@@ -22,7 +22,7 @@ Later packaging and integration changes are still under validation.
 | Mac native CTest | 5/5 passed | Helper contract, model worker lifetime, audio buffer/cancellation, native lifecycle, process identity; initial development build used newer Homebrew dependencies |
 | Mac service subprocess suite | 10 passed, 1 UI opt-in skipped | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
 | Mac contract/grounding/migration suite | 17 passed, 9 subtests | Includes offline migration's actual open-profile guard |
-| Mach-O and installation tools | 21 passed before final recording/OS-floor checks | Actual Mach-O relocation/run, missing dependency rejection, Darwin directory exchange, rollback, metadata and lock behavior; final expanded suite recorded separately |
+| Mach-O and installation tools | 26 passed | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral and lock behavior |
 | Flutter release runner | Built successfully | Unsigned/ad-hoc development, not installed-release validation |
 | Mac full Flutter suite with `2fb6445` | 135 passed, 10 skipped | Complete unit/widget suite, 104 s on this host |
 | Mac native desktop/service/MCP integration | Passed in 94 s | Actual Mac Flutter runner, read-only desktop DB, shared ownership, note propagation, recording survives Flutter state destruction/restart, final transcript/artifact persistence; capture/inference use controlled fixtures |
