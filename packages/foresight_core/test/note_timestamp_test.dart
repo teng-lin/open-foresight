@@ -52,6 +52,8 @@ void main() {
         'body': 'Keep shorthand',
         'revision': 3,
         'timestamp': null,
+        'last_enhanced': null,
+        'last_manual_edit': null,
       });
       store.close();
       store = Store(path);

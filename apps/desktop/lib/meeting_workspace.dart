@@ -44,7 +44,11 @@ extension _MeetingWorkspace on _WorkspaceState {
   Future<void> saveMeetingNotes() async {
     final id = loadedMeetingNotes;
     if (id == null) return;
-    meetingNoteSaves.schedule(id, meetingNotesController.text);
+    meetingNoteSaves.schedule(
+      id,
+      meetingNotesController.text,
+      lastManualEdit: meetingNoteManualEdit,
+    );
     await flushMeetingNotesDraft();
   }
 
@@ -60,7 +64,15 @@ extension _MeetingWorkspace on _WorkspaceState {
 
   void scheduleMeetingNotesSave() {
     final id = loadedMeetingNotes;
-    if (id != null) meetingNoteSaves.schedule(id, meetingNotesController.text);
+    if (id == null) return;
+    if (meetingNotesController.text != loadedMeetingNoteSnapshot?.body) {
+      meetingNoteManualEdit = DateTime.now().millisecondsSinceEpoch;
+    }
+    meetingNoteSaves.schedule(
+      id,
+      meetingNotesController.text,
+      lastManualEdit: meetingNoteManualEdit,
+    );
   }
 
   void formatMeetingNotes(String before, [String after = '']) {
@@ -94,16 +106,45 @@ extension _MeetingWorkspace on _WorkspaceState {
     }
   }
 
-  void loadMeetingNotes(int id) {
-    if (loadedMeetingNotes != id) {
-      unawaited(flushMeetingNotesDraft().catchError((Object _) {}));
-      loadedMeetingNotes = id;
-      meetingNotesController.text =
-          d.store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
-                id,
-              ]).firstOrNull?['body']
-              as String? ??
-          '';
+  void loadMeetingNotes(int id, {bool acceptedSave = false}) {
+    final row = d.store.rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [
+      id,
+    ]).firstOrNull;
+    final enhanced =
+        d.store.rows(
+              "SELECT COALESCE(edited,generated) AS body FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
+              [id],
+            ).firstOrNull?['body']
+            as String? ??
+        '';
+    final stored = MeetingNoteSnapshot(
+      body: row?['body'] as String? ?? '',
+      enhanced: enhanced,
+      timestamp: row?['timestamp'] as int?,
+      lastEnhanced: row?['last_enhanced'] as int?,
+      lastManualEdit: row?['last_manual_edit'] as int?,
+    );
+    final changedId = loadedMeetingNotes != id;
+    if (changedId ||
+        acceptedSave ||
+        (row != null &&
+            !stored.sameRecord(loadedMeetingNoteSnapshot) &&
+            stored.shouldReload(
+              currentBody: meetingNotesController.text,
+              currentEnhanced: loadedMeetingNoteSnapshot?.enhanced ?? '',
+              localManualEdit: meetingNoteManualEdit,
+              localEnhanced: loadedMeetingNoteSnapshot?.lastEnhanced,
+              dirty: meetingNoteSaves.isDirty(id),
+              programmaticWrite: meetingEnhancing,
+            ))) {
+      if (changedId) {
+        unawaited(flushMeetingNotesDraft().catchError((Object _) {}));
+        loadedMeetingNotes = id;
+      }
+      if (meetingNotesController.text != stored.body)
+        meetingNotesController.text = stored.body;
+      loadedMeetingNoteSnapshot = stored;
+      meetingNoteManualEdit = stored.lastManualEdit;
       meetingEnhanceStatus = '';
     }
   }

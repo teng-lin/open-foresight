@@ -55,15 +55,53 @@ The exact names are bound by `NoteRecord.toJson` plus selected PP21086–21088,
 retained in `ida/note-edit-timestamp-fields-pool.txt`, successful REA evidence
 `ev_2f1664083a6d221c14152e01f7d585ce92a44139d75ec52bcf62bc70e1dd8df0`.
 
-Literal timestamp-guard integration remains pending the enhancement timestamp
-writer lifecycle and representation in the port. The port saves raw drafts separately
-from enhancement artifacts, so inserting a guessed save-time comparison into
-the command handler would not reproduce the original combined-note guard.
-The debounce change makes no such approximation.
+The port now stores nullable `last_enhanced` and `last_manual_edit` on meeting
+notes, preserving unknown legacy values. Raw editor drafts capture manual-edit
+time when their body differs from the loaded baseline, and carry that same time
+through debounce, retries, and accepted saves. Current enhanced-note edits
+capture manual-edit time; unchanged bodies preserve it. Generation completion
+sets `last_enhanced`, while historical artifact edits and summaries leave both
+current-note dates alone. These writes retain the existing atomic enhancement
+artifact/save-time transaction and preserve raw revisions.
+
+The clean editor now checks changed stored snapshots without requiring a note
+ID change. It reloads when the stored enhanced body is nonempty but the local
+enhanced body is empty, the exact stored-priority date is strictly newer than the
+local-priority date, or either raw/enhanced body differs. Dirty drafts, including
+failed and in-flight writes, block reload. The programmatic-write flag also
+blocks it; this is original state slot 87, set during explicit enhancement,
+separate from cancellation slot 103. Equal timestamps do not imply newer data,
+and unknown local dates do not acquire invented fallback times. Accepted saves
+refresh the loaded baseline only after the latest queued draft succeeds.
+
+The original comparison uses String equality followed by a false-result branch:
+body **differences**, not equality, trigger the extra reload paths at
+`0x100a89afc` and `0x100a89b60`. This interpretation is consistent with the
+captured Dart Boolean offsets and the controller-change equality guard.
+
+Generation timestamps are established by the full parent traces
+`ida/note-manual-enhancement-parent-{0,600,1200}.json` and
+`ida/note-live-enhancement-parent-{0,600,1200}.json`, successful REA evidence
+`ev_a3c43988e7ac006cfb8fbc6431913072ecb121fb0193d182f8da9a324bbfdd43`.
+Noncancelled completion allocates the date at `0x100a4aaac`/`0x100a4c338`,
+stores state slot 119, and saves the note. The separate start/state callbacks
+are retained under REA
+`ev_0342282af278de53d909c340c193c42c7de50b68c855b5b15ac5bb4e7c08c4f7`.
+The failed `py_eval` batch is not evidence for these statements.
+
+Raw commands remain independent of enhancement artifacts, so the original
+combined-note empty-enhancement overwrite guard is not inserted into those
+commands. Streaming partial-note merges and cancellation restoration remain
+separate parity work. No unsaved-draft generation invalidation policy was
+inferred from these traces.
 
 Six new tests cover deadline reset, captured cross-note drafts, ordered
 in-flight disposal, retry of failed drafts, supersession of failed snapshots,
 editor switch/disposal persistence, and rejected in-flight saves blocking
 explicit navigation until retry. Existing workspace and collection fixtures
-also pass in the focused ten-test run; 19 core application,
-dedicated-runtime, and proactive tests also pass after the teardown correction.
+also passed in the focused ten-test run. The metadata/reload additions extend
+focused coverage to fifteen desktop tests and seven core note tests, including
+legacy migration, exact date priority, clean external refresh, dirty protection,
+keypress-time transport, retry preservation, and manual enhancement editing.
+The complete suites passed with 227 core tests (five skipped) and 189 desktop
+tests (ten skipped); the changed core and desktop files also pass analysis.

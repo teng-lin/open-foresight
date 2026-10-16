@@ -48,6 +48,13 @@ class Store {
         db.execute('ALTER TABLE $table ADD COLUMN timestamp INTEGER');
       }
     }
+    for (final column in ['last_enhanced', 'last_manual_edit']) {
+      if (!db
+          .select('PRAGMA table_info(meeting_notes)')
+          .any((row) => row['name'] == column)) {
+        db.execute('ALTER TABLE meeting_notes ADD COLUMN $column INTEGER');
+      }
+    }
     if (!db
         .select('PRAGMA table_info(models)')
         .any((row) => row['name'] == 'backend'))
@@ -465,11 +472,20 @@ class Store {
     return id;
   }
 
-  void saveMeetingNotes(int meetingId, String body) => db.execute(
-    'INSERT INTO meeting_notes(meeting_id,body,revision,timestamp) VALUES(?,?,1,?) '
-    'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1,timestamp=excluded.timestamp',
-    [meetingId, body, DateTime.now().millisecondsSinceEpoch],
-  );
+  void saveMeetingNotes(int meetingId, String body, {int? lastManualEdit}) {
+    final previous = rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+      meetingId,
+    ]).firstOrNull;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final manual =
+        lastManualEdit ?? (body != (previous?['body'] ?? '') ? now : null);
+    db.execute(
+      'INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,last_manual_edit) VALUES(?,?,1,?,?) '
+      'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1,timestamp=excluded.timestamp,'
+      'last_manual_edit=COALESCE(excluded.last_manual_edit,meeting_notes.last_manual_edit)',
+      [meetingId, body, now, manual],
+    );
+  }
 
   void transcript(
     int meeting,
@@ -512,9 +528,9 @@ class Store {
     }
   }
 
-  void editArtifact(int id, String text) {
+  void editArtifact(int id, String text, {int? lastManualEdit}) {
     final enhanced = rows(
-      "SELECT selected.meeting_id FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' "
+      "SELECT selected.meeting_id,COALESCE(selected.edited,selected.generated) AS body FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' "
       'AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id '
       'AND newer.kind=selected.kind AND newer.id>selected.id)',
       [id],
@@ -524,19 +540,35 @@ class Store {
     if (enhanced == null) {
       update();
     } else {
-      _writeEnhancedNote(enhanced['meeting_id'] as int, update);
+      _writeEnhancedNote(
+        enhanced['meeting_id'] as int,
+        update,
+        manual: true,
+        editTimestamp: lastManualEdit,
+        changed: enhanced['body'] != text,
+      );
     }
   }
 
   // The original saves the current raw/enhanced fields and save timestamp as
   // one Note replacement. Historical artifacts do not replace that current Note.
-  void _writeEnhancedNote(int meeting, void Function() write) {
+  void _writeEnhancedNote(
+    int meeting,
+    void Function() write, {
+    bool manual = false,
+    int? editTimestamp,
+    bool changed = true,
+  }) {
     db.execute('SAVEPOINT save_enhanced_note');
     try {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final column = manual ? 'last_manual_edit' : 'last_enhanced';
+      final date = manual ? editTimestamp ?? (changed ? now : null) : now;
       db.execute(
-        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp) VALUES(?,'',0,?) "
-        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp',
-        [meeting, DateTime.now().millisecondsSinceEpoch],
+        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,$column) VALUES(?,'',0,?,?) "
+        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp,'
+        '$column=COALESCE(excluded.$column,meeting_notes.$column)',
+        [meeting, now, date],
       );
       write();
       db.execute('RELEASE save_enhanced_note');

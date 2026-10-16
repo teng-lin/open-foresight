@@ -49,6 +49,7 @@ import 'graph_rendering.dart';
 import 'graph_persistence.dart';
 import 'meeting_export.dart';
 import 'note_save_scheduler.dart';
+import 'meeting_note_state.dart';
 import 'generated_content.dart';
 
 part 'screenshot_ui.dart';
@@ -382,10 +383,21 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   int? noteId, meetingId, recordingMeeting, meetingPreviewId;
   String meetingPreviewTab = 'Notes';
   final meetingNotesController = TextEditingController();
-  late final meetingNoteSaves = NoteSaveScheduler(
-    (id, body) async {
-      await d.command('meetings.notes', {'id': id, 'body': body});
-      if (mounted) update(() {});
+  late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
+    (id, body, lastManualEdit) async {
+      await d.command('meetings.notes', {
+        'id': id,
+        'body': body,
+        if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+      });
+    },
+    onSaved: (id) {
+      if (mounted) {
+        if (loadedMeetingNotes == id && !meetingNoteSaves.isDirty(id)) {
+          loadMeetingNotes(id, acceptedSave: true);
+        }
+        update(() {});
+      }
     },
     onError: (failure, stack) {
       if (mounted)
@@ -397,6 +409,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     },
   );
   int? loadedMeetingNotes;
+  MeetingNoteSnapshot? loadedMeetingNoteSnapshot;
+  int? meetingNoteManualEdit;
   bool meetingSidecarVisible = true,
       meetingEnhancedVisible = true,
       meetingEnhancing = false,
@@ -1549,6 +1563,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     final controller = TextEditingController(
       text: (a['edited'] ?? a['generated']) as String,
     );
+    final original = controller.text;
+    int? lastManualEdit;
     await showInputDialog<void>(
       builder: (context) => AlertDialog(
         title: const Text('Edit generated artifact'),
@@ -1557,6 +1573,15 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           height: 300,
           child: TextField(
             controller: controller,
+            onChanged: (text) {
+              if (a['kind'] == 'enhanced_notes' &&
+                  (text != original ||
+                      (loadedMeetingNotes == a['meeting_id'] &&
+                          meetingNotesController.text !=
+                              loadedMeetingNoteSnapshot?.body))) {
+                lastManualEdit = DateTime.now().millisecondsSinceEpoch;
+              }
+            },
             maxLines: null,
             expands: true,
           ),
@@ -1567,6 +1592,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
               await d.command('artifacts.edit', {
                 'id': a['id'],
                 'text': controller.text,
+                if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
               });
               if (!context.mounted) return;
               Navigator.pop(context);

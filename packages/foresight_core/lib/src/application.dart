@@ -513,7 +513,11 @@ class Application {
           return null;
         case 'meetings.notes':
           _meeting(a['id'] as int);
-          store.saveMeetingNotes(a['id'] as int, a['body'] as String);
+          store.saveMeetingNotes(
+            a['id'] as int,
+            a['body'] as String,
+            lastManualEdit: a['last_manual_edit'] as int?,
+          );
           _scheduleEnhance(a['id'] as int);
           return null;
         case 'meetings.transcript':
@@ -551,7 +555,11 @@ class Application {
           resumeRecording(a['id'] as int?);
           return captureState;
         case 'artifacts.edit':
-          store.editArtifact(a['id'] as int, a['text'] as String);
+          store.editArtifact(
+            a['id'] as int,
+            a['text'] as String,
+            lastManualEdit: a['last_manual_edit'] as int?,
+          );
           return null;
         case 'models.speech':
           await configureSpeech(
