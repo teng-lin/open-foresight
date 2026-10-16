@@ -33,6 +33,8 @@ class Store {
     CREATE TABLE IF NOT EXISTS meeting_details(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id),created INTEGER NOT NULL,reminder INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS meeting_answers(meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,answer_id INTEGER NOT NULL REFERENCES answers(id) ON DELETE CASCADE,PRIMARY KEY(meeting_id,answer_id));
+    CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL,UNIQUE(meeting_id,normalized));
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
     PRAGMA user_version=1;''',
     );
@@ -64,6 +66,14 @@ class Store {
         "ALTER TABLE answers ADD COLUMN conversation TEXT NOT NULL DEFAULT 'desktop'",
       );
     }
+    if (!db
+        .select('PRAGMA table_info(answers)')
+        .any((r) => r['name'] == 'request_id')) {
+      db.execute('ALTER TABLE answers ADD COLUMN request_id TEXT');
+    }
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS answer_request_id ON answers(request_id)',
+    );
     _reconcileLabelRecords();
   }
 
@@ -203,8 +213,9 @@ class Store {
     List<Map<String, Object?>> citations,
     String model, {
     String conversation = 'desktop',
+    String? requestId,
   }) => db.execute(
-    'INSERT INTO answers(question,body,status,citations,model,created,conversation) VALUES(?,?,?,?,?,?,?)',
+    'INSERT INTO answers(question,body,status,citations,model,created,conversation,request_id) VALUES(?,?,?,?,?,?,?,?)',
     [
       question,
       body,
@@ -213,6 +224,7 @@ class Store {
       model,
       DateTime.now().millisecondsSinceEpoch,
       conversation,
+      requestId,
     ],
   );
   void saveNote(int? id, String title, String body) {

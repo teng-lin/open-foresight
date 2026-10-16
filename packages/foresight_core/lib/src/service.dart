@@ -438,6 +438,7 @@ class ApplicationService {
                         args['conversation'] as String,
                         requestId: lease.id,
                         meetingId: args['meeting_id'] as int?,
+                        current: () => !lease.cancelled,
                       ),
                     )
                   : request['method'] == 'google.sign_in'

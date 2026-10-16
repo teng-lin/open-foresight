@@ -844,7 +844,7 @@ extension _MeetingWorkspace on _WorkspaceState {
             ].indexOf(meetingPanel),
             children: [
               chat(meetingScope: id, compact: true),
-              meetingTranscriptPanel(id, questions: true),
+              meetingQuestionsPanel(id),
               meetingSummaryPanel(id),
               meetingTranscriptPanel(id),
               meetingSummaryPanel(id, actions: true),
@@ -854,6 +854,167 @@ extension _MeetingWorkspace on _WorkspaceState {
       ],
     ),
   );
+
+  Widget meetingQuestionsPanel(int id) {
+    final automatic = d.store.preference('proactiveAnswers', 'true') == 'true';
+    final detected = d.store.rows(
+      'SELECT q.*,a.body,a.citations FROM meeting_questions q '
+      'LEFT JOIN answers a ON a.id=q.answer_id WHERE q.meeting_id=? ORDER BY q.id',
+      [id],
+    );
+    final manual = d.store
+        .rows(
+          'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
+          [id],
+        )
+        .where(
+          (row) =>
+              (row['text'] as String).contains(RegExp('[?？]')) &&
+              !detected.any((question) => question['question'] == row['text']),
+        )
+        .toList();
+    final pipeline = d is RemoteDomain
+        ? (d as RemoteDomain).capture['proactive'] as Map? ?? const {}
+        : d.application.proactive.state;
+    final detectionError = (pipeline['errors'] as Map?)?['$id'] as String?;
+    return Column(
+      children: [
+        SwitchListTile(
+          dense: true,
+          title: const Text('Automatic answers'),
+          subtitle: const Text(
+            'Detect questions and answer with your local model.',
+          ),
+          value: automatic,
+          onChanged: (enabled) => preference('proactiveAnswers', '$enabled'),
+        ),
+        if ((pipeline['running'] == true && pipeline['active_meeting'] == id) ||
+            (pipeline['pending_meetings'] as List? ?? []).contains(id))
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              automatic
+                  ? 'Waiting for the local model or processing transcript…'
+                  : 'Automatic answering is off. Queued questions are saved.',
+            ),
+          ),
+        if (detectionError != null)
+          ListTile(
+            title: Text(detectionError),
+            trailing: TextButton(
+              onPressed: () => run(() async {
+                await d.command('meetings.retry_detection', {'id': id});
+              }),
+              child: const Text('Retry detection'),
+            ),
+          ),
+        Expanded(
+          child: detected.isEmpty && manual.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'Questions detected during the conversation will be answered here.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    for (final item in detected)
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item['question'] as String,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Text(switch (item['state']) {
+                                'queued' => 'Automatic · Waiting',
+                                'answering' => 'Automatic · Answering…',
+                                'completed' => 'Automatic · Answered',
+                                'insufficient_context' =>
+                                  'Automatic · No supporting sources found',
+                                'failed' => 'Automatic · Could not answer',
+                                'cancelled' => 'Automatic · Cancelled',
+                                _ => 'Automatic · Saved question',
+                              }),
+                              if ((item['error'] as String).isNotEmpty)
+                                Text(item['error'] as String),
+                              if (item['body'] != null)
+                                GeneratedContent(
+                                  item['body'] as String,
+                                  fontSize: answerFontSize,
+                                ),
+                              if (item['body'] != null)
+                                IconButton(
+                                  tooltip: 'Copy automatic answer',
+                                  onPressed: () => Clipboard.setData(
+                                    ClipboardData(text: item['body'] as String),
+                                  ),
+                                  icon: const Icon(Icons.copy_outlined),
+                                ),
+                              if (item['citations'] != null)
+                                Wrap(
+                                  children: [
+                                    for (final source
+                                        in jsonDecode(
+                                              item['citations'] as String,
+                                            )
+                                            as List)
+                                      TextButton(
+                                        onPressed: () =>
+                                            citation(source as Map),
+                                        child: Text(
+                                          '[${source['citation']}] source revision ${source['revision']}',
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              if ([
+                                'failed',
+                                'insufficient_context',
+                                'cancelled',
+                              ].contains(item['state']))
+                                TextButton(
+                                  onPressed: () => run(() async {
+                                    await d.command('meetings.retry_question', {
+                                      'id': item['id'],
+                                    });
+                                  }),
+                                  child: const Text('Try again'),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    for (final row in manual)
+                      ListTile(
+                        title: SelectableText(row['text'] as String),
+                        trailing: IconButton(
+                          tooltip: 'Answer this question',
+                          onPressed: busy || asking || meetingEnhancing
+                              ? null
+                              : () {
+                                  question.text = row['text'] as String;
+                                  update(() => meetingPanel = 'Chat');
+                                  unawaited(askQuestion(meetingScope: id));
+                                },
+                          icon: const Icon(Icons.arrow_upward),
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
 
   Widget meetingTranscriptPanel(int id, {bool questions = false}) {
     final rows = d.store.rows(

@@ -24,11 +24,12 @@ retained there. No account credentials or profile contents were extracted.
 | Automatic questions | `QueryDetectorOnDevice`, `TranscriptManager`, `TranscriptBuffer`, `TextDeduplicator`, `QueryDispatcher`, `Query detected, advancing history cursor.`, and `Questions detected during the conversation will be answered here.` | The original buffers transcripts, runs local query detection, deduplicates, dispatches and advances a processing cursor. Exact prompts, thresholds and model behavior remain unresolved. |
 | Web fallback | `enable_web_search`, web-search-toggle events, `google_search` function schema, and meeting-assistant prompt instructions | Search is switchable. The assistant is instructed to call Google search for factual queries outside its meeting context and cite tool results using `[Source:N]`. Endpoint, credential handling and complete orchestration need further inspection. |
 
-The UI observer currently returns `cgWindowNotFound`. REA reports retained
-Hopper resources from the earlier Apple Events authorization failure and refuses
-another target until cleanup is confirmed. These limits have not been treated
-as proof of behavior, and static findings have not been relabeled as runtime
-observations. No OS permissions were changed.
+Further native investigation uses REA with IDA Pro. See the
+[IDA search investigation](ida-search-investigation.md) for the current provider
+attempt, timeout, and configuration questions. Earlier UI observation failed
+with `cgWindowNotFound`. These limits have not been treated as proof of behavior,
+and static findings have not been relabeled as runtime observations. No OS
+permissions were changed.
 
 ## Recording-control implementation
 
@@ -73,3 +74,40 @@ contract; they are not a claim that the original has identical native call order
 
 Physical audio quality, actual OS capture reauthorization, and reference-native
 gesture/timing comparisons remain required before claiming full recording parity.
+
+## Automatic meeting answers
+
+The application service now owns a durable pipeline from finalized captured
+speech to local question detection, deduplication, retrieval, and a cited answer.
+It stores a processing cursor and question jobs per meeting. Starting a meeting
+does not replay its previous transcript; restarting the service resumes pending
+work. Detection accepts only questions copied from the supplied transcript and
+rejects invented text. Case, punctuation, and whitespace normalization prevent
+duplicate jobs within the meeting.
+
+Generation waits while another model job is busy. Disabling Automatic answers
+retains queued questions and cancels only the pipeline's own request. Cancelling
+while indexing, retrieving, or generating prevents subsequent generation and
+orphan answer writes. Each answer is saved with its exact request and meeting
+ownership. A failed question does not block later questions; the UI exposes retry
+actions and displays grounded answers, citations, and current-meeting status.
+
+These are tested reconstruction decisions. The original's exact detection
+prompt, buffer window, overlap, thresholds, scheduling, and retry policy have
+not been established from function-level evidence. In particular, detection
+currently batches six final transcript rows; questions split across batches
+remain a known quality limitation to investigate.
+
+Verification after this implementation:
+
+- Core suite: **49 passed, 1 opt-in test skipped**.
+- Desktop suite: **165 passed, 10 existing opt-in tests skipped**.
+- Core and desktop analyzers: no issues.
+- A separate opt-in run using the real local Gemma 4 E2B model passed English
+  and Chinese question extraction and a statement-only negative case.
+- Capture-to-answer integration uses a compiled native capture fixture and
+  deterministic retrieval/generation doubles. This verifies service wiring and
+  cancellation, not physical capture quality or real-model answer accuracy.
+
+The model run covers detection only. Full real-audio, retrieval, and answer
+comparison against the original remains outstanding.

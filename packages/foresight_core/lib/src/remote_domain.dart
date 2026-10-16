@@ -191,13 +191,19 @@ class RemoteDomain extends Domain {
     String conversation, {
     String? requestId,
     int? meetingId,
-  }) => client
-      .stream('answer.stream', {
-        'question': question,
-        'conversation': conversation,
-        if (meetingId != null) 'meeting_id': meetingId,
-      })
-      .map((value) => value as String);
+    bool Function()? current,
+  }) async* {
+    if (current != null && !current()) throw StateError('Answer cancelled');
+    await for (final value in client.stream('answer.stream', {
+      'question': question,
+      'conversation': conversation,
+      if (meetingId != null) 'meeting_id': meetingId,
+    })) {
+      if (current != null && !current()) throw StateError('Answer cancelled');
+      yield value as String;
+    }
+  }
+
   @override
   Future<Map<String, List<double>>> graphEmbeddings(
     List<Map<String, Object?>> sources,

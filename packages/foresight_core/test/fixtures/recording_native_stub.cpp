@@ -7,7 +7,9 @@
 struct Handle { bool speech; int channel; int marker = 0; std::deque<std::string> events; };
 static Handle* channels[2] = {};
 static int fail_channel = -1;
+static std::string speech_event;
 extern "C" {
+void fixture_speech_event(const char* event) { speech_event = event; }
 void fixture_fail_channel(int channel) { fail_channel = channel; }
 int fixture_emit(int channel, const char* event) {
   if (!channels[channel]) return 0;
@@ -34,7 +36,9 @@ int fs_speech_push(void* pointer, const int16_t* samples, size_t count, int) {
 }
 int fs_speech_finish(void* pointer, const char*) {
   auto* handle = static_cast<Handle*>(pointer);
-  handle->events.push_back("{\"type\":\"transcript\",\"text\":\"marker_" + std::to_string(handle->marker) + "\"}");
+  handle->events.push_back(speech_event.empty()
+      ? "{\"type\":\"transcript\",\"text\":\"marker_" + std::to_string(handle->marker) + "\"}"
+      : speech_event);
   handle->events.push_back("{\"type\":\"done\",\"status\":\"completed\"}");
   return 0;
 }

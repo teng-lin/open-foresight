@@ -56,6 +56,8 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
   - Markdown notes, which can be enhanced live in a Standard or Concise style
   - a sidecar with meeting-scoped Chat, Live Q&A, Summary, Transcript, and Action items
 
+  Live Q&A can detect questions in finalized speech and queue grounded answers automatically using the local model. Its Automatic answers switch pauses processing while retaining queued questions; failed answers can be retried.
+
   Recording can be paused and resumed, and stops itself after a period of inactivity that you choose. Double-click its waveform or use Full screen to open the immersive meeting workspace. Generated notes, summaries, action items and answers render as formatted, selectable Markdown, with original Markdown retained for editing and copying. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
 - **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
 - **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
@@ -84,13 +86,14 @@ Open Foresight reproduces the original's main workflows, and adds features the o
 These features of the original are not in Open Foresight yet:
 
 - **Speaker labels.** The original labels speakers in the transcript. Open Foresight has no speaker identification or echo cancellation.
-- **Proactive answers in meetings.** The original detects questions in the live transcript and answers them unprompted. Open Foresight's Live Q&A answers only when you ask.
 - **Web search fallback.** The original's meeting assistant can fall back to a Google web-search tool.
 - **Cloud Gemini models.** The original's binary references cloud Gemini models. Open Foresight leaves these out on purpose and runs every model locally.
 
 The original's single-note Markdown export format has now been observed live and reproduced, with date filters, preview, copy and download. Additional export scenarios and label editing still need reference verification; see the [feature parity progress ledger](docs/feature-parity-progress.md).
 
 Pause/resume and an immersive workspace are implemented. Exact original gestures and physical-audio behavior remain under [investigation and validation](docs/missing-functions-investigation.md).
+
+Automatic meeting answers are implemented and tested, including with a real local question-detection model. The original's exact detection rules and scheduling still need reference verification. Search configuration is also [under investigation](docs/ida-search-investigation.md); a separate user project has not been established as a requirement.
 
 ## Platform status
 

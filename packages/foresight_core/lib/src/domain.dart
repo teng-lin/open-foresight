@@ -259,7 +259,14 @@ class Domain {
     String conversation, {
     String? requestId,
     int? meetingId,
+    bool Function()? current,
   }) async* {
+    void ensureCurrent() {
+      _checkOpen();
+      if (current != null && !current()) throw StateError('Answer cancelled');
+    }
+
+    ensureCurrent();
     if (meetingId != null) {
       if (store.rows('SELECT id FROM meetings WHERE id=?', [
         meetingId,
@@ -276,6 +283,7 @@ class Domain {
       String model, {
       required String conversation,
     }) {
+      ensureCurrent();
       store.db.execute('SAVEPOINT persist_conversation_answer');
       try {
         store.answer(
@@ -285,6 +293,7 @@ class Domain {
           citations,
           model,
           conversation: conversation,
+          requestId: requestId,
         );
         if (meetingId != null) {
           // Capture the exact inserted row before any other client can write.
@@ -345,6 +354,7 @@ class Domain {
       ),
     );
     final citations = <Map<String, Object?>>[];
+    ensureCurrent();
     final context = StringBuffer();
     final passages = await retrieveAnswerPassages(
       store.path,
@@ -360,7 +370,7 @@ class Domain {
           )
           .toList(),
     );
-    _checkOpen();
+    ensureCurrent();
     final completeProcedure =
         passages.length == 1 && passages.single['complete_procedure'] == true;
     final completeExamples =
@@ -509,6 +519,7 @@ class Domain {
         responseSchema: schema,
         maxOutputTokens: localGrounding ? 1536 : 1024,
       )) {
+        ensureCurrent();
         if (event['type'] == 'delta') {
           raw += event['text'] as String? ?? '';
           body = provisionalAnswer(raw) ?? body;
@@ -520,6 +531,7 @@ class Domain {
         }
         if (event['type'] == 'done') status = event['status'] as String;
       }
+      ensureCurrent();
       if (status == 'completed') {
         final answer = GroundedAnswer.parse(raw, allowed);
         body = answer.rendered;
@@ -541,14 +553,15 @@ class Domain {
         conversation: conversation,
       );
     } catch (e) {
-      saveAnswer(
-        question,
-        body,
-        'failed',
-        citations,
-        model,
-        conversation: conversation,
-      );
+      if (!_closed && (current == null || current()))
+        saveAnswer(
+          question,
+          body,
+          'failed',
+          citations,
+          model,
+          conversation: conversation,
+        );
       rethrow;
     }
   }
