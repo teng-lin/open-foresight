@@ -16,7 +16,7 @@ main `6a1fefc` after the README update.
 | Proactive answers | Current service commits final transcript segments and indexes meetings; Live Q&A requires a manual action. | Detect questions automatically, schedule bounded generation, retain meeting-scoped answers, and test deduplication, cancellation, failures, and background operation. Audit meeting conversation/retrieval scope before adding automatic answers. |
 | Meeting web-search fallback | README identifies a Google search tool in the original. No equivalent is established here. | Inspect the reference trigger and results; implement explicit web-search configuration, retrieval and source attribution; verify fallback, offline failure and cancellation. Keep local generation intact. |
 | Recording pause/fullscreen gestures | Current UI has Stop and a button opening the transcription workspace. | Add real pause/resume through the service and capture lifecycle, verify no paused audio leaks into resumed transcription, and reproduce immersive controls. |
-| Rich generated-content previews | Current meeting artifacts render selectable Markdown source. | Render formatting while preserving selection, raw copy, artifact editing, and citation behavior; compare controlled content with the original. |
+| Rich generated-content previews | Implemented formatted selectable Markdown for enhanced notes, summaries, action items, previous versions and answers. Formatting, raw summary copy/edit, preserved generated originals, links and image handling have deterministic UI coverage. | Compare controlled generated content visually with the original; exact renderer parity remains unverified. |
 | Cloud Gemini references | README explicitly describes these as intentionally omitted; static references do not establish a live feature contract. | Retain the documented local-model policy while investigating the original's optional cloud boundary. No cloud requests have been introduced. |
 | Meeting export format and filtering | Live original UI observed; a controlled single-note downloaded file is retained as a regression fixture. Filter/preview/copy/download implemented and tested. | Verify additional original scenarios: multiple-note ordering/separators, enhanced-note preference, custom-date boundary behavior and non-English formatting. Native development-app save-dialog comparison is also pending. |
 | Label editing | Original Sources → Add label opens Create New Organization Label, explains automatic assignment/clustering, and offers Cancel / Create & Auto-Assign. Dialog was cancelled. Existing add/remove/organization-label tests pass in the desktop suite. | Observe document-label editing and persistence with a controlled fixture; compare state changes, cancellation, deletion and graph restoration. Viewing the creation dialog does not verify editing. |
@@ -95,3 +95,31 @@ flutter analyze --no-pub
 
 The opt-in tests remain skipped because their real-model/capture prerequisites
 were not supplied to this run. No claim of exhaustive parity is made.
+
+## Rich preview implementation
+
+`apps/desktop/lib/generated_content.dart` renders Markdown through the pinned
+`flutter_markdown_plus` 1.0.12 dependency. Its
+[maintainer documentation](https://pub.dev/packages/flutter_markdown_plus/versions/1.0.12)
+describes the Markdown renderer and selection integration. A shared SelectionArea
+supports text selection across rendered blocks. Existing artifact editing still
+uses the raw Markdown; Summary and Action items now have explicit copy actions.
+Enhanced notes retain their existing copy action. Citation source controls remain
+separate from rendering.
+
+Generated images render their alternative text without loading remote URLs or
+local files. Only explicit clicks on HTTP(S) links launch the platform opener;
+file, script, data and relative links do not. Opening errors appear in the UI.
+
+The full desktop suite after this change passed **162 tests, 10 skipped**, and
+Flutter analysis reported no issues. Three new tests verify headings, bold and
+italic spans, lists and tables at narrow and wide widths, image/link behavior,
+and editing/copying a meeting summary while preserving its generated original.
+An optional headless capture is saved under `test-results/rich-preview.png` and
+was inspected for layout. Headless font fallback does not reproduce installed
+system fonts; this capture is not a reference screenshot comparison.
+
+```sh
+cd apps/desktop
+flutter test --no-pub test/generated_content_test.dart
+```

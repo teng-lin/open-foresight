@@ -507,10 +507,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                         )
                       : SingleChildScrollView(
                           padding: const EdgeInsets.all(20),
-                          child: SelectableText(
+                          child: GeneratedContent(
                             (enhanced['edited'] ?? enhanced['generated'])
                                 as String,
-                            style: const TextStyle(fontSize: 15, height: 1.6),
                           ),
                         ),
                 ),
@@ -964,6 +963,18 @@ extension _MeetingWorkspace on _WorkspaceState {
               ),
               if (artifact != null)
                 IconButton(
+                  tooltip: 'Copy $title',
+                  onPressed: () => Clipboard.setData(
+                    ClipboardData(
+                      text:
+                          (artifact['edited'] ?? artifact['generated'])
+                              as String,
+                    ),
+                  ),
+                  icon: const Icon(Icons.copy_outlined),
+                ),
+              if (artifact != null)
+                IconButton(
                   tooltip: 'Edit $title',
                   onPressed: () => editArtifact(artifact),
                   icon: const Icon(Icons.edit_outlined),
@@ -991,9 +1002,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SelectableText(
+                      GeneratedContent(
                         (artifact['edited'] ?? artifact['generated']) as String,
-                        style: TextStyle(fontSize: answerFontSize, height: 1.6),
+                        fontSize: answerFontSize,
                       ),
                       if (versions.length > 1)
                         ExpansionTile(
@@ -1001,7 +1012,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                           children: [
                             for (final previous in versions.skip(1))
                               ListTile(
-                                title: SelectableText(
+                                title: GeneratedContent(
                                   (previous['edited'] ?? previous['generated'])
                                       as String,
                                 ),

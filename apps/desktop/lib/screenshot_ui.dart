@@ -2671,12 +2671,9 @@ extension _ScreenshotScreens on _WorkspaceState {
                                   ),
                                 ],
                               ),
-                              SelectableText(
+                              GeneratedContent(
                                 a['body'] as String,
-                                style: TextStyle(
-                                  fontSize: answerFontSize,
-                                  height: 1.6,
-                                ),
+                                fontSize: answerFontSize,
                               ),
                               if (a['status'] != 'completed')
                                 Text('Status: ${a['status']}'),
@@ -2699,9 +2696,9 @@ extension _ScreenshotScreens on _WorkspaceState {
                           ),
                         ),
                       if (asking)
-                        SelectableText(
+                        GeneratedContent(
                           answer.isEmpty ? 'Searching your knowledge…' : answer,
-                          style: TextStyle(fontSize: answerFontSize),
+                          fontSize: answerFontSize,
                         ),
                     ],
                   ),

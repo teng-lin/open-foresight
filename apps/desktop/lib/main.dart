@@ -45,6 +45,7 @@ import 'graph_layout.dart';
 import 'graph_rendering.dart';
 import 'graph_persistence.dart';
 import 'meeting_export.dart';
+import 'generated_content.dart';
 
 part 'screenshot_ui.dart';
 part 'meeting_workspace.dart';
