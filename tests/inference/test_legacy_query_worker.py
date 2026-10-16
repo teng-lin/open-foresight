@@ -9,6 +9,7 @@ from legacy_query_worker import MAX_FRAME, serve
 
 
 class Executor:
+    cache_storage = 'float16'
     def __init__(self):
         self.calls = []
 
@@ -16,7 +17,7 @@ class Executor:
         self.calls.append((transcript, limit))
         if transcript == 'overflow':
             raise ValueError('Prompt exceeds the original 512-token context')
-        return {'text': ' Question?\n', 'finish_reason': 'eos'}
+        return {'text': ' Question?\n', 'finish_reason': 'eos', 'cache_storage': self.cache_storage}
 
 
 class DedicatedWorkerProtocolTest(unittest.TestCase):
@@ -32,6 +33,8 @@ class DedicatedWorkerProtocolTest(unittest.TestCase):
         self.assertEqual(frames[1]['text'], ' Question?\n')
         self.assertEqual(frames[1]['id'], 'owned')
         self.assertFalse(frames[1]['original_gpu_parity_verified'])
+        self.assertEqual(frames[0]['cache_storage'], 'float16')
+        self.assertEqual(frames[1]['cache_storage'], 'float16')
 
     def test_bad_request_and_context_overflow_do_not_poison_next_request(self):
         executor, frames = self.run_requests([

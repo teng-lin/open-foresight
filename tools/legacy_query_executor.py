@@ -80,6 +80,8 @@ _erf = np.vectorize(math.erf, otypes=[np.float32])
 
 
 class LegacyQueryExecutor:
+    cache_storage = 'float16'
+
     def __init__(self, model_path):
         with LegacyQueryWeights(model_path) as model:
             metadata = dict(proto_fields(model.metadata['odml.infra.proto.LlmParameters']))
@@ -148,12 +150,16 @@ class LegacyQueryExecutor:
             # Original MakeSelfAttention scales Q after QKVRoPE, before QK^T.
             query = rope(query, positions, wavelength) * np.float32(self.query_scale)
             key = rope(key, positions, wavelength)[:, 0, :]
+            # Selected original V1 caches use the calculation dtype (F16).
+            # Keep storage rounding separate from the remaining float32 math.
+            key = key.astype(np.float16)
+            value = value.astype(np.float16)
             previous = self.cache[layer]
             if previous is not None:
                 key = np.concatenate((previous[0], key))
                 value = np.concatenate((previous[1], value))
             self.cache[layer] = key, value
-            score = query.transpose(1, 0, 2) @ key.T
+            score = query.transpose(1, 0, 2) @ key.astype(np.float32).T
             columns = np.arange(len(key))[None, :]
             allowed = columns <= positions[:, None]
             if not global_layer:
@@ -161,7 +167,7 @@ class LegacyQueryExecutor:
             score = np.where(allowed[None, :, :], score, -np.inf)
             probability = np.exp(score - np.max(score, axis=-1, keepdims=True))
             probability /= np.sum(probability, axis=-1, keepdims=True)
-            mixed = (probability @ value).transpose(1, 0, 2).reshape(-1, 1024)
+            mixed = (probability @ value.astype(np.float32)).transpose(1, 0, 2).reshape(-1, 1024)
             after = linear(mixed, 'self_attention.post')
             x = x + norm(after, 'post_layer_norm')
             before = norm(x, 'ff_layer.pre_layer_norm')
@@ -202,7 +208,7 @@ class LegacyQueryExecutor:
                 'output_token_ids': generated, 'text': self.tokenizer.decode(generated),
                 'finish_reason': finish, 'model_sha256': LegacyQueryWeights.sha256,
                 'original_weights_executed': True, 'original_gpu_parity_verified': False,
-                'backend': 'numpy_float32_cpu_diagnostic'}
+                'backend': 'numpy_float32_cpu_diagnostic', 'cache_storage': self.cache_storage}
 
 
 def main():

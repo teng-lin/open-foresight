@@ -24,6 +24,7 @@ def emit(output, value):
 
 def serve(executor, source, output):
     emit(output, {'type': 'ready', 'backend': BACKEND,
+                  'cache_storage': executor.cache_storage,
                   'original_gpu_parity_verified': False})
     while True:
         line = source.readline(MAX_FRAME + 1)
@@ -51,6 +52,7 @@ def serve(executor, source, output):
             result = executor.generate(prompt[len(PREFIX):], limit)
             emit(output, {'type': 'result', 'id': request_id,
                           'text': result['text'], 'finish_reason': result['finish_reason'],
+                          'cache_storage': result['cache_storage'],
                           'backend': BACKEND, 'original_gpu_parity_verified': False})
         except (ValueError, TypeError, KeyError, RuntimeError) as error:
             emit(output, {'type': 'error', 'id': request_id, 'message': str(error)})

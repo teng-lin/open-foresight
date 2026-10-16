@@ -175,6 +175,42 @@ explicit `FORESIGHT_ORIGINAL_QUERY_MODEL` environment variable. The tested
 environment uses NumPy 2.5.1 and SentencePiece 0.2.1. The packaging dependency
 locks now include both dependencies.
 
+## Selected cache precision
+
+The logged `int8_kv_cache: true` option does **not** quantize this model's cache.
+The original cache descriptor selects uint8 only when
+`(apply_srq && int8_kv_cache) || force_int8_kv_cache`. The selected model logs
+`apply_srq: false` and `force_int8_kv_cache: false`, so that predicate is false.
+The original configuration printer binds those flags to offsets 408, 410 and
+411; the recovered protobuf serializer also binds offset 225 to field 41,
+`apply_srq`. This rules out adding speculative int8 cache quantization.
+
+The false branch uses builder offset 3024, initialized by
+`DeduceDataTypeFromPrecision`. That function maps F32 to float32 and the other
+calculation precisions to float16. The retained original run explicitly selects
+`CalculationsPrecision::F16`. Selected V1 `AddValuesToCache` performs typed
+reads and linear cache writes, with no extra quantization operation. The CPU
+executor now stores K/V as **float16**, then lifts them to float32 for its
+remaining attention calculations. Reports explicitly include
+`cache_storage: "float16"`; this does not claim all operations run in float16.
+
+Canonical traces include `detector-gpu-v1-add-values-cache.json`, the K/V cache
+descriptor files, `detector-cache-runtime-flag-print.json`,
+`detector-cache-calculation-dtype-binding.json`, and
+`detector-cache-dtype-from-precision.json`. The original run's retained `run.stderr`
+contains the actual flags and F16 calculation choice. Earlier float32-cache
+reports remain unchanged. Fresh `original-query-float16-cache-paired-cases.json`
+re-executes the corrected CPU model against nine retained original outputs;
+all nine agree after the recovered output trimming. Both raw outputs remain in
+the report, including the original decoder's leading spaces.
+
+The cache regression checks float16 storage in all 18 layers, exact retention of
+old cache rows while new tokens append, agreement of the greedy choice, and
+bounded prefill/incremental logit differences. Float16 storage can amplify tiny
+BLAS grouping differences across a rounding boundary, so those logits are not
+expected to be bit-identical. Fourteen Python tests pass with original-weight
+execution enabled, including these cache checks and the worker protocol tests.
+
 ## Application worker and registration
 
 `tools/legacy_query_worker.py` loads the SHA-identified asset once and accepts
@@ -213,9 +249,10 @@ without chat substitution or cursor advancement.
 ## Remaining fidelity work
 
 Float32 CPU execution changes the original packed-int8 GPU arithmetic. The
-original Metal runtime also uses an int8 KV cache, while this reconstructed
-worker stores float32 keys and values. Matching selected question outputs does
-not establish numerical parity. GPU reduction/rounding, GELU implementation,
+original Metal runtime uses F16 calculations and cache storage; this worker
+now matches the cache storage type while its other operations remain float32.
+Matching selected question outputs does not establish numerical parity. GPU
+operation precision, reduction/rounding, GELU implementation,
 and broader tokenizer/session/output comparisons remain relevant.
 
 Dedicated model acquisition and persistence still need a supported installation

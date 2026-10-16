@@ -64,14 +64,28 @@ class OriginalDetectorExecutionTest(unittest.TestCase):
         batch = self.model.forward(ids, 0)
         self.model.cache = [None] * 18
         for position, token in enumerate(ids):
+            previous = [None if entry is None else (entry[0].copy(), entry[1].copy())
+                        for entry in self.model.cache]
             incremental = self.model.forward([token], position)
-        np.testing.assert_allclose(batch, incremental, rtol=2e-4, atol=5e-4)
+            for old, (key, value) in zip(previous, self.model.cache):
+                self.assertEqual(key.dtype, np.dtype('float16'))
+                self.assertEqual(value.dtype, np.dtype('float16'))
+                self.assertEqual(len(key), position + 1)
+                if old is not None:
+                    np.testing.assert_array_equal(key[:-1], old[0])
+                    np.testing.assert_array_equal(value[:-1], old[1])
+        # Different BLAS prefill shapes can cross an F16 rounding boundary.
+        # Bound the resulting logits within two F16 epsilons, while requiring
+        # the same greedy candidate and exact retention of prior cache rows.
+        np.testing.assert_allclose(batch, incremental, rtol=0, atol=2 * np.finfo(np.float16).eps)
+        self.assertEqual(int(np.argmax(batch)), int(np.argmax(incremental)))
 
     def test_original_question_output_and_statement_negative(self):
         positive = self.model.generate(
             'The launch is scheduled for Friday. What risks could delay it?', 64)
         self.assertEqual(positive['text'], 'What risks could delay the launch?')
         self.assertEqual(positive['finish_reason'], 'eos')
+        self.assertEqual(positive['cache_storage'], 'float16')
         negative = self.model.generate('The meeting starts at three.', 64)
         self.assertEqual(negative['text'], '')
         self.assertEqual(negative['finish_reason'], 'eos')
