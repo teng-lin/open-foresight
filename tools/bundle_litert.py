@@ -51,6 +51,7 @@ print(json.dumps(dict(executable=sys.executable, version=sys.version,
     # the C++ runtime, or graphics drivers/loaders from the builder.
     host_libraries = ('ld-linux', 'libc.so.', 'libm.so.', 'libdl.so.',
                       'libpthread.so.', 'librt.so.', 'libutil.so.', 'libresolv.so.',
+                      'libmvec.so.', 'libanl.so.', 'libnss_', 'libthread_db.so.',
                       'libstdc++.so.', 'libgcc_s.so.', 'libcuda', 'libnvidia',
                       'libvulkan', 'libOpenCL', 'libGL', 'libEGL', 'libdrm')
     runtime_libraries = set()
@@ -74,21 +75,33 @@ print(json.dumps(dict(executable=sys.executable, version=sys.version,
             runtime_libraries.add(name)
     # Both executable and modules resolve relative to the relocated runtime.
     # Do not retain a venv's absolute shebangs, prefix, or user Python paths.
+    # OpenSSL's compiled-in Ubuntu CA location is absent on Fedora/Arch.
+    # Use the host's maintained trust bundle while respecting explicit overrides.
+    system_certificates = '''if [[ -z "${SSL_CERT_FILE:-}" ]]; then
+  for task_certificates in /etc/ssl/certs/ca-certificates.crt /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+    if [[ -r "$task_certificates" ]]; then
+      export SSL_CERT_FILE="$task_certificates"
+      break
+    fi
+  done
+fi'''
     launcher = destination.parent / 'litert-runner'
     launcher.write_text('''#!/usr/bin/env bash
 set -euo pipefail
 task_runtime=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LD_LIBRARY_PATH="$task_runtime/python/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+@SYSTEM_CERTIFICATES@
 exec "$task_runtime/python/bin/python3" -I -B "$task_runtime/litert_runner.py" "$@"
-''')
+'''.replace('@SYSTEM_CERTIFICATES@', system_certificates))
     launcher.chmod(0o755)
     embedding_python = destination.parent / 'litert-python'
     embedding_python.write_text('''#!/usr/bin/env bash
 set -euo pipefail
 task_runtime=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LD_LIBRARY_PATH="$task_runtime/python/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+@SYSTEM_CERTIFICATES@
 exec "$task_runtime/python/bin/python3" -I -B "$@"
-''')
+'''.replace('@SYSTEM_CERTIFICATES@', system_certificates))
     embedding_python.chmod(0o755)
     subprocess.run([str(launcher), '--check'], check=True, timeout=30,
                    capture_output=True, cwd='/')

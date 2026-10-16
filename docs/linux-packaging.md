@@ -107,7 +107,9 @@ offline migration documented in the main README.
 The bundle includes private protobuf/gRPC libraries and SQLite (including the
 unversioned name Dart opens). Python extension dependencies are bundled privately
 as well, avoiding distro-specific optional DBM/libcrypt dependencies. It does
-not replace the system glibc, C++ runtime or GPU driver.
+not replace the system glibc, C++ runtime or GPU driver. The Python launchers
+select the distro's maintained CA bundle, respecting `SSL_CERT_FILE` overrides;
+Ubuntu's compiled-in OpenSSL certificate path is absent on Fedora/Arch.
 Distro dependency names are centralized in `packaging/metadata.json`. RPM host
 requirements are explicit: automatic scanning of private Python/protobuf
 libraries would otherwise require libraries already inside the payload.
@@ -118,7 +120,9 @@ All payload ELF linkage is checked after native installation.
 CI builds on ordinary hosted Linux runners without a GPU. After the baseline
 build, parallel native-container jobs create `.deb`, `.rpm`, and `.pkg.tar.zst`
 files. Each installs its dependencies and package, validates the desktop entry,
-checks every ELF for missing libraries, imports LiteRT, runs Whisper help and
+verifies installed payload hashes, checks every ELF for missing libraries, imports
+LiteRT, verifies Python can load
+the host CA roots, runs Whisper help and
 decodes the public JFK fixture on CPU with a SHA-verified Tiny model, then
 launches the installed app under Xvfb as an ordinary user. It checks activation
 IPC and a private SQLite profile, reinstalls the same version, removes the

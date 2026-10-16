@@ -25,6 +25,10 @@ def main():
                LIBGL_ALWAYS_SOFTWARE='1', GDK_BACKEND='x11')
     # Check all runtime ELFs, including dlopen-only Python extensions. This
     # catches host dependencies that an executable-only ldd check misses.
+    manifest = json.loads((root / 'manifest.json').read_text())
+    for entry in manifest['files']:
+        with (root / entry['path']).open('rb') as stream:
+            assert hashlib.file_digest(stream, 'sha256').hexdigest() == entry['sha256'], entry['path']
     count = 0
     for file in root.rglob('*'):
         if not file.is_file() or file.is_symlink():
@@ -37,6 +41,9 @@ def main():
         count += 1
     assert count > 0
     subprocess.run([str(root / 'share/open-foresight/litert-runner'), '--check'],
+                   env=env, check=True, timeout=30)
+    subprocess.run([str(root / 'share/open-foresight/litert-python'), '-c',
+                    'import ssl; assert ssl.create_default_context().cert_store_stats()["x509_ca"] > 0, ssl.get_default_verify_paths()'],
                    env=env, check=True, timeout=30)
     subprocess.run([str(root / 'bin/whisper-cli-vulkan'), '--help'],
                    env=env, check=True, capture_output=True, timeout=30)
@@ -84,9 +91,9 @@ def main():
                 assert runtime.stat().st_mode & 0o077 == 0
                 time.sleep(3)
                 assert app.poll() is None, log.read_text()
-                print(json.dumps({'installed_startup': True, 'activation_ipc': True,
+                print(json.dumps({'installed_startup': True, 'installed_manifest': True, 'activation_ipc': True,
                                   'elf_linkage_files': count, 'private_profile': True,
-                                  'litert_import': True, 'whisper_cli': True,
+                                  'litert_import': True, 'python_system_ca_store': True, 'whisper_cli': True,
                                   'whisper_cpu_fixture': True,
                                   'physical_audio_or_gpu_inference_tested': False}))
             finally:
