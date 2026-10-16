@@ -169,7 +169,7 @@ void main() {
   );
 
   testWidgets(
-    'shared Start transcribing creates a new meeting from an existing selection',
+    'Start transcribing opens speech setup before creating a meeting; cancel preserves selection',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-quick-start-');
       final store = Store('${tmp.path}/app.db');
@@ -183,9 +183,13 @@ void main() {
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      expect(state.meetingId, isNot(existing));
-      expect(store.rows('SELECT * FROM meetings').length, 2);
-      expect(find.text('Set up speech'), findsOneWidget);
+      expect(state.meetingId, existing);
+      expect(store.rows('SELECT * FROM meetings').length, 1);
+      expect(find.text('Transcription Model'), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(state.busy, false);
+      expect(store.rows('SELECT * FROM meetings').length, 1);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();

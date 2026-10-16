@@ -229,6 +229,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
   );
   bool busy = false, asking = false;
+  bool quickStarting = false;
+  bool systemAudioSetupReviewed = false;
   int _operations = 0;
   double answerFontSize = 16;
   final hiddenAnswers = <int>{};
@@ -520,6 +522,159 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       if (mounted) setState(() => captureCapabilityError = error.toString());
       rethrow;
     }
+  }
+
+  Future<bool> ensureRecordingAccess() async {
+    if (!Platform.isMacOS) return true;
+    final capabilities = await d.command('audio.capabilities') as Map;
+    if (!mounted) return false;
+    if (capabilities['microphone_purpose_present'] == false ||
+        capabilities['system_audio_purpose_present'] == false) {
+      throw StateError(
+        'The recording service is missing audio access configuration. Reinstall Open Foresight.',
+      );
+    }
+    if (capabilities['microphone'] == 'authorized') {
+      if (systemAudioSetupReviewed ||
+          capabilities['system_audio_request'] == 'completed')
+        return true;
+      return setupSystemAudioAccess(forRecording: true);
+    }
+    final allow = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Allow recording access'),
+        content: const Text(
+          'Allow microphone access to transcribe your voice. macOS may also ask for Screen & System Audio Recording access when recording starts. If access was denied, enable Open Foresight in System Settings > Privacy & Security.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Allow microphone'),
+          ),
+        ],
+      ),
+    );
+    if (allow != true || !mounted) return false;
+    await requestMicrophoneAccess();
+    if (!mounted) return false;
+    if (captureCapabilities['microphone'] != 'authorized') {
+      throw StateError(
+        captureCapabilityError.isNotEmpty
+            ? captureCapabilityError
+            : 'Microphone access is required. Enable Open Foresight in System Settings > Privacy & Security > Microphone.',
+      );
+    }
+    if (systemAudioSetupReviewed ||
+        capabilities['system_audio_request'] == 'completed')
+      return true;
+    return setupSystemAudioAccess(forRecording: true);
+  }
+
+  Future<bool> setupSystemAudioAccess({bool forRecording = false}) async {
+    var requesting = false;
+    var completed = false;
+    var message =
+        'Allow Open Foresight under System Settings > Privacy & Security > Screen & System Audio Recording > System Audio Recording Only. The exact wording varies by macOS version.';
+    String? settingsUrl;
+    final proceed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, updateDialog) => AlertDialog(
+          title: const Text('Allow system audio recording'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Permission requested: System Audio Recording Only. This lets Foresight transcribe audio playing on your Mac.',
+                ),
+                const SizedBox(height: 12),
+                Text(message),
+                if (requesting) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(),
+                  const Text('Waiting for the macOS audio access request…'),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            if (settingsUrl != null)
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await openPlatformUri(Uri.parse(settingsUrl!));
+                  } catch (error) {
+                    if (dialogContext.mounted)
+                      updateDialog(() => message = error.toString());
+                  }
+                },
+                child: const Text('Open System Settings'),
+              ),
+            TextButton(
+              onPressed: requesting
+                  ? null
+                  : () async {
+                      updateDialog(() {
+                        requesting = true;
+                        completed = false;
+                      });
+                      try {
+                        final result =
+                            await d.command('audio.request_system') as Map;
+                        if (!dialogContext.mounted) return;
+                        updateDialog(() {
+                          requesting = false;
+                          completed =
+                              result['system_audio_request'] == 'completed';
+                          settingsUrl = result['settings_url'] as String?;
+                          message =
+                              '${result['message'] ?? 'The request was sent to macOS.'}\nTurn on Open Foresight under System Audio Recording Only, then return and continue. Permission is checked by actual capture.';
+                        });
+                        if (mounted)
+                          setState(
+                            () => captureCapabilities =
+                                Map<String, dynamic>.from(result),
+                          );
+                      } catch (error) {
+                        if (dialogContext.mounted)
+                          updateDialog(() {
+                            requesting = false;
+                            message = error.toString();
+                          });
+                      }
+                    },
+              child: Text(
+                settingsUrl == null ? 'Request access' : 'Retry request',
+              ),
+            ),
+            FilledButton(
+              onPressed: !completed || requesting
+                  ? null
+                  : () => Navigator.pop(dialogContext, true),
+              child: Text(forRecording ? 'Continue recording' : 'Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (proceed == true && mounted) {
+      systemAudioSetupReviewed = true;
+      return true;
+    }
+    return false;
   }
 
   Future<void> refreshAudioDevices() async {
