@@ -15,10 +15,13 @@ class GemmaSetupDialog extends StatefulWidget {
   final int memoryGb;
   final void Function(NativeRuntime, GemmaModel) installed;
   final VoidCallback localSetup;
+  final Future<NativeRuntime> Function(String, String, bool Function())?
+  installGeneration;
   const GemmaSetupDialog({
     super.key,
     required this.store,
     this.createDownload,
+    this.installGeneration,
     this.firstRun = false,
     this.needsEmbedding = false,
     this.needsGeneration = true,
@@ -185,19 +188,27 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         downloaded[model] = true;
         status = 'Loading ${model.name} and preparing GPU cache...';
       });
-      final ready = await configureGeneration(
-        widget.store,
-        widget.library,
-        asset.path,
-        widget.runner,
-        backend: 'litert_lm',
-        current: () => mounted && !cancelled,
-        onCandidate: (value) => candidate = value,
-        onRegister: () {
-          if (mounted && !cancelled)
-            setState(() => status = 'Saving ${model.name} registration...');
-        },
-      );
+      final ready = widget.installGeneration != null
+          ? await widget.installGeneration!(
+              asset.path,
+              widget.runner,
+              () => mounted && !cancelled,
+            )
+          : await configureGeneration(
+              widget.store,
+              widget.library,
+              asset.path,
+              widget.runner,
+              backend: 'litert_lm',
+              current: () => mounted && !cancelled,
+              onCandidate: (value) => candidate = value,
+              onRegister: () {
+                if (mounted && !cancelled)
+                  setState(
+                    () => status = 'Saving ${model.name} registration...',
+                  );
+              },
+            );
       candidate = null; // ownership is transferred only after a complete load.
       if (!mounted || cancelled) {
         ready.close();

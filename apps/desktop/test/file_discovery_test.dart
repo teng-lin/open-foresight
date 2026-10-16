@@ -124,7 +124,9 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Import selected (1)'));
       await tester.pumpAndSettle();
-      expect(selected, ['${root.path}/Apollo.md']);
+      expect(selected, [
+        File('${root.path}/Apollo.md').resolveSymbolicLinksSync(),
+      ]);
       await tester.tap(find.text('Discover'));
       await tester.pump();
       await tester.tap(find.text('Cancel'));

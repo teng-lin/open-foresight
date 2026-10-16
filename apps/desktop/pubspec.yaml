@@ -5,12 +5,14 @@ version: 0.1.0+1
 environment:
   sdk: '>=3.8.0 <4.0.0'
 dependencies:
+  foresight_core:
+    path: ../../packages/foresight_core
   flutter:
     sdk: flutter
   grpc: 4.3.1
   protobuf: 5.1.0
   sqlite3: 2.9.4
-  crypto: 3.0.6
+  crypto: 3.0.7
   ffi: 2.1.4
   fixnum: 1.1.1
   file_selector: 1.0.3

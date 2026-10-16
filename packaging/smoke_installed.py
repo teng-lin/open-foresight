@@ -21,9 +21,11 @@ import urllib.request
 def main():
     root = Path('/opt/open-foresight')
     assert os.getuid() != 0, 'Run the application smoke test as a normal user'
-    env = dict(os.environ, LD_LIBRARY_PATH=f'{root}/lib:{root}/app/lib:{root}/share/open-foresight/python/lib',
+    env = dict(os.environ, LD_LIBRARY_PATH=f'{root}/lib:{root}/app/lib',
+               FORESIGHT_LITERT_LIBRARY=str(root / 'lib/liblitert-lm.so'),
+               FORESIGHT_ONNX_LIBRARY=str(root / 'lib/libonnxruntime.so'),
                LIBGL_ALWAYS_SOFTWARE='1', GDK_BACKEND='x11')
-    # Check all runtime ELFs, including dlopen-only Python extensions. This
+    # Check all runtime ELFs, including dlopen-only inference libraries. This
     # catches host dependencies that an executable-only ldd check misses.
     manifest = json.loads((root / 'manifest.json').read_text())
     for entry in manifest['files']:
@@ -40,10 +42,9 @@ def main():
         assert 'not found' not in linked.stdout + linked.stderr, (file, linked.stdout, linked.stderr)
         count += 1
     assert count > 0
-    subprocess.run([str(root / 'share/open-foresight/litert-runner'), '--check'],
-                   env=env, check=True, timeout=30)
-    subprocess.run([str(root / 'share/open-foresight/litert-python'), '-c',
-                    'import ssl; assert ssl.create_default_context().cert_store_stats()["x509_ca"] > 0, ssl.get_default_verify_paths()'],
+    assert not any(p.is_file() and (p.suffix in ('.py', '.pyc', '.pyo') or
+                   p.name.startswith(('python', 'libpython'))) for p in root.rglob('*'))
+    subprocess.run([str(root / 'bin/foresight-model'), '--check'],
                    env=env, check=True, timeout=30)
     subprocess.run([str(root / 'bin/whisper-cli-vulkan'), '--help'],
                    env=env, check=True, capture_output=True, timeout=30)
@@ -93,7 +94,7 @@ def main():
                 assert app.poll() is None, log.read_text()
                 print(json.dumps({'installed_startup': True, 'installed_manifest': True, 'activation_ipc': True,
                                   'elf_linkage_files': count, 'private_profile': True,
-                                  'litert_import': True, 'python_system_ca_store': True, 'whisper_cli': True,
+                                  'native_litert_runtime': True, 'no_bundled_python': True, 'whisper_cli': True,
                                   'whisper_cpu_fixture': True,
                                   'physical_audio_or_gpu_inference_tested': False}))
             finally:

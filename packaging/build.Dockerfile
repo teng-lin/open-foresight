@@ -4,7 +4,7 @@ ARG SDK_IMAGE=open-foresight-sdk:local
 FROM ${SDK_IMAGE} AS builder
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Header-only application dependency, independent of the expensive SDK build.
-RUN apt-get update && apt-get install -y --no-install-recommends nlohmann-json3-dev && \
+RUN apt-get update && apt-get install -y --no-install-recommends nlohmann-json3-dev libicu-dev && \
     rm -rf /var/lib/apt/lists/*
 # The cached SDK uses a shallow, commit-pinned Flutter checkout. Restore its
 # matching release tag before pub resolves packages, verifying the tag cannot
@@ -18,6 +18,8 @@ WORKDIR /src
 COPY . .
 ARG SOURCE_REVISION
 ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python
+RUN python3 tools/prepare_litert.py build/lib/liblitert-lm.so && \
+    python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 RUN test -n "$SOURCE_REVISION" && \
     ./tools/build.sh "-DFORESIGHT_BUILD_REVISION=$SOURCE_REVISION"
 # Application OAuth configuration is optional. BuildKit secrets never become
@@ -26,7 +28,7 @@ RUN test -n "$SOURCE_REVISION" && \
 RUN --mount=type=secret,id=google_client \
     task_args=(); if [[ -f /run/secrets/google_client ]]; then task_args+=(--google-client /run/secrets/google_client); fi; \
     /opt/dev-python/bin/python tools/package.py --output dist/open-foresight \
-      --revision "$SOURCE_REVISION" --litert-python /opt/litert-python/bin/python \
+      --revision "$SOURCE_REVISION" \
       --generation-backend gpu --whisper-gpu-runtime /opt/whisper-runtime/whisper-cli \
       --whisper-gpu-device 0 "${task_args[@]}" && \
     python3 packaging/check_abi.py dist/open-foresight --max-glibc 2.39 --report dist/abi.json

@@ -1,10 +1,16 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:dbus/dbus.dart';
 
-/// Owned portal session. The desktop controls consent, bindings and conflicts.
+/// Owned native macOS registration or Freedesktop portal session.
 class GlobalShortcuts {
-  final DBusClient client;
+  DBusClient? _client;
+  DBusClient get client => _client ??= DBusClient.session();
+  final bool macOS;
+  bool _macEnabled = false;
+  static const channel = MethodChannel('foresight/desktop');
   final void Function(String, String?) activated;
   final void Function()? changed;
   static const service = 'org.freedesktop.portal.Desktop';
@@ -24,7 +30,15 @@ class GlobalShortcuts {
     this.changed,
     DBusClient? client,
     this.appId = 'io.openforesight.App',
-  }) : client = client ?? DBusClient.session();
+    bool? macOS,
+  }) : _client = client,
+       macOS = macOS ?? Platform.isMacOS {
+    if (this.macOS)
+      channel.setMethodCallHandler((call) async {
+        if (!_closed && _macEnabled && call.method == 'quick-meeting')
+          activated('quick-meeting', null);
+      });
+  }
 
   Future<Map<String, DBusValue>> _request(
     String method,
@@ -86,6 +100,22 @@ class GlobalShortcuts {
 
   Future<void> enable({String preferredTrigger = 'CTRL+SHIFT+f'}) async {
     if (_closed) throw StateError('Shortcut service closed');
+    if (macOS) {
+      try {
+        await channel.invokeMethod<void>('shortcut.enable', {
+          'trigger': preferredTrigger,
+        });
+        _macEnabled = true;
+        trigger = preferredTrigger;
+        state = 'Registered with macOS';
+      } catch (error) {
+        state = 'Shortcut unavailable: $error';
+        rethrow;
+      } finally {
+        changed?.call();
+      }
+      return;
+    }
     if (session != null) return;
     state = 'Requesting desktop shortcut';
     changed?.call();
@@ -104,6 +134,22 @@ class GlobalShortcuts {
         ),
       });
       if (_closed) throw StateError('Shortcut service closed');
+      if (macOS) {
+        try {
+          await channel.invokeMethod<void>('shortcut.enable', {
+            'trigger': preferredTrigger,
+          });
+          _macEnabled = true;
+          trigger = preferredTrigger;
+          state = 'Registered with macOS';
+        } catch (error) {
+          state = 'Shortcut unavailable: $error';
+          rethrow;
+        } finally {
+          changed?.call();
+        }
+        return;
+      }
       session = DBusObjectPath(response['session_handle']!.asString());
       _activation =
           DBusRemoteObjectSignalStream(
@@ -158,6 +204,8 @@ class GlobalShortcuts {
   }
 
   Future<void> configure() async {
+    if (macOS)
+      throw StateError('Change the meeting shortcut in Foresight settings.');
     if (session == null) throw StateError('Enable global shortcuts first');
     final version = (await portal.getProperty(interface, 'version')).asUint32();
     if (version < 2)
@@ -172,6 +220,13 @@ class GlobalShortcuts {
   }
 
   Future<void> disable() async {
+    if (macOS) {
+      if (_macEnabled) await channel.invokeMethod<void>('shortcut.disable');
+      _macEnabled = false;
+      state = 'disabled';
+      changed?.call();
+      return;
+    }
     await _activation?.cancel();
     await _changes?.cancel();
     _activation = null;
@@ -194,6 +249,7 @@ class GlobalShortcuts {
   Future<void> close() async {
     _closed = true;
     await disable();
-    await client.close();
+    if (macOS) channel.setMethodCallHandler(null);
+    await _client?.close();
   }
 }

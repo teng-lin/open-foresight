@@ -1,17 +1,21 @@
+import 'package:foresight_core/foresight_core.dart'
+    show
+        runtimeConfiguration,
+        privateDirectory,
+        configureProfileRuntime,
+        openPlatformUri,
+        platformNotification;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
-import 'package:grpc/grpc.dart' show CallOptions;
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'domain.dart';
-import 'helper.dart';
-import 'native.dart';
-import 'store.dart';
+import 'package:foresight_core/remote.dart';
 import 'graph_labels.dart';
 import 'graph_label_controls.dart';
 import 'graph_clusters.dart';
@@ -40,7 +44,6 @@ import 'file_discovery_sheet.dart';
 import 'graph_layout.dart';
 import 'graph_rendering.dart';
 import 'graph_persistence.dart';
-import 'generated/rag_service.pbgrpc.dart';
 
 part 'screenshot_ui.dart';
 part 'meeting_workspace.dart';
@@ -52,6 +55,7 @@ Future<void> main([List<String> arguments = const []]) async {
   final runtime = profile.runtime;
   ensurePrivateDirectory(data);
   ensurePrivateDirectory(runtime);
+  configureProfileRuntime(data);
   final commandPath = '$runtime/commands.sock';
   final launchCommand = arguments.contains('--stop-meeting')
       ? 'stop-meeting'
@@ -73,45 +77,18 @@ Future<void> main([List<String> arguments = const []]) async {
     if (await AppCommands.forward(commandPath, command: launchCommand)) exit(0);
     rethrow;
   }
-  final store = Store('$data/application.db');
-  store.db.execute(
-    "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing')",
-  );
-  final manifest = Platform.environment['FORESIGHT_MODEL_MANIFEST'];
-  if (manifest != null && File(manifest).existsSync()) {
-    await registerInstalledModels(store, manifest);
-  }
+  final domain = await RemoteDomain.connect(profile);
   runApp(
     Foresight(
-      Domain(store, Helper('$runtime/helper.sock', '$data/helper')),
+      domain,
       commands: ownedCommands,
       quickOnLaunch: arguments.contains('--quick-meeting'),
     ),
   );
 }
 
-Future<void> openSourceLink(Uri uri) async {
-  final result = await Process.run('xdg-open', [uri.toString()]);
-  if (result.exitCode != 0) throw StateError('Could not open the source link.');
-}
-
-void ensurePrivateDirectory(String path) {
-  final directory = Directory(path);
-  if (!directory.existsSync()) {
-    directory.createSync(recursive: true);
-    final changed = Process.runSync('chmod', ['700', path]);
-    if (changed.exitCode != 0)
-      throw StateError('Cannot create private directory: $path');
-  }
-  final owner = Process.runSync('stat', ['-Lc', '%u', path]);
-  final user = Process.runSync('id', ['-u']);
-  if (owner.exitCode != 0 ||
-      user.exitCode != 0 ||
-      owner.stdout.toString().trim() != user.stdout.toString().trim() ||
-      directory.statSync().mode & 0x3f != 0) {
-    throw StateError('A private user-owned directory is required: $path');
-  }
-}
+Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
+void ensurePrivateDirectory(String path) => privateDirectory(path);
 
 class Foresight extends StatelessWidget {
   final Domain domain;
@@ -244,7 +221,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     graphMotionFrames.value++;
   }
 
-  Timer? inactivityTimer;
   late final DesktopSettings desktopSettings = DesktopSettings(
     Directory(
       Platform.environment['XDG_CONFIG_HOME'] ??
@@ -272,7 +248,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       meetingCompactAssistant = false;
   String meetingPanel = 'Chat', meetingEnhanceStatus = '';
   double meetingSidecarWidth = 400;
-  Timer? meetingEnhanceTimer, recordingDisplayTimer;
   DateTime? recordingBegan;
   String modelKind = 'embedding';
   bool embeddingGpu = false;
@@ -283,16 +258,30 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   AppCommands? commands;
   GlobalShortcuts? globalShortcuts;
   String globalShortcutState = 'disabled';
-  Timer? liveIndexTimer, googleTimer;
-  late final GoogleAuth googleAuth = GoogleAuth(
-    Directory('${File(d.store.path).parent.path}/google'),
-  );
-  late final GoogleConnections google = GoogleConnections(d, googleAuth);
+  late final GoogleAuth googleAuth = d is RemoteDomain
+      ? RemoteGoogleAuth(d as RemoteDomain)
+      : d.application.googleAuth;
+  late final GoogleConnections google = d is RemoteDomain
+      ? RemoteGoogleConnections(d as RemoteDomain, googleAuth)
+      : d.application.google;
   String googleState = '';
   List<AudioDevice> availableAudioDevices = [];
   String audioDeviceState = '';
-  bool googleSyncing = false;
-  bool googleReminding = false;
+  Map<String, dynamic> captureCapabilities = {};
+  String captureCapabilityError = '';
+  String loginState = '';
+  String get microphoneAccessLabel =>
+      const {
+        'authorized': 'Allowed',
+        'denied': 'Denied',
+        'restricted': 'Restricted by system policy',
+        'not_determined': 'Not requested',
+      }[captureCapabilities['microphone']] ??
+      'Checking';
+
+  bool get googleSyncing => d is RemoteDomain
+      ? (d as RemoteDomain).googleStatus['syncing'] == true
+      : d.application.google.syncing;
   HyprShortcuts get hyprShortcuts =>
       HyprShortcuts(desktopSettings.config, desktopSettings.launcher);
   String recordingState = 'idle';
@@ -340,23 +329,16 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     google; // Create the independently versioned connection tables.
     googleState = googleAuth.loadError;
     unawaited(refreshAudioDevices());
-    googleTimer = Timer.periodic(
-      const Duration(minutes: 1),
-      (_) => unawaited(maintainGoogle()),
-    );
+    if (Platform.isMacOS) {
+      unawaited(refreshCaptureCapabilities());
+      unawaited(refreshLoginSetting());
+    }
+
     notifications = d.store.preference('notifications') == 'true';
-    unawaited(
-      Process.run('sh', ['-c', 'command -v notify-send']).then((result) {
-        if (mounted)
-          setState(
-            () => notificationState = result.exitCode == 0
-                ? 'notify-send available; delivery depends on desktop service'
-                : 'notify-send unavailable',
-          );
-      }),
-    );
+    unawaited(refreshNotifications());
+    syncCapture();
     d.helper.changed = () {
-      if (mounted) setState(() {});
+      if (mounted) setState(syncCapture);
     };
     d.helper.onReady = () async {
       try {
@@ -387,17 +369,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    if (recording != null && recordingMeeting != null) {
-      d.store.db.execute("UPDATE meetings SET state='interrupted' WHERE id=?", [
-        recordingMeeting,
-      ]);
-    }
-    inactivityTimer?.cancel();
-    liveIndexTimer?.cancel();
-    googleTimer?.cancel();
-    meetingEnhanceTimer?.cancel();
-    recordingDisplayTimer?.cancel();
-    google.close();
+    if (d is! RemoteDomain) google.close();
     d.close();
     unawaited(googleAuth.close());
     unawaited(commands?.close() ?? Future<void>.value());
@@ -435,7 +407,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     } on MissingPluginException {
       /* pure widget tests */
     }
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       final active = await Process.run('hyprctl', ['activewindow', '-j']);
       if (active.exitCode == 0 &&
           (jsonDecode(active.stdout as String) as Map)['pid'] != pid) {
@@ -453,7 +426,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> enableGlobalShortcuts() async {
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       await hyprShortcuts.install(
         d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
       );
@@ -476,17 +450,76 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       );
       globalShortcutState = globalShortcuts!.state;
     }
-    d.store.setPreference('globalShortcut', 'true');
+    await d.command('preferences.set', {
+      'key': 'globalShortcut',
+      'value': 'true',
+    });
     if (mounted) setState(() {});
   }
 
   Future<void> disableGlobalShortcuts() async {
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
     await globalShortcuts?.disable();
-    d.store.setPreference('globalShortcut', 'false');
+    await d.command('preferences.set', {
+      'key': 'globalShortcut',
+      'value': 'false',
+    });
     if (mounted) setState(() => globalShortcutState = 'disabled');
+  }
+
+  Future<void> refreshLoginSetting() async {
+    try {
+      await desktopSettings.refresh();
+      if (mounted) setState(() => loginState = '');
+    } catch (error) {
+      if (mounted) setState(() => loginState = error.toString());
+    }
+  }
+
+  Future<void> setOpenAtLogin(bool value) async {
+    try {
+      await desktopSettings.setOpenAtLogin(value);
+      if (mounted) setState(() => loginState = '');
+    } catch (error) {
+      if (mounted) setState(() => loginState = error.toString());
+      rethrow;
+    }
+  }
+
+  Future<void> refreshCaptureCapabilities() async {
+    try {
+      final result = await d.command('audio.capabilities') as Map;
+      if (mounted)
+        setState(() {
+          captureCapabilities = Map<String, dynamic>.from(result);
+          captureCapabilityError =
+              result['microphone_purpose_present'] == false ||
+                  result['system_audio_purpose_present'] == false
+              ? 'The recording service is missing audio access configuration. Reinstall Open Foresight.'
+              : '';
+        });
+    } catch (error) {
+      if (mounted) setState(() => captureCapabilityError = error.toString());
+    }
+  }
+
+  Future<void> requestMicrophoneAccess() async {
+    try {
+      final result = await d.command('audio.request_microphone') as Map;
+      if (mounted)
+        setState(() {
+          captureCapabilities = Map<String, dynamic>.from(result);
+          captureCapabilityError = result['granted'] == true
+              ? ''
+              : 'Microphone access was denied. Enable Open Foresight in System Settings > Privacy & Security > Microphone, then refresh access status.';
+        });
+    } catch (error) {
+      if (mounted) setState(() => captureCapabilityError = error.toString());
+      rethrow;
+    }
   }
 
   Future<void> refreshAudioDevices() async {
@@ -504,12 +537,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   bool modelSetupShown = false;
   Future<void> chooseGemma({bool firstRun = false}) async {
-    final info = File('/proc/meminfo').readAsStringSync();
-    final memoryKb =
-        int.tryParse(
-          RegExp(r'MemTotal:\s+(\d+)').firstMatch(info)?.group(1) ?? '',
-        ) ??
-        0;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -519,31 +546,26 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         needsEmbedding: needsModel(d.store, 'embedding'),
         needsGeneration: !firstRun || needsModel(d.store, 'generation'),
         installEmbedding: (asset, current) async {
-          final result = await d.helper.client.updateModelPaths(
-            UpdateModelPathsRequest(
-              embeddingModelPath: asset.path,
-              useGpu: true,
-            ),
-            options: CallOptions(timeout: const Duration(minutes: 30)),
-          );
+          await d.commandCurrent('models.embedding', {
+            'path': asset.path,
+            'gpu': true,
+            'digest': embeddingGemmaModel.digest,
+          }, current);
           if (!current()) return;
-          if (!result.success) throw StateError(result.errorMessage);
-          await d.store.register(
-            'embedding',
-            asset.path,
-            '',
-            backend: 'litert_lm_embedding_gpu',
-            expectedDigest: embeddingGemmaModel.digest,
-            current: current,
-          );
           if (mounted) setState(() => embeddingGpu = true);
         },
         directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
-        library:
-            Platform.environment['FORESIGHT_NATIVE'] ??
-            'libforesight_native.so',
-        runner: Platform.environment['FORESIGHT_LITERT_RUNNER'] ?? '',
-        memoryGb: (memoryKb / 1048576).round(),
+        library: runtimeConfiguration.nativeLibrary,
+        runner: runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? '',
+        memoryGb: physicalMemoryGb(),
+        installGeneration: (path, runtime, current) async {
+          await d.commandCurrent('models.generation', {
+            'path': path,
+            'runtime': runtime,
+            'backend': 'litert_lm',
+          }, current);
+          return d is RemoteDomain ? (d as RemoteDomain).runtime : d.generator!;
+        },
         installed: (runtime, model) {
           d.generator?.close();
           d.generator = runtime;
@@ -587,9 +609,16 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           '${File(d.store.path).parent.path}/models/whisper',
         ),
         runner:
-            Platform.environment['FORESIGHT_WHISPER_RUNTIME'] ??
+            runtimeConfiguration['FORESIGHT_WHISPER_RUNTIME'] ??
             registration?['runtime'] as String? ??
             '',
+        installSpeech: (asset, runner, digest, current) async {
+          await d.commandCurrent('models.speech', {
+            'path': asset.path,
+            'runtime': runner,
+            'digest': digest,
+          }, current);
+        },
         installed: () {
           if (mounted)
             setState(
@@ -600,43 +629,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       ),
     );
     if (mounted) setState(() {});
-  }
-
-  Future<void> maintainGoogle() async {
-    if (!mounted || !googleAuth.connected) return;
-    // A paused refresh must not prevent checks for already cached reminders.
-    unawaited(maintainGoogleReminders());
-    if (googleSyncing || d.sourcesPaused) return;
-    setState(() => googleSyncing = true);
-    try {
-      final hours =
-          int.tryParse(d.store.preference('googleRefreshHours', '4')) ?? 4;
-      final last = google.lastCompletedRefreshMs;
-      if (DateTime.now().millisecondsSinceEpoch - last >= hours * 3600000)
-        await google.refresh();
-      if (mounted)
-        setState(() => googleState = 'Google sources and calendar refreshed');
-    } catch (e) {
-      if (mounted) setState(() => googleState = e.toString());
-    } finally {
-      if (mounted) setState(() => googleSyncing = false);
-    }
-  }
-
-  Future<void> maintainGoogleReminders() async {
-    if (googleReminding) return;
-    googleReminding = true;
-    try {
-      await google.reminders(DateTime.now(), (message) async {
-        final result = await Process.run('notify-send', ['Open Foresight', message]);
-        if (result.exitCode != 0)
-          throw StateError('Desktop could not deliver the meeting reminder.');
-      });
-    } catch (e) {
-      if (mounted) setState(() => googleState = e.toString());
-    } finally {
-      googleReminding = false;
-    }
   }
 
   Future<void> importGoogleClient() async {
@@ -658,24 +650,66 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         setState(
           () => googleState = 'Complete Google sign-in in your browser.',
         );
-      final opened = await Process.run('xdg-open', [uri.toString()]);
-      if (opened.exitCode != 0)
-        throw StateError('Could not open your browser.');
+      await openPlatformUri(uri);
     });
     if (mounted)
       setState(() => googleState = 'Connected as ${googleAuth.email}');
     await google.syncCalendar();
   }
 
+  Future<void> setMeetingReminders(bool value) async {
+    if (value && Platform.isMacOS) {
+      final result = await d.command('notifications.request_permission') as Map;
+      if (result['granted'] != true) {
+        throw StateError(
+          'Meeting reminders need notification access. Enable Open Foresight in System Settings > Notifications.',
+        );
+      }
+    }
+    await preference('googleReminders', value.toString());
+    await refreshNotifications();
+  }
+
+  Future<void> refreshNotifications() async {
+    try {
+      final result = await d.command('notifications.capabilities') as Map;
+      if (mounted)
+        setState(
+          () => notificationState = result['available'] == true
+              ? 'Notifications available'
+              : Platform.isMacOS
+              ? 'Notification permission required; enable to request access'
+              : 'Notifications unavailable',
+        );
+    } catch (error) {
+      if (mounted) setState(() => notificationState = error.toString());
+    }
+  }
+
+  Future<void> setNotifications(bool value) async {
+    if (value && Platform.isMacOS) {
+      final result = await d.command('notifications.request_permission') as Map;
+      if (result['granted'] != true) {
+        if (mounted)
+          setState(
+            () => notificationState =
+                'Notification permission denied; enable Open Foresight in System Settings',
+          );
+        return;
+      }
+    }
+    await d.command('preferences.set', {
+      'key': 'notifications',
+      'value': value.toString(),
+    });
+    if (mounted) setState(() => notifications = value);
+    await refreshNotifications();
+  }
+
   Future<void> notify(String message) async {
     if (!notifications) return;
     try {
-      final result = await Process.run('notify-send', ['Open Foresight', message]);
-      if (result.exitCode != 0 && mounted)
-        setState(
-          () => notificationState =
-              'notification delivery failed: ${result.stderr}',
-        );
+      await platformNotification('Open Foresight', message);
     } catch (e) {
       if (mounted)
         setState(() => notificationState = 'notification unavailable: $e');
@@ -816,7 +850,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     );
     if (saved == true && mounted) {
       await run(() async {
-        d.store.importText(
+        await importText(
           s['title'] as String,
           text.text,
           s['mime'] as String,
@@ -911,9 +945,15 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
               ),
             ),
             FilledButton(
-              onPressed: () => setState(() {
-                d.store.saveNote(noteId, noteTitle.text, noteBody.text);
-                noteId ??= d.store.db.lastInsertRowId;
+              onPressed: () => run(() async {
+                final saved =
+                    await d.command('notes.save', {
+                          'id': noteId,
+                          'title': noteTitle.text,
+                          'body': noteBody.text,
+                        })
+                        as Map;
+                if (mounted) setState(() => noteId = saved['id'] as int);
               }),
               child: const Text('Save note'),
             ),
@@ -964,41 +1004,20 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           onPressed: busy
               ? null
               : () => run(() async {
-                  if (modelKind != 'embedding')
-                    await d.store.register(
-                      modelKind,
-                      modelPath.text,
-                      runtimePath.text,
-                    );
-                  if (modelKind == 'embedding') {
-                    final result = await d.helper.client.updateModelPaths(
-                      UpdateModelPathsRequest(
-                        embeddingModelPath: modelPath.text,
-                        sentencePieceModelPath: '',
-                        useGpu: embeddingGpu,
-                      ),
-                    );
-                    if (!result.success) throw StateError(result.errorMessage);
-                    await d.store.register(
-                      'embedding',
-                      modelPath.text,
-                      '',
-                      backend: embeddingGpu
-                          ? 'litert_lm_embedding_gpu'
-                          : modelPath.text.endsWith('.litertlm')
-                          ? 'litert_lm_embedding_cpu'
-                          : 'sentence_transformers_cpu',
-                    );
-                    modelState = 'Embedding model ready; index rebuilt';
-                  }
-                  if (modelKind == 'generation') {
-                    d.generator ??= NativeRuntime(
-                      Platform.environment['FORESIGHT_NATIVE'] ??
-                          'libforesight_native.so',
-                    );
-                    await d.generator!.load(runtimePath.text, modelPath.text);
-                    modelState = 'generation initialized (quality unevaluated)';
-                  }
+                  await d.command(
+                    modelKind == 'embedding'
+                        ? 'models.embedding'
+                        : modelKind == 'generation'
+                        ? 'models.generation'
+                        : 'models.register',
+                    {
+                      'kind': modelKind,
+                      'path': modelPath.text,
+                      'runtime': runtimePath.text,
+                      'gpu': embeddingGpu,
+                    },
+                  );
+                  modelState = '$modelKind ready';
                 }),
           child: const Text('Register and load'),
         ),
@@ -1014,8 +1033,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ),
         CheckboxListTile(
           value: notifications,
-          onChanged: notificationState.startsWith('notify-send available')
-              ? (value) => setState(() => notifications = value!)
+          onChanged:
+              (Platform.isMacOS
+                  ? runtimeConfiguration['FORESIGHT_NOTIFICATIONS'] != null
+                  : notificationState.startsWith('Notifications available'))
+              ? (value) => run(() => setNotifications(value!))
               : null,
           title: const Text('Desktop completion/error notifications'),
           subtitle: Text(notificationState),
@@ -1039,213 +1061,67 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     ),
   );
   Widget meetings() => meetingId == null ? meetingList() : meetingWorkspace();
+  Future<String> importText(
+    String title,
+    String text,
+    String mime,
+    String provenance, {
+    String? id,
+    int? modifiedAtMs,
+    String? sourceUri,
+  }) async {
+    final result =
+        await d.command('sources.import', {
+              'title': title,
+              'text': text,
+              'mime': mime,
+              'provenance': provenance,
+              'id': id,
+              'modifiedAtMs': modifiedAtMs,
+              'sourceUri': sourceUri,
+              'index': false,
+            })
+            as Map;
+    return result['id'] as String;
+  }
+
+  void syncCapture() {
+    final state = d is RemoteDomain
+        ? (d as RemoteDomain).capture
+        : d.application.captureState;
+    recording = state['active'] == true
+        ? RemoteRecording(Map<String, dynamic>.from(state))
+        : null;
+    recordingMeeting = state['meeting_id'] as int?;
+    recordingState = state['state'] as String? ?? 'idle';
+    final began = state['began'] as int?;
+    recordingBegan = began == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(began);
+    provisionalTranscript
+      ..clear()
+      ..addAll(Map<String, String>.from(state['provisional'] as Map? ?? {}));
+  }
+
   Future<void> startRecording() async {
-    final speech = d.store
-        .rows("SELECT * FROM models WHERE kind='speech'")
-        .firstOrNull;
-    if (speech == null)
-      throw StateError('Register speech model and whisper.cpp runner first');
-    final pinnedMeeting = meetingId!;
-    recordingMeeting = pinnedMeeting;
-    provisionalTranscript.clear();
-    recording = Recording(
-      Platform.environment['FORESIGHT_NATIVE'] ?? 'libforesight_native.so',
-      (state) {
-        if (mounted) setState(() => recordingState = state);
-      },
-      (text, start, end, source) {
-        d.store.transcript(
-          pinnedMeeting,
-          text,
-          true,
-          start,
-          end,
-          '$source; captured-sample timeline (gaps excluded)',
-        );
-        if (loadedMeetingNotes == pinnedMeeting &&
-            meetingNotesController.text.trim().isNotEmpty &&
-            d.store.preference('liveEnhance', 'true') == 'true') {
-          meetingEnhanceTimer?.cancel();
-          meetingEnhanceTimer = Timer(const Duration(seconds: 2), () {
-            if (mounted && meetingId == pinnedMeeting)
-              unawaited(enhanceMeetingNotes(pinnedMeeting));
-          });
-        }
-        if (mounted) {
-          setState(() {});
-          liveIndexTimer?.cancel();
-          liveIndexTimer = Timer(const Duration(seconds: 1), () {
-            if (mounted)
-              unawaited(
-                indexMeeting(pinnedMeeting).catchError((Object e) {
-                  if (mounted) setState(() => error = 'Live indexing: $e');
-                }),
-              );
-          });
-        }
-      },
-      levels: () {
-        if (mounted) setState(() {});
-      },
-      provisional: (text, start, end, source) {
-        if (mounted) setState(() => provisionalTranscript[source] = text);
-      },
-      interruption: (event) {
-        d.store.transcript(
-          pinnedMeeting,
-          'Capture interruption: ${event['reason']}; ${event['discarded_bytes']} residual bytes discarded. Captured-sample transcript timing excludes the gap.',
-          false,
-          0,
-          0,
-          '${event['source']}-capture-interruption',
-        );
-        d.store.db.execute(
-          "UPDATE meetings SET state='interrupted' WHERE id=?",
-          [pinnedMeeting],
-        );
-        if (mounted) setState(() {});
-      },
-    );
-    try {
-      recording!.start(
-        speech['runtime'] as String,
-        speech['path'] as String,
-        microphoneTarget:
-            Platform.environment['FORESIGHT_MICROPHONE_TARGET'] ??
-            d.store.preference('microphoneTarget', 'auto'),
-        playbackTarget:
-            Platform.environment['FORESIGHT_PLAYBACK_TARGET'] ??
-            d.store.preference('playbackTarget', 'auto'),
-      );
-    } catch (_) {
-      recording = null;
-      rethrow;
-    }
-    inactivityTimer?.cancel();
-    inactivityTimer = Timer.periodic(const Duration(seconds: 5), (_) {
-      final minutes =
-          int.tryParse(d.store.preference('inactivity', '15')) ?? 15;
-      if (minutes > 0 &&
-          recording != null &&
-          !busy &&
-          DateTime.now().difference(recording!.lastAudioActivity).inSeconds >=
-              minutes * 60) {
-        unawaited(run(stopRecording));
-      }
-    });
-    d.store.db.execute("UPDATE meetings SET state='recording' WHERE id=?", [
-      pinnedMeeting,
-    ]);
-    recordingBegan = DateTime.now();
-    recordingDisplayTimer?.cancel();
-    recordingDisplayTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted && recording != null) setState(() {});
-    });
+    await d.command('meetings.start', {'id': meetingId!});
+    syncCapture();
+    if (mounted) setState(() {});
   }
 
   Future<void> stopRecording() async {
-    recordingDisplayTimer?.cancel();
-    inactivityTimer?.cancel();
-    liveIndexTimer?.cancel();
-    final active = recording!;
-    final id = recordingMeeting!;
-    var status = 'failed';
-    d.store.db.execute("UPDATE meetings SET state='transcribing' WHERE id=?", [
-      id,
-    ]);
-    try {
-      await active.stop();
-      status = 'transcribed';
-      await indexMeeting(id);
-      status = recordingState.startsWith('No speech') ? 'empty' : 'completed';
-      await notify('Meeting transcription completed');
-    } finally {
-      if (identical(recording, active)) recording = null;
-      if (mounted)
-        d.store.db.execute("UPDATE meetings SET state=? WHERE id=?", [
-          status,
-          id,
-        ]);
-    }
+    await d.command('meetings.stop');
+    syncCapture();
+    if (mounted) setState(() {});
+    await notify('Meeting transcription completed');
   }
 
   Future<void> indexMeeting(int id) async {
-    final transcript = d.store
-        .rows(
-          'SELECT * FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-          [id],
-        )
-        .map(
-          (t) =>
-              '[${t['source']} ${t['start_ms']}–${t['end_ms']} ms] ${t['text']}',
-        )
-        .join('\n');
-    if (transcript.trim().isEmpty) return;
-    final sourceId = d.store.importText(
-      'Meeting $id transcript',
-      transcript,
-      'text/plain',
-      'meeting:$id',
-      id: 'meeting-$id',
-    );
-    final indexing = d.index(sourceId);
-    if (d.sourcesPaused) {
-      // Source indexing is queued, but microphone shutdown must finish now.
-      unawaited(
-        indexing.then<void>(
-          (_) {
-            if (mounted) setState(() {});
-          },
-          onError: (Object e) {
-            if (mounted) setState(() => error = 'Meeting indexing: $e');
-          },
-        ),
-      );
-    } else {
-      await indexing;
-    }
+    await d.command('meetings.index', {'id': id});
   }
 
   Future<void> generateMeeting(String kind) async {
-    final selectedMeeting = meetingId!;
-    if (d.generator == null) throw StateError('Generation model unavailable');
-    final text = d.store
-        .rows(
-          'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-          [selectedMeeting],
-        )
-        .map((t) => t['text'])
-        .join('\n');
-    if (text.isEmpty) throw StateError('No final transcript');
-    final inputRevision =
-        d.store.rows('SELECT revision FROM meetings WHERE id=?', [
-              selectedMeeting,
-            ]).first['revision']
-            as int;
-    var result = '';
-    String status = 'failed', failure = '';
-    await for (final e in d.generator!.generate(
-      'meeting-${DateTime.now().microsecondsSinceEpoch}',
-      'Produce $kind from this transcript only. Use ${d.store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details.\n${boundUtf8(text, 2800)}',
-    )) {
-      if (e['type'] == 'delta') result += e['text'] as String;
-      if (e['type'] == 'done') status = e['status'] as String;
-      if (e['type'] == 'error') failure = e['message'].toString();
-    }
-    if (status != 'completed')
-      throw StateError('Meeting generation $status: $failure');
-    final digest =
-        d.store
-                .rows('SELECT digest FROM models WHERE kind=\'generation\'')
-                .first['digest']
-            as String;
-    d.store.artifact(
-      selectedMeeting,
-      kind,
-      result,
-      digest,
-      inputRevision: inputRevision,
-    );
+    await d.command('meetings.generate', {'id': meetingId!, 'kind': kind});
   }
 
   void editArtifact(Map<String, Object?> a) async {
@@ -1266,8 +1142,12 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ),
         actions: [
           TextButton(
-            onPressed: () {
-              d.store.editArtifact(a['id'] as int, controller.text);
+            onPressed: () async {
+              await d.command('artifacts.edit', {
+                'id': a['id'],
+                'text': controller.text,
+              });
+              if (!context.mounted) return;
               Navigator.pop(context);
               setState(() {});
             },

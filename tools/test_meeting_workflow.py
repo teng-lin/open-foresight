@@ -48,7 +48,7 @@ def main():
     parser.add_argument('--flutter', default='flutter')
     parser.add_argument('--model-python', type=Path,
                         default=Path(os.environ.get('FORESIGHT_MODEL_PYTHON', ROOT / '.venv/bin/python')),
-                        help='Python environment for non-LiteRT model adapters')
+                        help='Deprecated test-driver option; native inference does not use Python')
     parser.add_argument('--agent-desktop', type=Path, default=ROOT.parent / 'agent-desktop',
                         help='Agent Desktop checkout used for a dedicated headless display')
     parser.add_argument('--model-manifest', type=Path, default=ROOT / 'models/local/native/installed.json')
@@ -95,9 +95,11 @@ def main():
             env = {
                 'FORESIGHT_DATA': temporary + '/data',
                 'FORESIGHT_RUNTIME': temporary + '/run',
+                'FORESIGHT_SERVICE': str(helper_bundle / 'bin/foresight-service'),
                 'FORESIGHT_HELPER': str(helper_bundle / 'bin/ForesightHelper'),
-                'FORESIGHT_MODEL_ADAPTER': str(ROOT / 'services/helper/model_adapter.py'),
-                'FORESIGHT_MODEL_PYTHON': str(args.model_python.expanduser().absolute()),
+                'FORESIGHT_MODEL_WORKER': str(helper_bundle / 'bin/foresight-model'),
+                'FORESIGHT_LITERT_LIBRARY': str(helper_bundle / 'lib/liblitert-lm.so'),
+                'FORESIGHT_ONNX_LIBRARY': str(helper_bundle / 'lib/libonnxruntime.so'),
                 'FORESIGHT_MODEL_MANIFEST': str(args.model_manifest.resolve()),
                 'FORESIGHT_NATIVE': str(helper_bundle / 'lib/libforesight_native.so'),
                 'FORESIGHT_PLAYBACK_TARGET': sink,
@@ -117,7 +119,7 @@ def main():
             }
             if args.real_inactivity:
                 env['FORESIGHT_REAL_INACTIVITY'] = '1'
-            bundled_runner = helper_bundle / 'share/open-foresight/litert-runner'
+            bundled_runner = helper_bundle / 'bin/foresight-model'
             if bundled_runner.is_file():
                 env['FORESIGHT_LITERT_RUNNER'] = str(bundled_runner)
             for setting in ('FORESIGHT_LITERT_BACKEND', 'FORESIGHT_WHISPER_BACKEND',
@@ -159,8 +161,8 @@ def main():
                     assert report_path.is_file(), 'Flutter did not produce a completed workflow report'
                     report = json.loads(report_path.read_text())
                     report['helper_bundle'] = str(helper_bundle)
-                    report['packaged_embedding_adapter_sha256'] = hashlib.sha256(
-                        (helper_bundle / 'share/open-foresight/litert_embedding_adapter.py').read_bytes()).hexdigest()
+                    report['packaged_native_model_worker_sha256'] = hashlib.sha256(
+                        (helper_bundle / 'bin/foresight-model').read_bytes()).hexdigest()
                     gallery = args.gallery or ROOT / 'test-results/ui/foresight-headless'
                     report['source_revision'] = revision
                     report['reference_screen_captures'] = str(gallery)
@@ -189,6 +191,8 @@ def main():
                     except ProcessLookupError:
                         pass
             finally:
+                subprocess.run([str(helper_bundle / 'open-foresight-service'), '--stop'],
+                    env={**os.environ, **env}, capture_output=True, timeout=30, check=False)
                 for process in Path('/proc').iterdir():
                     if not process.name.isdigit():
                         continue

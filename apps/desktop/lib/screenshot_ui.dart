@@ -93,9 +93,11 @@ extension _ScreenshotScreens on _WorkspaceState {
   );
 
   Future<void> quickStart() async {
+    final created =
+        await d.command('meetings.create', {'title': '[New Meeting]'}) as Map;
     update(() {
       tab = 3;
-      meetingId = d.store.meeting('[New Meeting]');
+      meetingId = created['id'] as int;
     });
     if (speechSetupProblem(d.store) != null) return;
     await run(startRecording);
@@ -110,7 +112,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       control: parts.contains('CTRL'),
       shift: parts.contains('SHIFT'),
       alt: parts.contains('ALT'),
-      meta: parts.contains('SUPER'),
+      meta: parts.any({'SUPER', 'CMD', 'COMMAND', 'META'}.contains),
     );
   }
 
@@ -141,44 +143,84 @@ extension _ScreenshotScreens on _WorkspaceState {
     input.dispose();
     if (saved != true || !mounted) return;
     await run(() async {
-      final normalized = HyprShortcuts.normalize(value);
+      final normalized = HyprShortcuts.normalize(
+        Platform.isMacOS
+            ? value
+                  .toUpperCase()
+                  .replaceAll(RegExp(r'\b(CMD|COMMAND|META)\b'), 'SUPER')
+                  .replaceAll('OPTION', 'ALT')
+                  .replaceAll('CONTROL', 'CTRL')
+            : value,
+      );
       if (d.store.preference('globalShortcut') == 'true') {
-        if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+        if (Platform.isMacOS) {
+          await globalShortcuts!.enable(
+            preferredTrigger: normalized.replaceAll(' ', ''),
+          );
+        } else if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] !=
+            null) {
           await hyprShortcuts.install(normalized);
         } else {
           await globalShortcuts!.configure();
           return;
         }
       }
-      d.store.setPreference('quickShortcut', normalized);
+      await preference('quickShortcut', normalized);
     });
   }
 
   Widget screenshotWorkspace(BuildContext context) => CallbackShortcuts(
     bindings: {
-      const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit1,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 3),
-      const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit2,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 1),
-      const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit3,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 0),
-      const SingleActivator(LogicalKeyboardKey.digit4, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit4,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 5),
-      const SingleActivator(LogicalKeyboardKey.digit5, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit5,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 6),
       quickActivator: () {
         if (!busy && recording == null) unawaited(quickStart());
       },
-      const SingleActivator(LogicalKeyboardKey.keyO, control: true): () {
+      SingleActivator(
+        LogicalKeyboardKey.keyO,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () {
         if (!busy) unawaited(run(import));
       },
-      const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
-          update(() {
-            tab = 2;
-            noteId = null;
-            noteTitle.clear();
-            noteBody.clear();
-          }),
+      SingleActivator(
+        LogicalKeyboardKey.keyN,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () => update(() {
+        tab = 2;
+        noteId = null;
+        noteTitle.clear();
+        noteBody.clear();
+      }),
     },
     child: Focus(
       autofocus: true,
@@ -520,23 +562,8 @@ extension _ScreenshotScreens on _WorkspaceState {
           );
 
   Future<void> importPath(String path) async {
-    await d.waitForSourceWork();
-    final modified = (await File(path).stat()).modified;
-    final (text, provenance) = await Parser().extract(path);
-    final existing = d.store.sources
-        .where((s) => (s['provenance'] as String).endsWith('; $path'))
-        .firstOrNull;
-    final id = d.store.importText(
-      path.split('/').last,
-      text,
-      path.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain',
-      '$provenance; $path',
-      id: existing?['id'] as String?,
-      modifiedAtMs: modified.millisecondsSinceEpoch,
-      sourceUri: Uri.file(File(path).absolute.path).toString(),
-    );
+    await d.command('sources.import_file', {'path': path});
     if (mounted) update(() {});
-    await d.index(id);
   }
 
   Future<void> findFilesOnComputer({List<String>? roots}) async {
@@ -584,56 +611,11 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Future<void> importDirectory(String path) async {
-    final files = Directory(path)
-        .listSync(recursive: true, followLinks: false)
-        .whereType<File>()
-        .where(
-          (file) => RegExp(
-            r'\.(txt|md|pdf|rtf)$',
-            caseSensitive: false,
-          ).hasMatch(file.path),
-        )
-        .toList();
-    final failures = <String>[];
-    for (final file in files) {
-      try {
-        await importPath(file.path);
-      } catch (e) {
-        failures.add('${file.path.split('/').last}: $e');
-      }
-    }
-    if (failures.isNotEmpty)
-      throw StateError(
-        'Imported ${files.length - failures.length} files. ${failures.join('\n')}',
-      );
+    await d.command('sources.import_directory', {'path': path});
   }
 
   Future<void> reimport() async {
-    final failures = <String>[];
-    for (final s in d.store.sources) {
-      final path = (s['provenance'] as String).split('; ').last;
-      try {
-        if (path.startsWith('url:')) {
-          await importAddress(path.substring(4));
-        } else if (File(path).existsSync()) {
-          await importPath(path);
-        } else if (path.startsWith('/')) {
-          throw StateError('Imported file is missing: $path');
-        } else {
-          await d.index(s['id'] as String);
-        }
-      } catch (e) {
-        failures.add('${s['title']}: $e');
-      }
-    }
-    if (googleAuth.connected) {
-      try {
-        await google.refresh();
-      } catch (e) {
-        failures.add(e.toString());
-      }
-    }
-    if (failures.isNotEmpty) throw StateError(failures.join('\n'));
+    await d.command('sources.refresh');
   }
 
   String googleSyncStatus() {
@@ -680,73 +662,53 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Future<void> importAddress(String value) async {
-    await d.waitForSourceWork();
-    final uri = Uri.tryParse(value);
-    if (uri == null ||
-        !['http', 'https'].contains(uri.scheme) ||
-        uri.host.isEmpty)
-      throw StateError('Enter an HTTP or HTTPS URL.');
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 20);
-    try {
-      final response = await (await client.getUrl(
-        uri,
-      )).close().timeout(const Duration(seconds: 30));
-      if (response.statusCode != 200)
-        throw StateError('URL returned HTTP ${response.statusCode}');
-      final bytes = <int>[];
-      await for (final chunk in response.timeout(const Duration(seconds: 30))) {
-        bytes.addAll(chunk);
-        if (bytes.length > 5 * 1024 * 1024)
-          throw StateError('Page exceeds 5 MB.');
-      }
-      var text = utf8.decode(bytes);
-      if (response.headers.contentType?.mimeType == 'text/html') {
-        text = text
-            .replaceAll(
-              RegExp(
-                r'<(script|style)\b[^>]*>[\s\S]*?</\1>',
-                caseSensitive: false,
-              ),
-              '',
-            )
-            .replaceAll(RegExp(r'<[^>]+>'), ' ')
-            .replaceAll('&nbsp;', ' ')
-            .replaceAll('&amp;', '&')
-            .replaceAll('&lt;', '<')
-            .replaceAll('&gt;', '>')
-            .replaceAll(RegExp(r'\s+'), ' ')
-            .trim();
-      } else if (!(response.headers.contentType?.mimeType.startsWith('text/') ??
-          false)) {
-        throw StateError(
-          'URL must contain HTML or plain text. Add binary documents as files.',
-        );
-      }
-      if (text.isEmpty) throw StateError('No readable text found.');
-      final existing = d.store.sources
-          .where((s) => s['provenance'] == 'url:$uri')
-          .firstOrNull;
-      final id = d.store.importText(
-        uri.host + uri.path,
-        text,
-        'text/plain',
-        'url:$uri',
-        id: existing?['id'] as String?,
-        sourceUri: uri.toString(),
-      );
-      await d.index(id);
-    } finally {
-      client.close(force: true);
-    }
+    await d.command('sources.import_url', {'url': value});
   }
 
   List<String> sourceLabels(Map<String, Object?> s) =>
       (jsonDecode(s['labels'] as String? ?? '[]') as List).cast<String>();
+  Future<void> putDocumentLabel(DocumentLabel label) async {
+    await d.command('labels.put', {
+      'id': label.documentId,
+      'name': label.name,
+      'source': label.source,
+      'color': label.colorHex,
+      'rationale': label.rationale,
+    });
+  }
+
+  Future<bool> saveGraphLayout(
+    String identity,
+    List<Map<String, Object?>> sources,
+    Map<String, List<double>> vectors,
+    Map<String, GraphPoint> points, {
+    String? labelSet,
+    List<GraphCluster> clusters = const [],
+  }) async {
+    return await d.command('graph.save', {
+          'identity': identity,
+          'sources': sources,
+          'vectors': vectors,
+          'points': points.map((k, v) => MapEntry(k, [v.x, v.y, v.z])),
+          'labelSet': labelSet,
+          'clusters': clusters
+              .map(
+                (c) => {
+                  'label': c.label,
+                  'center_proj_x': c.center.x,
+                  'center_proj_y': c.center.y,
+                  'radius': c.radius,
+                },
+              )
+              .toList(),
+        })
+        as bool;
+  }
+
   Future<void> addSelectedGraphLabel(String id, String value) async {
     final name = value.trim();
     if (name.isEmpty) return;
-    d.store.putDocumentLabel(
+    await putDocumentLabel(
       DocumentLabel(
         id,
         name,
@@ -758,15 +720,14 @@ extension _ScreenshotScreens on _WorkspaceState {
     await autoAssignOrganizationLabel(name);
   }
 
-  void removeSelectedGraphLabel(String id, String name) {
+  Future<void> removeSelectedGraphLabel(String id, String name) async {
     final source = d.store.sources.where((row) => row['id'] == id).single;
-    update(() {
-      d.store.labels(
-        id,
-        sourceLabels(source).where((label) => label != name).toList(),
-      );
-      d.store.acknowledgeGraphLabelRemoval();
+    await d.command('labels.set', {
+      'id': id,
+      'labels': sourceLabels(source).where((label) => label != name).toList(),
     });
+    await d.command('graph.acknowledge');
+    if (mounted) update(() {});
   }
 
   Future<void> createOrganizationLabel() async {
@@ -847,9 +808,11 @@ extension _ScreenshotScreens on _WorkspaceState {
       edges,
     );
     if (!mounted) return;
-    for (final write in plan.writes) d.store.putDocumentLabel(write);
-    d.store.saveLabelCluster(name);
-    d.store.invalidateGraphOrganization();
+    for (final write in plan.writes) {
+      await putDocumentLabel(write);
+    }
+    await d.command('labels.cluster', {'name': name});
+    await d.command('graph.invalidate');
     if (mounted)
       update(() {
         graphOrganizationRevision++;
@@ -883,12 +846,14 @@ extension _ScreenshotScreens on _WorkspaceState {
         ],
       ),
     );
-    if (confirmed == true && mounted)
-      update(() {
-        d.store.deleteOrganizationLabel(name);
-        d.store.acknowledgeGraphLabelRemoval();
-        if (labelFilter == name) labelFilter = '';
-      });
+    if (confirmed == true && mounted) {
+      await d.command('labels.delete', {'name': name});
+      await d.command('graph.acknowledge');
+      if (mounted)
+        update(() {
+          if (labelFilter == name) labelFilter = '';
+        });
+    }
   }
 
   Future<void> editLabels(Map<String, Object?>? s) async {
@@ -924,14 +889,15 @@ extension _ScreenshotScreens on _WorkspaceState {
         .toList();
     input.dispose();
     if (ok != true || !mounted) return;
-    update(() {
-      for (final row in s == null ? filteredSources() : [s]) {
-        d.store.labels(
-          row['id'] as String,
-          s == null ? {...sourceLabels(row), ...values}.toList() : values,
-        );
-      }
-    });
+    for (final row in s == null ? filteredSources() : [s]) {
+      await d.command('labels.set', {
+        'id': row['id'],
+        'labels': s == null
+            ? {...sourceLabels(row), ...values}.toList()
+            : values,
+      });
+    }
+    if (mounted) update(() {});
   }
 
   Map<String, String> driveSourceMimes() => {
@@ -1768,7 +1734,7 @@ extension _ScreenshotScreens on _WorkspaceState {
               saved.identity != null &&
               scene.points.length == sources.length &&
               sources.length >= 2) {
-            final published = d.store.saveGraphLayout(
+            final published = await saveGraphLayout(
               saved.identity!,
               sources,
               saved.vectors,
@@ -1929,7 +1895,7 @@ extension _ScreenshotScreens on _WorkspaceState {
             current.activeGeneration.toString() != generation)
           return;
         if (layout.length == sources.length && sources.length >= 2) {
-          final published = d.store.saveGraphLayout(
+          final published = await saveGraphLayout(
             persistentIdentity,
             sources,
             vectors,
@@ -2606,13 +2572,15 @@ extension _ScreenshotScreens on _WorkspaceState {
       }
       if (meetingScope != null) {
         final saved = d.store
-            .rows('SELECT id FROM answers ORDER BY id DESC LIMIT 1')
+            .rows(
+              "SELECT id FROM answers WHERE conversation='desktop' ORDER BY id DESC LIMIT 1",
+            )
             .firstOrNull;
         if (saved != null)
-          d.store.db.execute(
-            'INSERT OR IGNORE INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
-            [meetingScope, saved['id']],
-          );
+          await d.command('meetings.link_answer', {
+            'id': meetingScope,
+            'answer': saved['id'],
+          });
       }
     } finally {
       if (mounted) update(() => asking = false);
@@ -2828,9 +2796,15 @@ extension _ScreenshotScreens on _WorkspaceState {
               'New meeting',
               busy || recording != null
                   ? null
-                  : () => update(
-                      () => meetingId = d.store.meeting('[New Meeting]'),
-                    ),
+                  : () => run(() async {
+                      final created =
+                          await d.command('meetings.create', {
+                                'title': '[New Meeting]',
+                              })
+                              as Map;
+                      if (mounted)
+                        update(() => meetingId = created['id'] as int);
+                    }),
               icon: Icons.add,
             ),
           ],
@@ -3272,41 +3246,11 @@ extension _ScreenshotScreens on _WorkspaceState {
     if (ok != true || !mounted) return;
     await run(() async {
       if (googleAuth.connected) await googleAuth.disconnect();
-      for (final row in d.store.sources) {
-        await d.delete(row['id'] as String);
-      }
-      d.store.db.execute('BEGIN');
-      try {
-        for (final table in [
-          'google_sources',
-          'google_folders',
-          'calendar_events',
-          'artifacts',
-          'transcript',
-          'meeting_details',
-          'meetings',
-          'answers',
-          'notes',
-          'source_details',
-          'document_labels',
-          'document_clusters',
-          'graph_documents',
-          'graph_force_state',
-          'graph_layouts',
-          'sources',
-        ]) {
-          d.store.db.execute('DELETE FROM $table');
-        }
-        d.store.db.execute('COMMIT');
-      } catch (_) {
-        d.store.db.execute('ROLLBACK');
-        rethrow;
-      }
+      await d.command('workspace.clear');
       update(() {
         meetingId = null;
         loadedMeetingNotes = null;
         meetingNotesController.clear();
-        meetingEnhanceTimer?.cancel();
         meetingEnhanceStatus = '';
         sourceQuery = '';
         sourceSearchController.clear();
@@ -3321,8 +3265,11 @@ extension _ScreenshotScreens on _WorkspaceState {
     });
   }
 
-  void preference(String key, String value) =>
-      update(() => d.store.setPreference(key, value));
+  Future<void> preference(String key, String value) async {
+    await d.command('preferences.set', {'key': key, 'value': value});
+    if (mounted) update(() {});
+  }
+
   Widget settingRow(String title, String subtitle, Widget control) =>
       LayoutBuilder(
         builder: (_, constraints) {
@@ -3407,14 +3354,15 @@ extension _ScreenshotScreens on _WorkspaceState {
             children: [
               SwitchListTile(
                 title: const Text('Open at login'),
-                subtitle: const Text(
-                  'Automatically open Foresight when you log in to your computer.',
+                subtitle: Text(
+                  loginState.isEmpty
+                      ? 'Automatically open Foresight when you log in to your computer.'
+                      : loginState,
                 ),
                 value: desktopSettings.openAtLogin,
                 onChanged: busy
                     ? null
-                    : (value) =>
-                          run(() => desktopSettings.setOpenAtLogin(value)),
+                    : (value) => run(() => setOpenAtLogin(value)),
               ),
               const Divider(height: 1),
               SwitchListTile(
@@ -3423,8 +3371,9 @@ extension _ScreenshotScreens on _WorkspaceState {
                   'Notify five minutes before a timed Calendar meeting starts.',
                 ),
                 value: d.store.preference('googleReminders') == 'true',
-                onChanged: (value) =>
-                    preference('googleReminders', value.toString()),
+                onChanged: busy
+                    ? null
+                    : (value) => run(() => setMeetingReminders(value)),
               ),
               const Divider(height: 1),
               Padding(
@@ -3597,7 +3546,7 @@ extension _ScreenshotScreens on _WorkspaceState {
             '',
             TextButton(
               onPressed: () => update(() => tab = 2),
-              child: const Text('Ctrl + N'),
+              child: Text(Platform.isMacOS ? '⌘ + N' : 'Ctrl + N'),
             ),
           ),
         ),
@@ -3609,6 +3558,32 @@ extension _ScreenshotScreens on _WorkspaceState {
         Card(
           child: Column(
             children: [
+              if (Platform.isMacOS) ...[
+                ListTile(
+                  title: const Text('Recording access'),
+                  subtitle: Text(
+                    captureCapabilityError.isNotEmpty
+                        ? captureCapabilityError
+                        : 'Microphone: $microphoneAccessLabel\nSystem audio access is checked when you explicitly start recording. Enable Open Foresight under Privacy & Security > Screen & System Audio Recording if access is denied.',
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () => run(requestMicrophoneAccess),
+                      child: const Text('Allow microphone'),
+                    ),
+                    TextButton(
+                      onPressed: busy ? null : refreshCaptureCapabilities,
+                      child: const Text('Refresh access status'),
+                    ),
+                  ],
+                ),
+                const Divider(height: 1),
+              ],
               settingRow(
                 'Microphone',
                 'Select the microphone used for spoken transcription.',
@@ -3634,10 +3609,9 @@ extension _ScreenshotScreens on _WorkspaceState {
                 title: const Text('Desktop completion notifications'),
                 subtitle: Text(notificationState),
                 value: notifications,
-                onChanged: (value) => update(() {
-                  notifications = value;
-                  d.store.setPreference('notifications', value.toString());
-                }),
+                onChanged: busy
+                    ? null
+                    : (value) => run(() => setNotifications(value)),
               ),
               const Divider(height: 1),
             ],

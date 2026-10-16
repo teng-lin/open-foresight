@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:open_foresight/main.dart' as app;
+import 'package:open_foresight/store.dart';
+import 'package:open_foresight/graph_layout.dart';
 import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
 import 'package:open_foresight/graph_persistence.dart';
@@ -291,7 +293,10 @@ void main() {
         ]).single['edited'],
         'My meeting review: preserve this edit.',
       );
-      workspace.d.store.setPreference('liveEnhance', 'false');
+      await workspace.d.command('preferences.set', {
+        'key': 'liveEnhance',
+        'value': 'false',
+      });
       await tester.enterText(
         find.byKey(const ValueKey('meeting-notes-editor')),
         'Ask what you can do for your country.',
@@ -398,8 +403,8 @@ void main() {
       );
       await tester.tap(find.text('Close').last);
       await tester.pumpAndSettle();
-      // Reproduce closing the app while a native speech result is pending.
-      // The profile must reopen without a freed-handle poll or a stale recording.
+      // Close the desktop while a native speech result is pending.
+      // The service must finish transcription and survive reconnection.
       final savedSpeech =
           reopened.d.store
                   .rows("SELECT runtime FROM models WHERE kind='speech'")
@@ -409,10 +414,14 @@ void main() {
         '${env['FORESIGHT_DATA']}/speech-cancellation-runner',
       )..writeAsStringSync('#!/bin/sh\nsleep 2\nexec "$savedSpeech" "\$@"\n');
       await Process.run('chmod', ['700', slowSpeech.path]);
-      reopened.d.store.db.execute(
-        "UPDATE models SET runtime=? WHERE kind='speech'",
-        [slowSpeech.path],
-      );
+      final speechAsset = reopened.d.store
+          .rows("SELECT path FROM models WHERE kind='speech'")
+          .single['path'];
+      await reopened.d.command('models.register', {
+        'kind': 'speech',
+        'path': speechAsset,
+        'runtime': slowSpeech.path,
+      });
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await tester.tap(find.byTooltip('Meeting options'));
@@ -434,7 +443,7 @@ void main() {
       expect(await secondPlayer.exitCode, 0);
       await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.byTooltip('Stop transcribing'));
-      expect(reopened.recording.finishing, true);
+      await waitUntil(tester, () => reopened.recording?.finishing == true);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
@@ -445,22 +454,25 @@ void main() {
         tester,
         () => afterCancellation.d.generator?.effectiveState['state'] == 'ready',
       );
+      await waitUntil(tester, () => afterCancellation.recording == null);
       expect(
         afterCancellation.d.store.rows(
           'SELECT state FROM meetings WHERE id=?',
           [meeting],
         ).single['state'],
-        'interrupted',
+        'completed',
       );
-      afterCancellation.d.store.db.execute(
-        "UPDATE models SET runtime=? WHERE kind='speech'",
-        [savedSpeech],
-      );
+      await afterCancellation.d.command('models.register', {
+        'kind': 'speech',
+        'path': speechAsset,
+        'runtime': savedSpeech,
+      });
       final realInactivity = env['FORESIGHT_REAL_INACTIVITY'] == '1';
       final inactivityObservations = <Map<String, Object?>>[];
-      if (realInactivity) {
-        afterCancellation.d.store.setPreference('inactivity', '5');
-      }
+      await afterCancellation.d.command('preferences.set', {
+        'key': 'inactivity',
+        'value': realInactivity ? '5' : '0.1',
+      });
       // The opt-in path waits for production timekeeping on silent devices.
       await tester.tap(find.text('Start transcribing'));
       await tester.pump();
@@ -472,11 +484,6 @@ void main() {
       final activityAtStart =
           afterCancellation.recording.lastAudioActivity as DateTime;
       var nextCheckpoint = 60;
-      if (!realInactivity) {
-        afterCancellation.recording.lastAudioActivity = DateTime.now().subtract(
-          const Duration(minutes: 16),
-        );
-      }
       await waitUntil(tester, () {
         final elapsed = DateTime.now().difference(activityAtStart).inSeconds;
         if (realInactivity &&
@@ -653,21 +660,21 @@ void main() {
           '$screenshotDirectory/${name == 'Stats' ? '01-stats' : '02-sources-list'}.png',
         );
       }
-      final unindexedGraphSource = afterCancellation.d.store.importText(
+      final unindexedGraphSource = await afterCancellation.importText(
         'Missing vector fixture',
         'Missing-vector text participates in the graph.',
         'text/plain',
         'fixture:missing-vector',
       );
-      afterCancellation.d.store.state(unindexedGraphSource, 'failed');
       final labelledSources = afterCancellation.d.store.sources;
-      afterCancellation.d.store.labels(labelledSources[0]['id'] as String, [
-        'Planning',
-      ]);
-      afterCancellation.d.store.labels(labelledSources[1]['id'] as String, [
-        'Planning',
-        'Local AI',
-      ]);
+      await afterCancellation.d.command('labels.set', {
+        'id': labelledSources[0]['id'],
+        'labels': ['Planning'],
+      });
+      await afterCancellation.d.command('labels.set', {
+        'id': labelledSources[1]['id'],
+        'labels': ['Planning', 'Local AI'],
+      });
       afterCancellation.update(() {});
       await tester.pumpAndSettle();
       await tester.tap(find.text('Graph view'));
@@ -998,8 +1005,24 @@ void main() {
       );
       // Distinguish restoration from a coincidentally identical fresh PCA result.
       // This changes coordinates only inside the disposable acceptance profile.
-      afterCancellation.d.store.db.execute(
-        'UPDATE graph_documents SET proj_x=proj_x*0.75',
+      final snapshotStore = afterCancellation.d.store as Store;
+      final snapshot = snapshotStore.loadRegisteredGraphLayout(
+        snapshotStore.sources,
+        labelSet: snapshotStore.graphLabelSet(),
+      );
+      final adjusted = snapshot.points.map(
+        (k, v) => MapEntry(k, GraphPoint(v.x * .75, v.y, v.z)),
+      );
+      expect(
+        await afterCancellation.d.command('graph.save', {
+          'identity': snapshot.identity,
+          'sources': graphSceneSources(snapshotStore.sources, snapshot.vectors),
+          'vectors': snapshot.vectors,
+          'points': adjusted.map((k, v) => MapEntry(k, [v.x, v.y, v.z])),
+          'labelSet': snapshotStore.graphLabelSet(),
+          'clusters': snapshotStore.rows('SELECT * FROM document_clusters'),
+        }),
+        true,
       );
       final expectedGraph = {
         for (final row in afterCancellation.d.store.rows(
@@ -1192,8 +1215,7 @@ void main() {
             'cited_answer_after_restart': answer,
             'indexed_source': source['id'],
             'inactivity_timer_finalized_silent_capture': true,
-            'inactivity_test_uses_backdated_activity_timestamp':
-                !realInactivity,
+            'inactivity_test_uses_backdated_activity_timestamp': false,
             if (realInactivity) ...{
               'inactivity_setting_minutes': 5,
               'inactivity_elapsed_seconds':

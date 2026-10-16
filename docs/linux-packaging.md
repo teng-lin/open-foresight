@@ -7,15 +7,16 @@ packaging branch, version tags, and manual dispatch once registered on main.
 
 ## Compatibility baseline
 
-All native components are rebuilt inside Ubuntu 24.04: the helper, Flutter app,
-Whisper Vulkan executable and isolated LiteRT Python environment. The build pins
+Application executables are rebuilt inside Ubuntu 24.04: the helper, Flutter app,
+application service/MCP server, inference worker and Whisper Vulkan executable.
+Standalone LiteRT-LM and ONNX libraries use pinned, SHA-verified upstream archives. The build pins
 Flutter, gRPC (including its protobuf submodule) and Whisper to full source
 commits. The modern protobuf toolchain is intentional: our authoritative
 descriptor uses Edition 2024, which older distro protoc packages cannot generate.
 The original descriptor and its presence/UTF-8 semantics are retained.
-Python development and LiteRT dependency closures are pinned with hashes in
-`requirements-dev.lock` and `requirements-litert.lock` for Python 3.12. Update
-them deliberately with `uv pip compile --python-version 3.12 --generate-hashes`.
+Python is a build/test tool only; no Python interpreter or modules enter the
+application bundle. The reusable SDK retains its build-time Python environments
+and dependency locks, independently of the native inference runtime.
 The SDK (gRPC, Flutter, Python and Whisper) is a separate private GHCR image.
 Its tag hashes the SDK Dockerfile, CMake hook, dependency locks and Whisper builder;
 application CI consumes the resolved immutable image digest. Ordinary app changes
@@ -30,7 +31,7 @@ branch. Fork PRs cannot consume the private image without registry access.
 No larger paid runner is required. BuildKit caches intermediate SDK layers too.
 
 `packaging/check_abi.py` audits version requirements of every ELF file, including
-Python extensions, and rejects requirements above glibc 2.39 or GLIBCXX 3.4.33.
+inference libraries, and rejects requirements above glibc 2.39 or GLIBCXX 3.4.33.
 Both CI and manual package creation enforce this check. An Arch-built executable
 requiring glibc 2.43 cannot accidentally become an Ubuntu package.
 
@@ -93,7 +94,7 @@ Arch package; its Hyprland integration remains user-configurable in the app.
 ## Installed layout and ownership
 
 * `/opt/open-foresight`: private application libraries, Flutter assets, helper,
-  Whisper and LiteRT Python.
+  Whisper, native inference and the application service/MCP server.
 * `/usr/bin/open-foresight`: stable launcher, independent of the source checkout.
 * `/usr/share/applications/io.openforesight.App.desktop`: application menu entry.
 * `/usr/share/pixmaps/open-foresight.png`: icon.
@@ -105,13 +106,10 @@ GPU drivers, or deletes user data. Existing legacy profiles use the explicit
 offline migration documented in the main README.
 
 The bundle includes private protobuf/gRPC libraries and SQLite (including the
-unversioned name Dart opens). Python extension dependencies are bundled privately
-as well, avoiding distro-specific optional DBM/libcrypt dependencies. It does
-not replace the system glibc, C++ runtime or GPU driver. The Python launchers
-select the distro's maintained CA bundle, respecting `SSL_CERT_FILE` overrides;
-Ubuntu's compiled-in OpenSSL certificate path is absent on Fedora/Arch.
+unversioned name Dart opens), ICU and native inference libraries. It does not
+replace the system glibc, C++ runtime or GPU driver.
 Distro dependency names are centralized in `packaging/metadata.json`. RPM host
-requirements are explicit: automatic scanning of private Python/protobuf
+requirements are explicit: automatic scanning of private protobuf/inference
 libraries would otherwise require libraries already inside the payload.
 All payload ELF linkage is checked after native installation.
 
@@ -121,8 +119,7 @@ CI builds on ordinary hosted Linux runners without a GPU. After the baseline
 build, parallel native-container jobs create `.deb`, `.rpm`, and `.pkg.tar.zst`
 files. Each installs its dependencies and package, validates the desktop entry,
 verifies installed payload hashes, checks every ELF for missing libraries, imports
-LiteRT, verifies Python can load
-the host CA roots, runs Whisper help and
+the native LiteRT runtime, rejects bundled Python files, runs Whisper help and
 decodes the public JFK fixture on CPU with a SHA-verified Tiny model, then
 launches the installed app under Xvfb as an ordinary user. It checks activation
 IPC and a private SQLite profile, reinstalls the same version, removes the

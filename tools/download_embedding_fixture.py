@@ -13,8 +13,12 @@ REVISION = '1110a243fdf4706b3f48f1d95db1a4f5529b4d41'
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('destination', type=Path)
+    parser.add_argument('--native', action='store_true', help='Also download the pinned native ONNX export')
     args = parser.parse_args()
     report = json.loads((ROOT / 'models/minilm-manifest.json').read_text())
+    if args.native:
+        report['assets'].append({'path': 'onnx/model.onnx', 'bytes': 90405214,
+            'sha256': '6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452'})
     args.destination.mkdir(parents=True, exist_ok=True)
     for item in report['assets']:
         name = item['path']
