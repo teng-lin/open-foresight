@@ -1,0 +1,35 @@
+name: foresight_linux
+description: Foresight Linux prototype desktop client
+publish_to: none
+version: 0.1.0+1
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  grpc: 4.3.1
+  protobuf: 5.1.0
+  sqlite3: 2.9.4
+  crypto: 3.0.6
+  ffi: 2.1.4
+  fixnum: 1.1.1
+  file_selector: 1.0.3
+  dbus: 0.7.11
+dev_dependencies:
+  integration_test:
+    sdk: flutter
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 5.0.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+  fonts:
+    - family: GoogleSans
+      fonts:
+        - asset: assets/fonts/GoogleSans-Regular.ttf
+        - asset: assets/fonts/GoogleSans-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/GoogleSans-Bold.ttf
+          weight: 700

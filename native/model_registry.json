@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "generation": {
+    "id": "qwen2.5-1.5b-instruct-q4-k-m",
+    "download": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+    "runtime_repository": "https://github.com/ggml-org/llama.cpp.git",
+    "runtime_revision": "cbe28bb3cb0758f0c566a9a3561766821aeb0748",
+    "runtime_version": "0.6.0-dev",
+    "executable": "llama-completion",
+    "format": "GGUF Q4_K_M; embedded tokenizer; Qwen2.5 ChatML",
+    "effective_capabilities": [
+      "text-generation",
+      "owned-ordered-stream",
+      "cancellation"
+    ],
+    "unsupported": [
+      "custom-sampling-settings",
+      "tools",
+      "image",
+      "audio",
+      "retained-model-residency"
+    ]
+  },
+  "speech": {
+    "id": "whisper-tiny-en",
+    "download": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+    "file": "ggml-tiny.en.bin",
+    "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
+    "runtime_repository": "https://github.com/ggml-org/whisper.cpp.git",
+    "runtime_revision": "0c7be696371069e0baa2515ed7aa08d5a5473aa6",
+    "runtime_version": "1.9.5-dev",
+    "executable": "whisper-cli",
+    "format": "GGML Whisper; mono PCM16 16000Hz; English",
+    "effective_capabilities": [
+      "final-transcript",
+      "owned-results",
+      "cancellation"
+    ],
+    "unsupported": [
+      "live-partials",
+      "diarization",
+      "word-timestamps",
+      "tts"
+    ]
+  }
+}

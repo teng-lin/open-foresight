@@ -1,0 +1,20 @@
+syntax = "proto3";
+package foresight.linux.control.v1;
+message Empty {}
+message WatchRequest { uint64 last_revision = 1; }
+message ModelIdentity {
+ string model_digest = 1; string tokenizer_digest = 2; string preprocessing = 3;
+ string backend = 4; uint32 dimensions = 5; repeated string modalities = 6;
+ string path = 7;
+}
+message State {
+ string build_id = 1; string reference_version = 2; string instance_id = 3;
+ uint64 revision = 4; string pipeline = 5; bool tokenizer_ready = 6;
+ ModelIdentity model = 7; uint64 active_generation = 8; uint64 pending_generation = 9;
+ string index = 10; uint64 attempted = 11; uint64 completed = 12;
+ uint64 failed = 13; bool totals_known = 14; string last_error = 15;
+}
+service HelperControl {
+ rpc GetState(Empty) returns (State);
+ rpc WatchState(WatchRequest) returns (stream State);
+}

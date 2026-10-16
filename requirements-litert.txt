@@ -1,0 +1,3 @@
+# Optional explicit Gemma 4 CPU/GPU runner. Install in a dedicated environment.
+litert-lm==0.18.0
+sentencepiece==0.2.1

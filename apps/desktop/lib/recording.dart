@@ -1,0 +1,429 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:ffi';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:ffi/ffi.dart';
+import 'native.dart';
+
+class _AudioSegment {
+  final int channel, startSamples, sampleRate;
+  final Uint8List pcm;
+  final bool provisional;
+  _AudioSegment(
+    this.channel,
+    this.startSamples,
+    this.sampleRate,
+    this.pcm,
+    this.provisional,
+  );
+}
+
+/// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
+/// ephemeral; completed speech segments are committed while capture continues.
+class Recording {
+  final DynamicLibrary lib;
+  final void Function(String) state;
+  final void Function(String, int, int, String) transcript;
+  final void Function(String, int, int, String)? provisional;
+  final void Function(Map<String, dynamic>)? interruption;
+  final void Function()? levels;
+  final currentVolumes = <double>[];
+  int _lastLevels = 0;
+  final captures = <Pointer<Void>>[], speeches = <Pointer<Void>>[];
+  final sampleCounts = <int>[], peakVolumes = <double>[];
+  final _buffers = <BytesBuilder>[], _starts = <int>[], _rates = <int>[];
+  final _lastVoice = <int>[], _voiced = <bool>[], _nextSnapshot = <int>[];
+  final _queues = <List<_AudioSegment>>[];
+  final _workers = <int, Future<void>>{};
+  Timer? timer;
+  bool polling = false, finishing = false;
+  String lastError = '', _runtime = '', _model = '';
+  DateTime lastAudioActivity = DateTime.now();
+  int _epoch = 0, _transcriptCount = 0;
+  Recording(
+    String path,
+    this.state,
+    this.transcript, {
+    this.provisional,
+    this.interruption,
+    this.levels,
+  }) : lib = DynamicLibrary.open(path);
+
+  Map<String, dynamic>? poll(Pointer<Void> handle) {
+    final result = lib
+        .lookupFunction<
+          Pointer<Utf8> Function(Pointer<Void>, Int32),
+          Pointer<Utf8> Function(Pointer<Void>, int)
+        >('fs_event_poll')(handle, 0);
+    if (result == nullptr) return null;
+    try {
+      return jsonDecode(result.toDartString()) as Map<String, dynamic>;
+    } finally {
+      lib.lookupFunction<
+        Void Function(Pointer<Utf8>),
+        void Function(Pointer<Utf8>)
+      >('fs_string_free')(result);
+    }
+  }
+
+  Pointer<Void> _speech() {
+    final runtime = _runtime.toNativeUtf8(), model = _model.toNativeUtf8();
+    try {
+      final handle = lib.lookupFunction<CreateNative, CreateDart>(
+        'fs_speech_create',
+      )(runtime, model);
+      if (handle == nullptr)
+        throw StateError('Speech runtime/model unavailable');
+      speeches.add(handle);
+      return handle;
+    } finally {
+      calloc.free(runtime);
+      calloc.free(model);
+    }
+  }
+
+  void _releaseSpeech(Pointer<Void> handle) {
+    if (!speeches.remove(handle)) return;
+    lib.lookupFunction<
+      Void Function(Pointer<Void>),
+      void Function(Pointer<Void>)
+    >('fs_speech_destroy')(handle);
+  }
+
+  void start(
+    String runtime,
+    String model, {
+    bool playback = true,
+    String microphoneTarget = 'auto',
+    String playbackTarget = 'auto',
+  }) {
+    if (captures.isNotEmpty ||
+        speeches.isNotEmpty ||
+        finishing ||
+        _workers.isNotEmpty)
+      throw StateError('A recording is already active');
+    if (!File(model).existsSync())
+      throw StateError('Speech model file is missing: $model');
+    if (!File(runtime).existsSync() ||
+        File(runtime).statSync().mode & 0x49 == 0)
+      throw StateError('Speech runner is missing or not executable: $runtime');
+    _runtime = runtime;
+    _model = model;
+    _epoch++;
+    _transcriptCount = 0;
+    lastError = '';
+    lastAudioActivity = DateTime.now();
+    sampleCounts.clear();
+    peakVolumes.clear();
+    currentVolumes.clear();
+    _buffers.clear();
+    _starts.clear();
+    _rates.clear();
+    _lastVoice.clear();
+    _voiced.clear();
+    _nextSnapshot.clear();
+    _queues.clear();
+    try {
+      final probe = _speech();
+      _releaseSpeech(probe);
+      for (var channel = 0; channel < (playback ? 2 : 1); channel++) {
+        final target = (channel == 0 ? microphoneTarget : playbackTarget)
+            .toNativeUtf8();
+        Pointer<Void> capture;
+        try {
+          capture = lib
+              .lookupFunction<
+                Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
+                Pointer<Void> Function(Pointer<Utf8>, int, int)
+              >('fs_capture_start')(target, channel, 48000);
+        } finally {
+          calloc.free(target);
+        }
+        if (capture == nullptr)
+          throw StateError('PipeWire capture unavailable');
+        captures.add(capture);
+        sampleCounts.add(0);
+        peakVolumes.add(0);
+        currentVolumes.add(0);
+        _buffers.add(BytesBuilder(copy: false));
+        _starts.add(0);
+        _rates.add(48000);
+        _lastVoice.add(0);
+        _voiced.add(false);
+        _nextSnapshot.add(48000 * 5);
+        _queues.add([]);
+      }
+      state('Listening · live transcription');
+      timer = Timer.periodic(const Duration(milliseconds: 20), (_) => drain());
+    } catch (_) {
+      dispose();
+      rethrow;
+    }
+  }
+
+  void drain() {
+    if (polling) return;
+    polling = true;
+    try {
+      for (var channel = 0; channel < captures.length; channel++) {
+        for (var n = 0; n < 50; n++) {
+          final event = poll(captures[channel]);
+          if (event == null) break;
+          if (event['type'] == 'gap') {
+            _flush(channel);
+            final gap = {
+              ...event,
+              'source': channel == 0 ? 'microphone' : 'playback',
+            };
+            if (lastError.isEmpty)
+              state(
+                'Capture gap: ${event['reason']}; resuming live transcription',
+              );
+            interruption?.call(gap);
+            continue;
+          }
+          if (event['type'] == 'error' || event['type'] == 'state') {
+            if (event['type'] == 'error' || event['state'] == 'failed') {
+              final source = channel == 0 ? 'Microphone' : 'Playback';
+              lastError =
+                  '$source capture failed: ${event['message'] ?? 'Capture unavailable'}';
+              state(lastError);
+            } else if (lastError.isEmpty) {
+              // The native terminal sequence is failed -> stopped. Keep the
+              // failure visible until Stop, including when a peer channel
+              // continues to emit ordinary connecting/capturing states.
+              state('${event['message'] ?? event['state']}');
+            }
+            continue;
+          }
+          if (event['type'] != 'pcm') continue;
+          final pcm = base64Decode(event['data'] as String);
+          final rate = (event['sampleRate'] as num).toInt();
+          if (rate != _rates[channel]) {
+            _flush(channel);
+            _rates[channel] = rate;
+            _nextSnapshot[channel] = rate * 5;
+          }
+          sampleCounts[channel] += pcm.length ~/ 2;
+          final volume = (event['volume'] as num).toDouble();
+          currentVolumes[channel] = volume;
+          if (volume > peakVolumes[channel]) peakVolumes[channel] = volume;
+          if (volume > .003) {
+            lastAudioActivity = DateTime.now();
+            _voiced[channel] = true;
+            _lastVoice[channel] = sampleCounts[channel];
+          }
+          _buffers[channel].add(pcm);
+          final length = _buffers[channel].length ~/ 2;
+          if (length >= rate * 20 ||
+              _voiced[channel] &&
+                  length >= rate &&
+                  sampleCounts[channel] - _lastVoice[channel] >= rate) {
+            _flush(channel);
+          } else if (_voiced[channel] && length >= _nextSnapshot[channel]) {
+            _nextSnapshot[channel] = length + rate * 4;
+            // Snapshots never queue behind final work; capture itself keeps running.
+            if (!_workers.containsKey(channel) &&
+                _queues[channel].isEmpty &&
+                provisional != null) {
+              _enqueue(
+                _AudioSegment(
+                  channel,
+                  _starts[channel],
+                  rate,
+                  _buffers[channel].toBytes(),
+                  true,
+                ),
+              );
+            }
+          }
+        }
+      }
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastLevels >= 100) {
+        _lastLevels = now;
+        levels?.call();
+      }
+    } finally {
+      polling = false;
+    }
+  }
+
+  void _flush(int channel) {
+    final pcm = _buffers[channel].takeBytes();
+    if (_voiced[channel] && pcm.isNotEmpty)
+      _enqueue(
+        _AudioSegment(channel, _starts[channel], _rates[channel], pcm, false),
+      );
+    _starts[channel] = sampleCounts[channel];
+    _voiced[channel] = false;
+    _nextSnapshot[channel] = _rates[channel] * 5;
+  }
+
+  void _enqueue(_AudioSegment segment) {
+    final queue = _queues[segment.channel];
+    if (queue.length >= 4) {
+      lastError =
+          'Speech recognition cannot keep up with capture. Stop recording and retry with a faster model.';
+      state(lastError);
+      // Preserve the new segment in memory; stop acquisition instead of losing speech.
+      timer?.cancel();
+      for (final capture in captures) {
+        lib.lookupFunction<
+          Void Function(Pointer<Void>),
+          void Function(Pointer<Void>)
+        >('fs_capture_stop')(capture);
+      }
+      captures.clear();
+    }
+    queue.add(segment);
+    if (_workers.containsKey(segment.channel)) return;
+    final epoch = _epoch;
+    final future = _processChannel(segment.channel, epoch);
+    _workers[segment.channel] = future;
+    unawaited(
+      future.whenComplete(() {
+        if (epoch == _epoch) _workers.remove(segment.channel);
+      }),
+    );
+  }
+
+  Future<void> _processChannel(int channel, int epoch) async {
+    // Deferring prevents synchronous failure from racing worker registration.
+    await Future<void>.delayed(Duration.zero);
+    while (epoch == _epoch && _queues[channel].isNotEmpty) {
+      final segment = _queues[channel].removeAt(0);
+      Pointer<Void>? handle;
+      try {
+        handle = _speech();
+        final samples = calloc<Int16>(segment.pcm.length ~/ 2);
+        try {
+          final bytes = ByteData.sublistView(segment.pcm);
+          for (var i = 0; i < segment.pcm.length ~/ 2; i++) {
+            samples[i] = bytes.getInt16(i * 2, Endian.little);
+          }
+          final rc = lib
+              .lookupFunction<
+                Int32 Function(Pointer<Void>, Pointer<Int16>, Size, Int32),
+                int Function(Pointer<Void>, Pointer<Int16>, int, int)
+              >(
+                'fs_speech_push',
+              )(handle, samples, segment.pcm.length ~/ 2, segment.sampleRate);
+          if (rc != 0) throw StateError('ASR buffer rejected');
+        } finally {
+          calloc.free(samples);
+        }
+        final request = 'live-$channel-${DateTime.now().microsecondsSinceEpoch}'
+            .toNativeUtf8();
+        try {
+          if (lib.lookupFunction<
+                Int32 Function(Pointer<Void>, Pointer<Utf8>),
+                int Function(Pointer<Void>, Pointer<Utf8>)
+              >('fs_speech_finish')(handle, request) !=
+              0)
+            throw StateError('Speech request rejected');
+        } finally {
+          calloc.free(request);
+        }
+        String? failure;
+        while (epoch == _epoch) {
+          final event = poll(handle);
+          if (event == null) {
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            continue;
+          }
+          if (event['type'] == 'error') failure = event['message'].toString();
+          if (event['type'] == 'transcript') {
+            final text = (event['text'] as String).trim();
+            if (text.isNotEmpty && text != '[BLANK_AUDIO]') {
+              final start = segment.startSamples * 1000 ~/ segment.sampleRate;
+              final end =
+                  start +
+                  (segment.pcm.length ~/ 2) * 1000 ~/ segment.sampleRate;
+              final source = channel == 0 ? 'microphone' : 'playback';
+              if (segment.provisional) {
+                provisional?.call(text, start, end, source);
+              } else {
+                _transcriptCount++;
+                transcript(text, start, end, source);
+                provisional?.call('', start, end, source);
+              }
+            }
+          }
+          if (event['type'] == 'done') {
+            if (event['status'] != 'completed')
+              throw StateError(
+                'ASR ${event['status']}: ${failure ?? 'runner failed'}',
+              );
+            break;
+          }
+        }
+      } catch (error) {
+        if (epoch == _epoch) {
+          lastError = error.toString();
+          state('Live transcription failed: $lastError');
+        }
+      } finally {
+        if (handle != null) _releaseSpeech(handle);
+      }
+    }
+  }
+
+  Future<void> stop() async {
+    if (finishing) throw StateError('Transcription is already in progress');
+    finishing = true;
+    final epoch = _epoch;
+    timer?.cancel();
+    drain();
+    for (final capture in captures) {
+      lib.lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_stop')(capture);
+    }
+    captures.clear();
+    for (var channel = 0; channel < _buffers.length; channel++) {
+      _flush(channel);
+    }
+    state('Finalizing live transcript');
+    try {
+      while (_workers.isNotEmpty && epoch == _epoch) {
+        await Future.wait(_workers.values.toList());
+        await Future<void>.delayed(Duration.zero);
+      }
+      if (epoch != _epoch) throw StateError('Recording cancelled');
+      if (lastError.isNotEmpty) throw StateError(lastError);
+      state(
+        _transcriptCount == 0
+            ? 'No speech detected. Check microphone mute and playback.'
+            : 'Transcript saved',
+      );
+    } finally {
+      if (epoch == _epoch) dispose();
+      finishing = false;
+    }
+  }
+
+  void dispose() {
+    _epoch++;
+    timer?.cancel();
+    for (final capture in captures) {
+      lib.lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_stop')(capture);
+    }
+    captures.clear();
+    for (final speech in List<Pointer<Void>>.from(speeches)) {
+      _releaseSpeech(speech);
+    }
+    _workers.clear();
+    for (final queue in _queues) {
+      queue.clear();
+    }
+    for (final buffer in _buffers) {
+      buffer.clear();
+    }
+  }
+}

@@ -1,0 +1,130 @@
+// Reconstructed wire-compatible schema. Exact original edition/options are in rag_service.descriptor.pb.
+syntax = "proto3";
+package research.xeno.labs.foresight.launch_agent.proto;
+
+message IndexRequest {
+  string document_id = 1;
+  string content = 2;
+  string user_id = 3;
+  int32 max_tokens_per_chunk = 4;
+  int32 chunk_overlap = 5;
+  bytes image_bytes = 6;
+  string mime_type = 7;
+}
+
+message IndexResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message Query {
+  oneof query {
+    string text_query = 1;
+    bytes audio_query = 2;
+  }
+}
+
+message RetrieveRequest {
+  Query query = 1;
+  int32 max_results = 2;
+  double min_similarity_score = 3;
+  string user_id = 4;
+  repeated string allowed_document_ids = 5;
+}
+
+message RetrieveResponse {
+  repeated RetrievedChunk chunks = 1;
+}
+
+message RetrievedChunk {
+  string text = 1;
+  double relevance_score = 2;
+  string document_id = 3;
+  string mime_type = 4;
+}
+
+message UpdateModelPathsRequest {
+  string embedding_model_path = 1;
+  string sentence_piece_model_path = 2;
+  bool use_gpu = 3;
+  string cache_dir = 4;
+}
+
+message UpdateModelPathsResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message DeleteRequest {
+  string document_id = 1;
+  string user_id = 2;
+}
+
+message DeleteResponse {
+  bool success = 1;
+  string error_message = 2;
+}
+
+message EncodeRequest {
+  string text = 1;
+}
+
+message EncodeResponse {
+  repeated int32 tokens = 1;
+}
+
+message ChunkTextRequest {
+  string text = 1;
+  int32 max_tokens_per_chunk = 2;
+}
+
+message ChunkTextResponse {
+  repeated string chunks = 1;
+}
+
+message TruncateTextRequest {
+  string text = 1;
+  int32 max_tokens = 2;
+}
+
+message TruncateTextResponse {
+  string truncated_text = 1;
+}
+
+message ComputeEmbeddingRequest {
+  string text = 1;
+}
+
+message ComputeEmbeddingResponse {
+  repeated double embedding = 1;
+}
+
+message ComputeImageEmbeddingRequest {
+  bytes image_bytes = 1;
+}
+
+message ComputeAudioEmbeddingRequest {
+  bytes audio_bytes = 1;
+}
+
+message PingRequest {
+}
+
+message PingResponse {
+  bool success = 1;
+  string version = 2;
+}
+
+service RagService {
+  rpc IndexDocument (IndexRequest) returns (IndexResponse);
+  rpc RetrieveContext (RetrieveRequest) returns (RetrieveResponse);
+  rpc UpdateModelPaths (UpdateModelPathsRequest) returns (UpdateModelPathsResponse);
+  rpc DeleteDocument (DeleteRequest) returns (DeleteResponse);
+  rpc Encode (EncodeRequest) returns (EncodeResponse);
+  rpc ChunkText (ChunkTextRequest) returns (ChunkTextResponse);
+  rpc TruncateText (TruncateTextRequest) returns (TruncateTextResponse);
+  rpc ComputeEmbedding (ComputeEmbeddingRequest) returns (ComputeEmbeddingResponse);
+  rpc ComputeImageEmbedding (ComputeImageEmbeddingRequest) returns (ComputeEmbeddingResponse);
+  rpc ComputeAudioEmbedding (ComputeAudioEmbeddingRequest) returns (ComputeEmbeddingResponse);
+  rpc Ping (PingRequest) returns (PingResponse);
+}
