@@ -137,6 +137,45 @@ void main() {
     },
   );
 
+  test(
+    'closing during the helper startup probe cannot launch an orphan',
+    () async {
+      final marker = File('${scratch.path}/launched');
+      final script = File('${scratch.path}/helper');
+      script.writeAsStringSync('#!/bin/sh\ntouch "${marker.path}"\n');
+      Process.runSync('/bin/chmod', ['700', script.path]);
+      final previous = runtimeConfiguration.environment['FORESIGHT_HELPER'];
+      runtimeConfiguration.environment['FORESIGHT_HELPER'] = script.path;
+      final runtime = Directory('/tmp').createTempSync('of-probe-');
+      final socketPath = '${runtime.path}/helper.sock';
+      final server = await ServerSocket.bind(
+        InternetAddress(socketPath, type: InternetAddressType.unix),
+        0,
+      );
+      final peers = <Socket>[];
+      server.listen(peers.add);
+      final helper = Helper(socketPath, '${scratch.path}/helper-data');
+      try {
+        final startup = helper.start();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await helper.close();
+        await startup;
+        expect(marker.existsSync(), false);
+      } finally {
+        for (final peer in peers) {
+          peer.destroy();
+        }
+        await server.close();
+        runtime.deleteSync(recursive: true);
+        if (previous == null) {
+          runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+        } else {
+          runtimeConfiguration.environment['FORESIGHT_HELPER'] = previous;
+        }
+      }
+    },
+  );
+
   test('physical memory is detected on supported hosts', () {
     if (Platform.isMacOS || Platform.isLinux)
       expect(physicalMemoryGb(), greaterThan(0));

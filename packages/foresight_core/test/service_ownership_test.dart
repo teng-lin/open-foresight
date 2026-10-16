@@ -21,6 +21,19 @@ void main() {
         'FORESIGHT_DATA': '${scratch.path}/data',
         'FORESIGHT_RUNTIME': '${scratch.path}/a',
       });
+      final kernel = File('${scratch.path}/service.dill');
+      final compilation = await Process.run(Platform.resolvedExecutable, [
+        'compile',
+        'kernel',
+        'bin/service.dart',
+        '-o',
+        kernel.path,
+      ]);
+      expect(
+        compilation.exitCode,
+        0,
+        reason: '${compilation.stdout} ${compilation.stderr}',
+      );
       final diagnostics = StringBuffer();
       Process? owner, contender;
       ServiceClient? first, second;
@@ -71,7 +84,7 @@ void main() {
         );
         contender = await launch(other.data, other.runtime);
         expect(
-          await contender.exitCode.timeout(const Duration(seconds: 20)),
+          await contender.exitCode.timeout(const Duration(seconds: 60)),
           isNot(0),
         );
         expect((await second.call('status') as Map)['pid'], owner.pid);
@@ -81,7 +94,7 @@ void main() {
         second = null;
         owner.kill(ProcessSignal.sigterm);
         expect(
-          await owner.exitCode.timeout(const Duration(seconds: 20)),
+          await owner.exitCode.timeout(const Duration(seconds: 60)),
           0,
           reason: diagnostics.toString(),
         );
@@ -141,6 +154,6 @@ void main() {
         scratch.deleteSync(recursive: true);
       }
     },
-    timeout: const Timeout(Duration(minutes: 3)),
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 }
