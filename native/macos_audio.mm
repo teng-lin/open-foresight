@@ -9,6 +9,7 @@
 #include <cmath>
 #include <thread>
 #include <memory>
+#include <mutex>
 
 namespace {
 std::string json(id value) {
@@ -67,6 +68,7 @@ struct Ring {
 };
 struct Session {
   Ring ring;
+  bool discardAudio = false;
   std::atomic<bool> ready{false};
   OSStatus startStatus = noErr;
   AudioQueueRef queue = nullptr;
@@ -91,6 +93,8 @@ void input(void *context, AudioQueueRef queue, AudioQueueBufferRef buffer,
 OSStatus output(AudioDeviceID, const AudioTimeStamp *, const AudioBufferList *data,
                 const AudioTimeStamp *, AudioBufferList *, const AudioTimeStamp *, void *context) {
   auto &s = *static_cast<Session *>(context);
+  // Permission setup must not inspect, buffer, or publish private PCM.
+  if (s.discardAudio) return noErr;
   if (!data || !data->mNumberBuffers) return noErr;
   UInt32 frames = data->mBuffers[0].mDataByteSize / s.format.mBytesPerFrame;
   for (UInt32 frame = 0; frame < frames; ++frame) {
@@ -147,6 +151,50 @@ OSStatus start(Session &s, AudioDeviceID device, bool playback, int rate) {
   status = AudioDeviceCreateIOProcID(s.aggregate, output, &s, &s.io);
   return status ? status : AudioDeviceStart(s.aggregate, s.io);
 }
+struct SystemAudioRequest {
+  std::atomic<bool> completed{false};
+  OSStatus status = noErr; // Published by completed's release/acquire pair.
+};
+std::mutex systemRequestMutex;
+std::shared_ptr<SystemAudioRequest> systemRequest;
+NSString *const systemAudioSettings = @"x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture";
+NSString *const systemAudioInstructions = @"In System Settings > Privacy & Security > Screen & System Audio Recording > System Audio Recording Only, enable Open Foresight (or the service shown by macOS), then retry. On some macOS versions the section is named System Audio Recording.";
+NSDictionary *systemAudioState(const std::shared_ptr<SystemAudioRequest> &request) {
+  NSString *state = @"unknown", *phase = @"not_requested", *code = @"system_audio_permission_unknown";
+  NSString *message = @"Request system audio access explicitly. macOS does not expose a public Core Audio permission status check.";
+  OSStatus status = noErr;
+  if (request) {
+    if (!request->completed.load(std::memory_order_acquire)) {
+      state = @"pending"; phase = @"requesting"; code = @"system_audio_permission_pending";
+      message = [@"Answer the macOS system audio permission dialog, if shown. " stringByAppendingString:systemAudioInstructions];
+    } else {
+      status = request->status;
+      phase = status ? @"failed" : @"completed";
+      if (status == kAudioDevicePermissionsError) {
+        state = @"denied"; code = @"system_audio_device_permission_denied";
+        message = [@"Core Audio denied access to the audio device. " stringByAppendingString:systemAudioInstructions];
+      } else if (status == kAudioHardwareBadDeviceError) {
+        state = @"unavailable"; code = @"device_unavailable";
+        message = @"No system audio output device is available. Connect or select an output device, then retry.";
+      } else if (status) {
+        state = @"unavailable"; code = @"system_audio_request_failed";
+        message = [NSString stringWithFormat:@"Core Audio could not start the system audio access request (%d). Check the output device. %@", int(status), systemAudioInstructions];
+      } else {
+        // A successful tap may deliver silence when permission is denied.
+        // Neither success nor silence establishes authorization.
+        code = @"system_audio_permission_unverified";
+        message = [@"The system audio access request completed. macOS may have shown a permission prompt; permission cannot be verified through the public Core Audio API. " stringByAppendingString:systemAudioInstructions];
+      }
+    }
+  }
+  NSString *bundleID = [NSBundle mainBundle].bundleIdentifier;
+  NSString *bundleName = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleName"];
+  return @{@"system_audio":state, @"system_audio_request":phase,
+           @"permission_verified":@NO, @"code":code, @"message":message,
+           @"settings_url":systemAudioSettings, @"os_status":@(status),
+           @"requesting_bundle_id":bundleID ? bundleID : @"",
+           @"requesting_bundle_name":bundleName ? bundleName : @""};
+}
 std::string micStatus() {
   switch ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio]) {
     case AVAuthorizationStatusAuthorized: return "authorized";
@@ -163,9 +211,58 @@ std::string fs_macos_devices() { @autoreleasepool {
   return json(items);
 } }
 std::string fs_macos_capabilities() { @autoreleasepool {
-  return json(@{@"microphone":[NSString stringWithUTF8String:micStatus().c_str()], @"system_audio":@"permission_checked_on_capture", @"backend":@"core_audio_tap", @"minimum_macos":@"15.0",
+  std::shared_ptr<SystemAudioRequest> request;
+  { std::lock_guard lock(systemRequestMutex); request = systemRequest; }
+  NSMutableDictionary *result = [systemAudioState(request) mutableCopy];
+  [result addEntriesFromDictionary:@{@"microphone":[NSString stringWithUTF8String:micStatus().c_str()],
+    @"backend":@"core_audio_tap", @"minimum_macos":@"15.0",
     @"microphone_purpose_present":@([[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSMicrophoneUsageDescription"] != nil),
-    @"system_audio_purpose_present":@([[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSAudioCaptureUsageDescription"] != nil)});
+    @"system_audio_purpose_present":@([[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSAudioCaptureUsageDescription"] != nil)}];
+  return json(result);
+} }
+std::string fs_macos_request_system(int timeout_ms) { @autoreleasepool {
+  if (![[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSAudioCaptureUsageDescription"]) {
+    return json(@{@"system_audio":@"unavailable", @"system_audio_request":@"failed",
+      @"permission_verified":@NO, @"code":@"capture_bundle_misconfigured",
+      @"message":@"The requesting process is missing NSAudioCaptureUsageDescription. Launch the installed Open Foresight service bundle.",
+      @"settings_url":systemAudioSettings});
+  }
+  std::shared_ptr<SystemAudioRequest> request;
+  {
+    std::lock_guard lock(systemRequestMutex);
+    request = systemRequest;
+    if (!request || request->completed.load(std::memory_order_acquire)) {
+      request = systemRequest = std::make_shared<SystemAudioRequest>();
+      // Match recording's late-completion ownership: Core Audio can wait on
+      // consent; returning on timeout never destroys a session still in use.
+      // Keep a single in-flight request so repeated clicks cannot create taps.
+      try {
+        std::thread([request] { @autoreleasepool {
+          OSStatus status = kAudioHardwareUnspecifiedError;
+          try {
+            AudioDeviceID device = resolve("auto", true);
+            if (!device) status = kAudioHardwareBadDeviceError;
+            else {
+              auto session = std::make_unique<Session>();
+              session->discardAudio = true;
+              status = start(*session, device, true, 48000);
+            }
+          } catch (...) {
+            // Never let thread/allocation failures terminate the service.
+          } // Stop IO and destroy the private aggregate/tap before reporting.
+          request->status = status;
+          request->completed.store(true, std::memory_order_release);
+        } }).detach();
+      } catch (...) {
+        request->status = kAudioHardwareUnspecifiedError;
+        request->completed.store(true, std::memory_order_release);
+      }
+    }
+  }
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::clamp(timeout_ms, 0, 30000));
+  while (!request->completed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  return json(systemAudioState(request));
 } }
 bool fs_macos_request_microphone() { @autoreleasepool {
   if (![[NSBundle mainBundle] objectForInfoDictionaryKey:@"NSMicrophoneUsageDescription"]) return false;
@@ -207,12 +304,12 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     if (cancel) return;
     if (!ownedSession->ready.load(std::memory_order_acquire)) {
-      event(@"state", @"failed", @"Core Audio is waiting for access. Answer the system permission dialog or enable Screen & System Audio Recording in System Settings, then restart recording.", @"capture_permission_pending"); return;
+      event(@"state", @"failed", [@"Core Audio is waiting for access. Answer the system permission dialog. " stringByAppendingString:systemAudioInstructions], @"capture_permission_pending"); return;
     }
     auto &session = *ownedSession;
     OSStatus status = session.startStatus;
     if (status) {
-      event(@"state", @"failed", [NSString stringWithFormat:@"Core Audio capture failed (%d). Check the selected device and Privacy & Security > %@; restart recording after granting access.", int(status), playback ? @"Screen & System Audio Recording" : @"Microphone"], @"core_audio_start_failed"); return;
+      event(@"state", @"failed", [NSString stringWithFormat:@"Core Audio capture failed (%d). Check the selected device and Privacy & Security > %@; restart recording after granting access.", int(status), playback ? @"Screen & System Audio Recording > System Audio Recording Only" : @"Microphone"], @"core_audio_start_failed"); return;
     }
     event(@"state", @"capturing", @"Capturing audio", @"");
     std::vector<unsigned char> frame; frame.reserve(rate * 2 * 40 / 1000);

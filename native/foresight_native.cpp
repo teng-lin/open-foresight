@@ -319,6 +319,14 @@ char *fs_audio_capabilities() {
   return owned("{\"backend\":\"pipewire\"}");
 #endif
 }
+char *fs_audio_request_system(int32_t timeout_ms) {
+#ifdef __APPLE__
+  return owned(fs_macos_request_system(timeout_ms));
+#else
+  (void)timeout_ms;
+  return owned("{\"system_audio\":\"unavailable\",\"system_audio_request\":\"failed\",\"permission_verified\":false,\"code\":\"unsupported_platform\",\"message\":\"System audio permission requests are specific to macOS.\"}");
+#endif
+}
 int fs_audio_request_microphone() {
 #ifdef __APPLE__
   return fs_macos_request_microphone() ? 0 : 1;

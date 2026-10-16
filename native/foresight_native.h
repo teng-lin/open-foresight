@@ -53,6 +53,10 @@ void fs_capture_stop(void *capture);
 char *fs_audio_capabilities(void);
 /* Explicit setup only. Call off the service event loop; can wait for TCC UI. */
 int fs_audio_request_microphone(void);
+/* Explicit Core Audio consent request. Owned JSON, free with fs_string_free.
+ * Waits for startup up to timeout_ms (clamped 0..30000). No PCM is inspected or retained.
+ * Completion does not prove permission: inspect permission_verified/code. */
+char *fs_audio_request_system(int32_t timeout_ms);
 /* Stateless utilities used by contract tests and import conversion. */
 double fs_pcm_rms(const int16_t *samples, size_t count);
 size_t fs_resample_pcm(const int16_t *input, size_t count, int input_rate,
