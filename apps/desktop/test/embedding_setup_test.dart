@@ -93,7 +93,9 @@ void main() {
       expect(service.requests.length, 2);
       expect(tester.takeException(), isNull);
     } finally {
-      await tester.pumpWidget(const SizedBox.shrink());
+      // Disposal initiates real gRPC I/O; keep its completion callbacks outside
+      // Flutter's fake clock, just like the explicit channel/server cleanup.
+      await tester.runAsync(() => tester.pumpWidget(const SizedBox.shrink()));
       await tester.runAsync(() async {
         await helper.close();
         await server.shutdown();
