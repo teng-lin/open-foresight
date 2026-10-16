@@ -1,3 +1,10 @@
+import 'package:foresight_core/foresight_core.dart'
+    show
+        runtimeConfiguration,
+        privateDirectory,
+        configureProfileRuntime,
+        openPlatformUri,
+        platformNotification;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -48,6 +55,7 @@ Future<void> main([List<String> arguments = const []]) async {
   final runtime = profile.runtime;
   ensurePrivateDirectory(data);
   ensurePrivateDirectory(runtime);
+  configureProfileRuntime(data);
   final commandPath = '$runtime/commands.sock';
   final launchCommand = arguments.contains('--stop-meeting')
       ? 'stop-meeting'
@@ -79,28 +87,8 @@ Future<void> main([List<String> arguments = const []]) async {
   );
 }
 
-Future<void> openSourceLink(Uri uri) async {
-  final result = await Process.run('xdg-open', [uri.toString()]);
-  if (result.exitCode != 0) throw StateError('Could not open the source link.');
-}
-
-void ensurePrivateDirectory(String path) {
-  final directory = Directory(path);
-  if (!directory.existsSync()) {
-    directory.createSync(recursive: true);
-    final changed = Process.runSync('chmod', ['700', path]);
-    if (changed.exitCode != 0)
-      throw StateError('Cannot create private directory: $path');
-  }
-  final owner = Process.runSync('stat', ['-Lc', '%u', path]);
-  final user = Process.runSync('id', ['-u']);
-  if (owner.exitCode != 0 ||
-      user.exitCode != 0 ||
-      owner.stdout.toString().trim() != user.stdout.toString().trim() ||
-      directory.statSync().mode & 0x3f != 0) {
-    throw StateError('A private user-owned directory is required: $path');
-  }
-}
+Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
+void ensurePrivateDirectory(String path) => privateDirectory(path);
 
 class Foresight extends StatelessWidget {
   final Domain domain;
@@ -279,6 +267,18 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   String googleState = '';
   List<AudioDevice> availableAudioDevices = [];
   String audioDeviceState = '';
+  Map<String, dynamic> captureCapabilities = {};
+  String captureCapabilityError = '';
+  String loginState = '';
+  String get microphoneAccessLabel =>
+      const {
+        'authorized': 'Allowed',
+        'denied': 'Denied',
+        'restricted': 'Restricted by system policy',
+        'not_determined': 'Not requested',
+      }[captureCapabilities['microphone']] ??
+      'Checking';
+
   bool get googleSyncing => d is RemoteDomain
       ? (d as RemoteDomain).googleStatus['syncing'] == true
       : d.application.google.syncing;
@@ -329,18 +329,13 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     google; // Create the independently versioned connection tables.
     googleState = googleAuth.loadError;
     unawaited(refreshAudioDevices());
+    if (Platform.isMacOS) {
+      unawaited(refreshCaptureCapabilities());
+      unawaited(refreshLoginSetting());
+    }
 
     notifications = d.store.preference('notifications') == 'true';
-    unawaited(
-      Process.run('sh', ['-c', 'command -v notify-send']).then((result) {
-        if (mounted)
-          setState(
-            () => notificationState = result.exitCode == 0
-                ? 'notify-send available; delivery depends on desktop service'
-                : 'notify-send unavailable',
-          );
-      }),
-    );
+    unawaited(refreshNotifications());
     syncCapture();
     d.helper.changed = () {
       if (mounted) setState(syncCapture);
@@ -412,7 +407,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     } on MissingPluginException {
       /* pure widget tests */
     }
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       final active = await Process.run('hyprctl', ['activewindow', '-j']);
       if (active.exitCode == 0 &&
           (jsonDecode(active.stdout as String) as Map)['pid'] != pid) {
@@ -430,7 +426,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> enableGlobalShortcuts() async {
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       await hyprShortcuts.install(
         d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
       );
@@ -461,7 +458,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> disableGlobalShortcuts() async {
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
     await globalShortcuts?.disable();
@@ -470,6 +468,58 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       'value': 'false',
     });
     if (mounted) setState(() => globalShortcutState = 'disabled');
+  }
+
+  Future<void> refreshLoginSetting() async {
+    try {
+      await desktopSettings.refresh();
+      if (mounted) setState(() => loginState = '');
+    } catch (error) {
+      if (mounted) setState(() => loginState = error.toString());
+    }
+  }
+
+  Future<void> setOpenAtLogin(bool value) async {
+    try {
+      await desktopSettings.setOpenAtLogin(value);
+      if (mounted) setState(() => loginState = '');
+    } catch (error) {
+      if (mounted) setState(() => loginState = error.toString());
+      rethrow;
+    }
+  }
+
+  Future<void> refreshCaptureCapabilities() async {
+    try {
+      final result = await d.command('audio.capabilities') as Map;
+      if (mounted)
+        setState(() {
+          captureCapabilities = Map<String, dynamic>.from(result);
+          captureCapabilityError =
+              result['microphone_purpose_present'] == false ||
+                  result['system_audio_purpose_present'] == false
+              ? 'The recording service is missing audio access configuration. Reinstall Open Foresight.'
+              : '';
+        });
+    } catch (error) {
+      if (mounted) setState(() => captureCapabilityError = error.toString());
+    }
+  }
+
+  Future<void> requestMicrophoneAccess() async {
+    try {
+      final result = await d.command('audio.request_microphone') as Map;
+      if (mounted)
+        setState(() {
+          captureCapabilities = Map<String, dynamic>.from(result);
+          captureCapabilityError = result['granted'] == true
+              ? ''
+              : 'Microphone access was denied. Enable Open Foresight in System Settings > Privacy & Security > Microphone, then refresh access status.';
+        });
+    } catch (error) {
+      if (mounted) setState(() => captureCapabilityError = error.toString());
+      rethrow;
+    }
   }
 
   Future<void> refreshAudioDevices() async {
@@ -487,12 +537,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   bool modelSetupShown = false;
   Future<void> chooseGemma({bool firstRun = false}) async {
-    final info = File('/proc/meminfo').readAsStringSync();
-    final memoryKb =
-        int.tryParse(
-          RegExp(r'MemTotal:\s+(\d+)').firstMatch(info)?.group(1) ?? '',
-        ) ??
-        0;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -511,11 +555,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           if (mounted) setState(() => embeddingGpu = true);
         },
         directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
-        library:
-            Platform.environment['FORESIGHT_NATIVE'] ??
-            'libforesight_native.so',
-        runner: Platform.environment['FORESIGHT_LITERT_RUNNER'] ?? '',
-        memoryGb: (memoryKb / 1048576).round(),
+        library: runtimeConfiguration.nativeLibrary,
+        runner: runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? '',
+        memoryGb: physicalMemoryGb(),
         installGeneration: (path, runtime, current) async {
           await d.commandCurrent('models.generation', {
             'path': path,
@@ -567,7 +609,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           '${File(d.store.path).parent.path}/models/whisper',
         ),
         runner:
-            Platform.environment['FORESIGHT_WHISPER_RUNTIME'] ??
+            runtimeConfiguration['FORESIGHT_WHISPER_RUNTIME'] ??
             registration?['runtime'] as String? ??
             '',
         installSpeech: (asset, runner, digest, current) async {
@@ -608,27 +650,66 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         setState(
           () => googleState = 'Complete Google sign-in in your browser.',
         );
-      final opened = await Process.run('xdg-open', [uri.toString()]);
-      if (opened.exitCode != 0)
-        throw StateError('Could not open your browser.');
+      await openPlatformUri(uri);
     });
     if (mounted)
       setState(() => googleState = 'Connected as ${googleAuth.email}');
     await google.syncCalendar();
   }
 
+  Future<void> setMeetingReminders(bool value) async {
+    if (value && Platform.isMacOS) {
+      final result = await d.command('notifications.request_permission') as Map;
+      if (result['granted'] != true) {
+        throw StateError(
+          'Meeting reminders need notification access. Enable Open Foresight in System Settings > Notifications.',
+        );
+      }
+    }
+    await preference('googleReminders', value.toString());
+    await refreshNotifications();
+  }
+
+  Future<void> refreshNotifications() async {
+    try {
+      final result = await d.command('notifications.capabilities') as Map;
+      if (mounted)
+        setState(
+          () => notificationState = result['available'] == true
+              ? 'Notifications available'
+              : Platform.isMacOS
+              ? 'Notification permission required; enable to request access'
+              : 'Notifications unavailable',
+        );
+    } catch (error) {
+      if (mounted) setState(() => notificationState = error.toString());
+    }
+  }
+
+  Future<void> setNotifications(bool value) async {
+    if (value && Platform.isMacOS) {
+      final result = await d.command('notifications.request_permission') as Map;
+      if (result['granted'] != true) {
+        if (mounted)
+          setState(
+            () => notificationState =
+                'Notification permission denied; enable Open Foresight in System Settings',
+          );
+        return;
+      }
+    }
+    await d.command('preferences.set', {
+      'key': 'notifications',
+      'value': value.toString(),
+    });
+    if (mounted) setState(() => notifications = value);
+    await refreshNotifications();
+  }
+
   Future<void> notify(String message) async {
     if (!notifications) return;
     try {
-      final result = await Process.run('notify-send', [
-        'Open Foresight',
-        message,
-      ]);
-      if (result.exitCode != 0 && mounted)
-        setState(
-          () => notificationState =
-              'notification delivery failed: ${result.stderr}',
-        );
+      await platformNotification('Open Foresight', message);
     } catch (e) {
       if (mounted)
         setState(() => notificationState = 'notification unavailable: $e');
@@ -952,8 +1033,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ),
         CheckboxListTile(
           value: notifications,
-          onChanged: notificationState.startsWith('notify-send available')
-              ? (value) => setState(() => notifications = value!)
+          onChanged:
+              (Platform.isMacOS
+                  ? runtimeConfiguration['FORESIGHT_NOTIFICATIONS'] != null
+                  : notificationState.startsWith('Notifications available'))
+              ? (value) => run(() => setNotifications(value!))
               : null,
           title: const Text('Desktop completion/error notifications'),
           subtitle: Text(notificationState),

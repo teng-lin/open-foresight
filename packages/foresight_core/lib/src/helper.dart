@@ -1,6 +1,8 @@
+import 'platform_services.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
+import 'dart:ffi';
+import 'package:ffi/ffi.dart';
 import 'package:grpc/grpc.dart';
 import 'generated/rag_service.pbgrpc.dart';
 import 'generated/helper_control.pbgrpc.dart' as control;
@@ -10,7 +12,12 @@ class Helper {
   late final ClientChannel channel;
   late final RagServiceClient client;
   Process? process;
+  Future<Process>? _launching;
+  Future<PingResponse>? _startupProbe;
+  Future<void>? _closing;
   bool stopping = false;
+  bool shutdownVerified = true;
+  bool _adopted = false;
   int restarts = 0;
   String state = 'disconnected';
   control.State? snapshot;
@@ -66,20 +73,37 @@ class Helper {
   }
 
   Future<void> start() async {
-    final executable = Platform.environment['FORESIGHT_HELPER'];
+    final executable = runtimeConfiguration['FORESIGHT_HELPER'];
     if (manageProcess && executable != null && process == null) {
       bool live = false;
       try {
-        await client.ping(
+        await (_startupProbe = client.ping(
           PingRequest(),
           options: CallOptions(timeout: const Duration(milliseconds: 400)),
-        );
+        ));
         live = true;
+        _adopted = true;
       } catch (_) {}
+      if (stopping) return;
       if (!live) {
-        process = await Process.start(executable, [socket, storage]);
+        process = await (_launching = Process.start(executable, [
+          socket,
+          storage,
+        ], environment: runtimeConfiguration.environment));
         process!.stdout.drain<void>();
         process!.stderr.drain<void>();
+        if (stopping) {
+          final late = process!;
+          late.kill();
+          try {
+            await late.exitCode.timeout(const Duration(seconds: 5));
+          } on TimeoutException {
+            late.kill(ProcessSignal.sigkill);
+            await late.exitCode;
+          }
+          process = null;
+          return;
+        }
         process!.exitCode.then((code) async {
           process = null;
           state = 'helper exited ($code)';
@@ -132,9 +156,22 @@ class Helper {
     changed?.call();
   }
 
-  Future<void> close() async {
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
     stopping = true;
     await watch?.cancel();
+    // Resolve launch/adoption races before deciding which process is owned.
+    try {
+      await _startupProbe;
+    } catch (_) {
+      /* No helper answered. */
+    }
+    try {
+      await _launching;
+    } catch (_) {
+      /* The helper could not start. */
+    }
     if (manageProcess) {
       final owned = process;
       if (owned != null) {
@@ -148,16 +185,46 @@ class Helper {
       } else {
         // A service restart can adopt its predecessor's surviving helper.
         // Verify the private profile arguments before releasing that owner.
+        if (_adopted || snapshot != null) shutdownVerified = false;
         final pid = int.tryParse(snapshot?.instanceId.split('-').first ?? '');
         if (pid != null) {
+          shutdownVerified = false;
           try {
-            final args = utf8
-                .decode(await File('/proc/$pid/cmdline').readAsBytes())
-                .split('\u0000');
-            if (args.length >= 3 && args[1] == socket && args[2] == storage)
-              Process.killPid(pid, ProcessSignal.sigterm);
-          } on FileSystemException {
-            /* The helper has already exited. */
+            final library = DynamicLibrary.open(
+              runtimeConfiguration.nativeLibrary,
+            );
+            final matches = library
+                .lookupFunction<
+                  Int32 Function(
+                    Int64,
+                    Pointer<Utf8>,
+                    Pointer<Utf8>,
+                    Pointer<Utf8>,
+                  ),
+                  int Function(int, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
+                >('fs_process_matches');
+            final a = socket.toNativeUtf8(), b = storage.toNativeUtf8();
+            final identity = snapshot!.instanceId.toNativeUtf8();
+            try {
+              if (matches(pid, a, b, identity) == 1) {
+                Process.killPid(pid, ProcessSignal.sigterm);
+                for (var attempt = 0; attempt < 50; attempt++) {
+                  if (matches(pid, a, b, identity) == 0) {
+                    shutdownVerified = true;
+                    break;
+                  }
+                  await Future<void>.delayed(const Duration(milliseconds: 100));
+                }
+              }
+            } finally {
+              calloc.free(a);
+              calloc.free(b);
+              calloc.free(identity);
+            }
+          } catch (error) {
+            stderr.writeln(
+              'Could not verify adopted helper ownership; leaving it running: $error',
+            );
           }
         }
       }

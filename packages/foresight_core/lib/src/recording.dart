@@ -141,7 +141,9 @@ class Recording {
           calloc.free(target);
         }
         if (capture == nullptr)
-          throw StateError('PipeWire capture unavailable');
+          throw StateError(
+            'Audio capture unavailable; check device and microphone/system-audio permissions.',
+          );
         captures.add(capture);
         sampleCounts.add(0);
         peakVolumes.add(0);
@@ -162,12 +164,16 @@ class Recording {
     }
   }
 
-  void drain() {
+  void drain({bool flushAll = false}) {
     if (polling) return;
     polling = true;
     try {
       for (var channel = 0; channel < captures.length; channel++) {
-        for (var n = 0; n < 50; n++) {
+        for (
+          var n = 0;
+          (flushAll || n < 50) && channel < captures.length;
+          n++
+        ) {
           final event = poll(captures[channel]);
           if (event == null) break;
           if (event['type'] == 'gap') {
@@ -375,7 +381,15 @@ class Recording {
     finishing = true;
     final epoch = _epoch;
     timer?.cancel();
-    drain();
+    // Stop callbacks first while retaining queued PCM, then consume the tail.
+    // Destroying handles before this drain loses the last captured audio.
+    for (final capture in captures) {
+      lib.lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_finish')(capture);
+    }
+    drain(flushAll: true);
     for (final capture in captures) {
       lib.lookupFunction<
         Void Function(Pointer<Void>),

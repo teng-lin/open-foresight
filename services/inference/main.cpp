@@ -1,5 +1,7 @@
+#include "fd_stream.h"
 #include "litert.h"
 #include "litertlm_header_schema_generated.h"
+#include <algorithm>
 #include <cmath>
 #include <condition_variable>
 #include <fstream>
@@ -9,7 +11,9 @@
 #include <nlohmann/json.hpp>
 #include <openssl/evp.h>
 #include <sentencepiece_processor.h>
+#include <sstream>
 #include <unistd.h>
+#include <vector>
 using json = nlohmann::json;
 namespace fs = std::filesystem;
 
@@ -352,7 +356,7 @@ public:
         text.substr(text.size() - 128).find_first_not_of(" \r\n\t") ==
             std::string::npos)
       throw std::runtime_error("Generation entered a whitespace loop");
-    if (tokens(text) >= static_cast<size_t>(std::max(1, budget - 16)))
+    if (tokens(text) >= static_cast<size_t>(budget - std::min(16, budget / 8)))
       throw std::runtime_error("Generation reached the output budget");
     if (!schema.is_null()) {
       auto checked = json::parse(text);
@@ -368,8 +372,8 @@ int main(int argc, char **argv) {
   int protocol_fd = dup(STDOUT_FILENO);
   if (protocol_fd < 0 || dup2(STDERR_FILENO, STDOUT_FILENO) < 0)
     return 1;
-  std::ofstream protocol("/proc/self/fd/" + std::to_string(protocol_fd));
-  close(protocol_fd);
+  FdStreamBuffer protocol_buffer(protocol_fd);
+  std::ostream protocol(&protocol_buffer);
   bool embedding = argc > 1 && std::string(argv[1]) == "--embedding";
   try {
     std::map<std::string, std::string> args;

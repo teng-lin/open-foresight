@@ -122,6 +122,24 @@ int main() {
     REQUIRE(units.size() == 2 && units[0].heading == "Résumé / Étude" &&
             units[1].heading == "Résumé / Étude / Résultat");
     REQUIRE(words("CAFÉ 東京") == Strings({"café", "東京"}));
+    REQUIRE(validate_draft("## Overview [S99]", {{"S1", "A source."}})
+                .count("Missing or unknown citation") == 1);
+    REQUIRE(validate_draft("## Overview", {{"S1", "A source."}}).empty());
+    REQUIRE(validate_draft("[S99]", {{"S1", "A source."}})
+                .count("Missing or unknown citation") == 1);
+    Fake no_generation;
+    const std::string oversized = std::string(6000, 'x') + " 12–24 months";
+    json oversized_request = {{"version", 1},
+                              {"question", "What is the duration?"},
+                              {"sources",
+                               {{{"citation", "S1"},
+                                 {"title", "Whole evidence"},
+                                 {"excerpt", oversized}}}}};
+    auto fallback = grounded_answer(no_generation, oversized_request, 512);
+    REQUIRE(fallback.at("method") == "source-fallback");
+    REQUIRE(fallback.at("answer").get<std::string>().find(oversized) !=
+            std::string::npos);
+    REQUIRE(no_generation.cursor == 0);
     std::cout << "Native grounding: attribution, numeric fidelity, Unicode, "
                  "retry, fallback, verification and budget checks passed\n";
   } catch (const std::exception &e) {

@@ -1,12 +1,17 @@
 // Process ownership fixture. It deliberately performs no model inference.
 #include <csignal>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <unistd.h>
 int main(int argc, char **argv) {
   if (argc != 3 || std::string(argv[1]) != "--embedding")
     return 2;
+  if (const char *log = std::getenv("FORESIGHT_FIXTURE_PID_LOG")) {
+    std::ofstream stream(log, std::ios::app);
+    stream << getpid() << '\n';
+  }
   bool stubborn = std::filesystem::path(argv[2]).filename() == "stubborn";
   if (stubborn)
     signal(SIGTERM, SIG_IGN);

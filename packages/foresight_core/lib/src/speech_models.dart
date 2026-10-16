@@ -1,3 +1,4 @@
+import 'platform_services.dart';
 import 'dart:io';
 import 'dart:typed_data';
 import 'gemma_download.dart';
@@ -108,13 +109,17 @@ Future<void> configureSpeech(
       '-t',
       '4',
     ];
-    if (Platform.environment['FORESIGHT_WHISPER_BACKEND'] == 'cpu') {
+    if (runtimeConfiguration['FORESIGHT_WHISPER_BACKEND'] == 'cpu') {
       arguments.add('-ng');
-    } else if (Platform.environment['FORESIGHT_WHISPER_DEVICE']
+    } else if (runtimeConfiguration['FORESIGHT_WHISPER_DEVICE']
         case final String device when device.isNotEmpty) {
       arguments.addAll(['-dev', device]);
     }
-    process = await Process.start(runner, arguments);
+    process = await Process.start(
+      runner,
+      arguments,
+      environment: runtimeConfiguration.environment,
+    );
     onProcess?.call(process);
     final stdout = process.stdout.drain<void>();
     final stderr = process.stderr.drain<void>();

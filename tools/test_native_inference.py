@@ -68,6 +68,10 @@ def main():
                                 env=environment, capture_output=True, text=True, timeout=900)
         assert result.returncode == 0 and '4' in result.stdout, result.stderr[-2000:]
         report['generation'] = result.stdout
+        short = subprocess.run([*command, '--prompt', 'Reply exactly YES.', '--max-output-tokens', '16'],
+                               env=environment, capture_output=True, text=True, timeout=900)
+        assert short.returncode == 0 and short.stdout.strip(), short.stderr[-2000:]
+        report['short_output_budget'] = short.stdout
         schema = {'type':'object', 'properties':{'answer':{'type':'string'}}, 'required':['answer'], 'additionalProperties':False}
         result = subprocess.run([*command, '--prompt', 'Return JSON with answer set to hello.', '--json-schema', json.dumps(schema), '--max-output-tokens', '128'],
                                 env=environment, capture_output=True, text=True, timeout=900)

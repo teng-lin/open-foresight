@@ -183,13 +183,18 @@ public:
       throw std::runtime_error(
           "Prepare this legacy model's native ONNX export with "
           "tools/download_embedding_fixture.py --native, then reindex");
+#ifdef __APPLE__
+    constexpr const char *library_name = "libonnxruntime.dylib";
+#else
+    constexpr const char *library_name = "libonnxruntime.so";
+#endif
     const char *configured = getenv("FORESIGHT_ONNX_LIBRARY");
     auto path = configured ? fs::path(configured)
-                           : fs::read_symlink("/proc/self/exe").parent_path() /
-                                 "../lib/libonnxruntime.so";
+                           : foresight::executable_path().parent_path() /
+                                 ("../lib/" + std::string(library_name));
     if (!configured && !fs::is_regular_file(path))
-      path = fs::read_symlink("/proc/self/exe").parent_path() /
-             "../../lib/libonnxruntime.so";
+      path = foresight::executable_path().parent_path() /
+             ("../../lib/" + std::string(library_name));
     auto library = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!library)
       throw std::runtime_error("Cannot load native ONNX Runtime: " +

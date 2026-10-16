@@ -2,6 +2,8 @@
 
 A local knowledge and meeting desktop application built with Flutter, a C++ retrieval helper, SQLite, and local inference workers. The current desktop target is Linux; macOS requires platform integration work.
 
+See the [macOS support implementation plan](docs/macos-support-plan.md) for the proposed port built on the application-service and MCP refactor.
+
 ## Source layout
 
 - `apps/desktop`: Flutter interface, persistence, sources, meetings, and cited answers.

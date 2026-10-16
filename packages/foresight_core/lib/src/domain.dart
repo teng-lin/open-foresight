@@ -1,7 +1,7 @@
+import 'platform_services.dart';
 import 'dart:async';
 import 'application.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
 import 'store.dart';
@@ -227,9 +227,7 @@ class Domain {
           .rows("SELECT * FROM models WHERE kind='generation'")
           .firstOrNull;
       if (gen != null) {
-        generator = NativeRuntime(
-          Platform.environment['FORESIGHT_NATIVE'] ?? 'libforesight_native.so',
-        );
+        generator = NativeRuntime(runtimeConfiguration.nativeLibrary);
         await generator!.load(
           gen['runtime'] as String,
           gen['path'] as String,

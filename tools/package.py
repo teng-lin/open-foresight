@@ -36,7 +36,7 @@ def main():
     assert helper.is_file() and native.is_file() and args.flutter_bundle.is_dir(), 'Build all components first'
     assert not args.output.exists(), 'Choose an empty output directory to avoid stale packaged libraries'
     worker = args.build / 'services/inference/foresight-model'
-    assert worker.is_file() and args.litert_library.is_file(), 'Build native inference and prepare LiteRT-LM first'
+    assert worker.is_file() and args.litert_library.is_file() and args.onnx_library.is_file(), 'Build native inference and prepare LiteRT-LM/ONNX Runtime first'
     assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
     assert hashlib.sha256(args.onnx_library.read_bytes()).hexdigest() == ONNX_LIBRARY_SHA256, 'ONNX Runtime checksum mismatch'
     # Refuse a Python extension or an incompatible/missing public C runtime.

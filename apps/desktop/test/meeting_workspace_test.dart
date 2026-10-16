@@ -10,7 +10,8 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 
 class NotesRuntime extends NativeRuntime {
   String prompt = '';
-  NotesRuntime() : super('libc.so.6');
+  NotesRuntime()
+    : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
   Stream<Map<String, dynamic>> generate(
     String id,

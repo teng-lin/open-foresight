@@ -85,3 +85,14 @@ Verified on the implementation host with CPU and GPU EmbeddingGemma bundles,
 MiniLM ONNX, GPU Gemma E2B, service/MCP restoration and a relocated desktop
 bundle. Other Gemma sizes and independent clean machines require their own
 acceptance checks; the port does not establish new GPU/model compatibility.
+
+## Platform integration review
+
+The worker resolves executable paths through the shared Linux/macOS process
+adapter and writes its protocol to an owned POSIX descriptor without `/proc`.
+macOS library discovery uses `.dylib` names; explicit library paths also work.
+Finder resource configuration selects the native runner and forwards LiteRT/ONNX
+library paths into native subprocess launches. macOS helper launch continues to
+use the owned supervisor and close-on-exec safeguards from the application core.
+The preparation and packaging scripts remain Linux x86_64 tools; this does not
+establish a packaged or real-model macOS release.

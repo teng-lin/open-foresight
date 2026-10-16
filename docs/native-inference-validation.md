@@ -57,3 +57,30 @@ The detailed procedural fixture also exposed an uncited completeness conclusion
 in the former Python pipeline. The native prompt/repair instructions explicitly
 require citations for limitations and prohibit unsupported completeness claims;
 strict validation and attributed fallback remain enabled.
+
+## Integration review against macOS platform support
+
+After incorporating main's macOS process/ownership and resource configuration:
+
+- Linux: six native CTest targets, sixteen core tests, 135 Flutter tests (ten
+  opt-in skips), all eleven service/MCP tests (including the isolated native
+  desktop integration), and static analysis pass. Real GPU generation, a
+  sixteen-token output budget, structured JSON,
+  cited answers and seventeen embedding/tokenizer requests pass through the
+  portable descriptor protocol.
+- Apple Silicon Mac: `foresight-model` and `libforesight_native.dylib` compile;
+  native grounding, protocol and helper-worker lifetime/parent-death/launch-race
+  tests pass.
+  An unconfigured worker emits valid error JSON without `/proc`. This does not
+  validate real-model Mac inference or distribution packaging.
+- Review fixes preserve Mac supervisor ownership and launch serialization, use
+  portable executable/library paths and protocol descriptors, propagate native
+  library configuration from Finder resources, retain compiled fixture PID
+  reporting, and make repeated helper shutdown share one termination future.
+  Unknown citations are rejected even in headings and citation-only blocks;
+  oversized complete evidence falls back to attributed excerpts without losing
+  rows or numeric ranges. Small output budgets use a proportional safety margin,
+  and packaging checks for both native runtime files before hashing them.
+
+Review reports are under `test-results/merge-*`; the Mac source/build was
+isolated in `/tmp/foresight-pr1-native-review`, with no changes to another checkout.

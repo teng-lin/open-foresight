@@ -1,3 +1,4 @@
+import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -9,19 +10,25 @@ import 'store.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
 
-void privateDirectory(String path) {
-  final dir = Directory(path);
-  if (!dir.existsSync()) {
-    dir.createSync(recursive: true);
-    if (Process.runSync('chmod', ['700', path]).exitCode != 0)
-      throw StateError('Cannot protect $path');
+/// The profile lock is independent of runtime overrides. An endpoint record lets
+/// clients attach to that owner even when launched with a different runtime.
+String serviceEndpoint(ProfilePaths profile) {
+  privateDirectory(profile.data);
+  final record = File('${profile.data}/.application-endpoint.json');
+  if (FileSystemEntity.typeSync(record.path, followLinks: false) ==
+      FileSystemEntityType.link) {
+    throw StateError('Service endpoint record must not be a symbolic link');
   }
-  final owner = Process.runSync('stat', ['-Lc', '%u', path]);
-  final user = Process.runSync('id', ['-u']);
-  if (owner.exitCode != 0 ||
-      owner.stdout.toString().trim() != user.stdout.toString().trim() ||
-      (dir.statSync().mode & 0x3f) != 0)
-    throw StateError('Requires private user-owned directory: $path');
+  if (record.existsSync()) {
+    final value = jsonDecode(record.readAsStringSync()) as Map;
+    if (value['data'] != profile.data || value['runtime'] is! String) {
+      throw StateError('Invalid application service endpoint record');
+    }
+    final runtime = value['runtime'] as String;
+    privateDirectory(runtime);
+    return '$runtime/application.sock';
+  }
+  return '${profile.runtime}/application.sock';
 }
 
 /// Newline framed, multiplexed local RPC. No network listener is opened.
@@ -222,10 +229,22 @@ class ApplicationService {
   }
   static Future<ApplicationService> start(ProfilePaths profile) async {
     privateDirectory(profile.data);
+    // Configure native state only when a native installation is present. Tests
+    // and administration may use the storage-only service without model workers.
+    if (runtimeConfiguration['FORESIGHT_NATIVE'] != null)
+      configureProfileRuntime(profile.data);
     privateDirectory(profile.runtime);
-    final path = '${profile.runtime}/application.sock';
-    final lock = File('$path.lock').openSync(mode: FileMode.append);
+    var path = '${profile.runtime}/application.sock';
+    final lock = File(
+      '${profile.data}/.application.lock',
+    ).openSync(mode: FileMode.append);
     try {
+      if (Process.runSync('/bin/chmod', [
+            '600',
+            '${profile.data}/.application.lock',
+          ]).exitCode !=
+          0)
+        throw StateError('Cannot protect profile ownership lock');
       lock.lockSync(FileLock.exclusive);
     } catch (_) {
       lock.closeSync();
@@ -235,6 +254,10 @@ class ApplicationService {
     Helper? helper;
     ServerSocket? listener;
     try {
+      // An unclean predecessor can leave a healthy helper at this endpoint.
+      // Reuse that runtime until a clean shutdown releases its workers.
+      path = serviceEndpoint(profile);
+      profile = ProfilePaths(profile.data, File(path).parent.path);
       final stale = File(path);
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
         stale.deleteSync();
@@ -254,8 +277,18 @@ class ApplicationService {
       );
       if ((await Process.run('chmod', ['600', path])).exitCode != 0)
         throw StateError('Cannot protect application socket');
+      final endpoint = File('${profile.data}/.application-endpoint.json');
+      final temporary = File('${endpoint.path}.$pid');
+      temporary.writeAsStringSync(
+        jsonEncode({'data': profile.data, 'runtime': profile.runtime}),
+      );
+      if (Process.runSync('/bin/chmod', ['600', temporary.path]).exitCode !=
+          0) {
+        throw StateError('Cannot protect service endpoint record');
+      }
+      temporary.renameSync(endpoint.path);
       final service = ApplicationService._(domain, listener, path, lock);
-      final manifest = Platform.environment['FORESIGHT_MODEL_MANIFEST'];
+      final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
         domain.initialize(
           registerInstalledModels(store, manifest).then<void>((_) {}),
@@ -409,6 +442,10 @@ class ApplicationService {
   ) async {
     if (!{
       'status',
+      'audio.capabilities',
+      'notifications.capabilities',
+      'notifications.request_permission',
+      'audio.request_microphone',
       'sources.list',
       'sources.get',
       'notes.list',
@@ -462,6 +499,13 @@ class ApplicationService {
     domain.store.close();
     if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
       File(path).deleteSync();
+    final endpoint = File(
+      '${File(domain.store.path).parent.path}/.application-endpoint.json',
+    );
+    if (domain.helper.shutdownVerified &&
+        failure == null &&
+        endpoint.existsSync())
+      endpoint.deleteSync();
     lock.closeSync();
     if (failure != null)
       throw StateError('Application shutdown failed: $failure');
@@ -470,7 +514,7 @@ class ApplicationService {
 
 /// Attach first; competing launchers may race safely on the service's OS lock.
 Future<ServiceClient> ensureService(ProfilePaths profile) async {
-  final path = '${profile.runtime}/application.sock';
+  var path = serviceEndpoint(profile);
   try {
     return await ServiceClient.connect(path);
   } on SocketException {
@@ -478,7 +522,7 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
   }
   privateDirectory(profile.data);
   privateDirectory(profile.runtime);
-  final executable = Platform.environment['FORESIGHT_SERVICE'];
+  final executable = runtimeConfiguration['FORESIGHT_SERVICE'];
   if (executable == null || !File(executable).existsSync())
     throw StateError(
       'Set FORESIGHT_SERVICE to the application-service executable',
@@ -488,12 +532,14 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
     const [],
     mode: ProcessStartMode.detached,
     environment: {
+      ...runtimeConfiguration.environment,
       'FORESIGHT_DATA': profile.data,
       'FORESIGHT_RUNTIME': profile.runtime,
     },
   );
   for (var attempt = 0; attempt < 100; attempt++) {
     try {
+      path = serviceEndpoint(profile);
       return await ServiceClient.connect(path);
     } on SocketException {
       await Future<void>.delayed(const Duration(milliseconds: 100));

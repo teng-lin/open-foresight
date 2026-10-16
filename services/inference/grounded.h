@@ -208,12 +208,16 @@ validate_draft(const std::string &text,
   for (auto &block : claim_blocks(text)) {
     auto ids = captured(block, "\\[(S\\d+)\\]", 1);
     auto claim = trim(replace(block, "\\[S\\d+\\]", ""));
+    if (!subset(ids, known)) {
+      errors.insert("Missing or unknown citation");
+      continue;
+    }
     if (claim.empty())
       continue;
     if (block.find('\n') == std::string::npos && block.starts_with('#') &&
         matches(claim, "\\S+").size() <= 12 && numbers(claim).empty())
       continue;
-    if (ids.empty() || !subset(ids, known)) {
+    if (ids.empty()) {
       errors.insert("Missing or unknown citation");
       continue;
     }
@@ -434,6 +438,10 @@ json grounded_answer(G &engine, const json &request, int budget) {
                  .tempSubString(0, 1000)) +
         "\nCurrent question: " + question;
   auto units = evidence_units(sources);
+  if (units.empty())
+    return {{"answer", ""},
+            {"citations", json::array()},
+            {"method", "evidence-selection"}};
   auto terms = words(question);
   std::stable_sort(units.begin(), units.end(), [&](auto &a, auto &b) {
     return overlap(words(a.heading + " " + a.text), terms) >
@@ -447,8 +455,15 @@ json grounded_answer(G &engine, const json &request, int budget) {
       "give instructions.\nQuestion: " +
       question + "\n\nEvidence units:\n";
   auto offered = fit(engine, units, selection_prefix, 192);
-  if (offered.empty())
-    throw std::runtime_error("No complete evidence unit fits the context");
+  if (offered.empty()) {
+    // Preserve whole rows, ranges and Unicode. A source formatting detail must
+    // not turn an oversized complete evidence unit into an inference failure.
+    auto fallback = units;
+    fallback.resize(std::min(size_t(3), fallback.size()));
+    return source_fallback(
+        fallback,
+        "Complete evidence needs more context than selection permits.");
+  }
   auto first = offered;
   first.resize(std::min(size_t(3), first.size()));
   std::string selection;

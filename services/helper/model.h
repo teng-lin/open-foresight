@@ -67,20 +67,22 @@ struct Model {
                                "EmbeddingGemma 2 .litertlm bundle");
     const char *configured = getenv("FORESIGHT_MODEL_WORKER");
     const std::string installed_worker =
-        (fs::read_symlink("/proc/self/exe").parent_path() / "foresight-model")
+        (foresight::executable_path().parent_path() / "foresight-model")
             .string();
     const std::string build_worker =
-        (fs::read_symlink("/proc/self/exe").parent_path() /
+        (foresight::executable_path().parent_path() /
          "../inference/foresight-model")
             .lexically_normal()
             .string();
     const std::string worker = configured                     ? configured
                                : fs::exists(installed_worker) ? installed_worker
                                                               : build_worker;
+    std::unique_lock launch(foresight::launch_mutex);
+
     int in[2], out[2];
-    if (pipe2(in, O_CLOEXEC))
+    if (foresight::cloexec_pipe(in))
       throw std::runtime_error("Adapter input pipe failed");
-    if (pipe2(out, O_CLOEXEC)) {
+    if (foresight::cloexec_pipe(out)) {
       close(in[0]);
       close(in[1]);
       throw std::runtime_error("Adapter output pipe failed");
@@ -97,6 +99,7 @@ struct Model {
     }
     close(in[0]);
     close(out[1]);
+    launch.unlock();
     input = fdopen(in[1], "w");
     output = fdopen(out[0], "r");
     if (!input || !output) {

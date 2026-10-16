@@ -1,4 +1,5 @@
 #pragma once
+#include "../../native/portable_process.h"
 #include "c/conversation.h"
 #include "c/embedding_engine.h"
 #include "c/engine.h"
@@ -15,16 +16,19 @@ class LiteRt {
 
 public:
   LiteRt() {
+#ifdef __APPLE__
+    constexpr const char *library_name = "liblitert-lm.dylib";
+#else
+    constexpr const char *library_name = "liblitert-lm.so";
+#endif
     const char *configured = std::getenv("FORESIGHT_LITERT_LIBRARY");
-    auto path =
-        configured
-            ? std::filesystem::path(configured)
-            : (std::filesystem::read_symlink("/proc/self/exe").parent_path() /
-               "../lib/liblitert-lm.so")
-                  .lexically_normal();
+    auto path = configured ? std::filesystem::path(configured)
+                           : (foresight::executable_path().parent_path() /
+                              ("../lib/" + std::string(library_name)))
+                                 .lexically_normal();
     if (!configured && !std::filesystem::is_regular_file(path))
-      path = (std::filesystem::read_symlink("/proc/self/exe").parent_path() /
-              "../../lib/liblitert-lm.so")
+      path = (foresight::executable_path().parent_path() /
+              ("../../lib/" + std::string(library_name)))
                  .lexically_normal();
     library_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!library_)

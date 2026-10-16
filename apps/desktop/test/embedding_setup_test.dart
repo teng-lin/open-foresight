@@ -93,11 +93,11 @@ void main() {
       expect(service.requests.length, 2);
       expect(tester.takeException(), isNull);
     } finally {
+      // Finish real HTTP/2 I/O outside the widget's fake clock before dispose
+      // requests the same idempotent shutdown.
+      await tester.runAsync(helper.close);
       await tester.pumpWidget(const SizedBox.shrink());
-      await tester.runAsync(() async {
-        await helper.close();
-        await server.shutdown();
-      });
+      await tester.runAsync(server.shutdown);
       temporary.deleteSync(recursive: true);
     }
   });

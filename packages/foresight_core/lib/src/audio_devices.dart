@@ -1,3 +1,7 @@
+import 'dart:ffi';
+import 'dart:isolate';
+import 'package:ffi/ffi.dart';
+import 'platform_services.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -8,6 +12,27 @@ class AudioDevice {
 }
 
 Future<List<AudioDevice>> audioDevices() async {
+  if (Platform.isMacOS) {
+    final helper = runtimeConfiguration['FORESIGHT_AUDIO_DEVICES'];
+    if (helper == null)
+      throw StateError('The bundled Mac audio device adapter is unavailable.');
+    final result = await Process.run(helper, [
+      '--list-devices',
+    ]).timeout(const Duration(seconds: 10));
+    if (result.exitCode != 0)
+      throw StateError('Mac audio discovery failed: ${result.stderr}');
+    final devices = (jsonDecode(result.stdout as String) as List).map((entry) {
+      final item = entry as Map;
+      return AudioDevice(
+        item['id'] as String,
+        item['label'] as String,
+        item['playback'] as bool,
+      );
+    }).toList();
+    devices.sort((a, b) => a.label.compareTo(b.label));
+    return devices;
+  }
+
   final result = await Process.run(
     'pw-dump',
     [],
@@ -35,4 +60,42 @@ Future<List<AudioDevice>> audioDevices() async {
   }
   devices.sort((a, b) => a.label.compareTo(b.label));
   return devices;
+}
+
+/// Querying capabilities never asks for protected resources or starts capture.
+Map<String, dynamic> audioCapabilities() {
+  final lib = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
+  final result = lib
+      .lookupFunction<Pointer<Utf8> Function(), Pointer<Utf8> Function()>(
+        'fs_audio_capabilities',
+      )();
+  if (result == nullptr) throw StateError('Audio capability query failed');
+  try {
+    return Map<String, dynamic>.from(jsonDecode(result.toDartString()) as Map);
+  } finally {
+    lib.lookupFunction<
+      Void Function(Pointer<Utf8>),
+      void Function(Pointer<Utf8>)
+    >('fs_string_free')(result);
+  }
+}
+
+/// Explicit permission setup only. Run the blocking TCC request off the service
+/// event loop so other clients and active model/recording work stay responsive.
+Future<Map<String, dynamic>> requestMicrophonePermission() async {
+  final capabilities = audioCapabilities();
+  if (Platform.isMacOS && capabilities['microphone_purpose_present'] != true) {
+    throw StateError(
+      'The application service bundle is missing its microphone purpose string. Launch the installed Open Foresight application service and reinstall if necessary.',
+    );
+  }
+  final path = runtimeConfiguration.nativeLibrary;
+  final granted = await Isolate.run(() {
+    final lib = DynamicLibrary.open(path);
+    return lib.lookupFunction<Int32 Function(), int Function()>(
+          'fs_audio_request_microphone',
+        )() ==
+        0;
+  });
+  return {'granted': granted, ...audioCapabilities()};
 }
