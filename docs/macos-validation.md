@@ -13,7 +13,8 @@ The deployment target is 15.0; execution on 26.6 does not prove the OS floor.
 The committed application-service baseline is `3195e04`; the Mac plan is
 `c609a0a`. Work is isolated from the active MSI service and packaging worktrees.
 Reviewed native/core/audio changes were merged to main in `0d1aba7`.
-Later packaging and integration changes are still under validation.
+The integration branch now includes packaging, guided audio/model setup, and
+configured-model relocation; release acceptance remains separate.
 
 ## Executed checks
 
@@ -21,23 +22,26 @@ Later packaging and integration changes are still under validation.
 | --- | --- | --- |
 | Mac native CTest | 5/5 passed | Helper contract, model worker lifetime, audio buffer/cancellation, native lifecycle, process identity; initial development build used newer Homebrew dependencies |
 | Mac native CTest with source SDK | 6/6 passed | Fresh `build/macos15`, arm64/15.0, system SQLite/zlib, pinned static gRPC dependencies, document parser included; no Homebrew runtime libraries |
-| Mac service subprocess suite | 10 passed, 1 UI opt-in skipped | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
+| Mac service subprocess suite | 12/12 passed, including native UI | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
 | Mac contract/grounding/migration suite | 17 passed, 9 subtests | Includes offline migration's actual open-profile guard |
 | Mach-O and installation tools | 29 passed | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral, locks, actual AOT source/graph persistence, and Swift document extraction |
 | Flutter release runner | Built successfully | Unsigned/ad-hoc development, not installed-release validation |
-| Mac full Flutter suite with `2fb6445` | 135 passed, 10 skipped | Complete unit/widget suite, 104 s on this host |
+| Mac full Flutter suite | 143 passed, 10 skipped | Complete unit/widget suite, including embedding-download consent and guided quick-start; analysis clean |
 | Mac native desktop/service/MCP integration | Passed in 94 s | Actual Mac Flutter runner, read-only desktop DB, shared ownership, note propagation, recording survives Flutter state destruction/restart, final transcript/artifact persistence; capture/inference use controlled fixtures |
 | PDFKit/AppKit extraction | 5/5 passed | Actual generated Unicode PDF/RTF, spaced paths, encrypted PDF, empty/scanned documents, read failures, stderr-only usage errors |
-| Updated Mac application core | 17/17 passed | Includes Mac importer argv/error handling; analyses clean |
+| Updated Mac application core | 29/29 passed | Includes importer contracts, permission actions, atomic idle shutdown and configured runner relocation; analysis clean |
 | Linux native CTest on isolated MSI checkout | 4/4 passed | Integrated native/core changes; no edits to active MSI worktrees |
-| Linux application core | 17 passed | Includes concurrent helper shutdown, Mac parser contract fixtures and private profile/installation paths |
-| Linux service/workflow suite at `bf22d50` | 11/11 passed | Includes actual native Flutter desktop/MCP capture/restart integration with controlled inference/audio |
-| Linux full Flutter suite with `2fb6445` | 135 passed, 10 skipped | Real-I/O widget disposal fixed; opt-in models/UI remain separate |
+| Linux application core | 29/29 passed | Includes shared-service shutdown and configured runner relocation; analysis clean |
+| Linux service/workflow suite | 12/12 passed | Includes actual native Flutter desktop/MCP capture/restart integration with controlled inference/audio; restart awaits restored model readiness |
+| Linux full Flutter suite | 140 passed, 13 skipped | Analysis clean; Mac-only widget cases skipped on Linux |
 | Linux prototype packaging and relocation at `bf22d50` | Passed | Release runner, 130-file folder bundle, paths with spaces, cwd `/`, native desktop/MCP shared owner, independent headless profile and note writes; same host glibc 2.44, no distro ABI/clean-machine or model-runtime claim |
 | AOT installation maintenance exclusion | Passed | Installer exclusive lock blocks startup before DB creation; two profile services coexist with shared locks and exclude replacement until both stop |
 | Standalone Python deployment metadata | 19 Mach-O files checked; none above 15.0 | Full relocated bundle execution and signing still separate |
 | Complete relocated development app | Passed MCP-first and desktop-first | Minimal HOME/PATH/profile environment, paths with spaces, two MCP clients, shared AOT service, notes/source revisions/labels/graph persistence, native PDF/RTF extraction, maintenance exclusion; desktop process termination tested, actual window-close/reopen still separate |
 | Real models using bundled runtime paths | Passed | Full Gemma GPU grounded/citation/cancellation/reuse workflow in 73 s, actual EmbeddingGemma GPU retrieval, and bundled Whisper JFK transcription; outer Flutter test harness remains a development tool |
+
+| Reviewed assembled app at `c87514c` | Passed desktop-first smoke | 31 Mach-O files audited; two MCP clients, idle-only atomic upgrade, injected post-swap verification failure and inode/signature rollback; data survives restart |
+| Configured real models after bundle move | Passed | Private profile registered real embedding/generation/speech models, indexed a source, stopped the owner, moved the app, restored generation and answered with a correct citation; raw registrations retained, runtime projection resolves the new paths; signature remains valid |
 
 ## Pinned model probes
 
@@ -68,10 +72,10 @@ include `tools/test_gemma_models.py` and the native/service test suites.
 
 ## Outstanding acceptance evidence
 
-The source-built target-15 SDK and initial complete relocated development bundle
-pass the checks above. Final onboarding, system-audio permission actions, and
-atomic idle-only upgrade changes require a fresh assembled-app run before the
-packaging phase is merged. The separate physical/release gates remain:
+The source-built target-15 SDK and complete development bundle pass the checks
+above. The user confirmed the guided setup flow works; this does not establish
+physical audio transcription or signed permission attribution. The separate
+physical/release gates remain:
 
 - Developer ID signing, notarization, stapling, and Gatekeeper assessment.
 - Signed installed-service microphone/system capture attribution, desktop-first
@@ -83,7 +87,8 @@ packaging phase is merged. The separate physical/release gates remain:
   dependencies, and execution on the intended minimum OS/hardware.
 - Representative latency and peak memory with explicit usable thresholds and
   defaults on that minimum hardware.
-- Final integrated Linux packaging and desktop workflow verification.
+- Linux distribution packaging and clean-machine ABI verification; the isolated
+  MSI prototype bundle and integrated desktop/service tests passed on the build host.
 
 The local keychain currently has no valid code-signing identities; this is an
 external release prerequisite. Development signatures cannot close these gates.
