@@ -32,15 +32,8 @@ void main() {
       fixture.lookupFunction<Void Function(Int32), void Function(int)>(
         'fixture_fail_channel',
       )(channel);
-  int emit(int channel, int marker) {
-    final bytes = ByteData(2000 * 2);
-    for (var i = 0; i < 2000; i++) bytes.setInt16(i * 2, marker, Endian.little);
-    final event = jsonEncode({
-      'type': 'pcm',
-      'sampleRate': 1000,
-      'volume': .02,
-      'data': base64Encode(bytes.buffer.asUint8List()),
-    }).toNativeUtf8();
+  int emitEvent(int channel, Map<String, Object> value) {
+    final event = jsonEncode(value).toNativeUtf8();
     try {
       return fixture.lookupFunction<
         Int32 Function(Int32, Pointer<Utf8>),
@@ -50,6 +43,125 @@ void main() {
       calloc.free(event);
     }
   }
+
+  void holdSpeech(bool hold) =>
+      fixture.lookupFunction<Void Function(Int32), void Function(int)>(
+        'fixture_hold_speech',
+      )(hold ? 1 : 0);
+  int emit(int channel, int marker, {int count = 2000}) {
+    final bytes = ByteData(count * 2);
+    for (var i = 0; i < count; i++)
+      bytes.setInt16(i * 2, marker, Endian.little);
+    return emitEvent(channel, {
+      'type': 'pcm',
+      'sampleRate': 1000,
+      'volume': .02,
+      'data': base64Encode(bytes.buffer.asUint8List()),
+    });
+  }
+
+  for (final pause in [false, true]) {
+    test(
+      'a late speech hypothesis cannot reappear after ${pause ? "pause/resume" : "a route gap"}',
+      () async {
+        fail(-1);
+        holdSpeech(true);
+        final provisional = <String>[];
+        final rows = <String>[];
+        final recording = Recording(
+          library,
+          (_) {},
+          (text, _, _, _) => rows.add(text),
+          provisional: (text, _, _, _) => provisional.add(text),
+        );
+        try {
+          recording.start('/usr/bin/true', model, playback: false);
+          emit(0, 123, count: 5000);
+          recording.drain();
+          final deadline = DateTime.now().add(const Duration(seconds: 2));
+          while (recording.speeches.isEmpty &&
+              DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+          expect(recording.speeches, hasLength(1));
+          if (pause) {
+            recording.pause();
+            recording.resume();
+          } else {
+            emitEvent(0, {'type': 'gap', 'reason': 'audio_device_changed'});
+            recording.drain();
+          }
+          holdSpeech(false);
+          await recording.stop();
+          expect(provisional.where((text) => text.isNotEmpty), isEmpty);
+          expect(rows, ['marker_123']);
+        } finally {
+          holdSpeech(false);
+          recording.dispose();
+        }
+      },
+    );
+  }
+
+  test(
+    'route loss clears stale levels, hypotheses and AEC until recovery',
+    () async {
+      fail(-1);
+      final provisional = <String>[];
+      final rows = <String>[];
+      final states = <String>[];
+      final recording = Recording(
+        library,
+        states.add,
+        (text, _, _, _) => rows.add(text),
+        provisional: (text, _, _, source) => provisional.add('$source:$text'),
+      );
+      try {
+        recording.start('/usr/bin/true', model, echoCancellation: true);
+        emit(0, 123);
+        emit(1, 456);
+        recording.drain();
+        expect(recording.echoCancellationState['active'], true);
+        expect(recording.currentVolumes, [.02, .02]);
+
+        emitEvent(0, {'type': 'gap', 'reason': 'audio_device_changed'});
+        recording.drain();
+        expect(recording.currentVolumes, [0, .02]);
+        expect(provisional, contains('microphone:'));
+        expect(recording.echoCancellationState['active'], false);
+        expect(recording.echoCancellationState['pending'], true);
+        emitEvent(0, {
+          'type': 'echo_cancellation',
+          'active': true,
+          'fallback_status': 0,
+        });
+        recording.drain();
+        expect(recording.echoCancellationState['active'], true);
+
+        emitEvent(0, {'type': 'gap', 'reason': 'capture_buffer_overflow'});
+        recording.drain();
+        expect(recording.echoCancellationState['active'], true);
+        emitEvent(1, {
+          'type': 'state',
+          'state': 'failed',
+          'message': 'device lost',
+        });
+        emitEvent(0, {'type': 'error', 'message': 'engine failed'});
+        emitEvent(0, {'type': 'state', 'state': 'stopped'});
+        recording.drain();
+        expect(recording.currentVolumes, [0, 0]);
+        expect(provisional, contains('playback:'));
+        expect(recording.echoCancellationState['active'], false);
+        expect(recording.echoCancellationState['pending'], false);
+        expect(states, contains('Microphone capture failed: engine failed'));
+        expect(states.last, contains('device lost'));
+        await expectLater(recording.stop(), throwsStateError);
+        expect(rows, unorderedEquals(['marker_123', 'marker_456']));
+      } finally {
+        recording.dispose();
+      }
+    },
+  );
 
   test(
     'echo processing survives bypass, pause and resume without changing routes',
@@ -110,6 +222,20 @@ void main() {
         }
         recording.drain();
         expect(recording.echoCancellationState['active'], false);
+        expect(states.last, contains('continuing with standard'));
+        expect(recording.lastError, isEmpty);
+        emitEvent(0, {
+          'type': 'echo_cancellation',
+          'active': false,
+          'fallback_status': 0,
+          'fallback_reason': 'tap_startup_timeout',
+        });
+        recording.drain();
+        expect(recording.echoCancellationState['active'], false);
+        expect(
+          recording.echoCancellationState['fallback_reason'],
+          'tap_startup_timeout',
+        );
         expect(states.last, contains('continuing with standard'));
         expect(recording.lastError, isEmpty);
         await recording.stop();

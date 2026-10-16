@@ -10,13 +10,15 @@ class _AudioSegment {
   final int channel, startSamples, sampleRate;
   final Uint8List pcm;
   final bool provisional;
+  final int? provisionalEpoch;
   _AudioSegment(
     this.channel,
     this.startSamples,
     this.sampleRate,
     this.pcm,
-    this.provisional,
-  );
+    this.provisional, [
+    this.provisionalEpoch,
+  ]);
 }
 
 /// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
@@ -34,6 +36,7 @@ class Recording {
   final sampleCounts = <int>[], peakVolumes = <double>[];
   final _buffers = <BytesBuilder>[], _starts = <int>[], _rates = <int>[];
   final _lastVoice = <int>[], _voiced = <bool>[], _nextSnapshot = <int>[];
+  final _provisionalEpochs = <int>[];
   final _queues = <List<_AudioSegment>>[];
   final _workers = <int, Future<void>>{};
   Timer? timer;
@@ -163,6 +166,7 @@ class Recording {
     _lastVoice.clear();
     _voiced.clear();
     _nextSnapshot.clear();
+    _provisionalEpochs.clear();
     _queues.clear();
     _targets
       ..clear()
@@ -182,6 +186,7 @@ class Recording {
         _lastVoice.add(0);
         _voiced.add(false);
         _nextSnapshot.add(48000 * 5);
+        _provisionalEpochs.add(0);
         _queues.add([]);
       }
       state('Listening · live transcription');
@@ -232,6 +237,7 @@ class Recording {
     for (var channel = 0; channel < _buffers.length; channel++) {
       _flush(channel);
       currentVolumes[channel] = 0;
+      _provisionalEpochs[channel]++;
       provisional?.call('', 0, 0, channel == 0 ? 'microphone' : 'playback');
     }
     paused = true;
@@ -301,8 +307,9 @@ class Recording {
               ..clear()
               ..addAll(event)
               ..['pending'] = false;
-            if (event['fallback_status'] != null &&
-                event['fallback_status'] != 0) {
+            if ((event['fallback_status'] != null &&
+                    event['fallback_status'] != 0) ||
+                (event['fallback_reason'] as String?)?.isNotEmpty == true) {
               state(
                 'Echo cancellation unavailable; continuing with standard microphone capture.',
               );
@@ -314,6 +321,12 @@ class Recording {
           }
           if (event['type'] == 'gap') {
             _flush(channel);
+            _captureInterrupted(
+              channel,
+              reconnecting: true,
+              processingInterrupted:
+                  event['reason'] != 'capture_buffer_overflow',
+            );
             final gap = {
               ...event,
               'source': channel == 0 ? 'microphone' : 'playback',
@@ -326,6 +339,12 @@ class Recording {
             continue;
           }
           if (event['type'] == 'error' || event['type'] == 'state') {
+            if (event['type'] == 'error' ||
+                event['state'] == 'failed' ||
+                event['state'] == 'stopped') {
+              _flush(channel);
+              _captureInterrupted(channel, reconnecting: false);
+            }
             if (event['type'] == 'error' || event['state'] == 'failed') {
               final source = channel == 0 ? 'Microphone' : 'Playback';
               lastError =
@@ -376,6 +395,7 @@ class Recording {
                   rate,
                   _buffers[channel].toBytes(),
                   true,
+                  _provisionalEpochs[channel],
                 ),
               );
             }
@@ -390,6 +410,23 @@ class Recording {
     } finally {
       polling = false;
     }
+  }
+
+  void _captureInterrupted(
+    int channel, {
+    required bool reconnecting,
+    bool processingInterrupted = true,
+  }) {
+    currentVolumes[channel] = 0;
+    _provisionalEpochs[channel]++;
+    provisional?.call('', 0, 0, channel == 0 ? 'microphone' : 'playback');
+    if (channel == 0 && processingInterrupted) {
+      // A live handle can outlast its audio engine during recovery or failure.
+      // Only a fresh native processing event can establish active AEC again.
+      _echoState['active'] = false;
+      _echoState['pending'] = reconnecting && _echoCancellation;
+    }
+    levels?.call();
   }
 
   void _flush(int channel) {
@@ -485,7 +522,10 @@ class Recording {
                   (segment.pcm.length ~/ 2) * 1000 ~/ segment.sampleRate;
               final source = channel == 0 ? 'microphone' : 'playback';
               if (segment.provisional) {
-                if (!paused) provisional?.call(text, start, end, source);
+                if (!paused &&
+                    segment.provisionalEpoch == _provisionalEpochs[channel]) {
+                  provisional?.call(text, start, end, source);
+                }
               } else {
                 _transcriptCount++;
                 transcript(text, start, end, source);

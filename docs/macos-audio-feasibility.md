@@ -2,9 +2,18 @@
 
 Reference: [Apple Core Audio tap capture documentation](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps); API/format contracts were also checked against the installed macOS 27 SDK headers.
 
-The native service library uses AudioQueue input capture and private Core Audio process taps through a private aggregate device for system audio. Supported floor: macOS 15. No Flutter window or plugin owns capture. Input and output use the existing separate native handles/event channels. Targets are Core Audio device UIDs; `auto` follows the current default input/output; explicit UIDs never fall back. System capture taps stream 0 of the selected output rather than silently capturing all outputs.
+The native service library uses AVAudioEngine input capture and private Core Audio process taps through a private aggregate device for system audio. Supported floor: macOS 15. No Flutter window or plugin owns capture. Input and output use the existing separate native handles/event channels. Targets are Core Audio device UIDs; `auto` follows the current default input/output; explicit UIDs never fall back. System capture taps stream 0 of the selected output rather than silently capturing all outputs.
 
 Audio callbacks write mono float samples into a bounded single-producer/single-consumer ring without allocation, mutexes or logging. A service worker resamples continuously, converts to little-endian signed 16-bit mono, computes levels and emits 40ms frames. Overflow emits a gap. Device removal/default changes cause a gap and bounded reconnect attempts; a stable stream resets the retry budget. Stop waits for callbacks, drains the ring and emits a partial final frame. The additive `fs_capture_finish` stops capture while retaining queued events; clients must drain those events before releasing with `fs_capture_stop`.
+
+The shared recording owner clears affected-channel levels, interim hypotheses,
+and active echo-processing state during route interruption. Late interim ASR
+results from before interruption or pause cannot repopulate cleared speech;
+final segments remain queued. The original's 1,500 ms microphone startup
+watchdog now falls back from silent processed startup to a fresh standard
+engine, then reports failure if standard capture also produces no valid PCM
+buffers. Valid silence satisfies startup. See [recording recovery](recording-recovery.md)
+for the fixture coverage and remaining physical/reference validation.
 
 ## Permission and launch identity
 

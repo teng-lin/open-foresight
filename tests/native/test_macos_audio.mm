@@ -4,6 +4,33 @@
 #define REQUIRE(value) do { if (!(value)) throw std::runtime_error(#value); } while (false)
 #include <iostream>
 int main() { @autoreleasepool {
+  // One-shot startup watchdog: converted PCM, including silent buffers, satisfies
+  // startup; only an on-time zero-callback check falls back or fails.
+  using namespace std::chrono_literals;
+  using Action = TapWatchdogAction;
+  const TapStartupWatchdog::Clock::time_point now{};
+  const TapStartupWatchdog::WallClock::time_point wall{};
+  TapStartupWatchdog referenceWatchdog;
+  referenceWatchdog.arm(now, wall);
+  REQUIRE(referenceWatchdog.check(now + 1499ms, wall + 1499ms, true, 0, false) == Action::none);
+  REQUIRE(referenceWatchdog.check(now + 1500ms, wall + 1500ms, true, 0, false) == Action::failed);
+  TapStartupWatchdog watchdog(1000ms);
+  watchdog.arm(now, wall);
+  REQUIRE(watchdog.check(now + 999ms, wall + 999ms, true, 0, true) == Action::none);
+  REQUIRE(watchdog.check(now + 1000ms, wall + 1000ms, true, 0, true) == Action::standardFallback);
+  REQUIRE(watchdog.check(now + 2000ms, wall + 2000ms, true, 0, false) == Action::none);
+  watchdog.arm(now, wall);
+  REQUIRE(watchdog.check(now + 1000ms, wall + 1500ms, true, 0, false) == Action::failed);
+  watchdog.arm(now, wall);
+  REQUIRE(watchdog.check(now + 1000ms, wall + 1500ms + TapStartupWatchdog::WallClock::duration(1), true, 0, true) == Action::deferred);
+  REQUIRE(watchdog.check(now + 1999ms, wall + 2499ms, true, 0, true) == Action::none);
+  REQUIRE(watchdog.check(now + 2000ms, wall + 2500ms, true, 0, true) == Action::standardFallback);
+  watchdog.arm(now, wall);
+  REQUIRE(watchdog.check(now + 1000ms, wall + 1000ms, true, 1, true) == Action::none);
+  REQUIRE(watchdog.check(now + 2000ms, wall + 2000ms, true, 0, true) == Action::none);
+  watchdog.arm(now, wall);
+  REQUIRE(watchdog.check(now + 1000ms, wall + 1000ms, false, 0, true) == Action::none);
+
   // A partially started processed engine must be released before the standard
   // engine is created. Failed fallback must propagate rather than report capture.
   std::vector<std::string> startup;
@@ -47,9 +74,26 @@ int main() { @autoreleasepool {
   REQUIRE(ring->pop(sample) && sample == 0.f);
   REQUIRE(!ring->pop(sample));
 
-  pushAudio(*ring, format, reinterpret_cast<const AudioBufferList *>(&stereo), true);
+  pushMicrophoneAudio(*ring, format, reinterpret_cast<const AudioBufferList *>(&stereo), 48000);
+  REQUIRE(ring->convertedBuffers == 1);
   REQUIRE(ring->pop(sample) && sample == .75f);
   REQUIRE(ring->pop(sample) && sample == -.5f);
+  REQUIRE(!ring->pop(sample));
+
+  auto invalidFormat = format;
+  invalidFormat.mBitsPerChannel = 24;
+  pushMicrophoneAudio(*ring, invalidFormat, reinterpret_cast<const AudioBufferList *>(&stereo), 48000);
+  REQUIRE(ring->convertedBuffers == 1 && ring->changed);
+  ring->changed = false;
+  pushMicrophoneAudio(*ring, format, reinterpret_cast<const AudioBufferList *>(&stereo), 16000);
+  REQUIRE(ring->convertedBuffers == 1 && ring->changed);
+  pushMicrophoneAudio(*ring, format, nullptr, 48000);
+  REQUIRE(ring->convertedBuffers == 1);
+  left[0] = left[1] = right[0] = right[1] = 0;
+  pushMicrophoneAudio(*ring, format, reinterpret_cast<const AudioBufferList *>(&stereo), 48000);
+  REQUIRE(ring->convertedBuffers == 2);
+  REQUIRE(ring->pop(sample) && sample == 0);
+  REQUIRE(ring->pop(sample) && sample == 0);
   REQUIRE(!ring->pop(sample));
 
   // Setup callbacks must never inspect private PCM, even if Core Audio

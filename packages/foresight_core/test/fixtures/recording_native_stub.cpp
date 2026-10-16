@@ -8,7 +8,9 @@ struct Handle { bool speech; int channel; int marker = 0; std::deque<std::string
 static Handle* channels[2] = {};
 static int fail_channel = -1;
 static std::string speech_event;
+static bool hold_speech = false;
 extern "C" {
+void fixture_hold_speech(int hold) { hold_speech = hold != 0; }
 void fixture_speech_event(const char* event) { speech_event = event; }
 void fixture_fail_channel(int channel) { fail_channel = channel; }
 int fixture_emit(int channel, const char* event) {
@@ -58,6 +60,7 @@ int fs_speech_finish(void* pointer, const char*) {
 }
 char* fs_event_poll(void* pointer, int) {
   auto* handle = static_cast<Handle*>(pointer);
+  if (handle->speech && hold_speech) return nullptr;
   if (handle->events.empty()) return nullptr;
   auto event = handle->events.front();
   handle->events.pop_front();

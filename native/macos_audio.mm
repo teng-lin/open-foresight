@@ -56,6 +56,7 @@ struct Ring {
   std::array<float, capacity> samples{};
   std::atomic<size_t> read{0}, write{0};
   std::atomic<uint64_t> dropped{0};
+  std::atomic<uint64_t> convertedBuffers{0};
   std::atomic<bool> changed{false};
   void push(float value) {
     auto w = write.load(std::memory_order_relaxed), next = (w + 1) % capacity;
@@ -107,9 +108,9 @@ bool supportedPcm(const AudioStreamBasicDescription &format) {
           ((format.mFormatFlags & kAudioFormatFlagIsSignedInteger) &&
               (format.mBitsPerChannel == 16 || format.mBitsPerChannel == 32)));
 }
-void pushAudio(Ring &ring, const AudioStreamBasicDescription &format, const AudioBufferList *data, bool firstChannel = false) {
-  if (!data || !data->mNumberBuffers) return;
-  if (!supportedPcm(format)) { ring.changed = true; return; }
+bool pushAudio(Ring &ring, const AudioStreamBasicDescription &format, const AudioBufferList *data, bool firstChannel = false) {
+  if (!data || !data->mNumberBuffers) return false;
+  if (!supportedPcm(format)) { ring.changed = true; return false; }
   UInt32 frames = data->mBuffers[0].mDataByteSize / format.mBytesPerFrame;
   for (UInt32 frame = 0; frame < frames; ++frame) {
     double sum = 0; unsigned channels = 0;
@@ -130,6 +131,15 @@ void pushAudio(Ring &ring, const AudioStreamBasicDescription &format, const Audi
     }
     ring.push(channels ? float(sum / channels) : 0.f);
   }
+  return true;
+}
+void pushMicrophoneAudio(Ring &ring, const AudioStreamBasicDescription &format,
+                         const AudioBufferList *data, double expectedRate) {
+  if (format.mSampleRate != expectedRate) { ring.changed = true; return; }
+  // The reference increments its watchdog count after successful PCM
+  // conversion, rather than merely receiving an invalid callback format.
+  if (pushAudio(ring, format, data, true))
+    ring.convertedBuffers.fetch_add(1, std::memory_order_relaxed);
 }
 OSStatus output(AudioDeviceID, const AudioTimeStamp *, const AudioBufferList *data,
                 const AudioTimeStamp *, AudioBufferList *, const AudioTimeStamp *, void *context) {
@@ -173,12 +183,11 @@ OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) { @try {
   const double sampleRate = format.sampleRate;
   [node installTapOnBus:0 bufferSize:1024 format:nil block:^(AVAudioPCMBuffer *buffer, AVAudioTime *) {
     // The callback owns only the ring. Late callbacks cannot touch a destroyed
-    // capture session; conversion, JSON, and model work stay off this thread.
+    // capture session; resampling, JSON, and model work stay off this thread.
     const auto &actual = *buffer.format.streamDescription;
-    if (actual.mSampleRate != sampleRate) { ring->changed = true; return; }
     // The original's converter maps the first source channel when reducing
     // microphone input to mono, rather than averaging phase-opposed channels.
-    pushAudio(*ring, actual, buffer.audioBufferList, true);
+    pushMicrophoneAudio(*ring, actual, buffer.audioBufferList, sampleRate);
   }];
   s.tapInstalled = true;
   [s.engine prepare];
@@ -355,6 +364,7 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
     event(@"state", @"failed", @"The responsible service executable is missing its audio purpose string. Launch the installed Open Foresight service bundle.", @"capture_bundle_misconfigured"); return;
   }
   int attempt = 0;
+  bool tapStartupFallback = false;
   while (!cancel) {
     event(@"state", @"connecting", @"Connecting audio device", @"");
     AudioDeviceID device = resolve(target, playback);
@@ -368,6 +378,7 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
     // Core Audio can wait on a system permission dialog. Keep cancellation and
     // service shutdown responsive; late completion owns and destroys its session.
     const bool requested = !playback && echoCancellation && echoCancellation->load();
+    if (requested) tapStartupFallback = false;
     std::thread([ownedSession, device, playback, rate, requested] { @autoreleasepool {
       ownedSession->startStatus = start(*ownedSession, device, playback, rate, requested);
       ownedSession->ready.store(true, std::memory_order_release);
@@ -392,7 +403,8 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
       emit(json(@{@"type":@"echo_cancellation", @"supported":@YES,
           @"requested":@(desired), @"active":@(active),
           @"restart_required":@(desired && !session.engine.inputNode.voiceProcessingEnabled),
-          @"fallback_status":@(session.echoFallback)}));
+          @"fallback_status":@(session.echoFallback),
+          @"fallback_reason":tapStartupFallback ? @"tap_startup_timeout" : @""}));
     };
     if (!playback) {
       if (session.echoFallback && echoCancellation) {
@@ -405,6 +417,9 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
     double phase = 0, position = 0; float previous = 0; bool havePrevious = false;
     double initialDeviceRate = 0; get(device, kAudioDevicePropertyNominalSampleRate, initialDeviceRate);
     uint64_t dropped = 0; auto check = std::chrono::steady_clock::now(); bool reconnect = false;
+    TapStartupWatchdog watchdog;
+    if (!playback) watchdog.arm(TapStartupWatchdog::Clock::now(), TapStartupWatchdog::WallClock::now());
+    bool watchdogFallback = false;
     while (true) {
       if (cancel) {
         if (session.engine) [session.engine stop];
@@ -427,9 +442,27 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
       if (cancel) break;
       if (!playback && echoCancellation && echoCancellation->load() != appliedEcho) {
         appliedEcho = echoCancellation->load();
+        if (appliedEcho) tapStartupFallback = false;
         if (session.engine.inputNode.voiceProcessingEnabled)
           session.engine.inputNode.voiceProcessingBypassed = !appliedEcho;
         echoState(appliedEcho);
+      }
+      if (!playback) {
+        const auto action = watchdog.check(TapStartupWatchdog::Clock::now(),
+            TapStartupWatchdog::WallClock::now(), !cancel,
+            session.ring->convertedBuffers.load(std::memory_order_relaxed), appliedEcho);
+        if (action == TapWatchdogAction::standardFallback) {
+          // The reference disposes the silent processed engine before creating
+          // a fresh standard engine, and gives that engine its own watchdog.
+          if (echoCancellation) echoCancellation->store(false);
+          tapStartupFallback = true;
+          watchdogFallback = true;
+          break;
+        }
+        if (action == TapWatchdogAction::failed) {
+          event(@"state", @"failed", @"Microphone audio stream stalled (no buffers received).", @"microphone_tap_timeout");
+          break;
+        }
       }
       auto lost = session.ring->dropped.load();
       if (lost != dropped) { emit(json(@{@"type":@"gap", @"reason":@"capture_buffer_overflow", @"discarded_samples":@(lost - dropped)})); dropped = lost; }
@@ -448,6 +481,12 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
     if (!frame.empty()) pcm(frame); // Drain buffered final audio before returning.
+    if (watchdogFallback && !cancel) {
+      emit(json(@{@"type":@"gap", @"reason":@"microphone_tap_startup_timeout", @"discarded_bytes":@0}));
+      ownedSession.reset();
+      event(@"state", @"connecting", @"Echo cancellation delivered no microphone audio; retrying with standard microphone capture.", @"microphone_tap_standard_fallback");
+      continue;
+    }
     if (!reconnect || cancel) break;
     emit(json(@{@"type":@"gap", @"reason":@"audio_device_changed", @"discarded_bytes":@0}));
     ownedSession.reset();
