@@ -194,8 +194,9 @@ class ServiceConnection {
 
 class _RequestLease {
   final String id;
+  final String method;
   bool cancelled = false;
-  _RequestLease(this.id);
+  _RequestLease(this.id, this.method);
 }
 
 class ApplicationService {
@@ -341,7 +342,10 @@ class ApplicationService {
               }
               final args = Map<String, dynamic>.from(request['args'] as Map);
               args.putIfAbsent('conversation', () => conversation);
-              final lease = _RequestLease('rpc-$conversation-$id');
+              final lease = _RequestLease(
+                'rpc-$conversation-$id',
+                request['method'] as String,
+              );
               _leases[client]![id] = lease;
               args['requestId'] = lease.id;
               final Stream<Object?> results =
@@ -353,6 +357,8 @@ class ApplicationService {
                         requestId: lease.id,
                       ),
                     )
+                  : request['method'] == 'google.sign_in'
+                  ? domain.application.signIn(lease.id)
                   : Stream.fromFuture(
                       _execute(request['method'] as String, args, lease),
                     );
@@ -428,6 +434,8 @@ class ApplicationService {
     final lease = _leases[client]?.remove(id);
     if (lease != null) {
       lease.cancelled = true;
+      if (lease.method == 'google.sign_in')
+        domain.application.cancelSignIn(lease.id);
       domain.generator?.cancel(requestId: lease.id);
     }
     unawaited(_subscriptions[client]?.remove(id)?.cancel());

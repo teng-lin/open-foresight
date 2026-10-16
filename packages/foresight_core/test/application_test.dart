@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/application.dart';
 
 class TestDomain extends Domain {
   final indexed = <String>[];
@@ -31,6 +32,25 @@ class DelayedGenerator extends NativeRuntime {
   }
 }
 
+class BrowserAuth extends GoogleAuth {
+  final done = Completer<void>();
+  int cancelled = 0;
+  BrowserAuth(Directory directory) : super(directory);
+  @override
+  Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
+    await openBrowser(Uri.parse('https://example.invalid/authorize'));
+    await done.future;
+  }
+
+  @override
+  void cancelSignIn() {
+    if (!done.isCompleted) {
+      cancelled++;
+      done.completeError(StateError('Cancelled'));
+    }
+  }
+}
+
 void main() {
   late Directory directory;
   late TestDomain domain;
@@ -50,6 +70,40 @@ void main() {
     domain.store.close();
     directory.deleteSync(recursive: true);
   });
+  test(
+    'OAuth cancellation before the callback listener binds does not escape its request',
+    () async {
+      final auth = GoogleAuth(Directory('${directory.path}/early-cancel'));
+      auth.client = GoogleClient(
+        'fixture.apps.googleusercontent.com',
+        'fixture',
+      );
+      final task = auth.signIn((_) async {});
+      auth.cancelSignIn();
+      await expectLater(task, throwsStateError);
+      await auth.close();
+    },
+  );
+  test(
+    'OAuth browser invitation is streamed to its client and cancellation belongs to its owner',
+    () async {
+      final auth = BrowserAuth(Directory('${directory.path}/browser-auth'));
+      final app = Application(domain, auth: auth);
+      final invitation = StreamIterator(app.signIn('desktop-request'));
+      expect(await invitation.moveNext(), true);
+      expect(
+        (invitation.current as Map)['authorization_url'],
+        'https://example.invalid/authorize',
+      );
+      app.cancelSignIn('another-request');
+      expect(auth.cancelled, 0);
+      app.cancelSignIn('desktop-request');
+      await expectLater(invitation.moveNext(), throwsStateError);
+      expect(auth.cancelled, 1);
+      await invitation.cancel();
+      await app.close();
+    },
+  );
   test(
     'source updates preserve IDs and increment revisions; notes return their own IDs',
     () async {

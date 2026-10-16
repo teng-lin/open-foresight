@@ -283,8 +283,22 @@ class RemoteGoogleAuth implements GoogleAuth {
   Future<void> configure(File file) =>
       _call('google.configure', {'path': file.path});
   @override
-  Future<void> signIn(Future<void> Function(Uri) openBrowser) =>
-      _call('google.sign_in');
+  Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
+    try {
+      await for (final value in domain.client.stream('google.sign_in')) {
+        final state = Map<String, dynamic>.from(value as Map);
+        if (state['authorization_url'] is String) {
+          await openBrowser(Uri.parse(state['authorization_url'] as String));
+        } else {
+          domain.googleStatus = state;
+        }
+      }
+    } catch (_) {
+      await _call('google.cancel_sign_in');
+      rethrow;
+    }
+  }
+
   @override
   void cancelSignIn() {
     unawaited(_call('google.cancel_sign_in'));

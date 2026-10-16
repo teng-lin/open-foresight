@@ -30,6 +30,31 @@ Future<void> main() async {
       rejected = true;
     }
     if (!rejected) throw StateError('Desktop connection can write');
+    final auth = RemoteGoogleAuth(domain);
+    final configuration = File(
+      '${File(domain.store.path).parent.path}/oauth-fixture.json',
+    );
+    await configuration.writeAsString(
+      jsonEncode({
+        'installed': {
+          'client_id': 'fixture.apps.googleusercontent.com',
+          'client_secret': 'controlled-fixture',
+        },
+      }),
+    );
+    await auth.configure(configuration);
+    var browserInvited = false, oauthCancelled = false;
+    try {
+      await auth.signIn((uri) async {
+        browserInvited =
+            uri.scheme == 'https' && uri.host == 'accounts.google.com';
+        await domain.command('google.cancel_sign_in');
+      });
+    } catch (error) {
+      oauthCancelled = error.toString().toLowerCase().contains('cancel');
+    }
+    if (!browserInvited || !oauthCancelled)
+      throw StateError('Desktop did not receive/cancel the OAuth invitation');
     final update = Completer<void>();
     domain.helper.changed = () {
       if (!update.isCompleted) update.complete();
@@ -57,6 +82,8 @@ Future<void> main() async {
       throw StateError('Data lost after service restart');
     print(
       jsonEncode({
+        'browser_invitation_received': browserInvited,
+        'oauth_cancelled_cleanly': oauthCancelled,
         'read_only': true,
         'changes': true,
         'reconnected': true,

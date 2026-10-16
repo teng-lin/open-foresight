@@ -32,10 +32,11 @@ class Application {
   bool _closed = false;
   bool _modelBusy = false;
   bool get modelBusy => _modelBusy || domain.restoring;
-  Application(this.domain);
-  late final GoogleAuth googleAuth = GoogleAuth(
-    Directory('${File(store.path).parent.path}/google'),
-  );
+  final GoogleAuth? _auth;
+  Application(this.domain, {GoogleAuth? auth}) : _auth = auth;
+  String? _signInOwner;
+  late final GoogleAuth googleAuth =
+      _auth ?? GoogleAuth(Directory('${File(store.path).parent.path}/google'));
   late final GoogleConnections google = GoogleConnections(domain, googleAuth);
   Timer? _googleTimer;
   bool _googleBusy = false;
@@ -216,14 +217,6 @@ class Application {
           return googleState;
         case 'google.configure':
           await googleAuth.configure(File(a['path'] as String));
-          return googleState;
-        case 'google.sign_in':
-          await googleAuth.signIn((uri) async {
-            changed();
-            final opened = await Process.run('xdg-open', [uri.toString()]);
-            if (opened.exitCode != 0)
-              throw StateError('Could not open browser');
-          });
           return googleState;
         case 'google.cancel_sign_in':
           googleAuth.cancelSignIn();
@@ -511,6 +504,36 @@ class Application {
       }.contains(method))
         changed();
     }
+  }
+
+  Stream<Object?> signIn(String owner) async* {
+    if (_signInOwner != null)
+      throw StateError('Google sign-in is already open');
+    _signInOwner = owner;
+    final invitation = Completer<Uri>();
+    final signedIn = googleAuth.signIn((uri) async {
+      invitation.complete(uri);
+      changed();
+    });
+    unawaited(
+      signedIn.catchError((Object e, StackTrace st) {
+        if (!invitation.isCompleted) invitation.completeError(e, st);
+      }),
+    );
+    try {
+      yield {'authorization_url': (await invitation.future).toString()};
+      await signedIn;
+      yield googleState;
+    } finally {
+      cancelSignIn(owner);
+      await signedIn.catchError((Object _) {});
+      if (_signInOwner == owner) _signInOwner = null;
+      changed();
+    }
+  }
+
+  void cancelSignIn(String owner) {
+    if (_signInOwner == owner) googleAuth.cancelSignIn();
   }
 
   Map<String, Object?> _source(String id) {

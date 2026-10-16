@@ -215,6 +215,8 @@ class GoogleAuth {
     final nonce = _random(32), verifier = _random(64);
     final authorization = Completer<String>();
     _authorization = authorization;
+    // A remote client may cancel while the loopback listener is still binding.
+    unawaited(authorization.future.then<void>((_) {}, onError: (Object _) {}));
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     _callback = server;
     final redirect = 'http://127.0.0.1:${server.port}/oauth2callback';

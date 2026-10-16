@@ -96,7 +96,7 @@ Cancellation belongs to the connection and request that started an operation. Ca
 
 Content is shared: editing/deleting an existing source or note is visible to both clients. Supplying an existing ID to an edit operation replaces its current text; the service does not merge concurrent edits. The desktop uses its own answer conversation; each MCP connection gets a separate follow-up/history context, with saved answers still retained in the shared profile.
 
-Google credentials and refreshes belong to the service. Google browser sign-in and consent are still started explicitly from the desktop; MCP does not expose credentials or authentication tools. Google reminders and refresh timers run in the service, independent of an open desktop window.
+Google credentials and refreshes belong to the service. The service streams a sign-in URL to the desktop, which opens the browser even when MCP started the service without a graphical environment. Browser sign-in and consent are started explicitly from the desktop; MCP does not expose credentials or authentication tools. Google reminders and refresh timers run in the service, independent of an open desktop window.
 
 Inspect or stop the service explicitly:
 
@@ -118,7 +118,7 @@ ctest --test-dir build --output-on-failure
 python3 -m pytest tests/service -v
 ```
 
-`tests/service` runs actual service/helper/MCP subprocesses with controlled embedding, generation, speech, and capture fixtures. It checks shared writes/search, launch races, cancellation ownership, capture surviving disconnection, stale socket recovery, canceled model registration, and desktop facade reconnection. Set `FORESIGHT_DART_EXECUTABLE` if Dart is not on PATH.
+`tests/service` runs actual service/helper/MCP subprocesses with controlled embedding, generation, speech, and capture fixtures. It checks shared writes/search, launch races, cancellation ownership, capture surviving disconnection, stale socket recovery, canceled model registration, desktop facade reconnection, browser invitation forwarding, and early OAuth cancellation. Set `FORESIGHT_DART_EXECUTABLE` if Dart is not on PATH.
 
 The native UI gate requires a separately created private Agent Desktop session:
 
