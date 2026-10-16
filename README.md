@@ -1,12 +1,15 @@
 # Open Foresight
 
-A local knowledge and meeting desktop application built with Flutter, a C++ retrieval helper, SQLite, and local inference workers. The current desktop target is Linux; macOS requires platform integration work.
+A local knowledge and meeting desktop application built with Flutter, a C++ retrieval helper, SQLite, and local inference workers. Linux is the established desktop target. Apple Silicon macOS support is under integration, with native capture, a Mac runner, and bundle tooling implemented; signed installed-release and physical-device validation remain required.
 
-See the [macOS support implementation plan](docs/macos-support-plan.md) for the proposed port built on the application-service and MCP refactor.
+See [Mac build, bundle, and MCP instructions](docs/macos-support.md), the
+[validation ledger](docs/macos-validation.md), and the
+[remaining support-plan gates](docs/macos-support-plan.md).
 
 ## Source layout
 
-- `apps/desktop`: Flutter interface, persistence, sources, meetings, and cited answers.
+- `apps/desktop`: Flutter interface and read-only profile views.
+- `packages/foresight_core`: application operations, service/MCP entrypoints, persistence, sources, meetings, and cited answers.
 - `services/helper`: gRPC retrieval helper and local model workers.
 - `native`: generation, speech, and audio capture adapters.
 - `proto`: required service definitions and protocol descriptor.
@@ -21,6 +24,10 @@ For the reference investigation workflow, see [Replicating Foresight with REA on
 ## Build
 
 Requirements: Linux, a C++20 compiler, CMake, protobuf/gRPC development packages, SQLite3, nlohmann-json, Python, and Flutter with GTK3 Linux development dependencies. The source pins Flutter package dependencies; the originating toolchain used Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
+
+The commands below target Linux. Mac builds use the separate
+[macOS instructions](docs/macos-support.md), a source-built dependency SDK, and
+`tools/package_macos.py`.
 
 ```sh
 uv venv .venv
