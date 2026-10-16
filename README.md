@@ -14,6 +14,8 @@ A local knowledge and meeting desktop application built with Flutter, a C++ retr
 
 This repository starts with a fresh history. Reference screenshots, reverse-engineering reports, historical evaluation results, machine-specific environments, downloaded models, application profiles, and account credentials are excluded. Runtime fonts and images are retained because the interface uses them.
 
+For the reference investigation workflow, see [Replicating Foresight with REA on Linux and herdr on Mac](docs/rea-linux-and-herdr-mac.md).
+
 ## Build
 
 Requirements: Linux, a C++20 compiler, CMake, protobuf/gRPC development packages, SQLite3, nlohmann-json, Python, and Flutter with GTK3 Linux development dependencies. The source pins Flutter package dependencies; the originating toolchain used Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
