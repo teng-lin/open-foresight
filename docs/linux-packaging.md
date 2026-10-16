@@ -108,6 +108,8 @@ offline migration documented in the main README.
 The bundle includes private protobuf/gRPC libraries and SQLite (including the
 unversioned name Dart opens), ICU and native inference libraries. It does not
 replace the system glibc, C++ runtime or GPU driver.
+OpenSSL's `libssl` and `libcrypto` both come from the host: mixing a bundled older
+crypto library with a newer distro TLS library breaks its versioned symbols.
 Distro dependency names are centralized in `packaging/metadata.json`. RPM host
 requirements are explicit: automatic scanning of private protobuf/inference
 libraries would otherwise require libraries already inside the payload.

@@ -87,7 +87,7 @@ def main():
     bundled = []
     for name, path in re.findall(r'\s*(\S+) => (/\S+)', dependencies):
         if name.startswith(('libgrpc', 'libgpr', 'libprotobuf', 'libupb', 'libabsl',
-                            'libre2', 'libcares', 'libaddress_sorting', 'libutf8', 'libicu', 'libcrypto', 'libsqlite3.so')):
+                            'libre2', 'libcares', 'libaddress_sorting', 'libutf8', 'libicu', 'libsqlite3.so')):
             destination = args.output / 'lib' / name
             if not destination.exists():
                 shutil.copy2(path, destination)
