@@ -865,9 +865,7 @@ class Application {
     if (modelBusy) throw StateError('Model configuration is busy');
     _meeting(id);
     if (recording != null) throw StateError('A meeting is already recording');
-    final speech = store
-        .rows("SELECT * FROM models WHERE kind='speech'")
-        .firstOrNull;
+    final speech = store.model('speech');
     if (speech == null)
       throw StateError('Register speech model and whisper.cpp runner first');
     provisionalTranscript.clear();

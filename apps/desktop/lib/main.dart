@@ -747,9 +747,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   String speechModelName() {
-    final registration = d.store
-        .rows("SELECT * FROM models WHERE kind='speech'")
-        .firstOrNull;
+    final registration = d.store.model('speech');
     if (registration == null) return 'Select a transcription model';
     final known = speechModels
         .where((model) => model.digest == registration['digest'])
@@ -760,9 +758,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> chooseSpeech() async {
-    final registration = d.store
-        .rows("SELECT runtime FROM models WHERE kind='speech'")
-        .firstOrNull;
+    final registration = d.store.model('speech');
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -1208,8 +1204,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ListView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          children: d.store
-              .rows('SELECT * FROM models')
+          children: d.store.models
               .map(
                 (m) => ListTile(
                   title: Text('${m['kind']}: ${m['path']}'),

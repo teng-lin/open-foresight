@@ -194,6 +194,20 @@ started silent tap does not prove permission. Connecting, listing MCP tools, or
 querying capabilities never invokes either permission request. User consent and
 actual captured audio remain separate installed-app checks.
 
+Configured generation and speech models retain runner provenance when an explicit
+registration selects the current `FORESIGHT_LITERT_RUNNER` or
+`FORESIGHT_WHISPER_RUNTIME` executable inside the canonical installation root.
+The model row and its `modelRuntimeResource.<kind>` preference are committed
+atomically. Metadata records the resource key, original runtime path, model
+digest, and backend. After the app moves, model restoration, recording, readiness
+checks, and setup UI resolve that resource from the current bundle without
+rewriting the original row. A missing/non-executable resource or one pointing
+outside the current installation is not substituted. External registrations,
+legacy rows without provenance, and mismatched/corrupt metadata retain their
+original runner paths. Re-register a legacy bundled runner explicitly through
+model setup after backing up the profile; no automatic legacy migration guesses
+ownership from a filename or an `.app` directory name.
+
 Before native workers start, the shared runtime adapter copies its supported
 settings into native process state using `fs_set_runtime_environment`. A Dart
 configuration map alone cannot configure C/C++ `getenv` consumers. LiteRT and

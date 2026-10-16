@@ -223,9 +223,7 @@ class Domain {
       }
     }
     if (generator == null) {
-      final gen = store
-          .rows("SELECT * FROM models WHERE kind='generation'")
-          .firstOrNull;
+      final gen = store.model('generation');
       if (gen != null) {
         generator = NativeRuntime(runtimeConfiguration.nativeLibrary);
         await generator!.load(

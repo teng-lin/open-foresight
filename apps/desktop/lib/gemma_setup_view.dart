@@ -71,9 +71,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   void initState() {
     super.initState();
     embeddingReady = !widget.needsEmbedding;
-    registeredGeneration = widget.store
-        .rows("SELECT * FROM models WHERE kind='generation'")
-        .firstOrNull;
+    registeredGeneration = widget.store.model('generation');
     final digest = registeredGeneration?['digest'];
     for (final model in gemmaModels) {
       final file = File(
