@@ -18,7 +18,7 @@ struct Model {
   bool healthy = true;
   int dimensions = 0;
   std::string digest, tokenizer_digest, preprocessing;
-  std::string backend = "sentence-transformers-cpu";
+  std::string backend = "litert-lm-embedding-cpu";
   ~Model() {
     if (input)
       fclose(input);
@@ -65,33 +65,18 @@ struct Model {
     if (!litert && !fs::is_directory(path))
       throw std::runtime_error("Embedding model must be a local directory or "
                                "EmbeddingGemma 2 .litertlm bundle");
-    const char *py =
-        getenv(litert ? "FORESIGHT_LITERT_PYTHON" : "FORESIGHT_MODEL_PYTHON");
-    const char *adapter = getenv(litert ? "FORESIGHT_LITERT_EMBEDDING_ADAPTER"
-                                        : "FORESIGHT_MODEL_ADAPTER");
-    std::string installed =
+    const char *configured = getenv("FORESIGHT_MODEL_WORKER");
+    const std::string installed_worker =
+        (fs::read_symlink("/proc/self/exe").parent_path() / "foresight-model")
+            .string();
+    const std::string build_worker =
         (fs::read_symlink("/proc/self/exe").parent_path() /
-         "../share/open-foresight" /
-         (litert ? "litert_embedding_adapter.py" : "model_adapter.py"))
+         "../inference/foresight-model")
             .lexically_normal()
             .string();
-    if (!adapter && fs::exists(installed))
-      adapter = installed.c_str();
-    const std::string source_adapter =
-        (fs::path(MODEL_ADAPTER_PATH).parent_path() /
-         "litert_embedding_adapter.py")
-            .string();
-    if (litert && !adapter)
-      adapter = source_adapter.c_str();
-    const std::string installed_python =
-        (fs::read_symlink("/proc/self/exe").parent_path() /
-         "../share/open-foresight/litert-python")
-            .lexically_normal()
-            .string();
-    if (litert && !py && fs::exists(installed_python))
-      py = installed_python.c_str();
-    if (litert && !py)
-      py = getenv("FORESIGHT_MODEL_PYTHON");
+    const std::string worker = configured                     ? configured
+                               : fs::exists(installed_worker) ? installed_worker
+                                                              : build_worker;
     int in[2], out[2];
     if (pipe2(in, O_CLOEXEC))
       throw std::runtime_error("Adapter input pipe failed");
@@ -102,8 +87,7 @@ struct Model {
     }
     try {
       process = std::make_unique<ChildProcess>(
-          py ? py : "python3", adapter ? adapter : MODEL_ADAPTER_PATH, path,
-          in[0], out[1], gpu ? "--gpu" : "");
+          worker, "--embedding", path, in[0], out[1], gpu ? "--gpu" : "");
     } catch (...) {
       close(in[0]);
       close(in[1]);
@@ -134,7 +118,7 @@ struct Model {
       digest = info.at("digest");
       tokenizer_digest = info.at("tokenizer_digest");
       preprocessing = info.at("preprocessing");
-      backend = info.value("backend", "sentence-transformers-cpu");
+      backend = info.value("backend", "litert-lm-embedding-cpu");
       if (dimensions <= 0)
         throw std::runtime_error("Invalid embedding dimensions");
     } catch (...) {

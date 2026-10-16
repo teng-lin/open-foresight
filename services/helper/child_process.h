@@ -42,15 +42,14 @@ class ChildProcess {
   }
 
 public:
-  ChildProcess(std::string python, std::string adapter, std::string model,
+  ChildProcess(std::string executable, std::string mode, std::string model,
                int input, int output, std::string option = {}) {
     auto started = std::make_shared<std::promise<pid_t>>();
     auto result = started->get_future();
     const pid_t owner = getpid();
     creator_ = std::thread([this, started, owner, input, output,
-                            python = std::move(python),
-                            adapter = std::move(adapter),
-                            model = std::move(model),
+                            executable = std::move(executable),
+                            mode = std::move(mode), model = std::move(model),
                             option = std::move(option)] {
       pid_t child = fork();
       if (child == 0) {
@@ -72,11 +71,11 @@ public:
         if (fcntl(STDERR_FILENO, F_SETFD, 0) < 0)
           _exit(127);
         if (option.empty())
-          execlp(python.c_str(), python.c_str(), adapter.c_str(), model.c_str(),
-                 static_cast<char *>(nullptr));
+          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
+                 model.c_str(), static_cast<char *>(nullptr));
         else
-          execlp(python.c_str(), python.c_str(), adapter.c_str(), model.c_str(),
-                 option.c_str(), static_cast<char *>(nullptr));
+          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
+                 model.c_str(), option.c_str(), static_cast<char *>(nullptr));
         _exit(127);
       }
       pid_.store(child);

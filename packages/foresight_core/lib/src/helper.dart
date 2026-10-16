@@ -51,7 +51,7 @@ class Helper {
             ? 'litert-lm-embedding-gpu'
             : path.endsWith('.litertlm')
             ? 'litert-lm-embedding-cpu'
-            : 'sentence-transformers-cpu';
+            : 'onnx-bert-cpu';
         return current.pipeline == 'ready' &&
             current.tokenizerReady &&
             current.lastError.isEmpty &&

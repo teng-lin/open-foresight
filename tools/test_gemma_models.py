@@ -13,16 +13,15 @@ def main():
     parser.add_argument('--flutter', default='flutter')
     parser.add_argument('--model', type=Path, default=ROOT / 'models/local/gemma4/gemma-4-E2B-it-181938105e0e/gemma-4-E2B-it.litertlm')
     parser.add_argument('--embedding-gpu', action='store_true')
-    parser.add_argument('--embedding', type=Path, default=Path(os.environ.get('FORESIGHT_EMBEDDING', ROOT / 'models/local/all-MiniLM-L6-v2')))
-    parser.add_argument('--python', type=Path, default=Path(os.environ.get('FORESIGHT_MODEL_PYTHON', ROOT / '.venv/bin/python')))
-    parser.add_argument('--runner', type=Path, default=ROOT / 'models/local/native/litert-runner')
+    parser.add_argument('--embedding', type=Path, default=Path(os.environ.get('FORESIGHT_EMBEDDING', ROOT / 'models/local/embeddinggemma2/e7a8a2204b91/embeddinggemma-2-740m.litertlm')))
+    parser.add_argument('--runner', type=Path, default=ROOT / 'build/services/inference/foresight-model')
     parser.add_argument('--bundle', type=Path, help='Test a relocated native library, helper and isolated runner')
     parser.add_argument('--report', type=Path, default=ROOT / 'test-results/gemma4-linux.json')
     args = parser.parse_args()
     bundle = args.bundle.resolve() if args.bundle else ROOT / 'dist/open-foresight'
     native = bundle / 'lib/libforesight_native.so' if args.bundle else ROOT / 'build/native/libforesight_native.so'
-    runner = bundle / 'share/open-foresight/litert-runner' if args.bundle else args.runner.resolve()
-    adapter = bundle / 'share/open-foresight/model_adapter.py' if args.bundle else ROOT / 'services/helper/model_adapter.py'
+    runner = bundle / 'bin/foresight-model' if args.bundle else args.runner.resolve()
+    worker = bundle / 'bin/foresight-model' if args.bundle else args.runner.resolve()
     report = args.report.resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -33,8 +32,8 @@ def main():
         'FORESIGHT_GEMMA_MODEL': str(args.model.resolve()),
         'FORESIGHT_LITERT_RUNNER': str(runner),
         'FORESIGHT_HELPER': str(bundle / 'bin/ForesightHelper'),
-        'FORESIGHT_MODEL_ADAPTER': str(adapter),
-        'FORESIGHT_MODEL_PYTHON': str(args.python.expanduser().absolute()),
+        'FORESIGHT_MODEL_WORKER': str(worker),
+        'FORESIGHT_LITERT_LIBRARY': str(bundle / 'lib/liblitert-lm.so' if args.bundle else ROOT / 'build/lib/liblitert-lm.so'),
         'FORESIGHT_EMBEDDING': str(args.embedding.resolve()),
         'FORESIGHT_GEMMA_REPORT': str(report),
         'LD_LIBRARY_PATH': str(bundle / 'lib'),

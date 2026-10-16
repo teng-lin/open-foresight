@@ -4,7 +4,7 @@ import unittest
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
-    'grounded', Path(__file__).resolve().parents[2] / 'services/helper/grounded_generation.py')
+    'grounded', Path(__file__).resolve().parents[2] / 'tests/reference/inference/grounded_generation.py')
 grounded = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(grounded)
 

@@ -112,6 +112,8 @@ def running(tmp_path):
     model = fixtures / 'model'
     model.mkdir()
     (model / "config.json").write_text("{}")
+    (model / "onnx").mkdir()
+    (model / "onnx/model.onnx").write_bytes(b"controlled native model fixture")
     asset = fixtures / 'asset.bin'
     asset.write_bytes(b'controlled model fixture')
     runner = fixtures / 'runner'
@@ -133,8 +135,7 @@ def running(tmp_path):
     env.update(FORESIGHT_DATA=str(tmp_path/'data'), FORESIGHT_RUNTIME=str(tmp_path/'run'),
         FORESIGHT_SERVICE=str(SERVICE), FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
-        FORESIGHT_MODEL_ADAPTER=str(ROOT/'tests/fixtures/model_adapter.py'),
-        FORESIGHT_MODEL_PYTHON=os.sys.executable, FORESIGHT_DELAY_GENERATION=str(fixtures/'delay'),
+        FORESIGHT_MODEL_WORKER=str(HELPER.parent/'model_worker_fixture'), FORESIGHT_DELAY_GENERATION=str(fixtures/'delay'),
         PATH=str(fixtures)+':'+env['PATH'])
     log = (tmp_path/'service.log').open('w+')
     process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
