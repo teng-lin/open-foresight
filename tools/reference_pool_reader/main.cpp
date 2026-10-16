@@ -99,6 +99,21 @@ int main(int argc, char** argv) {
     std::printf("LIST_EMPTY_DISPATCH CODE_OFFSET[0x%lx]\n",
       (unsigned long)(origin[dart::kGrowableObjectArrayCid + 42110] - reinterpret_cast<dart::uword>(image.lib)));
 
+    // Resolve only the public encryption-service methods called by AssetManager.
+    // Do not inspect key objects or keychain contents.
+    const auto class_table = isolate->group()->class_table();
+    for (intptr_t cid=0; cid<class_table->NumCids(); cid++) {
+      if (!class_table->HasValidClassAt(cid)) continue;
+      const auto& cls = dart::Class::Handle(zone, class_table->At(cid));
+      const auto& name = dart::String::Handle(zone, cls.Name());
+      if (std::strcmp(name.ToCString(), "MacosEncryptionService") != 0) continue;
+      std::printf("ENCRYPTION_CLASS CID[%ld] NAME[%s]\n", (long)cid, name.ToCString());
+      for (intptr_t offset : {-4096,-4092,-4085}) {
+        const auto entry = origin[cid + offset];
+        std::printf("ENCRYPTION_DISPATCH[%ld] CODE_OFFSET[0x%lx]\n",
+          (long)offset,(unsigned long)(entry - reinterpret_cast<dart::uword>(image.lib)));
+      }
+    }
     for (intptr_t offset : {-4092,-4090,-4096,23776}) {
       auto entry = origin[95 + offset];
       std::printf("STRING_DISPATCH[%ld] CODE_OFFSET[0x%lx]\n",

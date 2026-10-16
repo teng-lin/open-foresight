@@ -551,3 +551,76 @@ Remaining: dedicated model acquisition/decryption and compatible native raw
 generation, production adapter selection, original real-model comparisons,
 history boundary/pruning and precise scheduling. Web search and physical
 recording parity also remain separate unfinished parts of the overall goal.
+
+
+## Dedicated model download and local encryption pipeline
+
+Follow-up IDA analysis narrows the missing detector backend. The installed
+`.tflite` asset's nonstandard header does not establish an unsupported model
+format: the asset manager has an explicit local encryption layer.
+
+- `_downloadModel` (0x100668db0) calls
+  `OdmlService.downloadMediaInParallel`, using model metadata including blob ID
+  and expected size, then `_saveModelToLocalFile` (call at 0x1006692a0).
+  The complete 667-line decompilation is retained in two pages.
+- `_saveModelToLocalFile` (0x10066c208) creates the destination parent, writes a
+  staging path, and selects either a direct byte write or
+  `_encryptAndPersistFile` through a boolean branch. It subsequently replaces
+  the destination and renames the staging file. The caller's branch selection
+  for type 4 has not yet been bound; not every model is proven encrypted.
+- `_encryptAndPersistFile` (0x10066c4a8) requires an encryption service, awaits
+  encrypted bytes, rejects an empty result, writes them, and checks the stored
+  length. This supports encryption during local persistence; it does not prove
+  the network payload's format or the remote service's accessibility.
+- `decryptFilePath` (0x100645a3c) returns null for an empty/missing path. For an
+  existing file it returns the original path when the service is absent, bytes
+  are empty, or the service reports unencrypted data. Otherwise it awaits
+  decryption, rejects an empty result, and writes the result to the temporary
+  directory with the input basename, deleting an existing temporary copy first.
+  The model loader receives that resulting path. Temporary-file cleanup after
+  inference remains unverified.
+
+The matching snapshot reader resolves MacosEncryptionService CID 592 and these
+exact dispatch selectors used by AssetManager:
+
+| Selector offset | Bound method | Original address |
+| --- | --- | --- |
+| -4096 | isDataEncrypted | 0x100cff44c |
+| -4092 | decryptData | 0x100cfedd4 |
+| -4085 | encryptData | 0x100cfe644 |
+
+The reader only inspects the named class and dispatch addresses. It reads no
+key objects or keychain contents. `decryptData` uses an isolate, copies native
+input/output buffers, frees them on both success and failure, and returns an
+empty byte list for native failure. Its native bridge calls
+`DecryptBufferToBufferMacos` (0x1000263c0). `DecryptBufferInternal`
+(0x1000264fc) obtains an AEAD keyset handle and invokes a Tink AEAD primitive.
+The separate file-to-file helper uses StreamingAEAD; those are distinct paths.
+MacosEncryptionService.initialize (0x100cfe2ac) initializes native encryption
+and can configure a keychain service name. Key ownership, storage and migration
+semantics have not been recovered by this trace.
+
+A read-only check found no already-decrypted model at the exact system temporary
+basename or under the candidate app-named temporary directory. That limited
+negative search does not prove there is no usable copy elsewhere. No model
+was decrypted or copied and no keychain operation was executed.
+
+Evidence (REA captures with IDA Pro / matching snapshot reader):
+
+- `ev_e7dbef8f5e47e5df65aa80198d0fae5d2124253e975b6f5cfb48a9b552767fc5`:
+  complete decryptFilePath control flow.
+- `ev_de2a38c761723e5b798c53963d120f6a1c367994ec9b33cf4eb5c76583e2ca6e`:
+  native/Dart decryption functions and service inventory.
+- `ev_fede06f2b958560ca2e6dd95a11babdcc9a3dc7e0657223e3e3e4691d5ce0c9e`:
+  download, encrypted persistence and native AEAD internals.
+- `ev_e836c4e7fae87798fd9bc755d50ff5b8d1f88d46b321f994be30d45193470a48`:
+  remaining downloader page, staging/rename, initialization and detection bridge.
+- `ev_64c9da2751f265ae1217d9b2527d630ce5e300df19e34c861baad900001a1960`:
+  exact class/dispatch binding; retained reader source rebuilt and ran cleanly.
+- `ev_29d343f9247f6a22c1a3306232e1339e02fc13b4baaf135409085f41afb4d752`:
+  bounded temporary-path check.
+
+The production detector still uses the generic chat callback. Next required
+work is to bind type-4 acquisition/persistence options, establish a usable raw
+model and its native inference contract, then integrate that backend. Local
+AEAD wrapping alone is not the dedicated detector implementation.
