@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev python3-venv libvulkan-dev glslc glslang-tools \
     unzip xz-utils && rm -rf /var/lib/apt/lists/*
 
-ARG GRPC_COMMIT=5e6ba94242b92e363220bc2163d55ce3554d4ecc
+ARG GRPC_COMMIT=aae267021b1ac256f8b9038d0ef528c3798cc137
 RUN git init /opt/grpc && cd /opt/grpc && git remote add origin https://github.com/grpc/grpc.git && \
     git fetch --depth=1 origin "$GRPC_COMMIT" && git checkout --detach FETCH_HEAD && \
     git submodule update --init --recursive --depth=1 && \

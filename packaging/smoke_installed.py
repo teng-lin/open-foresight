@@ -18,7 +18,7 @@ import time
 def main():
     root = Path('/opt/open-foresight')
     assert os.getuid() != 0, 'Run the application smoke test as a normal user'
-    env = dict(os.environ, LD_LIBRARY_PATH=f'{root}/lib:{root}/app/lib',
+    env = dict(os.environ, LD_LIBRARY_PATH=f'{root}/lib:{root}/app/lib:{root}/share/open-foresight/python/lib',
                LIBGL_ALWAYS_SOFTWARE='1', GDK_BACKEND='x11')
     # Check all runtime ELFs, including dlopen-only Python extensions. This
     # catches host dependencies that an executable-only ldd check misses.

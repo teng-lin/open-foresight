@@ -8,10 +8,10 @@ case "$task_format" in
   deb)
     export DEBIAN_FRONTEND=noninteractive
     apt-get update
-    apt-get install -y --no-install-recommends python3 binutils xz-utils xvfb xauth dbus-x11 libgl1-mesa-dri libegl1 desktop-file-utils
+    apt-get install -y --no-install-recommends python3 binutils xz-utils xvfb xauth dbus-x11 libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils
     ;;
   rpm)
-    dnf install -y python3 rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL desktop-file-utils findutils tar gzip shadow-utils
+    dnf install -y python3 rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
     ;;
   arch)
     pacman -Syu --noconfirm --needed python binutils xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils

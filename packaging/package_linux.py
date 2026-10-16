@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 
@@ -165,10 +166,10 @@ def main():
     epoch = int(os.environ.get('SOURCE_DATE_EPOCH', '0'))
     args.output.mkdir(parents=True, exist_ok=True)
     # Enforce the same compatibility floor for manual packages and CI artifacts.
-    subprocess.run([os.sys.executable, str(HERE / 'check_abi.py'), str(args.bundle),
+    subprocess.run([sys.executable, str(HERE / 'check_abi.py'), str(args.bundle),
                     '--max-glibc', '2.39', '--report', str(args.output / 'abi.json')], check=True)
     stem = f'open-foresight-{args.version}-{args.release}'
-    names = {'tar': f'{stem}-linux-x86_64.tar.gz', 'deb': f'{stem}_amd64.deb',
+    names = {'tar': f'{stem}-linux-x86_64.tar.gz', 'deb': f'open-foresight_{args.version}-{args.release}_amd64.deb',
              'rpm': f'{stem}.x86_64.rpm', 'arch': f'open-foresight-bin-{args.version}-{args.release}-x86_64.pkg.tar.zst'}
     output = args.output / names[args.format]
     if output.exists():
