@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:mcp_dart/mcp_dart.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/version.dart';
 
 Future<void> main() async {
   ServiceConnection? client;
@@ -12,7 +13,10 @@ Future<void> main() async {
     await client.connect();
     final connection = client;
     final server = McpServer(
-      const Implementation(name: 'open-foresight', version: '0.1.0'),
+      const Implementation(
+        name: 'open-foresight',
+        version: openForesightVersion,
+      ),
       options: const McpServerOptions(
         capabilities: ServerCapabilities(tools: ServerCapabilitiesTools()),
       ),

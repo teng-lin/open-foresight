@@ -5,7 +5,8 @@ the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy. The workflow is
 `.github/workflows/linux-packages.yml`. It runs only when a GitHub release is
 published (including prereleases), not on pull requests, branch pushes, or tag
 pushes alone. The release tag must be `v` followed by the version in
-`apps/desktop/pubspec.yaml`, for example `v0.1.0`.
+`apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
+[Versioning and releases](../README.md#versioning-and-releases).
 
 ## Compatibility baseline
 

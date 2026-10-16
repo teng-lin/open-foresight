@@ -5,8 +5,8 @@
 <h1 align="center">Open Foresight</h1>
 
 <p align="center">
-  A local-first knowledge and meeting app for Linux and macOS.<br>
-  Import your sources, ask questions with checked citations, and record and transcribe meetings, all with models that run on your own machine.
+  Offline AI meeting notes, transcription, and a cited knowledge base for Linux and macOS.<br>
+  An open-source alternative to Google AI Edge Foresight and Granola. Record and transcribe meetings, import your sources, and ask questions with checked citations, all with models that run on your own machine.
 </p>
 
 ---
@@ -235,6 +235,21 @@ flutter analyze
 ```
 
 Tests that use real models, real capture, or the desktop integration are opt-in. They need their tools and models installed. Their reports and captures go under the ignored `test-results/` directory, or a path you choose.
+
+## Versioning and releases
+
+The version is written in one place, `apps/desktop/pubspec.yaml`, as `version: X.Y.Z+N`. `X.Y.Z` is the release version, following [SemVer](https://semver.org). `N` is a build number that must increase with every release, because macOS compares it between installs. CMake, the helper's build ID, the packaging scripts, the MCP server, and the app all read this value. The app shows it under **Settings → Version**.
+
+To cut a release:
+
+```sh
+python3 tools/app_version.py --set 0.2.0   # updates the pubspec and its derived copies, bumps the build number
+git commit -am "chore: release v0.2.0"
+git tag v0.2.0 && git push origin main v0.2.0
+gh release create v0.2.0 --generate-notes  # builds the Linux packages and the macOS DMG
+```
+
+`python3 tools/app_version.py` prints the current version, and `--check` fails if a derived copy is out of date. Release CI refuses a tag that does not match `v` plus the pubspec version.
 
 ## Documentation
 

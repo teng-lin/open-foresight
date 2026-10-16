@@ -51,7 +51,8 @@ parallelism. Build-time Python and Flutter are not installed-app dependencies.
 
 `.github/workflows/macos-release.yml` runs only when a GitHub release is published
 (including prereleases). Its tag must match `v` plus the version in
-`apps/desktop/pubspec.yaml`, for example `v0.1.0`. A tag push alone, pull request,
+`apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
+[Versioning and releases](../README.md#versioning-and-releases). A tag push alone, pull request,
 or branch push does not generate a DMG.
 
 The release workflow reuses the macOS build and regression gates in `macos.yml`,
