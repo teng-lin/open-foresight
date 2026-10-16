@@ -54,6 +54,10 @@ python3 tools/package.py --output dist/open-foresight-gemma --litert-python "$PW
 
 Choose an unused package output directory. Pass `--generation-backend gpu` to package Gemma GPU generation; Whisper GPU packaging accepts `--whisper-gpu-runtime` and `--whisper-gpu-device`. Validate device indices on the target machine.
 
+## Application service and MCP
+
+The desktop and MCP clients share one local application service per profile. It owns database writes, models, imports, and meeting recording independently of the desktop window. Use `dist/open-foresight/open-foresight-mcp` as a stdio MCP server. See [setup, tools, lifecycle, and verification](docs/application-service.md).
+
 ## Google connections
 
 Drive and Calendar use browser authorization. Supply your application OAuth configuration with `tools/package.py --google-client /path/to/google-client.json`, or use the application's configuration setting. Packaging does not inspect another application or copy account tokens. Keep configuration and tokens out of Git.

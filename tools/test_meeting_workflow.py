@@ -95,6 +95,7 @@ def main():
             env = {
                 'FORESIGHT_DATA': temporary + '/data',
                 'FORESIGHT_RUNTIME': temporary + '/run',
+                'FORESIGHT_SERVICE': str(helper_bundle / 'bin/foresight-service'),
                 'FORESIGHT_HELPER': str(helper_bundle / 'bin/ForesightHelper'),
                 'FORESIGHT_MODEL_ADAPTER': str(ROOT / 'services/helper/model_adapter.py'),
                 'FORESIGHT_MODEL_PYTHON': str(args.model_python.expanduser().absolute()),
@@ -189,6 +190,8 @@ def main():
                     except ProcessLookupError:
                         pass
             finally:
+                subprocess.run([str(helper_bundle / 'open-foresight-service'), '--stop'],
+                    env={**os.environ, **env}, capture_output=True, timeout=30, check=False)
                 for process in Path('/proc').iterdir():
                     if not process.name.isdigit():
                         continue

@@ -17,3 +17,6 @@ __pycache__/
 .env.*
 !.env.example
 google-client*.json
+
+.dart_tool/
+.packages

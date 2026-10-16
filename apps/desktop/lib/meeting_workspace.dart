@@ -1,17 +1,14 @@
 part of 'main.dart';
 
 extension _MeetingWorkspace on _WorkspaceState {
-  void saveMeetingNotes() {
+  Future<void> saveMeetingNotes() async {
     final id = loadedMeetingNotes;
     if (id == null) return;
-    d.store.saveMeetingNotes(id, meetingNotesController.text);
+    await d.command('meetings.notes', {
+      'id': id,
+      'body': meetingNotesController.text,
+    });
     if (mounted) update(() {});
-    meetingEnhanceTimer?.cancel();
-    if (d.store.preference('liveEnhance', 'true') == 'true') {
-      meetingEnhanceTimer = Timer(const Duration(seconds: 2), () {
-        if (mounted && meetingId == id) unawaited(enhanceMeetingNotes(id));
-      });
-    }
   }
 
   void formatMeetingNotes(String before, [String after = '']) {
@@ -30,80 +27,13 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   Future<void> enhanceMeetingNotes(int id) async {
-    if (meetingEnhancing || busy || asking || d.generator?.generating == true) {
-      if (mounted &&
-          loadedMeetingNotes == id &&
-          d.store.preference('liveEnhance', 'true') == 'true') {
-        meetingEnhanceTimer?.cancel();
-        meetingEnhanceTimer = Timer(const Duration(seconds: 3), () {
-          if (mounted && meetingId == id) unawaited(enhanceMeetingNotes(id));
-        });
-      }
-      return;
-    }
-    final notes = d.store.rows(
-      'SELECT body,revision FROM meeting_notes WHERE meeting_id=?',
-      [id],
-    ).firstOrNull;
-    if (notes == null || (notes['body'] as String).trim().isEmpty) return;
-    final transcript = d.store
-        .rows(
-          'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-          [id],
-        )
-        .map((t) => t['text'])
-        .join('\n');
-    if (d.generator == null || transcript.isEmpty) {
-      if (mounted)
-        update(
-          () => meetingEnhanceStatus = d.generator == null
-              ? 'Set up a generation model to enhance notes.'
-              : 'Waiting for a transcript to enrich these notes.',
-        );
-      return;
-    }
+    if (meetingEnhancing) return;
     update(() {
       meetingEnhancing = true;
       meetingEnhanceStatus = '';
     });
-    var result = '', status = 'failed';
     try {
-      final revision =
-          d.store.rows('SELECT revision FROM meetings WHERE id=?', [
-                id,
-              ]).single['revision']
-              as int;
-      await for (final event in d.generator!.generate(
-        'notes-${DateTime.now().microsecondsSinceEpoch}',
-        'Enrich each shorthand note using only the transcript below. Preserve the user names and spelling. '
-            'Do not add unsupported details. Write ${d.store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}, one bullet per note. '
-            'Notes:\n${boundUtf8(notes['body'] as String, 1500)}\nTranscript:\n${boundUtf8(transcript, 2800)}',
-        maxOutputTokens: 512,
-      )) {
-        if (event['type'] == 'delta') result += event['text'] as String;
-        if (event['type'] == 'done') status = event['status'] as String;
-        if (event['type'] == 'error')
-          throw StateError(event['message'].toString());
-      }
-      if (status != 'completed') throw StateError('Note enhancement $status');
-      final current = d.store.rows(
-        'SELECT revision FROM meeting_notes WHERE meeting_id=?',
-        [id],
-      ).firstOrNull;
-      if (!mounted || current?['revision'] != notes['revision']) return;
-      final digest =
-          d.store
-                  .rows("SELECT digest FROM models WHERE kind='generation'")
-                  .firstOrNull?['digest']
-              as String? ??
-          'unknown';
-      d.store.artifact(
-        id,
-        'enhanced_notes',
-        result,
-        digest,
-        inputRevision: revision,
-      );
+      await d.command('meetings.enhance', {'id': id});
     } catch (e) {
       if (mounted) update(() => meetingEnhanceStatus = e.toString());
     } finally {
@@ -114,7 +44,6 @@ extension _MeetingWorkspace on _WorkspaceState {
   Widget meetingWorkspace() {
     final id = meetingId!;
     if (loadedMeetingNotes != id) {
-      meetingEnhanceTimer?.cancel();
       loadedMeetingNotes = id;
       meetingNotesController.text =
           d.store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
@@ -329,15 +258,11 @@ extension _MeetingWorkspace on _WorkspaceState {
       ],
     );
     if (file == null) return;
-    d.store.transcript(
-      id,
-      await file.readAsString(),
-      true,
-      0,
-      0,
-      'import:${file.path}',
-    );
-    await indexMeeting(id);
+    await d.command('meetings.transcript', {
+      'id': id,
+      'text': await File(file.path).readAsString(),
+      'source': 'imported transcript',
+    });
   }
 
   Widget meetingNotesEditor(int id, bool wide) {
@@ -540,15 +465,14 @@ extension _MeetingWorkspace on _WorkspaceState {
                           )
                           .toList(),
                       onChanged: (style) => update(
-                        () => d.store.setPreference('noteStyle', style!),
+                        () => unawaited(preference('noteStyle', style!)),
                       ),
                     ),
                     const SizedBox(width: 18),
                     FilledButton.tonalIcon(
                       onPressed: () => update(() {
-                        d.store.setPreference(
-                          'liveEnhance',
-                          (!live).toString(),
+                        unawaited(
+                          preference('liveEnhance', (!live).toString()),
                         );
                         meetingEnhancedVisible = !live;
                         if (!live) saveMeetingNotes();

@@ -1,0 +1,17 @@
+name: foresight_core
+description: Flutter-independent Open Foresight application logic.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+dependencies:
+  mcp_dart: 2.4.3
+  grpc: 4.3.1
+  protobuf: 5.1.0
+  sqlite3: 2.9.4
+  crypto: 3.0.7
+  ffi: 2.1.4
+  fixnum: 1.1.1
+dev_dependencies:
+  test: ^1.25.15
+  lints: ^5.1.1

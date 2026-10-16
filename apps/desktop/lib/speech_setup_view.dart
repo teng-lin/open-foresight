@@ -6,12 +6,15 @@ import 'store.dart';
 
 class SpeechSetupDialog extends StatefulWidget {
   final Store store;
+  final Future<void> Function(File, String, String, bool Function())?
+  installSpeech;
   final Directory directory;
   final String runner;
   final VoidCallback installed;
   const SpeechSetupDialog({
     super.key,
     required this.store,
+    this.installSpeech,
     required this.directory,
     required this.runner,
     required this.installed,
@@ -116,20 +119,29 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
         status = 'Loading ${model.name} on the configured device...';
         progress = null;
       });
-      await configureSpeech(
-        widget.store,
-        asset,
-        widget.runner,
-        model.digest,
-        current: () => mounted && !cancelled,
-        onProcess: (process) {
-          probe = process;
-          if (cancelled) process.kill();
-        },
-      );
-      if (!mounted || cancelled) return;
+      if (widget.installSpeech != null) {
+        await widget.installSpeech!(
+          asset,
+          widget.runner,
+          model.digest,
+          () => mounted && !cancelled,
+        );
+      } else {
+        await configureSpeech(
+          widget.store,
+          asset,
+          widget.runner,
+          model.digest,
+          current: () => mounted && !cancelled,
+          onProcess: (process) {
+            probe = process;
+            if (cancelled) process.kill();
+          },
+        );
+        if (!mounted || cancelled) return;
+      }
       widget.installed();
-      Navigator.pop(context);
+      if (mounted) Navigator.pop(context);
     } on ModelDownloadCancelled {
       // Closing this dialog leaves the previous registration intact.
     } catch (failure) {

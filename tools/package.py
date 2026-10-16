@@ -29,6 +29,9 @@ def main():
     assert args.whisper_gpu_device >= 0
     helper = args.build / 'services/helper/ForesightHelper'
     native = args.build / 'native/libforesight_native.so'
+    service = args.build / 'application/foresight-service'
+    mcp = args.build / 'application/foresight-mcp'
+    assert service.is_file() and mcp.is_file(), 'Build the application service and MCP server first'
     assert helper.is_file() and native.is_file() and args.flutter_bundle.is_dir(), 'Build all components first'
     assert not args.output.exists(), 'Choose an empty output directory to avoid stale packaged libraries'
     shutil.copytree(args.flutter_bundle, args.output / 'app')
@@ -36,6 +39,8 @@ def main():
     (args.output / 'lib').mkdir()
     (args.output / 'share/open-foresight').mkdir(parents=True)
     shutil.copy2(helper, args.output / 'bin/ForesightHelper')
+    shutil.copy2(service, args.output / 'bin/foresight-service')
+    shutil.copy2(mcp, args.output / 'bin/foresight-mcp')
     shutil.copy2(native, args.output / 'lib/libforesight_native.so')
     if args.whisper_gpu_runtime:
         assert args.whisper_gpu_runtime.is_file(), 'Build the Vulkan Whisper runtime first'
@@ -83,6 +88,7 @@ def main():
 set -euo pipefail
 task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LD_LIBRARY_PATH="$task_bundle/lib:$task_bundle/app/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export FORESIGHT_SERVICE="$task_bundle/bin/foresight-service"
 export FORESIGHT_HELPER="$task_bundle/bin/ForesightHelper"
 export FORESIGHT_NATIVE="$task_bundle/lib/libforesight_native.so"
 export FORESIGHT_MODEL_ADAPTER="$task_bundle/share/open-foresight/model_adapter.py"
@@ -113,10 +119,19 @@ task_python="$task_bundle/../../.venv/bin/python"
 if [[ -z "${FORESIGHT_MODEL_PYTHON:-}" && -x "$task_python" ]]; then
   export FORESIGHT_MODEL_PYTHON="$task_python"
 fi
-exec "$task_bundle/app/open-foresight" "$@"
+case "${FORESIGHT_ENTRYPOINT:-desktop}" in
+  desktop) exec "$task_bundle/app/open-foresight" "$@" ;;
+  mcp) exec "$task_bundle/bin/foresight-mcp" "$@" ;;
+  service) exec "$task_bundle/bin/foresight-service" "$@" ;;
+  *) echo "Unknown Open Foresight entrypoint" >&2; exit 2 ;;
+esac
 '''.replace('@GENERATION_BACKEND@', args.generation_backend)
    .replace('@WHISPER_DEVICE@', str(args.whisper_gpu_device)))
     launcher.chmod(0o755)
+    for entry in ('mcp', 'service'):
+        command = args.output / ('open-foresight-' + entry)
+        command.write_text('#!/usr/bin/env bash\nset -euo pipefail\ntask_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)\nexport FORESIGHT_ENTRYPOINT=' + entry + '\nexec "$task_bundle/open-foresight" "$@"\n')
+        command.chmod(0o755)
     commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
     files = [{'path': str(file.relative_to(args.output)),
               'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}
