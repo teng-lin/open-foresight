@@ -158,7 +158,7 @@ void main() {
       try {
         final startup = helper.start();
         await Future<void>.delayed(const Duration(milliseconds: 10));
-        await helper.close();
+        await Future.wait([helper.close(), helper.close()]);
         await startup;
         expect(marker.existsSync(), false);
       } finally {

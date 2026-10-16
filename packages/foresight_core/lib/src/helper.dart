@@ -157,17 +157,20 @@ class Helper {
     changed?.call();
   }
 
-  Future<void> close() async {
+  Future<void>? _closing;
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
     stopping = true;
     await watch?.cancel();
     // Resolve launch/adoption races before deciding which process is owned.
     try {
-      await _startupProbe;
+      if (_startupProbe != null) await _startupProbe;
     } catch (_) {
       /* No helper answered. */
     }
     try {
-      await _launching;
+      if (_launching != null) await _launching;
     } catch (_) {
       /* The helper could not start. */
     }
