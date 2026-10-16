@@ -13,9 +13,11 @@ import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-GRPC_COMMIT = 'aae267021b1ac256f8b9038d0ef528c3798cc137'  # v1.83.1, protobuf 36.x / Edition 2024
+GRPC_COMMIT = 'aae267021b1ac256f8b9038d0ef528c3798cc137'  # v1.83.1; its protobuf 35.1 supports the repo's Edition 2024 descriptor
+PROTOBUF_COMMIT = '35cd01f9fe9afbeea38cc7b979a3b6bfcde82c03'
 JSON_COMMIT = '65ee68451d8eb2b5f3a30b410476ab83deb3289b'  # v3.12.0
 MODULES = ['abseil-cpp', 'boringssl-with-bazel', 'cares/cares', 'protobuf', 're2']
 
@@ -55,7 +57,8 @@ def main():
     if args.jobs < 1:
         parser.error('--jobs must be positive')
     prefix, sources = args.prefix.resolve(), args.sources.resolve()
-    manifest = {'grpc_commit': GRPC_COMMIT, 'json_commit': JSON_COMMIT,
+    manifest = {'grpc_commit': GRPC_COMMIT, 'protobuf_commit': PROTOBUF_COMMIT,
+                'protobuf_version': 'libprotoc 35.1', 'json_commit': JSON_COMMIT,
                 'architecture': 'arm64', 'minimum_macos': '15.0', 'static': True}
     stamp = prefix / 'foresight-sdk.json'
     required = [prefix / 'bin/protoc', prefix / 'bin/grpc_cpp_plugin',
@@ -123,8 +126,23 @@ def main():
             if source.is_file() and source.name.startswith(('LICENSE', 'COPYING', 'NOTICE')):
                 shutil.copy2(source, licenses / f'{name}-{source.name}')
     version = subprocess.check_output([str(prefix / 'bin/protoc'), '--version'], text=True).strip()
-    if not version.startswith('libprotoc 36.'):
-        raise RuntimeError(f'Edition 2024 requires protobuf 36.x, got {version}')
+    # Compatibility is a schema/plugin capability, not a guessed version
+    # floor. Generate from the unchanged authoritative Edition 2024 descriptor
+    # and the control schema using this installed protoc/plugin pair.
+    with tempfile.TemporaryDirectory(prefix='foresight-sdk-probe-') as temporary:
+        run(sys.executable, ROOT / 'tools/generate_bindings.py', '--language', 'cpp',
+            '--output', temporary, '--protoc', prefix / 'bin/protoc',
+            '--grpc-plugin', prefix / 'bin/grpc_cpp_plugin')
+        run(prefix / 'bin/protoc', f'--proto_path={ROOT / "proto/linux"}',
+            f'--cpp_out={temporary}', f'--grpc_out={temporary}',
+            f'--plugin=protoc-gen-grpc={prefix / "bin/grpc_cpp_plugin"}',
+            ROOT / 'proto/linux/helper_control.proto')
+    actual_commit = subprocess.check_output(
+        ['git', '-C', str(sources / 'grpc/third_party/protobuf'), 'rev-parse', 'HEAD'],
+        text=True).strip()
+    if actual_commit != PROTOBUF_COMMIT:
+        raise RuntimeError(f'Unexpected protobuf gitlink: {actual_commit}')
+    manifest['protobuf_version'] = version
     for binary in [prefix / 'bin/protoc', prefix / 'bin/grpc_cpp_plugin']:
         info = subprocess.check_output(['xcrun', 'vtool', '-show-build', str(binary)], text=True)
         if 'minos 15.0' not in info:
