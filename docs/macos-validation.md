@@ -22,7 +22,7 @@ configured-model relocation; release acceptance remains separate.
 | --- | --- | --- |
 | Mac native CTest | 5/5 passed | Helper contract, model worker lifetime, audio buffer/cancellation, native lifecycle, process identity; initial development build used newer Homebrew dependencies |
 | Mac native CTest with source SDK | 6/6 passed | Fresh `build/macos15`, arm64/15.0, system SQLite/zlib, pinned static gRPC dependencies, document parser included; no Homebrew runtime libraries |
-| Mac service subprocess suite | 12/12 passed, including native UI | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
+| Mac service subprocess suite | 14/14 passed, including native UI | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
 | Mac contract/grounding/migration suite | 17 passed, 9 subtests | Includes offline migration's actual open-profile guard |
 | Mach-O and installation tools | 32 passed, 6 subtests | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral, locks, actual AOT source/graph persistence, and Swift document extraction |
 | Flutter release runner | Built successfully | Unsigned/ad-hoc development, not installed-release validation |
@@ -69,6 +69,19 @@ or a peak-memory benchmark. They do not establish E4B/12B performance or identit
 with encrypted reference-application assets. Raw local logs and JSON reports are
 under the ignored `test-results/verification` directory; reproducible runners
 include `tools/test_gemma_models.py` and the native/service test suites.
+
+## PR review follow-up
+
+Cross-area review found three concrete issues, all fixed with regression coverage:
+SDK source checks now reject staged edits as well as unstaged edits; existing
+meeting recording uses the same explicit permission flow as quick start; and
+idle shutdown verifies adopted helpers that have exited, while preserving unknown
+inspection failures and refusing to signal mismatching identities.
+
+After these fixes: native CTest 6/6, service subprocess tests 14/14 (including
+native desktop integration and two real adopted-helper cases), packaging tools
+32 passed / 6 subtests, and focused setup widgets 9/9. Flutter analysis is clean.
+GitHub CI results are reported on the PR separately from these local checks.
 
 ## Outstanding acceptance evidence
 
