@@ -55,6 +55,10 @@ Migration refuses active owners, unfinished recordings, and existing destination
 
 For `.deb`, `.rpm`, and Arch/Omarchy installers and the CI build matrix, see
 [Linux packaging](docs/linux-packaging.md).
+Publishing a GitHub release builds and attaches these packages and an Apple
+Silicon [macOS DMG](docs/macos-support.md#release-ci-disk-image). Installer
+generation runs only for published releases; the release tag must match the
+desktop version (for example `v0.1.0`). The current DMG uses ad-hoc signing.
 
 ## Local models
 

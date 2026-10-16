@@ -1,18 +1,15 @@
 name: Linux packages
 
 on:
-  workflow_dispatch:
-  pull_request:
-  push:
-    branches: [main, feature/linux-packaging]
-    tags: ['v*']
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
   group: linux-packages-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   sdk:
@@ -34,15 +31,11 @@ jobs:
         id: sdk
         env:
           SDK_HASH: ${{ hashFiles('packaging/sdk.Dockerfile', 'packaging/minimal-grpc.cmake', 'requirements-dev.lock', 'requirements-litert.lock', 'tools/build_whisper_vulkan.py') }}
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}/linux-sdk:$SDK_HASH"
           echo "image=$image" >> "$GITHUB_OUTPUT"
           if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
             echo 'build=false' >> "$GITHUB_OUTPUT"
-          elif [[ "$EVENT_NAME" == pull_request ]]; then
-            echo 'SDK not published: push SDK changes to a trusted branch and run Linux packages first.' >&2
-            exit 1
           else
             echo 'build=true' >> "$GITHUB_OUTPUT"
           fi
@@ -107,18 +100,14 @@ jobs:
       - name: Package version
         id: version
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python3 - <<'PY'
           import os, pathlib, re, subprocess
           version = re.search(r'^version: (\d+\.\d+\.\d+)', pathlib.Path('apps/desktop/pubspec.yaml').read_text(), re.M)[1]
-          if os.environ['REF_TYPE'] == 'tag':
-              if os.environ['REF_NAME'] != 'v' + version:
-                  raise SystemExit('Release tag must match pubspec version')
-              release = '1'
-          else:
-              release = os.environ['GITHUB_RUN_NUMBER']
+          if os.environ['RELEASE_TAG'] != 'v' + version:
+              raise SystemExit('Release tag must match pubspec version')
+          release = '1'
           epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
@@ -154,6 +143,28 @@ jobs:
           path: dist/packages/
           if-no-files-found: error
           retention-days: 14
+
+  publish:
+    needs: [bundle, packages]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+      - name: Attach tested Linux packages to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            artifacts/portable-bundle/* \
+            artifacts/open-foresight-deb-x86-64/*.deb* \
+            artifacts/open-foresight-rpm-x86-64/*.rpm* \
+            artifacts/open-foresight-arch-x86-64/*.pkg.tar.zst* --clobber
 
   packages:
     needs: bundle

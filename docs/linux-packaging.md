@@ -2,8 +2,10 @@
 
 Open Foresight builds one portable x86-64 application bundle, then wraps it with
 the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy. The workflow is
-`.github/workflows/linux-packages.yml`. It runs on pull requests, main, the
-packaging branch, version tags, and manual dispatch once registered on main.
+`.github/workflows/linux-packages.yml`. It runs only when a GitHub release is
+published (including prereleases), not on pull requests, branch pushes, or tag
+pushes alone. The release tag must be `v` followed by the version in
+`apps/desktop/pubspec.yaml`, for example `v0.1.0`.
 
 ## Compatibility baseline
 
@@ -25,9 +27,8 @@ unused duplicate gRPC libraries are excluded and compilation uses `-O2`.
 CI saves the SDK core image/cache before building Whisper, preserving the
 successful C++/Flutter/Python build if a shader build fails. Whisper uses pinned
 SPIRV-Headers; upstream RE2 tests are disabled alongside gRPC/protobuf tests.
-SDK publishing requires a trusted push or manual run. Pull requests consume an
-already published matching SDK; SDK changes must first be built on a trusted
-branch. Fork PRs cannot consume the private image without registry access.
+Release CI publishes a missing SDK with its repository token and reuses an
+already published matching SDK on subsequent releases.
 No larger paid runner is required. BuildKit caches intermediate SDK layers too.
 
 `packaging/check_abi.py` audits version requirements of every ELF file, including
@@ -138,10 +139,12 @@ added by packaging. The bundled Whisper defaults to Vulkan device 0; override
 
 Artifacts are retained for 14 days with SHA-256 sidecars, the source revision,
 version/release, source-date epoch and ABI report. Tar preserves executable modes
-across Actions artifact upload/download. Version tags must match pubspec;
-non-tag runs use the workflow run number as package release. Artifact production
-does not publish a release, sign packages, or configure apt/dnf/pacman repositories.
-Those are a separate distribution step after validating the installers.
+across Actions artifact upload/download. Release tags must match pubspec, and the
+native package release is `1`. After all package installation tests pass, CI
+attaches the portable archive, `.deb`, `.rpm`, `.pkg.tar.zst`, checksums, build
+manifests, and ABI report to the triggering GitHub release. Reruns replace assets
+with matching names. CI does not create the release, sign Linux packages, or
+configure apt/dnf/pacman repositories.
 
 GitHub Actions must be enabled and its account spending/payment limits must allow
 hosted jobs. A failure before any steps execute does not validate the build.
