@@ -54,6 +54,8 @@ jobs:
         run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
       - name: Build macOS 15 compatible dependency SDK
         run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
+      - name: Expose SDK code generators
+        run: echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
       - name: Save completed dependency SDK
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
