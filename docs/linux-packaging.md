@@ -1,0 +1,151 @@
+# Linux packages and CI
+
+Open Foresight builds one portable x86-64 application bundle, then wraps it with
+the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy. The workflow is
+`.github/workflows/linux-packages.yml`. It runs on pull requests, main, the
+packaging branch, version tags, and manual dispatch once registered on main.
+
+## Compatibility baseline
+
+All native components are rebuilt inside Ubuntu 24.04: the helper, Flutter app,
+Whisper Vulkan executable and isolated LiteRT Python environment. The build pins
+Flutter, gRPC (including its protobuf submodule) and Whisper to full source
+commits. The modern protobuf toolchain is intentional: our authoritative
+descriptor uses Edition 2024, which older distro protoc packages cannot generate.
+The original descriptor and its presence/UTF-8 semantics are retained.
+
+`packaging/check_abi.py` audits version requirements of every ELF file, including
+Python extensions, and rejects requirements above glibc 2.39 or GLIBCXX 3.4.33.
+Both CI and manual package creation enforce this check. An Arch-built executable
+requiring glibc 2.43 cannot accidentally become an Ubuntu package.
+
+Initial installation targets are Ubuntu 24.04, Debian 13, Fedora 44 and current
+Arch/Omarchy, on x86-64. Older releases and ARM64 are outside this initial matrix.
+The container base and apt repositories receive updates; pinned source versions
+and normalized archives do not make the complete compiler build bit-for-bit
+reproducible. Build manifests and ABI reports record what was produced.
+
+## Build locally
+
+Run from a clean checkout with Docker/BuildKit available:
+
+```sh
+docker build --file packaging/build.Dockerfile --target artifact \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+  --output type=local,dest=build/portable .
+export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
+python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight \
+  --format tar --version 0.1.0 --release 1
+```
+
+The Docker build runs descriptor verification, native CTest, Flutter analysis and
+regular Flutter tests before packaging. Large model downloads and GPU inference
+are not part of this build. The exported bundle includes the GPU-capable Whisper
+runner and LiteRT runtime, with model setup available on first launch.
+
+Build each installer inside its native distro container, using the same commands
+as CI. These commands install/remove packages only inside disposable containers:
+
+```sh
+mkdir -p artifacts
+cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
+docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH \
+  ubuntu:24.04 bash packaging/ci/package-and-test.sh deb 0.1.0 1
+docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH \
+  fedora:44 bash packaging/ci/package-and-test.sh rpm 0.1.0 1
+docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH \
+  archlinux:base-devel bash packaging/ci/package-and-test.sh arch 0.1.0 1
+```
+
+Use an empty `dist/packages` directory for each format invocation; the packager
+refuses to overwrite an existing package. On a matching build environment, the
+lower-level command is:
+
+```sh
+python3 packaging/package_linux.py --bundle /path/to/open-foresight \
+  --format deb --version 0.1.0 --release 1
+```
+
+Use `rpm` with rpmbuild or `arch` with makepkg. Arch packaging runs as an ordinary
+user and emits an `open-foresight-bin` package plus its exact local binary
+PKGBUILD/payload. That recipe is rebuildable with makepkg, requires no AUR helper,
+and is not a source-build recipe or an AUR publication. Omarchy uses this same
+Arch package; its Hyprland integration remains user-configurable in the app.
+
+## Installed layout and ownership
+
+* `/opt/open-foresight`: private application libraries, Flutter assets, helper,
+  Whisper and LiteRT Python.
+* `/usr/bin/open-foresight`: stable launcher, independent of the source checkout.
+* `/usr/share/applications/io.openforesight.App.desktop`: application menu entry.
+* `/usr/share/pixmaps/open-foresight.png`: icon.
+* `$XDG_DATA_HOME/open-foresight`: per-user profile and downloaded models.
+
+The package owns program files only. It has no script that starts the app,
+changes desktop shortcuts, moves an active profile, downloads models, installs
+GPU drivers, or deletes user data. Existing legacy profiles use the explicit
+offline migration documented in the main README.
+
+The bundle includes private protobuf/gRPC libraries and SQLite (including the
+unversioned name Dart opens). It does not replace the system glibc or GPU driver.
+Distro dependency names are centralized in `packaging/metadata.json`. RPM host
+requirements are explicit: automatic scanning of private Python/protobuf
+libraries would otherwise require libraries already inside the payload.
+All payload ELF linkage is checked after native installation.
+
+## CI validation and artifacts
+
+CI builds on ordinary hosted Linux runners without a GPU. After the baseline
+build, parallel native-container jobs create `.deb`, `.rpm`, and `.pkg.tar.zst`
+files. Each installs its dependencies and package, validates the desktop entry,
+checks every ELF for missing libraries, imports LiteRT, runs Whisper help, and
+launches the installed app under Xvfb as an ordinary user. It checks activation
+IPC and a private SQLite profile, reinstalls the same version, removes the
+package, and verifies a per-user sentinel survives. The DEB also gets a separate
+Debian 13 installation/startup test.
+
+These tests do not certify GPU inference, physical audio, mixed-language accuracy,
+Wayland/global shortcut portals, or a real browser consent flow. Those require
+separate desktop/hardware acceptance. There is no automatic CPU fallback policy
+added by packaging. The bundled Whisper defaults to Vulkan device 0; override
+`FORESIGHT_WHISPER_DEVICE` as appropriate for a machine with multiple GPUs.
+
+Artifacts are retained for 14 days with SHA-256 sidecars, the source revision,
+version/release, source-date epoch and ABI report. Tar preserves executable modes
+across Actions artifact upload/download. Version tags must match pubspec;
+non-tag runs use the workflow run number as package release. Artifact production
+does not publish a release, sign packages, or configure apt/dnf/pacman repositories.
+Those are a separate distribution step after validating the installers.
+
+GitHub Actions must be enabled and its account spending/payment limits must allow
+hosted jobs. A failure before any steps execute does not validate the build.
+
+## Application configuration
+
+Model weights, account tokens, databases and local environments are excluded from
+the build context. No real Google account is required for CI. For a distribution
+that includes its OAuth application registration, supply the application-only
+configuration explicitly through a BuildKit secret:
+
+```sh
+docker build --file packaging/build.Dockerfile --target artifact \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+  --secret id=google_client,src=/path/to/google-client.json \
+  --output type=local,dest=build/portable .
+```
+
+This configuration is intentionally copied into the distributed app so every
+desktop user can read it. It is not an account token. The packager rejects a
+tokens/profile file, verifies the bundle manifest, and refuses escaping symlinks.
+CI does not currently inject application configuration; browser sign-in requires
+configuration through the app or a separately configured release build.
+
+Package metadata currently uses `LicenseRef-Unspecified`, reflecting the absence
+of a declared project license. Set the intended license in metadata when one is
+adopted; packaging does not choose a license for the project. Bundled dependency
+notices remain part of their payloads.
+
+References: [GitHub Actions artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts),
+[Debian shared-library policy](https://www.debian.org/doc/debian-policy/ch-sharedlibs.html),
+[RPM spec format](https://rpm.org/docs/6.0.x/manual/spec.html),
+[Arch PKGBUILD](https://man.archlinux.org/man/PKGBUILD.5.en).

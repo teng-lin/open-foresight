@@ -22,7 +22,10 @@
     "libnotify-bin",
     "xdg-utils",
     "libvulkan1",
-    "libgomp1"
+    "libgomp1",
+    "ca-certificates",
+    "libgl1",
+    "libegl1"
   ],
   "rpm_dependencies": [
     "bash",
@@ -42,7 +45,10 @@
     "libnotify",
     "xdg-utils",
     "vulkan-loader",
-    "libgomp"
+    "libgomp",
+    "ca-certificates",
+    "libglvnd-glx",
+    "libglvnd-egl"
   ],
   "arch_dependencies": [
     "bash",
@@ -61,6 +67,8 @@
     "libpulse",
     "libnotify",
     "xdg-utils",
-    "vulkan-icd-loader"
+    "vulkan-icd-loader",
+    "ca-certificates",
+    "libglvnd"
   ]
 }
