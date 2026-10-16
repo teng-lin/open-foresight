@@ -110,7 +110,7 @@ extension _ScreenshotScreens on _WorkspaceState {
           tab = 3;
           meetingId = created['id'] as int;
         });
-        await startRecording();
+        await startRecording(accessReviewed: true);
       });
     } catch (failure, stack) {
       if (mounted) await run(() => Future<void>.error(failure, stack));

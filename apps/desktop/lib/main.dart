@@ -1261,7 +1261,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       ..addAll(Map<String, String>.from(state['provisional'] as Map? ?? {}));
   }
 
-  Future<void> startRecording() async {
+  Future<void> startRecording({bool accessReviewed = false}) async {
+    if (!accessReviewed && !await ensureRecordingAccess()) return;
+    if (!mounted) return;
     await d.command('meetings.start', {'id': meetingId!});
     syncCapture();
     if (mounted) setState(() {});

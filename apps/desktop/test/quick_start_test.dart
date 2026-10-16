@@ -183,6 +183,36 @@ void main() {
   );
 
   testWidgets(
+    'existing meeting recording checks Mac permissions and cancel preserves the meeting',
+    (tester) async {
+      await tester.runAsync(registerSpeech);
+      final meeting = store.meeting('Existing meeting');
+      domain.denyMicrophone = true;
+      await show(tester);
+      await tester.tap(find.text('Meetings').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Existing meeting'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Meeting options'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Record microphone + playback'));
+      // The operation remains busy while the permission dialog is open.
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Allow recording access'), findsOneWidget);
+      expect(domain.operations, isNot(contains('meetings.start')));
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(store.rows('SELECT id FROM meetings').single['id'], meeting);
+      expect(domain.operations, isNot(contains('meetings.start')));
+      final dynamic state = tester.state(find.byType(Workspace));
+      expect(state.busy, false);
+      expect(tester.takeException(), isNull);
+      await dispose(tester);
+    },
+    skip: !Platform.isMacOS,
+  );
+
+  testWidgets(
     'Mac microphone denial is actionable and leaves no empty meeting',
     (tester) async {
       await tester.runAsync(registerSpeech);
