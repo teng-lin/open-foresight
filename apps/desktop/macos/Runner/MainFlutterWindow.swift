@@ -112,7 +112,7 @@ private class DesktopIntegration {
       let object = Unmanaged<DesktopIntegration>.fromOpaque(context).takeUnretainedValue()
       var identifier = EventHotKeyID()
       GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
-                        UInt32(MemoryLayout<EventHotKeyID>.size), nil, &identifier)
+                        MemoryLayout<EventHotKeyID>.size, nil, &identifier)
       guard identifier.signature == object.signature else { return OSStatus(eventNotHandledErr) }
       object.activate()
       object.channel.invokeMethod("quick-meeting", arguments: nil)

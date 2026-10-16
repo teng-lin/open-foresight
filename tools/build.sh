@@ -48,9 +48,13 @@ else
   echo "Native build passed. Add Flutter to PATH to also build/test the desktop app." >&2
 fi
 if [[ -x "$task_build/application/foresight-service" && -x "$task_build/application/foresight-mcp" ]]; then
+  # macOS's default /var/folders temp prefix can exhaust sockaddr_un's limit
+  # before the test-specific directory and socket names are appended.
+  task_service_temp=$(mktemp -d /tmp/of-svc.XXXXXX)
   FORESIGHT_SERVICE_EXECUTABLE="$task_build/application/foresight-service" \
   FORESIGHT_MCP_EXECUTABLE="$task_build/application/foresight-mcp" \
   FORESIGHT_HELPER_EXECUTABLE="$task_build/services/helper/ForesightHelper" \
   FORESIGHT_NATIVE_LIBRARY="$task_native" \
-    "$task_python" -m pytest "$task_root/tests/service" -v
+    "$task_python" -m pytest "$task_root/tests/service" --basetemp "$task_service_temp" -v
+  rm -rf -- "$task_service_temp"
 fi

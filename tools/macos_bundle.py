@@ -66,6 +66,8 @@ def resolve_dependency(name, owner, app, executable=None, inherited_rpaths=()):
     else:
         candidates = [Path(name)]
     for path in candidates:
+        if system_library(str(path)):
+            return path
         if path.is_file():
             return path.resolve()
     raise ValueError(f'Unresolved dependency {name!r} loaded by {owner}')
@@ -109,6 +111,8 @@ def relocate_dependencies(app):
             if system_library(name) or name in identifier:
                 continue
             resolved = resolve_dependency(name, source, app, executable, inherited)
+            if system_library(str(resolved)):
+                continue
             if resolved.is_relative_to(app):
                 destination = resolved
             elif resolved in known:
@@ -164,6 +168,8 @@ def audit_dependencies(app):
             if name.startswith('/'):
                 raise ValueError(f'Absolute non-system load in {binary}: {name}')
             resolved = resolve_dependency(name, binary, app, executable_context(binary, app))
+            if system_library(str(resolved)):
+                continue
             if not resolved.is_relative_to(app):
                 raise ValueError(f'External dependency in {binary}: {name}')
         records[str(binary.relative_to(app))] = loads

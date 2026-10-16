@@ -206,7 +206,7 @@ void main() {
             '${const JsonEncoder.withIndent('  ').convert({
               'model': 'Gemma 4 E2B IT public LiteRT artifact',
               'model_digest': store.rows("SELECT digest FROM models WHERE kind='generation'").single['digest'],
-              'platform': 'Linux x86_64',
+              'platform': Platform.operatingSystem,
               'runtime': 'litert-lm 0.18.0 ${env['FORESIGHT_LITERT_BACKEND'] ?? 'cpu'}',
               'native_load_and_backend_registration': 'passed',
               'grounded_answer': answer,
