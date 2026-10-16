@@ -12,7 +12,8 @@ extern "C" {
 int fs_abi_version(void);
 /* Before worker startup only; 0 success, -1 unsupported key/invalid value. */
 int fs_set_runtime_environment(const char *key, const char *value);
-/* 1 verified same-user helper argv/instance, 0 mismatch, -1 unavailable. */
+/* 1 verified helper identity; 0 mismatch or confirmed absent; -1 inspection
+ * unavailable (never evidence that shutdown succeeded). */
 int fs_process_matches(int64_t pid, const char *socket, const char *storage, const char *instance_id);
 void fs_string_free(char *string);
 char *fs_event_poll(void *handle, int timeout_ms);

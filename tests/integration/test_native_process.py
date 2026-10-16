@@ -49,4 +49,5 @@ with tempfile.TemporaryDirectory(prefix='fs-identity-', dir='/tmp') as directory
     finally:
         process.terminate()
         process.wait(timeout=10)
+    assert matches() == 0, "Exited verified helper must be positively absent"
 print('native helper identity and environment boundary passed')
