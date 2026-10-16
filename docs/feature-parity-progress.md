@@ -13,7 +13,7 @@ main `6a1fefc` after the README update.
 | Requirement | Current evidence | Remaining work |
 | --- | --- | --- |
 | Speaker labels and echo cancellation | README identifies both as absent. Current capture tags identify microphone/playback channels, not individual people. | Inspect reference speaker behavior; implement actual local attribution and echo handling; verify controlled multi-speaker and overlapping-channel audio. Channel names alone do not satisfy this requirement. |
-| Proactive answers | Current service commits final transcript segments and indexes meetings; Live Q&A requires a manual action. | Detect questions automatically, schedule bounded generation, retain meeting-scoped answers, and test deduplication, cancellation, failures, and background operation. Audit meeting conversation/retrieval scope before adding automatic answers. |
+| Proactive answers | Current service commits final transcript segments and indexes meetings; Live Q&A requires a manual action. A follow-up audit fixed meeting conversation-history isolation and exact answer ownership. | Detect questions automatically, schedule bounded generation, retain meeting-scoped answers, and test deduplication, cancellation, failures, and background operation. Retrieval still uses shared indexed knowledge. |
 | Meeting web-search fallback | README identifies a Google search tool in the original. No equivalent is established here. | Inspect the reference trigger and results; implement explicit web-search configuration, retrieval and source attribution; verify fallback, offline failure and cancellation. Keep local generation intact. |
 | Recording pause/fullscreen gestures | Current UI has Stop and a button opening the transcription workspace. | Add real pause/resume through the service and capture lifecycle, verify no paused audio leaks into resumed transcription, and reproduce immersive controls. |
 | Rich generated-content previews | Implemented formatted selectable Markdown for enhanced notes, summaries, action items, previous versions and answers. Formatting, raw summary copy/edit, preserved generated originals, links and image handling have deterministic UI coverage. | Compare controlled generated content visually with the original; exact renderer parity remains unverified. |
@@ -123,3 +123,26 @@ system fonts; this capture is not a reference screenshot comparison.
 cd apps/desktop
 flutter test --no-pub test/generated_content_test.dart
 ```
+
+## Meeting conversation audit
+
+The desktop previously sent every meeting question through the `desktop`
+conversation and then linked the most recent desktop answer to the meeting.
+Consequently, follow-up retrieval and generation could use a different meeting's
+history or general Ask history; concurrent clients could also cause the UI to
+link an unrelated answer.
+
+Meeting Chat now passes its meeting ID through the remote domain and application
+service. The service validates the meeting and forces `meeting:<id>` as the
+conversation. Answer insertion and the exact meeting-answer association use one
+synchronous SQLite savepoint. General Ask continues to use `desktop`, and old
+saved conversations are preserved. This changes conversation history and answer
+ownership; retrieval still searches shared indexed sources. No claim of
+reference evidence-scope parity or automatic question answering is made.
+
+Verification: **33 core tests passed**, **163 desktop tests passed, 10 skipped**,
+and both Dart and Flutter analysis reported no issues. New tests exercise
+follow-up retrieval queries and model prompts with distinct conversation
+markers, concurrent remote clients against a real service socket, ordinary and
+meeting answer commands, invalid meeting rejection, and manual Chat submission
+in two meeting workspaces plus general Ask.

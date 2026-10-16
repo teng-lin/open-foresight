@@ -221,6 +221,7 @@ class Application {
                 .askInConversation(
                   a['question'] as String,
                   a['conversation'] as String? ?? 'desktop',
+                  meetingId: a['meeting_id'] as int?,
                 )
                 .last,
           };

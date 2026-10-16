@@ -437,6 +437,7 @@ class ApplicationService {
                         args['question'] as String,
                         args['conversation'] as String,
                         requestId: lease.id,
+                        meetingId: args['meeting_id'] as int?,
                       ),
                     )
                   : request['method'] == 'google.sign_in'

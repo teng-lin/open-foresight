@@ -258,14 +258,57 @@ class Domain {
     String question,
     String conversation, {
     String? requestId,
+    int? meetingId,
   }) async* {
+    if (meetingId != null) {
+      if (store.rows('SELECT id FROM meetings WHERE id=?', [
+        meetingId,
+      ]).isEmpty) {
+        throw StateError('Meeting not found: $meetingId');
+      }
+      conversation = 'meeting:$meetingId';
+    }
+    void saveAnswer(
+      String question,
+      String body,
+      String status,
+      List<Map<String, Object?>> citations,
+      String model, {
+      required String conversation,
+    }) {
+      store.db.execute('SAVEPOINT persist_conversation_answer');
+      try {
+        store.answer(
+          question,
+          body,
+          status,
+          citations,
+          model,
+          conversation: conversation,
+        );
+        if (meetingId != null) {
+          // Capture the exact inserted row before any other client can write.
+          final answerId = store.db.lastInsertRowId;
+          store.db.execute(
+            'INSERT INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
+            [meetingId, answerId],
+          );
+        }
+        store.db.execute('RELEASE persist_conversation_answer');
+      } catch (_) {
+        store.db.execute('ROLLBACK TO persist_conversation_answer');
+        store.db.execute('RELEASE persist_conversation_answer');
+        rethrow;
+      }
+    }
+
     if (application.modelBusy) throw StateError('Model configuration is busy');
     final scope = store.sourceSummaries
         .where((s) => s['state'] == 'indexed')
         .toList();
     if (scope.isEmpty) {
       const text = 'Insufficient context: import and index a source first.';
-      store.answer(
+      saveAnswer(
         question,
         text,
         'insufficient_context',
@@ -371,7 +414,7 @@ class Domain {
     if (citations.isEmpty) {
       const text =
           'Insufficient context: no current source excerpts were retrieved.';
-      store.answer(
+      saveAnswer(
         question,
         text,
         'insufficient_context',
@@ -398,7 +441,7 @@ class Domain {
         jsonEncode({'answer': rendered, 'citations': ids}),
         ids.toSet(),
       );
-      store.answer(
+      saveAnswer(
         question,
         answer.rendered,
         'completed',
@@ -489,7 +532,7 @@ class Domain {
       final result = status == 'completed'
           ? jsonDecode(raw) as Map<String, dynamic>
           : null;
-      store.answer(
+      saveAnswer(
         question,
         body,
         status,
@@ -498,7 +541,7 @@ class Domain {
         conversation: conversation,
       );
     } catch (e) {
-      store.answer(
+      saveAnswer(
         question,
         body,
         'failed',

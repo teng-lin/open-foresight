@@ -186,10 +186,16 @@ class RemoteDomain extends Domain {
   }
 
   @override
-  Stream<String> ask(String question) => client
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+  }) => client
       .stream('answer.stream', {
         'question': question,
-        'conversation': 'desktop',
+        'conversation': conversation,
+        if (meetingId != null) 'meeting_id': meetingId,
       })
       .map((value) => value as String);
   @override

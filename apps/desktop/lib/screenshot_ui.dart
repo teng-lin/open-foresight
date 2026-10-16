@@ -2597,20 +2597,12 @@ extension _ScreenshotScreens on _WorkspaceState {
       asking = true;
     });
     try {
-      await for (final text in d.ask(question.text)) {
+      await for (final text in d.askInConversation(
+        question.text,
+        meetingScope == null ? 'desktop' : 'meeting:$meetingScope',
+        meetingId: meetingScope,
+      )) {
         if (mounted) update(() => answer = text);
-      }
-      if (meetingScope != null) {
-        final saved = d.store
-            .rows(
-              "SELECT id FROM answers WHERE conversation='desktop' ORDER BY id DESC LIMIT 1",
-            )
-            .firstOrNull;
-        if (saved != null)
-          await d.command('meetings.link_answer', {
-            'id': meetingScope,
-            'answer': saved['id'],
-          });
       }
     } finally {
       if (mounted) update(() => asking = false);
