@@ -18,6 +18,41 @@ Local diagnostic artifacts are `/tmp/foresight-ida-open.json`, `/tmp/foresight-i
 
 The execution service also intermittently refused to create commands with `Too many open files (os error 24)`. Resolve that execution limit and inspect the upstream worker diagnostics before repeating a large analysis.
 
+The close request also timed out. A subsequent health request to the owned
+loopback worker reported `status: busy`, `busy_tool: idb_open`; process sampling
+showed continuing CPU use and a growing private database. The original REA
+client and supervisor exited while that worker remained alive. Cleanup is
+therefore unverified. Do not start duplicate analysis or remove its sidecars
+before inspecting worker state. The retained workspace for this attempt is
+`/private/var/folders/2c/mlyxj2757cb0mn64rs0xd65c0000gq/T/rea-ida-1NtJtI`.
+
+## Bounded follow-up findings
+
+The Mach-O symbol table retains these exact entry addresses for this hash:
+
+| Symbol | Address |
+| --- | --- |
+| `SearchCallbacks.initialize` | `0x1008e568c` |
+| `SearchCallbacks.handleGoogleSearch` | `0x1008e5a18` |
+| `SearchCallbacks._summarizeLinkContent` | `0x1008e6494` |
+| `SpeakerIdManager.getLabel` | `0x1006f6208` |
+| `QueryDetectorOnDevice.detectQuery` | `0x1009f2a18` |
+| `TextDeduplicator._normalizeText` | `0x1009f3a74` |
+| Native `InputRecorder.setEchoCancellationEnabled` | `0x10038f7bc` |
+| Native `InputRecorder.start` | `0x10038f918` |
+| Native `InputRecorder.startInternal` | `0x10038fc20` |
+
+These are symbol observations, not decompilation or execution evidence. Prefer
+focused function requests at these addresses once IDA is ready. Addresses do
+not apply to another executable hash.
+
+A bounded byte-pattern scan also found two Google-key-shaped constants in the
+shipped executable. Their values were redacted and were not copied into the
+implementation. This makes bundled configuration a plausible explanation for
+setup-free behavior, but does not establish which feature uses either constant.
+No Custom Search identifier was found by the specific legacy numeric-colon
+pattern used in that scan; this does not rule out other identifier formats.
+
 ## Next evidence required
 
 1. Confirm the headless worker completes analysis and can return one known function.
