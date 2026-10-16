@@ -27,6 +27,15 @@ def run(*args, **kwargs):
     return subprocess.run([str(x) for x in args], check=True, **kwargs)
 
 
+def require_clean_sources(path, *, ignore_submodules=False):
+    args = ['git', '-C', str(path), 'diff', 'HEAD', '--name-only']
+    if ignore_submodules:
+        args.append('--ignore-submodules=all')
+    dirty = subprocess.check_output(args, text=True).strip()
+    if dirty:
+        raise ValueError(f'Refusing modified SDK sources at {path}: {dirty}')
+
+
 def checkout(path, repository, commit):
     if not (path / '.git').exists():
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,10 +48,7 @@ def checkout(path, repository, commit):
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if present.returncode:
         run('git', '-C', path, 'fetch', '--depth', '1', 'origin', commit)
-    dirty = subprocess.check_output(['git', '-C', str(path), 'diff', '--name-only',
-                                     '--ignore-submodules=all'], text=True).strip()
-    if dirty:
-        raise ValueError(f'Refusing modified SDK sources at {path}: {dirty}')
+    require_clean_sources(path, ignore_submodules=True)
     run('git', '-C', path, 'checkout', '--detach', commit)
 
 
@@ -74,9 +80,7 @@ def main():
         *['third_party/' + module for module in MODULES])
     for module in MODULES:
         path = sources / 'grpc/third_party' / module
-        dirty = subprocess.check_output(['git', '-C', str(path), 'diff', '--name-only'], text=True).strip()
-        if dirty:
-            raise ValueError(f'Refusing modified SDK dependency at {path}: {dirty}')
+        require_clean_sources(path)
     checkout(sources / 'json', 'https://github.com/nlohmann/json.git', JSON_COMMIT)
     env = dict(os.environ, MACOSX_DEPLOYMENT_TARGET='15.0')
     # Clear inherited package hints that could make a newer Homebrew library

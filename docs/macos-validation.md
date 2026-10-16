@@ -24,7 +24,7 @@ configured-model relocation; release acceptance remains separate.
 | Mac native CTest with source SDK | 6/6 passed | Fresh `build/macos15`, arm64/15.0, system SQLite/zlib, pinned static gRPC dependencies, document parser included; no Homebrew runtime libraries |
 | Mac service subprocess suite | 12/12 passed, including native UI | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
 | Mac contract/grounding/migration suite | 17 passed, 9 subtests | Includes offline migration's actual open-profile guard |
-| Mach-O and installation tools | 29 passed | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral, locks, actual AOT source/graph persistence, and Swift document extraction |
+| Mach-O and installation tools | 32 passed, 6 subtests | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral, locks, actual AOT source/graph persistence, and Swift document extraction |
 | Flutter release runner | Built successfully | Unsigned/ad-hoc development, not installed-release validation |
 | Mac full Flutter suite | 143 passed, 10 skipped | Complete unit/widget suite, including embedding-download consent and guided quick-start; analysis clean |
 | Mac native desktop/service/MCP integration | Passed in 94 s | Actual Mac Flutter runner, read-only desktop DB, shared ownership, note propagation, recording survives Flutter state destruction/restart, final transcript/artifact persistence; capture/inference use controlled fixtures |

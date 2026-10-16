@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
+import build_macos_sdk as sdk
 import install_macos as installer
 from smoke_macos_bundle import (McpPeer, stop_desktop, parser_probe, source_graph_probe,
     verify_source_graph_restart, service_command, wait_stopped)
@@ -33,6 +34,33 @@ def portable_swap(first, second):
     os.replace(first,temporary)
     os.replace(second,first)
     os.replace(temporary,second)
+
+
+class SdkSourceTests(unittest.TestCase):
+    def test_pinned_checkout_rejects_staged_and_unstaged_sources(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(root), *args],
+                                               text=True, stderr=subprocess.DEVNULL).strip()
+            git('init')
+            git('remote', 'add', 'origin', 'https://example.invalid/sdk.git')
+            source = root / 'source.c'
+            source.write_text('original')
+            git('add', 'source.c')
+            git('-c', 'user.name=SDK test', '-c', 'user.email=sdk@example.invalid',
+                'commit', '-m', 'Pinned source')
+            commit = git('rev-parse', 'HEAD')
+            for staged in (False, True):
+                with self.subTest(staged=staged):
+                    git('reset', '--hard', 'HEAD')
+                    source.write_text('modified')
+                    if staged:
+                        git('add', 'source.c')
+                    with self.assertRaisesRegex(ValueError, 'modified SDK sources'):
+                        sdk.checkout(root, 'https://example.invalid/sdk.git', commit)
+                    with self.assertRaisesRegex(ValueError, 'modified SDK sources'):
+                        sdk.require_clean_sources(root)
 
 
 class InstallerTests(unittest.TestCase):
