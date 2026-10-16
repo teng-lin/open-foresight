@@ -175,7 +175,8 @@ scan found plausible regex strings including `\\s+` and
 not be substituted as recovered constants.
 
 The model prompt, exact regexes, hash dispatch target, similarity thresholds,
-exact expiry boundary, and dynamic similarity implementations remain unknown.
+exact expiry boundary remain unknown. Similarity calculations have now been
+partly resolved in the follow-up below.
 Static evidence establishes call flow, not actual model quality, timing under
 load, or persistence across application restarts.
 
@@ -245,3 +246,62 @@ through the application without a UI detection request, plus exclusion,
 suppression boundaries, two channels, final bypass, cleanup, and migration.
 The dispatcher-level five-second filter and twenty-second prefix/similarity
 state are separate work; lifetime database uniqueness remains pending removal.
+
+## Follow-up: similarity calculations and stream consumer
+
+Focused IDA decompilation through REA process capture recovered:
+
+- JaccardIndexStrategy.isSimilar at 0x100d0fe40: both empty sets match; one
+  empty set does not. Otherwise compare intersection / union against the
+  strategy threshold, accepting equality.
+- _LevenshteinUtils.distance at 0x100d1046c: unit insertion, deletion and
+  substitution costs over Dart string indices; two working rows. String
+  indexing preserves UTF-16 semantics rather than grapheme normalization.
+- _LevenshteinUtils.calculateRatio at 0x100d103f4:
+  (max string length - distance) / max string length, with two empty strings
+  returning one.
+- PartialRatioStrategy.isSimilar at 0x100d107c0: reject empty inputs; compare
+  equal-length strings directly; otherwise scan every substring of the longer
+  string having the shorter string's length, including the final offset, and
+  keep the best edit ratio. Stop on one; accept a score equal to the threshold.
+- TokenSetRatioStrategy.isSimilar at 0x100d10034: sort/join the intersection
+  and each full token set. Assembly confirms the two edit-ratio calls compare
+  intersection with each full set. A reduction closure in pool 26550 combines
+  these scores; its exact binding and the join separator still need recovery.
+
+Implemented the established edit distance/ratio, partial ratio, and Jaccard
+calculations in question_similarity.dart. Four focused tests cover reference
+edge cases, max-length normalization, unit-cost transposition behavior,
+UTF-16/surrogate handling, empty inputs and the final substring offset.
+Analyzer is clean. These calculations are not yet wired into the dispatcher:
+thresholds, exact normalization, and remaining token-set bindings must be
+resolved before replacing production behavior.
+
+The dispatcher callback TranscriptManager._onQueryDispatched at 0x1009f0560
+logs/updates analytics and forwards a record to its broadcast stream. The one
+direct getter cross-reference found for queryStream at 0x100a983a0 is
+AudioControlPillState._subscribeToQueryStream at 0x100a982c4. Its callback at
+0x100a983d0 calls triggerQuestionDetected for nonempty additions while mounted.
+This inspected consumer controls the indicator; it does not establish deletion
+of saved answer cards. Other access paths have not been exhaustively traced.
+
+Evidence:
+- ev_621cb243f895a20b8b8c66beacf0a97357d1fa522c057f990f4e94d441136ef5:
+  dispatcher callback decompilation.
+- ev_b538075ac58d346a5f640da0474feb89880e57b91ff1bd681adb1012fab05ef6:
+  three strategies and queryStream getter cross-references.
+- ev_a657fb2bc8ceff19f225882b4500ee0baeb1d620a192b42b52c2edfff646e8f1:
+  stream subscription/consumer and edit-ratio helper.
+- ev_30fa2a263a793f734cb222a994fa47a6d873b4512d6529be253c3ea1f745aa34:
+  edit-distance helper and token-set call-site assembly.
+
+Runtime constant recovery did not succeed. macOS denied debugger launch of the
+signed installed original (ev_944150e9d414ee123ef7f55253bc7c0c070d134b0878649836c68d6a3a3d5d99).
+A separate temporary app copy with a debug signature and isolated HOME launched,
+but timed out without hitting either selected Dart breakpoint
+(ev_e0fda9d5b9b41c45c95fa9bd3d798b2b9099268ad056fcc4efe216723c8dabd1,
+ev_25a9c93702bd9cda8949eeee2bfc874ad1df6e36bfb2971de71a72bf3322ed23).
+No threshold values were read. This is a failed observation, not evidence of
+constant values or of normal original startup. Owned processes were cleaned up
+and the temporary app/data were removed; the installed original was not edited.
+The matching IDA analysis cache remains retained and its scoped workers closed.
