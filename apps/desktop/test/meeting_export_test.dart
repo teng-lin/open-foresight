@@ -27,13 +27,21 @@ void main() {
     directory.deleteSync(recursive: true);
   });
 
+  void savedAt(int id, DateTime date) => store.db.execute(
+    'UPDATE meeting_notes SET timestamp=? WHERE meeting_id=?',
+    [date.millisecondsSinceEpoch, id],
+  );
+
   int meeting(String title, DateTime date, {String notes = ''}) {
     final id = store.meeting(title);
     store.db.execute(
       'UPDATE meeting_details SET created=? WHERE meeting_id=?',
       [date.millisecondsSinceEpoch, id],
     );
-    if (notes.isNotEmpty) store.saveMeetingNotes(id, notes);
+    if (notes.isNotEmpty) {
+      store.saveMeetingNotes(id, notes);
+      savedAt(id, date);
+    }
     return id;
   }
 
@@ -205,12 +213,14 @@ void main() {
                 .first['id']
             as int;
     store.artifact(id, 'summary', 'Unrelated summary', 'fixture');
+    savedAt(id, today);
     expect(
       composeMeetingExport(store).markdown,
       '## Enhanced\nOct 16, 2026 12:00am\n\n**Current enhancement**\n',
     );
 
     store.editArtifact(current, '  User-edited enhancement  \n');
+    savedAt(id, today);
     final before = store.rows('SELECT * FROM artifacts ORDER BY id');
     expect(
       composeMeetingExport(store).markdown,
@@ -227,6 +237,7 @@ void main() {
     // A cleared current enhancement falls back to the raw content. It does not
     // resurrect an older enhancement or the pre-edit generated text.
     store.editArtifact(current, ' \n\t');
+    savedAt(id, today);
     expect(
       composeMeetingExport(store).markdown,
       '## Enhanced\nOct 16, 2026 12:00am\n\nRaw shorthand\n',
@@ -237,6 +248,7 @@ void main() {
     final id = meeting('Enhanced only', today);
     store.saveMeetingNotes(id, ' \n');
     store.artifact(id, 'enhanced_notes', '\n  Enhanced content  \n', 'fixture');
+    savedAt(id, today);
     final result = composeMeetingExport(store);
     expect(result.count, 1);
     expect(
@@ -249,6 +261,38 @@ void main() {
     );
     expect(composeMeetingExport(store).count, 0);
   });
+
+  test(
+    'unscheduled export uses saved note time and preserves unknown legacy time',
+    () {
+      final id = meeting(
+        'Unscheduled',
+        DateTime(2020, 1, 1),
+        notes: 'Saved recently',
+      );
+      savedAt(id, DateTime(2026, 10, 16, 14, 5));
+      final range = DateTimeRange(start: today, end: today);
+      expect(
+        composeMeetingExport(store, range: range).markdown,
+        '## Unscheduled\nOct 16, 2026 2:05pm\n\nSaved recently\n',
+      );
+      store.db.execute(
+        'UPDATE meeting_notes SET timestamp=NULL WHERE meeting_id=?',
+        [id],
+      );
+      expect(composeMeetingExport(store, range: range).count, 0);
+      expect(
+        composeMeetingExport(store).markdown,
+        contains('Jan 1, 2020 12:00am'),
+      );
+      expect(
+        store.rows('SELECT timestamp FROM meeting_notes WHERE meeting_id=?', [
+          id,
+        ]).single['timestamp'],
+        isNull,
+      );
+    },
+  );
 
   test(
     'export trims note titles and falls back to event then default titles',

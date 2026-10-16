@@ -129,16 +129,41 @@ under REA evidence
 `ev_bbdc5555122c2a975255f87602edc619a84d1e864e0f52537b676dcffcea134b`.
 
 Record slot 39 is `timestamp` (PP12416), copied into `Note.timestamp` by
-`Note.fromRecord`. The port currently has a meeting creation timestamp and
-lazily inserts `meeting_notes` on save, with no independent note timestamp.
-Its acquisition cap remains unimplemented until the original note creation
-lifecycle is bound and the equivalent timestamp is persisted. Applying the cap
-to meeting creation times could omit the wrong notes. The current port
-continues to export all eligible stored notes.
+`Note.fromRecord`. The save lifecycle is now bound: accepted saves in
+`MeetingTabsViewState._saveNote` (`0x100630f84`) and the scaffold note callback
+(`0x1009e96e0`) allocate `DateTime.now()` and replace that timestamp, including
+when an existing note is saved. `Note.toCompanion` (`0x1006e8f64`) persists its
+epoch milliseconds. `Note.insert` uses `InsertMode.replace`, confirmed by the
+selected PP8915 capture in `parity-note-insert-enum-pool.txt`, REA evidence
+`ev_9351f4fdb72e468ae0da0f83a07d430581fab9c2e5352c061ce72fa4f66680f1`.
+The retained save, scaffold, and companion traces are
+`note-meeting-first-save.json`, `note-scaffold-create.json`, and
+`note-companion-persistence.json`.
 
-Verification for the corrections: thirteen desktop export tests pass with
+The port now persists nullable save timestamps on standalone and meeting notes.
+Accepted raw saves, current enhancement generation, and current enhancement
+edits refresh the timestamp. Current enhancement writes update it atomically
+with the artifact; edits to historical enhancements and summaries do not.
+Migration leaves legacy timestamps unknown rather than inventing a date.
+Unscheduled meeting exports use the saved note timestamp when known; legacy
+rows retain the existing meeting-date fallback without writing a fabricated
+timestamp back to storage. Linked calendar starts still take precedence.
+
+The original acquisition cap remains unimplemented because legacy notes lack
+recoverable save times. Applying it to meeting creation times could omit the
+wrong notes. The port continues to export all eligible meeting notes; the
+original standalone-note inclusion also remains pending. Capturing timestamps
+for standalone saves prepares that work but does not add them to export.
+Original UI save acceptance, stale-enhancement protection, and debounce/flush
+triggers require separate parity work; the persistence change does not claim
+to reproduce those guards.
+
+Verification for the corrections: fourteen desktop export tests pass with
 `TZ=America/New_York`,
 including exact captured-file comparison, a two-note Markdown boundary case,
 date filtering, copy/download behavior, save cancellation/error recovery, and
-preservation of raw stored notes. These checks verify the port; they are not a
-new live comparison with the original app.
+preservation of raw stored notes, and saved-time versus unknown legacy-time
+filtering. Five new core regressions cover migration/reopening, accepted-save
+refresh, enhancement scope, artifact IDs, and rollback after failed writes;
+these pass alongside six application tests. These checks verify the port;
+they are not a new live comparison with the original app.

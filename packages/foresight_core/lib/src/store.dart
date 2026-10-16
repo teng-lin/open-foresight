@@ -16,7 +16,7 @@ class Store {
     if (version > 1) throw StateError('Unsupported newer application database');
     db.execute(
       '''CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,mime TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',deleted INTEGER NOT NULL DEFAULT 0,provenance TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,timestamp INTEGER);
     CREATE TABLE IF NOT EXISTS answers(id INTEGER PRIMARY KEY,question TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,citations TEXT NOT NULL,model TEXT NOT NULL,created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS models(kind TEXT PRIMARY KEY,path TEXT NOT NULL,digest TEXT NOT NULL,runtime TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY,title TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL);
@@ -32,13 +32,22 @@ class Store {
     CREATE TABLE IF NOT EXISTS graph_force_state(model_identity TEXT PRIMARY KEY REFERENCES graph_layouts(model_identity) ON DELETE CASCADE,label_set TEXT NOT NULL);
     INSERT OR IGNORE INTO source_details(source_id,imported,changed) SELECT id,0,0 FROM sources;
     CREATE TABLE IF NOT EXISTS meeting_details(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id),created INTEGER NOT NULL,reminder INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0,timestamp INTEGER);
     CREATE TABLE IF NOT EXISTS meeting_answers(meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,answer_id INTEGER NOT NULL REFERENCES answers(id) ON DELETE CASCADE,PRIMARY KEY(meeting_id,answer_id));
     CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
     PRAGMA user_version=1;''',
     );
+    // Legacy profiles did not record when a note was saved. Preserve unknown
+    // timestamps instead of manufacturing them from meeting creation times.
+    for (final table in ['notes', 'meeting_notes']) {
+      if (!db
+          .select('PRAGMA table_info($table)')
+          .any((row) => row['name'] == 'timestamp')) {
+        db.execute('ALTER TABLE $table ADD COLUMN timestamp INTEGER');
+      }
+    }
     if (!db
         .select('PRAGMA table_info(models)')
         .any((row) => row['name'] == 'backend'))
@@ -292,12 +301,17 @@ class Store {
     ],
   );
   void saveNote(int? id, String title, String body) {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
     if (id == null) {
-      db.execute('INSERT INTO notes(title,body) VALUES(?,?)', [title, body]);
+      db.execute('INSERT INTO notes(title,body,timestamp) VALUES(?,?,?)', [
+        title,
+        body,
+        timestamp,
+      ]);
     } else {
       db.execute(
-        'UPDATE notes SET title=?,body=?,revision=revision+1 WHERE id=?',
-        [title, body, id],
+        'UPDATE notes SET title=?,body=?,revision=revision+1,timestamp=? WHERE id=?',
+        [title, body, timestamp, id],
       );
     }
   }
@@ -450,9 +464,9 @@ class Store {
   }
 
   void saveMeetingNotes(int meetingId, String body) => db.execute(
-    'INSERT INTO meeting_notes(meeting_id,body,revision) VALUES(?,?,1) '
-    'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1',
-    [meetingId, body],
+    'INSERT INTO meeting_notes(meeting_id,body,revision,timestamp) VALUES(?,?,1,?) '
+    'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1,timestamp=excluded.timestamp',
+    [meetingId, body, DateTime.now().millisecondsSinceEpoch],
   );
 
   void transcript(
@@ -485,14 +499,52 @@ class Store {
         rows('SELECT revision FROM meetings WHERE id=?', [
           meeting,
         ]).first['revision'];
-    db.execute(
+    void insert() => db.execute(
       'INSERT INTO artifacts(meeting_id,kind,generated,input_revision,model,prompt_version) VALUES(?,?,?,?,?,?)',
       [meeting, kind, generated, revision, model, 'meeting-v1'],
     );
+    if (kind == 'enhanced_notes') {
+      _writeEnhancedNote(meeting, insert);
+    } else {
+      insert();
+    }
   }
 
-  void editArtifact(int id, String text) =>
-      db.execute('UPDATE artifacts SET edited=? WHERE id=?', [text, id]);
+  void editArtifact(int id, String text) {
+    final enhanced = rows(
+      "SELECT selected.meeting_id FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' "
+      'AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id '
+      'AND newer.kind=selected.kind AND newer.id>selected.id)',
+      [id],
+    ).firstOrNull;
+    void update() =>
+        db.execute('UPDATE artifacts SET edited=? WHERE id=?', [text, id]);
+    if (enhanced == null) {
+      update();
+    } else {
+      _writeEnhancedNote(enhanced['meeting_id'] as int, update);
+    }
+  }
+
+  // The original saves the current raw/enhanced fields and save timestamp as
+  // one Note replacement. Historical artifacts do not replace that current Note.
+  void _writeEnhancedNote(int meeting, void Function() write) {
+    db.execute('SAVEPOINT save_enhanced_note');
+    try {
+      db.execute(
+        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp) VALUES(?,'',0,?) "
+        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp',
+        [meeting, DateTime.now().millisecondsSinceEpoch],
+      );
+      write();
+      db.execute('RELEASE save_enhanced_note');
+    } catch (_) {
+      db.execute('ROLLBACK TO save_enhanced_note');
+      db.execute('RELEASE save_enhanced_note');
+      rethrow;
+    }
+  }
+
   String preference(String key, [String fallback = '']) =>
       rows('SELECT value FROM preferences WHERE key=?', [
             key,
