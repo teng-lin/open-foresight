@@ -54,6 +54,20 @@ abstract final class QuestionSimilarity {
     return best;
   }
 
+  /// Reference TokenSetRatioStrategy compares the sorted intersection with
+  /// each sorted full set and takes the larger edit ratio.
+  static double tokenSetRatio(Set<String> left, Set<String> right) {
+    if (left.isEmpty || right.isEmpty) return 0;
+    final common = left.intersection(right);
+    if (common.isEmpty) return 0;
+    String joined(Set<String> tokens) => (tokens.toList()..sort()).join(' ');
+    final shared = joined(common);
+    return math.max(
+      editRatio(shared, joined(left)),
+      editRatio(shared, joined(right)),
+    );
+  }
+
   /// Reference JaccardIndexStrategy treats two empty sets as identical and
   /// one empty set as dissimilar; otherwise intersection / union.
   static double jaccard(Set<String> left, Set<String> right) {

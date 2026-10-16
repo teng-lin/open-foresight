@@ -6,6 +6,19 @@ String normalizeMeetingQuestion(String text) => text
     .replaceAll(RegExp(r'''[\s?？.!。！,，:：;；"“”'‘’]+'''), ' ')
     .trim();
 
+// Pool-bound TextDeduplicator patterns, in their reference order.
+final _windowTimestamp = RegExp(r'^\[\d{2}:\d{2}:\d{2}\]\s*');
+final _windowPunctuation = RegExp(r"""[-.,?!:;"'()]+""");
+final _windowWhitespace = RegExp(r'\s+');
+
+String normalizeTranscriptWindow(String text) => text
+    .toLowerCase()
+    .trim()
+    .replaceAll(_windowTimestamp, ' ')
+    .replaceAll(_windowPunctuation, ' ')
+    .replaceAll(_windowWhitespace, ' ')
+    .trim();
+
 /// Service-owned transcript detection and durable grounded-answer jobs.
 /// Capture never waits for model work.
 class ProactiveQuestions {
@@ -232,23 +245,22 @@ class ProactiveQuestions {
         if (history.isEmpty) return;
         // The original hashes the complete window before preparing model input.
         // Finals still detect; only repeated interim input is suppressed.
-        final normalizedWindow = normalizeMeetingQuestion(history);
+        final normalizedWindow = normalizeTranscriptWindow(history);
         final now = _nowMilliseconds();
         final seen = _windowSeen.putIfAbsent(meetingId, () => {});
         final previous = seen[normalizedWindow];
         seen.removeWhere((_, timestamp) => now - timestamp >= 5000);
         if (normalizedWindow.isNotEmpty) seen[normalizedWindow] = now;
         if (!isFinal && previous != null && now - previous < 5000) return;
-        // IDA establishes the 200-unit tail; whitespace splitting is our
-        // reconstruction until the original Dart pool regex is resolved.
+        // The recovered splitter is \s+ and the join separator is a space.
         final units = RegExp(r'\S+').allMatches(history).toList();
         final eligible = units.length - (isFinal ? 0 : 5);
         if (eligible <= 0) return;
         final first = eligible > 200 ? eligible - 200 : 0;
-        final transcript = history.substring(
-          units[first].start,
-          units[eligible - 1].end,
-        );
+        final transcript = units
+            .sublist(first, eligible)
+            .map((unit) => unit.group(0)!)
+            .join(' ');
         // Failures remain retryable; only skipped or completed input is marked.
         _examinedVersions.remove(meetingId);
         _request =

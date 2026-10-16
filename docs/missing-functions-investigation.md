@@ -96,9 +96,8 @@ These include tested reconstruction decisions. Subsequent IDA evidence is
 recorded in [proactive-reference-trace.md](proactive-reference-trace.md).
 Detection now uses growing finalized history rather than six-row batches,
 retains its cursor on empty results, and limits model input to the last 200
-whitespace units. The count is established by IDA; whitespace splitting and
-preserving line breaks are reconstruction choices pending the exact regex and
-join delimiter. Input versions prevent rerunning an unchanged empty window;
+whitespace units. Snapshot-pool recovery now binds the splitter to whitespace
+runs and the join separator to one space; input preparation uses both. Input versions prevent rerunning an unchanged empty window;
 new speech arriving during detection remains eligible for the next pass.
 Durable cursor recovery across restarts remains a reconstruction extension.
 
@@ -113,14 +112,15 @@ transactional schema migration preserves existing job IDs and answer links.
 Repeated interim detection windows use a five-second timestamp filter that
 refreshes on suppressed repeats and allows input at exactly 5,000 ms. Final
 input bypasses suppression. Normalized string keys replace the original's
-unresolved hash implementation, and the normalization regex remains a
-reconstruction choice. This is the transcript-window filter; question dispatch
+unresolved hash implementation. Normalization now uses the pool-bound lowercase,
+leading timestamp, ASCII punctuation and whitespace rules. This is the transcript-window filter; question dispatch
 still uses lifetime database uniqueness and needs its separate rolling filter.
 
 Twenty-second prefix/similarity filtering and cursor boundary overlap still
-require integration. The original
-prompt, normalization patterns, similarity thresholds, scheduling details, and
-retry policy remain unresolved. The copied-question restriction and per-meeting
+require integration. Snapshot-pool recovery has established the original detector control-token
+prefix, normalization patterns, thresholds (0.7/0.8/0.9), and token-set reduction
+(max). Scheduling details, expiry boundaries, output handling integration and
+retry behavior still require work; see the latest proactive reference trace. The copied-question restriction and per-meeting
 lifetime uniqueness above still differ from the inspected reference body.
 
 Verification after this implementation:

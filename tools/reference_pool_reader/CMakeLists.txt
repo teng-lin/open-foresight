@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.20)
+project(foresight_pool_reader LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 20)
+find_package(dartvm3.14.0-294.0.dev_macos_arm64 REQUIRED PATHS "${CMAKE_CURRENT_SOURCE_DIR}/../packages")
+find_package(ICU REQUIRED COMPONENTS uc i18n)
+add_executable(pool_reader main.cpp ../blutter/src/DartLoader.cpp ../blutter/src/MachOHelper.cpp)
+target_include_directories(pool_reader PRIVATE ../blutter/src)
+target_link_libraries(pool_reader PRIVATE dartvm3.14.0-294.0.dev_macos_arm64 ICU::uc ICU::i18n objc)

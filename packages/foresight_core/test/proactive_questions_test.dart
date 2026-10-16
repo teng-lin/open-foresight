@@ -29,10 +29,9 @@ void main() {
       if (failDetection) throw StateError('Detection fixture failure');
       if (detectionGate != null) return detectionGate!.future;
       return detectionResult ??
-          text
-              .split('\n')
-              .where((line) => line.contains(RegExp('[?？]')))
-              .toList();
+          RegExp(
+            r'[^?？]+[?？]',
+          ).allMatches(text).map((match) => match.group(0)!.trim()).toList();
     },
     answer: (id, question, request) async {
       if (question == failAnswer) throw StateError('Answer fixture failure');
@@ -91,6 +90,23 @@ void main() {
   }
 
   test(
+    'window normalization uses the recovered timestamp and punctuation rules',
+    () {
+      expect(
+        normalizeTranscriptWindow('[12:34:56]  Who---owns (this)?'),
+        'who owns this',
+      );
+      expect(normalizeTranscriptWindow('  A\n\tB!  '), 'a b');
+      expect(normalizeTranscriptWindow('谁负责？'), '谁负责？');
+      expect(normalizeTranscriptWindow('“Quoted”'), '“quoted”');
+      expect(
+        normalizeTranscriptWindow('middle [12:34:56] timestamp'),
+        'middle [12 34 56] timestamp',
+      );
+    },
+  );
+
+  test(
     'detects only new final speech, deduplicates multilingual questions and rejects invented ones',
     () async {
       store.transcript(
@@ -111,7 +127,7 @@ void main() {
         'Invented question?',
       ];
       await drain();
-      expect(detectedText, ['What now?\n部署日期是什么？']);
+      expect(detectedText, ['What now? 部署日期是什么？']);
       expect(answered, ['What now?', '部署日期是什么？']);
       expect(
         store
@@ -155,7 +171,7 @@ void main() {
       append('ship?');
       detectionResult = ['When can we ship?'];
       await drain();
-      expect(detectedText.last, 'When can we\nship?');
+      expect(detectedText.last, 'When can we ship?');
       expect(answered, ['When can we ship?']);
       expect(
         store
@@ -184,10 +200,7 @@ void main() {
       }
       detectionResult = ['When will the team be ready to ship?'];
       await drain();
-      expect(
-        detectedText.single,
-        'When\nwill\nthe\nteam\nbe\nready\nto\nship?',
-      );
+      expect(detectedText.single, 'When will the team be ready to ship?');
       expect(answered, ['When will the team be ready to ship?']);
     },
   );
@@ -226,7 +239,7 @@ void main() {
       detectionGate = null;
       detectionResult = ['When can we ship?'];
       await drain();
-      expect(detectedText, ['When can we', 'When can we\nship?']);
+      expect(detectedText, ['When can we', 'When can we ship?']);
       expect(answered, ['When can we ship?']);
     },
   );
@@ -246,7 +259,7 @@ void main() {
       append('ship?');
       detectionResult = ['When can we ship?'];
       await drain();
-      expect(detectedText.last, 'When can we\nship?');
+      expect(detectedText.last, 'When can we ship?');
       expect(answered, ['When can we ship?']);
     },
   );
@@ -304,7 +317,7 @@ void main() {
       queue.updateInterim(meeting, 'playback', 'one two three four five');
       detectionResult = ['When can we ship?'];
       await drain();
-      expect(detectedText.last, 'When can we\nship?');
+      expect(detectedText.last, 'When can we ship?');
       expect(answered, ['When can we ship?']);
       expect(
         store

@@ -51,6 +51,24 @@ void main() {
     },
   );
 
+  test(
+    'token-set ratio sorts full sets and takes the larger shared-set score',
+    () {
+      expect(QuestionSimilarity.tokenSetRatio({'b', 'a'}, {'a', 'b'}), 1);
+      expect(QuestionSimilarity.tokenSetRatio({'a'}, {'b', 'a'}), 1);
+      expect(
+        QuestionSimilarity.tokenSetRatio({'a', 'b'}, {'a', 'c'}),
+        closeTo(1 / 3, 1e-12),
+      );
+      expect(QuestionSimilarity.tokenSetRatio({'a'}, {'b'}), 0);
+      expect(QuestionSimilarity.tokenSetRatio({}, {}), 0);
+      expect(
+        QuestionSimilarity.tokenSetRatio({'谁', '负责'}, {'负责', '谁', '草稿'}),
+        1,
+      );
+    },
+  );
+
   test('Jaccard uses token sets and intersection over union', () {
     expect(QuestionSimilarity.jaccard({}, {}), 1);
     expect(QuestionSimilarity.jaccard({'a'}, {}), 0);

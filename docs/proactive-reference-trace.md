@@ -305,3 +305,93 @@ No threshold values were read. This is a failed observation, not evidence of
 constant values or of normal original startup. Owned processes were cleaned up
 and the temporary app/data were removed; the installed original was not edited.
 The matching IDA analysis cache remains retained and its scoped workers closed.
+
+## Pool recovery supersedes the unresolved-constant baseline
+
+A focused single-snapshot reader now binds the previously unresolved constants.
+The bundled Flutter engine identifies Dart 3.14.0-294.0.dev. The matching SDK
+commit is ac1a97aae47d12e81d772ad45ab6d1fe57a02cf4. Independently computing
+MakeSnapshotHashString from those SDK sources returns
+e3b703b387b759dc21a3cbe8aa329f7a, identical to the artifact header. Merely passing
+that hash to the build helper would not have been sufficient verification.
+
+The reader uses the Mach-O loader from greeng3/blutter commit
+d3b4615c7b7bd9bc1583f15fc6bc229b6aa8d9bd plus upstream single-snapshot PR 213
+(c1caafecd233ea17c3f4b6b5ff8847d59478b979) and a small local Mach-O symbol patch.
+It creates a Dart isolate from the snapshot without invoking the application.
+Only allowlisted pool entries are read; no search credential is selected.
+The source, build instructions, pinned inputs and local patch are retained in
+[tools/reference_pool_reader](../tools/reference_pool_reader/README.md).
+
+Pool labels below are the IDA X27-relative array labels. The actual ObjectPool
+index is obtained from the byte offset minus the heap-object tag. For example,
+PP[22356] is offset 0x2baa0 and ObjectPool index 22354. The threshold entries are
+immediate double bits, not heap-object pointers. Initial attempts to use
+ObjectAt on them were invalid and crashed the reader; corrected decoding checks
+the entry type and uses RawValueAt. The corrected reader exits successfully.
+
+| IDA pool label | Recovered value |
+| --- | --- |
+| 22356 | Jaccard threshold 0.7, bits 0x3fe6666666666666 |
+| 13118 | Token-set threshold 0.8, bits 0x3fe999999999999a |
+| 11291 | Partial-ratio threshold 0.9, bits 0x3feccccccccccccd |
+| 27 | Empty string |
+| 855 | One space |
+| 11631 | Whitespace regex: backslash-s plus |
+| 24954 | Prefix removal regex: non-letter/non-number/non-whitespace characters |
+| 24985 | Leading timestamp regex: bracketed HH:MM:SS plus optional whitespace |
+| 24986 | ASCII punctuation runs: hyphen, dot, comma, question/exclamation mark, colon, semicolon, straight quotes, parentheses |
+| 24977 | Excluded generated-output prefix: greater-than greater-than |
+| 24980 | Detector generation prefix: one space followed by the ctrl1 control token |
+| 26550 | Reduction closure: static max(double, double) |
+| 635 | Generated-question split delimiter: ASCII question mark |
+
+Exact regex source strings are retained in the allowlisted pool output under
+test-results/reference-functions/ida/selected-pool-constants.txt and the
+implemented window normalization. The prefix regex is
+[^\p{L}\p{N}\s]+. Binding the string dispatch selector -4092 for OneByteString
+returns image offset 0xd1ffd4, matching the native String.toLowerCase symbol;
+selector -4090 returns 0xd1fdd8, matching String.indexOf. This resolves the
+previous lowercasing inference. No interpretation is made of the reader's
+other diagnostic selector probes on unsupported string operations.
+
+Additional IDA assembly at 0x1009f3394 binds the question delimiter to PP[635].
+The prefix RegExp call at 0x1009f2020-0x1009f2048 uses the argument descriptor
+PP[566]. Its recovered named-argument indices bind caseSensitive=true,
+dotAll=false, multiLine=false, unicode=true. The Unicode property pattern is
+therefore active Unicode matching, rather than an assumed constructor default.
+
+Production integration in this revision replaces the approximate transcript
+window normalization with the recovered lowercasing, leading-timestamp removal,
+ASCII-punctuation-to-space replacement, whitespace collapse and trim. Detector
+input now joins the eligible whitespace units with one space, matching the
+recovered splitter/join values. Token-set scoring is implemented as the maximum
+edit ratio between the sorted intersection and either sorted full token set.
+
+Validation: 71 core tests passed, one opt-in test skipped; the retained reader
+source was rebuilt and exited zero with matching constants. Exact dispatcher
+integration, five-second question filtering, twenty-second expiry/replacement,
+raw ctrl1 detector output handling, and boundary overlap remain unfinished.
+The live pipeline still has its earlier copied-question restriction and lifetime
+database uniqueness; the recovered thresholds are not yet used by it.
+
+Evidence:
+- ev_11eede0a8827759493c37d64e5641de0a0271319ddb0c9cc060bdafd2818864f:
+  successful typed pool decoding, regexes, prompt control token and max closure.
+- ev_ca9c9f20819e97585ab8b545571171176c805e815e66383fd97dbafa4fcbd44d:
+  successful reader with string dispatch bindings.
+- ev_b662071d0c44e46dca72b3a81265aaa0b8adda647538c136eb636ff4820e4d7b:
+  IDA question delimiter and prefix-RegExp constructor assembly.
+- ev_3d0270907dc0d76b84270790910df49313de0539a4b06fd83782e819b538dbde:
+  retained argument descriptor and ASCII-question-mark delimiter.
+- ev_3d0dfbc193db313ec64083e6a70c42e4d113ebf4cf03b86bda32f80177687bff:
+  repository reader source rebuilt and run successfully.
+- ev_a11bd1768f9a4921030c7cfda38f80a4e11b28fd33fbab88c4be8cb52cda50f8:
+  core regression suite.
+
+A second isolated debug app copy initialized Dart but still did not produce a
+usable breakpoint observation. Its owned helper PID was identified by its
+temporary executable path and terminated; the app/data were removed. The SDK
+checkout and reader build remain under /tmp/foresight-dart-pool for reuse.
+The successful constants above come from snapshot deserialization, not from the
+failed debugger attempts or normal original-app execution.
