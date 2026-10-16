@@ -8,9 +8,20 @@ import 'package:test/test.dart';
 import 'package:sqlite3/sqlite3.dart' show SqliteException;
 import 'package:grpc/grpc.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 class LocalRetrieval extends RagServiceBase {
   late String document;
+  final encoded = <String>[];
+  int Function(String)? tokenCount;
+  @override
+  Future<EncodeResponse> encode(ServiceCall call, EncodeRequest request) async {
+    encoded.add(request.text);
+    return EncodeResponse(
+      tokens: List.filled(tokenCount?.call(request.text) ?? 1, 7),
+    );
+  }
+
   @override
   Future<RetrieveResponse> retrieveContext(
     ServiceCall call,
@@ -570,6 +581,71 @@ void main() {
       expect(store.rows('SELECT * FROM answers'), hasLength(4));
       expect(store.rows('SELECT * FROM conversation_memory').single, before);
       expect(store.rows('SELECT * FROM meeting_answers'), hasLength(1));
+    },
+  );
+  test(
+    'ready helper tokenizes non-Latin history and cached counts avoid re-encoding',
+    () async {
+      final tokenizer = LocalRetrieval()
+        ..tokenCount = (text) => text.contains('字') ? text.runes.length : 1;
+      final server = Server.create(services: [tokenizer]);
+      await server.serve(
+        address: InternetAddress(helper.socket, type: InternetAddressType.unix),
+        port: 0,
+      );
+      helper.snapshot = control.State(tokenizerReady: true);
+      for (var i = 0; i < 6; i++)
+        store.answer(
+          'Old question $i',
+          '字' * 40,
+          'completed',
+          [],
+          'legacy',
+          conversation: 'history',
+        );
+      runtime.contextLimit = 100;
+      runtime.answer = (_) async => 'New answer';
+      try {
+        await domain.askWithWebInConversation('Next?', 'history').toList();
+        expect(runtime.summaries, hasLength(1));
+        expect(tokenizer.encoded, contains('字' * 40));
+        expect(tokenizer.encoded, contains('Next?'));
+        expect(
+          tokenizer.encoded.any(
+            (text) => text.startsWith(referenceMemoryPrefix),
+          ),
+          isTrue,
+        );
+        final first = store
+            .rows(
+              "SELECT token_counts FROM conversation_memory WHERE conversation='history'",
+            )
+            .single;
+        expect(jsonDecode(first['token_counts'] as String), [1, 40, 1, 1]);
+        tokenizer.encoded.clear();
+        await domain.askWithWebInConversation('Again?', 'history').toList();
+        expect(tokenizer.encoded, hasLength(3));
+        expect(tokenizer.encoded, isNot(contains('字' * 40)));
+        expect(runtime.summaries, hasLength(1));
+        helper.snapshot = control.State(tokenizerReady: false);
+        runtime.contextLimit = 4096;
+        tokenizer.encoded.clear();
+        await domain.askWithWebInConversation('Fallback?', 'history').toList();
+        expect(tokenizer.encoded, isEmpty);
+        final weights =
+            jsonDecode(
+                  store
+                          .rows(
+                            "SELECT token_counts FROM conversation_memory WHERE conversation='history'",
+                          )
+                          .single['token_counts']
+                      as String,
+                )
+                as List;
+        expect(weights.take(6), [1, 40, 1, 1, 1, 1]);
+      } finally {
+        await server.shutdown();
+      }
     },
   );
 }

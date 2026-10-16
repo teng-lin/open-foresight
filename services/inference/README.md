@@ -97,3 +97,12 @@ library paths into native subprocess launches. macOS helper launch continues to
 use the owned supervisor and close-on-exec safeguards from the application core.
 The preparation and packaging scripts remain Linux x86_64 tools; this does not
 establish a packaged or real-model macOS release.
+
+## Conversation context admission
+
+Chat/tool conversations reject input estimated above 4096 generation-model
+tokens without reserving the full output allowance plus 256 tokens in advance.
+The native engine context and output cap still apply. The helper tokenizer and
+generation tokenizer serve different models. The separate grounded-generation
+path retains its input/output reserve check. Exact original native accounting
+remains unverified. See [tokenizer evidence](../../docs/reference-tokenizer.md).

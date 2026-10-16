@@ -15,6 +15,32 @@ Future<ReferenceChatMemory> memory(int count, {int memoTokens = 10}) =>
 
 void main() {
   test(
+    'history retains recorded counts and estimates only missing entries',
+    () async {
+      final estimated = <String>[];
+      final history = await ReferenceChatMemory.load(
+        [
+          referenceTextMessage('user', 'Old count'),
+          referenceTextMessage('assistant', 'Missing count'),
+        ],
+        tokenCounts: [17, null],
+        estimate: (message) async {
+          estimated.add(referenceHistoryText(message));
+          return 3;
+        },
+      );
+      expect(estimated, ['Missing count']);
+      expect(history.tokens, 20);
+      expect(history.tokenCounts, [17, 3]);
+      await expectLater(
+        ReferenceChatMemory.load([
+          referenceTextMessage('user', 'Question'),
+        ], tokenCounts: []),
+        throwsStateError,
+      );
+    },
+  );
+  test(
     'word fallback rounds, handles whitespace and estimates text parts separately',
     () async {
       for (final (text, tokens) in [

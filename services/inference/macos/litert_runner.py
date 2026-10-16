@@ -53,9 +53,8 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
                                ensure_ascii=False, separators=(',', ':'))
     if (len(engine.tokenize(prompt)) + len(engine.tokenize(system)) +
             len(engine.tokenize(encoded_tools)) +
-            (len(engine.tokenize(json.dumps(messages, ensure_ascii=False, separators=(',', ':')))) if messages else 0) +
-            budget + 256 > 4096):
-        raise ValueError('Prompt and output reserve exceed the 4096-token context')
+            (len(engine.tokenize(json.dumps(messages, ensure_ascii=False, separators=(',', ':')))) if messages else 0) > 4096):
+        raise ValueError('Conversation input exceeds the 4096-token context')
 
     with engine.create_conversation(
             system_message=system,

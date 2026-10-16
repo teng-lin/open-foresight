@@ -50,8 +50,9 @@ prompt path.
 
 The four-answer window has been replaced for web-enabled sends by the recovered
 memory policy below. Conversation cloning/cache reuse, full response
-alignment/sanitation, the original tokenizer/model configuration and history
-reset/lifecycle comparisons remain open. Ordinary local-only answering retains
+alignment/sanitation and history reset/lifecycle comparisons remain open.
+Helper tokenization and bundled defaults are covered in
+[the tokenizer evidence](reference-tokenizer.md). Ordinary local-only answering retains
 its existing path. This does not establish exhaustive history parity.
 
 ## Recovered memory policy and integration
@@ -74,9 +75,8 @@ It then removes first entries until the estimated history plus incoming message
 fits, or history is empty. An insufficient entry count or failed/empty
 compression falls back to the same FIFO removal. The memo itself can therefore
 be removed if it is too large. `_estimateMsgTokens` (0x1009164b8) has tokenizer
-and word-count fallback branches; its full 632-line decompilation is now retained. The port implements its
-tokenizer-unavailable word estimate; use of the original tokenizer remains
-unverified.
+and word-count fallback branches; its full 632-line decompilation is retained.
+The port now implements both branches.
 The implementation and remaining limits are detailed below.
 
 ## Verification and evidence
@@ -134,11 +134,10 @@ costs one. Text parts are estimated separately. This is confirmed by the
 pinned VM's LibcRound thread offset 1976, matching the indirect call in the
 original estimator; LibcCeil is at offset 1960. The helper also retains image
 and audio estimates (default 280 and 200); application chat remains text-only.
-An injectable token counter supports the separate tokenizer-backed branch, but
-Domain currently uses the original no-tokenizer fallback. Native admission
-independently counts actual model tokens and may reject an oversized request.
-The actual tokenizer branch, especially its effect on non-Latin context sizing,
-is still a parity limitation.
+Domain binds helper Encode when the helper reports tokenizer readiness and
+uses the word fallback otherwise. Per-entry costs are cached across readiness
+changes. Native admission independently counts generation-model input and may
+reject an oversized request. See [tokenizer verification](reference-tokenizer.md).
 
 The original `_simpleLlmExecutor` creates a fresh local conversation with a
 constant ConversationConfig whose slots are null except false booleans. It
@@ -148,15 +147,16 @@ with empty system instructions, no tools and no history. The existing tools
 bridge carries this plain conversation; tool detection is bypassed so a quoted
 function example cannot invoke a callback. C++ and Python support this empty-tool
 object mode while the public generateWithTools method still requires tools.
-Original service recovery, default sampling, token limits and streaming details
-are not established by this change. The port uses its existing sampling and a
-1024-token summary output cap.
+The bundled model defaults establish matching sampling and a 4096-token context.
+Original service recovery, runtime overrides and streaming remain unverified.
+The port retains a 1024-token summary output cap.
 
 Domain loads the current checkpoint plus completed answers after its cursor,
 prunes a request-local copy before generation, and commits the resulting memory
 with the answer and exact meeting link in one SQLite savepoint. The additive
 `conversation_memory` table stores conversation identity, through-answer ID and
-message JSON. All answers remain in the archive. A conversation/id index bounds
+message JSON and nullable per-entry token counts. Legacy rows are estimated
+once when replayed. All answers remain in the archive. A conversation/id index bounds
 tail lookups. Completed turns arriving during generation are merged before the
 new answer pair during commit, preventing a later checkpoint from skipping them.
 Cancelled or failed requests do not replace durable memory. Summary and answer

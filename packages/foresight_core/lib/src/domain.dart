@@ -16,6 +16,7 @@ import 'reference_tools.dart';
 import 'chat_sources.dart';
 import 'reference_chat_prompt.dart';
 import 'reference_chat_history.dart';
+import 'reference_tokenizer.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
 class Domain {
@@ -346,6 +347,7 @@ class Domain {
       required String conversation,
       Map<String, dynamic>? modelResponse,
       List<Map<String, dynamic>>? memoryMessages,
+      List<int>? memoryTokenCounts,
       int? historyThroughAnswerId,
     }) {
       ensureCurrent();
@@ -378,9 +380,18 @@ class Domain {
             ...memoryMessages.skip(memoryMessages.length - 2),
           ];
           store.db.execute(
-            'INSERT INTO conversation_memory(conversation,through_answer_id,messages) VALUES(?,?,?) '
-            'ON CONFLICT(conversation) DO UPDATE SET through_answer_id=excluded.through_answer_id,messages=excluded.messages',
-            [conversation, answerId, jsonEncode(committedMessages)],
+            'INSERT INTO conversation_memory(conversation,through_answer_id,messages,token_counts) VALUES(?,?,?,?) '
+            'ON CONFLICT(conversation) DO UPDATE SET through_answer_id=excluded.through_answer_id,messages=excluded.messages,token_counts=excluded.token_counts',
+            [
+              conversation,
+              answerId,
+              jsonEncode(committedMessages),
+              jsonEncode([
+                ...memoryTokenCounts!.take(memoryTokenCounts.length - 2),
+                ...List<int?>.filled(intervening.length, null),
+                ...memoryTokenCounts.skip(memoryTokenCounts.length - 2),
+              ]),
+            ],
           );
         }
         if (meetingId != null) {
@@ -572,7 +583,7 @@ class Domain {
       );
     final memoryRows = useWeb
         ? store.rows(
-            'SELECT through_answer_id,messages FROM conversation_memory WHERE conversation=?',
+            'SELECT through_answer_id,messages,token_counts FROM conversation_memory WHERE conversation=?',
             [conversation],
           )
         : <Map<String, Object?>>[];
@@ -591,14 +602,45 @@ class Domain {
               )
               .reversed
               .toList();
+    final tokenizer = helper.snapshot?.tokenizerReady == true
+        ? ReferenceRemoteTokenizer(helper.client)
+        : null;
+    final ReferenceTokenCounter? tokenize = tokenizer == null
+        ? null
+        : (text) => tokenizer.count(text, checkCurrent: ensureCurrent);
+    Future<int> estimateMessage(Map<String, dynamic> message) async {
+      ensureCurrent();
+      final count = await estimateReferenceHistoryTokens(
+        message,
+        tokenize: tokenize,
+      );
+      ensureCurrent();
+      return count;
+    }
+
+    final checkpointMessages = memoryRows.isEmpty
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            jsonDecode(memoryRows.single['messages'] as String) as List,
+          );
+    final checkpointCounts =
+        memoryRows.isEmpty || memoryRows.single['token_counts'] == null
+        ? List<int?>.filled(checkpointMessages.length, null)
+        : List<int?>.from(
+            jsonDecode(memoryRows.single['token_counts'] as String) as List,
+          );
+    final tailMessages = useWeb
+        ? referenceChatHistory(historyRows)
+        : <Map<String, dynamic>>[];
     final memory = useWeb
-        ? await ReferenceChatMemory.load([
-            if (memoryRows.isNotEmpty)
-              ...List<Map<String, dynamic>>.from(
-                jsonDecode(memoryRows.single['messages'] as String) as List,
-              ),
-            ...referenceChatHistory(historyRows),
-          ])
+        ? await ReferenceChatMemory.load(
+            [...checkpointMessages, ...tailMessages],
+            estimate: estimateMessage,
+            tokenCounts: [
+              ...checkpointCounts,
+              ...List<int?>.filled(tailMessages.length, null),
+            ],
+          )
         : null;
     ensureCurrent();
     final history = historyRows
@@ -620,7 +662,7 @@ class Domain {
         requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}';
     if (memory != null) {
       await memory.prune(
-        incomingTokens: await estimateReferenceHistoryTokens(
+        incomingTokens: await estimateMessage(
           referenceTextMessage('user', prompt),
         ),
         tokenLimit: generator!.effectiveState['context_length'] as int? ?? 4096,
@@ -763,6 +805,16 @@ class Domain {
       final result = status == 'completed' && !useWeb
           ? jsonDecode(raw) as Map<String, dynamic>
           : null;
+      final newMemoryPair = useWeb && status == 'completed'
+          ? [
+              referenceTextMessage('user', question),
+              modelResponse ?? referenceTextMessage('assistant', raw),
+            ]
+          : <Map<String, dynamic>>[];
+      final newMemoryCounts = [
+        for (final message in newMemoryPair) await estimateMessage(message),
+      ];
+      ensureCurrent();
       saveAnswer(
         question,
         body,
@@ -772,11 +824,10 @@ class Domain {
         conversation: conversation,
         modelResponse: useWeb && status == 'completed' ? modelResponse : null,
         memoryMessages: useWeb && status == 'completed'
-            ? [
-                ...memory!.messages,
-                referenceTextMessage('user', question),
-                modelResponse ?? referenceTextMessage('assistant', raw),
-              ]
+            ? [...memory!.messages, ...newMemoryPair]
+            : null,
+        memoryTokenCounts: useWeb && status == 'completed'
+            ? [...memory!.tokenCounts, ...newMemoryCounts]
             : null,
         historyThroughAnswerId: useWeb && historyRows.isNotEmpty
             ? historyRows.last['id'] as int

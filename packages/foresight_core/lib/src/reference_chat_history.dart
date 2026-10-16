@@ -89,11 +89,18 @@ class ReferenceChatMemory {
   static Future<ReferenceChatMemory> load(
     List<Map<String, dynamic>> messages, {
     Future<int> Function(Map<String, dynamic>)? estimate,
+    List<int?>? tokenCounts,
   }) async {
+    if (tokenCounts != null && tokenCounts.length != messages.length) {
+      throw StateError('History token counts do not match messages');
+    }
     final counter = estimate ?? estimateReferenceHistoryTokens;
     return ReferenceChatMemory._([
-      for (final message in messages)
-        (message: message, tokens: await counter(message)),
+      for (var i = 0; i < messages.length; i++)
+        (
+          message: messages[i],
+          tokens: tokenCounts?[i] ?? await counter(messages[i]),
+        ),
     ], counter);
   }
 
@@ -101,6 +108,7 @@ class ReferenceChatMemory {
     for (final entry in _entries) entry.message,
   ];
   int get tokens => _tokens;
+  List<int> get tokenCounts => [for (final entry in _entries) entry.tokens];
 
   Future<void> prune({
     required int incomingTokens,

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 import 'package:test/test.dart';
 
 void main() {
@@ -11,10 +12,14 @@ void main() {
       final directory = Directory.systemTemp.createTempSync('web-model-');
       final store = Store('${directory.path}/app.db');
       final helper = Helper(
-        '${directory.path}/unused.sock',
+        env['FORESIGHT_WEB_TOKENIZER_SOCKET'] ??
+            '${directory.path}/unused.sock',
         '${directory.path}/helper',
         manageProcess: false,
       );
+      if (env['FORESIGHT_WEB_TOKENIZER_SOCKET'] != null) {
+        helper.snapshot = control.State(tokenizerReady: true);
+      }
       final runtime = NativeRuntime(env['FORESIGHT_NATIVE']!);
       final queries = <String>[];
       final domain = Domain(
@@ -55,15 +60,16 @@ void main() {
           'runtime': runtime.effectiveState,
         };
         final reportPath = env['FORESIGHT_WEB_MODEL_REPORT'];
+        final reason = reportPath ?? 'Controlled web-model fixture';
         if (reportPath != null)
           File(reportPath).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert(report),
           );
-        expect(queries, isNotEmpty, reason: '$report');
+        expect(queries, isNotEmpty, reason: reason);
         expect(rows, hasLength(1));
-        expect(rows.single['status'], 'completed', reason: '$report');
-        expect(rows.single['body'], contains('CEDAR-8492'), reason: '$report');
-        expect(rows.single['body'], contains('[Source:1]'), reason: '$report');
+        expect(rows.single['status'], 'completed', reason: reason);
+        expect(rows.single['body'], contains('CEDAR-8492'), reason: reason);
+        expect(rows.single['body'], contains('[Source:1]'), reason: reason);
         final citations =
             jsonDecode(rows.single['citations'] as String) as List;
         expect(
@@ -84,13 +90,13 @@ void main() {
             const JsonEncoder.withIndent('  ').convert(report),
           );
         }
-        expect(followup.last, contains('CEDAR-8492'), reason: '$report');
-        expect(queries.length, searchCount, reason: '$report');
+        expect(followup.last, contains('CEDAR-8492'), reason: reason);
+        expect(queries.length, searchCount, reason: reason);
         expect(store.rows('SELECT id FROM answers'), hasLength(2));
         for (var i = 0; i < 6; i++) {
           final body = i < 3
               ? '${i == 0 ? 'The user chose violet as the project theme color. ' : ''}'
-                    '${'Planning context remains consistent across the project. ' * 75}'
+                    '${'Planning context remains consistent across the project. ' * 90}'
               : 'The current work is on schedule. ' * 16;
           store.answer(
             'Planning note $i',
@@ -107,6 +113,16 @@ void main() {
               'controlled-compression-fixture',
             )
             .toList();
+        report['compression_attempt'] = {
+          'answer': compressedAnswer,
+          'saved_answers': store.rows(
+            "SELECT question,status FROM answers WHERE conversation='controlled-compression-fixture'",
+          ),
+        };
+        if (reportPath != null)
+          File(reportPath).writeAsStringSync(
+            const JsonEncoder.withIndent('  ').convert(report),
+          );
         final checkpoint = store
             .rows(
               "SELECT * FROM conversation_memory WHERE conversation='controlled-compression-fixture'",
@@ -127,19 +143,19 @@ void main() {
         expect(
           referenceHistoryText(memory.first),
           startsWith(referenceMemoryPrefix),
-          reason: '$report',
+          reason: reason,
         );
         expect(
           referenceHistoryText(memory.first).toLowerCase(),
           contains('violet'),
-          reason: '$report',
+          reason: reason,
         );
         expect(
           compressedAnswer.last.toLowerCase(),
           contains('violet'),
-          reason: '$report',
+          reason: reason,
         );
-        expect(queries.length, searchCount, reason: '$report');
+        expect(queries.length, searchCount, reason: reason);
       } finally {
         domain.close();
         runtime.close();

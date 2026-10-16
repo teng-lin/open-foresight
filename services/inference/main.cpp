@@ -226,7 +226,9 @@ public:
     const auto tool_tokens = tools.is_null() ? 0 :
         tokens(tool_request.system_message) + tokens(tool_request.tools.dump()) +
         (tool_request.messages.empty() ? 0 : tokens(tool_request.messages.dump()));
-    if (tokens(prompt) + tool_tokens + budget + 256 > 4096)
+    if (!tools.is_null() && tokens(prompt) + tool_tokens > 4096)
+      throw std::runtime_error("Conversation input exceeds the 4096-token context");
+    if (tools.is_null() && tokens(prompt) + budget + 256 > 4096)
       throw std::runtime_error(
           "Prompt and output reserve exceed the 4096-token context");
     auto session =

@@ -66,6 +66,14 @@ API = types.SimpleNamespace(Tool=type('Tool', (), {}), SamplerConfig=options,
 
 
 class ToolRunnerTest(unittest.TestCase):
+    def test_chat_input_does_not_reserve_the_entire_output_budget(self):
+        engine = Engine([{'role': 'assistant', 'content': 'Short answer'}])
+        engine.tokenize = lambda text: list(text)
+        with contextlib.redirect_stdout(io.StringIO()):
+            runner.run_tool_conversation(engine, API, 'X' * 3500, [{'name': 'google_search'}], 1024)
+        self.assertEqual(engine.creations, 1)
+        self.assertEqual(engine.config['max_output_tokens'], 1024)
+
     def test_plain_summary_conversation_has_no_tools_history_or_system_preface(self):
         engine = Engine([{'role': 'assistant', 'content': 'Memo'}])
         output = io.StringIO()
