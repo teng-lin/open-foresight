@@ -10,7 +10,7 @@ import subprocess
 def bundle_runtime(python, destination, runner, architecture, identify):
     python, destination, runner = Path(python).absolute(), Path(destination).absolute(), Path(runner).absolute()
     subprocess.run([str(python), '-I', str(runner), '--check'], check=True,
-                   timeout=30, capture_output=True)
+                   timeout=30)
     query = '''import sys, sysconfig, json, importlib.metadata as m
 print(json.dumps(dict(executable=sys.executable, version=sys.version,
     stdlib=sysconfig.get_path('stdlib'), packages=sysconfig.get_path('purelib'),
@@ -103,8 +103,7 @@ export LD_LIBRARY_PATH="$task_runtime/python/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_
 exec "$task_runtime/python/bin/python3" -I -B "$@"
 '''.replace('@SYSTEM_CERTIFICATES@', system_certificates))
     embedding_python.chmod(0o755)
-    subprocess.run([str(launcher), '--check'], check=True, timeout=30,
-                   capture_output=True, cwd='/')
+    subprocess.run([str(launcher), '--check'], check=True, timeout=30, cwd='/')
     return {'version': config['version'], 'distributions': config['distributions'],
             'runner': 'share/open-foresight/litert-runner',
             'bundled_libraries': sorted(runtime_libraries),
