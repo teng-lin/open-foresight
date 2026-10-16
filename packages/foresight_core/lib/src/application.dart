@@ -124,6 +124,10 @@ class Application {
     if (modelOperation) _modelBusy = true;
     try {
       switch (method) {
+        case 'notifications.capabilities':
+          return await notificationCapabilities();
+        case 'notifications.request_permission':
+          return await notificationCapabilities(requestPermission: true);
         case 'audio.capabilities':
           return audioCapabilities();
         case 'audio.request_microphone':
@@ -493,6 +497,7 @@ class Application {
       if (!{
         'status',
         'audio.capabilities',
+        'notifications.capabilities',
         'sources.list',
         'sources.get',
         'sources.search',

@@ -138,7 +138,7 @@ Future<void> platformNotification(String title, String message) async {
       : await Process.run('notify-send', [title, message]);
   if (result.exitCode != 0)
     throw StateError(
-      'Notification delivery failed. Check notification permission in system settings: ${result.stderr}',
+      'Notification delivery failed. ${_notificationFailure(result)}',
     );
 }
 
@@ -197,4 +197,40 @@ void configureProfileRuntime(String data) {
     () => '$data/cache/python',
   );
   configureNativeEnvironment();
+}
+
+String _notificationFailure(ProcessResult result) {
+  try {
+    final body = jsonDecode(result.stdout.toString());
+    if (body is Map &&
+        body['error'] is String &&
+        (body['error'] as String).isNotEmpty)
+      return body['error'] as String;
+  } on FormatException {
+    /* Linux notify-send reports failures on stderr. */
+  }
+  final detail = result.stderr.toString().trim();
+  return detail.isEmpty
+      ? 'Check notification permission in System Settings.'
+      : detail;
+}
+
+Future<Map<String, dynamic>> notificationCapabilities({
+  bool requestPermission = false,
+}) async {
+  if (!Platform.isMacOS) return {'available': true, 'backend': 'freedesktop'};
+  final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
+  if (helper == null)
+    throw StateError(
+      'The bundled notification adapter is unavailable. Reinstall Open Foresight.',
+    );
+  final result = await Process.run(helper, [
+    requestPermission ? '--request-permission' : '--capabilities',
+  ]);
+  final body = Map<String, dynamic>.from(
+    jsonDecode(result.stdout.toString()) as Map,
+  );
+  if (result.exitCode != 0 && body['granted'] != false)
+    throw StateError(_notificationFailure(result));
+  return body;
 }

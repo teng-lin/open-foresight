@@ -13,6 +13,7 @@ class Helper {
   late final RagServiceClient client;
   Process? process;
   bool stopping = false;
+  bool shutdownVerified = true;
   int restarts = 0;
   String state = 'disconnected';
   control.State? snapshot;
@@ -155,6 +156,7 @@ class Helper {
         // Verify the private profile arguments before releasing that owner.
         final pid = int.tryParse(snapshot?.instanceId.split('-').first ?? '');
         if (pid != null) {
+          shutdownVerified = false;
           try {
             final library = DynamicLibrary.open(
               runtimeConfiguration.nativeLibrary,
@@ -174,6 +176,13 @@ class Helper {
             try {
               if (matches(pid, a, b, identity) == 1) {
                 Process.killPid(pid, ProcessSignal.sigterm);
+                for (var attempt = 0; attempt < 50; attempt++) {
+                  if (matches(pid, a, b, identity) == 0) {
+                    shutdownVerified = true;
+                    break;
+                  }
+                  await Future<void>.delayed(const Duration(milliseconds: 100));
+                }
               }
             } finally {
               calloc.free(a);
