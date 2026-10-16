@@ -2,6 +2,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/date_symbol_data_local.dart';
+import 'package:intl/intl.dart';
 import 'package:open_foresight/meeting_export.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/domain.dart';
@@ -35,25 +37,22 @@ void main() {
     return id;
   }
 
-  test(
-    'date presets cover inclusive calendar days across month boundaries',
-    () {
-      expect(meetingExportRange(MeetingExportPeriod.anytime, today), isNull);
-      for (final entry in {
-        MeetingExportPeriod.today: 1,
-        MeetingExportPeriod.last7Days: 7,
-        MeetingExportPeriod.last30Days: 30,
-        MeetingExportPeriod.last90Days: 90,
-      }.entries) {
-        final range = meetingExportRange(
-          entry.key,
-          DateTime(2026, 10, 16, 23, 59),
-        )!;
-        expect(range.end, today);
-        expect(range.start, DateTime(2026, 10, 17 - entry.value));
-      }
-    },
-  );
+  test('date presets subtract their day counts from local midnight', () {
+    expect(meetingExportRange(MeetingExportPeriod.anytime, today), isNull);
+    for (final entry in {
+      MeetingExportPeriod.today: 1,
+      MeetingExportPeriod.last7Days: 7,
+      MeetingExportPeriod.last30Days: 30,
+      MeetingExportPeriod.last90Days: 90,
+    }.entries) {
+      final range = meetingExportRange(
+        entry.key,
+        DateTime(2026, 10, 16, 23, 59),
+      )!;
+      expect(range.end, today);
+      expect(range.start, DateTime(2026, 10, 17 - entry.value));
+    }
+  });
 
   test(
     'export matches reference notes format and inclusive date boundaries',
@@ -99,7 +98,7 @@ void main() {
       expect(result.markdown, isNot(contains('Edited summary')));
       expect(
         result.markdown,
-        contains('## Review\nOct 10, 2026 12:00am - 12:30am\n\n**中文 notes**\n'),
+        contains('## Review\nOct 10, 2026 12:00am\n\n**中文 notes**\n'),
       );
       expect(result.markdown, contains('Included end'));
       for (final excluded in [
@@ -128,14 +127,17 @@ void main() {
     },
   );
 
-  test('calendar start takes precedence over import date', () {
-    final id = meeting(
-      'Calendar meeting',
-      DateTime(2026, 10, 1),
-      notes: 'Scheduled today',
-    );
-    store.db
-        .execute('INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)', [
+  test(
+    'calendar start takes precedence and linked events do not duplicate a note',
+    () {
+      final id = meeting(
+        'Calendar meeting',
+        DateTime(2026, 10, 1),
+        notes: 'Scheduled today',
+      );
+      store.db.execute(
+        'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        [
           'event',
           'account',
           'primary',
@@ -145,25 +147,87 @@ void main() {
           today.millisecondsSinceEpoch,
           today.add(const Duration(hours: 1)).millisecondsSinceEpoch,
           'confirmed',
-          '{}',
+          '{"htmlLink":"https://calendar.example.test/event?id=123&view=full"}',
           today.millisecondsSinceEpoch,
-        ]);
+        ],
+      );
+      store.db.execute(
+        'INSERT INTO calendar_events SELECT ?,account,?,google_id,meeting_id,'
+        'source_id,starts,ends,status,metadata,synced FROM calendar_events WHERE event_key=?',
+        ['duplicate-event', 'second-calendar', 'event'],
+      );
+      expect(
+        composeMeetingExport(
+          store,
+          range: DateTimeRange(start: today, end: today),
+        ).count,
+        1,
+      );
+      expect(
+        composeMeetingExport(store).markdown,
+        contains(
+          '[Oct 16, 2026 12:00am - 1:00am](https://calendar.example.test/event?id=123&view=full)',
+        ),
+      );
+    },
+  );
+
+  test('export sorts newest first, trims edges and separates records', () {
+    meeting('First', DateTime(2026, 10, 12, 9), notes: '\n  First note\n\n');
+    meeting('Second', DateTime(2026, 10, 12, 10), notes: '  中文 note  \n');
     expect(
-      composeMeetingExport(
-        store,
-        range: DateTimeRange(start: today, end: today),
-      ).count,
-      1,
+      composeMeetingExport(store).markdown,
+      '## Second\nOct 12, 2026 10:00am\n\n中文 note\n\n\n\n'
+      '## First\nOct 12, 2026 9:00am\n\nFirst note\n',
+    );
+    expect(
+      store
+          .rows('SELECT body FROM meeting_notes ORDER BY meeting_id')
+          .map((row) => row['body']),
+      ['\n  First note\n\n', '  中文 note  \n'],
     );
   });
 
   test(
+    'export uses the original date patterns in the active Intl locale',
+    () async {
+      await initializeDateFormatting('fr_FR');
+      meeting('Réunion', DateTime(2026, 10, 12, 15, 19), notes: 'Compte rendu');
+      final result = Intl.withLocale(
+        'fr_FR',
+        () => composeMeetingExport(store),
+      );
+      expect(
+        result.markdown,
+        '## Réunion\noct. 12, 2026 3:19pm\n\nCompte rendu\n',
+      );
+    },
+  );
+
+  test(
     'single-note export matches the captured original file byte for byte',
     () {
-      meeting(
+      final id = meeting(
         '[New Meeting]',
         DateTime(2026, 10, 12, 15, 19),
         notes: 'Parity export fixture',
+      );
+      // The captured original item has an explicit 15:19–15:49 event range.
+      store.db.execute(
+        'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        [
+          'captured-event',
+          'account',
+          'primary',
+          'google-id',
+          id,
+          '',
+          DateTime(2026, 10, 12, 15, 19).millisecondsSinceEpoch,
+          DateTime(2026, 10, 12, 15, 49).millisecondsSinceEpoch,
+          'confirmed',
+          '{}',
+          today.millisecondsSinceEpoch,
+        ],
       );
       final transcriptOnly = meeting('Transcript only', today);
       store.transcript(
@@ -199,6 +263,40 @@ void main() {
       expect(result.markdown, isNot(contains('excluded next day')));
     },
   );
+
+  test('preset boundaries retain the original elapsed-day DST behavior', () {
+    final midnight = DateTime(2026, 11, 5);
+    final range = meetingExportRange(MeetingExportPeriod.last7Days, midnight)!;
+    final first = midnight.subtract(const Duration(days: 6));
+    expect(range.start, first);
+    meeting(
+      'Before elapsed boundary',
+      first.subtract(const Duration(milliseconds: 1)),
+      notes: 'excluded',
+    );
+    meeting('At elapsed boundary', first, notes: 'included first');
+    meeting(
+      'At end',
+      DateTime(2026, 11, 5, 23, 59, 59, 999),
+      notes: 'included last',
+    );
+    meeting('After end', DateTime(2026, 11, 6), notes: 'excluded after');
+    final result = composeMeetingExport(store, range: range);
+    expect(result.count, 2);
+    expect(result.markdown, contains('included first'));
+    expect(result.markdown, contains('included last'));
+    expect(result.markdown, isNot(contains('excluded')));
+    final custom = meetingExportRange(
+      MeetingExportPeriod.custom,
+      midnight,
+      custom: DateTimeRange(
+        start: DateTime(2026, 10, 30, 12),
+        end: DateTime(2026, 11, 5, 12),
+      ),
+    )!;
+    expect(custom.start, DateTime(2026, 10, 30));
+    expect(custom.end, midnight);
+  });
 
   testWidgets(
     'preview, copy, save cancellation and errors use the selected content',

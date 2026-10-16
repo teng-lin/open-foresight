@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:intl/intl.dart';
 import 'store.dart';
 
 enum MeetingExportPeriod {
@@ -14,8 +16,8 @@ enum MeetingExportPeriod {
   final String label;
 }
 
-/// Calendar days in local time, with an inclusive end date. Constructing the
-/// next midnight (rather than adding 24 hours) also handles DST transitions.
+/// Original presets subtract elapsed 24-hour days from today's local midnight.
+/// Custom dates use local calendar midnights. Both include the final date.
 DateTimeRange? meetingExportRange(
   MeetingExportPeriod period,
   DateTime now, {
@@ -23,7 +25,18 @@ DateTimeRange? meetingExportRange(
 }) {
   if (period == MeetingExportPeriod.anytime) return null;
   final today = DateTime(now.year, now.month, now.day);
-  if (period == MeetingExportPeriod.custom) return custom;
+  if (period == MeetingExportPeriod.custom) {
+    return custom == null
+        ? null
+        : DateTimeRange(
+            start: DateTime(
+              custom.start.year,
+              custom.start.month,
+              custom.start.day,
+            ),
+            end: DateTime(custom.end.year, custom.end.month, custom.end.day),
+          );
+  }
   final days = switch (period) {
     MeetingExportPeriod.last7Days => 7,
     MeetingExportPeriod.last30Days => 30,
@@ -31,7 +44,7 @@ DateTimeRange? meetingExportRange(
     _ => 1,
   };
   return DateTimeRange(
-    start: DateTime(today.year, today.month, today.day - days + 1),
+    start: today.subtract(Duration(days: days - 1)),
     end: today,
   );
 }
@@ -45,9 +58,7 @@ class MeetingExportContent {
 MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
   final start = range?.start;
   final end = range?.end;
-  final lower = start == null
-      ? null
-      : DateTime(start.year, start.month, start.day).millisecondsSinceEpoch;
+  final lower = start?.millisecondsSinceEpoch;
   final upper = end == null
       ? null
       : DateTime(end.year, end.month, end.day + 1).millisecondsSinceEpoch;
@@ -55,44 +66,41 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
   final meetings = store.rows(
     'SELECT meetings.*,meeting_notes.body,'
     'COALESCE(calendar_events.starts,meeting_details.created,0) AS export_date,'
-    'calendar_events.ends AS export_end '
+    'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata '
     'FROM meetings JOIN meeting_notes ON meeting_notes.meeting_id=meetings.id '
     'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
-    'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id ORDER BY export_date,meetings.id',
+    'LEFT JOIN calendar_events ON calendar_events.event_key=('
+    'SELECT event_key FROM calendar_events AS export_event '
+    'WHERE export_event.meeting_id=meetings.id ORDER BY export_event.rowid LIMIT 1'
+    ') ORDER BY export_date DESC,meetings.id',
   );
   for (final meeting in meetings) {
     final date = meeting['export_date'] as int;
     if (lower != null && (date < lower || date >= upper!)) continue;
-    final notes = meeting['body'] as String;
-    if (notes.trim().isEmpty) continue;
+    final notes = (meeting['body'] as String).trim();
+    if (notes.isEmpty) continue;
     final begins = DateTime.fromMillisecondsSinceEpoch(date);
-    final ends = DateTime.fromMillisecondsSinceEpoch(
-      meeting['export_end'] as int? ??
-          date + const Duration(minutes: 30).inMilliseconds,
-    );
-    const months = [
-      'Jan',
-      'Feb',
-      'Mar',
-      'Apr',
-      'May',
-      'Jun',
-      'Jul',
-      'Aug',
-      'Sep',
-      'Oct',
-      'Nov',
-      'Dec',
-    ];
+    final end = meeting['export_end'] as int?;
+    final ends = end == null ? null : DateTime.fromMillisecondsSinceEpoch(end);
     final dateLine =
-        '${months[begins.month - 1]} ${begins.day}, ${begins.year} ${_exportClock(begins)} - ${_exportClock(ends)}';
-    output.add('## ${meeting['title']}\n$dateLine\n\n$notes\n');
+        '${DateFormat('MMM d, yyyy').format(begins)} ${_exportClock(begins)}'
+        '${ends == null ? '' : ' - ${_exportClock(ends)}'}';
+    final metadata = meeting['export_metadata'] as String?;
+    final url = metadata == null
+        ? null
+        : (jsonDecode(metadata) as Map<String, dynamic>)['htmlLink'] as String?;
+    final linkedDate = url == null || url.isEmpty
+        ? dateLine
+        : '[$dateLine]($url)';
+    output.add('## ${meeting['title']}\n$linkedDate\n\n$notes\n');
   }
-  return MeetingExportContent(output.join('\n'), output.length);
+  // composeExportMarkdown writes three blank lines before each later item;
+  // every item already ends with the newline after its trimmed note body.
+  return MeetingExportContent(output.join('\n\n\n'), output.length);
 }
 
 String _exportClock(DateTime time) =>
-    '${time.hour % 12 == 0 ? 12 : time.hour % 12}:${time.minute.toString().padLeft(2, '0')}${time.hour < 12 ? 'am' : 'pm'}';
+    DateFormat('h:mma').format(time).toLowerCase();
 
 class MeetingExportDialog extends StatefulWidget {
   const MeetingExportDialog({
