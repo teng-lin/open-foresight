@@ -272,7 +272,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Image.asset(
-                                  'assets/images/foresight-logo.png',
+                                  'assets/images/open-foresight-logo.png',
                                   width: 24,
                                   height: 24,
                                 ),
