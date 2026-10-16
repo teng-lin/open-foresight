@@ -572,15 +572,17 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           bool request = line.starts_with("tool ");
           bool model = line.starts_with("model ");
           bool answer = line.starts_with("answer ");
-          if ((!request && !model && !answer) || tool_answer_received) {
+          bool delta = line.starts_with("delta ");
+          if ((!request && !model && !answer && !delta) || tool_answer_received ||
+              (delta && c.awaiting_tool)) {
             tool_protocol_failed = true;
             failure(c, c.request, seq, "tool_protocol", "Invalid tool worker frame");
             c.stop(); return;
           }
           if (answer) tool_answer_received = true;
           if (request || model) c.awaiting_tool = true;
-          c.emit(event(model ? "model_response" : request ? "tool_request" : "tool_answer", c.request,
-                       seq++, ",\"text\":" + quote(line.substr(model ? 6 : request ? 5 : 7))));
+          c.emit(event(delta ? "model_delta" : model ? "model_response" : request ? "tool_request" : "tool_answer", c.request,
+                       seq++, ",\"text\":" + quote(line.substr(model || delta ? 6 : request ? 5 : 7))));
         }
         return;
       }

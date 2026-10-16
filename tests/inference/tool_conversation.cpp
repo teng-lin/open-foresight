@@ -1,4 +1,5 @@
 #include "../../services/inference/tool_conversation.h"
+#include "../../services/inference/conversation_stream.h"
 #include <sstream>
 #include <vector>
 #include <iostream>
@@ -7,6 +8,29 @@ void check(bool value) { if (!value) throw std::runtime_error("Tool protocol ass
 int main() {
   try {
     const auto calls = json::array({{{"function", {{"name", "google_search"}, {"arguments", "{\"query\":\"nested\"}"}}}}});
+    foresight::ConversationStreamMessage streamed;
+    streamed.append({{"role", "assistant"}, {"content", "蓝🧭\n"},
+                     {"channels", {{"analysis", "first"}}}});
+    streamed.append({{"content", {{{"type", "text"}, {"text", "Complete"}}}},
+                     {"channels", {{"analysis", " second"}}}});
+    streamed.append({{"tool_calls", calls}, {"usage", {{"output_tokens", 2}}}});
+    auto assembled = streamed.value();
+    check(assembled["content"] == json::array({{{"type", "text"}, {"text", "蓝🧭\nComplete"}}}));
+    check(assembled["channels"]["analysis"] == "first second");
+    check(assembled["tool_calls"] == calls);
+    check(assembled["tool_calls"][0]["function"]["arguments"].is_string());
+    check(assembled["usage"]["output_tokens"] == 2);
+    check(foresight::ConversationStreamMessage().value() ==
+          json({{"role", "assistant"}, {"content", json::array()}}));
+    check(foresight::parse_conversation_stream_chunk("plain text")["content"][0]["text"] == "plain text");
+    for (const auto &invalid : {json(123), json({{"content", 123}}),
+                                json({{"tool_calls", "invalid"}}),
+                                json({{"channels", {{"analysis", 123}}}})}) {
+      bool rejected = false;
+      try { foresight::ConversationStreamMessage().append(invalid); }
+      catch (const std::exception &) { rejected = true; }
+      check(rejected);
+    }
     const auto reply = json({{"role", "user"}, {"content", {{{"type", "text"}, {"text", "Result 中文"}}}}});
     std::istringstream input(reply.dump() + "\n");
     std::ostringstream output;

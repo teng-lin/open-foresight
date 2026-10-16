@@ -369,6 +369,7 @@ class NativeRuntime {
             void Function(Pointer<Utf8>)
           >('fs_string_free');
       var modelTurns = 0;
+      var streamedText = '';
       while (true) {
         // close/load may have destroyed this handle while awaiting the timer
         // or while a consumer was processing a yielded event.
@@ -392,6 +393,29 @@ class NativeRuntime {
         if (event['request_id'] != id) {
           throw StateError('Native generation returned a different request ID');
         }
+        if (event['type'] == 'model_delta') {
+          final chunk = jsonDecode(event['text'] as String);
+          if (chunk is! Map<String, dynamic>) {
+            throw FormatException('Invalid streamed model response');
+          }
+          final content = chunk['content'];
+          final String text;
+          if (content is String) {
+            text = content;
+          } else if (content is List) {
+            text = content
+                .where((part) => part is Map && part['type'] == 'text')
+                .map((part) => part['text'] as String)
+                .join();
+          } else {
+            text = '';
+          }
+          if (text.isNotEmpty) {
+            streamedText += text;
+            yield {...event, 'type': 'preview', 'text': streamedText};
+          }
+          continue;
+        }
         if (event['type'] == 'tool_request' ||
             event['type'] == 'model_response') {
           if (toolDispatcher == null)
@@ -403,6 +427,7 @@ class NativeRuntime {
                     ? null
                     : extractReferenceToolCalls(payload as Map<String, dynamic>)
               : payload as List<dynamic>;
+          streamedText = '';
           if (delegated) modelTurns++;
           late Map<String, dynamic> message;
           if (delegated && (calls == null || calls.isEmpty)) {

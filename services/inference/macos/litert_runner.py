@@ -7,12 +7,104 @@ tool calls are delegated over stdin/stdout to the owning application service.
 The native worker owns this process group and cancels it on close/timeout.
 """
 import argparse
+import ctypes
+import copy
 import importlib.metadata
 import importlib.util
 import json
 import os
+import queue
 from pathlib import Path
 import sys
+
+
+def merge_stream_message(result, chunk):
+    """Merge pinned conversation message deltas without parsing tool arguments."""
+    if not isinstance(chunk, dict):
+        raise ValueError('Invalid streamed conversation message')
+    for key, value in chunk.items():
+        if key == 'content':
+            if isinstance(value, str) and isinstance(result.get(key, ''), str):
+                result[key] = result.get(key, '') + value
+                continue
+            if not isinstance(value, (str, list)):
+                raise ValueError('Invalid streamed conversation content')
+            previous = result.get(key, [])
+            if isinstance(previous, str):
+                previous = [{'type': 'text', 'text': previous}]
+            parts = previous
+            for part in ([{'type': 'text', 'text': value}] if isinstance(value, str) else value):
+                if (isinstance(part, dict) and part.get('type') == 'text' and
+                        isinstance(part.get('text'), str) and parts and
+                        isinstance(parts[-1], dict) and parts[-1].get('type') == 'text' and
+                        isinstance(parts[-1].get('text'), str) and
+                        {k: v for k, v in part.items() if k != 'text'} ==
+                        {k: v for k, v in parts[-1].items() if k != 'text'}):
+                    parts[-1]['text'] += part['text']
+                else:
+                    parts.append(copy.deepcopy(part))
+            result[key] = parts
+        elif key == 'tool_calls':
+            if value is None:
+                continue
+            if not isinstance(value, list):
+                raise ValueError('Invalid streamed tool calls')
+            result.setdefault(key, []).extend(copy.deepcopy(value))
+        elif key == 'channels':
+            if not isinstance(value, dict) or any(not isinstance(v, str) for v in value.values()):
+                raise ValueError('Invalid streamed conversation channels')
+            channels = result.setdefault(key, {})
+            for channel, text in value.items():
+                channels[channel] = channels.get(channel, '') + text
+        else:
+            result[key] = copy.deepcopy(value)
+
+
+def stream_tool_response(conversation, litert_lm, message, budget):
+    # The C API owns callback chunks only during the callback. Copy their UTF-8
+    # into an ordered queue, then parse/emit on the worker's main thread.
+    pending = queue.Queue()
+    lib = conversation._lib
+    callback_type = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+
+    @callback_type
+    def callback(unused, pointer):
+        try:
+            error = lib.litert_lm_stream_chunk_get_error(pointer)
+            text = lib.litert_lm_stream_chunk_get_text(pointer)
+            pending.put((text.decode('utf-8') if text else '',
+                         lib.litert_lm_stream_chunk_is_final(pointer),
+                         error.decode('utf-8') if error else None))
+        except Exception as error:
+            pending.put(('', True, str(error)))
+
+    # Match the SDK's callback ownership across native cancellation/close.
+    conversation._current_callback = callback
+    optional = conversation._create_optional_args(
+        max_output_tokens=budget,
+        repetition_penalty_config=litert_lm.RepetitionPenaltyConfig(repetition_penalty=1.05))
+    try:
+        status = lib.litert_lm_conversation_send_message_stream(
+            conversation._ptr, json.dumps(message, ensure_ascii=False), '{}',
+            optional, callback, None)
+        if status != 0:
+            raise RuntimeError('Tool generation stream failed to start')
+        result = {}
+        while True:
+            raw, final, error = pending.get()
+            if error:
+                raise RuntimeError('Tool generation stream failed: ' + error)
+            if raw:
+                try:
+                    chunk = json.loads(raw)
+                except json.JSONDecodeError:
+                    chunk = {'role': 'assistant', 'content': [{'type': 'text', 'text': raw}]}
+                merge_stream_message(result, chunk)
+                print('delta ' + json.dumps(chunk, ensure_ascii=False), flush=True)
+            if final:
+                return result or {'role': 'assistant', 'content': []}
+    finally:
+        conversation._delete_optional_args(optional)
 
 
 def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
@@ -68,24 +160,9 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
             max_output_tokens=budget) as conversation:
         message = {'role': 'user', 'content': prompt}
         for turn in range(20):
-            # Use the pinned 0.18.0 C API through its owned conversation. The
-            # public Python Message parser JSON-decodes string arguments, while
-            # original Foresight treats them as a verbatim search query.
-            optional = conversation._create_optional_args(
-                max_output_tokens=budget,
-                repetition_penalty_config=litert_lm.RepetitionPenaltyConfig(repetition_penalty=1.05))
-            try:
-                response = conversation._lib.litert_lm_conversation_send_message(
-                    conversation._ptr, json.dumps(message), '{}', optional)
-                if not response:
-                    raise RuntimeError('Tool generation failed')
-                try:
-                    raw = conversation._lib.litert_lm_json_response_get_string(response)
-                    value = json.loads(raw.decode('utf-8'))
-                finally:
-                    conversation._lib.litert_lm_json_response_delete(response)
-            finally:
-                conversation._delete_optional_args(optional)
+            # The raw C callback preserves verbatim string tool arguments;
+            # Python Message.from_json would JSON-decode those arguments.
+            value = stream_tool_response(conversation, litert_lm, message, budget)
             if not isinstance(value, dict):
                 raise ValueError('Invalid tool generation response')
             if delegate_tool_detection:

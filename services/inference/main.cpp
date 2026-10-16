@@ -1,4 +1,5 @@
 #include "tool_conversation.h"
+#include "conversation_stream.h"
 #include "fd_stream.h"
 #include "litert.h"
 #include "raw_query_detector.h"
@@ -18,6 +19,45 @@
 #include <vector>
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+
+// Keep callback state until after its conversation is deleted. A stream error
+// is terminal in the pinned SDK, but native close/cancellation may still be
+// unwinding its callback thread when the caller observes that error.
+struct ConversationStreamState {
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool done = false;
+  std::string error;
+  foresight::ConversationStreamMessage result;
+  std::ostream &output;
+  decltype(&litert_lm_stream_chunk_get_text) get_text;
+  decltype(&litert_lm_stream_chunk_get_error) get_error;
+  decltype(&litert_lm_stream_chunk_is_final) is_final;
+
+  ConversationStreamState(LiteRt &lm, std::ostream &stream)
+      : output(stream), get_text(LM(stream_chunk_get_text)),
+        get_error(LM(stream_chunk_get_error)), is_final(LM(stream_chunk_is_final)) {}
+
+  static void receive(void *data, const LiteRtLmStreamChunk *chunk) {
+    auto &state = *static_cast<ConversationStreamState *>(data);
+    std::lock_guard lock(state.mutex);
+    if (state.done) return;
+    try {
+      if (const char *error = state.get_error(chunk)) state.error = error;
+      if (const char *raw = state.get_text(chunk); raw && *raw && state.error.empty()) {
+        const auto value = foresight::parse_conversation_stream_chunk(raw);
+        state.result.append(value);
+        state.output << "delta " << value.dump() << std::endl;
+      }
+    } catch (const std::exception &error) {
+      state.error = error.what();
+    }
+    if (state.is_final(chunk) || !state.error.empty()) {
+      state.done = true;
+      state.changed.notify_all();
+    }
+  }
+};
 
 std::string sha256(std::istream &in) {
   auto ctx = handle(EVP_MD_CTX_new(), EVP_MD_CTX_free);
@@ -280,6 +320,7 @@ public:
         handle(LM(thinking_config_create)(), LM(thinking_config_delete));
     LM(thinking_config_set_enable_thinking)(thinking.get(), false);
     LM(conversation_config_set_thinking_config)(config.get(), thinking.get());
+    std::vector<std::unique_ptr<ConversationStreamState>> callback_states;
     auto conversation =
         handle(LM(conversation_create)(engine.get(), config.get()),
                LM(conversation_delete));
@@ -300,12 +341,18 @@ public:
     if (!tools.is_null()) {
       if (!stream) throw std::runtime_error("Tool conversation requires a protocol stream");
       return foresight::tool_conversation([&](const std::string &input) {
-        auto response = handle(LM(conversation_send_message)(
-            conversation.get(), input.c_str(), nullptr, args.get()),
-            LM(json_response_delete));
-        const char *raw = LM(json_response_get_string)(response.get());
-        if (!raw) throw std::runtime_error("Missing tool generation response");
-        return json::parse(raw);
+        auto owned = std::make_unique<ConversationStreamState>(lm, *stream);
+        auto *state = owned.get();
+        callback_states.push_back(std::move(owned));
+        if (LM(conversation_send_message_stream)(
+                conversation.get(), input.c_str(), nullptr, args.get(),
+                ConversationStreamState::receive, state))
+          throw std::runtime_error("Tool generation stream failed to start");
+        std::unique_lock lock(state->mutex);
+        state->changed.wait(lock, [&] { return state->done; });
+        if (!state->error.empty())
+          throw std::runtime_error("Tool generation stream failed: " + state->error);
+        return state->result.value();
       }, message, std::cin, *stream, tool_request.delegate_tool_detection);
     }
     auto decode = [](const char *raw) {

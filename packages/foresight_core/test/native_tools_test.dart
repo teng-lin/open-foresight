@@ -35,11 +35,21 @@ if prompt=='Reference question':
  assert hashlib.sha256(options['system_message'].encode()).hexdigest()=='71a908bf5b041da7cff1c7ad1d397a62b2fc3d433774bad7dcaf26a351762f78'
 else:
  assert options['system_message']=='Follow the requested task faithfully. Do not invent facts.'
- assert prompt in ['Question','Text fallback question','Turn limit question','Final turn question','History question'], 'System instructions leaked into user content'
+ assert prompt in ['Question','Text fallback question','Turn limit question','Final turn question','History question','Stream question','Invalid stream question'], 'System instructions leaked into user content'
 if prompt=='History question':
  assert options['messages']==[{'role':'user','content':[{'type':'text','text':'Previous query 中文'}]},{'role':'assistant','content':[{'type':'text','text':'Previous answer [Source:8]'}]}]
 assert tools[0]['name']=='google_search'
 assert options['delegate_tool_detection'] is True
+if prompt in ['Stream question','Invalid stream question']:
+ for text in ['中文 ', 'streamed answer.']:
+  print('delta '+json.dumps({'role':'assistant','content':[{'type':'text','text':text}]},ensure_ascii=False),flush=True)
+ answer={'role':'assistant','content':[{'type':'text','text':'中文 streamed answer.'}]}
+ print('model '+json.dumps(answer),flush=True)
+ assert json.loads(sys.stdin.readline())=={'finish':True}
+ print('answer '+json.dumps(answer),flush=True)
+ if prompt=='Invalid stream question':
+  print('delta '+json.dumps({'content':'after final'}),flush=True)
+ sys.exit(0)
 calls=[{'function':{'name':'google_search','arguments':{'query':'Current query'}}}]
 answer={'role':'assistant','content':[{'type':'text','text':'Answer [Source:1]'}]}
 if prompt=='Reference question':
@@ -80,6 +90,47 @@ print('answer '+json.dumps(answer),flush=True)
       tearDown(() async {
         runtime.close();
         await directory.delete(recursive: true);
+      });
+
+      test(
+        'stream previews arrive before the single authoritative answer',
+        () async {
+          final events = await runtime
+              .generateWithTools(
+                'stream-owner',
+                'Stream question',
+                tools: [referenceGoogleSearchTool()],
+                dispatcher: ReferenceToolDispatcher({
+                  'google_search': (_) => throw StateError('Unexpected search'),
+                }),
+              )
+              .toList();
+          expect(
+            events.where((e) => e['type'] == 'preview').map((e) => e['text']),
+            ['中文 ', '中文 streamed answer.'],
+          );
+          expect(
+            events.where((e) => e['type'] == 'delta').single['text'],
+            '中文 streamed answer.',
+          );
+          expect(events.last['status'], 'completed');
+        },
+      );
+
+      test('a worker cannot stream after its final answer', () async {
+        final events = await runtime
+            .generateWithTools(
+              'invalid-stream-owner',
+              'Invalid stream question',
+              tools: [referenceGoogleSearchTool()],
+              dispatcher: ReferenceToolDispatcher({}),
+            )
+            .toList();
+        expect(
+          events.where((e) => e['type'] == 'error').single['code'],
+          'tool_protocol',
+        );
+        expect(events.last['status'], 'failed');
       });
 
       test(

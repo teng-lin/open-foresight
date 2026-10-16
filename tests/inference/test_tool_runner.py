@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import types
+import threading
 import unittest
 from unittest.mock import patch
 
@@ -14,22 +15,44 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
+class StreamResponse:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+
 class Lib:
     def __init__(self, responses):
         self.responses = iter(responses)
         self.messages = []
-        self.deleted = 0
+        self.chunks = {}
+        self.next_pointer = 10
+        self.start_status = 0
 
-    def litert_lm_conversation_send_message(self, ptr, message, context, optional):
+    def litert_lm_conversation_send_message_stream(self, ptr, message, context, optional, callback, data):
         self.messages.append(json.loads(message))
-        self.response = next(self.responses)
-        return 7
+        if self.start_status:
+            return self.start_status
+        response = next(self.responses)
+        chunks = response.chunks if isinstance(response, StreamResponse) else [
+            (json.dumps(response, ensure_ascii=False), False, None), (None, True, None)]
+        for raw, final, error in chunks:
+            self.next_pointer += 1
+            self.chunks[self.next_pointer] = (raw, final, error)
+            callback(data, self.next_pointer)
+            # The worker must have copied bytes before callback ownership ends.
+            del self.chunks[self.next_pointer]
+        return 0
 
-    def litert_lm_json_response_get_string(self, ptr):
-        return json.dumps(self.response, ensure_ascii=False).encode()
+    def litert_lm_stream_chunk_get_text(self, pointer):
+        value = self.chunks[pointer][0]
+        return value.encode() if value is not None else None
 
-    def litert_lm_json_response_delete(self, ptr):
-        self.deleted += 1
+    def litert_lm_stream_chunk_is_final(self, pointer):
+        return self.chunks[pointer][1]
+
+    def litert_lm_stream_chunk_get_error(self, pointer):
+        value = self.chunks[pointer][2]
+        return value.encode() if value is not None else None
 
 
 class Conversation:
@@ -37,6 +60,7 @@ class Conversation:
         self._lib = Lib(responses)
         self._ptr = 1
         self.options = []
+        self.deleted_options = []
         self.closed = False
 
     def __enter__(self): return self
@@ -44,7 +68,7 @@ class Conversation:
     def _create_optional_args(self, **kwargs):
         self.options.append(kwargs)
         return 2
-    def _delete_optional_args(self, ptr): pass
+    def _delete_optional_args(self, ptr): self.deleted_options.append(ptr)
 
 
 class Engine:
@@ -137,6 +161,97 @@ class RawDetectorTest(unittest.TestCase):
 
 
 class ToolRunnerTest(unittest.TestCase):
+    def test_stream_emits_unicode_before_final_and_reads_control_only_after_final(self):
+        ready = threading.Event()
+        finished = threading.Event()
+
+        class LiveOutput(io.StringIO):
+            def flush(self):
+                if self.getvalue().startswith('delta '):
+                    ready.set()
+
+        class Control(io.StringIO):
+            def readline(self, *args):
+                self_test.assertTrue(finished.is_set())
+                return super().readline(*args)
+
+        class AsyncLib(Lib):
+            def litert_lm_conversation_send_message_stream(self, ptr, message, context, optional, callback, data):
+                self.messages.append(json.loads(message))
+                def emit(value, final=False, error=None):
+                    self.next_pointer += 1
+                    pointer = self.next_pointer
+                    self.chunks[pointer] = (json.dumps(value, ensure_ascii=False) if value is not None else None, final, error)
+                    callback(data, pointer)
+                    del self.chunks[pointer]
+                def produce():
+                    emit({'role': 'assistant', 'content': [{'type': 'text', 'text': '蓝🧭\n'}]})
+                    if not ready.wait(2):
+                        emit(None, True, 'Preview was buffered until completion')
+                        return
+                    emit({'content': [{'type': 'text', 'text': 'Complete'}]})
+                    finished.set()
+                    emit({'usage': {'output_tokens': 2}}, True)
+                self.thread = threading.Thread(target=produce)
+                self.thread.start()
+                return 0
+
+        self_test = self
+        engine = Engine([])
+        engine.conversation._lib = AsyncLib([])
+        output = LiveOutput()
+        try:
+            with patch('sys.stdin', Control('{"finish":true}\n')), contextlib.redirect_stdout(output):
+                runner.run_tool_conversation(engine, API, 'Question', {
+                    'tools': [{'name': 'google_search'}], 'system_message': 'Instructions',
+                    'delegate_tool_detection': True}, 256)
+        finally:
+            ready.set()
+            engine.conversation._lib.thread.join(timeout=3)
+        frames = [(line.split(' ', 1)[0], json.loads(line.split(' ', 1)[1])) for line in output.getvalue().splitlines()]
+        self.assertEqual([kind for kind, _ in frames], ['delta', 'delta', 'delta', 'model', 'answer'])
+        self.assertEqual(frames[-1][1], {
+            'role': 'assistant', 'content': [{'type': 'text', 'text': '蓝🧭\nComplete'}],
+            'usage': {'output_tokens': 2}})
+        self.assertEqual(engine.conversation.deleted_options, [2])
+        self.assertTrue(engine.conversation.closed)
+
+    def test_stream_errors_and_start_failure_release_options_without_final_answer(self):
+        for response, start_status, expected in [
+                (StreamResponse([(None, False, 'CANCELLED')]), 0, 'CANCELLED'),
+                ({'content': 'unused'}, 1, 'failed to start'),
+                (StreamResponse([('123', True, None)]), 0, 'Invalid streamed')]:
+            engine = Engine([response])
+            engine.conversation._lib.start_status = start_status
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex((RuntimeError, ValueError), expected):
+                    runner.run_tool_conversation(engine, API, 'Question', [{'name': 'google_search'}], 256)
+            self.assertNotIn('answer ', output.getvalue())
+            self.assertEqual(engine.conversation.deleted_options, [2])
+            self.assertTrue(engine.conversation.closed)
+            self.assertIsNotNone(engine.conversation._current_callback)
+
+    def test_stream_merges_channels_and_preserves_text_part_metadata_and_calls(self):
+        calls = [{'function': {'name': 'google_search', 'arguments': '{"query":"nested"}'}}]
+        response = StreamResponse([
+            (json.dumps({'role': 'assistant', 'content': [{'type': 'text', 'text': 'A', 'language': 'en'}], 'channels': {'analysis': 'first'}}), False, None),
+            (json.dumps({'content': [{'type': 'text', 'text': 'B', 'language': 'en'}], 'channels': {'analysis': ' second'}}), False, None),
+            (json.dumps({'tool_calls': calls}), True, None),
+        ])
+        final = {'role': 'assistant', 'content': 'Done'}
+        engine, frames = self.run_protocol([response, final], '{"role":"user","content":"Result"}\n')
+        self.assertEqual([kind for kind, _ in frames], ['delta', 'delta', 'delta', 'tool', 'delta', 'answer'])
+        self.assertEqual(frames[3][1], calls)
+        self.assertEqual(frames[-1][1], final)
+        self.assertEqual(len(engine.conversation.deleted_options), 2)
+        direct = Conversation([response])
+        with direct, contextlib.redirect_stdout(io.StringIO()):
+            assembled = runner.stream_tool_response(direct, API, {'role': 'user', 'content': 'Question'}, 256)
+        self.assertEqual(assembled['channels'], {'analysis': 'first second'})
+        self.assertEqual(assembled['content'], [{'type': 'text', 'text': 'AB', 'language': 'en'}])
+        self.assertEqual(assembled['tool_calls'], calls)
+
     def test_chat_input_does_not_reserve_the_entire_output_budget(self):
         engine = Engine([{'role': 'assistant', 'content': 'Short answer'}])
         engine.tokenize = lambda text: list(text)
@@ -188,7 +303,7 @@ class ToolRunnerTest(unittest.TestCase):
                 'tools': [{'name': 'google_search'}], 'system_message': 'Instructions',
                 'delegate_tool_detection': True}, 256)
         frames = [(line.split(' ', 1)[0], json.loads(line.split(' ', 1)[1])) for line in output.getvalue().splitlines()]
-        self.assertEqual(frames, [('model', value), ('model', answer), ('answer', answer)])
+        self.assertEqual(frames, [('delta', value), ('model', value), ('delta', answer), ('model', answer), ('answer', answer)])
         self.assertEqual(engine.conversation._lib.messages, [{'role': 'user', 'content': 'Question'}, message])
         self.assertEqual(engine.creations, 1)
         self.assertTrue(engine.conversation.closed)
@@ -232,22 +347,22 @@ class ToolRunnerTest(unittest.TestCase):
         reply = {'role': 'user', 'content': [{'type': 'text', 'text': 'Result 中文'}]}
         answer = {'role': 'assistant', 'content': [{'type': 'text', 'text': 'Answer [Source:1]'}]}
         engine, frames = self.run_protocol([{'tool_calls': calls}, answer], json.dumps(reply) + '\n')
-        self.assertEqual(frames, [('tool', calls), ('answer', answer)])
+        self.assertEqual(frames, [('delta', {'tool_calls': calls}), ('tool', calls), ('delta', answer), ('answer', answer)])
         self.assertEqual(engine.creations, 1)
         self.assertFalse(engine.config['automatic_tool_calling'])
         self.assertEqual(engine.config['tools'][0].get_tool_description(), {'type': 'function', 'function': {'name': 'google_search'}})
         self.assertEqual(engine.conversation._lib.messages, [{'role': 'user', 'content': 'Question'}, reply])
-        self.assertEqual(engine.conversation._lib.deleted, 2)
+        self.assertEqual(len(engine.conversation.deleted_options), 2)
         self.assertTrue(engine.conversation.closed)
 
     def test_twentieth_turn_does_not_execute_another_tool_batch(self):
         calls = [{'function': {'name': 'google_search', 'arguments': {'query': 'q'}}}]
         replies = (json.dumps({'role': 'user', 'content': 'result'}) + '\n') * 19
         engine, frames = self.run_protocol([{'tool_calls': calls}] * 20, replies)
-        self.assertEqual([kind for kind, _ in frames], ['tool'] * 19 + ['answer'])
+        self.assertEqual([kind for kind, _ in frames], ['delta', 'tool'] * 19 + ['delta', 'answer'])
         self.assertEqual(frames[-1][1], {'error': 'Max turns reached after tool call detection'})
         self.assertEqual(len(engine.conversation._lib.messages), 20)
-        self.assertEqual(engine.conversation._lib.deleted, 20)
+        self.assertEqual(len(engine.conversation.deleted_options), 20)
 
     def test_owner_disconnect_and_invalid_reply_close_conversation(self):
         for reply in ['', '{}\n']:
@@ -256,7 +371,7 @@ class ToolRunnerTest(unittest.TestCase):
                 with self.assertRaises((RuntimeError, ValueError)):
                     runner.run_tool_conversation(engine, API, 'Question', [{'name': 'google_search'}], 256)
             self.assertTrue(engine.conversation.closed)
-            self.assertEqual(engine.conversation._lib.deleted, 1)
+            self.assertEqual(len(engine.conversation.deleted_options), 1)
 
 
 if __name__ == '__main__': unittest.main()

@@ -1,5 +1,72 @@
 // Response transformations recovered from the original Foresight Dart snapshot.
 // See docs/reference-chat-response.md for addresses and evidence boundaries.
+import 'dart:convert';
+
+final _streamedTextField = RegExp(
+  r'"text":\s*"((?:[^"\\]|\\.|"(?!\s*(?:,\s*"[^"]+"\s*:|}|\s*$)))*)',
+);
+
+/// The original stream displays the last text field in JSON-like output, or
+/// sanitized plain text. Incomplete JSON/fence headers produce no update.
+String? provisionalReferenceChatResponse(String raw) {
+  var prefix = raw.trim();
+  var json = prefix.startsWith('{');
+  if (!json && prefix.startsWith('```')) {
+    prefix = prefix.substring(3).trim();
+    json = prefix.startsWith('{') || prefix.startsWith('json');
+    if (!json && 'json'.startsWith(prefix)) return null;
+  }
+  String text;
+  if (json) {
+    final matches = _streamedTextField.allMatches(raw);
+    if (matches.isEmpty) return null;
+    text = _unescapeStreamedString(matches.last[1]!);
+  } else {
+    text = raw;
+  }
+  final sanitized = sanitizeReferenceChatResponse(text);
+  return sanitized.isEmpty ? null : sanitized;
+}
+
+String _unescapeStreamedString(String value) {
+  var trailingSlashes = 0;
+  for (var i = value.length - 1; i >= 0 && value.codeUnitAt(i) == 92; i--) {
+    trailingSlashes++;
+  }
+  if (trailingSlashes.isOdd) value = value.substring(0, value.length - 1);
+  value = value.replaceAll(RegExp(r'\\u[0-9a-fA-F]{0,3}$'), '');
+  final controls = value.replaceAllMapped(
+    RegExp(r'[\x00-\x1F]'),
+    (m) => r'\u' + m[0]!.codeUnitAt(0).toRadixString(16).padLeft(4, '0'),
+  );
+  final escaped = StringBuffer();
+  var slashes = 0;
+  for (final unit in controls.codeUnits) {
+    if (unit == 92) {
+      slashes++;
+      escaped.writeCharCode(unit);
+    } else {
+      if (unit == 34 && slashes.isEven) escaped.write(r'\');
+      escaped.writeCharCode(unit);
+      slashes = 0;
+    }
+  }
+  try {
+    return jsonDecode('"$escaped"') as String;
+  } on FormatException {
+    return value
+        .replaceAllMapped(
+          RegExp(r'\\u([0-9a-fA-F]{4})'),
+          (m) => String.fromCharCode(int.parse(m[1]!, radix: 16)),
+        )
+        .replaceAll(r'\n', '\n')
+        .replaceAll(r'\r', '\r')
+        .replaceAll(r'\t', '\t')
+        .replaceAll(r'\"', '"')
+        .replaceAll(r'\\', r'\')
+        .replaceAllMapped(RegExp(r'\\(.)'), (m) => m[1]!);
+  }
+}
 
 final _numberBeforeWords = RegExp(
   r'\b(\d+)\b[\*_]*\s+[\*_]*([a-zA-Z\d]+(?:\s+[a-zA-Z\d]+){0,3})\b',

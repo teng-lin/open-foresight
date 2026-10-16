@@ -764,6 +764,15 @@ class Domain {
             );
       await for (final event in events) {
         ensureCurrent();
+        if (useWeb && event['type'] == 'preview') {
+          final preview = provisionalReferenceChatResponse(
+            event['text'] as String? ?? '',
+          );
+          if (preview != null) {
+            body = preview;
+            yield body;
+          }
+        }
         if (event['type'] == 'delta') {
           if (useWeb && event['response'] is Map<String, dynamic>) {
             modelResponse = event['response'] as Map<String, dynamic>;

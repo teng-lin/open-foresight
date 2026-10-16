@@ -46,6 +46,7 @@ class ToolRuntime extends NativeRuntime {
   final summaries = <String>[];
   final summaryIds = <String>[];
   final answerIds = <String>[];
+  final previews = <String>[];
   Future<String> Function(String)? summarize;
   @override
   Stream<Map<String, dynamic>> generateConversation(
@@ -89,6 +90,9 @@ class ToolRuntime extends NativeRuntime {
     expect(prompt, contains('[Current Date: '));
     expect(prompt, contains('Query: '));
     expect(tools.single['name'], 'google_search');
+    for (final text in previews) {
+      yield {'type': 'preview', 'text': text};
+    }
     final text = await answer(dispatcher);
     yield {
       'type': 'delta',
@@ -179,6 +183,36 @@ void main() {
       expect(citations.first['kind'], 'web');
       expect(citations.first['query'], 'second');
       expect(citations.first['excerpt'], 'title: C\nsnippet: c');
+    },
+  );
+  test(
+    'web previews render partial JSON without entering final history',
+    () async {
+      runtime.previews.addAll([
+        '{"analysis":"private"',
+        '{"analysis":"private","text":"Visible',
+        '{"analysis":"private","text":"Visible reply.',
+      ]);
+      runtime.answer = (_) async => 'Final reply.';
+      final emitted = <String>[];
+      await for (final body in domain.askWithWebInConversation(
+        'Stream a reply',
+        'desktop',
+        requestId: 'web-preview',
+      )) {
+        emitted.add(body);
+        if (body.startsWith('Visible')) {
+          expect(store.rows('SELECT * FROM answers'), isEmpty);
+        }
+      }
+      expect(
+        emitted,
+        containsAllInOrder(['Visible', 'Visible reply.', 'Final reply.']),
+      );
+      expect(emitted.any((value) => value.contains('private')), isFalse);
+      final saved = store.rows('SELECT * FROM answers').single;
+      expect(saved['body'], 'Final reply.');
+      expect(saved['model_response'], isNot(contains('Visible')));
     },
   );
   test(

@@ -2,6 +2,46 @@ import 'package:foresight_core/src/reference_chat_response.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('stream previews hide JSON headers and select the last text field', () {
+    expect(provisionalReferenceChatResponse('{"analysis":"private"'), isNull);
+    expect(provisionalReferenceChatResponse('```js'), isNull);
+    expect(
+      provisionalReferenceChatResponse('```json\n{"intent":"search"'),
+      isNull,
+    );
+    expect(
+      provisionalReferenceChatResponse('{"text":"First","text":"Second'),
+      'Second',
+    );
+    expect(
+      provisionalReferenceChatResponse('```\n{"text":"Visible'),
+      'Visible',
+    );
+    expect(
+      provisionalReferenceChatResponse(' Plain answer. '),
+      'Plain answer.',
+    );
+  });
+  test(
+    'stream previews tolerate split escapes, controls and unescaped quotes',
+    () {
+      expect(provisionalReferenceChatResponse(r'{"text":"Hello\'), 'Hello');
+      expect(provisionalReferenceChatResponse(r'{"text":"Hello\u00'), 'Hello');
+      expect(
+        provisionalReferenceChatResponse(r'{"text":"A\nB\u4e2d\u6587'),
+        'A\nB中文',
+      );
+      expect(provisionalReferenceChatResponse('{"text":"A\nB'), 'A\nB');
+      expect(
+        provisionalReferenceChatResponse('{"text":"Say "yes" please'),
+        'Say "yes" please',
+      );
+      expect(
+        provisionalReferenceChatResponse(r'{"text":"A\q B\nC\u0044'),
+        'Aq B\nCD',
+      );
+    },
+  );
   test('cleanup unwraps text envelopes and removes internal metadata', () {
     expect(
       sanitizeReferenceChatResponse(
