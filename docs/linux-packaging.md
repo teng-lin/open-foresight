@@ -17,8 +17,15 @@ Flutter, gRPC (including its protobuf submodule) and Whisper to full source
 commits. The modern protobuf toolchain is intentional: our authoritative
 descriptor uses Edition 2024, which older distro protoc packages cannot generate.
 The original descriptor and its presence/UTF-8 semantics are retained.
-Python is a build/test tool only; no Python interpreter or modules enter the
-application bundle. The reusable SDK retains its build-time Python environments
+The default native inference bundle uses Python only for build/test tooling.
+An explicitly supplied `tools/package.py --query-python-runtime PREFIX` can
+add a standalone Python >=3.12 runtime with pinned NumPy2.5.1 and
+SentencePiece0.2.1 for the reconstructed dedicated CPU query detector. This
+optional runtime is private and relocatable; its worker path and interpreter
+come from the bundle, with no automatic host-Python fallback. The three
+reconstructed worker modules and distribution notices are copied explicitly;
+original oracle code and model weights are excluded. A native-only bundle
+keeps dedicated-runtime setup unavailable until an explicit runtime is supplied. The reusable SDK retains its build-time Python environments
 and dependency locks, independently of the native inference runtime.
 The SDK (gRPC, Flutter, Python and Whisper) is a separate private GHCR image.
 Its tag hashes the SDK Dockerfile, CMake hook, dependency locks and Whisper builder;

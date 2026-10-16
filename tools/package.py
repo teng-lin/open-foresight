@@ -10,6 +10,7 @@ import subprocess
 from prepare_litert import LIBRARY_SHA256
 from prepare_onnx import LIBRARY_SHA256 as ONNX_LIBRARY_SHA256
 from app_version import read_version
+from query_worker_packaging import copy_worker as copy_query_worker, copy_runtime as copy_query_runtime
 from web_search_release import release_web_search_keys, shell_web_search_keys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,8 @@ def main():
     parser.add_argument('--revision', help='Source commit for exported trees without .git')
     parser.add_argument('--litert-library', type=Path, default=ROOT / 'build/lib/liblitert-lm.so', help='Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py')
     parser.add_argument('--onnx-library', type=Path, default=ROOT / 'build/lib/libonnxruntime.so', help='Pinned ONNX Runtime from tools/prepare_onnx.py')
+    parser.add_argument('--query-python-runtime', type=Path,
+                        help='Optional standalone Python >=3.12 prefix with NumPy2.5.1/SentencePiece0.2.1 for the dedicated CPU detector')
     parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
     parser.add_argument('--whisper-gpu-runtime', type=Path,
                         help='Statically linked Vulkan whisper-cli to bundle (host Vulkan loader required)')
@@ -72,6 +75,15 @@ def main():
     for component in ('protobuf-lite', 'esaxx', 'darts_clone', 'absl'):
         shutil.copy2(args.build / '_deps/sentencepiece-src/third_party' / component / 'LICENSE',
                      args.output / 'share/open-foresight' / ('sentencepiece-' + component + '-LICENSE'))
+    copy_query_worker(args.output / 'share/open-foresight/adapters')
+    if args.query_python_runtime:
+        copy_query_runtime(args.query_python_runtime, args.output / 'lib/query-python',
+                           args.output / 'share/open-foresight/licenses')
+        query_python = args.output / 'bin/query-python'
+        query_python.write_text('#!/bin/bash\nset -euo pipefail\n'
+            'task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)\n'
+            'exec "$task_bundle/lib/query-python/bin/python3" -I -B "$@"\n')
+        query_python.chmod(0o755)
     litert_runtime = {'kind': 'native', 'version': '0.18.0', 'runner': 'bin/foresight-model',
                       'library': 'lib/liblitert-lm.so', 'sha256': hashlib.sha256(args.litert_library.read_bytes()).hexdigest()}
     client = args.google_client
@@ -105,6 +117,7 @@ set -euo pipefail
 @WEB_SEARCH_RELEASE_ENV@
 task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LD_LIBRARY_PATH="$task_bundle/lib:$task_bundle/app/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export FORESIGHT_INSTALL_ROOT="$task_bundle"
 export FORESIGHT_SERVICE="$task_bundle/bin/foresight-service"
 export FORESIGHT_HELPER="$task_bundle/bin/ForesightHelper"
 export FORESIGHT_NATIVE="$task_bundle/lib/libforesight_native.so"
@@ -113,6 +126,10 @@ export FORESIGHT_LITERT_LIBRARY="$task_bundle/lib/liblitert-lm.so"
 export FORESIGHT_ONNX_LIBRARY="$task_bundle/lib/libonnxruntime.so"
 export FORESIGHT_LITERT_RUNNER="$task_bundle/bin/foresight-model"
 export FORESIGHT_LITERT_BACKEND="${FORESIGHT_LITERT_BACKEND:-@GENERATION_BACKEND@}"
+export FORESIGHT_QUERY_WORKER="$task_bundle/share/open-foresight/adapters/legacy_query_worker.py"
+if [[ -x "$task_bundle/bin/query-python" ]]; then
+  export FORESIGHT_LITERT_PYTHON="$task_bundle/bin/query-python"
+fi
 if [[ -x "$task_bundle/bin/whisper-cli-vulkan" ]]; then
   export FORESIGHT_WHISPER_RUNTIME="${FORESIGHT_WHISPER_RUNTIME:-$task_bundle/bin/whisper-cli-vulkan}"
   export FORESIGHT_WHISPER_BACKEND="${FORESIGHT_WHISPER_BACKEND:-gpu}"
@@ -156,6 +173,10 @@ esac
     manifest = {'build_id': f'open-foresight-{version}+{commit[:12]}', 'revision': commit,
                 'version': version, 'build_number': build_number,
                 'gemma_runtime': litert_runtime,
+                'query_detector_runtime': {'backend': 'legacy_query_cpu',
+                    'bundled': bool(args.query_python_runtime),
+                    'worker': 'share/open-foresight/adapters/legacy_query_worker.py',
+                    'python': 'bin/query-python' if args.query_python_runtime else None},
                 'embedding_compatibility_runtime': {'kind': 'native-onnx', 'version': '1.31.0', 'sha256': ONNX_LIBRARY_SHA256},
                 'generation_backend_default': args.generation_backend,
                 'whisper_runtime': 'vulkan' if args.whisper_gpu_runtime else 'registered',

@@ -10,6 +10,8 @@ import subprocess
 import sys
 
 from app_version import read_version
+from query_worker_packaging import (copy_worker as copy_query_worker,
+    copy_licenses as copy_query_licenses, inspect_runtime as inspect_query_runtime)
 from web_search_release import release_web_search_keys
 from macos_bundle import audit_dependencies, relocate_dependencies, run, sign_application
 
@@ -84,6 +86,7 @@ def copy_python(source, resources, values):
     notices = resources / 'licenses'
     notices.mkdir(exist_ok=True)
     shutil.copy2(lock, notices / lock.name)
+    copy_query_licenses(runtime, notices)
 
 
 def main(argv=None):
@@ -150,6 +153,8 @@ def main(argv=None):
     adapters.mkdir(exist_ok=True)
     for name in ('model_adapter.py', 'litert_embedding_adapter.py', 'litert_runner.py', 'grounded_generation.py'):
         shutil.copy2(ROOT / 'services/inference/macos' / name, adapters / name)
+    query_worker = copy_query_worker(adapters)
+    values['FORESIGHT_QUERY_WORKER'] = query_worker
     shutil.copy2(ROOT / 'services/inference/macos/foresight-model', adapters / 'foresight-model')
     values.update(FORESIGHT_MODEL_WORKER=adapters / 'foresight-model',
                   FORESIGHT_MODEL_ADAPTER=adapters / 'model_adapter.py',
@@ -197,6 +202,7 @@ def main(argv=None):
     if args.python_runtime:
         run(resources / 'adapters/litert-runner', '--check')
         run(resources / 'adapters/litert-python', '-I', adapters / 'litert_embedding_adapter.py', '--check')
+        inspect_query_runtime(resources / 'adapters/litert-python')
     notarized = False
     if args.notary_profile:
         submission = app.parent / (app.stem + '.notary.zip')
@@ -221,7 +227,9 @@ def main(argv=None):
               'architecture': 'arm64', 'minimum_macos': '15.0',
               'signing': 'ad-hoc-development' if args.identity == '-' else 'developer-id',
               'notarized': notarized, 'python_bundled': bool(args.python_runtime),
-              'whisper_bundled': bool(args.whisper_runtime), 'linkage': audit_dependencies(app)}
+              'whisper_bundled': bool(args.whisper_runtime),
+              'query_worker_runtime_bundled': bool(args.python_runtime),
+              'linkage': audit_dependencies(app)}
     # A report outside the sealed bundle avoids invalidating its signature.
     report_path = app.parent / (app.stem + '.manifest.json')
     report_path.write_text(json.dumps(report, indent=2) + '\n')
