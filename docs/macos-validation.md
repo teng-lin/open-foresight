@@ -20,6 +20,7 @@ Later packaging and integration changes are still under validation.
 | Check | Observed result | Scope / limits |
 | --- | --- | --- |
 | Mac native CTest | 5/5 passed | Helper contract, model worker lifetime, audio buffer/cancellation, native lifecycle, process identity; initial development build used newer Homebrew dependencies |
+| Mac native CTest with source SDK | 6/6 passed | Fresh `build/macos15`, arm64/15.0, system SQLite/zlib, pinned static gRPC dependencies, document parser included; no Homebrew runtime libraries |
 | Mac service subprocess suite | 10 passed, 1 UI opt-in skipped | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
 | Mac contract/grounding/migration suite | 17 passed, 9 subtests | Includes offline migration's actual open-profile guard |
 | Mach-O and installation tools | 29 passed | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral, locks, actual AOT source/graph persistence, and Swift document extraction |
@@ -35,6 +36,8 @@ Later packaging and integration changes are still under validation.
 | Linux prototype packaging and relocation at `bf22d50` | Passed | Release runner, 130-file folder bundle, paths with spaces, cwd `/`, native desktop/MCP shared owner, independent headless profile and note writes; same host glibc 2.44, no distro ABI/clean-machine or model-runtime claim |
 | AOT installation maintenance exclusion | Passed | Installer exclusive lock blocks startup before DB creation; two profile services coexist with shared locks and exclude replacement until both stop |
 | Standalone Python deployment metadata | 19 Mach-O files checked; none above 15.0 | Full relocated bundle execution and signing still separate |
+| Complete relocated development app | Passed MCP-first and desktop-first | Minimal HOME/PATH/profile environment, paths with spaces, two MCP clients, shared AOT service, notes/source revisions/labels/graph persistence, native PDF/RTF extraction, maintenance exclusion; desktop process termination tested, actual window-close/reopen still separate |
+| Real models using bundled runtime paths | Passed | Full Gemma GPU grounded/citation/cancellation/reuse workflow in 73 s, actual EmbeddingGemma GPU retrieval, and bundled Whisper JFK transcription; outer Flutter test harness remains a development tool |
 
 ## Pinned model probes
 
@@ -65,9 +68,10 @@ include `tools/test_gemma_models.py` and the native/service test suites.
 
 ## Outstanding acceptance evidence
 
-The source-built target-15 SDK and complete relocated bundle are being validated.
-Installed runtime, imports, desktop-first ownership, and update tests must pass
-before the packaging phase is merged. The separate physical/release gates remain:
+The source-built target-15 SDK and initial complete relocated development bundle
+pass the checks above. Final onboarding, system-audio permission actions, and
+atomic idle-only upgrade changes require a fresh assembled-app run before the
+packaging phase is merged. The separate physical/release gates remain:
 
 - Developer ID signing, notarization, stapling, and Gatekeeper assessment.
 - Signed installed-service microphone/system capture attribution, desktop-first
