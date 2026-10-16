@@ -22,7 +22,89 @@ int main(int argc, char** argv) {
       (unsigned long)(dart::UntaggedObject::ToAddr(dart::Bool::True().ptr()->untag()) - dart::UntaggedObject::ToAddr(dart::Object::null()->untag())),
       (unsigned long)(dart::UntaggedObject::ToAddr(dart::Bool::False().ptr()->untag()) - dart::UntaggedObject::ToAddr(dart::Object::null()->untag())));
     std::printf("POOL_LENGTH %ld\n",static_cast<long>(pool.Length()));
-    for (intptr_t pp : {30668,30669,30672,28,30682,30683,30684,30685,30686,30687,8915,14907,21994,21998,9198,255,5212,508,5255,28510,19633,12416,18673,13325,14763,9735,14018,569,570,571,572,28443,28495,28497,28498,28499,28500,13185,1220,12673,12592,4121,7856,1188,19653,19657,10619,1207,13214,28511,30736,30737,30738,30739,30740,30741,30742,30743,30744,30745,30746,30747,30748,30749,30750,30751,30752,30753,30754,30755,30756,30757,30758,30759,30760,30761,30762,30763,30764,30765,30766,30767,30768,30769,30770,30771,30772,30773,30774,30775,30776,30777,30778,30779,30780,30781,30782,30783,30784,30785,30786,30787,30788,30789,30790,30791,30792,30793,30794,30795,30796,30797,30798,30799,30800,30801,30802,30803,30804,30805,30806,30807,30808,30809,30810,30811,30812,30813,30814,30815,30816,30817,30818,30819,30820,30821,30822,30823,30824,30825,30826,21993,21995,5213,1539,13184,11905,25010,5033,26962,30858,30827,30828,30829,30830,30831,30832,30833,30834,30835,30836,30837,30838,30839,1168,6379,6381,530,12651,12652,12653,12654,12655,12656,12657,12658,12659,12660,12661,12662,12663,12664,12665,12666,12667,12668,12669,12670,12671,12672,12673,12674,12675,12676,12677,12678,12679,12680,12681,12682,12683,12684,12685,12686,12687,12688,12689,12690,12691,12692,12693,12694,12695,12696,12697,12698,12699,12700,12701,12702,12703,12704,12705,31008,30099,30359,30611,30612,30613,30614,30731,1211,531,30991,30715,30716,30723,30724,30123,30598,31052,30688,30689,26977,1109,7976,12640,12600,12601,12602,12603,12604,12605,12606,12607,12608,12609,12610,12611,12612,12613,12614,12621,12622,12625,12626,12627,12628,12629,12630,12631,12634,12635,12636,12637,12638,12639,12641,12642,12643,12644,12645,4632,26969,4563,31045,9969,66,16,4659,10206,31046,31047,31049,4777,4924,4920,5265,8324,9779,3012,5279,10495,9018,8511,9018,9245,23909,23910,23911,23918,23926,23929,26597,26598,26599,26600,26601,26602,26604,26605,26606,2765,21048,9836,9089,4620,9663,82,20693,5845,26972,5940,3656,492,4518,4523,27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921,11620,21079,26976,26978,26981,26989,26990,26995,26996,27001,27002,27003,27004,27424}) {
+    // These two public enum candidates expose only their own value/name.
+    // A non-enum (for example a values map) is deliberately not traversed.
+    for (intptr_t pp : {13169,17020}) {
+      const auto index = dart::ObjectPool::IndexFromOffset(pp * 8 - dart::kHeapObjectTag);
+      if (index < 0 || index >= pool.Length() ||
+          pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) continue;
+      const auto& value = dart::Object::Handle(zone, pool.ObjectAt(index));
+      std::printf("PUBLIC_DOWNLOAD_ENUM_PP[%ld] CID[%ld]\n", (long)pp, (long)value.GetClassId());
+      if (!value.IsInstance()) continue;
+      const auto& cls = dart::Class::Handle(zone, dart::Instance::Cast(value).clazz());
+      const auto& name = dart::String::Handle(zone, cls.Name());
+      if (std::strstr(name.ToCString(), "FallbackMode") == nullptr ||
+          cls.host_instance_size() < 24) continue;
+      std::printf("PUBLIC_DOWNLOAD_ENUM_PP[%ld] CLASS[%s]\n", (long)pp, name.ToCString());
+      const auto bitmap = isolate->group()->class_table()->GetUnboxedFieldsMapAt(value.GetClassId());
+      for (intptr_t offset : {8,16}) {
+        const auto address = dart::UntaggedObject::ToAddr(value.ptr()->untag()) + offset;
+        if (bitmap.Get(offset / 8)) {
+          int64_t number;
+          std::memcpy(&number, reinterpret_cast<void*>(address), sizeof(number));
+          std::printf("PUBLIC_DOWNLOAD_ENUM_PP[%ld] OFFSET[%ld] VALUE[%lld]\n", (long)pp, (long)offset, (long long)number);
+        } else {
+          dart::ObjectPtr pointer;
+          std::memcpy(&pointer, reinterpret_cast<void*>(address), sizeof(pointer));
+          const auto& field = dart::Object::Handle(zone, pointer);
+          if (field.IsSmi() || field.IsMint() || field.IsString())
+            std::printf("PUBLIC_DOWNLOAD_ENUM_PP[%ld] OFFSET[%ld] VALUE[%s]\n", (long)pp, (long)offset, field.ToCString());
+        }
+      }
+    }
+    // Selected public download URL fragments/schema labels only. Never inspect
+    // credential PP9019 or any entire application configuration map.
+    for (intptr_t pp : {13106,57,483,5327,1553,4523,13124,13125,13126,5320,1229,4714,4687,17024,17025,16982,17026,17027,13087,13090,13176,17017,17018,17019,10483,17021,2349}) {
+      const auto index = dart::ObjectPool::IndexFromOffset(pp * 8 - dart::kHeapObjectTag);
+      if (index < 0 || index >= pool.Length()) continue;
+      if (pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) {
+        std::printf("PUBLIC_DOWNLOAD_PP[%ld] IMMEDIATE[0x%lx]\n", (long)pp,
+          (unsigned long)pool.RawValueAt(index));
+        continue;
+      }
+      const auto& value = dart::Object::Handle(zone, pool.ObjectAt(index));
+      if (value.IsString() || value.IsSmi() || value.IsMint() || value.IsDouble() || value.IsBool())
+        std::printf("PUBLIC_DOWNLOAD_PP[%ld] CID[%ld] VALUE[%s]\n", (long)pp,
+          (long)value.GetClassId(), value.ToCString());
+      else
+        std::printf("PUBLIC_DOWNLOAD_PP[%ld] CID[%ld] NONSCALAR_OMITTED\n", (long)pp,
+          (long)value.GetClassId());
+      if (pp == 13087 && value.IsInstance()) {
+        const auto& cls = dart::Class::Handle(zone, dart::Instance::Cast(value).clazz());
+        const auto& name = dart::String::Handle(zone, cls.Name());
+        if (std::strcmp(name.ToCString(), "Duration") == 0 && cls.host_instance_size() >= 16) {
+          const auto bitmap = isolate->group()->class_table()->GetUnboxedFieldsMapAt(value.GetClassId());
+          if (bitmap.Get(1)) {
+            int64_t microseconds;
+            std::memcpy(&microseconds, reinterpret_cast<void*>(dart::UntaggedObject::ToAddr(value.ptr()->untag()) + 8), sizeof(microseconds));
+            std::printf("PUBLIC_DOWNLOAD_DURATION_PP[13087] MICROSECONDS[%lld]\n", (long long)microseconds);
+          }
+        }
+        if (value.GetClassId() == 315 && std::strcmp(name.ToCString(), "RetryOptions") == 0 && cls.host_instance_size() >= 32) {
+          const auto bitmap = isolate->group()->class_table()->GetUnboxedFieldsMapAt(value.GetClassId());
+          for (intptr_t offset : {8, 24}) {
+            if (bitmap.Get(offset / 8)) continue;
+            dart::ObjectPtr raw;
+            std::memcpy(&raw, reinterpret_cast<void*>(dart::UntaggedObject::ToAddr(value.ptr()->untag()) + offset), sizeof(raw));
+            const auto& field = dart::Object::Handle(zone, raw);
+            if (field.IsString() || field.IsSmi() || field.IsMint() || field.IsDouble() || field.IsBool()) {
+              std::printf("PUBLIC_DOWNLOAD_RETRY_PP[13087] OFFSET[%ld] VALUE[%s]\n", (long)offset, field.ToCString());
+            } else if (field.IsInstance()) {
+              const auto& field_cls = dart::Class::Handle(zone, dart::Instance::Cast(field).clazz());
+              const auto& field_name = dart::String::Handle(zone, field_cls.Name());
+              if (std::strcmp(field_name.ToCString(), "Duration") != 0 || field_cls.host_instance_size() < 16) continue;
+              const auto field_bitmap = isolate->group()->class_table()->GetUnboxedFieldsMapAt(field.GetClassId());
+              if (!field_bitmap.Get(1)) continue;
+              int64_t microseconds;
+              std::memcpy(&microseconds, reinterpret_cast<void*>(dart::UntaggedObject::ToAddr(field.ptr()->untag()) + 8), sizeof(microseconds));
+              std::printf("PUBLIC_DOWNLOAD_RETRY_PP[13087] OFFSET[%ld] DURATION_MICROSECONDS[%lld]\n", (long)offset, (long long)microseconds);
+            }
+          }
+        }
+      }
+    }
+
+    for (intptr_t pp : {21086,21087,21088,1129,30668,30669,30672,28,30682,30683,30684,30685,30686,30687,8915,14907,21994,21998,9198,255,5212,508,5255,28510,19633,12416,18673,13325,14763,9735,14018,569,570,571,572,28443,28495,28497,28498,28499,28500,13185,1220,12673,12592,4121,7856,1188,19653,19657,10619,1207,13214,28511,30736,30737,30738,30739,30740,30741,30742,30743,30744,30745,30746,30747,30748,30749,30750,30751,30752,30753,30754,30755,30756,30757,30758,30759,30760,30761,30762,30763,30764,30765,30766,30767,30768,30769,30770,30771,30772,30773,30774,30775,30776,30777,30778,30779,30780,30781,30782,30783,30784,30785,30786,30787,30788,30789,30790,30791,30792,30793,30794,30795,30796,30797,30798,30799,30800,30801,30802,30803,30804,30805,30806,30807,30808,30809,30810,30811,30812,30813,30814,30815,30816,30817,30818,30819,30820,30821,30822,30823,30824,30825,30826,21993,21995,5213,1539,13184,11905,25010,5033,26962,30858,30827,30828,30829,30830,30831,30832,30833,30834,30835,30836,30837,30838,30839,1168,6379,6381,530,12651,12652,12653,12654,12655,12656,12657,12658,12659,12660,12661,12662,12663,12664,12665,12666,12667,12668,12669,12670,12671,12672,12673,12674,12675,12676,12677,12678,12679,12680,12681,12682,12683,12684,12685,12686,12687,12688,12689,12690,12691,12692,12693,12694,12695,12696,12697,12698,12699,12700,12701,12702,12703,12704,12705,31008,30099,30359,30611,30612,30613,30614,30731,1211,531,30991,30715,30716,30723,30724,30123,30598,31052,30688,30689,26977,1109,7976,12640,12600,12601,12602,12603,12604,12605,12606,12607,12608,12609,12610,12611,12612,12613,12614,12621,12622,12625,12626,12627,12628,12629,12630,12631,12634,12635,12636,12637,12638,12639,12641,12642,12643,12644,12645,4632,26969,4563,31045,9969,66,16,4659,10206,31046,31047,31049,4777,4924,4920,5265,8324,9779,3012,5279,10495,9018,8511,9018,9245,23909,23910,23911,23918,23926,23929,26597,26598,26599,26600,26601,26602,26604,26605,26606,2765,21048,9836,9089,4620,9663,82,20693,5845,26972,5940,3656,492,4518,4523,27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921,11620,21079,26976,26978,26981,26989,26990,26995,26996,27001,27002,27003,27004,27424}) {
       const auto offset = pp * 8;
       const auto index = dart::ObjectPool::IndexFromOffset(offset - dart::kHeapObjectTag);
       if (pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) {
@@ -104,7 +186,7 @@ int main(int argc, char** argv) {
         for (intptr_t j=0;j<str.Length();j++) std::printf(" %04x",str.CharAt(j));
         std::printf("\n");
       }
-      if ((pp == 11620 || (pp >= 28497 && pp <= 28500)) && obj.IsInstance()) {
+      if ((pp == 1129 || pp == 11620 || (pp >= 28497 && pp <= 28500)) && obj.IsInstance()) {
         const auto raw = dart::UntaggedObject::ToAddr(obj.ptr()->untag());
         int64_t stored; std::memcpy(&stored,reinterpret_cast<void*>(raw+8),sizeof(stored));
         const auto bitmap = isolate->group()->class_table()->GetUnboxedFieldsMapAt(obj.GetClassId());
@@ -185,6 +267,17 @@ int main(int argc, char** argv) {
       if (!class_table->HasValidClassAt(cid)) continue;
       const auto& cls = dart::Class::Handle(zone, class_table->At(cid));
       const auto& name = dart::String::Handle(zone, cls.Name());
+      if (cid == 58 || cid == 315 || cid == 1517 || cid == 1518 || cid == 1519 || cid == 5529 || cid == 6128)
+        std::printf("PUBLIC_DOWNLOAD_CLASS CID[%ld] NAME[%s]\n", (long)cid, name.ToCString());
+      if (cid == 315 && std::strcmp(name.ToCString(), "RetryOptions") == 0) {
+        const auto& fields = dart::Array::Handle(zone, cls.fields());
+        for (intptr_t j=0; j<fields.Length(); j++) {
+          const auto& field = dart::Field::Handle(zone, dart::Field::RawCast(fields.At(j)));
+          if (!field.is_static())
+            std::printf("PUBLIC_DOWNLOAD_RETRY_FIELD OFFSET[%ld] NAME[%s]\n",
+              (long)field.HostOffset(), dart::String::Handle(zone, field.name()).ToCString());
+        }
+      }
       if (std::strcmp(name.ToCString(), "Note") == 0 ||
           std::strcmp(name.ToCString(), "CalendarEvent") == 0) {
         const auto& fields = dart::Array::Handle(zone, cls.fields());

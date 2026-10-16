@@ -5,6 +5,7 @@ export 'src/native.dart';
 export 'src/recording.dart';
 export 'src/meeting_speakers.dart';
 export 'src/model_setup.dart';
+export 'src/model_acquisition.dart';
 export 'src/speech_models.dart';
 export 'src/gemma_download.dart';
 export 'src/google_auth.dart';

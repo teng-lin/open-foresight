@@ -89,3 +89,68 @@ final $typed_data.Uint8List fetchExternalWebsiteResponseDescriptor = $convert.ba
     'djb250ZW50GAMgASgJUgdjb250ZW50EhsKCW1pbWVfdHlwZRgFIAEoCVIIbWltZVR5cGUSGAoH'
     'c3VtbWFyeRgHIAEoCVIHc3VtbWFyeRI4ChhzdW1tYXJ5X2NvbmZpZGVuY2Vfc2NvcmUYCCABKA'
     'FSFnN1bW1hcnlDb25maWRlbmNlU2NvcmVKBAgBEAJKBAgEEAVKBAgGEAc=');
+
+@$core.Deprecated('Use getSharedConfigRequestDescriptor instead')
+const GetSharedConfigRequest$json = {
+  '1': 'GetSharedConfigRequest',
+  '2': [
+    {'1': 'app_version', '3': 1, '4': 1, '5': 9, '10': 'appVersion'},
+    {'1': 'platform', '3': 2, '4': 1, '5': 9, '10': 'platform'},
+    {'1': 'fallback_mode', '3': 3, '4': 1, '5': 5, '10': 'fallbackMode'},
+  ],
+};
+
+/// Descriptor for `GetSharedConfigRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getSharedConfigRequestDescriptor = $convert.base64Decode(
+    'ChZHZXRTaGFyZWRDb25maWdSZXF1ZXN0Eh8KC2FwcF92ZXJzaW9uGAEgASgJUgphcHBWZXJzaW'
+    '9uEhoKCHBsYXRmb3JtGAIgASgJUghwbGF0Zm9ybRIjCg1mYWxsYmFja19tb2RlGAMgASgFUgxm'
+    'YWxsYmFja01vZGU=');
+
+@$core.Deprecated('Use onDeviceModelMetadataDescriptor instead')
+const OnDeviceModelMetadata$json = {
+  '1': 'OnDeviceModelMetadata',
+  '2': [
+    {'1': 'model_type', '3': 1, '4': 1, '5': 5, '10': 'modelType'},
+    {'1': 'name', '3': 2, '4': 1, '5': 9, '10': 'name'},
+    {'1': 'version', '3': 3, '4': 1, '5': 9, '10': 'version'},
+    {'1': 'blob_id', '3': 6, '4': 1, '5': 9, '10': 'blobId'},
+    {'1': 'size', '3': 8, '4': 1, '5': 3, '10': 'size'},
+  ],
+  '9': [
+    {'1': 4, '2': 5},
+    {'1': 5, '2': 6},
+    {'1': 7, '2': 8},
+    {'1': 9, '2': 14},
+  ],
+};
+
+/// Descriptor for `OnDeviceModelMetadata`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List onDeviceModelMetadataDescriptor = $convert.base64Decode(
+    'ChVPbkRldmljZU1vZGVsTWV0YWRhdGESHQoKbW9kZWxfdHlwZRgBIAEoBVIJbW9kZWxUeXBlEh'
+    'IKBG5hbWUYAiABKAlSBG5hbWUSGAoHdmVyc2lvbhgDIAEoCVIHdmVyc2lvbhIXCgdibG9iX2lk'
+    'GAYgASgJUgZibG9iSWQSEgoEc2l6ZRgIIAEoA1IEc2l6ZUoECAQQBUoECAUQBkoECAcQCEoECA'
+    'kQDg==');
+
+@$core.Deprecated('Use foresightSharedConfigDescriptor instead')
+const ForesightSharedConfig$json = {
+  '1': 'ForesightSharedConfig',
+  '2': [
+    {
+      '1': 'on_device_model_metadatas',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.ai_edge.foresight.service.OnDeviceModelMetadata',
+      '10': 'onDeviceModelMetadatas'
+    },
+  ],
+  '9': [
+    {'1': 2, '2': 6},
+  ],
+};
+
+/// Descriptor for `ForesightSharedConfig`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List foresightSharedConfigDescriptor = $convert.base64Decode(
+    'ChVGb3Jlc2lnaHRTaGFyZWRDb25maWcSawoZb25fZGV2aWNlX21vZGVsX21ldGFkYXRhcxgBIA'
+    'MoCzIwLmFpX2VkZ2UuZm9yZXNpZ2h0LnNlcnZpY2UuT25EZXZpY2VNb2RlbE1ldGFkYXRhUhZv'
+    'bkRldmljZU1vZGVsTWV0YWRhdGFzSgQIAhAG');

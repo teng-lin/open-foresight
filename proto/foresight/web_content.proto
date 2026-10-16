@@ -1,5 +1,5 @@
 // Reconstructed from the matching Foresight Dart BuilderInfo and RPC method.
-// Only the inspected web-content messages/method are included here.
+// Only the inspected web-content and model-acquisition messages/methods are included.
 syntax = "proto2";
 package ai_edge.foresight.service;
 
@@ -26,6 +26,31 @@ message FetchExternalWebsiteResponse {
   optional double summary_confidence_score = 8;
 }
 
+message GetSharedConfigRequest {
+  optional string app_version = 1;
+  optional string platform = 2;
+  // Enum wire value 1 is FALLBACK_CLOSEST_LOWER. Other names are not recovered.
+  optional int32 fallback_mode = 3;
+}
+
+message OnDeviceModelMetadata {
+  // Enum wire value 4 is MODEL_TYPE_QUERY_DETECTOR. Preserve unknown variants.
+  optional int32 model_type = 1;
+  optional string name = 2;
+  optional string version = 3;
+  reserved 4, 5;
+  optional string blob_id = 6;
+  reserved 7;
+  optional int64 size = 8;
+  reserved 9 to 13;
+}
+
+message ForesightSharedConfig {
+  repeated OnDeviceModelMetadata on_device_model_metadatas = 1;
+  reserved 2 to 5;
+}
+
 service ForesightService {
   rpc FetchExternalWebsite(FetchExternalWebsiteRequest) returns (FetchExternalWebsiteResponse);
+  rpc GetSharedConfig(GetSharedConfigRequest) returns (ForesightSharedConfig);
 }

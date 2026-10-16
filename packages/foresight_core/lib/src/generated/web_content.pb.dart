@@ -12,6 +12,7 @@
 
 import 'dart:core' as $core;
 
+import 'package:fixnum/fixnum.dart' as $fixnum;
 import 'package:protobuf/protobuf.dart' as $pb;
 
 export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
@@ -264,6 +265,254 @@ class FetchExternalWebsiteResponse extends $pb.GeneratedMessage {
   $core.bool hasSummaryConfidenceScore() => $_has(4);
   @$pb.TagNumber(8)
   void clearSummaryConfidenceScore() => $_clearField(8);
+}
+
+class GetSharedConfigRequest extends $pb.GeneratedMessage {
+  factory GetSharedConfigRequest({
+    $core.String? appVersion,
+    $core.String? platform,
+    $core.int? fallbackMode,
+  }) {
+    final result = create();
+    if (appVersion != null) result.appVersion = appVersion;
+    if (platform != null) result.platform = platform;
+    if (fallbackMode != null) result.fallbackMode = fallbackMode;
+    return result;
+  }
+
+  GetSharedConfigRequest._();
+
+  factory GetSharedConfigRequest.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory GetSharedConfigRequest.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'GetSharedConfigRequest',
+      package: const $pb.PackageName(
+          _omitMessageNames ? '' : 'ai_edge.foresight.service'),
+      createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'appVersion')
+    ..aOS(2, _omitFieldNames ? '' : 'platform')
+    ..a<$core.int>(3, _omitFieldNames ? '' : 'fallbackMode', $pb.PbFieldType.O3)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetSharedConfigRequest clone() =>
+      GetSharedConfigRequest()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  GetSharedConfigRequest copyWith(
+          void Function(GetSharedConfigRequest) updates) =>
+      super.copyWith((message) => updates(message as GetSharedConfigRequest))
+          as GetSharedConfigRequest;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static GetSharedConfigRequest create() => GetSharedConfigRequest._();
+  @$core.override
+  GetSharedConfigRequest createEmptyInstance() => create();
+  static $pb.PbList<GetSharedConfigRequest> createRepeated() =>
+      $pb.PbList<GetSharedConfigRequest>();
+  @$core.pragma('dart2js:noInline')
+  static GetSharedConfigRequest getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<GetSharedConfigRequest>(create);
+  static GetSharedConfigRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get appVersion => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set appVersion($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasAppVersion() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearAppVersion() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get platform => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set platform($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasPlatform() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearPlatform() => $_clearField(2);
+
+  /// Enum wire value 1 is FALLBACK_CLOSEST_LOWER. Other names are not recovered.
+  @$pb.TagNumber(3)
+  $core.int get fallbackMode => $_getIZ(2);
+  @$pb.TagNumber(3)
+  set fallbackMode($core.int value) => $_setSignedInt32(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasFallbackMode() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearFallbackMode() => $_clearField(3);
+}
+
+class OnDeviceModelMetadata extends $pb.GeneratedMessage {
+  factory OnDeviceModelMetadata({
+    $core.int? modelType,
+    $core.String? name,
+    $core.String? version,
+    $core.String? blobId,
+    $fixnum.Int64? size,
+  }) {
+    final result = create();
+    if (modelType != null) result.modelType = modelType;
+    if (name != null) result.name = name;
+    if (version != null) result.version = version;
+    if (blobId != null) result.blobId = blobId;
+    if (size != null) result.size = size;
+    return result;
+  }
+
+  OnDeviceModelMetadata._();
+
+  factory OnDeviceModelMetadata.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory OnDeviceModelMetadata.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'OnDeviceModelMetadata',
+      package: const $pb.PackageName(
+          _omitMessageNames ? '' : 'ai_edge.foresight.service'),
+      createEmptyInstance: create)
+    ..a<$core.int>(1, _omitFieldNames ? '' : 'modelType', $pb.PbFieldType.O3)
+    ..aOS(2, _omitFieldNames ? '' : 'name')
+    ..aOS(3, _omitFieldNames ? '' : 'version')
+    ..aOS(6, _omitFieldNames ? '' : 'blobId')
+    ..aInt64(8, _omitFieldNames ? '' : 'size')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  OnDeviceModelMetadata clone() =>
+      OnDeviceModelMetadata()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  OnDeviceModelMetadata copyWith(
+          void Function(OnDeviceModelMetadata) updates) =>
+      super.copyWith((message) => updates(message as OnDeviceModelMetadata))
+          as OnDeviceModelMetadata;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static OnDeviceModelMetadata create() => OnDeviceModelMetadata._();
+  @$core.override
+  OnDeviceModelMetadata createEmptyInstance() => create();
+  static $pb.PbList<OnDeviceModelMetadata> createRepeated() =>
+      $pb.PbList<OnDeviceModelMetadata>();
+  @$core.pragma('dart2js:noInline')
+  static OnDeviceModelMetadata getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<OnDeviceModelMetadata>(create);
+  static OnDeviceModelMetadata? _defaultInstance;
+
+  /// Enum wire value 4 is MODEL_TYPE_QUERY_DETECTOR. Preserve unknown variants.
+  @$pb.TagNumber(1)
+  $core.int get modelType => $_getIZ(0);
+  @$pb.TagNumber(1)
+  set modelType($core.int value) => $_setSignedInt32(0, value);
+  @$pb.TagNumber(1)
+  $core.bool hasModelType() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearModelType() => $_clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.String get name => $_getSZ(1);
+  @$pb.TagNumber(2)
+  set name($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(2)
+  $core.bool hasName() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearName() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get version => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set version($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(3)
+  $core.bool hasVersion() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearVersion() => $_clearField(3);
+
+  @$pb.TagNumber(6)
+  $core.String get blobId => $_getSZ(3);
+  @$pb.TagNumber(6)
+  set blobId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(6)
+  $core.bool hasBlobId() => $_has(3);
+  @$pb.TagNumber(6)
+  void clearBlobId() => $_clearField(6);
+
+  @$pb.TagNumber(8)
+  $fixnum.Int64 get size => $_getI64(4);
+  @$pb.TagNumber(8)
+  set size($fixnum.Int64 value) => $_setInt64(4, value);
+  @$pb.TagNumber(8)
+  $core.bool hasSize() => $_has(4);
+  @$pb.TagNumber(8)
+  void clearSize() => $_clearField(8);
+}
+
+class ForesightSharedConfig extends $pb.GeneratedMessage {
+  factory ForesightSharedConfig({
+    $core.Iterable<OnDeviceModelMetadata>? onDeviceModelMetadatas,
+  }) {
+    final result = create();
+    if (onDeviceModelMetadatas != null)
+      result.onDeviceModelMetadatas.addAll(onDeviceModelMetadatas);
+    return result;
+  }
+
+  ForesightSharedConfig._();
+
+  factory ForesightSharedConfig.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ForesightSharedConfig.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ForesightSharedConfig',
+      package: const $pb.PackageName(
+          _omitMessageNames ? '' : 'ai_edge.foresight.service'),
+      createEmptyInstance: create)
+    ..pc<OnDeviceModelMetadata>(
+        1, _omitFieldNames ? '' : 'onDeviceModelMetadatas', $pb.PbFieldType.PM,
+        subBuilder: OnDeviceModelMetadata.create)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ForesightSharedConfig clone() =>
+      ForesightSharedConfig()..mergeFromMessage(this);
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ForesightSharedConfig copyWith(
+          void Function(ForesightSharedConfig) updates) =>
+      super.copyWith((message) => updates(message as ForesightSharedConfig))
+          as ForesightSharedConfig;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ForesightSharedConfig create() => ForesightSharedConfig._();
+  @$core.override
+  ForesightSharedConfig createEmptyInstance() => create();
+  static $pb.PbList<ForesightSharedConfig> createRepeated() =>
+      $pb.PbList<ForesightSharedConfig>();
+  @$core.pragma('dart2js:noInline')
+  static ForesightSharedConfig getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ForesightSharedConfig>(create);
+  static ForesightSharedConfig? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $pb.PbList<OnDeviceModelMetadata> get onDeviceModelMetadatas => $_getList(0);
 }
 
 const $core.bool _omitFieldNames =

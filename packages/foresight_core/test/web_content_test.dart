@@ -12,6 +12,12 @@ List<int> hex(String text) => [
 ];
 
 class Fixture extends ForesightServiceBase {
+  @override
+  Future<ForesightSharedConfig> getSharedConfig(
+    ServiceCall call,
+    GetSharedConfigRequest request,
+  ) async => throw GrpcError.unimplemented();
+
   final requests = <FetchExternalWebsiteRequest>[];
   final credentials = <String?>[];
   late Future<FetchExternalWebsiteResponse> Function(

@@ -39,6 +39,13 @@ class ForesightServiceClient extends $grpc.Client {
     return $createUnaryCall(_$fetchExternalWebsite, request, options: options);
   }
 
+  $grpc.ResponseFuture<$0.ForesightSharedConfig> getSharedConfig(
+    $0.GetSharedConfigRequest request, {
+    $grpc.CallOptions? options,
+  }) {
+    return $createUnaryCall(_$getSharedConfig, request, options: options);
+  }
+
   // method descriptors
 
   static final _$fetchExternalWebsite = $grpc.ClientMethod<
@@ -46,6 +53,11 @@ class ForesightServiceClient extends $grpc.Client {
       '/ai_edge.foresight.service.ForesightService/FetchExternalWebsite',
       ($0.FetchExternalWebsiteRequest value) => value.writeToBuffer(),
       $0.FetchExternalWebsiteResponse.fromBuffer);
+  static final _$getSharedConfig =
+      $grpc.ClientMethod<$0.GetSharedConfigRequest, $0.ForesightSharedConfig>(
+          '/ai_edge.foresight.service.ForesightService/GetSharedConfig',
+          ($0.GetSharedConfigRequest value) => value.writeToBuffer(),
+          $0.ForesightSharedConfig.fromBuffer);
 }
 
 @$pb.GrpcServiceName('ai_edge.foresight.service.ForesightService')
@@ -62,6 +74,15 @@ abstract class ForesightServiceBase extends $grpc.Service {
         ($core.List<$core.int> value) =>
             $0.FetchExternalWebsiteRequest.fromBuffer(value),
         ($0.FetchExternalWebsiteResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.GetSharedConfigRequest,
+            $0.ForesightSharedConfig>(
+        'GetSharedConfig',
+        getSharedConfig_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.GetSharedConfigRequest.fromBuffer(value),
+        ($0.ForesightSharedConfig value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.FetchExternalWebsiteResponse> fetchExternalWebsite_Pre(
@@ -72,4 +93,13 @@ abstract class ForesightServiceBase extends $grpc.Service {
 
   $async.Future<$0.FetchExternalWebsiteResponse> fetchExternalWebsite(
       $grpc.ServiceCall call, $0.FetchExternalWebsiteRequest request);
+
+  $async.Future<$0.ForesightSharedConfig> getSharedConfig_Pre(
+      $grpc.ServiceCall $call,
+      $async.Future<$0.GetSharedConfigRequest> $request) async {
+    return getSharedConfig($call, await $request);
+  }
+
+  $async.Future<$0.ForesightSharedConfig> getSharedConfig(
+      $grpc.ServiceCall call, $0.GetSharedConfigRequest request);
 }
