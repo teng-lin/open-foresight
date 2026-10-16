@@ -46,6 +46,27 @@ jobs:
           else
             echo 'build=true' >> "$GITHUB_OUTPUT"
           fi
+      - name: Verify registry publication before compiling
+        if: steps.sdk.outputs.build == 'true'
+        env:
+          SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+        run: |
+          docker buildx build --push --tag "$SDK_IMAGE-publish-check" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" - <<'DOCKERFILE'
+          FROM scratch
+          LABEL org.opencontainers.image.description="SDK registry permission check"
+          DOCKERFILE
+      - name: Save reusable SDK core before GPU runner build
+        if: steps.sdk.outputs.build == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/sdk.Dockerfile
+          target: core
+          push: true
+          tags: ${{ steps.sdk.outputs.image }}-core
+          cache-from: type=gha,scope=linux-sdk-core-x86-64
+          cache-to: type=gha,mode=max,scope=linux-sdk-core-x86-64
       - name: Bootstrap reusable Linux SDK
         if: steps.sdk.outputs.build == 'true'
         id: build
@@ -53,9 +74,12 @@ jobs:
         with:
           context: .
           file: packaging/sdk.Dockerfile
+          target: sdk
           push: true
           tags: ${{ steps.sdk.outputs.image }}
-          cache-from: type=gha,scope=linux-sdk-x86-64
+          cache-from: |
+            type=gha,scope=linux-sdk-core-x86-64
+            type=gha,scope=linux-sdk-x86-64
           cache-to: type=gha,mode=max,scope=linux-sdk-x86-64
       - name: Resolve immutable SDK digest
         id: resolve

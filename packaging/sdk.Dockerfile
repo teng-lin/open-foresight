@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Ubuntu 24.04 / glibc 2.39 is the supported binary baseline. Build *all*
 # native components here, including Whisper and the isolated Python runtime.
-FROM ubuntu:24.04 AS sdk
+FROM ubuntu:24.04 AS core
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive CI=true FLUTTER_SUPPRESS_ANALYTICS=true
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -21,7 +21,7 @@ RUN git init /opt/grpc && cd /opt/grpc && git remote add origin https://github.c
       -DCMAKE_PROJECT_grpc_INCLUDE=/opt/minimal-grpc.cmake \
       '-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG' '-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG' \
       -DCMAKE_CXX_FLAGS='-march=x86-64 -mtune=generic' \
-      -DBUILD_SHARED_LIBS=ON -DgRPC_BUILD_TESTS=OFF -Dprotobuf_BUILD_TESTS=OFF \
+      -DBUILD_SHARED_LIBS=ON -DgRPC_BUILD_TESTS=OFF -Dprotobuf_BUILD_TESTS=OFF -DRE2_BUILD_TESTING=OFF \
       -DgRPC_SSL_PROVIDER=package -DgRPC_ZLIB_PROVIDER=package \
       -DgRPC_BUILD_GRPC_CSHARP_PLUGIN=OFF -DgRPC_BUILD_GRPC_NODE_PLUGIN=OFF \
       -DgRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN=OFF -DgRPC_BUILD_GRPC_PHP_PLUGIN=OFF \
@@ -44,6 +44,16 @@ WORKDIR /src
 COPY requirements-dev.lock requirements-litert.lock ./
 RUN python3 -m venv /opt/dev-python && /opt/dev-python/bin/pip install --no-cache-dir --require-hashes -r requirements-dev.lock && \
     python3 -m venv /opt/litert-python && /opt/litert-python/bin/pip install --no-cache-dir --require-hashes -r requirements-litert.lock
+# Publish/cache the core before building the GPU runner. Shader dependency
+# failures must not discard a successful gRPC/Flutter/Python bootstrap.
+FROM core AS sdk
+ARG SPIRV_HEADERS_COMMIT=86f980c731e62ae4eaf383d320449d71687936bf
+RUN git init /opt/spirv-source && cd /opt/spirv-source && \
+    git remote add origin https://github.com/KhronosGroup/SPIRV-Headers.git && \
+    git fetch --depth=1 origin "$SPIRV_HEADERS_COMMIT" && git checkout --detach FETCH_HEAD && \
+    cmake -S . -B build -DCMAKE_INSTALL_PREFIX=/opt/spirv-headers \
+      -DSPIRV_HEADERS_ENABLE_TESTS=OFF -DSPIRV_HEADERS_ENABLE_INSTALL=ON && \
+    cmake --install build && rm -rf /opt/spirv-source
 COPY tools/build_whisper_vulkan.py /opt/tools/build_whisper_vulkan.py
-RUN python3 /opt/tools/build_whisper_vulkan.py --source /opt/whisper --build /opt/whisper-build --output /opt/whisper-runtime --jobs 2 && \
+RUN python3 /opt/tools/build_whisper_vulkan.py --source /opt/whisper --build /opt/whisper-build --output /opt/whisper-runtime --spirv-prefix /opt/spirv-headers --jobs 2 && \
     rm -rf /opt/whisper-build /opt/whisper

@@ -21,6 +21,9 @@ Its tag hashes the SDK Dockerfile, CMake hook, dependency locks and Whisper buil
 application CI consumes the resolved immutable image digest. Ordinary app changes
 skip the SDK build entirely. The first bootstrap is slower on two-core runners;
 unused duplicate gRPC libraries are excluded and compilation uses `-O2`.
+CI saves the SDK core image/cache before building Whisper, preserving the
+successful C++/Flutter/Python build if a shader build fails. Whisper uses pinned
+SPIRV-Headers; upstream RE2 tests are disabled alongside gRPC/protobuf tests.
 SDK publishing requires a trusted push or manual run. Pull requests consume an
 already published matching SDK; SDK changes must first be built on a trusted
 branch. Fork PRs cannot consume the private image without registry access.
@@ -32,7 +35,9 @@ Both CI and manual package creation enforce this check. An Arch-built executable
 requiring glibc 2.43 cannot accidentally become an Ubuntu package.
 
 Initial installation targets are Ubuntu 24.04, Debian 13, Fedora 44 and current
-Arch/Omarchy, on x86-64. Older releases and ARM64 are outside this initial matrix.
+Arch/Omarchy, on x86-64. CPU transcription requires AVX2, FMA, F16C and BMI2, selected
+by [the pinned Whisper build's portable x86 defaults](https://github.com/ggml-org/whisper.cpp/blob/0c7be696371069e0baa2515ed7aa08d5a5473aa6/ggml/CMakeLists.txt#L141).
+Older releases and ARM64 are outside this initial matrix.
 The container base and apt repositories receive updates; pinned source versions
 and normalized archives do not make the complete compiler build bit-for-bit
 reproducible. Build manifests and ABI reports record what was produced.
