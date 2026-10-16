@@ -123,6 +123,53 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
                 raise ValueError('Invalid tool response message')
 
 
+def run_query_detector(engine, prompt):
+    """Raw TextCache equivalent for the dedicated model, with an empty base.
+
+    LiteRT 0.18 rejects TOP_K during decode. TOP_P with k=1 and p=1 keeps
+    the same single candidate as the recovered TOP_K k=1 policy. The caller
+    must load the dedicated model; this does not select chat weights.
+    """
+    from contextlib import ExitStack
+    import ctypes
+    lib = engine._lib
+    with ExitStack() as cleanup:
+        def owned(pointer, destroy):
+            if not pointer:
+                raise RuntimeError('Raw detector LiteRT operation failed')
+            cleanup.callback(destroy, pointer)
+            return pointer
+
+        config = owned(lib.litert_lm_session_config_create(),
+                       lib.litert_lm_session_config_delete)
+        lib.litert_lm_session_config_set_apply_prompt_template(config, False)
+        lib.litert_lm_session_config_set_max_output_tokens(config, 512)
+        sampler = owned(lib.litert_lm_sampler_params_create(2),
+                        lib.litert_lm_sampler_params_delete)
+        lib.litert_lm_sampler_params_set_top_k(sampler, 1)
+        lib.litert_lm_sampler_params_set_top_p(sampler, 1.0)
+        lib.litert_lm_sampler_params_set_temperature(sampler, 0.3)
+        lib.litert_lm_session_config_set_sampler_params(config, sampler)
+        session = owned(lib.litert_lm_engine_create_session(engine._engine_ptr, config),
+                        lib.litert_lm_session_delete)
+        # CTextCacheInput strings are NUL-terminated in the original native API.
+        encoded = prompt.split('\0', 1)[0].encode('utf-8')
+        data = owned(lib.litert_lm_input_data_create(0, encoded, len(encoded)),
+                     lib.litert_lm_input_data_delete)
+        inputs = (ctypes.c_void_p * 1)(data)
+        if lib.litert_lm_session_run_prefill(session, inputs, 1) != 0:
+            raise RuntimeError('Raw detector prefill failed')
+        response = owned(lib.litert_lm_session_run_decode(session),
+                         lib.litert_lm_responses_delete)
+        if lib.litert_lm_responses_get_num_candidates(response) < 1:
+            raise RuntimeError('Raw detector returned no candidates')
+        text = lib.litert_lm_responses_get_response_text_at(response, 0)
+        if text is None:
+            raise RuntimeError('Raw detector returned a null candidate')
+        sys.stdout.write(text.decode('utf-8'))
+        sys.stdout.flush()
+
+
 def run(args):
     if importlib.metadata.version('litert-lm') != '0.18.0':
         raise RuntimeError('This runner requires litert-lm==0.18.0')
@@ -139,12 +186,15 @@ def run(args):
     backend = litert_lm.Backend.GPU() if args.backend == 'gpu' else litert_lm.Backend.CPU(thread_count=4)
     with litert_lm.Engine(str(model), backend=backend,
                          audio_backend=litert_lm.Backend.CPU(thread_count=4),
-                         max_num_tokens=4096, cache_dir=str(cache)) as engine:
+                         max_num_tokens=512 if args.query_detector else 4096, cache_dir=str(cache)) as engine:
         if args.probe:
             return
         if args.prompt is None:
             raise ValueError('A prompt is required')
         prompt = args.prompt
+        if args.query_detector:
+            run_query_detector(engine, prompt)
+            return
         if args.tools:
             if args.json_schema:
                 raise ValueError('Tools cannot be combined with a response schema')
@@ -208,11 +258,16 @@ def main():
                         default=os.environ.get('FORESIGHT_LITERT_BACKEND', 'cpu'))
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--probe', action='store_true')
+    parser.add_argument('--query-detector', action='store_true')
     parser.add_argument('--prompt')
     parser.add_argument('--json-schema')
     parser.add_argument('--tools')
     parser.add_argument('--max-output-tokens', type=int, default=256)
     args = parser.parse_args()
+    if args.query_detector:
+        if args.tools or args.json_schema:
+            parser.error('Raw query detection cannot use tools or a response schema')
+        args.backend = 'cpu'
     if args.backend not in ('cpu', 'gpu'):
         parser.error('FORESIGHT_LITERT_BACKEND must be cpu or gpu')
     if not args.check and not args.model:

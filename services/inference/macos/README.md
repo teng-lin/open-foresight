@@ -26,3 +26,9 @@ while delegating callbacks to the application service over the private owned
 process connection. The model subprocess performs no network requests or tool
 callbacks itself. See [reference tool behavior](../../../docs/reference-tool-generation.md)
 for protocol, ownership, tests and remaining production integration.
+
+Experimental `--query-detector` mode uses a raw session with no chat template,
+system instruction, tools or schema. Its fixed 512-token setting and single
+candidate sampling follow the recovered detector options. CPU is currently a
+port testing choice; dedicated-asset compatibility and production integration
+remain unverified. See [runtime evidence](../../../docs/reference-query-runtime.md).

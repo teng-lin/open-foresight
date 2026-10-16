@@ -106,3 +106,9 @@ The native engine context and output cap still apply. The helper tokenizer and
 generation tokenizer serve different models. The separate grounded-generation
 path retains its input/output reserve check. Exact original native accounting
 remains unverified. See [tokenizer evidence](../../docs/reference-tokenizer.md).
+
+Experimental `--query-detector` mode uses a raw session with no chat template,
+system instruction, tools or schema. Its fixed 512-token setting and single
+candidate sampling follow the recovered detector options. CPU is currently a
+port testing choice; dedicated-asset compatibility and production integration
+remain unverified. See [runtime evidence](../../docs/reference-query-runtime.md).

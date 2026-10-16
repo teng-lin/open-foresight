@@ -481,8 +481,8 @@ question prompt applied to the selected chat model:
 - TextGenerator uses the process-native text-generator asset, rather than the
   generic LiteRT-LM chat conversation adapter in this reconstruction.
   TextGenerator.create builds empty cache/system strings and task placeholders
-  $CONTEXT$ and $USER_INPUT$. The caller's backend option is the literal native
-  value 35; its semantic enum name remains unbound. Its options also contain a
+  $CONTEXT$ and $USER_INPUT$. The caller supplies native model type 35, now bound to
+  LLM_MODEL_TYPE_GEMMA4_200M (see the follow-up below). Its options also contain a
   token-limit value 512. These do not establish the selected chat model's
   settings or prove that the current generic runner can execute this model.
 
@@ -566,8 +566,9 @@ format: the asset manager has an explicit local encryption layer.
 - `_saveModelToLocalFile` (0x10066c208) creates the destination parent, writes a
   staging path, and selects either a direct byte write or
   `_encryptAndPersistFile` through a boolean branch. It subsequently replaces
-  the destination and renames the staging file. The caller's branch selection
-  for type 4 has not yet been bound; not every model is proven encrypted.
+  the destination and renames the staging file. The later snapshot policy trace
+  binds type 4 to the encryption branch; this does not mean every model is
+  encrypted.
 - `_encryptAndPersistFile` (0x10066c4a8) requires an encryption service, awaits
   encrypted bytes, rejects an empty result, writes them, and checks the stored
   length. This supports encryption during local persistence; it does not prove
@@ -624,3 +625,10 @@ The production detector still uses the generic chat callback. Next required
 work is to bind type-4 acquisition/persistence options, establish a usable raw
 model and its native inference contract, then integrate that backend. Local
 AEAD wrapping alone is not the dedicated detector implementation.
+
+
+The follow-up [dedicated runtime trace](reference-query-runtime.md) now binds
+native model type 35 to Gemma 4 200M, confirms the type-4 encryption policy, and
+adds a raw-session worker primitive with bounded real-library validation.
+Original executor selection, dedicated model compatibility and production
+integration remain unfinished.

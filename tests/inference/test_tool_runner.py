@@ -65,6 +65,77 @@ API = types.SimpleNamespace(Tool=type('Tool', (), {}), SamplerConfig=options,
     ThinkingConfig=options, RepetitionPenaltyConfig=options)
 
 
+class RawDetectorLib:
+    def __init__(self):
+        self.calls = []
+        self.next_id = 10
+        self.prefill_status = 0
+        self.candidates = 1
+        self.text = 'When is the review?'.encode()
+
+    def __getattr__(self, name):
+        def invoke(*args):
+            self.calls.append((name, args))
+            if name.endswith('_create') or name == 'litert_lm_engine_create_session':
+                self.next_id += 1
+                return self.next_id
+            if name == 'litert_lm_session_run_prefill':
+                return self.prefill_status
+            if name == 'litert_lm_session_run_decode':
+                self.next_id += 1
+                return self.next_id
+            if name == 'litert_lm_responses_get_num_candidates':
+                return self.candidates
+            if name == 'litert_lm_responses_get_response_text_at':
+                return self.text
+        return invoke
+
+
+class RawDetectorTest(unittest.TestCase):
+    def test_raw_input_sampler_and_owned_buffers(self):
+        lib = RawDetectorLib()
+        engine = types.SimpleNamespace(_lib=lib, _engine_ptr=5)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            runner.run_query_detector(engine, ' <ctrl1>中文?\0discard')
+        self.assertEqual(output.getvalue(), 'When is the review?')
+        calls = dict(lib.calls)
+        self.assertEqual(calls['litert_lm_input_data_create'][1:],
+                         (' <ctrl1>中文?'.encode(), len(' <ctrl1>中文?'.encode())))
+        self.assertEqual(calls['litert_lm_sampler_params_create'], (2,))
+        self.assertEqual(calls['litert_lm_sampler_params_set_top_p'][1], 1.0)
+        self.assertEqual(calls['litert_lm_sampler_params_set_top_k'][1], 1)
+        self.assertEqual(calls['litert_lm_sampler_params_set_temperature'][1], 0.3)
+        self.assertFalse(calls['litert_lm_session_config_set_apply_prompt_template'][1])
+        self.assertEqual(calls['litert_lm_session_config_set_max_output_tokens'][1], 512)
+        self.assertEqual([n for n, _ in lib.calls if n.endswith('_delete')], [
+            'litert_lm_responses_delete', 'litert_lm_input_data_delete',
+            'litert_lm_session_delete', 'litert_lm_sampler_params_delete',
+            'litert_lm_session_config_delete'])
+
+    def test_prefill_failure_releases_all_created_native_objects(self):
+        lib = RawDetectorLib()
+        lib.prefill_status = 1
+        with self.assertRaisesRegex(RuntimeError, 'prefill failed'):
+            runner.run_query_detector(types.SimpleNamespace(_lib=lib, _engine_ptr=5), ' <ctrl1>Question?')
+        self.assertFalse(any(n == 'litert_lm_session_run_decode' for n, _ in lib.calls))
+        self.assertEqual(sum(n.endswith('_delete') for n, _ in lib.calls), 4)
+
+    def test_empty_output_is_valid_but_missing_candidate_is_an_error(self):
+        lib = RawDetectorLib()
+        lib.text = b''
+        engine = types.SimpleNamespace(_lib=lib, _engine_ptr=5)
+        with contextlib.redirect_stdout(io.StringIO()):
+            runner.run_query_detector(engine, ' <ctrl1>Statement.')
+        lib.candidates = 0
+        with self.assertRaisesRegex(RuntimeError, 'no candidates'):
+            runner.run_query_detector(engine, ' <ctrl1>Statement.')
+        lib.candidates = 1
+        lib.text = None
+        with self.assertRaisesRegex(RuntimeError, 'null candidate'):
+            runner.run_query_detector(engine, ' <ctrl1>Statement.')
+
+
 class ToolRunnerTest(unittest.TestCase):
     def test_chat_input_does_not_reserve_the_entire_output_budget(self):
         engine = Engine([{'role': 'assistant', 'content': 'Short answer'}])

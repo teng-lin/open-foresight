@@ -1,6 +1,7 @@
 #include "tool_conversation.h"
 #include "fd_stream.h"
 #include "litert.h"
+#include "raw_query_detector.h"
 #include "litertlm_header_schema_generated.h"
 #include <algorithm>
 #include <cmath>
@@ -198,19 +199,22 @@ class Generator {
 
 public:
   Generator(LiteRt &api, const std::string &path, bool gpu,
-            const std::string &cache)
+            const std::string &cache, bool query_detector = false)
       : lm(api), engine(nullptr, LM(engine_delete)) {
     auto settings =
         handle(LM(engine_settings_create)(path.c_str(), gpu ? "gpu" : "cpu",
                                           nullptr, "cpu"),
                LM(engine_settings_delete));
-    LM(engine_settings_set_max_num_tokens)(settings.get(), 4096);
+    LM(engine_settings_set_max_num_tokens)(settings.get(), query_detector ? 512 : 4096);
     LM(engine_settings_set_num_threads)(settings.get(), 4);
     LM(engine_settings_set_audio_num_threads)(settings.get(), 4);
     LM(engine_settings_set_cache_dir)(settings.get(), cache.c_str());
     engine.reset(LM(engine_create)(settings.get()));
     if (!engine)
       throw std::runtime_error("Cannot initialize generation model");
+  }
+  std::string detect_query(const std::string &prompt) {
+    return raw_query_detector(lm, engine.get(), prompt);
   }
   size_t tokens(const std::string &text) {
     auto result = handle(LM(engine_tokenize)(engine.get(), text.c_str()),
@@ -415,7 +419,7 @@ int main(int argc, char **argv) {
       std::string key = argv[i];
       if (key == "--gpu")
         gpu = true;
-      else if (key == "--probe" || key == "--check")
+      else if (key == "--probe" || key == "--check" || key == "--query-detector")
         args[key] = "true";
       else {
         if (i + 1 >= argc)
@@ -423,6 +427,9 @@ int main(int argc, char **argv) {
         args[key] = argv[++i];
       }
     }
+    const bool query_detector = args.count("--query-detector");
+    if (query_detector && (embedding || args.count("--tools") || args.count("--json-schema")))
+      throw std::runtime_error("Raw query detection cannot use embedding, tools or a response schema");
     if (embedding && fs::is_directory(args.at("--embedding"))) {
       minilm_embeddings(args.at("--embedding"), gpu, protocol);
       return 0;
@@ -442,6 +449,7 @@ int main(int argc, char **argv) {
                        : (std::getenv("FORESIGHT_LITERT_BACKEND")
                               ? std::getenv("FORESIGHT_LITERT_BACKEND")
                               : "cpu");
+    if (query_detector) backend = "cpu";
     if (backend != "cpu" && backend != "gpu")
       throw std::runtime_error("Backend must be cpu or gpu");
     auto path = fs::canonical(args.at("--model"));
@@ -450,9 +458,13 @@ int main(int argc, char **argv) {
                      : path.parent_path() / ".litert-cache";
     cache /= backend;
     fs::create_directories(cache);
-    Generator generator(lm, path, backend == "gpu", cache);
+    Generator generator(lm, path, backend == "gpu", cache, query_detector);
     if (args.count("--probe"))
       return 0;
+    if (query_detector) {
+      protocol << generator.detect_query(args.at("--prompt")) << std::flush;
+      return 0;
+    }
     int budget = args.count("--max-output-tokens")
                      ? std::stoi(args["--max-output-tokens"])
                      : 256;
