@@ -37,6 +37,12 @@ print(json.dumps(dict(executable=sys.executable, version=sys.version,
                     ignore=shutil.ignore_patterns('site-packages', '__pycache__', '*.pyc'))
     shutil.copytree(packages, target_stdlib / 'site-packages',
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    # Debian's site.py switches to dist-packages outside a venv. Declare the
+    # relocated interpreter's paths explicitly instead of depending on a
+    # distro's prefix/site conventions or falling back to host Python modules.
+    (destination / 'bin/python3._pth').write_text(
+        f'../lib/{stdlib.name}\n../lib/{stdlib.name}/lib-dynload\n'
+        f'../lib/{stdlib.name}/site-packages\nimport site\n')
     for file in destination.rglob('*.so*'):
         if not file.is_file():
             continue
