@@ -65,6 +65,9 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
   final output = <String>[];
   final meetings = store.rows(
     'SELECT meetings.*,meeting_notes.body,'
+    '(SELECT COALESCE(edited,generated) FROM artifacts '
+    "WHERE artifacts.meeting_id=meetings.id AND kind='enhanced_notes' "
+    'ORDER BY id DESC LIMIT 1) AS enhanced_body,'
     'COALESCE(calendar_events.starts,meeting_details.created,0) AS export_date,'
     'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata '
     'FROM meetings JOIN meeting_notes ON meeting_notes.meeting_id=meetings.id '
@@ -77,7 +80,10 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
   for (final meeting in meetings) {
     final date = meeting['export_date'] as int;
     if (lower != null && (date < lower || date >= upper!)) continue;
-    final notes = (meeting['body'] as String).trim();
+    final enhanced = (meeting['enhanced_body'] as String?)?.trim();
+    final notes = enhanced == null || enhanced.isEmpty
+        ? (meeting['body'] as String).trim()
+        : enhanced;
     if (notes.isEmpty) continue;
     final begins = DateTime.fromMillisecondsSinceEpoch(date);
     final end = meeting['export_end'] as int?;
@@ -86,13 +92,21 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
         '${DateFormat('MMM d, yyyy').format(begins)} ${_exportClock(begins)}'
         '${ends == null ? '' : ' - ${_exportClock(ends)}'}';
     final metadata = meeting['export_metadata'] as String?;
-    final url = metadata == null
+    final event = metadata == null
         ? null
-        : (jsonDecode(metadata) as Map<String, dynamic>)['htmlLink'] as String?;
+        : jsonDecode(metadata) as Map<String, dynamic>;
+    final url = event?['htmlLink'] as String?;
+    final noteTitle = (meeting['title'] as String).trim();
+    final eventTitle = event?['summary'] as String?;
+    final title = noteTitle.isNotEmpty
+        ? noteTitle
+        : eventTitle != null && eventTitle.isNotEmpty
+        ? eventTitle
+        : 'Untitled meeting';
     final linkedDate = url == null || url.isEmpty
         ? dateLine
         : '[$dateLine]($url)';
-    output.add('## ${meeting['title']}\n$linkedDate\n\n$notes\n');
+    output.add('## $title\n$linkedDate\n\n$notes\n');
   }
   // composeExportMarkdown writes three blank lines before each later item;
   // every item already ends with the newline after its trimmed note body.

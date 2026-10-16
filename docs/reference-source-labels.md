@@ -26,6 +26,15 @@ by REA evidence
 `ev_54e89aa17acdc9afba2cb5794c25e0d4aa0539d9b256cd688822d31f45743b42`
 with the owned IDA dispatcher closed.
 
+The follow-up build callbacks at `0x100a28ba0` and `0x100a28c20` respectively
+clear the controller and invoke the parent document-label addition method.
+Both then call `setState`; the addition callback does not await the returned
+future before that update. These effects agree with the port's current
+cancel/submit delegation. Retained outputs are `source-label-submit-actual.json`
+(the controller-clear function) and `source-label-cancel-actual.json` (the
+addition function). The parent method's internal trim/clear timing remains a
+separate binding; no additional label behavior change was made in this pass.
+
 ## Colors
 
 `DocumentGraphLayout.getHexForLabel` at `0x100855290` reuses a matching label's
@@ -44,7 +53,7 @@ document-specific addition/removal, organization propagation/deletion, and
 persistent association fields. Controlled live original-app document editing,
 deletion and graph restoration remain unverified.
 
-Final focused validation: 20 desktop tests pass across meeting export, label
+Final focused validation: 23 desktop tests pass across meeting export, label
 storage, graph label controls and organization-label workflows with
-`TZ=America/New_York`. The analyzer reports no issues in the four changed
-desktop implementation/test files, and `git diff --check` passes.
+`TZ=America/New_York`. The analyzer reports no issues in the changed desktop
+export implementation and test, and `git diff --check` passes.

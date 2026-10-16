@@ -44,6 +44,16 @@ selects one linked event rather than duplicating a note for every calendar row.
 Its choice of the first persisted row still needs comparison if a note has
 multiple different event associations.
 
+The follow-up `EventDocument.queryEventsByDocumentId` trace at `0x10092e1a4`
+(`export-event-association-order.json`) has no explicit database ordering. It
+filters by document, ignores empty event IDs, deduplicates IDs with an
+insertion-ordered map, and replaces a duplicate ID's title when a later row has
+a nonempty title. Updating that title keeps the ID's original map position.
+There is no recovered chronological or alphabetical priority to reproduce.
+Controlled comparison of duplicate IDs and multiple distinct event
+associations remains pending because the original association table and port's
+calendar cache have different representations.
+
 The formatter now uses the same `intl` date patterns as the original instead of
 hardcoded English month names. French locale data is exercised explicitly in a
 test. This binds formatting after a locale is configured; it does not establish
@@ -66,25 +76,67 @@ The subsequent reader output binds date patterns (PP28443/28495) and durations
 7,689,600,000,000 microseconds. These selected public values contain no account
 or distribution credentials.
 
-## Remaining bindings
+## Enhanced-note preference
 
 The complete `fetchExportNotes` (`0x100aa4f80`) decompilation is retained as
-`export-fetch-notes.json`. Fetch trims two note fields, preferring the first
-nonempty field, retrieves event metadata, and sorts the results. The note-field
-names still need explicit binding before changing those behaviors. The existing
-live single-note experiment alone does not establish
-enhanced-note selection or multiple-note ordering; the ordering correction above
-is supported by static code analysis.
+`export-fetch-notes.json`. `Note.fromRecord` at `0x10072c780` copies record slots
+23 and 31 into the corresponding note fields. `NoteRecord.toJson (_2)` at
+`0x10062ec00` and the selected public constants in
+`parity-stream-export-pool.txt` bind these slots to `content` (PP9089) and
+`enhancedContent` (PP19633). `$NotesTableTable.map` at `0x100b3d81c` independently
+binds the second field to SQL `enhanced_content` (PP18673).
+
+Fetch trims `enhancedContent` and uses it when nonempty; otherwise it uses the
+trimmed raw `content`. A note with empty raw content can therefore still export
+its enhancement. An empty current enhancement falls back to raw text instead of
+resurrecting an older enhancement.
+
+The port now applies this preference to its current enhanced-notes artifact
+(the latest artifact, with its edited value when present), matching the enhanced
+notes pane's existing storage representation. Export does not modify raw notes,
+generated text, edits, or historical artifacts. Two additional regression cases
+cover edited/latest preference, cleared enhancement fallback, enhanced-only
+notes, and preservation of stored evidence. These are static-contract checks;
+the earlier live single-note experiment did not exercise enhancements.
+
+## Titles
+
+Fetch trims the stored note title, uses linked event information when it is
+empty, and ultimately falls back to the public PP28510 string `Untitled
+meeting`. The selected string and `OrderingMode.desc` enum were captured in
+`parity-stream-final-pool.txt` under REA evidence
+`ev_df9f8183d07203dae49c5b22313d69f43279ece1b808f20275aa3ec7989e1fc7`.
+The port now trims note titles and falls back to the linked calendar summary
+and then that exact default. Stored titles are unchanged.
+
+The original additionally consults the association record's title before the
+current calendar event title. The port's calendar cache does not currently keep
+a separate association-title snapshot. That distinction, including duplicate-ID
+title replacement described above, remains a representation gap pending the
+association field/schema binding.
+
+## Remaining acquisition bindings
 
 The caller requests 1,000 notes from `DataStore.queryAllNotes` before filtering;
-`Note.queryAll` adds database ordering and a limit before mapping rows. The port
-does not yet reproduce that acquisition cap because the original database
-ordering column and row-field mapping still need binding. The correct row
-mapper is the constant closure at PP14906 (`0x10072c8c0`), not the ordering
-closure at `0x10092e688`. The current port continues to export all eligible
-stored notes.
+`Note.queryAll` adds descending database ordering and a limit before mapping
+rows. PP13325 is `OrderingMode.desc`; the ordering closure at `0x10092e688`
+loads a late table field at offset 55 through the selected PP14907 descriptor.
+The correct row mapper is the constant closure at PP14906 (`0x10072c8c0`).
+`parity-export-order-field-pool.txt` binds PP14907 to
+`Field <$NotesTableTable.timestamp>: late final`, completing the ordering
+contract as `timestamp DESC LIMIT 1000`. That selected-field capture succeeded
+under REA evidence
+`ev_bbdc5555122c2a975255f87602edc619a84d1e864e0f52537b676dcffcea134b`.
 
-Verification for the corrections: ten desktop export tests pass with
+Record slot 39 is `timestamp` (PP12416), copied into `Note.timestamp` by
+`Note.fromRecord`. The port currently has a meeting creation timestamp and
+lazily inserts `meeting_notes` on save, with no independent note timestamp.
+Its acquisition cap remains unimplemented until the original note creation
+lifecycle is bound and the equivalent timestamp is persisted. Applying the cap
+to meeting creation times could omit the wrong notes. The current port
+continues to export all eligible stored notes.
+
+Verification for the corrections: thirteen desktop export tests pass with
 `TZ=America/New_York`,
 including exact captured-file comparison, a two-note Markdown boundary case,
 date filtering, copy/download behavior, save cancellation/error recovery, and

@@ -188,6 +188,119 @@ void main() {
     );
   });
 
+  test('export prefers the current enhanced notes and preserves raw notes', () {
+    final id = meeting('Enhanced', today, notes: 'Raw shorthand');
+    store.artifact(id, 'enhanced_notes', 'Old enhancement', 'fixture');
+    store.artifact(
+      id,
+      'enhanced_notes',
+      '  **Current enhancement**  \n',
+      'fixture',
+    );
+    final current =
+        store
+                .rows(
+                  "SELECT id FROM artifacts WHERE kind='enhanced_notes' ORDER BY id DESC",
+                )
+                .first['id']
+            as int;
+    store.artifact(id, 'summary', 'Unrelated summary', 'fixture');
+    expect(
+      composeMeetingExport(store).markdown,
+      '## Enhanced\nOct 16, 2026 12:00am\n\n**Current enhancement**\n',
+    );
+
+    store.editArtifact(current, '  User-edited enhancement  \n');
+    final before = store.rows('SELECT * FROM artifacts ORDER BY id');
+    expect(
+      composeMeetingExport(store).markdown,
+      '## Enhanced\nOct 16, 2026 12:00am\n\nUser-edited enhancement\n',
+    );
+    expect(store.rows('SELECT * FROM artifacts ORDER BY id'), before);
+    expect(
+      store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+        id,
+      ]).single['body'],
+      'Raw shorthand',
+    );
+
+    // A cleared current enhancement falls back to the raw content. It does not
+    // resurrect an older enhancement or the pre-edit generated text.
+    store.editArtifact(current, ' \n\t');
+    expect(
+      composeMeetingExport(store).markdown,
+      '## Enhanced\nOct 16, 2026 12:00am\n\nRaw shorthand\n',
+    );
+  });
+
+  test('enhanced-only notes export when the raw content is empty', () {
+    final id = meeting('Enhanced only', today);
+    store.saveMeetingNotes(id, ' \n');
+    store.artifact(id, 'enhanced_notes', '\n  Enhanced content  \n', 'fixture');
+    final result = composeMeetingExport(store);
+    expect(result.count, 1);
+    expect(
+      result.markdown,
+      '## Enhanced only\nOct 16, 2026 12:00am\n\nEnhanced content\n',
+    );
+    store.editArtifact(
+      store.rows('SELECT id FROM artifacts').single['id'] as int,
+      '',
+    );
+    expect(composeMeetingExport(store).count, 0);
+  });
+
+  test(
+    'export trims note titles and falls back to event then default titles',
+    () {
+      final id = meeting('  Manual title \n', today, notes: 'Raw notes');
+      store.db.execute(
+        'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+        [
+          'title-event',
+          'account',
+          'primary',
+          'google-id',
+          id,
+          '',
+          today.millisecondsSinceEpoch,
+          today.add(const Duration(hours: 1)).millisecondsSinceEpoch,
+          'confirmed',
+          '{"summary":"Calendar fallback"}',
+          today.millisecondsSinceEpoch,
+        ],
+      );
+      expect(
+        composeMeetingExport(store).markdown,
+        startsWith('## Manual title\n'),
+      );
+      store.db.execute('UPDATE meetings SET title=? WHERE id=?', [' \n ', id]);
+      expect(
+        composeMeetingExport(store).markdown,
+        startsWith('## Calendar fallback\n'),
+      );
+      store.db.execute(
+        "UPDATE calendar_events SET metadata='{}' WHERE meeting_id=?",
+        [id],
+      );
+      expect(
+        composeMeetingExport(store).markdown,
+        startsWith('## Untitled meeting\n'),
+      );
+      store.db.execute('DELETE FROM calendar_events WHERE meeting_id=?', [id]);
+      expect(
+        composeMeetingExport(store).markdown,
+        '## Untitled meeting\nOct 16, 2026 12:00am\n\nRaw notes\n',
+      );
+      expect(
+        store.rows('SELECT title FROM meetings WHERE id=?', [
+          id,
+        ]).single['title'],
+        ' \n ',
+      );
+    },
+  );
+
   test(
     'export uses the original date patterns in the active Intl locale',
     () async {
