@@ -1,3 +1,4 @@
+import 'platform_services.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'graph_labels.dart';
@@ -443,8 +444,45 @@ class Store {
 }
 
 class Parser {
+  final bool _macOS;
+  final String? _macParser;
+  Parser({bool? macOS, String? macParser})
+    : _macOS = macOS ?? Platform.isMacOS,
+      _macParser = macParser;
   Future<(String, String)> extract(String path) async {
     final lower = path.toLowerCase();
+    if (_macOS && (lower.endsWith('.pdf') || lower.endsWith('.rtf'))) {
+      final executable =
+          _macParser ?? runtimeConfiguration['FORESIGHT_FILE_PARSER'];
+      if (executable == null || executable.isEmpty)
+        throw StateError(
+          'The bundled PDF/RTF extractor is unavailable. Reinstall Open Foresight.',
+        );
+      ProcessResult result;
+      try {
+        result = await Process.run(executable, [
+          lower.endsWith('.pdf') ? '--pdf' : '--rtf',
+          path,
+        ]);
+      } on ProcessException catch (error) {
+        throw StateError(
+          'Cannot launch the bundled file extractor. Reinstall Open Foresight: ${error.message}',
+        );
+      }
+      if (result.exitCode != 0)
+        throw StateError(
+          'File extraction failed: ${result.stderr.toString().trim()}',
+        );
+      final text = result.stdout as String;
+      if (text.trim().isEmpty)
+        throw StateError('The selected document contains no extractable text.');
+      return (
+        text,
+        lower.endsWith('.pdf')
+            ? 'PDFKit (macOS adapter)'
+            : 'NSAttributedString RTF (macOS adapter)',
+      );
+    }
     if (lower.endsWith('.pdf')) {
       final r = await Process.run('pdftotext', ['-layout', path, '-']);
       if (r.exitCode != 0)
