@@ -1,6 +1,8 @@
+import 'platform_services.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
+import 'dart:ffi';
+import 'package:ffi/ffi.dart';
 import 'package:grpc/grpc.dart';
 import 'generated/rag_service.pbgrpc.dart';
 import 'generated/helper_control.pbgrpc.dart' as control;
@@ -66,7 +68,7 @@ class Helper {
   }
 
   Future<void> start() async {
-    final executable = Platform.environment['FORESIGHT_HELPER'];
+    final executable = runtimeConfiguration['FORESIGHT_HELPER'];
     if (manageProcess && executable != null && process == null) {
       bool live = false;
       try {
@@ -77,7 +79,10 @@ class Helper {
         live = true;
       } catch (_) {}
       if (!live) {
-        process = await Process.start(executable, [socket, storage]);
+        process = await Process.start(executable, [
+          socket,
+          storage,
+        ], environment: runtimeConfiguration.environment);
         process!.stdout.drain<void>();
         process!.stderr.drain<void>();
         process!.exitCode.then((code) async {
@@ -151,13 +156,34 @@ class Helper {
         final pid = int.tryParse(snapshot?.instanceId.split('-').first ?? '');
         if (pid != null) {
           try {
-            final args = utf8
-                .decode(await File('/proc/$pid/cmdline').readAsBytes())
-                .split('\u0000');
-            if (args.length >= 3 && args[1] == socket && args[2] == storage)
-              Process.killPid(pid, ProcessSignal.sigterm);
-          } on FileSystemException {
-            /* The helper has already exited. */
+            final library = DynamicLibrary.open(
+              runtimeConfiguration.nativeLibrary,
+            );
+            final matches = library
+                .lookupFunction<
+                  Int32 Function(
+                    Int64,
+                    Pointer<Utf8>,
+                    Pointer<Utf8>,
+                    Pointer<Utf8>,
+                  ),
+                  int Function(int, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
+                >('fs_process_matches');
+            final a = socket.toNativeUtf8(), b = storage.toNativeUtf8();
+            final identity = snapshot!.instanceId.toNativeUtf8();
+            try {
+              if (matches(pid, a, b, identity) == 1) {
+                Process.killPid(pid, ProcessSignal.sigterm);
+              }
+            } finally {
+              calloc.free(a);
+              calloc.free(b);
+              calloc.free(identity);
+            }
+          } catch (error) {
+            stderr.writeln(
+              'Could not verify adopted helper ownership; leaving it running: $error',
+            );
           }
         }
       }

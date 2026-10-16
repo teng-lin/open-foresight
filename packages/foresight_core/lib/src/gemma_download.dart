@@ -1,3 +1,4 @@
+import 'platform_services.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -314,13 +315,4 @@ class GemmaDownload {
   }
 }
 
-int physicalMemoryGb() {
-  if (Platform.isLinux) {
-    final text = File('/proc/meminfo').readAsStringSync();
-    final kb = int.tryParse(
-      RegExp(r'MemTotal:\s+(\d+)').firstMatch(text)?.group(1) ?? '',
-    );
-    return kb == null ? 0 : (kb / (1024 * 1024)).round();
-  }
-  return 0;
-}
+int physicalMemoryGb() => systemMemoryGb();

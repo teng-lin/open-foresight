@@ -21,3 +21,4 @@ export 'src/graph_clusters.dart';
 export 'src/graph_persistence.dart';
 export 'src/label_propagation.dart';
 export 'src/force_layout.dart';
+export 'src/platform_services.dart';

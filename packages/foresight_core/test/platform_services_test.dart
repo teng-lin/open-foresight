@@ -1,0 +1,144 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:test/test.dart';
+import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/service.dart' show serviceEndpoint;
+
+void main() {
+  late Directory scratch;
+  setUp(() {
+    scratch = Directory(
+      Directory.systemTemp
+          .createTempSync('foresight-platform-')
+          .resolveSymbolicLinksSync(),
+    );
+  });
+  tearDown(() => scratch.deleteSync(recursive: true));
+
+  test(
+    'bundle resource lookup survives spaces, nested service and minimal environment',
+    () {
+      final app = '${scratch.path}/Open Foresight.app';
+      final resources = Directory('$app/Contents/Resources')
+        ..createSync(recursive: true);
+      File('${resources.path}/runtime.json').writeAsStringSync(
+        jsonEncode({
+          'FORESIGHT_SERVICE':
+              '../Library/Services/Open Foresight Service.app/Contents/MacOS/foresight-service',
+          'FORESIGHT_NATIVE': 'lib/libforesight_native.dylib',
+          'FORESIGHT_LITERT_BACKEND': 'gpu',
+        }),
+      );
+      final settings = RuntimeConfiguration.resolve(
+        environment: {},
+        executable: '$app/Contents/MacOS/foresight-mcp',
+      );
+      expect(
+        settings.nativeLibrary,
+        '${resources.path}/lib/libforesight_native.dylib',
+      );
+      expect(
+        settings['FORESIGHT_SERVICE'],
+        contains('Open Foresight Service.app'),
+      );
+      expect(settings['FORESIGHT_LITERT_BACKEND'], 'gpu');
+      final nested = Directory(
+        '$app/Contents/Library/Services/Open Foresight Service.app/Contents/Resources',
+      )..createSync(recursive: true);
+      File('${nested.path}/runtime.json').writeAsStringSync(
+        jsonEncode({
+          'FORESIGHT_NATIVE':
+              '../../../../Resources/lib/libforesight_native.dylib',
+        }),
+      );
+      final service = RuntimeConfiguration.resolve(
+        environment: {},
+        executable: '${nested.parent.path}/MacOS/foresight-service',
+      );
+      expect(
+        service.nativeLibrary,
+        '${nested.path}/../../../../Resources/lib/libforesight_native.dylib',
+      );
+      expect(
+        RuntimeConfiguration.resolve(
+          environment: {'FORESIGHT_NATIVE': '/override'},
+          executable: '$app/Contents/MacOS/app',
+        ).nativeLibrary,
+        '/override',
+      );
+    },
+  );
+
+  test(
+    'canonical aliases resolve to one profile and short deterministic Mac runtime',
+    () {
+      final home = Directory('${scratch.path}/home')..createSync();
+      final profile = Directory('${scratch.path}/profile')..createSync();
+      final alias = Link('${scratch.path}/alias')..createSync(profile.path);
+      final first = ProfilePaths.resolve({
+        'HOME': home.path,
+        'FORESIGHT_DATA': '${profile.path}/new',
+      }, macOS: true);
+      final second = ProfilePaths.resolve({
+        'HOME': home.path,
+        'FORESIGHT_DATA': '${alias.path}/new',
+      }, macOS: true);
+      expect(first.data, second.data);
+      expect(first.runtime, second.runtime);
+      expect(
+        utf8.encode('${first.runtime}/application.sock').length,
+        lessThan(104),
+      );
+      expect(
+        ProfilePaths.resolve({'HOME': home.path}, macOS: true).data,
+        '${home.path}/Library/Application Support/Open Foresight',
+      );
+    },
+  );
+
+  test('Mac rejects overflowing explicit Unix socket path', () {
+    expect(
+      () => ProfilePaths.resolve({
+        'HOME': scratch.path,
+        'FORESIGHT_RUNTIME': '${scratch.path}/${'x' * 110}',
+      }, macOS: true),
+      throwsStateError,
+    );
+  });
+
+  test('private directory refuses public mode and symlink', () {
+    final path = '${scratch.path}/private';
+    privateDirectory(path);
+    expect(Directory(path).statSync().mode & 0x3f, 0);
+    final alias = Link('${scratch.path}/private-alias')..createSync(path);
+    expect(() => privateDirectory(alias.path), throwsStateError);
+    Process.runSync('/bin/chmod', ['755', path]);
+    expect(() => privateDirectory(path), throwsStateError);
+  });
+
+  test(
+    'profile endpoint attaches across runtime overrides and validates privacy',
+    () {
+      final data = '${scratch.path}/data', runtime = '${scratch.path}/owner';
+      privateDirectory(data);
+      privateDirectory(runtime);
+      File(
+        '$data/.application-endpoint.json',
+      ).writeAsStringSync(jsonEncode({'data': data, 'runtime': runtime}));
+      expect(
+        serviceEndpoint(ProfilePaths(data, '${scratch.path}/other')),
+        '$runtime/application.sock',
+      );
+      Process.runSync('/bin/chmod', ['755', runtime]);
+      expect(
+        () => serviceEndpoint(ProfilePaths(data, runtime)),
+        throwsStateError,
+      );
+    },
+  );
+
+  test('physical memory is detected on supported hosts', () {
+    if (Platform.isMacOS || Platform.isLinux)
+      expect(physicalMemoryGb(), greaterThan(0));
+  });
+}
