@@ -101,6 +101,10 @@ def main():
         *[f'-DgRPC_BUILD_GRPC_{language}_PLUGIN=OFF' for language in
           ['CSHARP', 'NODE', 'OBJECTIVE_C', 'PHP', 'PYTHON', 'RUBY']],
         *[f'-DgRPC_{name}_PROVIDER=module' for name in ['ABSL', 'CARES', 'PROTOBUF', 'RE2', 'SSL']],
+        # c-ares' link-only symbol probe sees pipe2 in new SDKs even though
+        # Apple introduced it in macOS 27. Select its existing pipe/fcntl
+        # fallback rather than weakening availability diagnostics.
+        '-DHAVE_PIPE2:BOOL=OFF',
         '-DgRPC_ZLIB_PROVIDER=package', '-Dprotobuf_BUILD_TESTS=OFF',
         '-DABSL_BUILD_TESTING=OFF', '-DRE2_BUILD_TESTING=OFF', env=env)
     run('cmake', '--build', build, '--parallel', args.jobs, env=env)

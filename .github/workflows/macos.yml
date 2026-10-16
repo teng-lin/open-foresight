@@ -19,7 +19,7 @@ jobs:
     # macos-15-intel label. Fail early if runner allocation ever changes.
     # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
     runs-on: macos-15
-    timeout-minutes: 100
+    timeout-minutes: 120
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       FORESIGHT_BUILD_JOBS: '3'
@@ -43,7 +43,7 @@ jobs:
         run: |
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --no-analytics
+          "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
           "$RUNNER_TEMP/flutter/bin/flutter" --version
       - uses: actions/cache@v4
         with:
@@ -68,43 +68,14 @@ jobs:
             tests/test_macos_bundle.py -v
       - name: Assemble ad hoc development application
         run: |
-          .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity -
+          .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk
           codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
+      - name: Installed application tooling tests
+        run: .venv/bin/python -m unittest discover -s tests -p test_macos_tools.py -v
       - name: Relocated application MCP smoke with minimal environment
         run: |
-          .venv/bin/python - <<'PY'
-          import importlib.util
-          import os
-          from pathlib import Path
-          import shutil
-          import subprocess
-          import tempfile
-
-          spec = importlib.util.spec_from_file_location('service_test', 'tests/service/test_service_process.py')
-          fixture = importlib.util.module_from_spec(spec)
-          spec.loader.exec_module(fixture)
-          with tempfile.TemporaryDirectory(prefix='fs-bundle-', dir='/tmp') as root:
-              app = Path(root) / 'Application Path With Spaces' / 'Open Foresight.app'
-              app.parent.mkdir()
-              shutil.copytree('dist/Open Foresight.app', app, symlinks=True)
-              fixture.MCP = app / 'Contents/MacOS/foresight-mcp'
-              service = app / 'Contents/Library/Services/Open Foresight Service.app/Contents/MacOS/foresight-service'
-              env = {'HOME': os.environ['HOME'], 'TMPDIR': '/tmp',
-                     'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
-                     'FORESIGHT_DATA': str(Path(root) / 'profile')}
-              peers = []
-              try:
-                  for _ in range(2):
-                      peer = fixture.McpPeer(env)
-                      peers.append(peer)
-                      peer.initialize()
-                  states = [peer.tool('get_status')['structuredContent']['result'] for peer in peers]
-                  assert states[0]['pid'] == states[1]['pid'], states
-              finally:
-                  for peer in peers:
-                      peer.close()
-                  subprocess.run([str(service), '--stop'], env=env, check=True, timeout=30)
-          PY
+          .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
+            --output test-results/macos-bundle.json
       - name: Retain development package evidence
         if: always()
         uses: actions/upload-artifact@v4
