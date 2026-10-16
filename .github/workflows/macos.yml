@@ -25,12 +25,14 @@ jobs:
       FORESIGHT_BUILD_JOBS: '3'
       FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Verify Apple Silicon host
         run: |
           test "$RUNNER_ARCH" = ARM64
           test "$(uname -m)" = arm64
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
       - name: Install build tools
@@ -45,7 +47,7 @@ jobs:
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
           "$RUNNER_TEMP/flutter/bin/flutter" --version
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: sdk-cache
         with:
           path: build/sdk
@@ -58,7 +60,7 @@ jobs:
         run: echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
       - name: Save completed dependency SDK
         if: steps.sdk-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/sdk
           key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
@@ -89,7 +91,7 @@ jobs:
             --output test-results/macos-bundle.json
       - name: Retain development package evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: macos-development-evidence
           path: |
@@ -107,7 +109,9 @@ jobs:
     steps:
       - name: Install Linux native toolchain
         run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Install Python development dependencies
         run: |
           python -m venv .venv

@@ -287,6 +287,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Request access'));
       await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(Workspace));
+      expect(state.captureCapabilities['microphone'], 'authorized');
+      expect(state.captureCapabilities['system_audio_request'], 'completed');
+      expect(state.captureCapabilities['permission_verified'], false);
       expect(find.text('Open System Settings'), findsOneWidget);
       expect(store.rows('SELECT * FROM meetings'), isEmpty);
       await tester.tap(find.text('Continue recording'));

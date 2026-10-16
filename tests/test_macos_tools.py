@@ -14,10 +14,61 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import build_macos_sdk as sdk
 import install_macos as installer
+import test_gemma_models as gemma_probe
 from smoke_macos_bundle import (McpPeer, stop_desktop, parser_probe, source_graph_probe,
     verify_source_graph_restart, service_command, wait_stopped)
 
 SIGNATURE = {'team': 'test-team', 'adhoc': False}
+
+
+class MacModelProbeTests(unittest.TestCase):
+    def test_default_embedding_worker_is_rejected_as_generation_runner(self):
+        with patch.object(sys, 'platform', 'darwin'), \
+                patch.object(sys, 'argv', ['test_gemma_models.py']), \
+                patch.object(gemma_probe.subprocess, 'run') as run, \
+                patch('sys.stderr') as stderr:
+            with self.assertRaises(SystemExit) as error:
+                gemma_probe.main()
+            self.assertEqual(error.exception.code, 2)
+            self.assertIn('LiteRT generation runner', str(stderr.write.call_args_list))
+            run.assert_not_called()
+
+    def test_bundle_missing_generation_or_python_entries_reports_setup_error(self):
+        keys = ('FORESIGHT_NATIVE', 'FORESIGHT_HELPER', 'FORESIGHT_LITERT_RUNNER',
+                'FORESIGHT_MODEL_WORKER', 'FORESIGHT_MODEL_ADAPTER',
+                'FORESIGHT_LITERT_EMBEDDING_ADAPTER', 'FORESIGHT_MODEL_PYTHON',
+                'FORESIGHT_LITERT_PYTHON')
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary) / 'Open Foresight.app'
+            resources = app / 'Contents/Resources'
+            resources.mkdir(parents=True)
+            for missing in ('FORESIGHT_LITERT_RUNNER', 'FORESIGHT_MODEL_PYTHON',
+                            'FORESIGHT_LITERT_PYTHON'):
+                with self.subTest(missing=missing):
+                    (resources / 'runtime.json').write_text(json.dumps(
+                        {key: 'runtime/' + key for key in keys if key != missing}))
+                    with patch.object(sys, 'platform', 'darwin'), \
+                            patch.object(sys, 'argv', ['probe', '--bundle', str(app)]), \
+                            patch.object(gemma_probe.subprocess, 'run') as run, \
+                            patch('sys.stderr') as stderr:
+                        with self.assertRaises(SystemExit) as error:
+                            gemma_probe.main()
+                        self.assertEqual(error.exception.code, 2)
+                        self.assertIn(missing, str(stderr.write.call_args_list))
+                        run.assert_not_called()
+
+    def test_explicit_generation_runner_keeps_separate_embedding_worker(self):
+        with tempfile.TemporaryDirectory(prefix='model probe ') as temporary:
+            runner = Path(temporary) / 'generation runner'
+            with patch.object(sys, 'platform', 'darwin'), \
+                    patch.object(sys, 'argv', ['probe', '--runner', str(runner),
+                                              '--report', temporary + '/report.json']), \
+                    patch.object(gemma_probe.subprocess, 'run') as run:
+                gemma_probe.main()
+                env = run.call_args.kwargs['env']
+                self.assertEqual(env['FORESIGHT_LITERT_RUNNER'], str(runner.resolve()))
+                self.assertEqual(env['FORESIGHT_MODEL_WORKER'],
+                                 str(gemma_probe.ROOT / 'build/services/inference/foresight-model'))
 
 
 class MacModelWorkerTests(unittest.TestCase):

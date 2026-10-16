@@ -771,8 +771,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                         });
                         if (mounted)
                           setState(
-                            () => captureCapabilities =
-                                Map<String, dynamic>.from(result),
+                            () => captureCapabilities = {
+                              ...captureCapabilities,
+                              ...Map<String, dynamic>.from(result),
+                            },
                           );
                       } catch (error) {
                         if (dialogContext.mounted)

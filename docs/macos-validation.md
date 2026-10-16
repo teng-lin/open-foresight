@@ -39,7 +39,6 @@ configured-model relocation; release acceptance remains separate.
 | Standalone Python deployment metadata | 19 Mach-O files checked; none above 15.0 | Full relocated bundle execution and signing still separate |
 | Complete relocated development app | Passed MCP-first and desktop-first | Minimal HOME/PATH/profile environment, paths with spaces, two MCP clients, shared AOT service, notes/source revisions/labels/graph persistence, native PDF/RTF extraction, maintenance exclusion; desktop process termination tested, actual window-close/reopen still separate |
 | Real models using bundled runtime paths | Passed | Full Gemma GPU grounded/citation/cancellation/reuse workflow in 73 s, actual EmbeddingGemma GPU retrieval, and bundled Whisper JFK transcription; outer Flutter test harness remains a development tool |
-
 | Reviewed assembled app at `c87514c` | Passed desktop-first smoke | 31 Mach-O files audited; two MCP clients, idle-only atomic upgrade, injected post-swap verification failure and inode/signature rollback; data survives restart |
 | Configured real models after bundle move | Passed | Private profile registered real embedding/generation/speech models, indexed a source, stopped the owner, moved the app, restored generation and answered with a correct citation; raw registrations retained, runtime projection resolves the new paths; signature remains valid |
 

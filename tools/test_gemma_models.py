@@ -37,10 +37,21 @@ def main():
             'FORESIGHT_LITERT_PYTHON': str(args.python.expanduser().absolute()),
         }
         worker = ROOT / 'build/services/inference/foresight-model'
-        if args.bundle and bundle.suffix == '.app':
+        if not args.bundle and runner == worker.resolve():
+            parser.error('On macOS, pass --runner pointing to a LiteRT generation runner, '
+                         'or test a packaged .app with --bundle')
+        if args.bundle and bundle.suffix != '.app':
+            parser.error('On macOS, --bundle must point to a packaged .app')
+        if args.bundle:
             resources = bundle / 'Contents/Resources'
             import json
             config = json.loads((resources / 'runtime.json').read_text())
+            required = ('FORESIGHT_NATIVE', 'FORESIGHT_HELPER',
+                        'FORESIGHT_LITERT_RUNNER', 'FORESIGHT_MODEL_WORKER', *extra)
+            missing = [key for key in required
+                       if not isinstance(config.get(key), str) or not config[key]]
+            if missing:
+                parser.error('Bundle lacks required model runtime entries: ' + ', '.join(missing))
             def resource(key):
                 return (resources / config[key]).resolve()
             native = resource('FORESIGHT_NATIVE')
