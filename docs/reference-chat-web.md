@@ -55,7 +55,8 @@ The recovered instruction string and text-only date/context/query envelope are
 now used for web-enabled sends; see the prompt section below. Structured message replay is now implemented; see [history evidence](reference-chat-history.md).
 Its 55% memory compression/FIFO policy is integrated. Original tokenizer,
 sampling and model/context configuration remain under investigation. The current tool path
-publishes its final model answer in one delta; original streaming remains to be reproduced. The [textual tool-call fallback](reference-tool-fallback.md)
+publishes provisional previews while streaming and one authoritative final
+answer. See [streaming and retained-worker evidence](reference-chat-streaming.md). The [textual tool-call fallback](reference-tool-fallback.md)
 is now integrated and has a controlled-provider real-model check.
 
 ## Release credentials

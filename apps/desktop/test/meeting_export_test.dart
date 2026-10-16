@@ -180,6 +180,138 @@ void main() {
     },
   );
 
+  test(
+    'standalone notes use saved dates and share formatting and filtering',
+    () {
+      store.saveNote(null, '  Standalone title  ', '  **Standalone body**\n');
+      final standalone = store.db.lastInsertRowId;
+      store.db.execute('UPDATE notes SET timestamp=? WHERE id=?', [
+        DateTime(2026, 10, 16, 14, 5).millisecondsSinceEpoch,
+        standalone,
+      ]);
+      meeting('Meeting', today, notes: 'Meeting body');
+      store.saveNote(null, ' \t ', 'Fallback title body');
+      store.db.execute('UPDATE notes SET timestamp=? WHERE id=?', [
+        DateTime(2026, 10, 15, 12).millisecondsSinceEpoch,
+        store.db.lastInsertRowId,
+      ]);
+      final before = store.rows('SELECT * FROM notes ORDER BY id');
+      final all = composeMeetingExport(store);
+      expect(all.count, 3);
+      expect(
+        all.markdown,
+        startsWith(
+          '## Standalone title\nOct 16, 2026 2:05pm\n\n**Standalone body**\n',
+        ),
+      );
+      expect(
+        all.markdown,
+        contains(
+          '## Untitled meeting\nOct 15, 2026 12:00pm\n\nFallback title body\n',
+        ),
+      );
+      final filtered = composeMeetingExport(
+        store,
+        range: DateTimeRange(start: today, end: today),
+      );
+      expect(filtered.count, 2);
+      expect(filtered.markdown, isNot(contains('Fallback title body')));
+      expect(store.rows('SELECT * FROM notes ORDER BY id'), before);
+    },
+  );
+
+  test(
+    'global latest 1000 cap precedes body and date filtering across note types',
+    () {
+      final current = today.millisecondsSinceEpoch;
+      store.db.execute('BEGIN');
+      try {
+        // Exactly 1,000 newer candidates: two visible today, 499 empty, and
+        // 499 outside today's range. Both note types consume the same limit.
+        for (var index = 0; index < 998; index++) {
+          final timestamp = current - 100000000 - index;
+          if (index.isEven) {
+            final id = store.meeting('Empty meeting $index');
+            store.saveMeetingNotes(id, ' \n ');
+            store.db.execute(
+              'UPDATE meeting_notes SET timestamp=? WHERE meeting_id=?',
+              [timestamp, id],
+            );
+          } else {
+            store.db.execute(
+              'INSERT INTO notes(title,body,timestamp) VALUES(?,?,?)',
+              ['Outside standalone $index', 'Outside body $index', timestamp],
+            );
+          }
+        }
+        final included = meeting(
+          'Included meeting',
+          today,
+          notes: 'Included meeting body',
+        );
+        savedAt(included, today);
+        store.db.execute(
+          'INSERT INTO notes(title,body,timestamp) VALUES(?,?,?)',
+          ['Included standalone', 'Included standalone body', current + 1],
+        );
+        final excluded = meeting(
+          'Older saved meeting',
+          today,
+          notes: 'Excluded meeting body',
+        );
+        savedAt(excluded, DateTime(2000));
+        // Its recent calendar date must not promote its old saved timestamp
+        // into the acquired candidates.
+        store.db.execute(
+          'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+          [
+            'capped-event',
+            'account',
+            'primary',
+            'capped-google',
+            excluded,
+            '',
+            current,
+            current + 3600000,
+            'confirmed',
+            '{}',
+            current,
+          ],
+        );
+        store.db
+            .execute('INSERT INTO notes(title,body,timestamp) VALUES(?,?,?)', [
+              'Older standalone',
+              'Excluded standalone body',
+              DateTime(1999).millisecondsSinceEpoch,
+            ]);
+        store.db.execute(
+          "INSERT INTO notes(title,body,timestamp) VALUES('Unknown legacy','Excluded unknown body',NULL)",
+        );
+        store.db.execute('COMMIT');
+      } catch (_) {
+        store.db.execute('ROLLBACK');
+        rethrow;
+      }
+      final all = composeMeetingExport(store);
+      expect(all.count, 501);
+      expect(all.markdown, isNot(contains('Excluded')));
+      final filtered = composeMeetingExport(
+        store,
+        range: DateTimeRange(start: today, end: today),
+      );
+      expect(filtered.count, 2);
+      expect(filtered.markdown, startsWith('## Included standalone\n'));
+      expect(filtered.markdown, contains('Included meeting body'));
+      expect(filtered.markdown, isNot(contains('Outside body')));
+      expect(
+        store.rows('SELECT timestamp FROM notes WHERE title=?', [
+          'Unknown legacy',
+        ]).single['timestamp'],
+        isNull,
+      );
+    },
+  );
+
   test('export sorts newest first, trims edges and separates records', () {
     meeting('First', DateTime(2026, 10, 12, 9), notes: '\n  First note\n\n');
     meeting('Second', DateTime(2026, 10, 12, 10), notes: '  中文 note  \n');

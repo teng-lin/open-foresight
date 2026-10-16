@@ -36,8 +36,9 @@ adding it to history (`0x10090bce4`, `0x10090c31c`, `0x10090c914`). Citation
 selection and display renumbering follow history insertion. The separate
 `sanitizeChatResponse` path removes wrappers, thought traces and terminal
 repetition, balances unescaped quotes, and normalizes timestamps again. That
-processor is also implemented. Streamed JSON-field extraction and conversation
-streaming/cache lifecycle comparison remain open.
+processor is also implemented. Streamed JSON-field extraction and retained text-conversation cloning are now
+implemented; see [streaming evidence](reference-chat-streaming.md). Exact
+original runtime lifecycle comparison remains open.
 
 ## Evidence
 
@@ -94,5 +95,7 @@ skipped**. No real model or Google/ODML request was needed by these fixtures.
 Additional public snapshot evidence:
 `ev_8bdcb6587b015d1703269f15f982c84adfc73b1c1bd3ddc7c6d01806b2714fe9`
 retains the selected scalar separators, keyword list and class metadata.
-The evidence does not establish end-to-end streaming or cached-conversation
-parity, and those remain unfinished.
+The response-processing fixtures alone do not establish runtime parity. Later
+streaming and retained-worker checks are recorded in
+[streaming evidence](reference-chat-streaming.md); exact original runtime
+comparison remains unfinished.

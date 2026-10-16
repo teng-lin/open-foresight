@@ -149,21 +149,35 @@ Unscheduled meeting exports use the saved note timestamp when known; legacy
 rows retain the existing meeting-date fallback without writing a fabricated
 timestamp back to storage. Linked calendar starts still take precedence.
 
-The original acquisition cap remains unimplemented because legacy notes lack
-recoverable save times. Applying it to meeting creation times could omit the
-wrong notes. The port continues to export all eligible meeting notes; the
-original standalone-note inclusion also remains pending. Capturing timestamps
-for standalone saves prepares that work but does not add them to export.
+Export now acquires meeting and standalone notes together with
+`ORDER BY timestamp DESC LIMIT 1000`, before checking bodies or applying the
+selected date range. Empty notes and notes outside the selected range consume
+the original global limit. Calendar dates affect the final output order, not
+which notes enter that limit. Standalone notes use their saved timestamp,
+trimmed title/body, and the same `Untitled meeting` fallback without event
+metadata.
+
+Legacy NULL timestamps retain SQLite's descending NULL-last ordering, and
+export does not backfill them. Their exact historical acquisition order cannot
+be recovered. Meeting notes keep the existing meeting-date display fallback;
+standalone notes with unknown dates use the existing epoch-zero display
+fallback. Those are compatibility policies for missing legacy data, not
+recovered original save times. Equal save timestamps likewise have no traced
+secondary acquisition order.
 Original UI save acceptance, stale-enhancement protection, and debounce/flush
 triggers require separate parity work; the persistence change does not claim
 to reproduce those guards.
 
-Verification for the corrections: fourteen desktop export tests pass with
+Verification for the corrections: sixteen desktop export tests pass with
 `TZ=America/New_York`,
 including exact captured-file comparison, a two-note Markdown boundary case,
 date filtering, copy/download behavior, save cancellation/error recovery, and
 preservation of raw stored notes, and saved-time versus unknown legacy-time
-filtering. Five new core regressions cover migration/reopening, accepted-save
+filtering. Standalone coverage checks title/date/body formatting, filtering,
+mixed output order, and storage preservation. A 1,003-candidate fixture checks
+the shared cap before empty-body/date filtering, calendar-date independence,
+and unknown legacy timestamps sorting after known saves. Five new core
+regressions cover migration/reopening, accepted-save
 refresh, enhancement scope, artifact IDs, and rollback after failed writes;
 these pass alongside six application tests. These checks verify the port;
 they are not a new live comparison with the original app.
