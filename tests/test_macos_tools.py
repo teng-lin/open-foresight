@@ -13,7 +13,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import install_macos as installer
-from smoke_macos_bundle import McpPeer, stop_desktop
+from smoke_macos_bundle import (McpPeer, stop_desktop, parser_probe, source_graph_probe,
+    verify_source_graph_restart, service_command, wait_stopped)
 
 SIGNATURE = {'team': 'test-team', 'adhoc': False}
 
@@ -274,6 +275,68 @@ for line in sys.stdin:
         env=installer.minimal_environment('/tmp/home','/tmp/profile')
         self.assertEqual(set(env),{'HOME','PATH','FORESIGHT_DATA'})
         self.assertEqual(env['PATH'],'/usr/bin:/bin:/usr/sbin:/sbin')
+
+
+class CompiledMacComponentTests(unittest.TestCase):
+    """Actual executable probes when built components are supplied; no bundle claim."""
+    @unittest.skipUnless(sys.platform=='darwin','macOS executable adapter')
+    def test_real_compiled_document_adapter_with_generated_fixtures(self):
+        root = Path(__file__).resolve().parents[1]
+        executable = Path(os.environ.get('FORESIGHT_FILE_PARSER_EXECUTABLE',root/'build/macos/foresight-file-parser'))
+        if not executable.is_file():
+            self.skipTest('Build the native file parser or set FORESIGHT_FILE_PARSER_EXECUTABLE')
+        with tempfile.TemporaryDirectory(prefix='of-parser-test-',dir='/tmp') as temporary:
+            work=Path(temporary)
+            app=work/'Probe.app'
+            resources=app/'Contents/Resources'
+            (resources/'bin').mkdir(parents=True)
+            shutil.copy2(executable,resources/'bin/foresight-file-parser')
+            (resources/'runtime.json').write_text(json.dumps({'FORESIGHT_FILE_PARSER':'bin/foresight-file-parser'}))
+            result=parser_probe(app,work/'fixtures',installer.minimal_environment(work))
+            self.assertEqual(result['invalid_documents'],'rejected_with_stderr')
+            self.assertEqual(result['fixture_creation'],'stdlib_only_outside_app')
+
+    def test_document_probe_refuses_extractor_outside_relocated_app(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            work=Path(temporary);app=work/'Probe.app';resources=app/'Contents/Resources'
+            resources.mkdir(parents=True)
+            foreign=work/'foreign-extractor';foreign.write_text('not invoked')
+            (resources/'runtime.json').write_text(json.dumps({'FORESIGHT_FILE_PARSER':str(foreign)}))
+            with self.assertRaisesRegex(RuntimeError,'not inside'):
+                parser_probe(app,work/'fixtures',installer.minimal_environment(work))
+            self.assertFalse((work/'fixtures').exists())
+
+    @unittest.skipUnless(sys.platform=='darwin','macOS AOT component probe')
+    def test_real_aot_source_revision_labels_and_graph_survive_service_restart(self):
+        root=Path(__file__).resolve().parents[1]
+        service=Path(os.environ.get('FORESIGHT_SERVICE_EXECUTABLE',root/'build/application/foresight-service'))
+        mcp=Path(os.environ.get('FORESIGHT_MCP_EXECUTABLE',root/'build/application/foresight-mcp'))
+        if not service.is_file() or not mcp.is_file():
+            self.skipTest('Build AOT service/MCP or supply FORESIGHT_SERVICE_EXECUTABLE and FORESIGHT_MCP_EXECUTABLE')
+        with tempfile.TemporaryDirectory(prefix='of-source-test-',dir='/tmp') as temporary:
+            work=Path(temporary)
+            env=installer.minimal_environment(work,work/'data')
+            env.update(FORESIGHT_RUNTIME=str(work/'run'),FORESIGHT_SERVICE=str(service),FORESIGHT_HELPER='')
+            peer=None;owner=None
+            try:
+                peer=McpPeer(mcp,env)
+                owner=peer.tool('get_status')['pid']
+                evidence=source_graph_probe(work/'run/application.sock',peer,work/'data/application.db')
+                peer.close();peer=None
+                service_command(service,env,'--stop');wait_stopped(owner,service);owner=None
+                peer=McpPeer(mcp,env)
+                owner=peer.tool('get_status')['pid']
+                verify_source_graph_restart(peer,work/'data/application.db',evidence)
+                self.assertEqual(len(evidence['graph_rows']),2)
+            finally:
+                if peer is not None:
+                    peer.close()
+                if owner is None:
+                    try: owner=service_command(service,env,'--status')['pid']
+                    except (subprocess.SubprocessError,ValueError,OSError): pass
+                if owner is not None and installer.process_path(owner)==service.resolve():
+                    service_command(service,env,'--stop')
+                    wait_stopped(owner,service)
 
 
 if __name__=='__main__':

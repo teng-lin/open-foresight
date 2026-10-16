@@ -5,11 +5,14 @@ Physical audio, signed permission attribution, local-model inference, fresh-user
 installation and notarization are separate gates, explicitly reported unrun.
 """
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
 import queue
 import shutil
+import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -114,6 +117,134 @@ class McpPeer:
                 raise RuntimeError(f'Invalid trailing MCP output: {item!r}')
 
 
+class ApplicationPeer:
+    """Existing private application RPC; all writes remain service-owned."""
+    def __init__(self, endpoint):
+        self.socket = socket.socket(socket.AF_UNIX)
+        self.socket.settimeout(30)
+        self.socket.connect(str(endpoint))
+        self.reader = self.socket.makefile('r', encoding='utf-8')
+        self.sequence = 0
+
+    def call(self, method, args=None):
+        self.sequence += 1
+        identifier = self.sequence
+        self.socket.sendall((json.dumps({'id':identifier, 'method':method, 'args':args or {}})+'\n').encode())
+        result = None
+        while True:
+            line = self.reader.readline()
+            if not line:
+                raise EOFError('Application service closed the private connection')
+            event = json.loads(line)
+            if 'event' in event:
+                continue
+            if event.get('id') != identifier:
+                raise RuntimeError(f'Unexpected application reply: {event!r}')
+            if 'error' in event:
+                raise RuntimeError(event['error'])
+            if 'result' in event:
+                result = event['result']
+            if event.get('done'):
+                return result
+
+    def close(self):
+        self.reader.close()
+        self.socket.close()
+
+
+def pdf_fixture(text):
+    """One selectable-text PDF, built with standard Python and no SDK/runtime."""
+    escaped = text.replace('\\','\\\\').replace('(','\\(').replace(')','\\)')
+    stream = f'BT /F1 14 Tf 40 140 Td ({escaped}) Tj ET\n'.encode('ascii')
+    objects = [b'<< /Type /Catalog /Pages 2 0 R >>',
+        b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+        b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'endstream']
+    document = bytearray(b'%PDF-1.4\n')
+    offsets = [0]
+    for number, body in enumerate(objects,1):
+        offsets.append(len(document))
+        document.extend(f'{number} 0 obj\n'.encode()+body+b'\nendobj\n')
+    xref = len(document)
+    document.extend(f'xref\n0 {len(offsets)}\n0000000000 65535 f \n'.encode())
+    for offset in offsets[1:]:
+        document.extend(f'{offset:010d} 00000 n \n'.encode())
+    document.extend(f'trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode())
+    return bytes(document)
+
+
+def parser_probe(app, fixtures, env):
+    values = json.loads((app/'Contents/Resources/runtime.json').read_text())
+    relative = values['FORESIGHT_FILE_PARSER']
+    parser = (app/'Contents/Resources'/relative).resolve()
+    if not parser.is_relative_to(app.resolve()) or not parser.is_file():
+        raise RuntimeError('File parser is not inside the relocated application')
+    fixtures.mkdir()
+    expected = {'pdf':'Open Foresight packaged PDF smoke.', 'rtf':'Open Foresight packaged RTF smoke.'}
+    pdf, rtf = fixtures/'Fixture With Spaces.pdf', fixtures/'Fixture With Spaces.rtf'
+    pdf.write_bytes(pdf_fixture(expected['pdf']))
+    rtf.write_text(r'{\rtf1\ansi\deff0 {\fonttbl {\f0 Helvetica;}}\f0\fs24 '+expected['rtf']+r'\par}',encoding='ascii')
+    for kind, path in [('pdf',pdf),('rtf',rtf)]:
+        result = subprocess.run([str(parser),'--'+kind,str(path)],cwd='/',env=env,
+            capture_output=True,text=True,timeout=15,check=True)
+        if expected[kind] not in result.stdout:
+            raise AssertionError(f'Bundled {kind} parser did not extract known text: {result.stdout!r}')
+    for kind in ('pdf','rtf'):
+        invalid = fixtures/('Invalid.'+kind)
+        invalid.write_text('Not a supported document.',encoding='ascii')
+        result = subprocess.run([str(parser),'--'+kind,str(invalid)],cwd='/',env=env,
+            capture_output=True,text=True,timeout=15)
+        if result.returncode == 0 or result.stdout.strip() or not result.stderr.strip():
+            raise AssertionError(f'Invalid {kind} fixture was accepted or lacked an actionable error')
+    return {'pdf':'passed_selectable_text', 'rtf':'passed_formatted_text',
+            'invalid_documents':'rejected_with_stderr', 'fixture_creation':'stdlib_only_outside_app'}
+
+
+def graph_rows(database):
+    with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as connection:
+        return connection.execute('SELECT model_identity,document_id,source_revision,embedding,proj_x,proj_y,proj_z FROM graph_documents ORDER BY document_id').fetchall()
+
+
+def source_graph_probe(endpoint, mcp, database):
+    peer = ApplicationPeer(endpoint)
+    try:
+        first = peer.call('sources.import',{'title':'Bundle alpha','text':'Alpha revision one.', 'index':False})['id']
+        second = peer.call('sources.import',{'title':'Bundle beta','text':'Beta persistent content.', 'index':False})['id']
+        stale = [mcp.tool('get_source',{'id':identifier}) for identifier in (first,second)]
+        peer.call('sources.import',{'id':first,'title':'Bundle alpha','text':'Alpha revision two.', 'index':False})
+        sources = [mcp.tool('get_source',{'id':identifier}) for identifier in (first,second)]
+        assert sources[0]['revision'] == stale[0]['revision']+1
+        assert sources[0]['content'] == 'Alpha revision two.'
+        peer.call('labels.set',{'id':first,'labels':['Bundle Smoke']})
+        identity = json.dumps(['force-3d-mac45-pca-scene-v4','bundle-storage-smoke','no-real-model','none','none',3])
+        points = {first:[-.5,.25,0.], second:[.5,-.25,0.]}
+        # Force scenes support nonindexed text with empty vectors. This checks
+        # storage contracts, never represents generated embeddings/inference.
+        request = {'identity':identity,'sources':stale,'vectors':{},'points':points}
+        assert peer.call('graph.save',request) is False, 'Stale source revisions were published as a graph'
+        request['sources'] = sources
+        assert peer.call('graph.save',request) is True, 'Current source graph was not persisted'
+        rows = graph_rows(database)
+        assert len(rows)==2 and {row[1] for row in rows}=={first,second}
+        assert all(row[0]==identity and row[3]==b'' for row in rows)
+        return {'sources':sources,'graph_rows':rows,'label_source':first}
+    finally:
+        peer.close()
+
+
+def verify_source_graph_restart(mcp, database, evidence):
+    for expected in evidence['sources']:
+        current = mcp.tool('get_source',{'id':expected['id']})
+        assert current['content']==expected['content'] and current['revision']==expected['revision']
+    summary = mcp.tool('list_sources')
+    assert {item['id'] for item in summary} == {item['id'] for item in evidence['sources']}
+    assert graph_rows(database)==evidence['graph_rows'], 'Graph revisions/coordinates changed after restart'
+    with closing(sqlite3.connect(database.resolve().as_uri()+'?mode=ro',uri=True)) as connection:
+        labels = connection.execute('SELECT labels FROM source_details WHERE source_id=?',[evidence['label_source']]).fetchone()
+    assert labels and json.loads(labels[0])==['Bundle Smoke']
+
+
 def service_command(service, env, action):
     result = subprocess.run([str(service), action], cwd='/', env=env,
         capture_output=True, text=True, timeout=60, check=True)
@@ -161,6 +292,7 @@ def smoke(bundle, output, desktop=False):
             path.mkdir(mode=0o700)
         env = minimal_environment(home,data)
         env['FORESIGHT_RUNTIME'] = str(runtime)
+        report['packaged_document_extraction'] = parser_probe(app,root/'external-fixtures',env)
         executable, service = app/'Contents/MacOS/foresight-mcp', app/SERVICE
         peers, desktop_process = [], None
         owner = None
@@ -209,6 +341,7 @@ def smoke(bundle, output, desktop=False):
                 desktop_process = None
                 assert service_command(service,env,'--status')['pid'] == owner
                 report['gates']['desktop'] = 'passed_desktop_first_mcp_attach_and_desktop_process_exit'
+            source_graph = source_graph_probe(runtime/'application.sock',second,data/'application.db')
             for peer in peers:
                 peer.close()
             peers.clear()
@@ -228,6 +361,7 @@ def smoke(bundle, output, desktop=False):
             assert replacement != owner, 'Service was not restarted'
             owner = replacement
             assert process_path(owner) == service.resolve()
+            verify_source_graph_restart(third,data/'application.db',source_graph)
             notes = third.tool('list_notes')
             assert any(item['id'] == note['id'] and item['body'] == 'Persist across clients and service restart' for item in notes), notes
             third.close()
@@ -240,7 +374,9 @@ def smoke(bundle, output, desktop=False):
             report.update({'relocation':'passed_path_with_spaces', 'cwd':'/',
                 'environment_keys':sorted(env), 'two_aot_mcp_shared_owner':True,
                 'mcp_stdout_protocol_only':True, 'service_survives_client_disconnect':True,
-                'committed_note_survives_restart':True, 'graceful_stop_process_exit_verified':True,
+                'committed_note_survives_restart':True, 'sources_revisions_labels_graph_survive_restart':True,
+                'stale_graph_save_rejected':True, 'source_indexing_real_embeddings':'not_run', 'graph_ui_restore':'not_run',
+                'graph_verification':'service_writes_readonly_sqlite_persistence', 'graceful_stop_process_exit_verified':True,
                 'private_profile':True, 'maintenance_lock_blocks_racing_service_start':True, 'service_pids':[left['pid'],replacement]})
         finally:
             for peer in peers:
