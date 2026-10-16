@@ -135,6 +135,10 @@ class Application {
         case 'status':
           return {
             'pid': pid,
+            'application_api_version': 1,
+            'installation_root': configuredInstallationRoot,
+            'runtime_revision':
+                runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
             'models_busy': modelBusy,
             'capture': captureState,
             'sources_paused': domain.sourcesPaused,

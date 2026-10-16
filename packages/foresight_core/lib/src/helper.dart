@@ -132,8 +132,10 @@ class Helper {
         await Future<void>.delayed(const Duration(milliseconds: 250));
         continue;
       }
+      if (stopping) return;
       state = 'live (compatibility ${ping.version})';
       await watch?.cancel();
+      if (stopping) return;
       watch = control.HelperControlClient(channel)
           .watchState(control.WatchRequest())
           .listen(

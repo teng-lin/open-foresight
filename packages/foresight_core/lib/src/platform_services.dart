@@ -1,3 +1,5 @@
+import 'profile_paths.dart';
+import 'package:crypto/crypto.dart';
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 import 'dart:convert';
@@ -7,6 +9,7 @@ import 'dart:io';
 /// Paths in runtime.json are relative to Contents/Resources, never the cwd.
 const _scalarRuntimeKeys = {
   'FORESIGHT_LITERT_BACKEND',
+  'FORESIGHT_RUNTIME_REVISION',
   'FORESIGHT_WHISPER_BACKEND',
   'FORESIGHT_WHISPER_DEVICE',
   'FORESIGHT_MICROPHONE_TARGET',
@@ -218,7 +221,13 @@ String _notificationFailure(ProcessResult result) {
 Future<Map<String, dynamic>> notificationCapabilities({
   bool requestPermission = false,
 }) async {
-  if (!Platform.isMacOS) return {'available': true, 'backend': 'freedesktop'};
+  if (!Platform.isMacOS) {
+    final result = await Process.run('/bin/sh', [
+      '-c',
+      'command -v notify-send',
+    ]);
+    return {'available': result.exitCode == 0, 'backend': 'freedesktop'};
+  }
   final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
   if (helper == null)
     throw StateError(
@@ -233,4 +242,73 @@ Future<Map<String, dynamic>> notificationCapabilities({
   if (result.exitCode != 0 && body['granted'] != false)
     throw StateError(_notificationFailure(result));
   return body;
+}
+
+/// Shared with tools/install_macos.py. A stable per-installation lock covers all
+/// profiles, including clients launched during the installer's final app swap.
+String installationLockPath(String appRoot) {
+  final canonical = canonicalProfilePath(appRoot);
+  final result = Process.runSync('/usr/bin/id', ['-u']);
+  final uid = result.stdout.toString().trim();
+  if (result.exitCode != 0 || int.tryParse(uid) == null)
+    throw StateError('Cannot determine installation lock owner');
+  final identity = sha256
+      .convert(utf8.encode(canonical))
+      .toString()
+      .substring(0, 24);
+  return '/tmp/of-install-$uid-$identity/lock';
+}
+
+RandomAccessFile? acquireInstallationLock() {
+  final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
+  if (root == null) return null;
+  final path = installationLockPath(root);
+  privateDirectory(File(path).parent.path);
+  if (FileSystemEntity.typeSync(path, followLinks: false) ==
+      FileSystemEntityType.link)
+    throw StateError('Installation lock must not be a symbolic link');
+  final lock = File(path).openSync(mode: FileMode.append);
+  try {
+    if (Process.runSync('/bin/chmod', ['600', path]).exitCode != 0)
+      throw StateError('Cannot protect installation lock');
+    try {
+      lock.lockSync(FileLock.shared);
+    } on FileSystemException {
+      throw StateError(
+        'An Open Foresight update is in progress. Retry launching after installation finishes.',
+      );
+    }
+    return lock;
+  } catch (_) {
+    lock.closeSync();
+    rethrow;
+  }
+}
+
+String? get configuredInstallationRoot {
+  final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
+  return root == null ? null : canonicalProfilePath(root);
+}
+
+/// A packaged client may attach only to its own installed application revision.
+/// Development clients without a packaged revision retain the existing contract.
+void validateServiceCompatibility(
+  Map status, {
+  RuntimeConfiguration? configuration,
+}) {
+  final config = configuration ?? runtimeConfiguration;
+  final revision = config['FORESIGHT_RUNTIME_REVISION'];
+  if (revision == null) return;
+  final root = config['FORESIGHT_INSTALL_ROOT'];
+  if (root == null)
+    throw StateError(
+      'The application runtime configuration is missing its installation root. Reinstall Open Foresight.',
+    );
+  if (status['application_api_version'] != 1 ||
+      status['runtime_revision'] != revision ||
+      status['installation_root'] != canonicalProfilePath(root)) {
+    throw StateError(
+      'This profile is owned by a different Open Foresight installation or revision. Stop the existing application service explicitly, then launch this installation again. No requests have been replayed.',
+    );
+  }
 }
