@@ -92,7 +92,7 @@ The original's single-note Markdown export format has now been observed live and
 
 Pause/resume and an immersive workspace are implemented. Exact original gestures and physical-audio behavior remain under [investigation and validation](docs/missing-functions-investigation.md).
 
-Automatic meeting answers now use a reconstructed dedicated detector when its authenticated asset is registered. Four controlled parsed outputs match the original GPU runtime; supported model acquisition and broader numerical comparison remain pending. Search configuration is also [under investigation](docs/ida-search-investigation.md); a separate user project has not been established as a requirement.
+Automatic meeting answers now use a reconstructed dedicated detector when its authenticated asset is registered. Nine controlled parsed outputs match the original GPU runtime; supported model acquisition and broader numerical comparison remain pending. Search configuration is also [under investigation](docs/ida-search-investigation.md); a separate user project has not been established as a requirement.
 
 Transcripts label microphone and remote audio channels as Microphone and Remote, with Unknown for other sources. These are capture routes, not individual-speaker identification. Meeting generation is instructed to attribute statements only to clearly established real names.
 

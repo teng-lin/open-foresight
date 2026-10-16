@@ -186,7 +186,7 @@ matrices match their stored row checksums. A question-bearing transcript yields
 a rewritten question, and a statement-only transcript yields empty/EOS. This
 resolves the ability to execute the dedicated weights outside the original app.
 Dependency packaging and production integration are now implemented through the
-reconstructed dedicated CPU worker. Four controlled parsed outputs agree with
+reconstructed dedicated CPU worker. Nine controlled parsed outputs agree with
 the original Metal runtime. Original GPU arithmetic, complete detector output
 parity and supported acquisition remain open. The public LiteRT workers still
 reject this legacy container.
