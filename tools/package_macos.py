@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 
+from app_version import read_version
 from macos_bundle import audit_dependencies, relocate_dependencies, run, sign_application
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,11 +25,12 @@ def helper_bundle(path, executable, identifier):
     destination = macos / executable.name
     shutil.copy2(executable, destination)
     name = 'Open Foresight' if identifier.endswith('.service') else path.stem
+    version, build_number = read_version()
     with (path / 'Contents/Info.plist').open('wb') as stream:
         plistlib.dump({
             'CFBundleExecutable': executable.name, 'CFBundleIdentifier': identifier,
             'CFBundleName': name, 'CFBundleDisplayName': name, 'CFBundlePackageType': 'APPL',
-            'CFBundleVersion': '1', 'CFBundleShortVersionString': '0.1.0',
+            'CFBundleVersion': str(build_number), 'CFBundleShortVersionString': version,
             'LSMinimumSystemVersion': '15.0', 'LSUIElement': True, **PURPOSES,
         }, stream)
     return destination

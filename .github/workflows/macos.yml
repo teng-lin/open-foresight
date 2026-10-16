@@ -39,12 +39,12 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          python3 - <<'PY'
-          import os, pathlib, re
-          version = re.search(r'^version: (\d+\.\d+\.\d+)', pathlib.Path('apps/desktop/pubspec.yaml').read_text(), re.M)[1]
-          if os.environ['RELEASE_TAG'] != 'v' + version:
-              raise SystemExit('Release tag must match pubspec version (v' + version + ')')
-          PY
+          python3 tools/app_version.py --check
+          version=$(python3 tools/app_version.py)
+          if [ "$RELEASE_TAG" != "v$version" ]; then
+            echo "Release tag must match pubspec version (v$version)" >&2
+            exit 1
+          fi
       - name: Verify Apple Silicon host
         run: |
           test "$RUNNER_ARCH" = ARM64

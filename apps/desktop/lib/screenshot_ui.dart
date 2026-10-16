@@ -3999,12 +3999,16 @@ extension _ScreenshotScreens on _WorkspaceState {
                 onTap: () => showLicensePage(
                   context: context,
                   applicationName: 'Foresight',
+                  applicationVersion: openForesightVersion,
                 ),
               ),
               const Divider(height: 1),
               const ListTile(
                 title: Text('Version'),
-                subtitle: Text('Open Foresight · local models'),
+                subtitle: Text(
+                  'Open Foresight $openForesightVersion '
+                  '(build $openForesightBuildNumber)',
+                ),
               ),
             ],
           ),
