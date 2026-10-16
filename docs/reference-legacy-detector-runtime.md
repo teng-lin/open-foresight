@@ -26,8 +26,10 @@ Primary upstream source provides a viable reconstruction path:
   supports older Gemma variants but has no architecture-35 branch. Building it
   unchanged would not implement this detector.
 - [The legacy graph builder](https://github.com/google-ai-edge/mediapipe/blob/cad7f3ab99ebf175947e40c5252c642612aae927/mediapipe/tasks/cc/genai/inference/utils/xnn_utils/graph_builder.cc)
-  normalizes by clamped RMS and multiplies by **1 + stored scale**. This matters:
-  the detector's post-normalization and Q/K scale tensors contain zeros.
+  established **1 + stored scale**, which matters because the detector's
+  post-normalization and Q/K scale tensors contain zeros. Its clamped RMS
+  denominator was used initially and has now been corrected from the original
+  GPU trace below.
 - [The LLM graph](https://github.com/google-ai-edge/mediapipe/blob/cad7f3ab99ebf175947e40c5252c642612aae927/mediapipe/tasks/cc/genai/inference/utils/xnn_utils/llm.cc)
   supplies tied token/output weights, embedding scaling, residual paths, GELU
   gating and query scaling. [The RoPE helper](https://github.com/google-ai-edge/mediapipe/blob/cad7f3ab99ebf175947e40c5252c642612aae927/mediapipe/tasks/cc/genai/inference/utils/xnn_utils/utils.cc)
@@ -63,6 +65,53 @@ and `apply_srq`. REA evidence is
 `ev_15e94f2dccf3bfdc69fe8ce4af9e445c0b249e75b7fa3f18cb91d1090d645065`
 and `ev_841f9af297687fb5337738be2bf87cc711beb64ed96d8ed5be9f1f165680a98d`.
 
+## Original GPU normalization and rotary trace
+
+`odml_byom::CreateTransformerBuilder` at `0x1027f0f54` selects the ordinary
+`ml_drift::TransformerBuilder` for model type 35. Only types 5, 8 and 11 select
+specialized builders in that switch. The generic GPU builder is therefore the
+relevant implementation for this detector.
+
+`MakeNormalization` at `0x102833e6c` explicitly passes a scale shift of **1.0**.
+`MakeRMSNormalizationWithBuilder` at `0x10280ed0c` adds that shift to the learned
+scale and passes epsilon **1e-6**. The actual original GPU shader generator
+`GetRMSNormalizationCode` at `0x1028cba2c` computes the inverse square root of
+**mean square plus epsilon**. The CPU diagnostic now uses that denominator,
+replacing the older XNN clamp behavior. A tiny-activation regression distinguishes
+these formulas; the existing original-weight positive/negative and cache tests
+still pass.
+
+The primary [ml-drift RMS kernel source](https://github.com/google-ai-edge/ml-drift/blob/e420a73d95ce069b528b214499e28c69127f296f/ml_drift/common/kernels/mean_stddev_normalization.cc)
+matches the recovered GPU expression. Its [RoPE kernel](https://github.com/google-ai-edge/ml-drift/blob/e420a73d95ce069b528b214499e28c69127f296f/ml_drift/common/kernels/rope.cc)
+uses split halves and geometric timescales. Original `MakeRotaryEmbedding` at
+`0x102822970` forwards its three floats to `SplitRoPEConcat` with planar mode.
+Original `QKVRoPE` at `0x10285f434` selects minimum timescale 1, local maximum
+10,000, the metadata global maximum 1,000,000, and proportion 1 when no partial
+proportion is configured. Exact global-layer placement still needs the
+corresponding original caller.
+
+The original GPU scalar is now bound directly. `PerDimScale` at `0x10281d148`
+reads attention-scale enum 4 from builder offset 140 and multiplies Q by the
+rescale factor at offset 144 divided by head width at offset 24
+(`0x10281d25c`). For the original asset this is **32 / 256 = 0.125**.
+`MakeSelfAttention` calls this immediately after `QKVRoPE`, before the QK
+matrix product. The diagnostic now applies the scalar at that same stage.
+This confirms the scalar previously derived from the public XNN branch.
+
+The full fused-builder body and shader, including their retained tails,
+establish that `MakeTransformQKVRmsNormApplyRoPE` applies Q/K RMS with epsilon
+1e-6, optional learned gamma, and RoPE, then writes Q without an additional
+attention scalar. This agrees with scaling in the outer attention caller.
+Selection of the optional Q/K gamma tensors and the V1/V2 attention path still
+need their original caller. `IsModelv3` at `0x1027fa940` returns false for this
+model's absent/default configuration fields, excluding the V3 builder path.
+
+Retained IDA evidence files include `detector-gpu-model-builder.json`,
+`detector-gpu-normalization-default.json`, `detector-gpu-rms-builder.json`,
+`detector-gpu-rms-kernel.json`, `detector-gpu-qkv-rotary.json`, and
+`detector-gpu-transformer-config.json`, `detector-gpu-query-scale-dispatch.json`,
+and `detector-gpu-self-attention.json` under `test-results/reference-functions/ida/`.
+
 ## Isolated execution and results
 
 `tools/legacy_query_executor.py` runs the authenticated weights through a NumPy
@@ -87,10 +136,14 @@ reports preserve those results rather than presenting universal detection.
 
 Reports are retained under ignored `query-runtime/` evidence output:
 `original-query-weight-checksums.json`, `original-query-numpy-first.json` and
-`original-query-numpy-cases.json`. Every inference report explicitly sets
+`original-query-numpy-cases.json`. Those initial inference reports retain the
+older XNN denominator; `original-query-numpy-gpu-norm-cases.json` records fresh
+execution with the corrected GPU normalization formula. The subsequent
+`original-query-numpy-gpu-norm-scale-cases.json` also applies the binary-proven
+Q scaling before the dot product. Every inference report explicitly sets
 `original_gpu_parity_verified: false`.
 
-Eight tests pass in the isolated environment, including all original matrix
+Ten tests pass in the isolated environment, including all original matrix
 checksums, independent packing fixtures, malformed metadata/bounds rejection,
 norm/RoPE math, original-weight positive/negative output, and agreement between
 batch prefill and incremental cached execution. Real-model tests require the
@@ -101,7 +154,8 @@ has SentencePiece but currently lacks NumPy.
 ## Remaining fidelity work
 
 Float32 CPU execution changes the original packed-int8 GPU arithmetic. Original
-GPU RMS epsilon/rounding, GELU implementation, local/global layer placement,
+GPU reduction/rounding, exact attention-path selection, GELU implementation,
+local/global layer placement,
 tokenizer/session boundaries and output behavior still require direct reference
 comparison. Public legacy XNN math is an explicit diagnostic adaptation until
 that comparison is established. The current successful CPU output proves the

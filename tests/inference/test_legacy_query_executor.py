@@ -1,4 +1,5 @@
 import os
+import math
 from pathlib import Path
 import sys
 import unittest
@@ -19,8 +20,13 @@ except ModuleNotFoundError:
 class LegacyExecutorMathTest(unittest.TestCase):
     def test_zero_stored_norm_scale_is_identity_scale(self):
         value = np.array([[3, 4]], dtype=np.float32)
-        np.testing.assert_allclose(rms_norm(value, np.zeros(2)), value / np.sqrt(12.5))
+        np.testing.assert_allclose(rms_norm(value, np.zeros(2)), value / np.sqrt(12.5 + 1e-6))
         np.testing.assert_array_equal(rms_norm(np.zeros(2)), np.zeros(2))
+
+    def test_original_gpu_epsilon_is_added_before_inverse_square_root(self):
+        value = np.array([[1e-8, 0]], dtype=np.float32)
+        expected = np.array([[1e-8 / math.sqrt(5e-17 + 1e-6), 0]])
+        np.testing.assert_allclose(rms_norm(value), expected, rtol=1e-6, atol=0)
 
     def test_rope_rotates_first_and_second_halves(self):
         value = np.array([[[1, 2, 3, 4]]], dtype=np.float32)
@@ -28,6 +34,17 @@ class LegacyExecutorMathTest(unittest.TestCase):
         rotated = rope(value, np.array([np.pi / 2]), 10000)
         self.assertAlmostEqual(rotated[0, 0, 0], -3, places=5)
         self.assertAlmostEqual(rotated[0, 0, 2], 1, places=5)
+
+    def test_rotary_timescale_matches_original_planar_kernel_formula(self):
+        value = np.zeros((1, 1, 256), dtype=np.float32)
+        value[0, 0, 1] = value[0, 0, 129] = 1
+        for maximum in [10000, 1000000]:
+            # Original kernel: fraction=2*channel/head_dim, timescale=
+            # min*(max/min)^fraction, with min=1 and position=3.
+            phase = 3 / math.pow(maximum, 2 / 256)
+            actual = rope(value, np.array([3], dtype=np.float32), maximum)
+            self.assertAlmostEqual(actual[0, 0, 1], math.cos(phase) - math.sin(phase), places=5)
+            self.assertAlmostEqual(actual[0, 0, 129], math.sin(phase) + math.cos(phase), places=5)
 
     def test_truncated_metadata_rejects_incomplete_field(self):
         with self.assertRaisesRegex(ValueError, 'Truncated'):

@@ -59,9 +59,9 @@ def proto_fields(data):
 
 
 def rms_norm(x, scale=None):
-    # Public legacy XNN graph_builder.cc: x / max(sqrt(mean(x*x)), 1e-6),
-    # multiplied by (1 + stored scale). Original GPU rounding remains unverified.
-    divisor = np.maximum(np.sqrt(np.mean(x * x, axis=-1, keepdims=True)), 1e-6)
+    # Original GPU MakeNormalization adds 1 to learned scales; its RMS kernel
+    # computes rsqrt(mean_sq + 1e-6). GPU reduction/rounding remains unverified.
+    divisor = np.sqrt(np.mean(x * x, axis=-1, keepdims=True) + np.float32(1e-6))
     result = x / divisor
     return result if scale is None else result * (np.float32(1) + scale)
 
@@ -97,6 +97,7 @@ class LegacyQueryExecutor:
                 raise ValueError('Unsupported attention configuration')
             if any(feed_forward.get(k) != v for k, v in {1: 1, 2: 1, 3: 2, 4: 2}.items()):
                 raise ValueError('Unsupported feed-forward configuration')
+            # Original GPU PerDimScale case 4: rescale factor / head width.
             self.query_scale = struct.unpack('<f', transformer[25])[0] / 256
             self.global_wavelength = struct.unpack('<f', transformer[32])[0]
             self.qk_has_scale = bool(attention.get(8, False))
@@ -144,14 +145,15 @@ class LegacyQueryExecutor:
                            if self.qk_has_scale else None)
             global_layer = (layer + 1) % 6 == 0
             wavelength = self.global_wavelength if global_layer else 10000.0
-            query = rope(query, positions, wavelength)
+            # Original MakeSelfAttention scales Q after QKVRoPE, before QK^T.
+            query = rope(query, positions, wavelength) * np.float32(self.query_scale)
             key = rope(key, positions, wavelength)[:, 0, :]
             previous = self.cache[layer]
             if previous is not None:
                 key = np.concatenate((previous[0], key))
                 value = np.concatenate((previous[1], value))
             self.cache[layer] = key, value
-            score = (query.transpose(1, 0, 2) @ key.T) * self.query_scale
+            score = query.transpose(1, 0, 2) @ key.T
             columns = np.arange(len(key))[None, :]
             allowed = columns <= positions[:, None]
             if not global_layer:
