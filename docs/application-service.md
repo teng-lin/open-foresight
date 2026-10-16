@@ -142,9 +142,7 @@ The service takes a nonblocking POSIX advisory lock on
 `<canonical profile>/.application.lock`, independent of runtime overrides. Its
 private `.application-endpoint.json` records the active runtime directory. Clients
 validate that directory and attach to the recorded endpoint. A service launched
-with another runtime cannot acquire a competing profile writer. Stale endpoint
-records are replaced only after acquiring the profile lock and binding a new
-socket. Disconnected mutations with unknown commit state are still never replayed.
+with another runtime cannot acquire a competing profile writer. An unclean shutdown retains its runtime endpoint so a replacement service can adopt surviving helpers even when launched with a different runtime override. A clean shutdown closes workers and removes the endpoint record, allowing the next launch to relocate its runtime. Endpoint records are published only after acquiring the profile lock and binding a socket. Disconnected mutations with unknown commit state are still never replayed.
 
 Installed executables discover `Contents/Resources/runtime.json` in the nearest
 enclosing `.app`. It maps `FORESIGHT_*` resource-path keys to paths relative to that

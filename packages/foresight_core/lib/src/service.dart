@@ -234,11 +234,17 @@ class ApplicationService {
     if (runtimeConfiguration['FORESIGHT_NATIVE'] != null)
       configureProfileRuntime(profile.data);
     privateDirectory(profile.runtime);
-    final path = '${profile.runtime}/application.sock';
+    var path = '${profile.runtime}/application.sock';
     final lock = File(
       '${profile.data}/.application.lock',
     ).openSync(mode: FileMode.append);
     try {
+      if (Process.runSync('/bin/chmod', [
+            '600',
+            '${profile.data}/.application.lock',
+          ]).exitCode !=
+          0)
+        throw StateError('Cannot protect profile ownership lock');
       lock.lockSync(FileLock.exclusive);
     } catch (_) {
       lock.closeSync();
@@ -248,6 +254,10 @@ class ApplicationService {
     Helper? helper;
     ServerSocket? listener;
     try {
+      // An unclean predecessor can leave a healthy helper at this endpoint.
+      // Reuse that runtime until a clean shutdown releases its workers.
+      path = serviceEndpoint(profile);
+      profile = ProfilePaths(profile.data, File(path).parent.path);
       final stale = File(path);
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
         stale.deleteSync();
@@ -433,6 +443,8 @@ class ApplicationService {
     if (!{
       'status',
       'audio.capabilities',
+      'notifications.capabilities',
+      'notifications.request_permission',
       'audio.request_microphone',
       'sources.list',
       'sources.get',
@@ -487,6 +499,13 @@ class ApplicationService {
     domain.store.close();
     if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
       File(path).deleteSync();
+    final endpoint = File(
+      '${File(domain.store.path).parent.path}/.application-endpoint.json',
+    );
+    if (domain.helper.shutdownVerified &&
+        failure == null &&
+        endpoint.existsSync())
+      endpoint.deleteSync();
     lock.closeSync();
     if (failure != null)
       throw StateError('Application shutdown failed: $failure');

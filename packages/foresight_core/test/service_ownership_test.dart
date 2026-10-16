@@ -101,6 +101,30 @@ void main() {
           (await first!.call('notes.list') as List).single['body'],
           'Committed',
         );
+        expect(serviceEndpoint(other), '${other.runtime}/application.sock');
+        await first.close();
+        first = null;
+        owner.kill(ProcessSignal.sigkill);
+        await owner.exitCode;
+        final crashRuntime = '${scratch.path}/c';
+        owner = await launch(other.data, crashRuntime);
+        final crashProfile = ProfilePaths(other.data, crashRuntime);
+        for (var attempt = 0; attempt < 600; attempt++) {
+          try {
+            first = await ServiceClient.connect(serviceEndpoint(crashProfile));
+            final state = await first.call('status') as Map;
+            if (state['pid'] == owner.pid) break;
+            await first.close();
+            first = null;
+          } on SocketException {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+          }
+        }
+        expect(first, isNotNull, reason: diagnostics.toString());
+        expect(
+          serviceEndpoint(crashProfile),
+          '${other.runtime}/application.sock',
+        );
       } finally {
         await first?.close();
         await second?.close();

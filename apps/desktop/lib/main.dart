@@ -319,23 +319,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     unawaited(refreshAudioDevices());
 
     notifications = d.store.preference('notifications') == 'true';
-    if (Platform.isMacOS) {
-      notificationState =
-          runtimeConfiguration['FORESIGHT_NOTIFICATIONS'] != null
-          ? 'Notifications available; allow delivery in System Settings'
-          : 'Notification adapter unavailable';
-    } else {
-      unawaited(
-        Process.run('sh', ['-c', 'command -v notify-send']).then((result) {
-          if (mounted)
-            setState(
-              () => notificationState = result.exitCode == 0
-                  ? 'Notifications available; delivery depends on desktop service'
-                  : 'Notifications unavailable',
-            );
-        }),
-      );
-    }
+    unawaited(refreshNotifications());
     syncCapture();
     d.helper.changed = () {
       if (mounted) setState(syncCapture);
@@ -600,6 +584,42 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     if (mounted)
       setState(() => googleState = 'Connected as ${googleAuth.email}');
     await google.syncCalendar();
+  }
+
+  Future<void> refreshNotifications() async {
+    try {
+      final result = await d.command('notifications.capabilities') as Map;
+      if (mounted)
+        setState(
+          () => notificationState = result['available'] == true
+              ? 'Notifications available'
+              : Platform.isMacOS
+              ? 'Notification permission required; enable to request access'
+              : 'Notifications unavailable',
+        );
+    } catch (error) {
+      if (mounted) setState(() => notificationState = error.toString());
+    }
+  }
+
+  Future<void> setNotifications(bool value) async {
+    if (value && Platform.isMacOS) {
+      final result = await d.command('notifications.request_permission') as Map;
+      if (result['granted'] != true) {
+        if (mounted)
+          setState(
+            () => notificationState =
+                'Notification permission denied; enable Open Foresight in System Settings',
+          );
+        return;
+      }
+    }
+    await d.command('preferences.set', {
+      'key': 'notifications',
+      'value': value.toString(),
+    });
+    if (mounted) setState(() => notifications = value);
+    await refreshNotifications();
   }
 
   Future<void> notify(String message) async {
@@ -929,8 +949,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ),
         CheckboxListTile(
           value: notifications,
-          onChanged: notificationState.startsWith('Notifications available')
-              ? (value) => setState(() => notifications = value!)
+          onChanged:
+              (Platform.isMacOS
+                  ? runtimeConfiguration['FORESIGHT_NOTIFICATIONS'] != null
+                  : notificationState.startsWith('Notifications available'))
+              ? (value) => run(() => setNotifications(value!))
               : null,
           title: const Text('Desktop completion/error notifications'),
           subtitle: Text(notificationState),
