@@ -130,6 +130,15 @@ SearchCallbacks fixtureSearch({
   summarize: (_, _) async => '',
 );
 
+Map<String, dynamic> canonicalAssistant(String text) => referenceTextMessage(
+  'assistant',
+  jsonEncode({
+    'text': text,
+    'analysis': {'intent': 'unknown', 'reasoning': ''},
+    'tool_calls': [],
+  }),
+);
+
 void main() {
   late Directory directory;
   late Store store;
@@ -175,13 +184,13 @@ void main() {
         referenceHistoryText(
           jsonDecode(saved['model_response'] as String) as Map<String, dynamic>,
         ),
-        '',
+        referenceHistoryText(canonicalAssistant('')),
       );
       final memory = store.rows('SELECT * FROM conversation_memory').single;
       final messages = List<Map<String, dynamic>>.from(
         jsonDecode(memory['messages'] as String) as List,
       );
-      expect(referenceHistoryText(messages.last), '');
+      expect(messages.last, canonicalAssistant(''));
 
       expect(
         await domain
@@ -190,6 +199,48 @@ void main() {
         '',
       );
       expect(runtime.answerIds, hasLength(2));
+    },
+  );
+  test(
+    'analysis-first and malformed envelopes display text and replay canonical metadata',
+    () async {
+      runtime.answer = (_) async =>
+          '{"analysis":{"intent":"answer","reasoning":"private"},"text":"Visible."}';
+      expect(
+        await domain.askWithWebInConversation('First?', 'envelope').last,
+        'Visible.',
+      );
+      final expected = referenceTextMessage(
+        'assistant',
+        jsonEncode({
+          'text': 'Visible.',
+          'analysis': {'intent': 'answer', 'reasoning': 'private'},
+          'tool_calls': [],
+        }),
+      );
+      final first = store.rows('SELECT * FROM answers').single;
+      expect(jsonDecode(first['model_response'] as String), expected);
+      runtime.answer = (_) async =>
+          r'{"text":"Old","text":"Recovered\n中文","intent":"answer","reasoning":"why"';
+      expect(
+        await domain.askWithWebInConversation('Next?', 'envelope').last,
+        'Recovered\n中文',
+      );
+      expect(runtime.histories.last.last, expected);
+      final last = store
+          .rows('SELECT model_response FROM answers ORDER BY id DESC')
+          .first;
+      expect(
+        jsonDecode(last['model_response'] as String),
+        referenceTextMessage(
+          'assistant',
+          jsonEncode({
+            'text': 'Recovered\n中文',
+            'analysis': {'intent': 'answer', 'reasoning': 'why'},
+            'tool_calls': [],
+          }),
+        ),
+      );
     },
   );
   test(
@@ -432,8 +483,7 @@ void main() {
         final saved = store.rows('SELECT model_response FROM answers').single;
         expect(
           jsonDecode(saved['model_response'] as String),
-          referenceTextMessage(
-            'assistant',
+          canonicalAssistant(
             'There are 12 widgets. The invoice total is 87 [Source:1].',
           ),
         );
@@ -456,19 +506,13 @@ void main() {
       final row = store.rows('SELECT * FROM answers').single;
       expect(
         jsonDecode(row['model_response'] as String),
-        referenceTextMessage(
-          'assistant',
-          'May 11, 2026 at 10:00 AM [Source:2].',
-        ),
+        canonicalAssistant('May 11, 2026 at 10:00 AM [Source:2].'),
       );
       runtime.answer = (_) async => 'Next answer';
       await domain.askWithWebInConversation('Again?', 'time-repair').last;
       expect(
         runtime.histories.last.last,
-        referenceTextMessage(
-          'assistant',
-          'May 11, 2026 at 10:00 AM [Source:2].',
-        ),
+        canonicalAssistant('May 11, 2026 at 10:00 AM [Source:2].'),
       );
     },
   );
@@ -486,7 +530,7 @@ void main() {
       expect(first['body'], 'Second result [Source:1].');
       expect(
         jsonDecode(first['model_response'] as String),
-        referenceTextMessage('assistant', 'Second result [Source:2].'),
+        canonicalAssistant('Second result [Source:2].'),
       );
       runtime.answer = (_) async => 'Follow-up answer';
       await domain
@@ -494,7 +538,7 @@ void main() {
           .toList();
       expect(runtime.histories.last, [
         referenceTextMessage('user', 'First question'),
-        referenceTextMessage('assistant', 'Second result [Source:2].'),
+        canonicalAssistant('Second result [Source:2].'),
       ]);
       expect(runtime.prompts.last, isNot(contains('Conversation:')));
       expect(runtime.prompts.last, isNot(contains('First question')));
@@ -676,7 +720,7 @@ void main() {
         referenceTextMessage('user', 'Intervening query'),
         referenceTextMessage('assistant', 'Intervening answer'),
         referenceTextMessage('user', 'Own query'),
-        referenceTextMessage('assistant', 'Own answer'),
+        canonicalAssistant('Own answer'),
       ]);
     },
   );

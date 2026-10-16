@@ -805,13 +805,14 @@ class Domain {
       }
       if (status == 'completed' && useWeb) {
         final decodedRaw = raw;
+        final payload = parseReferenceChatResponse(decodedRaw);
         raw = alignReferenceResponseNumbers(
-          normalizeReferenceTimestamps(raw),
+          payload['text'] as String,
           truncateChatToolResult(context.toString(), 3000),
         );
         modelResponse = referenceResponseWithText(
           modelResponse ?? referenceTextMessage('assistant', raw),
-          raw,
+          jsonEncode({...payload, 'text': raw}),
         );
         final resolved = resolveChatCitations(
           completeReferenceChatResponse(

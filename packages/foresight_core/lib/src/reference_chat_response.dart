@@ -32,6 +32,59 @@ final _streamedTextField = RegExp(
   r'"text":\s*"((?:[^"\\]|\\.|"(?!\s*(?:,\s*"[^"]+"\s*:|}|\s*$)))*)',
 );
 
+/// Decode the chat text payload independently of SDK transport/tool-call JSON.
+/// Malformed payloads use the original last-field extraction, not JSON repair.
+Map<String, dynamic> parseReferenceChatResponse(String raw) {
+  var candidate = raw.trim();
+  if (candidate.startsWith('```json')) {
+    candidate = candidate.substring(7);
+  } else if (candidate.startsWith('```')) {
+    candidate = candidate.substring(3);
+  }
+  if (candidate.endsWith('```')) {
+    candidate = candidate.substring(0, candidate.length - 3);
+  }
+  candidate = candidate.trim();
+  try {
+    final value = jsonDecode(candidate) as Map<String, dynamic>;
+    final dynamic analysis = value['analysis'];
+    final intent = analysis?['intent'] ?? value['intent'] ?? 'unknown';
+    final reasoning = analysis?['reasoning'] ?? value['reasoning'] ?? '';
+    final text =
+        value['text']?.toString() ?? analysis?['text']?.toString() ?? '';
+    return {
+      'text': normalizeReferenceTimestamps(text),
+      'analysis': {'intent': intent, 'reasoning': reasoning},
+      'tool_calls': value['tool_calls'] ?? <dynamic>[],
+    };
+  } catch (_) {
+    String field(String name, String fallback) {
+      final pattern = name == 'text'
+          ? _streamedTextField
+          : RegExp(
+              _streamedTextField.pattern.replaceFirst('"text"', '"$name"'),
+            );
+      final matches = pattern.allMatches(raw);
+      return matches.isEmpty ? fallback : matches.last[1] ?? fallback;
+    }
+
+    var text = normalizeReferenceTimestamps(
+      _unescapeStreamedString(field('text', '')),
+    );
+    if (text.isEmpty && !candidate.startsWith('{')) {
+      text = normalizeReferenceTimestamps(candidate);
+    }
+    return {
+      'text': text,
+      'analysis': {
+        'intent': _unescapeStreamedString(field('intent', 'unknown')),
+        'reasoning': _unescapeStreamedString(field('reasoning', '')),
+      },
+      'tool_calls': <dynamic>[],
+    };
+  }
+}
+
 /// The original stream displays the last text field in JSON-like output, or
 /// sanitized plain text. Incomplete JSON/fence headers produce no update.
 String? provisionalReferenceChatResponse(String raw) {
@@ -311,28 +364,18 @@ String _cleanThreeDigitHour(String hour) {
       : hour.substring(0, 1);
 }
 
-/// Keep the structured message and nontext metadata while replacing the text
-/// assembled by the response processor, before display citation compaction.
+/// The original replaces SDK content with one canonical text payload while
+/// retaining fields outside content, before display citation compaction.
 Map<String, dynamic> referenceResponseWithText(
   Map<String, dynamic> response,
   String text,
 ) {
-  final content = response['content'];
-  if (content is String) return {...response, 'content': text};
-  final parts = <dynamic>[];
-  var replaced = false;
-  if (content is List) {
-    for (final part in content) {
-      if (part is Map && part['type'] == 'text') {
-        if (!replaced) parts.add({...part, 'text': text});
-        replaced = true;
-      } else {
-        parts.add(part);
-      }
-    }
-  }
-  if (!replaced) parts.add({'type': 'text', 'text': text});
-  return {...response, 'content': parts};
+  return {
+    ...response,
+    'content': [
+      {'type': 'text', 'text': text},
+    ],
+  };
 }
 
 final _textWrapper = RegExp(r'^\s*\{\s*"text"\s*:\s*"', dotAll: true);

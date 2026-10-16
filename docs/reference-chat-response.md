@@ -60,9 +60,10 @@ Web-enabled sends normalize provisional visible text. At completion, Domain
 normalizes the response and aligns its numbers against the same bounded
 3,000-unit retrieved local context used by the original. Web-search tool
 results are not substituted for this context. The structured assistant message
-receives the corrected text before memory insertion. Final display sanitation
-and source selection/renumbering follow. Existing nontext metadata is preserved
-without mutating the model's original map.
+receives the canonical JSON payload before memory insertion. Final display
+sanitation and source selection/renumbering follow. Fields outside SDK content
+are preserved without mutating the model's original map; content is replaced
+with one canonical text part.
 
 The original final-cleanup call at `0x10090c940`–`0x10090c948` loads the aligned
 plain text from stack slot -1032, with the decoded raw text at -1016 as an
@@ -88,9 +89,44 @@ so a long generation crossing midnight does not change the displayed date.
 This recovery happens after assistant history insertion and before display
 citation selection. The port preserves the model's processed response in
 history while saving the recovered display text separately. It does not
-regenerate or retry the model request. The malformed-JSON recovery region at
-`0x10090be84` extracts fields from the existing response; that is a separate
-path whose full metadata fallback remains under investigation.
+regenerate or retry the model request.
+
+Completed text payloads now follow the original JSON decode and recovery
+contract. The processor trims input, removes a leading literal `\`\`\`json`
+or `\`\`\`` fence and a trailing `\`\`\`` fence, then decodes a map. Text
+comes from `text.toString()`, then `analysis.text.toString()`, then an empty
+string. Nested `analysis.intent` and `analysis.reasoning` take precedence over
+the corresponding root fields; defaults are `unknown` and an empty string.
+The canonical payload is `{text, analysis: {intent, reasoning}, tool_calls}`,
+with missing/null `tool_calls` defaulting to an empty list. Other payload fields
+are discarded. Timestamp repair applies to selected text before context-number
+alignment. The canonical payload is serialized into the assistant's single
+SDK text part before history insertion; it is separate from SDK transport
+metadata and tool-call detection.
+
+If decoding or map access fails, the processor selects the last quoted
+`text`, `intent`, and `reasoning` matches using the original field regex and
+unescapes their string literals. Missing fields use the same defaults. Empty
+recovered text falls back to normalized, fence-stripped input only when that
+input does not start with `{`. Recovery always sets `tool_calls` to an empty
+list; it does not repair arbitrary JSON or infer executable calls.
+
+This corrects visible output as well as stored metadata: an analysis-first
+map now displays its selected text instead of exposing a brace, and malformed
+duplicate text fields use the last field. Fixtures distinguish new canonical
+history from legacy plain-text checkpoints, preserve pre-renumbering citation
+tags, and check replay/compression with canonical messages. The 37 focused
+response/web-answer tests pass; the changed files analyze cleanly.
+
+The field map is retained in `ida/chat-json-response-metadata-map.json`,
+REA `ev_2bcdec4289c195b3c8e5fb0a116c81e3c31ddf391fb77002171c71eb3aa9a1cc`.
+The catch body and tail are `ida/chat-send-recovery-region.json` and
+`ida/chat-malformed-metadata-recovery-tail.json`, with the tail captured under
+REA `ev_42907c35523c7ca9d7e5ae161b321ee6c8f8d26c5e9dc6357037d7b13a162651`.
+Fence arguments are retained in `ida/chat-response-json-fence-removal.json`,
+REA `ev_3909910543c21b7f6bd98e35516e0b9bb85a73a7c990f19cae441cd928019e86`.
+Selected public keys/defaults are in `ida/chat-response-metadata-pool.txt`,
+REA `ev_ba5b6a2dec96c300dab96db58dcd265a99546aef9e5cfb7d0f6a70971544771e`.
 
 Exact completion branches and date construction are retained in
 `ida/chat-empty-completion-fallback.json` and

@@ -3,6 +3,57 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'payload parsing reads analysis-first maps and preserves canonical values',
+    () {
+      expect(
+        parseReferenceChatResponse(
+          '{"analysis":{"intent":"answer","reasoning":"hidden"},"text":"May11,202026","tool_calls":[{"fixture":true}],"extra":"discard"}',
+        ),
+        {
+          'text': 'May 11, 2026',
+          'analysis': {'intent': 'answer', 'reasoning': 'hidden'},
+          'tool_calls': [
+            {'fixture': true},
+          ],
+        },
+      );
+      expect(
+        parseReferenceChatResponse(
+          '```json\n{"analysis":{"text":42},"intent":"root","reasoning":"why"}\n```',
+        ),
+        {
+          'text': '42',
+          'analysis': {'intent': 'root', 'reasoning': 'why'},
+          'tool_calls': [],
+        },
+      );
+    },
+  );
+  test(
+    'malformed payload recovery selects last fields and decodes literal escapes',
+    () {
+      expect(
+        parseReferenceChatResponse(
+          r'{"text":"First","text":"Last\n中文","intent":"old","intent":"answer","reasoning":"why\u003f"',
+        ),
+        {
+          'text': 'Last\n中文',
+          'analysis': {'intent': 'answer', 'reasoning': 'why?'},
+          'tool_calls': [],
+        },
+      );
+      expect(parseReferenceChatResponse('{"analysis":'), {
+        'text': '',
+        'analysis': {'intent': 'unknown', 'reasoning': ''},
+        'tool_calls': [],
+      });
+      expect(
+        parseReferenceChatResponse('```\n Plain May11,202026 \n```')['text'],
+        'Plain May 11, 2026',
+      );
+    },
+  );
+  test(
     'completion recovers sanitized raw text before considering date fallback',
     () {
       final now = DateTime(2026, 10, 16, 23, 59);
@@ -235,7 +286,7 @@ void main() {
     }
   });
   test(
-    'rewritten history preserves metadata without mutating the model map',
+    'rewritten history replaces content while retaining outer metadata and original map',
     () {
       final response = {
         'role': 'assistant',
@@ -249,8 +300,7 @@ void main() {
       final rewritten = referenceResponseWithText(response, 'Repaired 中文');
       expect(rewritten['metadata'], response['metadata']);
       expect(rewritten['content'], [
-        {'type': 'text', 'text': 'Repaired 中文', 'annotation': 'keep'},
-        {'type': 'image', 'url': 'fixture://image'},
+        {'type': 'text', 'text': 'Repaired 中文'},
       ]);
       expect((response['content'] as List).length, 3);
       expect((response['content'] as List).first['text'], 'Earlier');
