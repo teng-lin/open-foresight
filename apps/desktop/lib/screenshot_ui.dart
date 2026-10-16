@@ -264,16 +264,14 @@ extension _ScreenshotScreens on _WorkspaceState {
                                 Flexible(
                                   child: Text.rich(
                                     TextSpan(
-                                      children: [
-                                        if (MediaQuery.sizeOf(context).width >
-                                            900)
-                                          const TextSpan(
-                                            text: 'Google AI Edge ',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w700,
-                                            ),
+                                      children: const [
+                                        TextSpan(
+                                          text: 'Open ',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
                                           ),
-                                        const TextSpan(text: 'Foresight'),
+                                        ),
+                                        TextSpan(text: 'Foresight'),
                                       ],
                                     ),
                                     style: const TextStyle(fontSize: 18),
