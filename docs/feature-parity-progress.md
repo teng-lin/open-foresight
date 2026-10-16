@@ -13,14 +13,30 @@ Historical observations and validation counts below retain their original scope.
 
 | Requirement | Current evidence | Remaining work |
 | --- | --- | --- |
-| Speaker labels and echo cancellation | IDA proves a three-way channel lookup: Microphone, Remote, Unknown. That contract and macOS voice-processing lifecycle are implemented and tested. | Controlled physical echo/overlap and capture-recovery checks remain. Individual-person diarization is not established as an original feature by this trace. |
-| Proactive answers | Automatic scheduling, rolling deduplication, queue replacement, meeting ownership and history are implemented. The dedicated detector protocol and Gemma 4 200M architecture are recovered. A raw-session worker primitive is implemented and tested separately; see [runtime evidence](reference-query-runtime.md). | Production still uses a generic chat detector; finish type-4 acquisition/decryption, bind executor selection and legacy model settings, validate dedicated-model inference, and integrate the raw runtime; real capture/model comparison remains. |
-| Meeting web-search fallback | Search transport, remote summary RPC, native tool generation, Ask/meeting wiring, shared citation numbering and persisted URL snapshots are implemented and tested. Release packagers accept bundled credentials. See [chat evidence](reference-chat-web.md). | Provision distribution credentials and verify live service behavior, runtime model overrides and streaming. Helper tokenization matches five controlled original/port Encode probes; bundled context/sampling defaults match. Structured replay and 55% memory compression/FIFO are implemented and have a controlled local-model check. Original prompt text and textual-tool fallback are implemented; a local-model controlled-provider check passes. No separate user project setup has been added. |
+| Speaker labels and echo cancellation | IDA proves a three-way channel lookup: Microphone, Remote, Unknown. That contract and macOS voice-processing lifecycle are implemented and tested. Native startup-watchdog fallback and interrupted-state/late-ASR handling are now replicated; see [recovery](recording-recovery.md). | Controlled physical echo/overlap and capture-recovery checks remain. Individual-person diarization is not established as an original feature by this trace. |
+| Proactive answers | Automatic scheduling, rolling deduplication, queue replacement, meeting ownership and history are implemented. The dedicated detector protocol and Gemma 4 200M architecture are recovered. The installed dedicated asset is authenticated/decrypted and its GPU metadata bound; both public workers reject its legacy weights-only TFLite format. A raw-session worker primitive is implemented and tested separately; see [runtime evidence](reference-query-runtime.md). | Production still uses a generic chat detector; implement legacy model loading/execution, validate dedicated-model inference, integrate the dedicated runtime, and reproduce acquisition for distribution; real capture/model comparison remains. |
+| Meeting web-search fallback | Search transport, remote summary RPC, native tool generation, Ask/meeting wiring, shared citation numbering and persisted URL snapshots are implemented and tested. Release packagers accept bundled credentials. See [chat evidence](reference-chat-web.md) and [response processing](reference-chat-response.md). | Provision distribution credentials and verify live service behavior, runtime model overrides and streaming. Helper tokenization matches five controlled original/port Encode probes; bundled context/sampling defaults match. Structured replay and 55% memory compression/FIFO are implemented and have a controlled local-model check. Original prompt text and textual-tool fallback are implemented; a local-model controlled-provider check passes. No separate user project setup has been added. |
 | Recording pause/fullscreen gestures | Service pause/resume and immersive controls implemented in the follow-up worktree; native ABI/service/UI tests pass. See [investigation](missing-functions-investigation.md). | Compare exact reference gestures and elapsed-time behavior; validate real-device reacquisition and paused-audio exclusion on both platforms. |
 | Rich generated-content previews | Implemented formatted selectable Markdown for enhanced notes, summaries, action items, previous versions and answers. Formatting, raw summary copy/edit, preserved generated originals, links and image handling have deterministic UI coverage. | Compare controlled generated content visually with the original; exact renderer parity remains unverified. |
 | Cloud Gemini references | The optional web summary path is now proven to use a remote Foresight RPC with a fixed Gemini model ID. Its client is integrated into optional web-enabled Ask and meeting Chat when distribution credentials are present. | Ordinary answer generation remains local. Endpoint access and remote summary quality are unverified. |
-| Meeting export format and filtering | Live original UI observed; a controlled single-note downloaded file is retained as a regression fixture. Filter/preview/copy/download implemented and tested. | Verify additional original scenarios: multiple-note ordering/separators, enhanced-note preference, custom-date boundary behavior and non-English formatting. Native development-app save-dialog comparison is also pending. |
-| Label editing | Original Sources → Add label opens Create New Organization Label, explains automatic assignment/clustering, and offers Cancel / Create & Auto-Assign. Dialog was cancelled. Existing add/remove/organization-label tests pass in the desktop suite. | Observe document-label editing and persistence with a controlled fixture; compare state changes, cancellation, deletion and graph restoration. Viewing the creation dialog does not verify editing. |
+| Meeting export format and filtering | Live original UI observed; a controlled single-note downloaded file is retained as a regression fixture. Filter/preview/copy/download implemented and tested. IDA now binds trimming, separators, descending order, actual end times, calendar links, date patterns and elapsed-day preset boundaries; see [export trace](reference-meeting-export.md). | Verify enhanced-note preference and linked-event priority, plus controlled multi-note/live locale comparison. Native development-app save-dialog comparison is also pending. |
+| Label editing | Original Sources → Add label opens Create New Organization Label, explains automatic assignment/clustering, and offers Cancel / Create & Auto-Assign. Dialog was cancelled. Existing add/remove/organization-label tests pass in the desktop suite. IDA-backed focus-loss draft retention and palette fallback are implemented; see [label trace](reference-source-labels.md). | Observe document-label editing and persistence with a controlled fixture; compare state changes, cancellation, deletion and graph restoration. Viewing the creation dialog does not verify editing. |
+
+## Latest integrated verification
+
+The parallel follow-up implements the microphone startup watchdog and interrupted
+state cleanup, original chat response repair/sanitation, export formatting and
+filter corrections, and label focus-loss behavior. The installed dedicated
+detector has been authenticated/decrypted; its legacy weights-only format is
+rejected by the current public runtime on CPU and GPU. It is not connected to
+production automatic Q&A.
+
+Current checks: 187 core tests passed with three opt-in skips, 172 desktop tests
+passed with ten opt-in skips, all four native CTest groups passed, and all 13
+Python runner tests passed. Core and desktop analysis and whitespace checks are
+clean. These checks establish the port changes; hardware/live service/original
+model execution requirements in the table remain open. Historical counts and
+observations below describe earlier stages.
 
 ## Reference identity and export observation
 
@@ -69,10 +85,10 @@ results disable copy/download; cancelled save requests do not report success;
 write failures remain visible and allow retry.
 
 Calendar event start/end times take precedence over local creation times.
-Unscheduled meetings retain the existing UI's 30-minute default duration.
-Inclusive local calendar dates and English date/time formatting are current
-implementation choices; only the single-note format above has direct reference
-comparison. Raw notes, artifacts and transcripts remain unchanged in storage.
+Unscheduled meetings omit an end time. The later IDA trace supersedes the
+initial 30-minute fallback, English-only formatter and calendar-day preset
+assumptions: see [current export contract](reference-meeting-export.md). Raw
+notes, artifacts and transcripts remain unchanged in storage.
 
 Validation on the current implementation:
 
