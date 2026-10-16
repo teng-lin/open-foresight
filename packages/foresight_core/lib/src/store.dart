@@ -329,6 +329,8 @@ class Store {
       try {
         if (owned == null || File(runtime).resolveSymbolicLinksSync() != owned)
           resource = null;
+        else
+          runtime = File(runtime).absolute.path;
       } on FileSystemException {
         resource = null;
       }
