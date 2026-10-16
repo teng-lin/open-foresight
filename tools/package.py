@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--build', type=Path, default=ROOT / 'build')
     parser.add_argument('--flutter-bundle', type=Path,
                         default=ROOT / 'apps/desktop/build/linux/x64/release/bundle')
-    parser.add_argument('--output', type=Path, default=ROOT / 'dist/foresight-linux')
+    parser.add_argument('--output', type=Path, default=ROOT / 'dist/foresight')
     parser.add_argument('--google-client', type=Path, help='Optional application OAuth configuration; never account tokens')
     parser.add_argument('--litert-python', type=Path, help='Validated Python environment to bundle for Gemma 4')
     parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
@@ -78,7 +78,7 @@ def main():
             if not destination.exists():
                 shutil.copy2(path, destination)
                 bundled.append(name)
-    launcher = args.output / 'foresight-linux'
+    launcher = args.output / 'foresight'
     launcher.write_text('''#!/usr/bin/env bash
 set -euo pipefail
 task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -113,7 +113,7 @@ task_python="$task_bundle/../../.venv/bin/python"
 if [[ -z "${FORESIGHT_MODEL_PYTHON:-}" && -x "$task_python" ]]; then
   export FORESIGHT_MODEL_PYTHON="$task_python"
 fi
-exec "$task_bundle/app/foresight_linux" "$@"
+exec "$task_bundle/app/foresight" "$@"
 '''.replace('@GENERATION_BACKEND@', args.generation_backend)
    .replace('@WHISPER_DEVICE@', str(args.whisper_gpu_device)))
     launcher.chmod(0o755)
@@ -121,7 +121,7 @@ exec "$task_bundle/app/foresight_linux" "$@"
     files = [{'path': str(file.relative_to(args.output)),
               'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}
              for file in sorted(args.output.rglob('*')) if file.is_file()]
-    manifest = {'build_id': 'foresight-linux-0.1.0+' + commit[:12], 'revision': commit,
+    manifest = {'build_id': 'foresight-0.1.0+' + commit[:12], 'revision': commit,
                 'gemma_runtime': litert_runtime,
                 'generation_backend_default': args.generation_backend,
                 'whisper_runtime': 'vulkan' if args.whisper_gpu_runtime else 'registered',

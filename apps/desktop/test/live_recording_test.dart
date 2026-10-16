@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/recording.dart';
+import 'package:foresight/recording.dart';
 
 Future<void> waitFor(bool Function() ready, {int seconds = 40}) async {
   final deadline = DateTime.now().add(Duration(seconds: seconds));

@@ -4,10 +4,10 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:foresight_linux/main.dart' as app;
-import 'package:foresight_linux/graph_rendering.dart';
-import 'package:foresight_linux/cluster_rendering.dart';
-import 'package:foresight_linux/graph_persistence.dart';
+import 'package:foresight/main.dart' as app;
+import 'package:foresight/graph_rendering.dart';
+import 'package:foresight/cluster_rendering.dart';
+import 'package:foresight/graph_persistence.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,

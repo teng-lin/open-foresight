@@ -1,5 +1,5 @@
-name: foresight_linux
-description: Foresight Linux prototype desktop client
+name: foresight
+description: Foresight prototype desktop client
 publish_to: none
 version: 0.1.0+1
 environment:

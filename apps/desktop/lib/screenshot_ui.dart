@@ -360,7 +360,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                           onPressed: () => showDialog<void>(
                             context: context,
                             builder: (_) => const AlertDialog(
-                              title: Text('Foresight Linux'),
+                              title: Text('Foresight'),
                               content: Text(
                                 'Add local knowledge sources, then ask a question with citations. Start transcribing captures microphone and system playback; live transcription updates during recording.\n\nCtrl+1–5: navigate\nCtrl+O: add file\nCtrl+N: new note\nCtrl+Shift+F: start a meeting',
                               ),
@@ -3474,6 +3474,16 @@ extension _ScreenshotScreens on _WorkspaceState {
               ),
               const Divider(height: 1),
               settingRow(
+                'Transcription Model',
+                'Choose multilingual speech recognition for Chinese and English.',
+                OutlinedButton.icon(
+                  onPressed: busy || recording != null ? null : chooseSpeech,
+                  icon: const Icon(Icons.unfold_more, size: 18),
+                  label: Text(speechModelName()),
+                ),
+              ),
+              const Divider(height: 1),
+              settingRow(
                 'Default Note Enhancement Style',
                 'Format enhanced notes as complete sentences or brief phrases.',
                 SegmentedButton<String>(
@@ -3762,7 +3772,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => showLicensePage(
                   context: context,
-                  applicationName: 'Foresight Linux',
+                  applicationName: 'Foresight',
                 ),
               ),
               const Divider(height: 1),

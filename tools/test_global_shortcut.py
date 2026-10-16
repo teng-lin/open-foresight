@@ -55,7 +55,7 @@ def main():
     original = config.read_text()
     assert '-- BEGIN FORESIGHT GLOBAL SHORTCUT' not in original, 'Disable existing Foresight shortcut before isolated acceptance'
     before = json.loads(run('hyprctl', 'activewindow', '-j'))
-    assert before.get('pid') and before.get('class') != 'io.foresight.Linux', 'Focus a separate private sentinel window first'
+    assert before.get('pid') and before.get('class') != 'io.foresight.App', 'Focus a separate private sentinel window first'
     audio_defaults = {kind: run('pactl', 'get-default-' + kind) for kind in ('sink', 'source')}
     sink = 'foresight-shortcut-' + str(os.getpid())
     modules = []
@@ -69,7 +69,7 @@ def main():
                    FORESIGHT_MODEL_MANIFEST=str(args.model_manifest.resolve()),
                    FORESIGHT_MODEL_PYTHON=str(ROOT / '.venv/bin/python'))
         launcher.write_text('#!/bin/sh\n' + '\n'.join('export ' + key + '=' + shlex.quote(env[key]) for key in env if key.startswith('FORESIGHT_') or key in ('PULSE_SERVER', 'PIPEWIRE_REMOTE', 'PATH', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'WAYLAND_DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE')) +
-                            '\nexec ' + shlex.quote(str(bundle / 'foresight-linux')) + ' "$@" >>' + shlex.quote(str(root / 'app.log')) + ' 2>&1\n')
+                            '\nexec ' + shlex.quote(str(bundle / 'foresight')) + ' "$@" >>' + shlex.quote(str(root / 'app.log')) + ' 2>&1\n')
         launcher.chmod(0o700)
         manage = [args.dart, 'run', 'tool/manage_hypr_shortcut.dart']
         def meetings():
@@ -81,7 +81,7 @@ def main():
             except sqlite3.OperationalError: return []
         def owner():
             return [client for client in json.loads(run('hyprctl', 'clients', '-j'))
-                    if client.get('class') == 'io.foresight.Linux' and
+                    if client.get('class') == 'io.foresight.App' and
                     Path('/proc/' + str(client['pid']) + '/environ').exists() and
                     ('FORESIGHT_DATA=' + str(root / 'data')).encode() in Path('/proc/' + str(client['pid']) + '/environ').read_bytes().split(b'\0')]
         def key(): run(str(args.keyboard.resolve()))

@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/domain.dart';
-import 'package:foresight_linux/helper.dart';
-import 'package:foresight_linux/model_setup.dart';
-import 'package:foresight_linux/store.dart';
+import 'package:foresight/domain.dart';
+import 'package:foresight/helper.dart';
+import 'package:foresight/model_setup.dart';
+import 'package:foresight/store.dart';
 
 void main() {
   test(
@@ -36,7 +36,14 @@ void main() {
               .single['backend'],
           'litert_lm',
         );
-        await store.register('embedding', env['FORESIGHT_EMBEDDING']!, '');
+        await store.register(
+          'embedding',
+          env['FORESIGHT_EMBEDDING']!,
+          '',
+          backend: env['FORESIGHT_EMBEDDING_GPU'] == '1'
+              ? 'litert_lm_embedding_gpu'
+              : 'llama_cpp',
+        );
         helper.onReady = domain.resume;
         await helper.start();
         final readiness = Stopwatch()..start();
@@ -103,6 +110,7 @@ void main() {
               .rows('SELECT model FROM answers ORDER BY id DESC LIMIT 1')
               .single['model'],
           isNot('source-fallback'),
+          reason: procedure,
         );
         final numeric = store.importText(
           'Orion development profile',

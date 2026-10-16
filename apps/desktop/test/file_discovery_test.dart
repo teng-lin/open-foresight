@@ -1,8 +1,8 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/file_discovery.dart';
-import 'package:foresight_linux/file_discovery_sheet.dart';
+import 'package:foresight/file_discovery.dart';
+import 'package:foresight/file_discovery_sheet.dart';
 
 void main() {
   test(

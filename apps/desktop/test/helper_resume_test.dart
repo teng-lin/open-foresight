@@ -1,10 +1,10 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
-import 'package:foresight_linux/domain.dart';
-import 'package:foresight_linux/helper.dart';
-import 'package:foresight_linux/store.dart';
-import 'package:foresight_linux/generated/helper_control.pbgrpc.dart'
+import 'package:foresight/domain.dart';
+import 'package:foresight/helper.dart';
+import 'package:foresight/store.dart';
+import 'package:foresight/generated/helper_control.pbgrpc.dart'
     as control;
 import 'domain_lifecycle_test.dart' show DelayedIndexService;
 

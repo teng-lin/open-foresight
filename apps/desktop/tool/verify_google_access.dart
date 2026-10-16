@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:foresight_linux/google_auth.dart';
+import 'package:foresight/google_auth.dart';
 
 Future<void> main(List<String> arguments) async {
   if (arguments.length != 3)

@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/graph_layout.dart';
+import 'package:foresight/graph_layout.dart';
 
 void main() {
   test(

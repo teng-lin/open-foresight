@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/commands.dart';
+import 'package:foresight/commands.dart';
 
 void main() {
   test(

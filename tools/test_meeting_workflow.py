@@ -49,7 +49,7 @@ def main():
     parser.add_argument('--agent-desktop', type=Path, default=ROOT.parent / 'agent-desktop',
                         help='Agent Desktop checkout used for a dedicated headless display')
     parser.add_argument('--model-manifest', type=Path, default=ROOT / 'models/local/native/installed.json')
-    parser.add_argument('--helper-bundle', type=Path, default=ROOT / 'dist/foresight-linux',
+    parser.add_argument('--helper-bundle', type=Path, default=ROOT / 'dist/foresight',
                         help='Packaged helper/runtime to exercise before replacing the default launcher')
     parser.add_argument('--report', type=Path, default=ROOT / 'test-results/meeting-headless.json')
     parser.add_argument('--gallery', type=Path, help='Separate gallery for another evaluated model stack')

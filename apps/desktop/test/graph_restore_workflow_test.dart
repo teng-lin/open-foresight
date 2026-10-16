@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/main.dart';
-import 'package:foresight_linux/store.dart';
-import 'package:foresight_linux/generated/helper_control.pb.dart' as control;
+import 'package:foresight/main.dart';
+import 'package:foresight/store.dart';
+import 'package:foresight/generated/helper_control.pb.dart' as control;
 import 'graph_workflow_test.dart' show GraphDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 

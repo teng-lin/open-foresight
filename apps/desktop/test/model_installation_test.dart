@@ -2,8 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/model_setup.dart';
-import 'package:foresight_linux/store.dart';
+import 'package:foresight/model_setup.dart';
+import 'package:foresight/store.dart';
 
 void main() {
   test(

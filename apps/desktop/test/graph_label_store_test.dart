@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/graph_labels.dart';
-import 'package:foresight_linux/graph_rendering.dart';
-import 'package:foresight_linux/store.dart';
+import 'package:foresight/graph_labels.dart';
+import 'package:foresight/graph_rendering.dart';
+import 'package:foresight/store.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 void main() {

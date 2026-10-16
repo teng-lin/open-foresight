@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/gemma_download.dart';
+import 'package:foresight/gemma_download.dart';
 
 void main() {
   test(
@@ -77,7 +77,17 @@ void main() {
         ).download(model, root, sourceForTesting: uri);
         expect(await file.readAsBytes(), bytes);
         expect(requests, 4);
-        await GemmaDownload().download(model, root, sourceForTesting: uri);
+        final phases = <ModelDownloadPhase>[];
+        await GemmaDownload().download(
+          model,
+          root,
+          sourceForTesting: uri,
+          phase: phases.add,
+        );
+        expect(phases, [
+          ModelDownloadPhase.checkingCache,
+          ModelDownloadPhase.verifyingCache,
+        ]);
         expect(requests, 4);
         await file.writeAsBytes([1, 2, 3]);
         await expectLater(

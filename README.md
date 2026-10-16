@@ -28,11 +28,11 @@ python3 tools/package.py
 ./tools/run_desktop.sh
 ```
 
-The launcher uses the desktop application profile. Building this source does not copy existing user data or model registrations. PDF/RTF import uses `pdftotext`/`unrtf`; recording requires PipeWire and `pw-record`.
+The executable is `dist/foresight/foresight`; `./tools/run_desktop.sh` launches it. New installations store their profile in `$XDG_DATA_HOME/foresight` (normally `~/.local/share/foresight`). Existing `foresight-linux-desktop` profiles and their runtime sockets are reused in place; `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` override these paths. The independently running legacy virtual-display profile is never selected implicitly. Building this source does not copy existing user data or model registrations. PDF/RTF import uses `pdftotext`/`unrtf`; recording requires PipeWire and `pw-record`.
 
 ## Local models
 
-Model weights are downloaded separately and registered through the application. Gemma generation uses the pinned LiteRT runtime; Whisper supports registered CPU executables or an explicitly built Vulkan runtime.
+First launch offers Gemma 4 12B, E4B, and E2B using the reference memory requirements of 30, 15, and 6 GB. Setup downloads the missing EmbeddingGemma 2 source-search model and selected generation model, verifies pinned sizes and SHA-256 hashes, and registers each only after loading succeeds. Completed files and registrations survive a later failure or restart; cancellation removes owned partial downloads. Settings can reopen model selection or register existing local files. A bundle built with `--litert-python` is required for automatic setup. Linux uses public LiteRT model artifacts and a GPU runtime rather than the Mac service’s encrypted artifacts. System RAM eligibility does not guarantee a model fits the selected GPU. Settings → Transcription Model offers multilingual Whisper Tiny, Base, Small, Medium, and Large v3 Turbo. Existing English-only registrations remain selected until changed; automatic language detection preserves Chinese and English speech. See [speech model behavior and validation](docs/speech-models.md). Gemma generation uses the pinned LiteRT runtime; Whisper supports registered CPU executables or an explicitly built Vulkan runtime.
 
 ```sh
 uv pip install --python .venv/bin/python -r requirements-models.lock
@@ -40,7 +40,7 @@ python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2
 python3 native/setup_models.py --directory models/local/native
 uv venv --python 3.12 .venv-litert
 uv pip install --python .venv-litert/bin/python -r requirements-litert.txt
-python3 tools/package.py --output dist/foresight-linux-gemma --litert-python "$PWD/.venv-litert/bin/python"
+python3 tools/package.py --output dist/foresight-gemma --litert-python "$PWD/.venv-litert/bin/python"
 ```
 
 Choose an unused package output directory. Pass `--generation-backend gpu` to package Gemma GPU generation; Whisper GPU packaging accepts `--whisper-gpu-runtime` and `--whisper-gpu-device`. Validate device indices on the target machine.

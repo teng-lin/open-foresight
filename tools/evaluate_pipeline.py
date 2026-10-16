@@ -45,7 +45,7 @@ def main():
             configured = call('UpdateModelPaths', 'UpdateModelPathsRequest', 'UpdateModelPathsResponse',
                               embedding_model_path=str(args.embedding_model.resolve()))
             assert configured.success, configured.error_message
-            source = 'The Foresight Linux prototype will be released on November 12. Sam is responsible for the release.'
+            source = 'The Foresight prototype will be released on November 12. Sam is responsible for the release.'
             indexed = call('IndexDocument', 'IndexRequest', 'IndexResponse', document_id='release-source',
                            content=source, user_id='local_user', max_tokens_per_chunk=480, mime_type='text/plain')
             assert indexed.success, indexed.error_message

@@ -1,8 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/graph_labels.dart';
-import 'package:foresight_linux/graph_layout.dart';
-import 'package:foresight_linux/label_propagation.dart';
+import 'package:foresight/graph_labels.dart';
+import 'package:foresight/graph_layout.dart';
+import 'package:foresight/label_propagation.dart';
 
 DocumentLabel seed(String id, [String name = 'Alpha']) =>
     DocumentLabel(id, name, 'user_defined', '#0EBC5F');

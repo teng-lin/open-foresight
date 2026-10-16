@@ -27,14 +27,14 @@ def main():
         # Deliberately drop the build-time library path: test bundled resolution.
         env['LD_LIBRARY_PATH'] = str(relocated / 'lib') + ':' + str(relocated / 'app/lib')
         linkage = {}
-        for relative in ['bin/ForesightHelper', 'lib/libforesight_native.so', 'app/foresight_linux']:
+        for relative in ['bin/ForesightHelper', 'lib/libforesight_native.so', 'app/foresight']:
             value = subprocess.check_output(['ldd', str(relocated / relative)], env=env, text=True)
             assert 'not found' not in value, value
             linkage[relative] = value.splitlines()
         log = root / 'desktop.log'
         socket = str(root / 'run/helper.sock')
         with log.open('w') as output:
-            process = subprocess.Popen([str(relocated / 'foresight-linux')],
+            process = subprocess.Popen([str(relocated / 'foresight')],
                 env=env, cwd='/', stdout=output, stderr=output, start_new_session=True)
             channel = grpc.insecure_channel('unix:' + socket)
             try:

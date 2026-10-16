@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:foresight_linux/global_shortcuts.dart';
+import 'package:foresight/global_shortcuts.dart';
 
 Future<void> main() async {
   final shortcuts = GlobalShortcuts((id, token) {

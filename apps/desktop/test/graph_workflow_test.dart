@@ -5,11 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/domain.dart';
-import 'package:foresight_linux/main.dart';
-import 'package:foresight_linux/store.dart';
-import 'package:foresight_linux/graph_rendering.dart';
-import 'package:foresight_linux/generated/helper_control.pb.dart' as control;
+import 'package:foresight/domain.dart';
+import 'package:foresight/main.dart';
+import 'package:foresight/store.dart';
+import 'package:foresight/graph_rendering.dart';
+import 'package:foresight/generated/helper_control.pb.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class SourceReadCountingStore extends Store {

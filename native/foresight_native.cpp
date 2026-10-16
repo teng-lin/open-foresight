@@ -548,7 +548,7 @@ int fs_speech_finish(void *h, const char *id) {
       close(fd);
       wav(tmp, samples);
       std::vector<std::string> arguments{
-          s.runtime, "-m", s.model, "-f", tmp, "-l", "en", "-nt", "-np", "-t", "4"};
+          s.runtime, "-m", s.model, "-f", tmp, "-l", "auto", "-nt", "-np", "-t", "4"};
       const char *speech_backend = std::getenv("FORESIGHT_WHISPER_BACKEND");
       if (speech_backend && std::string(speech_backend) == "cpu")
         arguments.push_back("-ng");

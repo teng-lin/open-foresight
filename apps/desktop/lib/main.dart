@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
+import 'package:grpc/grpc.dart' show CallOptions;
 import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
@@ -29,6 +30,9 @@ import 'google_connections.dart';
 import 'google_picker.dart';
 import 'audio_devices.dart';
 import 'gemma_setup_view.dart';
+import 'speech_setup_view.dart';
+import 'speech_models.dart';
+import 'profile_paths.dart';
 import 'gemma_download.dart';
 import 'source_type.dart';
 import 'file_discovery.dart';
@@ -43,13 +47,9 @@ part 'meeting_workspace.dart';
 
 Future<void> main([List<String> arguments = const []]) async {
   WidgetsFlutterBinding.ensureInitialized();
-  final home = Platform.environment['HOME']!;
-  final data =
-      Platform.environment['FORESIGHT_DATA'] ??
-      '${Platform.environment['XDG_DATA_HOME'] ?? '$home/.local/share'}/foresight-linux';
-  final runtime =
-      Platform.environment['FORESIGHT_RUNTIME'] ??
-      '${Platform.environment['XDG_RUNTIME_DIR'] ?? '$data/runtime'}/foresight-linux';
+  final profile = ProfilePaths.resolve(Platform.environment);
+  final data = profile.data;
+  final runtime = profile.runtime;
   ensurePrivateDirectory(data);
   ensurePrivateDirectory(runtime);
   final commandPath = '$runtime/commands.sock';
@@ -129,7 +129,7 @@ class Foresight extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Foresight Linux',
+    title: 'Foresight',
     debugShowCheckedModeBanner: false,
     theme: foresightTheme(),
     home: Workspace(
@@ -250,7 +250,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       Platform.environment['XDG_CONFIG_HOME'] ??
           '${Platform.environment['HOME']}/.config',
     ),
-    '${File(Platform.resolvedExecutable).parent.parent.path}/foresight-linux',
+    '${File(Platform.resolvedExecutable).parent.parent.path}/foresight',
   );
   bool busy = false, asking = false;
   int _operations = 0;
@@ -358,7 +358,23 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     d.helper.changed = () {
       if (mounted) setState(() {});
     };
-    d.helper.onReady = d.resume;
+    d.helper.onReady = () async {
+      try {
+        await d.resume();
+      } finally {
+        if (mounted &&
+            widget.commands != null &&
+            !modelSetupShown &&
+            (needsModel(d.store, 'embedding') ||
+                needsModel(d.store, 'generation'))) {
+          modelSetupShown = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) unawaited(chooseGemma(firstRun: true));
+          });
+          if (mounted) setState(() {});
+        }
+      }
+    };
     unawaited(
       d.helper.start().catchError((Object e) {
         if (mounted)
@@ -486,7 +502,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     }
   }
 
-  Future<void> chooseGemma() async {
+  bool modelSetupShown = false;
+  Future<void> chooseGemma({bool firstRun = false}) async {
     final info = File('/proc/meminfo').readAsStringSync();
     final memoryKb =
         int.tryParse(
@@ -498,24 +515,30 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       barrierDismissible: false,
       builder: (_) => GemmaSetupDialog(
         store: d.store,
-        directory: Directory(
-          (d.store
-                          .rows(
-                            "SELECT * FROM models WHERE kind='generation' AND backend='litert_lm'",
-                          )
-                          .firstOrNull?['path']
-                      as String?) ==
-                  null
-              ? '${File(d.store.path).parent.path}/models/gemma4'
-              : File(
-                  d.store
-                          .rows(
-                            "SELECT path FROM models WHERE kind='generation'",
-                          )
-                          .first['path']
-                      as String,
-                ).parent.parent.path,
-        ),
+        firstRun: firstRun,
+        needsEmbedding: needsModel(d.store, 'embedding'),
+        needsGeneration: !firstRun || needsModel(d.store, 'generation'),
+        installEmbedding: (asset, current) async {
+          final result = await d.helper.client.updateModelPaths(
+            UpdateModelPathsRequest(
+              embeddingModelPath: asset.path,
+              useGpu: true,
+            ),
+            options: CallOptions(timeout: const Duration(minutes: 30)),
+          );
+          if (!current()) return;
+          if (!result.success) throw StateError(result.errorMessage);
+          await d.store.register(
+            'embedding',
+            asset.path,
+            '',
+            backend: 'litert_lm_embedding_gpu',
+            expectedDigest: embeddingGemmaModel.digest,
+            current: current,
+          );
+          if (mounted) setState(() => embeddingGpu = true);
+        },
+        directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
         library:
             Platform.environment['FORESIGHT_NATIVE'] ??
             'libforesight_native.so',
@@ -532,6 +555,47 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         },
         localSetup: () {
           if (mounted) setState(() => tab = 4);
+        },
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  String speechModelName() {
+    final registration = d.store
+        .rows("SELECT * FROM models WHERE kind='speech'")
+        .firstOrNull;
+    if (registration == null) return 'Select a transcription model';
+    final known = speechModels
+        .where((model) => model.digest == registration['digest'])
+        .firstOrNull;
+    if (known != null) return known.name;
+    final name = File(registration['path'] as String).uri.pathSegments.last;
+    return name.contains('.en.') ? '$name (English only)' : name;
+  }
+
+  Future<void> chooseSpeech() async {
+    final registration = d.store
+        .rows("SELECT runtime FROM models WHERE kind='speech'")
+        .firstOrNull;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => SpeechSetupDialog(
+        store: d.store,
+        directory: Directory(
+          '${File(d.store.path).parent.path}/models/whisper',
+        ),
+        runner:
+            Platform.environment['FORESIGHT_WHISPER_RUNTIME'] ??
+            registration?['runtime'] as String? ??
+            '',
+        installed: () {
+          if (mounted)
+            setState(
+              () => modelState =
+                  '${speechModelName()} ready; automatic language detection',
+            );
         },
       ),
     );
@@ -606,10 +670,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   Future<void> notify(String message) async {
     if (!notifications) return;
     try {
-      final result = await Process.run('notify-send', [
-        'Foresight Linux',
-        message,
-      ]);
+      final result = await Process.run('notify-send', ['Foresight', message]);
       if (result.exitCode != 0 && mounted)
         setState(
           () => notificationState =

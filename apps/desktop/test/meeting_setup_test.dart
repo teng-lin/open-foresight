@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/domain.dart';
-import 'package:foresight_linux/helper.dart';
-import 'package:foresight_linux/main.dart';
-import 'package:foresight_linux/model_setup.dart';
-import 'package:foresight_linux/store.dart';
+import 'package:foresight/domain.dart';
+import 'package:foresight/helper.dart';
+import 'package:foresight/main.dart';
+import 'package:foresight/model_setup.dart';
+import 'package:foresight/store.dart';
 
 class OfflineHelper extends Helper {
   OfflineHelper(super.socket, super.storage);

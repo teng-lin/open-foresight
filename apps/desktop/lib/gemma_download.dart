@@ -52,6 +52,23 @@ const gemmaModels = [
   ),
 ];
 
+const embeddingGemmaModel = GemmaModel(
+  'EmbeddingGemma 2',
+  'litert-community/embeddinggemma-2-740m-litert-lm',
+  '24d962e906c7d332c6428e71c9676855024569e2',
+  'embeddinggemma-2-740m.litertlm',
+  'e7a8a2204b91e0f96e92960e84a09a89212e1633dcb7575a9bf3378b4df77f4c',
+  484622336,
+  0,
+);
+
+enum ModelDownloadPhase {
+  checkingCache,
+  verifyingCache,
+  downloading,
+  verifyingDownload,
+}
+
 class ModelDownloadCancelled implements Exception {
   const ModelDownloadCancelled();
   @override
@@ -86,6 +103,7 @@ class GemmaDownload {
     GemmaModel model,
     Directory root, {
     void Function(int received, int total)? progress,
+    void Function(ModelDownloadPhase)? phase,
     Uri? sourceForTesting,
   }) async {
     if (_active || _cancelled)
@@ -100,8 +118,10 @@ class GemmaDownload {
           model.bytes <= 0 ||
           model.filename.contains('/') ||
           model.filename.contains('\\') ||
-          !model.filename.endsWith('.litertlm'))
+          !(model.filename.endsWith('.litertlm') ||
+              model.filename.endsWith('.bin')))
         throw ArgumentError('Invalid model metadata');
+      phase?.call(ModelDownloadPhase.checkingCache);
       final directory = Directory('${root.path}/${model.directory}');
       await directory.create(recursive: true);
       final destination = File('${directory.path}/${model.filename}');
@@ -110,6 +130,7 @@ class GemmaDownload {
         followLinks: false,
       );
       if (type != FileSystemEntityType.notFound) {
+        phase?.call(ModelDownloadPhase.verifyingCache);
         if (type != FileSystemEntityType.file ||
             await destination.length() != model.bytes ||
             (await sha256.bind(destination.openRead()).first).toString() !=
@@ -125,6 +146,7 @@ class GemmaDownload {
       final temporary = await directory.createTemp('.download-');
       partial = File('${temporary.path}/model.part');
       sink = partial.openWrite();
+      phase?.call(ModelDownloadPhase.downloading);
       final client = _client = createClient();
       client.autoUncompress = false;
       client.connectionTimeout = timeout;
@@ -196,6 +218,7 @@ class GemmaDownload {
       await sink.close();
       sink = null;
       _check();
+      phase?.call(ModelDownloadPhase.verifyingDownload);
       if (received != model.bytes ||
           (await sha256.bind(partial.openRead()).first).toString() !=
               model.digest)

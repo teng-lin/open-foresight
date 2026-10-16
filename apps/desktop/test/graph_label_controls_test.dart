@@ -1,10 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/domain.dart';
-import 'package:foresight_linux/main.dart';
-import 'package:foresight_linux/store.dart';
-import 'package:foresight_linux/graph_label_controls.dart';
+import 'package:foresight/domain.dart';
+import 'package:foresight/main.dart';
+import 'package:foresight/store.dart';
+import 'package:foresight/graph_label_controls.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {

@@ -15,7 +15,7 @@ import grpc
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = 'research.xeno.labs.foresight.launch_agent.proto'
 CORPUS = {
-    'release': 'The Foresight Linux prototype release is scheduled for November 12. Sam owns the release checklist.',
+    'release': 'The Foresight prototype release is scheduled for November 12. Sam owns the release checklist.',
     'meeting': 'The weekly design meeting starts at 10 AM on Tuesday. Priya will prepare the accessibility review.',
     'travel': 'The team travel budget is 2400 dollars. All receipts must be submitted to Morgan by Friday.',
     'storage': 'The retrieval helper stores document metadata in SQLite and searches local embedding vectors.',

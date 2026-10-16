@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/recording.dart';
+import 'package:foresight/recording.dart';
 
 void main() {
   test(

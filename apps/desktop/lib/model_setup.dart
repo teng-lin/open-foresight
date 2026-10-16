@@ -13,6 +13,7 @@ Future<NativeRuntime> configureGeneration(
   String backend = 'llama_cpp',
   bool Function()? current,
   void Function(NativeRuntime)? onCandidate,
+  void Function()? onRegister,
 }) async {
   final candidate = NativeRuntime(library);
   try {
@@ -22,6 +23,7 @@ Future<NativeRuntime> configureGeneration(
     await candidate.load(runner, model, backend: backend);
     if (current != null && !current())
       throw StateError('Model setup cancelled');
+    onRegister?.call();
     await store.register(
       'generation',
       model,
@@ -93,4 +95,24 @@ String? speechSetupProblem(Store store) {
     return 'The registered speech runner is missing or not executable.';
   }
   return null;
+}
+
+/// Registration alone is insufficient when a user has moved a model file.
+bool needsModel(Store store, String kind) {
+  final model = store.rows('SELECT path FROM models WHERE kind=?', [
+    kind,
+  ]).firstOrNull;
+  if (model == null) return true;
+  final path = model['path'] as String;
+  if (!File(path).existsSync() &&
+      !(kind == 'embedding' && Directory(path).existsSync()))
+    return true;
+  if (kind == 'generation') {
+    final registration = store.rows('SELECT runtime FROM models WHERE kind=?', [
+      kind,
+    ]).single;
+    final runtime = File(registration['runtime'] as String);
+    return !runtime.existsSync() || (runtime.statSync().mode & 0x49) == 0;
+  }
+  return false;
 }

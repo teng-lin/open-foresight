@@ -80,6 +80,21 @@ class NativeTest(unittest.TestCase):
                 self.assertIn('GPU runtime CPU override', next(e['text'] for e in events if e['type']=='transcript'))
             finally:
                 self.lib.fs_speech_destroy(speech)
+    def test_speech_detects_language_without_translation_and_preserves_gpu_device(self):
+        runner = self.runner('import sys\nassert sys.argv[sys.argv.index("-l") + 1] == "auto"\nassert "-tr" not in sys.argv and "--translate" not in sys.argv\nassert sys.argv[sys.argv.index("-dev") + 1] == "1"\nprint("你好，please review the target product profile。")\n')
+        with patch.dict(os.environ, {'FORESIGHT_WHISPER_RUNTIME': '',
+                                     'FORESIGHT_WHISPER_BACKEND': 'gpu',
+                                     'FORESIGHT_WHISPER_DEVICE': '1'}):
+            speech = self.lib.fs_speech_create(runner, str(self.model).encode())
+            try:
+                samples = (C.c_int16 * 1600)(*([100] * 1600))
+                self.assertEqual(self.lib.fs_speech_push(speech, samples, len(samples), 16000), 0)
+                self.assertEqual(self.lib.fs_speech_finish(speech, b'multilingual'), 0)
+                events = drain(self.lib, speech)
+                self.assertEqual(events[-1]['status'], 'completed')
+                self.assertIn('你好，please review', next(e['text'] for e in events if e['type']=='transcript'))
+            finally:
+                self.lib.fs_speech_destroy(speech)
     def test_delta_order_terminal_reference_and_uniqueness(self):
         e=self.engine('import os,time\nos.write(1,b"hello ")\ntime.sleep(.05)\nos.write(1,"世界".encode())\n')
         c=self.lib.fs_conversation_create(e);self.assertEqual(self.lib.fs_engine_destroy(e),-1)

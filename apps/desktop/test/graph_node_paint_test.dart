@@ -1,7 +1,7 @@
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/graph_rendering.dart';
+import 'package:foresight/graph_rendering.dart';
 
 Future<List<int>> render(GraphNodePainter painter) async {
   final recorder = ui.PictureRecorder();

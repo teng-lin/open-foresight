@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_linux/answer_contract.dart';
+import 'package:foresight/answer_contract.dart';
 
 void main() {
   test(
