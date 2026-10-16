@@ -218,7 +218,13 @@ String _notificationFailure(ProcessResult result) {
 Future<Map<String, dynamic>> notificationCapabilities({
   bool requestPermission = false,
 }) async {
-  if (!Platform.isMacOS) return {'available': true, 'backend': 'freedesktop'};
+  if (!Platform.isMacOS) {
+    final result = await Process.run('/bin/sh', [
+      '-c',
+      'command -v notify-send',
+    ]);
+    return {'available': result.exitCode == 0, 'backend': 'freedesktop'};
+  }
   final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
   if (helper == null)
     throw StateError(
