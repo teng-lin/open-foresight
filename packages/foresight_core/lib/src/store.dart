@@ -318,6 +318,7 @@ class Store {
 
   static const _runtimeResources = {
     'generation': 'FORESIGHT_LITERT_RUNNER',
+    'query-detection': 'FORESIGHT_LITERT_PYTHON',
     'speech': 'FORESIGHT_WHISPER_RUNTIME',
   };
 
@@ -381,6 +382,7 @@ class Store {
     final backends = [
       'llama_cpp',
       'litert_lm',
+      if (kind == 'query-detection') 'legacy_query_cpu',
       if (kind == 'embedding') ...[
         'sentence_transformers_cpu',
         'litert_lm_embedding_cpu',

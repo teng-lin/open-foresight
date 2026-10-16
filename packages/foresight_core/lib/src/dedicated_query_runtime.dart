@@ -1,0 +1,224 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+const dedicatedQueryModelKind = 'query-detection';
+const dedicatedQueryBackend = 'legacy_query_cpu';
+
+abstract interface class QueryCompletionRuntime {
+  Future<String> complete(String prompt, String requestId);
+  void cancel(String requestId);
+  Future<void> close();
+}
+
+class _QueryRequest {
+  final String id;
+  final result = Completer<String>();
+  _QueryRequest(this.id) {
+    result.future.ignore();
+  }
+}
+
+/// The reconstructed CPU detector has its own process and fresh per-call cache.
+/// Killing this process cancels only its owned detection, including model load.
+class DedicatedQueryRuntime implements QueryCompletionRuntime {
+  DedicatedQueryRuntime({
+    required this.python,
+    required this.worker,
+    required this.model,
+    this.timeout = const Duration(minutes: 2),
+  });
+  final String python, worker, model;
+  final Duration timeout;
+  Process? _process;
+  Future<void>? _starting;
+  _QueryRequest? _active;
+  Completer<void>? _ready;
+  int _epoch = 0;
+  bool _closed = false;
+  String _stderr = '';
+
+  void _fail(Object error) {
+    final ready = _ready;
+    if (ready != null && !ready.isCompleted) ready.completeError(error);
+    final active = _active;
+    if (active != null && !active.result.isCompleted) {
+      active.result.completeError(error);
+    }
+  }
+
+  void _stop(Object error) {
+    _epoch++;
+    _fail(error);
+    final process = _process;
+    _process = null;
+    // There are no subprocesses in this adapter. Do not signal shared workers.
+    process?.kill(ProcessSignal.sigkill);
+  }
+
+  Future<void> _start() async {
+    if (_process != null) return;
+    final epoch = _epoch;
+    final process = await Process.start(python, [
+      '-I',
+      '-B',
+      worker,
+      '--model',
+      model,
+    ]);
+    if (_closed || epoch != _epoch) {
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode;
+      throw StateError('Dedicated query detection cancelled');
+    }
+    _process = process;
+    _stderr = '';
+    final ready = _ready = Completer<void>();
+    ready.future.ignore();
+    void streamError(Object error) {
+      if (identical(_process, process)) _stop(error);
+    }
+
+    process.stderr.transform(const Utf8Decoder(allowMalformed: true)).listen((
+      text,
+    ) {
+      if (!identical(_process, process)) return;
+      _stderr += text;
+      if (_stderr.length > 4096)
+        _stderr = _stderr.substring(_stderr.length - 4096);
+    }, onError: streamError);
+    void frame(String line) {
+      final frame = jsonDecode(line);
+      if (frame is! Map) throw const FormatException('Invalid detector frame');
+      if (frame['type'] == 'ready') {
+        if (ready.isCompleted)
+          throw const FormatException('Repeated detector ready');
+        ready.complete();
+      } else if (frame['type'] == 'fatal') {
+        _stop(
+          StateError(
+            'Dedicated query detector unavailable: ${frame['message']}',
+          ),
+        );
+      } else {
+        final active = _active;
+        if (active == null || frame['id'] != active.id) {
+          throw const FormatException('Unowned detector response');
+        }
+        if (frame['type'] == 'error') {
+          active.result.completeError(StateError('${frame['message']}'));
+        } else if (frame['type'] == 'result' && frame['text'] is String) {
+          // Preserve decoder output verbatim; recovered downstream parsing
+          // owns sanitation, question splitting and trimming.
+          active.result.complete(frame['text'] as String);
+        } else {
+          throw const FormatException('Invalid detector response');
+        }
+      }
+    }
+
+    // Bound partial lines as well as complete frames; LineSplitter alone
+    // would retain an unlimited unterminated worker response.
+    const maxFrame = 1024 * 1024;
+    var pending = '';
+    process.stdout.transform(utf8.decoder).listen((chunk) {
+      if (!identical(_process, process)) return;
+      try {
+        pending += chunk;
+        while (true) {
+          final end = pending.indexOf('\n');
+          if (end < 0) break;
+          if (end > maxFrame)
+            throw const FormatException('Detector frame exceeds 1 MiB');
+          final line = pending.substring(0, end);
+          pending = pending.substring(end + 1);
+          frame(line);
+          if (!identical(_process, process)) return;
+        }
+        if (pending.length > maxFrame)
+          throw const FormatException('Detector frame exceeds 1 MiB');
+      } catch (error) {
+        streamError(error);
+      }
+    }, onError: streamError);
+    unawaited(
+      process.exitCode.then((code) {
+        if (!identical(_process, process)) return;
+        _process = null;
+        _fail(StateError('Dedicated query detector exited ($code): $_stderr'));
+      }),
+    );
+    await ready.future;
+  }
+
+  @override
+  Future<String> complete(String prompt, String requestId) async {
+    if (_closed) throw StateError('Dedicated query detector is closed');
+    if (_active != null) throw StateError('Dedicated query detector is busy');
+    final request = _active = _QueryRequest(requestId);
+    final timer = Timer(timeout, () {
+      if (identical(_active, request)) {
+        _stop(TimeoutException('Dedicated query detection timed out', timeout));
+      }
+    });
+    try {
+      await (_starting = _start());
+      if (!request.result.isCompleted) {
+        _process!.stdin.writeln(
+          jsonEncode({
+            'id': requestId,
+            'prompt': prompt,
+            'max_output_tokens': 512,
+          }),
+        );
+        await _process!.stdin.flush();
+      }
+      return await request.result.future;
+    } catch (error) {
+      _stop(error);
+      rethrow;
+    } finally {
+      _starting = null;
+      timer.cancel();
+      if (identical(_active, request)) _active = null;
+    }
+  }
+
+  @override
+  void cancel(String requestId) {
+    if (_active?.id == requestId) {
+      _stop(StateError('Dedicated query detection cancelled'));
+    }
+  }
+
+  @override
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    final process = _process;
+    final busy = _active != null;
+    _epoch++;
+    _fail(StateError('Dedicated query detector closed'));
+    _process = null;
+    if (process != null) {
+      if (busy) {
+        process.kill(ProcessSignal.sigkill);
+      } else {
+        try {
+          // An idle worker exits normally on EOF; bound shutdown in case a
+          // damaged worker stops reading. Active inference is killed directly.
+          await process.stdin.close().timeout(const Duration(seconds: 1));
+          await process.exitCode.timeout(const Duration(seconds: 1));
+        } catch (_) {
+          process.kill(ProcessSignal.sigkill);
+        }
+      }
+    }
+    try {
+      await _starting;
+    } catch (_) {
+      // Cancellation during launch/load is already delivered to the caller.
+    }
+    if (process != null) await process.exitCode;
+  }
+}

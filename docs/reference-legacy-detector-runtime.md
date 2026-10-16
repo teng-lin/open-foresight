@@ -2,13 +2,15 @@
 
 The authenticated original detector now executes through an isolated CPU
 diagnostic using its own weights and vocabulary. This does not establish
-numerical parity with the original GPU executor, and production automatic Q&A
-has not been switched to this diagnostic.
+numerical parity with the original GPU executor. Automatic Q&A now uses this
+reconstructed dedicated runtime when its authenticated model and worker are
+registered. An absent dedicated model produces a visible not-ready error and
+does not substitute chat inference.
 
 The exact asset SHA-256 is
 `889306301a8817c22de9631087896780762ce7985b3012e42debfc239a62193f`.
-The loader rejects a different asset. No model download, credentials, keychain
-operation, original-app execution, or IDA session was performed for this work.
+The loader rejects a different asset. The product worker contains reconstructed
+code; it neither loads the original application binary nor acquires model weights.
 
 ## Public runtime evidence
 
@@ -170,21 +172,53 @@ checksums, independent packing fixtures, malformed metadata/bounds rejection,
 norm/RoPE math, original-weight positive/negative output, and agreement between
 batch prefill and incremental cached execution. Real-model tests require the
 explicit `FORESIGHT_ORIGINAL_QUERY_MODEL` environment variable. The tested
-environment uses NumPy 2.5.1 and SentencePiece 0.2.1; the packaged runtime already
-has SentencePiece but currently lacks NumPy.
+environment uses NumPy 2.5.1 and SentencePiece 0.2.1. The packaging dependency
+locks now include both dependencies.
+
+## Application worker and registration
+
+`tools/legacy_query_worker.py` loads the SHA-identified asset once and accepts
+serial JSON-line requests. Each generation resets the KV cache. Requests carry
+an owned ID, the already-prefixed raw prompt, and an output limit up to 512;
+the executor also enforces the original 512-token context. Frames are bounded
+to 1 MiB. Its ready/result frames identify the float32 CPU backend and explicitly
+leave original GPU parity unverified.
+
+`DedicatedQueryRuntime` owns a separate worker process. Cancellation and timeout
+terminate only that owned process, including during model loading. Idle close
+sends EOF with a bounded shutdown deadline; active close kills and reaps the
+worker. Canceled workers cannot deliver responses or decoder errors to a later
+worker. The application passes decoded output unchanged to the existing
+`ReferenceQueryDetector`, whose recovered parser sanitizes and trims individual
+questions. The worker does not fabricate the original decoder's leading spaces.
+
+Use the existing `models.register` service operation with kind
+`query-detection`, backend `legacy_query_cpu`, the authenticated local model
+`path`, and Python interpreter/launcher `runtime`. The packaged resource map
+supplies `FORESIGHT_QUERY_WORKER`; it uses the same resource configuration and
+model database as other runtimes. No separate project configuration is needed.
+Registering the dedicated interpreter records package ownership for relocation.
+The model itself is not shipped or automatically acquired by this integration.
+
+Four Python protocol tests cover exact prefix/output handling, malformed and
+oversized frames, output bounds, and recovery after context failure. The actual
+isolated `-I -B` worker was also run with the original weights and produced
+`What risks could delay the launch?` followed by EOS. Six Dart process tests
+cover reuse, exact whitespace, request ownership, cancel/restart, malformed and
+unterminated oversized output, timeout, active close and graceful idle EOF;
+PID liveness checks confirm no owned process remains after cancellation/close.
+Application tests cover the dedicated answer pipeline and missing-model failure
+without chat substitution or cursor advancement.
 
 ## Remaining fidelity work
 
-Float32 CPU execution changes the original packed-int8 GPU arithmetic. Original
-GPU reduction/rounding, GELU implementation,
-tokenizer/session boundaries and output behavior still require direct reference
-comparison. Public legacy XNN math is an explicit diagnostic adaptation until
-that comparison is established. The current successful CPU output proves the
-weights can execute; it does not prove exact original GPU behavior.
+Float32 CPU execution changes the original packed-int8 GPU arithmetic. The
+original Metal runtime also uses an int8 KV cache, while this reconstructed
+worker stores float32 keys and values. Matching selected question outputs does
+not establish numerical parity. GPU reduction/rounding, GELU implementation,
+and broader tokenizer/session/output comparisons remain relevant.
 
-Production integration also needs reproducible dependency packaging, cancellation
-and worker ownership, dedicated model acquisition/persistence, and controlled
-runtime/output comparisons. A native XNN or Metal port can reuse the verified
-matrix loader and topology, but either requires additional execution work;
-building an older public factory unchanged or wrapping the zero-operator file
-does not solve those requirements.
+Dedicated model acquisition and persistence still need a supported installation
+path. A native XNN or Metal port can reuse the verified matrix loader and
+topology, but requires additional execution work; building an older public
+factory unchanged or wrapping the zero-operator file does not supply that graph.

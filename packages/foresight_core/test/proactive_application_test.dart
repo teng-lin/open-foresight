@@ -7,10 +7,18 @@ import 'package:ffi/ffi.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/dedicated_query_runtime.dart';
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
 class _Domain extends Domain {
-  _Domain(super.store, super.helper);
+  _Domain(super.store, super.helper, this.detector);
+  final QueryCompletionRuntime detector;
+  @override
+  late final Application application = Application(
+    this,
+    queryRuntime: detector,
+  );
   Completer<void>? indexGate;
   @override
   Future<void> index(String id) async {
@@ -49,10 +57,28 @@ class _Rag extends RagServiceBase {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _Detector implements QueryCompletionRuntime {
+  final requests = <String>[];
+  final prompts = <String>[];
+  String output = ' Who owns the draft?';
+  Object? failure;
+  @override
+  Future<String> complete(String prompt, String requestId) async {
+    requests.add(requestId);
+    prompts.add(prompt);
+    if (failure != null) throw failure!;
+    return output;
+  }
+
+  @override
+  void cancel(String requestId) {}
+  @override
+  Future<void> close() async {}
+}
+
 class _Runtime extends NativeRuntime {
   final requests = <String>[];
   final schemas = <Map<String, dynamic>?>[];
-  String detection = '{"questions":["Who owns the draft?"]}';
   _Runtime()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
@@ -68,9 +94,8 @@ class _Runtime extends NativeRuntime {
     schemas.add(responseSchema);
     yield {
       'type': 'delta',
-      'text': id.startsWith('proactive-detect-')
-          ? detection
-          : '{"status":"answered","answer":"Mira owns the draft.","citations":["S1"]}',
+      'text':
+          '{"status":"answered","answer":"Mira owns the draft.","citations":["S1"]}',
     };
     yield {'type': 'done', 'status': 'completed'};
   }
@@ -82,6 +107,7 @@ void main() {
   late Server server;
   late _Domain domain;
   late _Runtime runtime;
+  late _Detector detector;
   late _Rag rag;
   setUp(() async {
     directory = Directory.systemTemp.createTempSync('proactive-app-');
@@ -94,8 +120,12 @@ void main() {
       port: 0,
     );
     runtime = _Runtime();
-    domain = _Domain(store, Helper(socket, '${directory.path}/helper'))
-      ..generator = runtime;
+    detector = _Detector();
+    domain = _Domain(
+      store,
+      Helper(socket, '${directory.path}/helper'),
+      detector,
+    )..generator = runtime;
   });
   tearDown(() async {
     await domain.application.close();
@@ -106,6 +136,42 @@ void main() {
     store.close();
     directory.deleteSync(recursive: true);
   });
+
+  test(
+    'missing dedicated model reports not ready without chat substitution',
+    () async {
+      final app = Application(domain);
+      try {
+        final id = store.meeting('Detector unavailable');
+        final queue = app.proactive;
+        queue.begin(id);
+        store.transcript(
+          id,
+          'Who owns the draft?',
+          true,
+          0,
+          1000,
+          'microphone',
+        );
+        queue.notify(id);
+        await queue.process();
+        expect(
+          queue.errors[id],
+          contains('Dedicated question detector is not ready'),
+        );
+        expect(runtime.requests, isEmpty);
+        expect(store.rows('SELECT * FROM meeting_questions'), isEmpty);
+        expect(
+          store
+              .rows('SELECT transcript_id FROM meeting_question_cursors')
+              .single['transcript_id'],
+          0,
+        );
+      } finally {
+        await app.close();
+      }
+    },
+  );
 
   test(
     'service pipeline detects, indexes, grounds, cites and links an automatic answer by request ownership',
@@ -133,10 +199,11 @@ void main() {
       expect(answer['body'], 'Mira owns the draft. [S1]');
       expect(answer['conversation'], 'meeting:$id');
       expect(answer['request_id'], runtime.requests.last);
-      expect(runtime.requests, hasLength(2));
-      expect(runtime.requests.first, startsWith('proactive-detect-'));
+      expect(runtime.requests, hasLength(1));
+      expect(detector.requests.single, startsWith('proactive-detect-'));
+      expect(detector.prompts.single, startsWith(' <ctrl1>'));
       expect(runtime.requests.last, startsWith('proactive-answer-'));
-      expect(runtime.schemas.first?['required'], ['questions']);
+      expect(runtime.schemas.first?['required'], isNot(contains('questions')));
       expect(store.rows('SELECT * FROM meeting_answers').single, {
         'meeting_id': id,
         'answer_id': answer['id'],
@@ -153,16 +220,17 @@ void main() {
   );
 
   test(
-    'invalid model output is visible and leaves original transcript and processing boundary intact',
+    'dedicated detector failure is visible and leaves transcript and processing boundary intact',
     () async {
       final id = store.meeting('Invalid detection');
       final queue = domain.application.proactive;
       queue.begin(id);
       store.transcript(id, 'Who owns the draft?', true, 0, 1000, 'microphone');
       queue.notify(id);
-      runtime.detection = '{"questions":[123]}';
+      detector.failure = StateError('Dedicated detector failed');
       await queue.process();
-      expect(queue.errors[id], contains('Invalid question detection result'));
+      expect(queue.errors[id], contains('Dedicated detector failed'));
+      expect(runtime.requests, isEmpty);
       expect(store.rows('SELECT * FROM meeting_questions'), isEmpty);
       expect(
         store.rows('SELECT text FROM transcript').single['text'],
@@ -174,7 +242,7 @@ void main() {
             .single['transcript_id'],
         0,
       );
-      runtime.detection = '{"questions":["Who owns the draft?"]}';
+      detector.failure = null;
       await domain.command('meetings.retry_detection', {'id': id});
       await queue.process();
       expect(store.rows('SELECT * FROM meeting_questions'), hasLength(1));
@@ -206,7 +274,7 @@ void main() {
       final answer = queue.process();
       await queue.close().timeout(const Duration(seconds: 2));
       await answer;
-      expect(runtime.requests, hasLength(1));
+      expect(runtime.requests, isEmpty);
       expect(
         store.rows('SELECT state FROM meeting_questions').single['state'],
         'queued',
@@ -239,10 +307,10 @@ void main() {
       await rag.entered.future.timeout(const Duration(seconds: 2));
       await queue.close().timeout(const Duration(seconds: 2));
       await work;
-      expect(runtime.requests, hasLength(1));
+      expect(runtime.requests, isEmpty);
       rag.gate!.complete();
       await Future<void>.delayed(const Duration(milliseconds: 30));
-      expect(runtime.requests, hasLength(1));
+      expect(runtime.requests, isEmpty);
       expect(store.rows('SELECT * FROM answers'), isEmpty);
       expect(
         store.rows('SELECT state FROM meeting_questions').single['state'],
