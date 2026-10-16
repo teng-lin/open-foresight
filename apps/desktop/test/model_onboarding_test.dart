@@ -106,10 +106,12 @@ void main() {
         );
         await tester.tap(find.text('Setup'));
         await tester.pumpAndSettle();
-        expect(find.text('Set up local source search'), findsOneWidget);
+        expect(find.text('EmbeddingGemma 2'), findsOneWidget);
         expect(find.byType(RadioListTile<GemmaModel>), findsNothing);
         await tester.runAsync(() async {
-          await tester.tap(find.text('Continue'));
+          await tester.tap(
+            find.widgetWithText(FilledButton, 'Download EmbeddingGemma 2'),
+          );
           for (var i = 0; i < 100 && !loaded; i++) {
             await Future<void>.delayed(const Duration(milliseconds: 20));
           }
