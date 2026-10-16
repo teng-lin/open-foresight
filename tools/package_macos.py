@@ -1,0 +1,195 @@
+#!/usr/bin/env python3
+"""Assemble the Mac application, standalone service/MCP, and local runtimes."""
+import argparse
+import json
+import os
+from pathlib import Path
+import plistlib
+import shutil
+import subprocess
+import sys
+
+from macos_bundle import audit_dependencies, relocate_dependencies, run, sign_application
+
+ROOT = Path(__file__).resolve().parents[1]
+PURPOSES = {
+    'NSMicrophoneUsageDescription': 'Transcribe your microphone during meetings you start.',
+    'NSAudioCaptureUsageDescription': 'Transcribe meeting audio playing on this Mac when you start recording.',
+}
+
+
+def helper_bundle(path, executable, identifier):
+    macos = path / 'Contents/MacOS'
+    macos.mkdir(parents=True)
+    destination = macos / executable.name
+    shutil.copy2(executable, destination)
+    with (path / 'Contents/Info.plist').open('wb') as stream:
+        plistlib.dump({
+            'CFBundleExecutable': executable.name, 'CFBundleIdentifier': identifier,
+            'CFBundleName': path.stem, 'CFBundlePackageType': 'APPL',
+            'CFBundleVersion': '1', 'CFBundleShortVersionString': '0.1.0',
+            'LSMinimumSystemVersion': '15.0', 'LSUIElement': True, **PURPOSES,
+        }, stream)
+    return destination
+
+
+def write_runtime(resources, values):
+    resources.mkdir(parents=True, exist_ok=True)
+    config = {key: os.path.relpath(path, resources) if isinstance(path, Path) else path
+              for key, path in values.items()}
+    (resources / 'runtime.json').write_text(json.dumps(config, indent=2) + '\n')
+
+
+def copy_python(source, resources, values):
+    """Copy a relocatable standalone Python install, not a Homebrew framework."""
+    python = source / 'bin/python3'
+    if not python.is_file():
+        raise ValueError('--python-runtime must contain bin/python3')
+    query = 'import sys,json,sysconfig; print(json.dumps([sys.base_prefix,sysconfig.get_path("stdlib")]))'
+    base, stdlib = json.loads(run(python, '-I', '-c', query))
+    if not Path(base).resolve().is_relative_to(source.resolve()) or not Path(stdlib).resolve().is_relative_to(source.resolve()):
+        raise ValueError('Use a standalone Python runtime, not a venv linked to system/Homebrew Python')
+    target = resources / 'python'
+    shutil.copytree(source, target, symlinks=True,
+                    ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.a', 'test', 'tests'))
+    for path in target.rglob('*'):
+        if path.is_symlink() and not path.resolve().is_relative_to(target.resolve()):
+            raise ValueError(f'Python runtime symlink escapes bundle: {path}')
+    runtime = target / 'bin/python3'
+    adapters = resources / 'adapters'
+    for kind in ('litert-runner', 'litert-python'):
+        launcher = adapters / kind
+        args = '"$task_resources/adapters/litert_runner.py" "$@"' if kind == 'litert-runner' else '"$@"'
+        launcher.write_text('#!/bin/bash\nset -euo pipefail\n'
+            'task_resources=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)\n'
+            'export PYTHONDONTWRITEBYTECODE=1\n'
+            'exec "$task_resources/python/bin/python3" -I -B ' + args + '\n')
+        launcher.chmod(0o755)
+    values.update(FORESIGHT_LITERT_RUNNER=adapters / 'litert-runner',
+                  FORESIGHT_LITERT_PYTHON=adapters / 'litert-python',
+                  FORESIGHT_MODEL_PYTHON=runtime)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--build', type=Path, default=ROOT / 'build')
+    parser.add_argument('--flutter-app', type=Path, default=ROOT / 'apps/desktop/build/macos/Build/Products/Release/Open Foresight.app')
+    parser.add_argument('--output', type=Path, default=ROOT / 'dist/Open Foresight.app')
+    parser.add_argument('--python-runtime', type=Path, help='Standalone relocatable Python prefix with pinned LiteRT dependencies installed')
+    parser.add_argument('--whisper-runtime', type=Path)
+    parser.add_argument('--google-client', type=Path)
+    parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
+    parser.add_argument('--identity', default='-', help='Developer ID Application identity; default is ad-hoc development only')
+    parser.add_argument('--notary-profile', help='Existing notarytool keychain profile; requires a Developer ID identity')
+    parser.add_argument('--archive', type=Path, help='Create a distributable ZIP after signing/notarization')
+    args = parser.parse_args(argv)
+    if sys.platform != 'darwin':
+        parser.error('Mac application packaging requires macOS')
+    if args.output.suffix != '.app' or args.output.exists():
+        parser.error('Choose a new output path ending in .app')
+    if args.notary_profile and args.identity == '-':
+        parser.error('Notarization requires --identity with a Developer ID Application identity')
+    if args.identity != '-' and (not args.python_runtime or not args.whisper_runtime):
+        parser.error('Developer ID release requires bundled --python-runtime and --whisper-runtime; use ad-hoc signing for incomplete developer builds')
+    if args.generation_backend == 'gpu' and not args.python_runtime:
+        parser.error('GPU generation requires a validated --python-runtime')
+    required = {
+        'FORESIGHT_HELPER': args.build / 'services/helper/ForesightHelper',
+        'FORESIGHT_NATIVE': args.build / 'native/libforesight_native.dylib',
+        'FORESIGHT_AUDIO_DEVICES': args.build / 'native/foresight-audio',
+        'FORESIGHT_NOTIFICATIONS': args.build / 'macos/foresight-notifications',
+    }
+    service = args.build / 'application/foresight-service'
+    mcp = args.build / 'application/foresight-mcp'
+    for path in [args.flutter_app, service, mcp, *required.values()]:
+        if not path.exists():
+            parser.error(f'Build all components first: missing {path}')
+    app = args.output.absolute()
+    app.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(args.flutter_app, app, symlinks=True)
+    contents = app / 'Contents'
+    resources = contents / 'Resources'
+    values = {}
+    service_path = helper_bundle(contents / 'Library/Services/Open Foresight Service.app', service, 'io.openforesight.App.service')
+    values['FORESIGHT_SERVICE'] = service_path
+    shutil.copy2(mcp, contents / 'MacOS/foresight-mcp')
+    for key, source in required.items():
+        target = resources / ('lib' if source.suffix == '.dylib' else 'bin') / source.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        values[key] = target
+    # Notifications require a stable bundle identity as well.
+    notification = helper_bundle(contents / 'Library/Services/Open Foresight Notifications.app',
+                                 required['FORESIGHT_NOTIFICATIONS'], 'io.openforesight.App.notifications')
+    values['FORESIGHT_NOTIFICATIONS'] = notification
+    adapters = resources / 'adapters'
+    adapters.mkdir(exist_ok=True)
+    for name in ('model_adapter.py', 'litert_embedding_adapter.py', 'litert_runner.py', 'grounded_generation.py'):
+        shutil.copy2(ROOT / 'services/helper' / name, adapters / name)
+    values.update(FORESIGHT_MODEL_ADAPTER=adapters / 'model_adapter.py',
+                  FORESIGHT_LITERT_EMBEDDING_ADAPTER=adapters / 'litert_embedding_adapter.py',
+                  FORESIGHT_LITERT_BACKEND=args.generation_backend)
+    if args.whisper_runtime:
+        target = resources / 'bin/whisper-cli'
+        shutil.copy2(args.whisper_runtime, target)
+        values['FORESIGHT_WHISPER_RUNTIME'] = target
+    if args.google_client:
+        config = json.loads(args.google_client.read_text())
+        if set(config) != {'installed'} or 'client_id' not in config['installed']:
+            parser.error('Supply installed application OAuth configuration, never account tokens')
+        installed = config['installed']
+        if not isinstance(installed['client_id'], str) or not isinstance(installed.get('client_secret', ''), str):
+            parser.error('Invalid application OAuth configuration')
+        target = resources / 'google-client.json'
+        target.write_text(json.dumps({'installed': {key: installed[key] for key in ('client_id', 'client_secret') if key in installed}}))
+        values['FORESIGHT_GOOGLE_CLIENT'] = target
+    if args.python_runtime:
+        copy_python(args.python_runtime, resources, values)
+    write_runtime(resources, values)
+    write_runtime(service_path.parent.parent / 'Resources', values)
+    info = contents / 'Info.plist'
+    with info.open('rb') as stream:
+        metadata = plistlib.load(stream)
+    metadata.update(PURPOSES)
+    metadata['LSMinimumSystemVersion'] = '15.0'
+    with info.open('wb') as stream:
+        plistlib.dump(metadata, stream)
+    relocate_dependencies(app)
+    entitlements = ROOT / 'packaging/macos/Release.entitlements'
+    sign_application(app, args.identity, entitlements)
+    if args.python_runtime:
+        run(resources / 'adapters/litert-runner', '--check')
+        run(resources / 'adapters/litert-python', '-I', adapters / 'litert_embedding_adapter.py', '--check')
+    notarized = False
+    if args.notary_profile:
+        submission = app.parent / (app.stem + '.notary.zip')
+        subprocess.run(['ditto', '-c', '-k', '--keepParent', str(app), str(submission)], check=True)
+        try:
+            result = json.loads(run('xcrun', 'notarytool', 'submit', submission,
+                                    '--keychain-profile', args.notary_profile, '--wait', '--output-format', 'json'))
+            if result.get('status') != 'Accepted':
+                raise RuntimeError(f'Notarization failed: {result}')
+            run('xcrun', 'stapler', 'staple', app)
+            run('xcrun', 'stapler', 'validate', app)
+            run('spctl', '--assess', '--type', 'execute', '--verbose=2', app)
+            notarized = True
+        finally:
+            submission.unlink(missing_ok=True)
+    if args.archive:
+        if args.archive.exists():
+            raise ValueError('Archive path already exists')
+        args.archive.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(['ditto', '-c', '-k', '--keepParent', str(app), str(args.archive)], check=True)
+    report = {'app': str(app), 'revision': run('git', '-C', ROOT, 'rev-parse', 'HEAD').strip(),
+              'architecture': 'arm64', 'minimum_macos': '15.0',
+              'signing': 'ad-hoc-development' if args.identity == '-' else 'developer-id',
+              'notarized': notarized, 'python_bundled': bool(args.python_runtime),
+              'whisper_bundled': bool(args.whisper_runtime), 'linkage': audit_dependencies(app)}
+    # A report outside the sealed bundle avoids invalidating its signature.
+    report_path = app.parent / (app.stem + '.manifest.json')
+    report_path.write_text(json.dumps(report, indent=2) + '\n')
+    print(json.dumps({key: value for key, value in report.items() if key != 'linkage'}))
+
+
+if __name__ == '__main__':
+    main()

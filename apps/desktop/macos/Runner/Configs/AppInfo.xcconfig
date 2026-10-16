@@ -1,0 +1,6 @@
+PRODUCT_NAME = Open Foresight
+PRODUCT_BUNDLE_IDENTIFIER = io.openforesight.App
+PRODUCT_COPYRIGHT = Copyright © 2026 Open Foresight contributors.
+MACOSX_DEPLOYMENT_TARGET = 15.0
+ARCHS = arm64
+EXCLUDED_ARCHS = x86_64

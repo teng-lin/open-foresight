@@ -1,0 +1,14 @@
+absl-py==2.5.1
+click==8.5.0
+flatbuffers==25.12.19
+litert-lm==0.18.0
+litert-lm-api==0.18.0
+litert-lm-builder==0.18.0
+pip @ file:///private/tmp/tmphlydbzwu/pip-26.2.1-py3-none-any.whl#sha256=71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e
+prompt-toolkit==3.0.53
+protobuf==7.36.2
+questionary==2.1.1
+sentencepiece==0.2.1
+tomli==2.5.0
+typing-extensions==4.16.0
+wcwidth==0.9.2
