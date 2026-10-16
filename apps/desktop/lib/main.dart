@@ -50,41 +50,167 @@ part 'meeting_workspace.dart';
 
 Future<void> main([List<String> arguments = const []]) async {
   WidgetsFlutterBinding.ensureInitialized();
-  final profile = ProfilePaths.resolve(Platform.environment);
-  final data = profile.data;
-  final runtime = profile.runtime;
-  ensurePrivateDirectory(data);
-  ensurePrivateDirectory(runtime);
-  configureProfileRuntime(data);
-  final commandPath = '$runtime/commands.sock';
-  final launchCommand = arguments.contains('--stop-meeting')
-      ? 'stop-meeting'
-      : arguments.contains('--quick-meeting')
-      ? 'quick-meeting'
-      : 'activate';
-  if (await AppCommands.forward(
-    commandPath,
-    command: launchCommand,
-    activationToken: Platform.environment['XDG_ACTIVATION_TOKEN'],
-  ))
-    exit(0);
-  if (launchCommand == 'stop-meeting') exit(0);
-  AppCommands ownedCommands;
-  try {
-    ownedCommands = await AppCommands.bind(commandPath);
-  } catch (error) {
-    if (error is! SocketException && error is! FileSystemException) rethrow;
-    if (await AppCommands.forward(commandPath, command: launchCommand)) exit(0);
-    rethrow;
+  runApp(DesktopStartup(arguments: arguments));
+}
+
+Future<Domain> connectDesktopDomain(ProfilePaths profile) =>
+    RemoteDomain.connect(profile);
+void quitDesktop() => exit(0);
+
+/// Mount before connecting so service/profile failures remain visible and can
+/// be retried without retaining the failed attempt's activation socket.
+class DesktopStartup extends StatefulWidget {
+  final List<String> arguments;
+  final ProfilePaths? profile;
+  final Future<Domain> Function(ProfilePaths) connect;
+  final VoidCallback quit;
+  final void Function(String) configureRuntime;
+  const DesktopStartup({
+    super.key,
+    this.arguments = const [],
+    this.profile,
+    this.connect = connectDesktopDomain,
+    this.quit = quitDesktop,
+    this.configureRuntime = configureProfileRuntime,
+  });
+  @override
+  State<DesktopStartup> createState() => _DesktopStartupState();
+}
+
+class _DesktopStartupState extends State<DesktopStartup> {
+  Widget? application;
+  Object? failure;
+  bool starting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(start());
   }
-  final domain = await RemoteDomain.connect(profile);
-  runApp(
-    Foresight(
-      domain,
-      commands: ownedCommands,
-      quickOnLaunch: arguments.contains('--quick-meeting'),
-    ),
-  );
+
+  Future<void> start() async {
+    if (starting) return;
+    setState(() {
+      starting = true;
+      failure = null;
+    });
+    AppCommands? ownedCommands;
+    try {
+      final profile =
+          widget.profile ?? ProfilePaths.resolve(Platform.environment);
+      ensurePrivateDirectory(profile.data);
+      ensurePrivateDirectory(profile.runtime);
+      widget.configureRuntime(profile.data);
+      final commandPath = '${profile.runtime}/commands.sock';
+      final launchCommand = widget.arguments.contains('--stop-meeting')
+          ? 'stop-meeting'
+          : widget.arguments.contains('--quick-meeting')
+          ? 'quick-meeting'
+          : 'activate';
+      if (await AppCommands.forward(
+        commandPath,
+        command: launchCommand,
+        activationToken: Platform.environment['XDG_ACTIVATION_TOKEN'],
+      )) {
+        widget.quit();
+        return;
+      }
+      if (launchCommand == 'stop-meeting') {
+        widget.quit();
+        return;
+      }
+      try {
+        ownedCommands = await AppCommands.bind(commandPath);
+      } catch (error) {
+        if (error is! SocketException && error is! FileSystemException) rethrow;
+        if (await AppCommands.forward(commandPath, command: launchCommand)) {
+          widget.quit();
+          return;
+        }
+        rethrow;
+      }
+      final domain = await widget.connect(profile);
+      if (!mounted) {
+        await ownedCommands.close();
+        ownedCommands = null;
+        domain.close();
+        return;
+      }
+      setState(
+        () => application = Foresight(
+          domain,
+          commands: ownedCommands,
+          quickOnLaunch: widget.arguments.contains('--quick-meeting'),
+        ),
+      );
+      ownedCommands = null; // Workspace now owns the successful connection.
+    } catch (error) {
+      // Cleanup finishes before Retry becomes available or another app binds.
+      try {
+        await ownedCommands?.close();
+      } catch (_) {
+        // Preserve the actionable connection error if cleanup also fails.
+      }
+      if (mounted) setState(() => failure = error);
+    } finally {
+      if (mounted) setState(() => starting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      application ??
+      MaterialApp(
+        title: 'Open Foresight',
+        debugShowCheckedModeBanner: false,
+        theme: foresightTheme(),
+        home: Scaffold(
+          body: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 620),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      starting
+                          ? 'Starting Open Foresight…'
+                          : 'Open Foresight could not start',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 16),
+                    if (starting)
+                      const LinearProgressIndicator()
+                    else ...[
+                      SelectableText(failure.toString()),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Resolve the problem above, then retry. If another installation owns this profile, stop its application service explicitly or use a different profile.',
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          FilledButton(
+                            onPressed: start,
+                            child: const Text('Retry'),
+                          ),
+                          const SizedBox(width: 12),
+                          TextButton(
+                            onPressed: widget.quit,
+                            child: const Text('Quit'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
