@@ -93,7 +93,7 @@ def stop_owned_services(app, active, profiles, timeout=1800):
         pid = state['pid']
         if pid not in active or process_path(pid) != executable:
             raise Deferred(f'Profile {profile} is not owned by this installed service')
-        if state.get('capture', {}).get('active'):
+        if state.get('capture', {}).get('active') or state.get('capture', {}).get('finishing'):
             raise Deferred(f'Recording is active for profile {profile}. Stop recording and wait for the final transcript before upgrading; the application was not replaced')
         owners[pid] = env
     if set(owners) != services:
@@ -107,12 +107,23 @@ def stop_owned_services(app, active, profiles, timeout=1800):
             ancestor = parents[ancestor]
         if ancestor not in services:
             raise Deferred('The desktop, MCP client, or an unrelated worker is running. Close clients before upgrading')
-    # Recording must finish before this transaction. --stop then waits for
-    # idle service shutdown and worker cleanup; EOF cannot certify transcription.
+    # The preliminary status check gives an early deferral, but only the
+    # serialized service operation can close the recording-start race. A
+    # positive structured acknowledgement certifies successful resource cleanup;
+    # EOF, an unsupported old CLI, or a failed close all defer replacement.
     for pid, env in owners.items():
         if process_path(pid) != executable:
             raise Deferred('Service identity changed before shutdown; retry')
-        subprocess.run([str(executable), '--stop'], cwd='/', env=env, capture_output=True, text=True, timeout=timeout, check=True)
+        response = subprocess.run([str(executable), f'--stop-if-idle={pid}'], cwd='/', env=env,
+            capture_output=True, text=True, timeout=timeout)
+        if response.returncode:
+            raise Deferred(f'Idle service shutdown was refused or failed; app was not replaced: {response.stderr.strip()}')
+        try:
+            acknowledgement = json.loads(response.stdout)
+        except (ValueError, TypeError) as error:
+            raise Deferred('Service shutdown was not explicitly acknowledged; app was not replaced') from error
+        if not isinstance(acknowledgement, dict) or acknowledgement.get('stopped') is not True or acknowledgement.get('shutdown_verified') is not True:
+            raise Deferred('Service did not verify idle shutdown; app was not replaced')
         deadline = time.monotonic() + 15
         while process_path(pid) == executable and time.monotonic() < deadline:
             time.sleep(.05)

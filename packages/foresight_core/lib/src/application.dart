@@ -984,7 +984,6 @@ class Application {
     _closed = true;
     _googleTimer?.cancel();
     google.close();
-    await googleAuth.close();
     _liveIndex?.cancel();
     _inactivity?.cancel();
     for (final timer in _enhance.values) {
@@ -992,6 +991,7 @@ class Application {
     }
     _enhance.clear();
     try {
+      await googleAuth.close();
       if (recording != null) await stopRecording();
     } finally {
       await changes.close();

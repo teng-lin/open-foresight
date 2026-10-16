@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/platform_services.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -8,11 +9,48 @@ Future<void> main(List<String> args) async {
   ApplicationService? service;
   try {
     if (args.isNotEmpty) {
-      if (args.length != 1 || !['--status', '--stop'].contains(args.single))
-        throw ArgumentError('Usage: foresight-service [--status|--stop]');
+      if (args.length != 1)
+        throw ArgumentError(
+          'Usage: foresight-service [--status|--stop|--stop-if-idle[=PID]]',
+        );
+      final mode = args.single.split('=').first;
+      final expectedPid = args.single.startsWith('--stop-if-idle=')
+          ? int.tryParse(args.single.substring('--stop-if-idle='.length))
+          : null;
+      if (args.length != 1 ||
+          !['--status', '--stop', '--stop-if-idle'].contains(mode) ||
+          (args.single.contains('=') &&
+              (mode != '--stop-if-idle' ||
+                  expectedPid == null ||
+                  expectedPid <= 0)))
+        throw ArgumentError(
+          'Usage: foresight-service [--status|--stop|--stop-if-idle[=PID]]',
+        );
       final profile = ProfilePaths.resolve(Platform.environment);
       final client = await ServiceClient.connect(serviceEndpoint(profile));
       try {
+        if (mode == '--stop-if-idle') {
+          final result =
+              await client
+                      .call('service.stop_if_idle', {
+                        if (expectedPid != null) 'expected_pid': expectedPid,
+                        if (configuredInstallationRoot != null)
+                          'installation_root': configuredInstallationRoot,
+                        if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] !=
+                            null)
+                          'runtime_revision':
+                              runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
+                      })
+                      .timeout(const Duration(minutes: 30))
+                  as Map?;
+          if (result?['stopped'] != true ||
+              result?['shutdown_verified'] != true)
+            throw StateError(
+              'The service did not acknowledge a verified idle shutdown.',
+            );
+          stdout.writeln(jsonEncode(result));
+          return;
+        }
         final state = await client.call('status') as Map;
         if (args.single == '--status') {
           stdout.writeln(jsonEncode(state));
@@ -39,7 +77,7 @@ Future<void> main(List<String> args) async {
         if (!done.isCompleted) done.complete();
       }),
     ];
-    await done.future;
+    await Future.any([done.future, service.closed]);
     for (final signal in signals) {
       await signal.cancel();
     }
