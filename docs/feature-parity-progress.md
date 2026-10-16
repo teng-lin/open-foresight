@@ -14,7 +14,7 @@ Historical observations and validation counts below retain their original scope.
 | Requirement | Current evidence | Remaining work |
 | --- | --- | --- |
 | Speaker labels and echo cancellation | IDA proves a three-way channel lookup: Microphone, Remote, Unknown. That contract and macOS voice-processing lifecycle are implemented and tested. Native startup-watchdog fallback and interrupted-state/late-ASR handling are now replicated; see [recovery](recording-recovery.md). | Controlled physical echo/overlap and capture-recovery checks remain. Individual-person diarization is not established as an original feature by this trace. |
-| Proactive answers | Automatic scheduling, rolling deduplication, queue replacement, meeting ownership and history are implemented. The dedicated detector protocol and Gemma 4 200M architecture are recovered. The installed dedicated asset is authenticated/decrypted and its GPU metadata bound; both public workers reject its legacy weights-only TFLite format. A raw-session worker primitive is implemented and tested separately; see [runtime evidence](reference-query-runtime.md). | Production still uses a generic chat detector. An isolated evaluator executes the authenticated original weights and detects a controlled question; GPU numerical fidelity, production integration, distribution acquisition and real capture/model comparison remain. |
+| Proactive answers | Automatic scheduling, rolling deduplication, queue replacement, meeting ownership and history are implemented. The dedicated detector protocol and Gemma 4 200M architecture are recovered. The installed dedicated asset is authenticated/decrypted and its GPU metadata bound; both public workers reject its legacy weights-only TFLite format. A raw-session worker primitive is implemented and tested separately; see [runtime evidence](reference-query-runtime.md). | Production uses the reconstructed dedicated CPU worker when its authenticated asset is registered; no chat substitution is used. Four controlled outputs match the original Metal runtime after recovered question parsing. Broader numerical fidelity, int8 KV-cache behavior, supported acquisition and physical capture comparison remain. |
 | Meeting web-search fallback | Search transport, remote summary RPC, native tool generation, Ask/meeting wiring, shared citation numbering and persisted URL snapshots are implemented and tested. Release packagers accept bundled credentials. See [chat evidence](reference-chat-web.md) and [response processing](reference-chat-response.md). | Provision distribution credentials and verify live service behavior and runtime model overrides. Streaming and retained worker/base-conversation cloning are implemented; exact original runtime lifecycle comparison remains. Helper tokenization matches five controlled original/port Encode probes; bundled context/sampling defaults match. Structured replay and 55% memory compression/FIFO are implemented and have a controlled local-model check. Original prompt text and textual-tool fallback are implemented; a local-model controlled-provider check passes. No separate user project setup has been added. |
 | Recording pause/fullscreen gestures | Service pause/resume and immersive controls implemented in the follow-up worktree; native ABI/service/UI tests pass. See [investigation](missing-functions-investigation.md). | Compare exact reference gestures and elapsed-time behavior; validate real-device reacquisition and paused-audio exclusion on both platforms. |
 | Rich generated-content previews | Implemented formatted selectable Markdown for enhanced notes, summaries, action items, previous versions and answers. Formatting, raw summary copy/edit, preserved generated originals, links and image handling have deterministic UI coverage. | Compare controlled generated content visually with the original; exact renderer parity remains unverified. |
@@ -28,16 +28,21 @@ The parallel follow-up implements the microphone startup watchdog and interrupte
 state cleanup, original chat response repair/sanitation, export formatting and
 filter corrections, and label focus-loss behavior. The installed dedicated
 detector has been authenticated/decrypted; its legacy weights-only format is
-rejected by the current public runtime on CPU and GPU. It is not connected to
-production automatic Q&A.
+rejected by the current public runtime on CPU and GPU. A reconstructed owned CPU
+worker is now connected to production automatic Q&A through the existing model
+registry; missing assets report not ready. A contained original Metal runtime
+provided four controlled output comparisons.
 
-Current checks: 201 core tests passed with three opt-in skips, 178 desktop tests
-passed with ten opt-in skips, and all four native CTest groups passed. Python
-runner fixtures cover the persistent protocol. Real GPU checks verify retained
-worker cancellation and clone isolation, plus web search, citation, replay and
-compression through the retained worker. The isolated original-weight evaluator
-has a controlled positive and negative case; numerical comparison against the
-original GPU runtime and production integration remain open. See
+Current checks: 211 core tests and 178 desktop tests passed in the recorded full
+runs. Optional real-GPU web-chat and real-weight dedicated Dart runtime checks
+also passed separately. Core and desktop analysis are clean. All four native
+CTest groups passed in the retained transport validation. Real GPU web checks
+verify search, citation, canonical history replay and compression. The dedicated
+worker package survives signing and relocation, imports its bundled dependencies
+from a poisoned working directory, and passes positive/empty original-weight
+cases. The original Metal oracle and reconstructed CPU worker agree on four
+controlled questions/results after recovered trimming. These checks do not prove
+float32/int8 numerical equivalence or supported model acquisition. See
 [streaming and worker evidence](reference-chat-streaming.md) and
 [legacy detector evidence](reference-legacy-detector-runtime.md).
 

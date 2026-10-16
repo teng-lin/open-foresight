@@ -81,18 +81,18 @@ Open Foresight reproduces the original's main workflows, and adds features the o
 - **Local and open.** Models are public LiteRT and whisper.cpp files, pinned by SHA-256 hash, and generation never calls a cloud model. The source code is MIT-licensed.
 - **Isolated profiles.** You can run separate profiles side by side, and migrate an existing profile with a tool that keeps a verified backup.
 
-### Not yet reproduced
+### Original-app parity
 
-These features of the original are not in Open Foresight yet:
-
-- **Web search fallback.** The original's meeting assistant can fall back to a Google web-search tool.
-- **Cloud Gemini models.** The original's binary references cloud Gemini models. Open Foresight leaves these out on purpose and runs every model locally.
+Web-search fallback and the original remote Gemini summary RPC are implemented
+for optional web-enabled Ask and meeting Chat. Distribution credentials and live
+service verification remain pending; no separate user project setup is required.
+Ordinary answer generation remains local.
 
 The original's single-note Markdown export format has now been observed live and reproduced, with date filters, preview, copy and download. Additional export scenarios and label editing still need reference verification; see the [feature parity progress ledger](docs/feature-parity-progress.md).
 
 Pause/resume and an immersive workspace are implemented. Exact original gestures and physical-audio behavior remain under [investigation and validation](docs/missing-functions-investigation.md).
 
-Automatic meeting answers are implemented and tested, including with a real local question-detection model. The original's exact detection rules and scheduling still need reference verification. Search configuration is also [under investigation](docs/ida-search-investigation.md); a separate user project has not been established as a requirement.
+Automatic meeting answers now use a reconstructed dedicated detector when its authenticated asset is registered. Four controlled parsed outputs match the original GPU runtime; supported model acquisition and broader numerical comparison remain pending. Search configuration is also [under investigation](docs/ida-search-investigation.md); a separate user project has not been established as a requirement.
 
 Transcripts label microphone and remote audio channels as Microphone and Remote, with Unknown for other sources. These are capture routes, not individual-speaker identification. Meeting generation is instructed to attribute statements only to clearly established real names.
 

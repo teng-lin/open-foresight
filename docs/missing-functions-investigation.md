@@ -241,9 +241,11 @@ capture or end-to-end behavior of the original model.
 Further tracing identifies a separate MODEL_TYPE_QUERY_DETECTOR (type 4)
 native model, not the selected chat model. Its generation prefix and raw
 ASCII-output postprocessing are implemented in reference_query_detector.dart
-and tested through the service callback. The production application still uses
-its generic chat/JSON detector: a compatible dedicated native model/decryption
-backend must be reproduced before switching it. The original postprocessor
+and tested through the service callback. The production application now uses the reconstructed dedicated CPU worker
+through the existing model registry; it reports not ready when the dedicated
+asset is absent. See [the current runtime implementation](reference-legacy-detector-runtime.md)
+for packaged dependencies, controlled original-runtime comparisons and remaining
+acquisition/numerical gaps. The original postprocessor
 strips non-ASCII detector output; captured transcripts are unaffected.
 
 Current core validation: **97 passed, 1 opt-in model test skipped**; analyzer
