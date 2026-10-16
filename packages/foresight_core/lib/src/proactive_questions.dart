@@ -17,7 +17,12 @@ class ProactiveQuestions {
     required this.cancel,
     required this.changed,
     this.delay = const Duration(seconds: 1),
-  });
+    int Function()? nowMilliseconds,
+  }) : _nowMilliseconds = nowMilliseconds ?? _systemMilliseconds;
+
+  static int _systemMilliseconds() => DateTime.now().millisecondsSinceEpoch;
+  final int Function() _nowMilliseconds;
+
   final Store store;
   final Future<List<String>> Function(String text, String requestId) detect;
   final Future<int> Function(int meetingId, String question, String requestId)
@@ -29,6 +34,9 @@ class ProactiveQuestions {
   final _pending = <int>{};
   final _inputVersions = <int, int>{};
   final _examinedVersions = <int, int>{};
+  final _interim = <int, Map<String, String>>{};
+  final _lastInputIsFinal = <int, bool>{};
+  final _windowSeen = <int, Map<String, int>>{};
   final errors = <int, String>{};
   Timer? _timer;
   Future<void>? _inFlight;
@@ -70,11 +78,42 @@ class ProactiveQuestions {
     wake();
   }
 
-  void notify(int meetingId) {
+  void notify(int meetingId, {bool isFinal = true}) {
     if (_closed) return;
+    _lastInputIsFinal[meetingId] = isFinal;
     _inputVersions[meetingId] = (_inputVersions[meetingId] ?? 0) + 1;
     _pending.add(meetingId);
     wake();
+  }
+
+  /// Hypotheses replace one capture channel's current text rather than append
+  /// to finalized history. Repeated hypotheses refresh window suppression.
+  void updateInterim(int meetingId, String source, String text) {
+    if (_closed) return;
+    final channels = _interim.putIfAbsent(meetingId, () => {});
+    final trimmed = text.trim();
+    if ((channels[source] ?? '') == trimmed) {
+      if (trimmed.isNotEmpty) notify(meetingId, isFinal: false);
+      return;
+    }
+    if (trimmed.isEmpty) {
+      channels.remove(source);
+    } else {
+      channels[source] = trimmed;
+    }
+    notify(meetingId, isFinal: false);
+  }
+
+  /// Final callbacks remove their matching hypothesis before notifying final
+  /// input. Pausing/stopping clears all channels so stale speech is not reused.
+  void clearInterim(int meetingId, [String? source]) {
+    final channels = _interim[meetingId];
+    if (channels == null) return;
+    if (source == null) {
+      channels.clear();
+    } else {
+      channels.remove(source);
+    }
   }
 
   void wake() {
@@ -184,14 +223,34 @@ class ProactiveQuestions {
           'SELECT id,text FROM transcript WHERE meeting_id=? AND final=1 AND id>? ORDER BY id',
           [meetingId, cursor['transcript_id']],
         );
-        if (batch.isEmpty) return;
-        final history = batch.map((row) => row['text']).join('\n').trim();
+        final isFinal = _lastInputIsFinal[meetingId] ?? true;
+        final history = [
+          ...batch.map((row) => row['text'] as String),
+          ...?_interim[meetingId]?.values,
+        ].join('\n').trim();
+        _examinedVersions[meetingId] = inputVersion;
+        if (history.isEmpty) return;
+        // The original hashes the complete window before preparing model input.
+        // Finals still detect; only repeated interim input is suppressed.
+        final normalizedWindow = normalizeMeetingQuestion(history);
+        final now = _nowMilliseconds();
+        final seen = _windowSeen.putIfAbsent(meetingId, () => {});
+        final previous = seen[normalizedWindow];
+        seen.removeWhere((_, timestamp) => now - timestamp >= 5000);
+        if (normalizedWindow.isNotEmpty) seen[normalizedWindow] = now;
+        if (!isFinal && previous != null && now - previous < 5000) return;
         // IDA establishes the 200-unit tail; whitespace splitting is our
         // reconstruction until the original Dart pool regex is resolved.
         final units = RegExp(r'\S+').allMatches(history).toList();
-        final transcript = units.length > 200
-            ? history.substring(units[units.length - 200].start)
-            : history;
+        final eligible = units.length - (isFinal ? 0 : 5);
+        if (eligible <= 0) return;
+        final first = eligible > 200 ? eligible - 200 : 0;
+        final transcript = history.substring(
+          units[first].start,
+          units[eligible - 1].end,
+        );
+        // Failures remain retryable; only skipped or completed input is marked.
+        _examinedVersions.remove(meetingId);
         _request =
             'proactive-detect-$meetingId-${DateTime.now().microsecondsSinceEpoch}';
         final questions = await detect(transcript, _request!);
@@ -215,7 +274,7 @@ class ProactiveQuestions {
               'INSERT OR IGNORE INTO meeting_questions(meeting_id,transcript_id,question,normalized,created) VALUES(?,?,?,?,?)',
               [
                 meetingId,
-                batch.last['id'],
+                batch.isEmpty ? null : batch.last['id'],
                 question.trim(),
                 normalized,
                 DateTime.now().millisecondsSinceEpoch,
@@ -225,7 +284,7 @@ class ProactiveQuestions {
           // The original advances history only when detection finds queries.
           // Empty results must retain context for a later segment to complete
           // a question. The input version avoids polling that unchanged text.
-          if (questions.isNotEmpty) {
+          if (questions.isNotEmpty && batch.isNotEmpty) {
             store.db.execute(
               'UPDATE meeting_question_cursors SET transcript_id=? WHERE meeting_id=?',
               [batch.last['id'], meetingId],
@@ -274,6 +333,9 @@ class ProactiveQuestions {
     _pending.clear();
     _inputVersions.clear();
     _examinedVersions.clear();
+    _interim.clear();
+    _lastInputIsFinal.clear();
+    _windowSeen.clear();
     errors.clear();
     _suspended = false;
   }

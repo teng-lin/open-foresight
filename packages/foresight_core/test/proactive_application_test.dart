@@ -251,85 +251,112 @@ void main() {
     },
   );
 
-  test(
-    'final captured speech automatically schedules detection and a cited answer without a UI request',
-    () async {
-      final library =
-          '${directory.path}/capture.${Platform.isMacOS ? 'dylib' : 'so'}';
-      final build = await Process.run('c++', [
-        '-std=c++17',
-        '-shared',
-        '-fPIC',
-        'test/fixtures/recording_native_stub.cpp',
-        '-o',
-        library,
-      ]);
-      expect(build.exitCode, 0, reason: '${build.stderr}');
-      final fixture = DynamicLibrary.open(library);
-      final transcript = jsonEncode({
-        'type': 'transcript',
-        'text': 'Mira owns the draft. Who owns the draft?',
-      }).toNativeUtf8();
-      fixture.lookupFunction<
-        Void Function(Pointer<Utf8>),
-        void Function(Pointer<Utf8>)
-      >('fixture_speech_event')(transcript);
-      calloc.free(transcript);
-      final prior = runtimeConfiguration.environment['FORESIGHT_NATIVE'];
-      runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
-      try {
-        final model = File('${directory.path}/speech-fixture')
-          ..writeAsStringSync('Fixture');
-        await store.register('speech', model.path, '/usr/bin/true');
-        final id = store.meeting('Capture fixture');
-        await domain.command('meetings.start', {'id': id});
-        final bytes = ByteData(4000);
-        final event = jsonEncode({
-          'type': 'pcm',
-          'sampleRate': 1000,
-          'volume': .02,
-          'data': base64Encode(bytes.buffer.asUint8List()),
+  for (final interim in [false, true]) {
+    test(
+      '${interim ? 'Interim' : 'Final'} captured speech automatically schedules detection and a cited answer without a UI request',
+      () async {
+        final library =
+            '${directory.path}/capture.${Platform.isMacOS ? 'dylib' : 'so'}';
+        final build = await Process.run('c++', [
+          '-std=c++17',
+          '-shared',
+          '-fPIC',
+          'test/fixtures/recording_native_stub.cpp',
+          '-o',
+          library,
+        ]);
+        expect(build.exitCode, 0, reason: '${build.stderr}');
+        final fixture = DynamicLibrary.open(library);
+        final transcript = jsonEncode({
+          'type': 'transcript',
+          'text': interim
+              ? 'Mira owns the draft. Who owns the draft? one two three four five'
+              : 'Mira owns the draft. Who owns the draft?',
         }).toNativeUtf8();
-        expect(
-          fixture.lookupFunction<
-            Int32 Function(Int32, Pointer<Utf8>),
-            int Function(int, Pointer<Utf8>)
-          >('fixture_emit')(0, event),
-          1,
-        );
-        calloc.free(event);
-        await domain.command('meetings.pause', {'id': id});
-        final deadline = DateTime.now().add(const Duration(seconds: 3));
-        while (store.rows('SELECT * FROM transcript').isEmpty &&
-            DateTime.now().isBefore(deadline)) {
-          await Future<void>.delayed(const Duration(milliseconds: 10));
+        fixture.lookupFunction<
+          Void Function(Pointer<Utf8>),
+          void Function(Pointer<Utf8>)
+        >('fixture_speech_event')(transcript);
+        calloc.free(transcript);
+        final prior = runtimeConfiguration.environment['FORESIGHT_NATIVE'];
+        runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
+        try {
+          final model = File('${directory.path}/speech-fixture')
+            ..writeAsStringSync('Fixture');
+          await store.register('speech', model.path, '/usr/bin/true');
+          final id = store.meeting('Capture fixture');
+          await domain.command('meetings.start', {'id': id});
+          final bytes = ByteData(interim ? 12000 : 4000);
+          final event = jsonEncode({
+            'type': 'pcm',
+            'sampleRate': 1000,
+            'volume': .02,
+            'data': base64Encode(bytes.buffer.asUint8List()),
+          }).toNativeUtf8();
+          expect(
+            fixture.lookupFunction<
+              Int32 Function(Int32, Pointer<Utf8>),
+              int Function(int, Pointer<Utf8>)
+            >('fixture_emit')(0, event),
+            1,
+          );
+          calloc.free(event);
+          if (!interim) await domain.command('meetings.pause', {'id': id});
+          final deadline = DateTime.now().add(const Duration(seconds: 3));
+          while ((interim
+                  ? domain.application.provisionalTranscript.values.every(
+                      (text) => text.isEmpty,
+                    )
+                  : store.rows('SELECT * FROM transcript').isEmpty) &&
+              DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+          if (interim) {
+            expect(store.rows('SELECT * FROM transcript'), isEmpty);
+            expect(
+              domain.application.provisionalTranscript['microphone'],
+              'Mira owns the draft. Who owns the draft? one two three four five',
+            );
+            // Interim speech has no durable transcript to retrieve yet; supply
+            // independently imported context for the existing grounding path.
+            store.importText(
+              'Ownership',
+              'Mira owns the draft.',
+              'text/plain',
+              'fixture',
+            );
+            for (final source in store.sources) {
+              store.state(source['id'] as String, 'indexed');
+            }
+          } else {
+            expect(
+              store.rows('SELECT text FROM transcript').single['text'],
+              'Mira owns the draft. Who owns the draft?',
+            );
+          }
+          final queue = domain.application.proactive;
+          // The capture callback, not this test, called notify().
+          await queue.process();
+          await queue.process();
+          await queue.process();
+          expect(queue.errors, isEmpty);
+          expect(
+            store.rows('SELECT state FROM meeting_questions').single['state'],
+            'completed',
+          );
+          expect(
+            store.rows('SELECT body FROM answers').single['body'],
+            'Mira owns the draft. [S1]',
+          );
+          await domain.command('meetings.stop');
+        } finally {
+          if (prior == null) {
+            runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
+          } else {
+            runtimeConfiguration.environment['FORESIGHT_NATIVE'] = prior;
+          }
         }
-        expect(
-          store.rows('SELECT text FROM transcript').single['text'],
-          'Mira owns the draft. Who owns the draft?',
-        );
-        final queue = domain.application.proactive;
-        // The capture callback, not this test, called notify().
-        await queue.process();
-        await queue.process();
-        await queue.process();
-        expect(queue.errors, isEmpty);
-        expect(
-          store.rows('SELECT state FROM meeting_questions').single['state'],
-          'completed',
-        );
-        expect(
-          store.rows('SELECT body FROM answers').single['body'],
-          'Mira owns the draft. [S1]',
-        );
-        await domain.command('meetings.stop');
-      } finally {
-        if (prior == null) {
-          runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
-        } else {
-          runtimeConfiguration.environment['FORESIGHT_NATIVE'] = prior;
-        }
-      }
-    },
-  );
+      },
+    );
+  }
 }

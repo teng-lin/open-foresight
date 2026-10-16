@@ -11,11 +11,13 @@ void main() {
   late int meeting;
   late List<String> detectedText, answered, cancelled;
   var busy = false, failDetection = false;
+  var milliseconds = 0;
   String? failAnswer;
   List<String>? detectionResult;
   Completer<List<String>>? detectionGate;
   ProactiveQuestions create() => ProactiveQuestions(
     store: store,
+    nowMilliseconds: () => milliseconds,
     delay: const Duration(days: 1),
     changed: () {},
     busy: () => busy,
@@ -60,6 +62,7 @@ void main() {
     answered = [];
     cancelled = [];
     busy = false;
+    milliseconds = 0;
     failDetection = false;
     failAnswer = null;
     detectionResult = null;
@@ -245,6 +248,227 @@ void main() {
       await drain();
       expect(detectedText.last, 'When can we\nship?');
       expect(answered, ['When can we ship?']);
+    },
+  );
+
+  test(
+    'interim-only questions exclude the changing five-unit tail and have no false origin',
+    () async {
+      queue.begin(meeting);
+      queue.updateInterim(
+        meeting,
+        'microphone',
+        'Who owns this? one two three four five',
+      );
+      await drain();
+      expect(detectedText, ['Who owns this?']);
+      expect(answered, ['Who owns this?']);
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_questions')
+            .single['transcript_id'],
+        isNull,
+      );
+      expect(store.rows('SELECT * FROM transcript'), isEmpty);
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_question_cursors')
+            .single['transcript_id'],
+        0,
+      );
+    },
+  );
+
+  test('interim input of at most five units waits for more speech', () async {
+    queue.begin(meeting);
+    queue.updateInterim(meeting, 'microphone', 'Who owns this? one two');
+    await drain();
+    expect(detectedText, isEmpty);
+    queue.updateInterim(
+      meeting,
+      'microphone',
+      'Who owns this? one two three four five',
+    );
+    await drain();
+    expect(detectedText, ['Who owns this?']);
+  });
+
+  test(
+    'interim windows join retained final history and independent channels',
+    () async {
+      queue.begin(meeting);
+      append('When can we');
+      detectionResult = [];
+      await drain();
+      queue.updateInterim(meeting, 'microphone', 'ship?');
+      queue.updateInterim(meeting, 'playback', 'one two three four five');
+      detectionResult = ['When can we ship?'];
+      await drain();
+      expect(detectedText.last, 'When can we\nship?');
+      expect(answered, ['When can we ship?']);
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_questions')
+            .single['transcript_id'],
+        store.rows('SELECT id FROM transcript').single['id'],
+      );
+    },
+  );
+
+  test('interim tail exclusion occurs before the 200-unit cap', () async {
+    queue.begin(meeting);
+    queue.updateInterim(
+      meeting,
+      'microphone',
+      List.generate(220, (i) => 'word$i').join(' '),
+    );
+    detectionResult = [];
+    await drain();
+    expect(
+      detectedText.single.split(' '),
+      List.generate(200, (i) => 'word${i + 15}'),
+    );
+  });
+
+  test(
+    'duplicate interim windows refresh suppression and permit exactly five seconds',
+    () async {
+      queue.begin(meeting);
+      const text = 'Who owns this? one two three four five';
+      detectionResult = [];
+      queue.updateInterim(meeting, 'microphone', text);
+      await drain();
+      expect(detectedText, hasLength(1));
+      milliseconds = 4999;
+      queue.updateInterim(meeting, 'microphone', text);
+      await drain();
+      expect(detectedText, hasLength(1));
+      milliseconds = 5000;
+      queue.updateInterim(meeting, 'microphone', text.toUpperCase());
+      await drain();
+      expect(detectedText, hasLength(1));
+      milliseconds = 10000;
+      queue.updateInterim(meeting, 'microphone', text);
+      await drain();
+      expect(detectedText, hasLength(2));
+    },
+  );
+
+  test(
+    'final input bypasses window dedup and does not reuse its interim hypothesis',
+    () async {
+      queue.begin(meeting);
+      const text = 'Who owns this? one two three four five';
+      detectionResult = [];
+      queue.updateInterim(meeting, 'microphone', text);
+      await drain();
+      queue.clearInterim(meeting, 'microphone');
+      append(text);
+      await drain();
+      expect(detectedText, ['Who owns this?', text]);
+      queue.notify(meeting);
+      await drain();
+      expect(detectedText, ['Who owns this?', text, text]);
+    },
+  );
+
+  test(
+    'clearing and resetting interim input prevents stale speech in later windows',
+    () async {
+      queue.begin(meeting);
+      queue.updateInterim(
+        meeting,
+        'microphone',
+        'Stale question? one two three four five',
+      );
+      queue.clearInterim(meeting);
+      await drain();
+      expect(detectedText, isEmpty);
+      queue.updateInterim(
+        meeting,
+        'microphone',
+        'Also stale? one two three four five',
+      );
+      await queue.reset();
+      append('Fresh question?');
+      await drain();
+      expect(detectedText, ['Fresh question?']);
+    },
+  );
+
+  test(
+    'nullable origin migration preserves existing jobs, IDs, and answer links',
+    () async {
+      store.transcript(
+        meeting,
+        'Existing question?',
+        true,
+        0,
+        1000,
+        'microphone',
+      );
+      final transcriptId = store.db.lastInsertRowId;
+      store.answer(
+        'Existing question?',
+        'Existing answer',
+        'completed',
+        [],
+        'fixture',
+      );
+      final answerId = store.db.lastInsertRowId;
+      store.db.execute('DROP TABLE meeting_questions');
+      store.db.execute("""
+      CREATE TABLE meeting_questions(
+        id INTEGER PRIMARY KEY,
+        meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+        transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+        question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',
+        answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,
+        error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL,UNIQUE(meeting_id,normalized));
+    """);
+      store.db
+          .execute('INSERT INTO meeting_questions VALUES(?,?,?,?,?,?,?,?,?)', [
+            77,
+            meeting,
+            transcriptId,
+            'Existing question?',
+            'existing question',
+            'completed',
+            answerId,
+            '',
+            123,
+          ]);
+      final before = store.rows('SELECT * FROM meeting_questions').single;
+      await queue.close();
+      store.close();
+      store = Store('${directory.path}/app.db');
+      queue = create();
+      expect(store.rows('SELECT * FROM meeting_questions').single, before);
+      expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+      queue.begin(meeting);
+      queue.updateInterim(
+        meeting,
+        'microphone',
+        'New question? one two three four five',
+      );
+      await drain();
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_questions ORDER BY id')
+            .last['transcript_id'],
+        isNull,
+      );
+      expect(
+        store.rows('SELECT body FROM answers ORDER BY id').first['body'],
+        'Existing answer',
+      );
+      // Reopening the migrated schema is idempotent.
+      await queue.close();
+      store.close();
+      store = Store('${directory.path}/app.db');
+      queue = create();
+      expect(store.rows('SELECT * FROM meeting_questions'), hasLength(2));
+      expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
     },
   );
 

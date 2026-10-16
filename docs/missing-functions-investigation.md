@@ -77,7 +77,7 @@ gesture/timing comparisons remain required before claiming full recording parity
 
 ## Automatic meeting answers
 
-The application service now owns a durable pipeline from finalized captured
+The application service now owns a durable pipeline from captured
 speech to local question detection, deduplication, retrieval, and a cited answer.
 It stores a processing cursor and question jobs per meeting. Starting a meeting
 does not replay its previous transcript; restarting the service resumes pending
@@ -102,8 +102,23 @@ join delimiter. Input versions prevent rerunning an unchanged empty window;
 new speech arriving during detection remains eligible for the next pass.
 Durable cursor recovery across restarts remains a reconstruction extension.
 
-Interim input, five-second deduplication, twenty-second prefix/similarity
-filtering, and cursor boundary overlap still require integration. The original
+Interim capture hypotheses now feed detection alongside retained finalized
+history, with one hypothesis per capture channel. Interim preparation excludes
+the changing final five units before taking the 200-unit tail; at most five
+units produces no model call. Finalization removes the corresponding hypothesis,
+and pause/stop/reset clears it. A question detected before any finalized speech
+has a nullable transcript origin rather than a false link to an older row; a
+transactional schema migration preserves existing job IDs and answer links.
+
+Repeated interim detection windows use a five-second timestamp filter that
+refreshes on suppressed repeats and allows input at exactly 5,000 ms. Final
+input bypasses suppression. Normalized string keys replace the original's
+unresolved hash implementation, and the normalization regex remains a
+reconstruction choice. This is the transcript-window filter; question dispatch
+still uses lifetime database uniqueness and needs its separate rolling filter.
+
+Twenty-second prefix/similarity filtering and cursor boundary overlap still
+require integration. The original
 prompt, normalization patterns, similarity thresholds, scheduling details, and
 retry policy remain unresolved. The copied-question restriction and per-meeting
 lifetime uniqueness above still differ from the inspected reference body.
@@ -170,3 +185,19 @@ status, and continued recording after an AEC failure. These tests use native
 policy/PCM fixtures and the recording ABI fixture; they do not measure physical
 echo cancellation, microphone hardware startup, or the original's tap watchdog.
 Those reference and hardware checks remain outstanding.
+
+### Interim integration verification
+
+- Core suite: **65 passed, 1 opt-in test skipped**; analyzer clean.
+- Live Q&A desktop test: **1 passed**.
+- Capture/ASR ABI fixture verifies interim speech automatically schedules
+  detection and an owned cited answer before any finalized transcript row.
+  Imported fixture context provides grounding; provisional speech itself is
+  not silently inserted into the durable transcript or retrieval index.
+- Unit coverage includes five-unit exclusion, exclusion before the 200-unit
+  cap, retained history plus two capture channels, suppression timestamp
+  refresh and exact boundary, final bypass, stale-hypothesis cleanup, and
+  preservation/idempotence of the nullable-origin schema migration.
+
+These deterministic fixtures do not establish physical microphone behavior,
+original model output quality, or full dispatcher parity.

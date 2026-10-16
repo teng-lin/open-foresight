@@ -213,6 +213,35 @@ retained separators remain explicit approximations pending pool resolution.
 
 Regression tests cover cross-segment completion after an empty result, more
 than six segments, the 200-unit bound, concurrent speech arrival, restart with
-undetected history, cancellation, and durable answer ownership. Interim text,
-rolling deduplication, prefix/similarity replacement, and boundary overlap are
-still outstanding; this integration does not establish full Q&A parity.
+undetected history, cancellation, and durable answer ownership. Subsequent interim integration is described below; question dispatch filters,
+prefix/similarity replacement, and boundary overlap remain outstanding. These
+integrations do not establish full Q&A parity.
+
+## Integration: interim windows
+
+Capture hypotheses are stored per meeting/channel and joined with retained
+finalized history. The last five whitespace units are excluded on interim
+input before the 200-unit cap, reproducing the observed counts and ordering
+while retaining the previously stated regex/separator approximation. Final
+callbacks remove their matching hypothesis before notifying final input;
+pause/stop/reset clears remaining hypotheses.
+
+The complete assembled window feeds a separate five-second filter. Only
+interim duplicates are suppressed, every suppressed repeat refreshes its
+timestamp, and exactly 5,000 ms is allowed. Final input still runs detection.
+This uses normalized string keys rather than claiming the unresolved original
+hash dispatch is recovered; exact normalization remains unknown. Identical
+nonempty hypothesis callbacks remain eligible to refresh suppression.
+
+An interim-only detected question has no finalized transcript origin. The
+reconstruction therefore permits a null origin and migrates old NOT NULL jobs
+transactionally, preserving IDs, state and answer links. Durability remains a
+reconstruction extension. It does not establish the original's answer-context
+assembly for provisional speech: the current retrieval path still indexes
+finalized history and imported sources.
+
+Meaningful tests cover a native capture/ASR fixture feeding an interim question
+through the application without a UI detection request, plus exclusion,
+suppression boundaries, two channels, final bypass, cleanup, and migration.
+The dispatcher-level five-second filter and twenty-second prefix/similarity
+state are separate work; lifetime database uniqueness remains pending removal.
