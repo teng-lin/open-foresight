@@ -130,6 +130,8 @@ class Application {
           return await notificationCapabilities(requestPermission: true);
         case 'audio.capabilities':
           return audioCapabilities();
+        case 'audio.request_system':
+          return await requestSystemAudioPermission();
         case 'audio.request_microphone':
           return await requestMicrophonePermission();
         case 'status':

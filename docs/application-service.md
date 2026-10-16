@@ -160,7 +160,11 @@ Resources directory; absolute explicit environment overrides win. Nested service
 bundles can refer to the outer app through relative `../` paths. This map must
 contain the service, helper, native library, model runners, audio-device adapter,
 and notification adapter as applicable. All resolved values propagate to detached
-service launches and helper subprocesses. Profile content and downloaded models
+service launches and helper subprocesses. Packaged Mac services launch through
+LaunchServices (`open -g -n --env KEY=value service.app`) with explicit runtime
+and profile overrides, allowing the background service bundle to own its app
+identity without a Flutter window. Plain development executables launch directly.
+The installed app must still verify the actual TCC attribution. Profile content and downloaded models
 remain outside the bundle. With no HOME environment variable on macOS, the system
 user directory is obtained from Directory Services.
 
@@ -177,8 +181,16 @@ backend and permission state without prompting. `audio.request_microphone`
 (MCP: `audio_request_microphone`) explicitly requests microphone authorization in
 the service process; the blocking native request runs on another Dart isolate.
 An improperly packaged service with no microphone purpose string receives an
-actionable setup failure before entering the OS permission API. System-audio
-permission is checked on capture because no public preflight API is available.
+actionable setup failure before entering the OS permission API.
+`audio.request_system` (MCP: `audio_request_system`) explicitly exercises a short
+system-audio tap consent request in the service, also off the event loop and
+requiring the system-audio purpose string. Its JSON preserves `system_audio`
+(`unknown`, `pending`, `denied`, `unavailable`), `system_audio_request`,
+`permission_verified: false`, and native code/message/settings guidance. There is
+no public CoreAudio permission preflight: a completed request or a successfully
+started silent tap does not prove permission. Connecting, listing MCP tools, or
+querying capabilities never invokes either permission request. User consent and
+actual captured audio remain separate installed-app checks.
 
 Before native workers start, the shared runtime adapter copies its supported
 settings into native process state using `fs_set_runtime_environment`. A Dart

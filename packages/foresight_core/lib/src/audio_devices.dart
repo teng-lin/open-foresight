@@ -99,3 +99,37 @@ Future<Map<String, dynamic>> requestMicrophonePermission() async {
   });
   return {'granted': granted, ...audioCapabilities()};
 }
+
+/// Explicitly exercise the service's system-audio tap consent path. CoreAudio
+/// cannot verify authorization publicly: completed requests may still be silent.
+/// Preserve native unknown/pending/denied results instead of claiming a grant.
+Future<Map<String, dynamic>> requestSystemAudioPermission() async {
+  final capabilities = audioCapabilities();
+  if (Platform.isMacOS &&
+      capabilities['system_audio_purpose_present'] != true) {
+    throw StateError(
+      'The application service bundle is missing its system audio purpose string. Launch the installed Open Foresight application service and reinstall if necessary.',
+    );
+  }
+  final path = runtimeConfiguration.nativeLibrary;
+  return await Isolate.run(() {
+    final lib = DynamicLibrary.open(path);
+    final result = lib
+        .lookupFunction<
+          Pointer<Utf8> Function(Int32),
+          Pointer<Utf8> Function(int)
+        >('fs_audio_request_system')(10000);
+    if (result == nullptr)
+      throw StateError('System audio permission request failed');
+    try {
+      return Map<String, dynamic>.from(
+        jsonDecode(result.toDartString()) as Map,
+      );
+    } finally {
+      lib.lookupFunction<
+        Void Function(Pointer<Utf8>),
+        void Function(Pointer<Utf8>)
+      >('fs_string_free')(result);
+    }
+  });
+}

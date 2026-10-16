@@ -549,6 +549,7 @@ class ApplicationService {
       'notifications.capabilities',
       'notifications.request_permission',
       'audio.request_microphone',
+      'audio.request_system',
       'sources.list',
       'sources.get',
       'notes.list',
@@ -644,6 +645,47 @@ Future<ServiceClient> _connectCompatibleService(String path) async {
   return client;
 }
 
+/// Start packaged services as applications through LaunchServices so macOS can
+/// attribute protected operations to the service bundle. Installed TCC attribution
+/// still requires an integration check.
+/// Forward profile/runtime overrides explicitly; an agent host's unrelated
+/// environment must not become command-line arguments or service configuration.
+({String executable, List<String> arguments}) serviceLaunchCommand(
+  String executable,
+  Map<String, String> environment, {
+  bool? macOS,
+}) {
+  if (macOS ?? Platform.isMacOS) {
+    final canonical = File(executable).resolveSymbolicLinksSync();
+    const executableMarker = '.app/Contents/MacOS/';
+    final marker = canonical.lastIndexOf(executableMarker);
+    if (marker >= 0 &&
+        !canonical.substring(marker + executableMarker.length).contains('/')) {
+      final bundle = canonical.substring(0, marker + 4);
+      if (!File('$bundle/Contents/Info.plist').existsSync()) {
+        throw StateError(
+          'Application service bundle is missing Info.plist: $bundle',
+        );
+      }
+      return (
+        executable: '/usr/bin/open',
+        arguments: [
+          '-g',
+          '-n',
+          for (final entry in environment.entries)
+            if (entry.key.startsWith('FORESIGHT_') ||
+                entry.key == 'PYTHONPYCACHEPREFIX') ...[
+              '--env',
+              '${entry.key}=${entry.value}',
+            ],
+          bundle,
+        ],
+      );
+    }
+  }
+  return (executable: executable, arguments: const []);
+}
+
 /// Attach first; competing launchers may race safely on the service's OS lock.
 Future<ServiceClient> ensureService(ProfilePaths profile) async {
   var path = serviceEndpoint(profile);
@@ -659,16 +701,27 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
     throw StateError(
       'Set FORESIGHT_SERVICE to the application-service executable',
     );
-  await Process.start(
-    executable,
-    const [],
-    mode: ProcessStartMode.detached,
-    environment: {
-      ...runtimeConfiguration.environment,
-      'FORESIGHT_DATA': profile.data,
-      'FORESIGHT_RUNTIME': profile.runtime,
-    },
-  );
+  final environment = {
+    ...runtimeConfiguration.environment,
+    'FORESIGHT_DATA': profile.data,
+    'FORESIGHT_RUNTIME': profile.runtime,
+  };
+  final launch = serviceLaunchCommand(executable, environment);
+  if (launch.executable == '/usr/bin/open') {
+    final result = await Process.run(launch.executable, launch.arguments);
+    if (result.exitCode != 0) {
+      throw StateError(
+        'LaunchServices could not start the application service: ${result.stderr}',
+      );
+    }
+  } else {
+    await Process.start(
+      launch.executable,
+      launch.arguments,
+      mode: ProcessStartMode.detached,
+      environment: environment,
+    );
+  }
   for (var attempt = 0; attempt < 100; attempt++) {
     try {
       path = serviceEndpoint(profile);
