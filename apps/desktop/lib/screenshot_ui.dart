@@ -3123,45 +3123,28 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Future<void> exportMeetings() async {
-    final location = await getSaveLocation(
-      suggestedName: 'foresight-meeting-notes.md',
-      acceptedTypeGroups: [
-        const XTypeGroup(label: 'Markdown', extensions: ['md']),
-      ],
+    await saveMeetingNotes();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => MeetingExportDialog(
+        store: d.store,
+        save: (markdown) async {
+          final location = await getSaveLocation(
+            suggestedName: 'foresight-meeting-notes.md',
+            acceptedTypeGroups: [
+              const XTypeGroup(label: 'Markdown', extensions: ['md']),
+            ],
+          );
+          if (location == null) return false;
+          await File(location.path).writeAsString(markdown);
+          return true;
+        },
+      ),
     );
-    if (location == null) return;
-    await File(location.path).writeAsString(meetingMarkdown());
   }
 
-  String meetingMarkdown() {
-    final output = StringBuffer('# Meeting notes\n\n');
-    for (final m in d.store.rows('SELECT * FROM meetings ORDER BY id')) {
-      output.writeln('## ${m['title']}\n');
-      final notes = d.store.rows(
-        'SELECT body FROM meeting_notes WHERE meeting_id=?',
-        [m['id']],
-      ).firstOrNull;
-      if (notes != null && (notes['body'] as String).isNotEmpty) {
-        output.writeln('### Notes\n\n${notes['body']}\n');
-      }
-      for (final a in d.store.rows(
-        'SELECT * FROM artifacts WHERE meeting_id=? ORDER BY id',
-        [m['id']],
-      )) {
-        output.writeln(
-          '### ${a['kind']}\n\n${a['edited'] ?? a['generated']}\n',
-        );
-      }
-      output.writeln('### Transcript\n');
-      for (final t in d.store.rows(
-        'SELECT * FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-        [m['id']],
-      )) {
-        output.writeln('${t['text']}\n');
-      }
-    }
-    return output.toString();
-  }
+  String meetingMarkdown() => composeMeetingExport(d.store).markdown;
 
   Widget stats() {
     final meetings = d.store

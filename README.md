@@ -77,7 +77,7 @@ These features of the original are not in Open Foresight yet:
 - **Recording controls and rich previews.** The original's recording pill has pause and fullscreen gestures, and generated content is shown as a rich preview. Open Foresight uses an explicit Stop button and shows generated content as selectable Markdown text.
 - **Cloud Gemini models.** The original's binary references cloud Gemini models. Open Foresight leaves these out on purpose and runs every model locally.
 
-Some of the original's behavior, such as its export format and label editing, was never observed live, so parity in those areas has not been confirmed.
+The original's single-note Markdown export format has now been observed live and reproduced, with date filters, preview, copy and download. Additional export scenarios and label editing still need reference verification; see the [feature parity progress ledger](docs/feature-parity-progress.md).
 
 ## Platform status
 
