@@ -33,6 +33,7 @@ class Store {
     INSERT OR IGNORE INTO source_details(source_id,imported,changed) SELECT id,0,0 FROM sources;
     CREATE TABLE IF NOT EXISTS meeting_details(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id),created INTEGER NOT NULL,reminder INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0,timestamp INTEGER);
+    CREATE TABLE IF NOT EXISTS meeting_note_events(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meeting_notes(meeting_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,event_key TEXT NOT NULL,title TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_answers(meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,answer_id INTEGER NOT NULL REFERENCES answers(id) ON DELETE CASCADE,PRIMARY KEY(meeting_id,answer_id));
     CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
@@ -389,7 +390,10 @@ class Store {
     final backends = [
       'llama_cpp',
       'litert_lm',
-      if (kind == 'query-detection') 'legacy_query_cpu',
+      if (kind == 'query-detection') ...[
+        'legacy_query_cpu',
+        'legacy_query_cpu_encrypted',
+      ],
       if (kind == 'embedding') ...[
         'sentence_transformers_cpu',
         'litert_lm_embedding_cpu',
@@ -479,12 +483,50 @@ class Store {
     final now = DateTime.now().millisecondsSinceEpoch;
     final manual =
         lastManualEdit ?? (body != (previous?['body'] ?? '') ? now : null);
-    db.execute(
-      'INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,last_manual_edit) VALUES(?,?,1,?,?) '
-      'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1,timestamp=excluded.timestamp,'
-      'last_manual_edit=COALESCE(excluded.last_manual_edit,meeting_notes.last_manual_edit)',
-      [meetingId, body, now, manual],
-    );
+    db.execute('SAVEPOINT save_meeting_notes');
+    try {
+      if (previous == null) _snapshotMeetingEvents(meetingId);
+      db.execute(
+        'INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,last_manual_edit) VALUES(?,?,1,?,?) '
+        'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1,timestamp=excluded.timestamp,'
+        'last_manual_edit=COALESCE(excluded.last_manual_edit,meeting_notes.last_manual_edit)',
+        [meetingId, body, now, manual],
+      );
+      db.execute('RELEASE save_meeting_notes');
+    } catch (_) {
+      db.execute('ROLLBACK TO save_meeting_notes');
+      db.execute('RELEASE save_meeting_notes');
+      rethrow;
+    }
+  }
+
+  // Original event/document associations capture a name when the note is
+  // inserted. Later calendar refreshes do not supply that historical name.
+  void _snapshotMeetingEvents(int meeting) {
+    if (rows(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_events'",
+    ).isEmpty)
+      return;
+    for (final event in rows(
+      'SELECT event_key,metadata FROM calendar_events WHERE meeting_id=? ORDER BY rowid',
+      [meeting],
+    )) {
+      final key = event['event_key'] as String;
+      if (key.isEmpty) continue;
+      var title = '';
+      try {
+        final metadata = jsonDecode(event['metadata'] as String);
+        if (metadata is Map && metadata['summary'] is String) {
+          title = metadata['summary'] as String;
+        }
+      } on FormatException {
+        // Malformed legacy metadata cannot establish a captured event name.
+      }
+      db.execute(
+        'INSERT INTO meeting_note_events(meeting_id,event_key,title) VALUES(?,?,?)',
+        [meeting, key, title],
+      );
+    }
   }
 
   void transcript(
@@ -561,6 +603,10 @@ class Store {
   }) {
     db.execute('SAVEPOINT save_enhanced_note');
     try {
+      if (rows('SELECT meeting_id FROM meeting_notes WHERE meeting_id=?', [
+        meeting,
+      ]).isEmpty)
+        _snapshotMeetingEvents(meeting);
       final now = DateTime.now().millisecondsSinceEpoch;
       final column = manual ? 'last_manual_edit' : 'last_enhanced';
       final date = manual ? editTimestamp ?? (changed ? now : null) : now;

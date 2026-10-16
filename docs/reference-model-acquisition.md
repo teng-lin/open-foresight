@@ -4,8 +4,9 @@ The reconstructed protocol is backed by retained IDA Pro analysis of Foresight
 (`fa98b856bfbe9b40cdebfb9f975f7867ec5c0a3ca75b81214a096a60b6db8326`).
 The inspected app's `CFBundleShortVersionString` is `1.0.0`.
 `packages/foresight_core/lib/src/model_acquisition.dart` implements the public
-metadata RPC and blob transport. It is not yet connected to model setup or the
-desktop UI. Existing guided import remains the supported installation path.
+metadata RPC and blob transport. The existing Local models screen now connects
+these to dedicated model setup, authenticated encrypted storage and private
+plaintext runtime leases. Guided local import remains available.
 No live metadata or blob request was made during this reconstruction.
 
 ## Metadata and shared distribution credential
@@ -49,6 +50,11 @@ The URL builder at `0x10066d500` constructs
 slash is removed from the blob ID. Empty IDs or nonpositive expected sizes
 produce an empty result without transport.
 
+The original slot count is `ceil(size/838860800.0)` clamped to 1 through 8
+(800 MiB per slot). This uses double division, as in the original. The supported
+179437568-byte detector therefore uses one slot. Explicit parallelism overrides
+are available for protocol fixtures.
+
 Ranges are inclusive. For N parallel slots, chunk size is `ceil(size/N)`, start
 is `slot*chunkSize`, and end is `min(start+chunkSize-1,size-1)`. Surplus slots do
 not issue requests. Each GET carries `Range: bytes=<cursor>-<end>`; the cursor
@@ -61,8 +67,8 @@ retry. HTTP 429, 500, 502, 503, and 504 are retryable. Other unsuccessful status
 are not. The recovered exception allowlist includes ClientException,
 _ClientSocketException, RequestAbortedException, SocketException, and
 TimeoutException. Progress callbacks are throttled to 250 ms. The standalone
-component requires explicit parallelism until its original default is bound.
-Its default retry policy allows five total attempts, a 500 ms factor, and a
+component calculates this original parallelism for each download. Its default
+retry policy allows five total attempts, a 500 ms factor, and a
 10 s cap. Attempt n multiplies the factor by `2^min(n,31)` and then by
 `1 + (nextDouble()*2-1)*0.25`, using two sequential Duration multiplications
 and their separate rounding. Nonpositive attempts return zero without drawing
@@ -82,7 +88,23 @@ chunk-request-closure,retryability,retry-exception-handler,on-retry,
 range-header-arguments,channel-call-arguments}.json` and
 `ida/model-acquisition-range-retry-pool.txt`,
 `ida/model-download-retry-delay.json`, and
-`ida/model-acquisition-range-retry-fields-pool.txt`.
+`ida/model-acquisition-range-retry-fields-pool.txt`. The slot-count divisor is
+bound by `ida/model-acquisition-parallelism-pool.txt`, and its ceiling/clamps by
+`ida/model-asset-download-selection.json` at `0x100669014` through `0x10066907c`.
+
+## Distinct selection paths
+
+`downloadModelsByType` at `0x1006685d4` builds a map keyed by model type in input
+order, so later duplicates replace earlier ones. Its download operation then
+passes `basename(metadata.blobId)` to the media helper. The pure
+`referenceModelDownloadPlan` helper implements only these two download rules;
+it makes no version comparison and does not imply that a later entry is newer.
+
+The existing-model lookup has different semantics: `_getLocalModelPath` at
+`0x1006452b8` scans ordered metadata and returns the first matching type whose
+file exists, before a directory fallback. `_getLocalOnDeviceModel` at
+`0x1008f0b54` returns the first matching metadata. These lookup and refresh
+policies are not implemented by the download-plan helper.
 
 ## Validation and remaining integration
 
@@ -92,8 +114,8 @@ request fields, concurrent partition assembly, status classification,
 interrupted-body resume, the short-EOF behavior, and cancellation without
 closing an injected shared HTTP client. No external service is contacted.
 
-Automatic acquisition remains incomplete: bind original parallelism
-default, finish metadata selection/update policy, connect the distribution
+Automatic acquisition remains incomplete: finish metadata selection/update
+policy, connect the distribution
 credential and bundled runtime to existing model setup, authenticate the
 supported plaintext before atomic registration, and verify actual service
 access separately. Original local encryption and temporary decryption have

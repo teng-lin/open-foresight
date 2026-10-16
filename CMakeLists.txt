@@ -30,6 +30,15 @@ if(APPLE)
       -o "${MACOS_TOOLS}/foresight-file-parser"
     DEPENDS "${CMAKE_SOURCE_DIR}/native/file_parser.swift" VERBATIM)
   add_custom_target(macos_file_parser ALL DEPENDS "${MACOS_TOOLS}/foresight-file-parser")
+  add_custom_command(OUTPUT "${MACOS_TOOLS}/foresight-model-crypto"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${MACOS_TOOLS}"
+    COMMAND ${SWIFTC} -O -target arm64-apple-macosx15.0
+      "${CMAKE_SOURCE_DIR}/native/model_crypto.swift"
+      -o "${MACOS_TOOLS}/foresight-model-crypto"
+    DEPENDS "${CMAKE_SOURCE_DIR}/native/model_crypto.swift" VERBATIM)
+  add_custom_target(macos_model_crypto ALL DEPENDS "${MACOS_TOOLS}/foresight-model-crypto")
+  add_test(NAME macos_model_crypto_contract
+    COMMAND "${MACOS_TOOLS}/foresight-model-crypto" --self-test)
   add_test(NAME macos_file_parser_contract
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/integration/test_file_parser.py"
       "${MACOS_TOOLS}/foresight-file-parser")

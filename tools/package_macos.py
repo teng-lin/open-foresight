@@ -123,6 +123,7 @@ def main(argv=None):
         'FORESIGHT_AUDIO_DEVICES': args.build / 'native/foresight-audio',
         'FORESIGHT_NOTIFICATIONS': args.build / 'macos/foresight-notifications',
         'FORESIGHT_FILE_PARSER': args.build / 'macos/foresight-file-parser',
+        'FORESIGHT_MODEL_CRYPTO': args.build / 'macos/foresight-model-crypto',
     }
     service = args.build / 'application/foresight-service'
     mcp = args.build / 'application/foresight-mcp'

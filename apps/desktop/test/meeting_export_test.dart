@@ -62,6 +62,59 @@ void main() {
     }
   });
 
+  test('export retains association title before current calendar title', () {
+    final id = meeting('  ', today);
+    store.db
+        .execute('INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?)', [
+          'linked-event',
+          'account',
+          'primary',
+          'google-id',
+          id,
+          '',
+          today.millisecondsSinceEpoch,
+          today.add(const Duration(hours: 1)).millisecondsSinceEpoch,
+          'confirmed',
+          '{"summary":"Captured title"}',
+          today.millisecondsSinceEpoch,
+        ]);
+    store.saveMeetingNotes(id, 'Note body');
+    store.db.execute('UPDATE calendar_events SET metadata=?', [
+      '{"summary":"Current title"}',
+    ]);
+    expect(
+      composeMeetingExport(store).markdown,
+      startsWith('## Captured title\n'),
+    );
+    // Later nonempty names replace a duplicate ID's name without moving that
+    // ID behind another association. Empty names never erase the known name.
+    for (final link in [
+      ('another-event', 'Another title'),
+      ('linked-event', 'Updated association'),
+      ('linked-event', ''),
+    ]) {
+      store.db.execute(
+        'INSERT INTO meeting_note_events(meeting_id,event_key,title) VALUES(?,?,?)',
+        [id, link.$1, link.$2],
+      );
+    }
+    expect(
+      composeMeetingExport(store).markdown,
+      startsWith('## Updated association\n'),
+    );
+    store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
+      ' User title ',
+      id,
+    ]);
+    expect(composeMeetingExport(store).markdown, startsWith('## User title\n'));
+    store.db.execute('UPDATE meetings SET title=? WHERE id=?', ['', id]);
+    store.db.execute('DELETE FROM calendar_events');
+    expect(
+      composeMeetingExport(store).markdown,
+      startsWith('## Updated association\n'),
+    );
+  });
+
   test(
     'export matches reference notes format and inclusive date boundaries',
     () {

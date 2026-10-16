@@ -15,7 +15,8 @@ class TestDomain extends Domain {
 
 class DelayedGenerator extends NativeRuntime {
   final entered = Completer<void>(), release = Completer<void>();
-  DelayedGenerator()
+  final String output;
+  DelayedGenerator({this.output = 'Grounded enhancement'})
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
   Stream<Map<String, dynamic>> generate(
@@ -28,7 +29,7 @@ class DelayedGenerator extends NativeRuntime {
   }) async* {
     entered.complete();
     await release.future;
-    yield {'type': 'delta', 'text': 'Grounded enhancement'};
+    yield {'type': 'delta', 'text': output};
     yield {'type': 'done', 'status': 'completed'};
   }
 }
@@ -198,6 +199,48 @@ void main() {
       expect(
         domain.store.rows('SELECT body FROM meeting_notes').single['body'],
         'Mira revised draft',
+      );
+    },
+  );
+  test(
+    'accepted enhancement removes original line markers before persistence',
+    () async {
+      final id = domain.store.meeting('Planning');
+      domain.store.transcript(
+        id,
+        'Mira sends draft Tuesday.',
+        true,
+        0,
+        20,
+        'imported',
+      );
+      domain.store.saveMeetingNotes(id, 'Mira draft');
+      final generator = DelayedGenerator(
+        output:
+            '<LINE id="2"><L:2>Mira sends the draft Tuesday.</L:2></LINE>\n',
+      );
+      domain.generator = generator;
+      final work = domain.application.enhanceNotes(id);
+      await generator.entered.future;
+      generator.release.complete();
+      await work;
+      expect(
+        domain.store
+            .rows('SELECT generated FROM artifacts')
+            .single['generated'],
+        'Mira sends the draft Tuesday.',
+      );
+      expect(
+        domain.store
+            .rows('SELECT body,last_enhanced FROM meeting_notes')
+            .single,
+        containsPair('body', 'Mira draft'),
+      );
+      expect(
+        domain.store
+            .rows('SELECT last_enhanced FROM meeting_notes')
+            .single['last_enhanced'],
+        isNotNull,
       );
     },
   );

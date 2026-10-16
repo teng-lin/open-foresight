@@ -50,9 +50,12 @@ filters by document, ignores empty event IDs, deduplicates IDs with an
 insertion-ordered map, and replaces a duplicate ID's title when a later row has
 a nonempty title. Updating that title keeps the ID's original map position.
 There is no recovered chronological or alphabetical priority to reproduce.
-Controlled comparison of duplicate IDs and multiple distinct event
-associations remains pending because the original association table and port's
-calendar cache have different representations.
+The port now retains ordered note/event association records independently of
+the calendar cache. Export keeps the first nonempty event ID's position and uses
+the latest nonempty captured name for that ID. The regression fixture exercises
+duplicate-name replacement without moving the first event behind another link.
+The original database's order for multiple distinct links still needs a
+controlled comparison; the port preserves insertion order.
 
 The formatter now uses the same `intl` date patterns as the original instead of
 hardcoded English month names. French locale data is exercised explicitly in a
@@ -109,11 +112,26 @@ meeting`. The selected string and `OrderingMode.desc` enum were captured in
 The port now trims note titles and falls back to the linked calendar summary
 and then that exact default. Stored titles are unchanged.
 
-The original additionally consults the association record's title before the
-current calendar event title. The port's calendar cache does not currently keep
-a separate association-title snapshot. That distinction, including duplicate-ID
-title replacement described above, remains a representation gap pending the
-association field/schema binding.
+The original additionally consults the association record's name before the
+current calendar event title. `DataStore.addEventDocumentAssociation`
+(`0x10072be70`) copies the supplied ID, name, and document ID into an
+`EventDocument`; `toCompanion` (`0x10072bfb4`) persists them independently of the
+calendar event. The scaffold's existing-event branch passes CalendarEvent slots
+7 and 15 at `0x1009e9a2c`; its renamed-event branch supplies the new name at
+`0x1009e99d8`. `_saveNote` adds the association on the first note insertion
+(`0x1006316c0`), rather than refreshing it on every save. Retained evidence is
+`note-event-association-writer.json`, `note-event-association-companion.json`,
+`note-event-association-record-fields.json`, and `note-scaffold-create.json`.
+
+The port now captures the linked calendar names in `meeting_note_events` when
+the first raw or enhanced-only note save is accepted. That capture and the note
+write share a transaction. Subsequent calendar refreshes and note saves preserve
+the captured names; deleting the note removes its associations. Export prefers
+the trimmed note title, then the captured association name, current calendar
+title, and the default. A captured name remains usable when the current event is
+unavailable. Existing profiles receive no historical-name backfill: their title
+fallback continues using the current calendar cache until a new note/link is
+created. The port has no general event-reassociation editor yet.
 
 ## Remaining acquisition bindings
 

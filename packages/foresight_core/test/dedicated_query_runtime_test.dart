@@ -1,7 +1,40 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/dedicated_query_runtime.dart';
+
+/// SIGKILL requests termination asynchronously. Hold exit completion separately
+/// so this fixture detects returning from close before the owned worker is reaped.
+class DeferredExitProcess implements Process {
+  final exited = Completer<int>();
+  final requested = Completer<void>();
+  final output = StreamController<List<int>>();
+  final input = StreamController<List<int>>();
+  late final IOSink sink = IOSink(input.sink);
+  bool killed = false;
+  DeferredExitProcess() {
+    input.stream.listen((_) {
+      if (!requested.isCompleted) requested.complete();
+    });
+    output.add(utf8.encode('{"type":"ready"}\n'));
+  }
+  @override
+  Future<int> get exitCode => exited.future;
+  @override
+  Stream<List<int>> get stdout => output.stream;
+  @override
+  Stream<List<int>> get stderr => const Stream.empty();
+  @override
+  IOSink get stdin => sink;
+  @override
+  int get pid => 12345;
+  @override
+  bool kill([ProcessSignal signal = ProcessSignal.sigterm]) {
+    killed = true;
+    return true;
+  }
+}
 
 void main() {
   late Directory directory;
@@ -120,4 +153,35 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect((await Process.run('kill', ['-0', '$pid'])).exitCode, isNot(0));
   });
+
+  test(
+    'close waits for a previously cancelled owned process to finish exit',
+    () async {
+      await runtime.close();
+      final process = DeferredExitProcess();
+      runtime = DedicatedQueryRuntime(
+        python: 'fixture',
+        worker: worker,
+        model: '${directory.path}/pid',
+        startProcess: (_, _) async => process,
+      );
+      final pending = runtime.complete('wait', 'owned');
+      final failed = expectLater(pending, throwsStateError);
+      await process.requested.future;
+      runtime.cancel('owned');
+      await failed;
+      expect(process.killed, isTrue);
+      var closed = false;
+      final closing = runtime.close().then((_) {
+        closed = true;
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(closed, isFalse);
+      process.exited.complete(-9);
+      await closing;
+      expect(closed, isTrue);
+      await process.sink.close();
+      await process.output.close();
+    },
+  );
 }

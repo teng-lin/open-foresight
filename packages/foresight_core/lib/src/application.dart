@@ -9,6 +9,8 @@ import 'meeting_speakers.dart';
 import 'proactive_questions.dart';
 import 'reference_query_detector.dart';
 import 'dedicated_query_runtime.dart';
+import 'encrypted_query_runtime.dart';
+import 'dedicated_query_acquisition.dart';
 import 'store.dart';
 import 'graph_labels.dart';
 import 'graph_layout.dart';
@@ -16,6 +18,7 @@ import 'graph_clusters.dart';
 import 'graph_persistence.dart';
 import 'model_setup.dart';
 import 'speech_models.dart';
+import 'reference_note_enhancement.dart';
 import 'google_auth.dart';
 import 'google_connections.dart';
 import 'generated/rag_service.pb.dart';
@@ -100,6 +103,8 @@ class Application {
   );
   final GoogleAuth? _auth;
   QueryCompletionRuntime? _queryRuntime;
+  DedicatedQueryAcquisition? _queryAcquisition;
+  int _queryDownloadReceived = 0, _queryDownloadTotal = 0;
   String? _queryRegistration;
   final bool _providedQueryRuntime;
 
@@ -117,7 +122,8 @@ class Application {
       final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
       if (model == null ||
           worker == null ||
-          model['backend'] != dedicatedQueryBackend) {
+          (model['backend'] != dedicatedQueryBackend &&
+              model['backend'] != dedicatedEncryptedQueryBackend)) {
         await _queryRuntime?.close();
         _queryRuntime = null;
         _queryRegistration = null;
@@ -129,15 +135,23 @@ class Application {
         model['path'],
         model['digest'],
         model['runtime'],
+        model['backend'],
         worker,
       ]);
       if (_queryRegistration != registration) {
         await _queryRuntime?.close();
-        _queryRuntime = DedicatedQueryRuntime(
-          python: model['runtime'] as String,
-          worker: worker,
-          model: model['path'] as String,
-        );
+        _queryRuntime = model['backend'] == dedicatedEncryptedQueryBackend
+            ? EncryptedDedicatedQueryRuntime(
+                python: model['runtime'] as String,
+                worker: worker,
+                encryptedModel: model['path'] as String,
+                vaultRoot: File(model['path'] as String).parent,
+              )
+            : DedicatedQueryRuntime(
+                python: model['runtime'] as String,
+                worker: worker,
+                model: model['path'] as String,
+              );
         _queryRegistration = registration;
       }
     }
@@ -241,6 +255,7 @@ class Application {
     if (_closed) throw StateError('Application closed');
     if (current != null && !current()) throw StateError('Operation cancelled');
     if (method.startsWith('models.') &&
+        method != 'models.cancel_query_acquisition' &&
         (modelBusy ||
             domain.generator?.generating == true ||
             recording != null)) {
@@ -248,7 +263,9 @@ class Application {
         'Model configuration is busy while generation or recording is active',
       );
     }
-    final modelOperation = method.startsWith('models.');
+    final modelOperation =
+        method.startsWith('models.') &&
+        method != 'models.cancel_query_acquisition';
     if (modelOperation) _modelBusy = true;
     try {
       switch (method) {
@@ -270,6 +287,11 @@ class Application {
             'runtime_revision':
                 runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
             'models_busy': modelBusy,
+            'query_model_download': {
+              'active': _queryAcquisition != null,
+              'received': _queryDownloadReceived,
+              'total': _queryDownloadTotal,
+            },
             'capture': captureState,
             'sources_paused': domain.sourcesPaused,
             'helper': domain.helper.snapshot?.toProto3Json(),
@@ -560,6 +582,28 @@ class Application {
             a['text'] as String,
             lastManualEdit: a['last_manual_edit'] as int?,
           );
+          return null;
+        case 'models.cancel_query_acquisition':
+          await _queryAcquisition?.close();
+          return null;
+        case 'models.acquire_query':
+          final acquisition = DedicatedQueryAcquisition.distribution(store);
+          _queryAcquisition = acquisition;
+          _queryDownloadReceived = _queryDownloadTotal = 0;
+          changed();
+          try {
+            await acquisition.run(
+              current: () => !_closed && (current == null || current()),
+              onProgress: (received, total) {
+                _queryDownloadReceived = received;
+                _queryDownloadTotal = total;
+                changed();
+              },
+            );
+          } finally {
+            _queryAcquisition = null;
+            changed();
+          }
           return null;
         case 'models.speech':
           await configureSpeech(
@@ -1059,7 +1103,7 @@ class Application {
     store.artifact(
       id,
       'enhanced_notes',
-      result,
+      cleanNoteEnhancementTags(result),
       _digest,
       inputRevision: revision,
     );
@@ -1253,6 +1297,15 @@ class Application {
       timer.cancel();
     }
     _enhance.clear();
+    final acquisition = _queryAcquisition;
+    await acquisition?.close();
+    if (acquisition != null) {
+      try {
+        await acquisition.done;
+      } catch (_) {
+        /* Owned setup was cancelled. */
+      }
+    }
     await proactive.close();
     await _queryRuntime?.close();
     try {

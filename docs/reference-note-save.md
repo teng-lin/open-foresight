@@ -95,6 +95,26 @@ commands. Streaming partial-note merges and cancellation restoration remain
 separate parity work. No unsaved-draft generation invalidation policy was
 inferred from these traces.
 
+Completed enhancement output now uses the original `NotesEnhancer.cleanTags`
+(`0x1006ec7e4`) before the accepted artifact write. It removes PP19671, PP19672,
+and PP19673 regex matches in order, without trimming unrelated content or
+repairing partial indices. The original explicitly supplies four false RegExp
+flags, including `caseSensitive`; this is bound by
+`ida/note-clean-tags-regexp-call.json` and
+`ida/note-clean-tags-regexp-constructor.json`. Patterns are retained in
+`ida/note-enhancer-public-constants-pool.txt` and replacement order in
+`ida/note-enhancer-clean-tags.json`. Fixtures cover case-insensitive line tags,
+indexed markers, incomplete tags, preserved markup/whitespace, and accepted
+generation persistence without changing raw notes.
+
+The recovered streaming path additionally distinguishes the three status
+strings `Evaluating notes...`, `Scanning the transcripts...`, and
+`Structuring notes...` before writing cleaned content snapshots. The cancel
+button only sets state slot 103 (`ida/note-enhance-cancel-state.json`); the
+stream consumer then cancels its iterator and restores the prior extracted
+bullets through `formatNotesWithSpacing`. These UI/partial-save behaviors are
+still unimplemented; final-output cleanup does not establish their parity.
+
 Six new tests cover deadline reset, captured cross-note drafts, ordered
 in-flight disposal, retry of failed drafts, supersession of failed snapshots,
 editor switch/disposal persistence, and rejected in-flight saves blocking

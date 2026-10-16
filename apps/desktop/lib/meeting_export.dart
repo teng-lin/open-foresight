@@ -76,16 +76,21 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
     "WHERE artifacts.meeting_id=meetings.id AND kind='enhanced_notes' "
     'ORDER BY id DESC LIMIT 1) AS enhanced_body,'
     'COALESCE(calendar_events.starts,meeting_notes.timestamp,meeting_details.created,0) AS export_date,'
-    'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata '
+    'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata,'
+    '(SELECT title FROM meeting_note_events WHERE meeting_id=meetings.id '
+    'AND event_key=note_event.event_key AND title!=\'\' ORDER BY id DESC LIMIT 1) AS association_title '
     'FROM acquired JOIN meetings ON acquired.note_type=0 AND meetings.id=acquired.note_id '
     'JOIN meeting_notes ON meeting_notes.meeting_id=meetings.id '
     'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
-    'LEFT JOIN calendar_events ON calendar_events.event_key=('
+    'LEFT JOIN meeting_note_events AS note_event ON note_event.id=('
+    'SELECT id FROM meeting_note_events WHERE meeting_id=meetings.id '
+    'AND event_key!=\'\' ORDER BY id LIMIT 1) '
+    'LEFT JOIN calendar_events ON calendar_events.event_key=COALESCE(note_event.event_key,('
     'SELECT event_key FROM calendar_events AS export_event '
     'WHERE export_event.meeting_id=meetings.id ORDER BY export_event.rowid LIMIT 1'
-    ') UNION ALL '
+    ')) UNION ALL '
     'SELECT notes.id,notes.title,notes.body,NULL AS enhanced_body,'
-    'COALESCE(notes.timestamp,0) AS export_date,NULL AS export_end,NULL AS export_metadata '
+    'COALESCE(notes.timestamp,0) AS export_date,NULL AS export_end,NULL AS export_metadata,NULL AS association_title '
     'FROM acquired JOIN notes ON acquired.note_type=1 AND notes.id=acquired.note_id'
     ') ORDER BY export_date DESC,id',
   );
@@ -109,9 +114,12 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
         : jsonDecode(metadata) as Map<String, dynamic>;
     final url = event?['htmlLink'] as String?;
     final noteTitle = (meeting['title'] as String).trim();
+    final associationTitle = meeting['association_title'] as String?;
     final eventTitle = event?['summary'] as String?;
     final title = noteTitle.isNotEmpty
         ? noteTitle
+        : associationTitle != null && associationTitle.isNotEmpty
+        ? associationTitle
         : eventTitle != null && eventTitle.isNotEmpty
         ? eventTitle
         : 'Untitled meeting';

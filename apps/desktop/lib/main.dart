@@ -364,6 +364,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
   );
   bool busy = false, asking = false;
+  bool queryModelDownloading = false;
   final webSearchScopes = <String>{};
   bool quickStarting = false;
   bool meetingImmersive = false;
@@ -1394,7 +1395,56 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ),
         if (modelKind == 'query-detection')
           const Text(
-            'Import an already-decrypted dedicated question model. Its identity and bundled runtime are verified before replacing the current model. Automatic download is not available yet.',
+            'Download the dedicated question model using this distribution, or import an already-decrypted copy. Its identity and bundled runtime are verified before replacing the current model.',
+          ),
+        if (modelKind == 'query-detection')
+          Row(
+            children: [
+              OutlinedButton(
+                onPressed:
+                    busy ||
+                        !Platform.isMacOS ||
+                        (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ??
+                                '')
+                            .isEmpty
+                    ? null
+                    : () async {
+                        setState(() => queryModelDownloading = true);
+                        try {
+                          await run(() async {
+                            await d.command('models.acquire_query', {});
+                            modelState = 'Automatic question model ready';
+                          });
+                        } finally {
+                          if (mounted)
+                            setState(() => queryModelDownloading = false);
+                        }
+                      },
+                child: Text(
+                  queryModelDownloading
+                      ? 'Downloading and verifying…'
+                      : 'Download question model',
+                ),
+              ),
+              if (queryModelDownloading)
+                TextButton(
+                  onPressed: () async {
+                    try {
+                      await d.command('models.cancel_query_acquisition', {});
+                    } catch (failure) {
+                      if (mounted) setState(() => error = failure.toString());
+                    }
+                  },
+                  child: const Text('Cancel download'),
+                ),
+            ],
+          ),
+        if (modelKind == 'query-detection' &&
+            (!Platform.isMacOS ||
+                (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ?? '')
+                    .isEmpty))
+          const Text(
+            'Automatic download is unavailable in this distribution. You can import a supported local copy.',
           ),
         if (modelKind != 'embedding' && modelKind != 'query-detection')
           TextField(

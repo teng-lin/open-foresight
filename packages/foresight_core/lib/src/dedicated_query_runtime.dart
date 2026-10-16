@@ -27,9 +27,15 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
     required this.worker,
     required this.model,
     this.timeout = const Duration(minutes: 2),
-  });
+    Future<Process> Function(String, List<String>)? startProcess,
+  }) : _startProcess =
+           startProcess ??
+           ((python, arguments) => Process.start(python, arguments));
   final String python, worker, model;
   final Duration timeout;
+  final Future<Process> Function(String, List<String>) _startProcess;
+  final _retired = <Future<int>>{};
+  Future<void>? _closing;
   Process? _process;
   Future<void>? _starting;
   _QueryRequest? _active;
@@ -53,13 +59,27 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
     final process = _process;
     _process = null;
     // There are no subprocesses in this adapter. Do not signal shared workers.
-    process?.kill(ProcessSignal.sigkill);
+    if (process != null) {
+      final exited = process.exitCode;
+      _retired.add(exited);
+      unawaited(
+        exited.then<void>(
+          (_) {
+            _retired.remove(exited);
+          },
+          onError: (Object error, StackTrace stack) {
+            _retired.remove(exited);
+          },
+        ),
+      );
+      process.kill(ProcessSignal.sigkill);
+    }
   }
 
   Future<void> _start() async {
     if (_process != null) return;
     final epoch = _epoch;
-    final process = await Process.start(python, [
+    final process = await _startProcess(python, [
       '-I',
       '-B',
       worker,
@@ -192,8 +212,9 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
   }
 
   @override
-  Future<void> close() async {
-    if (_closed) return;
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
     _closed = true;
     final process = _process;
     final busy = _active != null;
@@ -220,5 +241,10 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
       // Cancellation during launch/load is already delivered to the caller.
     }
     if (process != null) await process.exitCode;
+    // Cancellation/error detaches a killed worker before a later request can
+    // restart it. Keep ownership until exit even when it is no longer current.
+    while (_retired.isNotEmpty) {
+      await Future.wait(_retired.toList());
+    }
   }
 }

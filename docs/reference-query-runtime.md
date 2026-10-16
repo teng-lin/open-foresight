@@ -66,11 +66,9 @@ uses supported TOP_P with k=1 and p=1, retaining one candidate, and temperature
 0.3. This is an explicit public-runtime adaptation; original-model comparison,
 including tie behavior, is still required.
 
-The Application detector callback remains unchanged and still uses the generic
-chat path. This worker primitive does not complete production detector parity.
-Required next work: implement compatible legacy model loading/execution,
-verify raw generation against the original,
-and connect the dedicated runtime to the existing ReferenceQueryDetector.
+This public-SDK primitive was an intermediate diagnostic. Production now uses
+the reconstructed legacy worker through ReferenceQueryDetector, as described
+below; the generic chat detector path has been removed.
 
 ## Validation and limitations
 
@@ -158,8 +156,8 @@ and LITERTLM as 2. Consequently the modern formats' default-CPU branch does not
 establish the legacy detector's backend. DeriveLlmModelSettingsStruct
 (0x102c46788), recovered across three pages, reads legacy ModelData metadata;
 `gpu` selects backend 2 at 0x102c47a94. This corrects the earlier diagnostic CPU
-choice. Static metadata and dispatch establish selection; actual original GPU
-execution has not been observed.
+choice. Static metadata and dispatch establish selection. Later controlled oracle runs
+observed the original Metal F16 runtime; see the legacy execution follow-up.
 
 Both raw workers were attempted on CPU and GPU with the decrypted asset and the
 unchanged 512-token context. Both fail at engine construction with unsupported format,
@@ -206,13 +204,11 @@ a caller-supplied digest cannot authorize a different model. Existing explicit
 installed-model manifests may optionally include the same kind. This manifest is
 not required for interactive import.
 
-This is supported local import, not original automatic acquisition. Retained
-original analysis shows metadata-selected blob ID and expected size flowing
-through `OdmlService.downloadMediaInParallel` to `ModelDownloader` at
-`odml.pa.googleapis.com`, followed by type-4 encryption before local persistence.
-The downloader also uses original application authentication. No public detector
-blob ID/direct download URL or independently supported authenticated download
-contract has been established. This implementation does not read original API
-credentials, keys or configuration, and it does not offer the ignored diagnostic
-decryption tool as an ordinary setup flow. Original automatic acquisition remains
-open; the import UI says automatic download is unavailable.
+Automatic acquisition is now connected to this existing setup flow when the
+distribution provides its shared web-content credential. It follows recovered
+metadata selection, blob basename, range/retry and type-4 encryption policies,
+then authenticates the supported model before registration. Encrypted models
+reopen through owned private leases, retained until their worker exits. See
+[acquisition implementation and verification limits](reference-model-acquisition.md).
+Live service access, signed-app Keychain behavior and the original refresh/cleanup
+policy remain unverified; local import remains available without a credential.

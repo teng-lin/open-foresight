@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:grpc/grpc.dart';
+import 'package:path/path.dart' as path;
 
 import 'generated/web_content.pbgrpc.dart';
 import 'web_content.dart' show referenceWebContentHost;
@@ -13,6 +14,36 @@ export 'generated/web_content.pb.dart'
 
 const referenceQueryDetectorModelType = 4;
 const referenceClosestLowerFallback = 1;
+const referenceModelDownloadBytesPerSlot = 838860800;
+
+/// Original AssetManager divides by the double 800 MiB, ceils, then clamps.
+int referenceModelDownloadParallelCount(int size) =>
+    (size / referenceModelDownloadBytesPerSlot).ceil().clamp(1, 8);
+
+class ModelDownloadPlan {
+  const ModelDownloadPlan({required this.metadata, required this.blobName});
+  final OnDeviceModelMetadata metadata;
+  final String blobName;
+}
+
+/// Original downloadModelsByType overwrites earlier entries of the same type.
+/// _downloadModel then passes basename(blobId) to the HTTP media helper.
+/// This does not infer a version ordering or implement the server refresh policy.
+ModelDownloadPlan? referenceModelDownloadPlan(
+  Iterable<OnDeviceModelMetadata> models,
+  int modelType,
+) {
+  OnDeviceModelMetadata? selected;
+  for (final model in models) {
+    if (model.modelType == modelType) selected = model;
+  }
+  return selected == null
+      ? null
+      : ModelDownloadPlan(
+          metadata: selected,
+          blobName: path.posix.basename(selected.blobId),
+        );
+}
 
 /// Public metadata RPC recovered from the original OdmlService.
 /// The credential comes from the same distribution configuration as web content.
@@ -37,23 +68,29 @@ class ModelConfigService {
   final bool _ownsChannel;
   final ClientChannel _channel;
   late final ForesightServiceClient _client;
+  final _requests = <ResponseFuture<ForesightSharedConfig>>{};
   bool _closed = false;
 
   Future<ForesightSharedConfig> fetch({required String appVersion}) {
     if (_closed) throw StateError('Model configuration service is closed.');
     if (appVersion.isEmpty) throw ArgumentError.value(appVersion, 'appVersion');
-    return _client.getSharedConfig(
+    final request = _client.getSharedConfig(
       GetSharedConfigRequest(
         appVersion: appVersion,
         platform: 'macos',
         fallbackMode: referenceClosestLowerFallback,
       ),
     );
+    _requests.add(request);
+    return request.whenComplete(() => _requests.remove(request));
   }
 
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    await Future.wait([
+      for (final request in _requests.toList()) request.cancel(),
+    ]);
     if (_ownsChannel) await _channel.shutdown();
   }
 }
@@ -108,7 +145,7 @@ class ModelDownloadRetryPolicy {
 class ModelBlobDownloader {
   ModelBlobDownloader({
     required String apiKey,
-    required this.parallelCount,
+    this.parallelCount,
     ModelDownloadRetryPolicy? retryPolicy,
     HttpClient? client,
     Uri? origin,
@@ -119,7 +156,7 @@ class ModelBlobDownloader {
        _ownsClient = client == null,
        _origin = origin ?? Uri.https(referenceWebContentHost),
        _sleep = sleep ?? Future<void>.delayed {
-    if (parallelCount <= 0)
+    if (parallelCount != null && parallelCount! <= 0)
       throw ArgumentError.value(parallelCount, 'parallelCount');
     if (this.retryPolicy.maxAttempts <= 0) {
       throw ArgumentError.value(this.retryPolicy.maxAttempts, 'maxAttempts');
@@ -127,7 +164,7 @@ class ModelBlobDownloader {
   }
 
   final String _apiKey;
-  final int parallelCount;
+  final int? parallelCount;
   final ModelDownloadRetryPolicy retryPolicy;
   final HttpClient _client;
   final bool _ownsClient;
@@ -156,14 +193,15 @@ class ModelBlobDownloader {
     if (_closed) throw StateError('Model downloader is closed.');
     if (blobId.isEmpty || size <= 0) return Uint8List(0);
     final bytes = Uint8List(size);
-    final chunkSize = (size + parallelCount - 1) ~/ parallelCount;
+    final slots = parallelCount ?? referenceModelDownloadParallelCount(size);
+    final chunkSize = (size + slots - 1) ~/ slots;
     var received = 0;
     final stopwatch = Stopwatch()..start();
     var lastProgress = 0;
     final uri = downloadUri(blobId);
     try {
       await Future.wait([
-        for (var index = 0; index < parallelCount; index++)
+        for (var index = 0; index < slots; index++)
           if (index * chunkSize < size)
             _downloadChunk(
               uri,

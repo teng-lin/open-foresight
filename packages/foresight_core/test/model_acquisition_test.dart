@@ -11,6 +11,8 @@ import 'package:test/test.dart';
 class ConfigFixture extends ForesightServiceBase {
   GetSharedConfigRequest? request;
   String? key;
+  Completer<ForesightSharedConfig>? pending;
+  Completer<void>? started;
   @override
   Future<ForesightSharedConfig> getSharedConfig(
     ServiceCall call,
@@ -18,6 +20,10 @@ class ConfigFixture extends ForesightServiceBase {
   ) async {
     this.request = request;
     key = call.clientMetadata?['x-goog-api-key'];
+    if (pending != null) {
+      started?.complete();
+      return pending!.future;
+    }
     return ForesightSharedConfig(
       onDeviceModelMetadatas: [
         OnDeviceModelMetadata(
@@ -64,7 +70,91 @@ class FixedRandom implements Random {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class TrackedChannel extends ClientChannel {
+  TrackedChannel(int port)
+    : super(
+        '127.0.0.1',
+        port: port,
+        options: const ChannelOptions(
+          credentials: ChannelCredentials.insecure(),
+        ),
+      );
+  var shutdowns = 0;
+  @override
+  Future<void> shutdown() {
+    shutdowns++;
+    return super.shutdown();
+  }
+}
+
 void main() {
+  test(
+    'metadata close cancels its active RPC without closing an injected channel',
+    () async {
+      final fixture = ConfigFixture()
+        ..pending = Completer()
+        ..started = Completer();
+      final server = Server.create(services: [fixture]);
+      await server.serve(address: InternetAddress.loopbackIPv4, port: 0);
+      final channel = TrackedChannel(server.port!);
+      final service = ModelConfigService(apiKey: 'fixture', channel: channel);
+      try {
+        final pending = service.fetch(appVersion: '1.0.0');
+        final cancelled = expectLater(
+          pending,
+          throwsA(
+            isA<GrpcError>().having(
+              (e) => e.code,
+              'code',
+              StatusCode.cancelled,
+            ),
+          ),
+        );
+        await fixture.started!.future;
+        await service.close();
+        await cancelled;
+        expect(channel.shutdowns, 0);
+      } finally {
+        await channel.shutdown();
+        await server.shutdown();
+      }
+    },
+  );
+  test(
+    'original parallelism uses the 800 MiB ceiling with one-to-eight clamp',
+    () {
+      const slot = 838860800;
+      expect(referenceModelDownloadParallelCount(1), 1);
+      expect(referenceModelDownloadParallelCount(slot), 1);
+      expect(referenceModelDownloadParallelCount(slot + 1), 2);
+      expect(referenceModelDownloadParallelCount(7 * slot), 7);
+      expect(referenceModelDownloadParallelCount(8 * slot), 8);
+      expect(referenceModelDownloadParallelCount(9 * slot), 8);
+      expect(referenceModelDownloadParallelCount(179437568), 1);
+    },
+  );
+
+  test(
+    'download plan uses last duplicate and basename without version ordering',
+    () {
+      final first = OnDeviceModelMetadata(
+        modelType: 4,
+        version: '9',
+        blobId: '/old/model.bin',
+      );
+      final other = OnDeviceModelMetadata(modelType: 2, blobId: '/other.bin');
+      final last = OnDeviceModelMetadata(
+        modelType: 4,
+        version: '1',
+        blobId: '/remote/version/detector.bin/',
+      );
+      final plan = referenceModelDownloadPlan([first, other, last], 4)!;
+      expect(plan.metadata, same(last));
+      expect(plan.blobName, 'detector.bin');
+      expect(referenceModelDownloadPlan([first, other], 99), isNull);
+    },
+  );
+
   test(
     'original retry durations preserve attempt limit, jitter, rounding and cap',
     () {
@@ -353,7 +443,6 @@ void main() {
         downloader.close();
         downloader = ModelBlobDownloader(
           apiKey: 'distribution-fixture',
-          parallelCount: 1,
           retryPolicy: ModelDownloadRetryPolicy(
             maxAttempts: 1,
             delay: (_) => Duration.zero,
@@ -365,6 +454,7 @@ void main() {
           0,
           0,
         ]);
+        expect(ranges.last, 'bytes=0-2');
       },
     );
 

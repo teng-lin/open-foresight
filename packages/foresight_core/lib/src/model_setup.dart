@@ -1,9 +1,12 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'store.dart';
 import 'native.dart';
 import 'platform_services.dart';
 import 'dedicated_query_runtime.dart';
+import 'encrypted_query_runtime.dart';
+import 'model_vault.dart';
 import 'package:crypto/crypto.dart';
 
 /// Probe a candidate before replacing persistent configuration. The caller
@@ -55,17 +58,78 @@ Future<void> configureDedicatedQuery(
   String? expectedDigest,
   bool Function()? current,
 }) async {
+  if (expectedDigest != null && expectedDigest != dedicatedQueryModelDigest) {
+    throw StateError(
+      'The dedicated question model installation digest is incorrect',
+    );
+  }
+  final python = await _prepareDedicatedQuery(
+    path,
+    runtime: runtime,
+    current: current,
+  );
+  await store.register(
+    dedicatedQueryModelKind,
+    File(path).absolute.path,
+    python,
+    backend: dedicatedQueryBackend,
+    expectedDigest: dedicatedQueryModelDigest,
+    current: current,
+  );
+}
+
+/// Verify decrypted bytes and the real worker before adopting encrypted storage.
+Future<void> configureEncryptedDedicatedQuery(
+  Store store,
+  String path, {
+  String? runtime,
+  bool Function()? current,
+  MacModelVault? vault,
+}) async {
+  if (current != null && !current()) throw StateError('Model setup cancelled');
+  final encrypted = File(path);
+  if (FileSystemEntity.typeSync(path, followLinks: false) !=
+          FileSystemEntityType.file ||
+      await encrypted.length() != dedicatedQueryModelBytes + 33) {
+    throw StateError(
+      'The encrypted dedicated question model has an invalid size.',
+    );
+  }
+  final digest = (await sha256.bind(encrypted.openRead()).first).toString();
+  final ownedVault = vault ?? MacModelVault(root: encrypted.parent);
+  ModelVaultLease? lease;
+  try {
+    lease = await ownedVault.openLease(encrypted);
+    final python = await _prepareDedicatedQuery(
+      lease.path,
+      runtime: runtime,
+      current: current,
+    );
+    await store.register(
+      dedicatedQueryModelKind,
+      encrypted.absolute.path,
+      python,
+      backend: dedicatedEncryptedQueryBackend,
+      expectedDigest: digest,
+      current: current,
+    );
+  } finally {
+    if (vault == null) await ownedVault.close();
+    await lease?.close();
+  }
+}
+
+Future<String> _prepareDedicatedQuery(
+  String path, {
+  String? runtime,
+  bool Function()? current,
+}) async {
   void checkCurrent() {
     if (current != null && !current())
       throw StateError('Model setup cancelled');
   }
 
   checkCurrent();
-  if (expectedDigest != null && expectedDigest != dedicatedQueryModelDigest) {
-    throw StateError(
-      'The dedicated question model installation digest is incorrect',
-    );
-  }
   final file = File(path);
   if (!await file.exists() || await file.length() != dedicatedQueryModelBytes) {
     throw StateError(
@@ -99,6 +163,11 @@ Future<void> configureDedicatedQuery(
     worker: worker,
     model: file.absolute.path,
   );
+  final cancellation = current == null
+      ? null
+      : Timer.periodic(const Duration(milliseconds: 100), (_) {
+          if (!current()) candidate.cancel('query-model-setup');
+        });
   try {
     checkCurrent();
     final response = await candidate.complete(
@@ -110,15 +179,9 @@ Future<void> configureDedicatedQuery(
         'The dedicated question runtime failed its readiness check',
       );
     checkCurrent();
-    await store.register(
-      dedicatedQueryModelKind,
-      file.absolute.path,
-      python,
-      backend: dedicatedQueryBackend,
-      expectedDigest: dedicatedQueryModelDigest,
-      current: current,
-    );
+    return python;
   } finally {
+    cancellation?.cancel();
     await candidate.close();
   }
 }
@@ -128,14 +191,22 @@ String? dedicatedQuerySetupProblem(Store store) {
   if (model == null)
     return 'Import the supported dedicated question model to enable automatic questions.';
   final asset = File(model['path'] as String);
-  if (model['backend'] != dedicatedQueryBackend ||
-      model['digest'] != dedicatedQueryModelDigest ||
+  final encrypted = model['backend'] == dedicatedEncryptedQueryBackend;
+  if ((!encrypted && model['backend'] != dedicatedQueryBackend) ||
+      (!encrypted && model['digest'] != dedicatedQueryModelDigest) ||
       !asset.existsSync() ||
-      asset.lengthSync() != dedicatedQueryModelBytes) {
+      asset.lengthSync() != dedicatedQueryModelBytes + (encrypted ? 33 : 0)) {
     return 'The imported dedicated question model is missing or does not match the supported asset.';
   }
   final python = File(model['runtime'] as String);
   final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
+  final crypto = runtimeConfiguration['FORESIGHT_MODEL_CRYPTO'];
+  if (encrypted &&
+      (crypto == null ||
+          !File(crypto).existsSync() ||
+          (File(crypto).statSync().mode & 0x49) == 0)) {
+    return 'The bundled model encryption helper is unavailable.';
+  }
   if (!python.existsSync() ||
       (python.statSync().mode & 0x49) == 0 ||
       worker == null ||
