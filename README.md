@@ -1,34 +1,145 @@
-# Open Foresight
+<p align="center">
+  <img src="apps/desktop/assets/images/open-foresight-logo.png" width="96" alt="Open Foresight icon">
+</p>
 
-A local knowledge and meeting desktop application built with Flutter, a C++ retrieval helper, SQLite, and local inference workers. Linux is the established desktop target. Apple Silicon macOS support is under integration, with native capture, a Mac runner, and bundle tooling implemented; signed installed-release and physical-device validation remain required.
+<h1 align="center">Open Foresight</h1>
 
-See [Mac build, bundle, and MCP instructions](docs/macos-support.md), the
-[validation ledger](docs/macos-validation.md), and the
-[remaining support-plan gates](docs/macos-support-plan.md).
+<p align="center">
+  A local-first knowledge and meeting app for Linux and macOS.<br>
+  Import your sources, ask questions with checked citations, and record and transcribe meetings, all with models that run on your own machine.
+</p>
 
-## Source layout
+---
 
-- `apps/desktop`: Flutter interface and read-only profile views.
-- `packages/foresight_core`: application operations, service/MCP entrypoints, persistence, sources, meetings, and cited answers.
-- `services/helper`: gRPC retrieval helper.
-- `services/inference`: native Linux LiteRT/ONNX worker and the Mac runtime adapter.
-- `native`: generation, speech, and audio capture adapters.
-- `proto`: required service definitions and protocol descriptor.
-- `tests`: reusable contract, lifecycle, and grounding tests with controlled fixtures.
-- `tools`: build, packaging, model setup, and optional integration-test commands.
-- `models/minilm-manifest.json`: pinned embedding download metadata; model weights are separate.
+## How this project started
 
-This repository starts with a fresh history. Reference screenshots, reverse-engineering reports, historical evaluation results, machine-specific environments, downloaded models, application profiles, and account credentials are excluded. Runtime fonts and images are retained because the interface uses them.
+Open Foresight began as an experiment: **how far can an AI agent equipped with [REA](https://github.com/morluto/rea) (Reverse Engineer Anything) go in replicating a shipped Mac application, and porting it to Linux?**
 
-For the reference investigation workflow, see [Replicating Foresight with REA on Linux and herdr on Mac](docs/rea-linux-and-herdr-mac.md).
+The reference was the macOS **Foresight** app (`com.google.AIEdgeForesight`), a Flutter app with local Gemma models, source search, a source graph, and meeting transcription. The experiment used two hosts:
 
-## Build
+- **Linux with REA**: static analysis of a copied `.app` bundle. This covered its plists, resources, protobuf schemas and model configuration, plus the arm64 Mach-O decompiled through REA's IDA provider. In the Flutter AOT code, recovered strings and pseudocode exposed contracts even though the original Dart source could not be recovered.
+- **A Mac through [herdr](docs/rea-linux-and-herdr-mac.md#mac-terminal-control-through-herdr)**: the installed app was run and observed directly, to establish what it actually does at runtime. Static analysis alone cannot show that.
 
-Requirements: Linux, a C++20 compiler, CMake, protobuf/gRPC development packages, SQLite3, nlohmann-json, OpenSSL, ICU, Python for build/test tooling, and Flutter with GTK3 Linux development dependencies. The source pins Flutter package dependencies; the originating toolchain used Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
+The work went one feature at a time. Each round identified the feature's contract and inspected the relevant code, observed the same workflow on the Mac, built it here, and compared the two with identical inputs. Parity meant matching state changes, persistence, errors and cancellation, not just matching screenshots. Where the original depended on Mac-only pieces, the port used open replacements: PipeWire instead of Core Audio, public LiteRT model artifacts instead of encrypted model packages, and Linux window and shortcut integration in place of the Mac's.
 
-The commands below target Linux. Mac builds use the separate
-[macOS instructions](docs/macos-support.md), a source-built dependency SDK, and
-`tools/package_macos.py`.
+The full method, including its limits and how evidence was kept, is in [Replicating Foresight with REA on Linux and herdr on Mac](docs/rea-linux-and-herdr-mac.md).
+
+## From port to cross-platform app
+
+Once the Linux reconstruction worked, the project stopped being only a copy and became an application of its own:
+
+1. **Reconstruct.** A Flutter interface, a C++ gRPC retrieval helper, SQLite persistence, and native model and capture workers rebuilt the reference's main workflows on Linux.
+2. **Own the stack.** Python inference was replaced with native C++ LiteRT and ONNX workers. Business logic moved into a Flutter-independent application service, which both the desktop and a new MCP server share. Linux gained `.deb`, `.rpm` and Arch packages.
+3. **Return to the Mac.** With the platform-specific parts behind small interfaces, macOS became a target again. Apple Silicon support now includes native Core Audio capture, a Mac runner, bundle tooling, and a release DMG, all from the same codebase.
+
+The repository has a fresh history. Reference screenshots, reverse-engineering reports, evaluation results, machine-specific environments, downloaded models, application profiles and credentials are all excluded. Runtime fonts and images are kept because the interface uses them.
+
+## Features
+
+- **Sources.** Import files and folders (text, Markdown, PDF, RTF), web pages by URL, and Google Drive content: single files, a whole folder, or the last year of files. Google Docs, Sheets and Slides are converted to text. A file finder helps you locate documents on your computer to add. Everything is indexed locally, and you can pause and resume importing and indexing.
+- **Organize.** Search, sort, and filter sources by type, in a list or a grid, and tag them with labels.
+- **Source graph.** Explore your sources as a force-directed graph of semantic links, with clusters and labels. Selecting a document shows related ones. The layout persists between sessions.
+- **Ask.** Get grounded answers from a local Gemma model, with citations checked against your sources. If verification fails, the answer is replaced by a fallback that is clearly labelled as one.
+- **Meetings.** See upcoming Google Calendar meetings and get reminders for them. Transcription captures the microphone and system audio. The meeting workspace has:
+  - Markdown notes, which can be enhanced live in a Standard or Concise style
+  - a sidecar with meeting-scoped Chat, Live Q&A, Summary, Transcript, and Action items
+
+  Recording stops itself after a period of inactivity that you choose. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
+- **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
+- **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
+- **MCP server.** Agents can import, search, ask, take notes, and record through the same application service the desktop uses.
+- **Desktop integration.** A global shortcut to quick-start a meeting, desktop notifications, a monitor for the local helper, and a background service that keeps recording after the window closes.
+
+## Beyond the original
+
+Open Foresight reproduces the original's main workflows, and adds features the original does not have:
+
+- **Linux support.** Native packages for Ubuntu, Debian, Fedora, and Arch/Omarchy, with PipeWire audio capture and Linux global shortcuts, including on Hyprland. The same codebase also builds for the Mac.
+- **An MCP server for agents.** The original has no MCP interface. MCP clients can search, import, ask, write notes, and record through the same service the desktop uses. The service runs headless, without a window.
+- **More model choices.** The original's settings offer a choice of Gemma model only. Open Foresight also lets you choose:
+  - the source search model
+  - the transcription model: multilingual Whisper from Tiny to Large v3 Turbo, which keeps Chinese and English speech in the language it was spoken
+
+  You can also register model files you already have, and run Whisper on the GPU through Vulkan.
+- **Audio routing.** Choose which microphone and which system playback output to transcribe, and see live input levels.
+- **Auto-stop can be turned off.** Along with 5, 10, 15, and 30 minutes, inactivity auto-stop can be set to Never.
+- **Bring your own Google project.** Drive and Calendar can use an OAuth client configuration that you import.
+- **Local and open.** Models are public LiteRT and whisper.cpp files, pinned by SHA-256 hash, and generation never calls a cloud model. The source code is MIT-licensed.
+- **Isolated profiles.** You can run separate profiles side by side, and migrate an existing profile with a tool that keeps a verified backup.
+
+### Not yet reproduced
+
+These features of the original are not in Open Foresight yet:
+
+- **Speaker labels.** The original labels speakers in the transcript. Open Foresight has no speaker identification or echo cancellation.
+- **Proactive answers in meetings.** The original detects questions in the live transcript and answers them unprompted. Open Foresight's Live Q&A answers only when you ask.
+- **Web search fallback.** The original's meeting assistant can fall back to a Google web-search tool.
+- **Recording controls and rich previews.** The original's recording pill has pause and fullscreen gestures, and generated content is shown as a rich preview. Open Foresight uses an explicit Stop button and shows generated content as selectable Markdown text.
+- **Cloud Gemini models.** The original's binary references cloud Gemini models. Open Foresight leaves these out on purpose and runs every model locally.
+
+Some of the original's behavior, such as its export format and label editing, was never observed live, so parity in those areas has not been confirmed.
+
+## Platform status
+
+| Platform | Status | Distribution |
+| --- | --- | --- |
+| **Linux** x86-64: Ubuntu 24.04, Debian 13, Fedora 44, Arch/Omarchy | Established target | `.deb`, `.rpm`, and Arch packages on [GitHub releases](https://github.com/teng-lin/open-foresight/releases) |
+| **macOS 15+** on Apple Silicon | In integration. Native capture, the Mac runner, and bundle tooling are implemented. Developer ID signing, notarization, and physical-device validation are still required. | Ad-hoc-signed DMG on GitHub releases |
+
+The macOS state is tracked in the [validation ledger](docs/macos-validation.md) and the [support plan's remaining gates](docs/macos-support-plan.md).
+
+## Install
+
+Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI when a release is published. See [Linux packaging](docs/linux-packaging.md) and [macOS release CI](docs/macos-support.md#release-ci-disk-image) for details.
+
+The current DMG is ad-hoc signed and not notarized, so macOS warns you the first time you open it.
+
+### First launch
+
+On first launch, setup offers three Gemma 4 generation models: **12B**, **E4B**, and **E2B**, which need about 30, 15, and 6 GB of memory respectively. It downloads the selected model and the **EmbeddingGemma 2** source-search model, checks their pinned sizes and SHA-256 hashes, and registers each model only after it loads successfully. You can cancel safely, and completed downloads are kept if setup is interrupted. Meeting transcription offers multilingual Whisper models from Tiny to Large v3 Turbo, under **Settings → Transcription Model**.
+
+Having enough system RAM does not guarantee that a model fits on your GPU. See [speech model behavior](docs/speech-models.md) and [native inference](services/inference/README.md) for details.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  Desktop[Flutter desktop] --> Service[Dart application service]
+  MCP[MCP stdio server] --> Service
+  Desktop -. read-only snapshots .-> DB[(SQLite profile)]
+  Service --> DB
+  Service --> Helper[C++ gRPC retrieval helper]
+  Service --> Workers[Native LiteRT / ONNX / whisper.cpp workers]
+  Service --> Capture[PipeWire or Core Audio capture]
+```
+
+There is one application service per profile. It owns every database write, the loaded models, imports, Google sync, and the recording session. The desktop and MCP clients attach to the service over a private Unix socket, and closing either one does not stop a recording or unload a model. See [Application service and MCP](docs/application-service.md).
+
+| Path | Contents |
+| --- | --- |
+| `apps/desktop` | Flutter interface, with Linux and macOS runners |
+| `packages/foresight_core` | Application operations, service and MCP entry points, persistence, sources, meetings, cited answers |
+| `services/helper` | gRPC retrieval helper |
+| `services/inference` | Native LiteRT/ONNX worker and the Mac runtime adapter |
+| `native` | Generation, speech, and audio capture adapters |
+| `proto` | Service definitions and the protocol descriptor |
+| `packaging` | Linux package builders, SDK/build containers, ABI checks |
+| `tests` | Contract, lifecycle, service, and grounding tests with controlled fixtures |
+| `tools` | Build, packaging, model setup, migration, and opt-in integration tests |
+
+## Build from source
+
+These commands target Linux. For macOS, see [Mac build, bundle, and MCP instructions](docs/macos-support.md); it uses a source-built dependency SDK and `tools/package_macos.py`.
+
+**Requirements:**
+
+- a C++20 compiler and CMake
+- protobuf and gRPC development packages
+- SQLite3, nlohmann-json, OpenSSL, and ICU
+- Python, for build and test tooling
+- Flutter, with the GTK3 Linux development dependencies
+
+Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
 
 ```sh
 uv venv .venv
@@ -40,7 +151,33 @@ python3 tools/package.py
 ./tools/run_desktop.sh
 ```
 
-The executable is `dist/open-foresight/open-foresight`; `./tools/run_desktop.sh` launches it. The profile lives in `$XDG_DATA_HOME/open-foresight` (normally `~/.local/share/open-foresight`), with sockets in `$XDG_RUNTIME_DIR/open-foresight`. `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` override these paths for isolated sessions. Legacy profiles are never selected implicitly. To migrate an existing desktop profile, stop its app and helper, then run:
+The bundle is written to `dist/open-foresight/` and contains three programs:
+
+- `open-foresight`: the desktop app
+- `open-foresight-mcp`: the MCP stdio server
+- `open-foresight-service`: the foreground service and administration commands
+
+The distributed app runs native C++ inference and does not need Python.
+
+### Packaging options
+
+```sh
+# Package Gemma GPU generation into a separate, unused output directory
+python3 tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
+# Optional native compatibility embedding model and CPU generation/speech runtimes
+python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2 --native
+python3 native/setup_models.py --directory models/local/native
+```
+
+For Whisper GPU packaging, use `--whisper-gpu-runtime` and `--whisper-gpu-device`, and check device indices on the target machine. PDF and RTF import uses `pdftotext` and `unrtf`. Recording needs PipeWire and `pw-record`.
+
+To build reproducible distro packages inside containers, see [Linux packaging](docs/linux-packaging.md).
+
+## Profiles and data
+
+The profile is stored in `$XDG_DATA_HOME/open-foresight`, which is normally `~/.local/share/open-foresight`. Sockets are in `$XDG_RUNTIME_DIR/open-foresight`. Set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` to use an isolated profile. Legacy profiles are never selected automatically.
+
+To migrate a profile from the earlier `foresight-linux-desktop` build, stop its app and helper, then run:
 
 ```sh
 python3 tools/migrate_profile.py ~/.local/share/foresight-linux-desktop \
@@ -49,40 +186,25 @@ python3 tools/migrate_profile.py ~/.local/share/foresight-linux-desktop \
   --new-bundle "$PWD/dist/open-foresight" --copy-external-models
 ```
 
-Migration refuses active owners, unfinished recordings, and existing destinations. It preserves a private backup, checks SQLite integrity, updates owned model/file paths, and optionally copies external model assets so other sessions retain their originals. Model downloads and GPU caches inside the profile move intact. Backups contain private application data; keep them outside Git. PDF/RTF import uses `pdftotext`/`unrtf`; recording requires PipeWire and `pw-record`.
+Migration refuses to run while the old profile has an active owner, an unfinished recording, or an existing destination. It keeps a private backup, checks SQLite integrity, and updates the model and file paths it owns. Backups contain private data, so keep them out of Git.
 
-## Distribution packages
+## Use it from an MCP client
 
-For `.deb`, `.rpm`, and Arch/Omarchy installers and the CI build matrix, see
-[Linux packaging](docs/linux-packaging.md).
-Publishing a GitHub release builds and attaches these packages and an Apple
-Silicon [macOS DMG](docs/macos-support.md#release-ci-disk-image). Installer
-generation runs only for published releases; the release tag must match the
-desktop version (for example `v0.1.0`). The current DMG uses ad-hoc signing.
-
-## Local models
-
-First launch offers Gemma 4 12B, E4B, and E2B using the reference memory requirements of 30, 15, and 6 GB. Setup downloads the missing EmbeddingGemma 2 source-search model and selected generation model, verifies pinned sizes and SHA-256 hashes, and registers each only after loading succeeds. Completed files and registrations survive a later failure or restart; cancellation removes owned partial downloads. Settings can reopen model selection or register existing local files. The packaged native LiteRT runtime supports automatic setup; users do not need Python. Linux uses public LiteRT model artifacts and a GPU runtime rather than the Mac service’s encrypted artifacts. System RAM eligibility does not guarantee a model fits the selected GPU. Settings → Transcription Model offers multilingual Whisper Tiny, Base, Small, Medium, and Large v3 Turbo. Existing English-only registrations remain selected until changed; automatic language detection preserves Chinese and English speech. See [speech model behavior and validation](docs/speech-models.md). Gemma generation uses the pinned LiteRT runtime; Whisper supports registered CPU executables or an explicitly built Vulkan runtime.
-
-```sh
-# Optional native compatibility model; the app also offers EmbeddingGemma setup.
-python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2 --native
-# Optional CPU generation and speech runtimes:
-python3 native/setup_models.py --directory models/local/native
-python3 tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
+```json
+{
+  "mcpServers": {
+    "open-foresight": {
+      "command": "/absolute/path/to/dist/open-foresight/open-foresight-mcp"
+    }
+  }
+}
 ```
 
-The distributed app uses native C++ inference and has no Python runtime dependency. Existing MiniLM directories need the pinned ONNX export and re-registration. See [native inference, migration, and verification](services/inference/README.md).
-
-Choose an unused package output directory. Pass `--generation-backend gpu` to package Gemma GPU generation; Whisper GPU packaging accepts `--whisper-gpu-runtime` and `--whisper-gpu-device`. Validate device indices on the target machine.
-
-## Application service and MCP
-
-The desktop and MCP clients share one local application service per profile. It owns database writes, models, imports, and meeting recording independently of the desktop window. Use `dist/open-foresight/open-foresight-mcp` as a stdio MCP server. See [setup, tools, lifecycle, and verification](docs/application-service.md).
+On macOS, the command is `/Applications/Open Foresight.app/Contents/MacOS/foresight-mcp`. The MCP server attaches to the same service as the desktop, or starts that service if it isn't running. Connecting does not download models or request capture permissions. See [Application service and MCP](docs/application-service.md#tools) for the tool list.
 
 ## Google connections
 
-Drive and Calendar use browser authorization. Supply your application OAuth configuration with `tools/package.py --google-client /path/to/google-client.json`, or use the application's configuration setting. Packaging does not inspect another application or copy account tokens. Keep configuration and tokens out of Git.
+Drive and Calendar use browser authorization with your own OAuth client. Provide it at packaging time with `tools/package.py --google-client /path/to/google-client.json`, or in the app's configuration setting. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
 
 ## Verification
 
@@ -96,4 +218,23 @@ flutter test
 flutter analyze
 ```
 
-Real-model, capture and desktop integration tests are opt-in and require their corresponding installed tools/models. Reports and captures go under ignored `test-results/` or an explicitly selected output path.
+Tests that use real models, real capture, or the desktop integration are opt-in. They need their tools and models installed. Their reports and captures go under the ignored `test-results/` directory, or a path you choose.
+
+## Documentation
+
+| Topic | Document |
+| --- | --- |
+| Reverse-engineering workflow | [Replicating Foresight with REA on Linux and herdr on Mac](docs/rea-linux-and-herdr-mac.md) |
+| Application service and MCP | [application-service.md](docs/application-service.md) · [design plan](docs/application-service-plan.md) |
+| Native inference | [services/inference](services/inference/README.md) · [validation](docs/native-inference-validation.md) |
+| Speech models | [speech-models.md](docs/speech-models.md) |
+| Linux packages and CI | [linux-packaging.md](docs/linux-packaging.md) |
+| macOS | [build and release](docs/macos-support.md) · [support plan](docs/macos-support-plan.md) · [validation ledger](docs/macos-validation.md) · [audio feasibility](docs/macos-audio-feasibility.md) |
+
+## License
+
+Open Foresight is released under the [MIT License](LICENSE). Third-party components keep their own licenses, which are included under `third_party/` and in packaged builds.
+
+## Disclaimer
+
+Open Foresight is an independent project. It is not affiliated with, endorsed by, or supported by Google. "Foresight" refers to the reference application this project studied.

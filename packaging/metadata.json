@@ -3,7 +3,7 @@
   "summary": "Local knowledge, meeting notes and transcription",
   "maintainer": "Teng Lin <teng.lin@gmail.com>",
   "url": "https://github.com/teng-lin/open-foresight",
-  "license": "LicenseRef-Unspecified",
+  "license": "MIT",
   "deb_dependencies": [
     "bash",
     "libc6 (>= 2.39)",
