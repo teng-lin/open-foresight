@@ -140,6 +140,9 @@ void main() {
       await tester.pump();
       workspace = tester.state(find.byType(app.Workspace));
       await waitFor(tester, () => workspace.recording != null);
+      // Capture survives independently of desktop startup. Wait for this
+      // client's restore/reconciliation to finish before requesting generation.
+      await workspace.d.resume();
       expect(
         (await workspace.d.command('status') as Map)['pid'],
         initial['pid'],
