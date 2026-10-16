@@ -55,19 +55,27 @@ extension _ScreenshotScreens on _WorkspaceState {
   );
 
   Widget heading(String title, {List<Widget> actions = const []}) => Padding(
-    padding: const EdgeInsets.only(bottom: 8),
-    child: SizedBox(
-      width: double.infinity,
-      child: Wrap(
-        alignment: WrapAlignment.spaceBetween,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 24,
-        runSpacing: 12,
-        children: [
-          Text(title, style: const TextStyle(fontSize: 28, height: 1.1)),
-          ...actions,
-        ],
-      ),
+    padding: const EdgeInsets.only(bottom: 16),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final label = Text(
+          title,
+          style: const TextStyle(fontSize: 28, height: 1.1),
+        );
+        final controls = Wrap(spacing: 12, runSpacing: 8, children: actions);
+        if (constraints.maxWidth < 700 && actions.isNotEmpty) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [label, const SizedBox(height: 12), controls],
+          );
+        }
+        return Row(
+          children: [
+            Expanded(child: label),
+            if (actions.isNotEmpty) controls,
+          ],
+        );
+      },
     ),
   );
 
@@ -80,7 +88,11 @@ extension _ScreenshotScreens on _WorkspaceState {
     onChanged: (value) => update(() => onChanged(value)),
     decoration: InputDecoration(
       hintText: hint,
-      prefixIcon: const Icon(Icons.search),
+      hintStyle: const TextStyle(
+        color: Color(0xffb8babd),
+        fontWeight: FontWeight.w400,
+      ),
+      prefixIcon: const Icon(Icons.search, color: Color(0xffb8babd)),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(40),
         borderSide: BorderSide.none,
@@ -442,15 +454,19 @@ extension _ScreenshotScreens on _WorkspaceState {
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.fromLTRB(
-                        tab == 3 && meetingId != null
+                        tab == 1 || (tab == 3 && meetingId != null)
                             ? 16
                             : MediaQuery.sizeOf(context).width > 1000
                             ? 56
                             : 16,
-                        tab == 3 && meetingId != null ? 12 : 34,
+                        tab == 3 && meetingId != null
+                            ? 12
+                            : tab == 1
+                            ? 22
+                            : 34,
                         MediaQuery.sizeOf(context).width > 1000
-                            ? (tab == 3 && meetingId != null
-                                  ? 16
+                            ? (tab == 1 || (tab == 3 && meetingId != null)
+                                  ? 40
                                   : tab == 6
                                   ? 88
                                   : 68)
@@ -1009,10 +1025,10 @@ extension _ScreenshotScreens on _WorkspaceState {
     return elapsed.inMinutes < 1
         ? 'Just now'
         : elapsed.inHours < 1
-        ? '${elapsed.inMinutes} mins ago'
+        ? '${elapsed.inMinutes} ${elapsed.inMinutes == 1 ? 'min' : 'mins'} ago'
         : elapsed.inDays < 1
-        ? '${elapsed.inHours} hours ago'
-        : '${elapsed.inDays} days ago';
+        ? '${elapsed.inHours} ${elapsed.inHours == 1 ? 'hour' : 'hours'} ago'
+        : '${elapsed.inDays} ${elapsed.inDays == 1 ? 'day' : 'days'} ago';
   }
 
   Widget sources() {
@@ -2784,10 +2800,80 @@ extension _ScreenshotScreens on _WorkspaceState {
     return '${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour < 12 ? 'AM' : 'PM'}';
   }
 
-  Widget meetingList() {
+  int meetingStart(Map<String, Object?> meeting) =>
+      (meeting['calendar_starts'] ?? meeting['created'] ?? 0) as int;
+
+  int meetingEnd(Map<String, Object?> meeting) =>
+      (meeting['calendar_ends'] ??
+              meetingStart(meeting) +
+                  ((meeting['duration_ms'] as int?) ??
+                      const Duration(minutes: 30).inMilliseconds))
+          as int;
+
+  String meetingDay(int timestamp) {
+    if (timestamp == 0) return 'Saved meetings';
+    final date = DateTime.fromMillisecondsSinceEpoch(timestamp).toLocal();
+    final now = DateTime.now();
+    if (date.year == now.year && date.month == now.month && date.day == now.day)
+      return 'Today';
+    return '${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][date.weekday - 1]}, ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][date.month - 1]} ${date.day}';
+  }
+
+  Widget meetingListHeading() => heading(
+    'Meetings',
+    actions: [
+      if (!googleAuth.connected)
+        OutlinedButton.icon(
+          onPressed: busy ? null : () => run(connectGoogle),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: const Text('Connect Calendar'),
+        ),
+      if (googleAuth.connected)
+        OutlinedButton.icon(
+          onPressed: busy || googleSyncing
+              ? null
+              : () => run(google.syncCalendar),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: Text(
+            google.lastCompletedRefreshMs == 0
+                ? 'Import Calendar'
+                : 'Last imported: ${timeLabel(google.lastCompletedRefreshMs)}',
+          ),
+        ),
+      OutlinedButton.icon(
+        onPressed: busy ? null : () => run(exportMeetings),
+        icon: const Icon(Icons.ios_share, size: 18),
+        label: const Text('Export meeting notes'),
+      ),
+      pill(
+        'New meeting',
+        busy || recording != null
+            ? null
+            : () => run(() async {
+                final created =
+                    await d.command('meetings.create', {
+                          'title': '[New Meeting]',
+                        })
+                        as Map;
+                if (mounted) update(() => meetingId = created['id'] as int);
+              }),
+        icon: Icons.add,
+      ),
+    ],
+  );
+
+  Widget meetingList({bool showHeading = true}) {
     final rows = d.store
         .rows(
-          'SELECT meetings.*,meeting_details.created,meeting_details.reminder,calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,calendar_events.status AS calendar_status FROM meetings LEFT JOIN meeting_details ON meetings.id=meeting_details.meeting_id LEFT JOIN calendar_events ON meetings.id=calendar_events.meeting_id ORDER BY COALESCE(calendar_events.starts,meeting_details.created) DESC',
+          'SELECT meetings.*,meeting_details.created,meeting_details.reminder,'
+          'calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
+          'calendar_events.status AS calendar_status,'
+          'COALESCE(saved.has_transcript,0) AS has_transcript,saved.duration_ms '
+          'FROM meetings LEFT JOIN meeting_details ON meetings.id=meeting_details.meeting_id '
+          'LEFT JOIN calendar_events ON meetings.id=calendar_events.meeting_id '
+          'LEFT JOIN (SELECT meeting_id,1 AS has_transcript,MAX(end_ms) AS duration_ms '
+          'FROM transcript WHERE final=1 GROUP BY meeting_id) AS saved ON saved.meeting_id=meetings.id '
+          'ORDER BY COALESCE(calendar_events.starts,meeting_details.created),meetings.id',
         )
         .where(
           (m) => (m['title'] as String).toLowerCase().contains(
@@ -2795,126 +2881,245 @@ extension _ScreenshotScreens on _WorkspaceState {
           ),
         )
         .toList();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var insertedNow = false;
+    Widget nowMarker() => Padding(
+      key: meetingNowKey,
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Row(
+        children: [
+          const Expanded(child: Divider(color: Color(0xff8cb2c9))),
+          const SizedBox(width: 12),
+          Chip(
+            backgroundColor: _blue,
+            label: Text(
+              '●  Now · ${meetingClock(now)}',
+              style: const TextStyle(color: _ink, fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(child: Divider(color: Color(0xff8cb2c9))),
+        ],
+      ),
+    );
+    final entries = <Widget>[];
+    String? previousDay;
+    for (final meeting in rows) {
+      if (!insertedNow && meetingStart(meeting) > now) {
+        entries.add(nowMarker());
+        insertedNow = true;
+      }
+      final day = meetingDay(meetingStart(meeting));
+      if (day != previousDay) {
+        entries.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 16),
+            child: Text(
+              day,
+              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
+          ),
+        );
+        previousDay = day;
+      }
+      entries.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: meetingListTile(meeting),
+        ),
+      );
+    }
+    if (!insertedNow && rows.isNotEmpty) entries.add(nowMarker());
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        heading(
-          'Meetings',
-          actions: [
-            pill(
-              'Export meeting notes',
-              busy ? null : () => run(exportMeetings),
-              icon: Icons.ios_share,
-            ),
-            pill(
-              'New meeting',
-              busy || recording != null
-                  ? null
-                  : () => run(() async {
-                      final created =
-                          await d.command('meetings.create', {
-                                'title': '[New Meeting]',
-                              })
-                              as Map;
-                      if (mounted)
-                        update(() => meetingId = created['id'] as int);
-                    }),
-              icon: Icons.add,
-            ),
-          ],
+        if (showHeading) meetingListHeading(),
+        searchBox(
+          'Search meetings',
+          (value) => meetingQuery = value,
+          controller: meetingSearchController,
         ),
-        searchBox('Search meetings', (value) => meetingQuery = value),
-        const SizedBox(height: 24),
-        pill(
-          'Now',
-          () => update(() => meetingQuery = ''),
-          icon: Icons.schedule,
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: () {
+            meetingSearchController.clear();
+            update(() => meetingQuery = '');
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              final target = meetingNowKey.currentContext;
+              if (target != null)
+                Scrollable.ensureVisible(
+                  target,
+                  duration: const Duration(milliseconds: 250),
+                  alignment: .5,
+                );
+            });
+          },
+          icon: const Icon(Icons.schedule, size: 18),
+          label: const Text('Now'),
         ),
         const SizedBox(height: 24),
         Expanded(
-          child: ListView(
-            children: [
-              if (rows.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.all(40),
-                  child: Text(
-                    'No meetings yet. Start transcribing or create a new meeting.',
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (rows.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Text(
+                      'No meetings yet. Start transcribing or create a new meeting.',
+                    ),
                   ),
-                ),
-              ...rows.map(
-                (m) => Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        m['created'] == 0
-                            ? 'Saved meetings'
-                            : DateTime.fromMillisecondsSinceEpoch(
-                                (m['calendar_starts'] ?? m['created']) as int,
-                              ).toLocal().toString().substring(0, 10),
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 12),
-                      Card(
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 20,
-                            vertical: 16,
-                          ),
-                          leading: m['calendar_starts'] == null
-                              ? null
-                              : SizedBox(
-                                  width: 155,
-                                  child: Text(
-                                    '${meetingClock(m['calendar_starts'] as int)} – ${meetingClock(m['calendar_ends'] as int)}',
-                                  ),
-                                ),
-                          title: Text(m['title'] as String),
-                          subtitle: Text(
-                            '${m['state']}${m['calendar_status'] == null ? ' · ${timeLabel(m['created'])}' : ' · Calendar ${m['calendar_status']}'}',
-                          ),
-                          onTap: () => update(() => meetingId = m['id'] as int),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                tooltip: 'Meeting notes',
-                                onPressed: () =>
-                                    update(() => meetingId = m['id'] as int),
-                                icon: Badge(
-                                  label: Text(
-                                    '${google.attachments(m['id'] as int).length}',
-                                  ),
-                                  child: const Icon(Icons.attach_file),
-                                ),
-                              ),
-                              pill(
-                                'Start',
-                                busy || recording != null
-                                    ? null
-                                    : () async {
-                                        update(
-                                          () => meetingId = m['id'] as int,
-                                        );
-                                        if (speechSetupProblem(d.store) == null)
-                                          await run(startRecording);
-                                      },
-                                icon: Icons.graphic_eq,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+                ...entries,
+              ],
+            ),
           ),
         ),
       ],
     );
+  }
+
+  Widget meetingListTile(Map<String, Object?> meeting) {
+    final id = meeting['id'] as int;
+    final start = meetingStart(meeting);
+    final end = meetingEnd(meeting);
+    final attachmentCount = google.attachments(id).length;
+    final state = meeting['state'] as String;
+    final active = state == 'recording' || state == 'transcribing';
+    void open() => update(() => meetingPreviewId = id);
+    return Card(
+      color: meetingPreviewId == id ? const Color(0xffd2deee) : Colors.white,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 650;
+          final details = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                meeting['title'] as String,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 16),
+              ),
+              if (narrow && start > 0)
+                Text(
+                  '${meetingClock(start)} – ${meetingClock(end)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              if (meeting['has_transcript'] == 1)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xfff3e5f9),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.graphic_eq,
+                          size: 12,
+                          color: Color(0xff7b2cbf),
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Transcript',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xff7b2cbf),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (meeting['calendar_status'] != null &&
+                  meeting['calendar_status'] != 'confirmed')
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Calendar ${meeting['calendar_status']}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              if (active || state == 'failed' || state == 'interrupted')
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    state,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+            ],
+          );
+          return InkWell(
+            onTap: open,
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              child: Row(
+                children: [
+                  if (!narrow && start > 0)
+                    SizedBox(
+                      width: 155,
+                      child: Text(
+                        '${meetingClock(start)} – ${meetingClock(end)}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  Expanded(child: details),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: open,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(40, 28),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.attach_file, size: 14),
+                        Text(
+                          '$attachmentCount',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: busy || recording != null || quickStarting
+                        ? null
+                        : () => recordExistingMeeting(id),
+                    icon: const Icon(Icons.graphic_eq, size: 18),
+                    label: const Text('Start'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> recordExistingMeeting(int id) async {
+    if (busy || recording != null || quickStarting) return;
+    update(() => quickStarting = true);
+    try {
+      if (speechSetupProblem(d.store) != null) await chooseSpeech();
+      if (!mounted || speechSetupProblem(d.store) != null) return;
+      update(() => meetingId = id);
+      await run(startRecording);
+    } finally {
+      if (mounted) update(() => quickStarting = false);
+    }
   }
 
   Future<void> exportMeetings() async {
@@ -3438,7 +3643,9 @@ extension _ScreenshotScreens on _WorkspaceState {
               const Divider(height: 1),
               settingRow(
                 'Source Search Model',
-                'EmbeddingGemma 2 runs source search locally. The download is 485 MB.',
+                needsModel(d.store, 'embedding')
+                    ? 'EmbeddingGemma 2 runs source search locally. Setup reuses an existing model or downloads 485 MB.'
+                    : 'EmbeddingGemma 2 is installed and runs source search locally.',
                 OutlinedButton(
                   onPressed:
                       busy ||
@@ -3681,6 +3888,13 @@ extension _ScreenshotScreens on _WorkspaceState {
                 const Text(
                   'Connect to import files and upcoming meetings. Foresight requests read-only access; imported text is indexed on this computer.',
                 ),
+                if (!googleAuth.connected && googleAuth.client == null)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Google sign-in setup required. Choose Connect Google to get started.',
+                    ),
+                  ),
                 if (googleState.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.symmetric(vertical: 8),
@@ -3700,9 +3914,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                         ),
                       ),
                       FilledButton(
-                        onPressed: busy || googleAuth.client == null
-                            ? null
-                            : () => run(connectGoogle),
+                        onPressed: busy ? null : () => run(connectGoogle),
                         child: const Text('Connect Google'),
                       ),
                       TextButton(
@@ -3792,7 +4004,7 @@ extension _ScreenshotScreens on _WorkspaceState {
               const Divider(height: 1),
               const ListTile(
                 title: Text('Version'),
-                subtitle: Text('Linux prototype · local models · Flutter'),
+                subtitle: Text('Open Foresight · local models'),
               ),
             ],
           ),
@@ -3886,7 +4098,7 @@ class _UsageChart extends CustomPainter {
   _UsageChart(this.values);
   @override
   void paint(Canvas canvas, Size size) {
-    final maxValue = math.max(1, values.reduce(math.max));
+    final maxValue = math.max(4, values.reduce(math.max));
     final paint = Paint()..color = const Color(0xffdfe3e9);
     for (var i = 0; i <= 4; i++) {
       final y = i * (size.height - 30) / 4;

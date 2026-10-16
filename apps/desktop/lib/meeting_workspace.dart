@@ -41,8 +41,7 @@ extension _MeetingWorkspace on _WorkspaceState {
     }
   }
 
-  Widget meetingWorkspace() {
-    final id = meetingId!;
+  void loadMeetingNotes(int id) {
     if (loadedMeetingNotes != id) {
       loadedMeetingNotes = id;
       meetingNotesController.text =
@@ -53,6 +52,126 @@ extension _MeetingWorkspace on _WorkspaceState {
           '';
       meetingEnhanceStatus = '';
     }
+  }
+
+  Widget meetingCollection() {
+    final id = meetingPreviewId;
+    if (id == null) return meetingList();
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final preview = meetingPreview(id);
+        if (constraints.maxWidth < 900) return preview;
+        return Column(
+          children: [
+            meetingListHeading(),
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(flex: 6, child: meetingList(showHeading: false)),
+                  const SizedBox(width: 24),
+                  Expanded(flex: 4, child: preview),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget meetingPreview(int id) {
+    loadMeetingNotes(id);
+    final meeting = d.store.rows(
+      'SELECT meetings.*,meeting_details.created,calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
+      '(SELECT MAX(end_ms) FROM transcript WHERE meeting_id=meetings.id AND final=1) AS duration_ms FROM meetings '
+      'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
+      'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
+      [id],
+    ).single;
+    final start = meetingStart(meeting);
+    final end = meetingEnd(meeting);
+    return Container(
+      key: const ValueKey('meeting-preview'),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        children: [
+          Container(
+            color: const Color(0xffdfebfb),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        meeting['title'] as String,
+                        style: const TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Expand meeting',
+                      onPressed: () => update(() => meetingId = id),
+                      icon: const Icon(Icons.open_in_full, size: 18),
+                    ),
+                    IconButton(
+                      tooltip: 'Close meeting preview',
+                      onPressed: () => update(() => meetingPreviewId = null),
+                      icon: const Icon(Icons.close, size: 18),
+                    ),
+                  ],
+                ),
+                Text(
+                  '${meetingDay(start)} · ${meetingClock(start)} – ${meetingClock(end)}',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.all(12),
+            child: Wrap(
+              spacing: 8,
+              children: [
+                for (final tab in ['Notes', 'AI summary', 'Transcript'])
+                  TextButton(
+                    onPressed: () => update(() => meetingPreviewTab = tab),
+                    style: TextButton.styleFrom(
+                      backgroundColor: meetingPreviewTab == tab
+                          ? _blue
+                          : Colors.transparent,
+                      foregroundColor: meetingPreviewTab == tab
+                          ? _ink
+                          : const Color(0xff50555b),
+                    ),
+                    child: Text(tab),
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: switch (meetingPreviewTab) {
+              'Transcript' => meetingTranscriptPanel(id),
+              'AI summary' => meetingSummaryPanel(id),
+              _ => meetingNotesEditor(id, false, preview: true),
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget meetingWorkspace() {
+    final id = meetingId!;
+    loadMeetingNotes(id);
     final meeting = d.store.rows(
       'SELECT meetings.*,meeting_details.created,calendar_events.starts,calendar_events.ends FROM meetings '
       'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
@@ -265,7 +384,7 @@ extension _MeetingWorkspace on _WorkspaceState {
     });
   }
 
-  Widget meetingNotesEditor(int id, bool wide) {
+  Widget meetingNotesEditor(int id, bool wide, {bool preview = false}) {
     final enhanced = d.store.rows(
       "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
       [id],
@@ -295,7 +414,7 @@ extension _MeetingWorkspace on _WorkspaceState {
       ),
     );
     final enhancedPane = Container(
-      margin: const EdgeInsets.fromLTRB(0, 24, 24, 24),
+      margin: EdgeInsets.fromLTRB(preview ? 24 : 0, 24, 24, 24),
       decoration: BoxDecoration(
         color: const Color(0xffeaf0f8),
         borderRadius: BorderRadius.circular(18),
@@ -303,7 +422,7 @@ extension _MeetingWorkspace on _WorkspaceState {
       child: LayoutBuilder(
         builder: (_, bounds) => SingleChildScrollView(
           child: SizedBox(
-            height: math.max(260, bounds.maxHeight),
+            height: math.max(preview ? 160 : 260, bounds.maxHeight),
             child: Column(
               children: [
                 Padding(
@@ -316,9 +435,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                         color: Color(0xff556272),
                       ),
                       const SizedBox(width: 8),
-                      const Expanded(
+                      Expanded(
                         child: Text(
-                          'Live enhanced notes',
+                          preview ? 'Enhanced notes' : 'Live enhanced notes',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
@@ -363,12 +482,14 @@ extension _MeetingWorkspace on _WorkspaceState {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               children: [
-                                const Icon(
-                                  Icons.auto_awesome,
-                                  color: Color(0xffb8bec8),
-                                  size: 32,
-                                ),
-                                const SizedBox(height: 16),
+                                if (!preview) ...[
+                                  const Icon(
+                                    Icons.auto_awesome,
+                                    color: Color(0xffb8bec8),
+                                    size: 32,
+                                  ),
+                                  const SizedBox(height: 16),
+                                ],
                                 Text(
                                   meetingEnhanceStatus.isEmpty
                                       ? 'Live enhanced notes will appear here as shorthand notes are written.'
@@ -423,36 +544,66 @@ extension _MeetingWorkspace on _WorkspaceState {
               spacing: 8,
               runSpacing: 4,
               children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      tooltip: 'Bold',
-                      onPressed: () => formatMeetingNotes('**', '**'),
-                      icon: const Icon(Icons.format_bold),
-                    ),
-                    IconButton(
-                      tooltip: 'Italic',
-                      onPressed: () => formatMeetingNotes('*', '*'),
-                      icon: const Icon(Icons.format_italic),
-                    ),
-                    IconButton(
-                      tooltip: 'Bullet list',
-                      onPressed: () => formatMeetingNotes('\n- '),
-                      icon: const Icon(Icons.format_list_bulleted),
-                    ),
-                    IconButton(
-                      tooltip: 'Numbered list',
-                      onPressed: () => formatMeetingNotes('\n1. '),
-                      icon: const Icon(Icons.format_list_numbered),
-                    ),
-                    IconButton(
-                      tooltip: 'Heading',
-                      onPressed: () => formatMeetingNotes('\n# '),
-                      icon: const Icon(Icons.title),
-                    ),
-                  ],
-                ),
+                if (preview)
+                  PopupMenuButton<String>(
+                    tooltip: 'Format notes',
+                    icon: const Icon(Icons.text_format),
+                    onSelected: (format) {
+                      switch (format) {
+                        case 'Bold':
+                          formatMeetingNotes('**', '**');
+                        case 'Italic':
+                          formatMeetingNotes('*', '*');
+                        case 'Bullet list':
+                          formatMeetingNotes('\n- ');
+                        case 'Numbered list':
+                          formatMeetingNotes('\n1. ');
+                        case 'Heading':
+                          formatMeetingNotes('\n# ');
+                      }
+                    },
+                    itemBuilder: (_) => [
+                      for (final format in [
+                        'Bold',
+                        'Italic',
+                        'Bullet list',
+                        'Numbered list',
+                        'Heading',
+                      ])
+                        PopupMenuItem(value: format, child: Text(format)),
+                    ],
+                  )
+                else
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        tooltip: 'Bold',
+                        onPressed: () => formatMeetingNotes('**', '**'),
+                        icon: const Icon(Icons.format_bold),
+                      ),
+                      IconButton(
+                        tooltip: 'Italic',
+                        onPressed: () => formatMeetingNotes('*', '*'),
+                        icon: const Icon(Icons.format_italic),
+                      ),
+                      IconButton(
+                        tooltip: 'Bullet list',
+                        onPressed: () => formatMeetingNotes('\n- '),
+                        icon: const Icon(Icons.format_list_bulleted),
+                      ),
+                      IconButton(
+                        tooltip: 'Numbered list',
+                        onPressed: () => formatMeetingNotes('\n1. '),
+                        icon: const Icon(Icons.format_list_numbered),
+                      ),
+                      IconButton(
+                        tooltip: 'Heading',
+                        onPressed: () => formatMeetingNotes('\n# '),
+                        icon: const Icon(Icons.title),
+                      ),
+                    ],
+                  ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -469,21 +620,36 @@ extension _MeetingWorkspace on _WorkspaceState {
                       ),
                     ),
                     const SizedBox(width: 18),
-                    FilledButton.tonalIcon(
-                      onPressed: () => update(() {
-                        unawaited(
-                          preference('liveEnhance', (!live).toString()),
-                        );
-                        meetingEnhancedVisible = !live;
-                        if (!live) saveMeetingNotes();
-                      }),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: const Color(0xffdce9ff),
-                        foregroundColor: const Color(0xff254ab5),
+                    if (preview)
+                      FilledButton.tonalIcon(
+                        onPressed:
+                            meetingEnhancing ||
+                                busy ||
+                                asking ||
+                                meetingNotesController.text.trim().isEmpty
+                            ? null
+                            : () => enhanceMeetingNotes(id),
+                        icon: const Icon(Icons.auto_awesome, size: 18),
+                        label: Text(
+                          meetingEnhancing ? 'Enhancing…' : 'Enhance',
+                        ),
+                      )
+                    else
+                      FilledButton.tonalIcon(
+                        onPressed: () => update(() {
+                          unawaited(
+                            preference('liveEnhance', (!live).toString()),
+                          );
+                          meetingEnhancedVisible = !live;
+                          if (!live) saveMeetingNotes();
+                        }),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xffdce9ff),
+                          foregroundColor: const Color(0xff254ab5),
+                        ),
+                        icon: const Icon(Icons.auto_awesome, size: 18),
+                        label: Text('Live Enhance ${live ? 'ON' : 'OFF'}'),
                       ),
-                      icon: const Icon(Icons.auto_awesome, size: 18),
-                      label: Text('Live Enhance ${live ? 'ON' : 'OFF'}'),
-                    ),
                     if (!meetingEnhancedVisible)
                       IconButton(
                         tooltip: 'Show enhanced notes',
@@ -500,6 +666,13 @@ extension _MeetingWorkspace on _WorkspaceState {
           Expanded(
             child: !meetingEnhancedVisible
                 ? editor
+                : preview
+                ? Column(
+                    children: [
+                      Expanded(flex: 3, child: editor),
+                      Expanded(flex: 2, child: enhancedPane),
+                    ],
+                  )
                 : wide
                 ? Row(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -645,9 +818,26 @@ extension _MeetingWorkspace on _WorkspaceState {
         if (!questions)
           Padding(
             padding: const EdgeInsets.all(12),
-            child: Text(
-              'Transcript',
-              style: Theme.of(context).textTheme.titleLarge,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Transcript',
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Copy full transcript',
+                  onPressed: rows.isEmpty
+                      ? null
+                      : () => Clipboard.setData(
+                          ClipboardData(
+                            text: rows.map((row) => row['text']).join('\n\n'),
+                          ),
+                        ),
+                  icon: const Icon(Icons.copy_all),
+                ),
+              ],
             ),
           ),
         Expanded(
@@ -671,33 +861,61 @@ extension _MeetingWorkspace on _WorkspaceState {
               : ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
-                    for (final t in displayed)
-                      ListTile(
-                        contentPadding: EdgeInsets.zero,
-                        title: SelectableText(t['text'] as String),
-                        subtitle: Text(
-                          (t['source'] as String).startsWith('microphone')
-                              ? 'Microphone'
-                              : (t['source'] as String).startsWith('playback')
-                              ? 'System audio'
-                              : 'Transcript',
+                    if (!questions && rows.isNotEmpty)
+                      SelectableText.rich(
+                        key: ValueKey('meeting-transcript-$id'),
+                        TextSpan(
+                          children: [
+                            for (
+                              var index = 0;
+                              index < rows.length;
+                              index++
+                            ) ...[
+                              TextSpan(
+                                text:
+                                    '${(rows[index]['source'] as String).startsWith('microphone')
+                                        ? 'Microphone'
+                                        : (rows[index]['source'] as String).startsWith('playback')
+                                        ? 'System audio'
+                                        : 'Transcript'}\n',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                              TextSpan(text: rows[index]['text'] as String),
+                              if (index < rows.length - 1)
+                                const TextSpan(text: '\n\n'),
+                            ],
+                          ],
                         ),
-                        trailing: questions
-                            ? IconButton(
-                                tooltip: 'Answer this question',
-                                onPressed: busy || asking || meetingEnhancing
-                                    ? null
-                                    : () {
-                                        question.text = t['text'] as String;
-                                        update(() => meetingPanel = 'Chat');
-                                        unawaited(
-                                          askQuestion(meetingScope: id),
-                                        );
-                                      },
-                                icon: const Icon(Icons.arrow_upward),
-                              )
-                            : null,
+                        style: Theme.of(context).textTheme.bodyLarge,
                       ),
+                    if (questions)
+                      for (final t in displayed)
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: SelectableText(t['text'] as String),
+                          subtitle: Text(
+                            (t['source'] as String).startsWith('microphone')
+                                ? 'Microphone'
+                                : (t['source'] as String).startsWith('playback')
+                                ? 'System audio'
+                                : 'Transcript',
+                          ),
+                          trailing: questions
+                              ? IconButton(
+                                  tooltip: 'Answer this question',
+                                  onPressed: busy || asking || meetingEnhancing
+                                      ? null
+                                      : () {
+                                          question.text = t['text'] as String;
+                                          update(() => meetingPanel = 'Chat');
+                                          unawaited(
+                                            askQuestion(meetingScope: id),
+                                          );
+                                        },
+                                  icon: const Icon(Icons.arrow_upward),
+                                )
+                              : null,
+                        ),
                     if (!questions && recordingMeeting == id)
                       for (final entry in provisionalTranscript.entries.where(
                         (e) => e.value.isNotEmpty,
@@ -741,7 +959,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                 tooltip: 'Generate $title',
                 onPressed: busy || asking || meetingEnhancing
                     ? null
-                    : () => run(() => generateMeeting(kind)),
+                    : () => run(() => generateMeeting(kind, id: id)),
                 icon: const Icon(Icons.auto_awesome),
               ),
               if (artifact != null)

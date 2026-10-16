@@ -87,7 +87,10 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Transcript'));
       await tester.pumpAndSettle();
-      expect(find.text('Microphone'), findsOneWidget);
+      expect(
+        find.textContaining('Microphone', findRichText: true),
+        findsOneWidget,
+      );
       await tester.tap(find.byTooltip('Close assistant'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Open assistant'), findsOneWidget);

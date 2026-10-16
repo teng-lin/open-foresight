@@ -57,7 +57,22 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         (runner.statSync().mode & 0x49) != 0;
   }
 
-  bool get done => embeddingReady && isCurrent(selected);
+  bool get done =>
+      embeddingReady && (!widget.needsGeneration || isCurrent(selected));
+
+  Directory get embeddingDirectory =>
+      Directory('${widget.directory.parent.path}/embeddinggemma2');
+  File? get localEmbedding => localModelFile(
+    embeddingGemmaModel,
+    embeddingDirectory,
+    registration: widget.store.model('embedding'),
+  );
+  bool get embeddingCached => localEmbedding != null;
+  File? localGeneration(GemmaModel model) => localModelFile(
+    model,
+    widget.directory,
+    registration: registeredGeneration,
+  );
 
   GemmaDownload? download;
   NativeRuntime? candidate;
@@ -74,13 +89,18 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     registeredGeneration = widget.store.model('generation');
     final digest = registeredGeneration?['digest'];
     for (final model in gemmaModels) {
-      final file = File(
-        '${widget.directory.path}/${model.directory}/${model.filename}',
-      );
-      downloaded[model] = file.existsSync() && file.lengthSync() == model.bytes;
+      downloaded[model] = localGeneration(model) != null;
     }
     selected =
         gemmaModels.where((model) => model.digest == digest).firstOrNull ??
+        gemmaModels
+            .where(
+              (model) =>
+                  downloaded[model] == true &&
+                  (widget.memoryGb == 0 ||
+                      widget.memoryGb >= model.minimumMemoryGb),
+            )
+            .firstOrNull ??
         (widget.memoryGb == 0
             ? gemmaModels.last
             : gemmaModels
@@ -151,12 +171,12 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         preflight = null;
       }
       if (!mounted || cancelled) return;
-      setState(() => status = 'Downloading ${model.name}...');
       if (!embeddingReady) {
         setState(() => status = 'Checking downloaded EmbeddingGemma 2...');
         final embedding = await download!.download(
           embeddingGemmaModel,
-          Directory('${widget.directory.parent.path}/embeddinggemma2'),
+          embeddingDirectory,
+          existingFile: localEmbedding,
           progress: reportProgress,
           phase: (phase) => reportPhase(embeddingGemmaModel, phase),
         );
@@ -178,6 +198,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       final asset = await download!.download(
         model,
         widget.directory,
+        existingFile: localGeneration(model),
         progress: reportProgress,
         phase: (phase) => reportPhase(model, phase),
       );
@@ -260,7 +281,9 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     child: AlertDialog(
       title: Text(
         !widget.needsGeneration
-            ? 'Download EmbeddingGemma 2'
+            ? embeddingCached
+                  ? 'Use EmbeddingGemma 2'
+                  : 'Download EmbeddingGemma 2'
             : widget.needsEmbedding
             ? 'Set up local models'
             : widget.firstRun
@@ -277,21 +300,27 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
               Text(
                 widget.needsGeneration
                     ? 'Choose the Gemma model that best fits your device. Models run locally, and you can switch them later in Settings.'
+                    : embeddingCached
+                    ? 'EmbeddingGemma 2 is already on this computer. Use it for local source search.'
                     : 'Local source search needs an embedding model. Download it now or use an existing local model.',
               ),
               if (!embeddingReady) ...[
                 const SizedBox(height: 16),
-                const ListTile(
+                ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(Icons.manage_search),
-                  title: Text('EmbeddingGemma 2'),
+                  leading: const Icon(Icons.manage_search),
+                  title: const Text('EmbeddingGemma 2'),
                   subtitle: Text(
-                    '485 MB download · Required for local source search',
+                    embeddingCached
+                        ? 'Downloaded · Ready to use for local source search'
+                        : '485 MB download · Required for local source search',
                   ),
                 ),
                 Text(
-                  widget.needsGeneration
-                      ? 'Download models will install EmbeddingGemma 2 and the selected Gemma model.'
+                  embeddingCached
+                      ? 'The existing embedding model will be verified and reused.'
+                      : widget.needsGeneration
+                      ? 'Setup will reuse downloaded models and download any missing models.'
                       : 'Nothing is downloaded until you choose Download EmbeddingGemma 2.',
                 ),
               ],
@@ -344,8 +373,15 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
               if (widget.memoryGb > 0)
                 Text('Device memory: ${widget.memoryGb} GB'),
               const SizedBox(height: 16),
-              const Text(
-                'Please keep Foresight open until the download completes.',
+              Text(
+                done
+                    ? 'This model is already configured. No download is needed.'
+                    : (!embeddingReady && !embeddingCached) ||
+                          (widget.needsGeneration &&
+                              !isCurrent(selected) &&
+                              downloaded[selected] != true)
+                    ? 'Keep Open Foresight open until setup completes.'
+                    : 'The downloaded model will be verified and loaded. No download is needed.',
               ),
               const SizedBox(height: 8),
               Text(
@@ -418,7 +454,13 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                 ? 'Retry'
                 : !embeddingReady
                 ? widget.needsGeneration
-                      ? 'Download models'
+                      ? (embeddingCached &&
+                                (isCurrent(selected) ||
+                                    downloaded[selected] == true)
+                            ? 'Use models'
+                            : 'Download models')
+                      : embeddingCached
+                      ? 'Use EmbeddingGemma 2'
                       : 'Download EmbeddingGemma 2'
                 : downloaded[selected] == true
                 ? 'Use model'

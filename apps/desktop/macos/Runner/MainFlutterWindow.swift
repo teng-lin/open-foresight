@@ -10,6 +10,10 @@ class MainFlutterWindow: NSWindow {
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
+    styleMask.insert(.fullSizeContentView)
+    titleVisibility = .hidden
+    titlebarAppearsTransparent = true
+    backgroundColor = NSColor(calibratedRed: 0.914, green: 0.933, blue: 0.965, alpha: 1)
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
