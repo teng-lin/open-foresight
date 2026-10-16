@@ -1,0 +1,31 @@
+// Reconstructed from the matching Foresight Dart BuilderInfo and RPC method.
+// Only the inspected web-content messages/method are included here.
+syntax = "proto2";
+package ai_edge.foresight.service;
+
+message FetchExternalWebsiteRequest {
+  optional string url = 1;
+  optional bool use_trawler = 2;
+  reserved 3;
+  optional bool summarize_content = 4;
+  optional int32 max_summarization_words = 5 [default = 100];
+  optional string model_id = 6;
+  reserved 7;
+  optional int32 summary_timeout_millis = 8;
+  optional int32 max_input_tokens = 9;
+}
+
+message FetchExternalWebsiteResponse {
+  reserved 1;
+  optional string title = 2;
+  optional string content = 3;
+  reserved 4;
+  optional string mime_type = 5;
+  reserved 6;
+  optional string summary = 7;
+  optional double summary_confidence_score = 8;
+}
+
+service ForesightService {
+  rpc FetchExternalWebsite(FetchExternalWebsiteRequest) returns (FetchExternalWebsiteResponse);
+}

@@ -4,20 +4,21 @@ This ledger tracks the features called out under **Not yet reproduced** and the
 unverified behaviors in the root README. The full task remains open; passing the
 export tests does not establish meeting, speaker, web-search, or label parity.
 
-Work is isolated in `open-foresight-feature-parity`, branch
-`feature/readme-parity`, created before implementation and rebased onto remote
-main `6a1fefc` after the README update.
+The initial implementation used `open-foresight-feature-parity` on
+`feature/readme-parity`. Follow-up reconstruction is now in
+`open-foresight-missing-functions`, branch `feature/missing-functions`.
+Historical observations and validation counts below retain their original scope.
 
 ## Requirements and current evidence
 
 | Requirement | Current evidence | Remaining work |
 | --- | --- | --- |
-| Speaker labels and echo cancellation | README identifies both as absent. Current capture tags identify microphone/playback channels, not individual people. | Inspect reference speaker behavior; implement actual local attribution and echo handling; verify controlled multi-speaker and overlapping-channel audio. Channel names alone do not satisfy this requirement. |
-| Proactive answers | Current service commits final transcript segments and indexes meetings; Live Q&A requires a manual action. A follow-up audit fixed meeting conversation-history isolation and exact answer ownership. | Detect questions automatically, schedule bounded generation, retain meeting-scoped answers, and test deduplication, cancellation, failures, and background operation. Retrieval still uses shared indexed knowledge. |
-| Meeting web-search fallback | README identifies a Google search tool in the original. No equivalent is established here. | Inspect the reference trigger and results; implement explicit web-search configuration, retrieval and source attribution; verify fallback, offline failure and cancellation. Keep local generation intact. |
+| Speaker labels and echo cancellation | IDA proves a three-way channel lookup: Microphone, Remote, Unknown. That contract and macOS voice-processing lifecycle are implemented and tested. | Controlled physical echo/overlap and capture-recovery checks remain. Individual-person diarization is not established as an original feature by this trace. |
+| Proactive answers | Automatic scheduling, rolling deduplication, queue replacement, meeting ownership and history are implemented. The dedicated detector protocol is recovered and tested. | Production still uses a generic chat detector; reproduce and integrate the original type-4 model loading/decryption and raw inference backend, then verify real capture/model behavior. |
+| Meeting web-search fallback | Search HTTP transport, callback formatting, source numbering and remote page-summary RPC are reconstructed and tested. See [service evidence](reference-web-content.md). | Integrate the tool into production answer generation/citations, provision distribution credentials, and verify live search, cancellation and offline behavior. No separate user project setup has been added. |
 | Recording pause/fullscreen gestures | Service pause/resume and immersive controls implemented in the follow-up worktree; native ABI/service/UI tests pass. See [investigation](missing-functions-investigation.md). | Compare exact reference gestures and elapsed-time behavior; validate real-device reacquisition and paused-audio exclusion on both platforms. |
 | Rich generated-content previews | Implemented formatted selectable Markdown for enhanced notes, summaries, action items, previous versions and answers. Formatting, raw summary copy/edit, preserved generated originals, links and image handling have deterministic UI coverage. | Compare controlled generated content visually with the original; exact renderer parity remains unverified. |
-| Cloud Gemini references | README explicitly describes these as intentionally omitted; static references do not establish a live feature contract. | Retain the documented local-model policy while investigating the original's optional cloud boundary. No cloud requests have been introduced. |
+| Cloud Gemini references | The optional web summary path is now proven to use a remote Foresight RPC with a fixed Gemini model ID. Its client is implemented but not enabled in production. | Complete this optional boundary with web-search integration; ordinary answer generation remains local. Endpoint access and remote summary quality are unverified. |
 | Meeting export format and filtering | Live original UI observed; a controlled single-note downloaded file is retained as a regression fixture. Filter/preview/copy/download implemented and tested. | Verify additional original scenarios: multiple-note ordering/separators, enhanced-note preference, custom-date boundary behavior and non-English formatting. Native development-app save-dialog comparison is also pending. |
 | Label editing | Original Sources → Add label opens Create New Organization Label, explains automatic assignment/clustering, and offers Cancel / Create & Auto-Assign. Dialog was cancelled. Existing add/remove/organization-label tests pass in the desktop suite. | Observe document-label editing and persistence with a controlled fixture; compare state changes, cancellation, deletion and graph restoration. Viewing the creation dialog does not verify editing. |
 

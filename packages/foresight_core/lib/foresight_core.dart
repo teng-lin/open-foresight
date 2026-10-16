@@ -25,3 +25,4 @@ export 'src/force_layout.dart';
 export 'src/platform_services.dart';
 export 'src/version.dart';
 export 'src/web_search.dart';
+export 'src/web_content.dart';

@@ -1,4 +1,4 @@
-import 'dart:convert';
+import 'reference_text.dart';
 
 /// The reference detector sends this prefix to its dedicated model, without
 /// adding a chat template or a JSON response schema.
@@ -11,10 +11,8 @@ String referenceQueryPrompt(String preparedTranscript) =>
 /// UTF-16 via a UTF-8 round trip, removes replacement characters, then removes
 /// everything except printable ASCII and CR/LF. This applies to detector
 /// output, not to the captured transcript or stored answer bodies.
-String sanitizeReferenceQueryOutput(String output) => utf8
-    .decode(utf8.encode(output), allowMalformed: true)
-    .replaceAll('\uFFFD', '')
-    .replaceAll(RegExp(r'[^\x20-\x7E\n\r]'), '');
+String sanitizeReferenceQueryOutput(String output) =>
+    sanitizeReferenceUtf8(output);
 
 /// Reference splitIntoQuestions keeps ASCII question marks on each piece and
 /// retains a final nonempty remainder even if it has no question mark.

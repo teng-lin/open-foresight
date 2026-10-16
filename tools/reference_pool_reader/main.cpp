@@ -18,8 +18,11 @@ int main(int argc, char** argv) {
     auto zone = dart::Thread::Current()->zone();
     auto& pool = *reinterpret_cast<dart::ObjectPool*>(dart::VMHandles::AllocateHandle(zone));
     pool = isolate->group()->object_store()->global_object_pool();
+    std::printf("BOOL_NULL_OFFSETS TRUE[0x%lx] FALSE[0x%lx]\n",
+      (unsigned long)(dart::UntaggedObject::ToAddr(dart::Bool::True().ptr()->untag()) - dart::UntaggedObject::ToAddr(dart::Object::null()->untag())),
+      (unsigned long)(dart::UntaggedObject::ToAddr(dart::Bool::False().ptr()->untag()) - dart::UntaggedObject::ToAddr(dart::Object::null()->untag())));
     std::printf("POOL_LENGTH %ld\n",static_cast<long>(pool.Length()));
-    for (intptr_t pp : {26972,5940,3656,492,4518,4523,27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921,11620,21079,26976,26978,26981,26989,26990,26995,26996,27001,27002,27003,27004,27424}) {
+    for (intptr_t pp : {8511,9018,9245,23909,23910,23911,23918,23926,23929,26597,26598,26599,26600,26601,26602,26604,26605,26606,2765,21048,9836,9089,4620,9663,82,20693,5845,26972,5940,3656,492,4518,4523,27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921,11620,21079,26976,26978,26981,26989,26990,26995,26996,27001,27002,27003,27004,27424}) {
       const auto offset = pp * 8;
       const auto index = dart::ObjectPool::IndexFromOffset(offset - dart::kHeapObjectTag);
       if (pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) {

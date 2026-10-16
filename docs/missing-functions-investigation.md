@@ -260,3 +260,18 @@ into production answers: native page summarization, tool/citation integration
 and release credential provisioning remain. No separate user project setup was
 added. See [the search evidence](ida-search-investigation.md) for exact recovered
 constants, IDA addresses and runtime limits.
+
+
+### Remote page summary reconstruction
+
+The original search summary provider calls a remote Foresight gRPC service with
+a fixed Gemini model ID. Its request fields, content sanitizer, HTML MIME
+override, 60-character title fallback and optional candidate ranking are now
+implemented and covered by a loopback service fixture. The default path sends
+one request per page; the candidate count of three applies only when ranking
+is enabled. This corrects the earlier interpretation of the boolean branch.
+
+Current core suite: **116 passed, one opt-in skipped**; analyzer clean. Actual
+Google access and remote summary quality remain unverified. The client is not
+yet wired into production answers and requires distribution credentials, with
+no separate user project setup UI. See [the full evidence](reference-web-content.md).

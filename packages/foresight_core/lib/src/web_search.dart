@@ -22,9 +22,8 @@ class WebSearchItem {
 
 typedef SearchItems = Future<List<WebSearchItem>?> Function(String query);
 
-/// The reference passes 100 to its native page summarizer. Its unit is not yet
-/// established, so this interface deliberately calls it a budget.
-typedef SummarizeSearchPage = Future<String> Function(String url, int budget);
+/// The reference requests a summary of at most 100 words from its page service.
+typedef SummarizeSearchPage = Future<String> Function(String url, int maxWords);
 
 typedef WebSearchResult = ({
   List<String> results,

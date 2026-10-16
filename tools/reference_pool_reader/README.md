@@ -4,7 +4,7 @@ Developer-only investigation tool; the application has no dependency on it.
 It deserializes the matching original Dart snapshot without invoking Dart
 application code. It prints only an explicit allowlist of pool entries needed
 to bind the IDA trace, including entry types before decoding immediate doubles.
-No search API-key entry is selected.
+No API-key entry is selected: search entry 27425 and service entry 9019 are excluded.
 
 Validated target: installed Foresight 1.0.0.28.20261005, arm64 macOS, SHA-256
 fa98b856bfbe9b40cdebfb9f975f7867ec5c0a3ca75b81214a096a60b6db8326.
@@ -73,3 +73,9 @@ labels and timeout. API-key entry 27425 is explicitly excluded. For Duration
 entry 11620, the reader prints the raw +8 field and verifies its unboxed bitmap
 bit before interpreting it as microseconds. These offsets are specific to the
 validated snapshot. See [search findings](../../docs/ida-search-investigation.md).
+
+
+The web-content probes include the RPC path, endpoint, header name, model ID,
+and protobuf field names. Boolean offsets from null bind the ranking branch
+without inferring truth from decompiler bit tests.
+See [web-content evidence](../../docs/reference-web-content.md).

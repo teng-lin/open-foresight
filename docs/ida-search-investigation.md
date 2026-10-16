@@ -156,10 +156,9 @@ The service accepts a distribution credential internally; no user project
 configuration screen is introduced.
 
 This is not yet an end-to-end web-answer feature. Production wiring, release
-credential provisioning, native fetch/summarization, tool dispatch and cancellation still need completion. The original summarizer
-passes budget 100, whose unit is unproven, and defaults to three candidates
-before choosing the highest score. The injected interface retains the budget
-without claiming those native internals have been reproduced.
+credential provisioning, native fetch/summarization, tool dispatch and cancellation still need completion. The subsequent [web-content reconstruction](reference-web-content.md) resolves
+100 as words and corrects the default candidate count to one. It implements
+the RPC, optional ranking and response postprocessing.
 
 Verification: eleven focused tests pass, including a loopback HTTP server checking
 encoded parameters, nullable items, errors and the response-body deadline;
@@ -196,3 +195,17 @@ Final core validation: 108 passed, one opt-in skipped; analyzer clean. The first
 full-suite rerun exposed an overly short 300 ms timeout in ordinary loopback
 fixtures under concurrent load. Ordinary fixtures now use the production five
 seconds; only the unfinished-body timeout fixture uses a short deadline.
+
+
+### Remote summary service reconstruction
+
+The web-content RPC, recovered protobuf subset and response processing are now
+implemented. Earlier references to an unimplemented local/native summarizer and
+always requesting three candidates are superseded by the
+[web-content findings](reference-web-content.md). The original sends the URL to
+odml.pa.googleapis.com with a fixed Gemini model ID, with ranking disabled by
+default. Production wiring and distribution credentials remain unfinished.
+
+Current core validation: **116 passed, one opt-in skipped**; analyzer clean.
+Eight new wire/gRPC tests cover the reconstructed service without contacting
+Google or invoking any remote/local model.
