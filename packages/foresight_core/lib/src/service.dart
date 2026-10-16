@@ -211,6 +211,7 @@ class ApplicationService {
   final ServerSocket listener;
   final String path;
   final RandomAccessFile lock;
+  final RandomAccessFile? installationLock;
   final _clients = <Socket>{};
   final _leases = <Socket, Map<int, _RequestLease>>{};
   final _subscriptions = <Socket, Map<int, StreamSubscription<Object?>>>{};
@@ -219,7 +220,13 @@ class ApplicationService {
   bool _closing = false;
   int _connectionSequence = 0;
   Future<void> _ready = Future<void>.value();
-  ApplicationService._(this.domain, this.listener, this.path, this.lock) {
+  ApplicationService._(
+    this.domain,
+    this.listener,
+    this.path,
+    this.lock,
+    this.installationLock,
+  ) {
     listener.listen(_accept);
     _changes = domain.application.changes.stream.listen((_) => _broadcast());
     _heartbeat = Timer.periodic(
@@ -228,6 +235,20 @@ class ApplicationService {
     );
   }
   static Future<ApplicationService> start(ProfilePaths profile) async {
+    // This must precede native loads, database opens, and worker creation.
+    final installationLock = acquireInstallationLock();
+    try {
+      return await _start(profile, installationLock);
+    } catch (_) {
+      installationLock?.closeSync();
+      rethrow;
+    }
+  }
+
+  static Future<ApplicationService> _start(
+    ProfilePaths profile,
+    RandomAccessFile? installationLock,
+  ) async {
     privateDirectory(profile.data);
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
@@ -287,7 +308,13 @@ class ApplicationService {
         throw StateError('Cannot protect service endpoint record');
       }
       temporary.renameSync(endpoint.path);
-      final service = ApplicationService._(domain, listener, path, lock);
+      final service = ApplicationService._(
+        domain,
+        listener,
+        path,
+        lock,
+        installationLock,
+      );
       final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
         domain.initialize(
@@ -507,16 +534,30 @@ class ApplicationService {
         endpoint.existsSync())
       endpoint.deleteSync();
     lock.closeSync();
+    installationLock?.closeSync();
     if (failure != null)
       throw StateError('Application shutdown failed: $failure');
   }
+}
+
+Future<ServiceClient> _connectCompatibleService(String path) async {
+  final client = await ServiceClient.connect(path);
+  if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
+    try {
+      validateServiceCompatibility(await client.call('status') as Map);
+    } catch (_) {
+      await client.close();
+      rethrow;
+    }
+  }
+  return client;
 }
 
 /// Attach first; competing launchers may race safely on the service's OS lock.
 Future<ServiceClient> ensureService(ProfilePaths profile) async {
   var path = serviceEndpoint(profile);
   try {
-    return await ServiceClient.connect(path);
+    return await _connectCompatibleService(path);
   } on SocketException {
     /* launch */
   }
@@ -540,7 +581,7 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
   for (var attempt = 0; attempt < 100; attempt++) {
     try {
       path = serviceEndpoint(profile);
-      return await ServiceClient.connect(path);
+      return await _connectCompatibleService(path);
     } on SocketException {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }

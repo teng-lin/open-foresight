@@ -175,3 +175,22 @@ settings into native process state using `fs_set_runtime_environment`. A Dart
 configuration map alone cannot configure C/C++ `getenv` consumers. LiteRT and
 Python bytecode caches default to `<profile>/cache/litert` and
 `<profile>/cache/python` when an installed native runtime is configured.
+
+Packaged runtimes also set `FORESIGHT_INSTALL_ROOT` to the canonical outer `.app`
+and `FORESIGHT_RUNTIME_REVISION` to their build revision. Before loading native
+code, opening the database, or starting workers, the service takes a shared,
+nonblocking POSIX lock at
+`/tmp/of-install-<uid>-<sha256(canonical app path) first 24 hex digits>/lock`.
+The private directory is 0700 and the lock is 0600. The descriptor remains open
+for the service lifetime. The installer takes the exclusive version of that
+same lock after explicitly stopping services and holds it through revalidation
+and replacement. A service launched during replacement fails with an actionable
+update-in-progress message before it opens profile state or native components.
+
+Status includes additive `application_api_version` (currently 1),
+`installation_root`, and `runtime_revision` fields. Clients carrying a packaged
+revision validate all three before attaching, including an already-running
+service from another app copy or revision. Canonical aliases of the same app
+remain compatible. Mismatches require the user to explicitly stop the existing
+service; clients neither stop it automatically nor replay mutations. Development
+clients without a packaged revision keep the existing attachment behavior.
