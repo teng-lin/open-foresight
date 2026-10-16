@@ -267,7 +267,8 @@ def main():
     if args.query_detector:
         if args.tools or args.json_schema:
             parser.error('Raw query detection cannot use tools or a response schema')
-        args.backend = 'cpu'
+        # The original dedicated GEMMA4_200M asset declares backend=gpu.
+        args.backend = 'gpu'
     if args.backend not in ('cpu', 'gpu'):
         parser.error('FORESIGHT_LITERT_BACKEND must be cpu or gpu')
     if not args.check and not args.model:

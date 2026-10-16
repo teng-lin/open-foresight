@@ -3,8 +3,9 @@
 Reference: Foresight 1.0.0.28.20261005, executable SHA-256
 `fa98b856bfbe9b40cdebfb9f975f7867ec5c0a3ca75b81214a096a60b6db8326`.
 REA captures use IDA Pro, the matching snapshot reader and bounded parsing of
-public protobuf descriptors embedded in that executable. No model key or API
-credential was extracted, and no original model was decrypted or downloaded.
+public protobuf descriptors embedded in that executable. The installed detector was authenticated and decrypted locally using only its
+exact model-key entry, without prompts or keychain changes. No API credential
+was accessed; key material was never logged or persisted.
 
 ## Recovered contract
 
@@ -34,7 +35,9 @@ TextCacheTaskImpl::Create (0x1001fe1fc) copies the 64-byte C options into typed
 engine and prompt components. CreateLlmEngine (0x101b79ac0) copies model_type
 into an optional settings field and sets its presence flag. **That flag is not
 a CPU selector.** The original executor backend is resolved later through
-settings/model metadata and remains unbound by this trace.
+settings/model metadata. The recovered legacy asset declares `backend=gpu`;
+the metadata resolver maps that string to legacy backend 2. The port worker
+selection now follows that GPU setting.
 
 TryInitialize (0x101b7a1e4) creates the base session and optional system context.
 PerformInference (0x101b7a9d8) can update cached context, clones the base session
@@ -52,11 +55,10 @@ and use the fixed 512-token setting. Input is already prepared by the caller;
 the mode adds no prefix. C API objects are freed on success and failures. Empty
 text is accepted; missing candidates and failed prefill/decode propagate.
 
-This mode currently forces CPU as a **port testing choice**, independently of
-the chat backend. It is not a claim about the original backend. The original
-architecture-35 override is also not exposed by the pinned public engine API;
-that API relies on compatible model metadata. Compatibility with the decrypted
-original TFLite asset has not been demonstrated.
+This mode selects GPU from the recovered dedicated asset contract, independently
+of the chat backend. The architecture-35 override is not exposed by the pinned
+public engine API. Both public workers reject the original legacy TFLite asset
+with `INVALID_ARGUMENT: Unsupported file format`; they cannot yet execute it.
 
 LiteRT 0.18 declares TOP_K in its public header but the installed runtime rejects
 it at decode with `UNIMPLEMENTED: Sampler type: 1 not implemented yet.` The port
@@ -66,8 +68,8 @@ including tie behavior, is still required.
 
 The Application detector callback remains unchanged and still uses the generic
 chat path. This worker primitive does not complete production detector parity.
-Required next work: acquire a usable dedicated asset, bind the original executor
-selection/legacy model settings, verify raw generation against the original,
+Required next work: implement compatible legacy model loading/execution,
+verify raw generation against the original,
 and connect the dedicated runtime to the existing ReferenceQueryDetector.
 
 ## Validation and limitations
@@ -89,7 +91,7 @@ Reproduce a raw runtime comparison with a compatible local asset:
 ```sh
 python3 tests/inference/test_raw_query_model.py \
   --model MODEL --native-probe BUILD/native_raw_query_probe \
-  --python LITERT_PYTHON --library LITERT_LIBRARY --report REPORT.json
+  --python LITERT_PYTHON --library LITERT_LIBRARY --backend gpu --report REPORT.json
 ```
 
 The default diagnostic context is 512. `--context` allows testing a different
@@ -122,3 +124,56 @@ Its retained files were read without repeating the analysis. The dispatcher log
 reported IDA closed 0/all sessions closed, and an independent process inventory
 found no corresponding IDA worker. This does not override REA's wider cleanup
 uncertainty. No unrelated process was terminated.
+
+## Authenticated installed asset and legacy loader boundary
+
+The public app configuration lookup selects `prod`, then only
+`encryption_keychain_service_name`, giving
+`com.google.AIEdgeForesight.encryption`. Native code retrieves account
+`dataEncryptionKey` as a generic-password item and deserializes a binary Tink
+keyset. It creates AES-256-GCM keys only when no key exists; the diagnostic never
+calls that creation path.
+
+`tools/decrypt_reference_detector.swift` reads only that exact existing entry
+with interaction disabled. Its controlled self-test verifies successful
+authentication and rejection of corrupted ciphertext. On the installed asset,
+authentication succeeded and yielded 179,437,568 bytes with TFL3 at offset 4,
+SHA-256 `889306301a8817c22de9631087896780762ce7985b3012e42debfc239a62193f`.
+The diagnostic writes only a new mode-0600 model file under ignored evidence
+output; it never writes keys or changes the installed asset. Its wire parser
+follows the public [Tink keyset schema](https://github.com/tink-crypto/tink/blob/master/proto/tink.proto)
+and [AES-GCM schema](https://github.com/tink-crypto/tink/blob/master/proto/aes_gcm.proto).
+
+The model is a legacy weights container: model version 3, one `GEMMA4_200M`
+subgraph, 490 tensors, no operator codes and no operators. Metadata includes
+`odml.infra.proto.LlmParameters`, `spm_vocab_model`,
+`odml.infra.LlmModelType` and `backend`. Its external buffers contain 116 bytes
+of LlmParameters, 550,461 bytes of SentencePiece vocabulary, and the literal
+`gpu` backend. Reading only the inline buffer vector gives empty values; the
+external offset/size fields must also be followed. The empty inline-buffer
+observation was superseded by this checked external-buffer read.
+
+GetFileFormatFromFileContents (0x102c664b8) identifies TFL3 as format 0, ZIP as 1
+and LITERTLM as 2. Consequently the modern formats' default-CPU branch does not
+establish the legacy detector's backend. DeriveLlmModelSettingsStruct
+(0x102c46788), recovered across three pages, reads legacy ModelData metadata;
+`gpu` selects backend 2 at 0x102c47a94. This corrects the earlier diagnostic CPU
+choice. Static metadata and dispatch establish selection; actual original GPU
+execution has not been observed.
+
+Both raw workers were attempted on CPU and GPU with the decrypted asset and the
+unchanged 512-token context. Both fail at engine construction with unsupported format,
+before prefill or inference. Reports and stderr are retained as
+`query-runtime/original-query-raw-runtime.json*` and
+`query-runtime/original-query-gpu-runtime.json*`. This is a verified loader gap,
+not successful detector inference or output parity. The previous E2B CPU probe
+remains a diagnostic of the raw API only.
+
+Additional REA evidence:
+
+- `ev_e27a217feab7e3fd5b571abea5528089d37469d04c67a300938343851bd2c345`: narrowly selected public model-key service configuration.
+- `ev_89454a142daa64ae0d4e9d737d56aca2cd9a15da92f69fc8aa97f09122ace315`: controlled crypto/keyset self-test.
+- `ev_480484654ea97b468f376bf61fab83b25af852db85e2c06f062bc9bdb7ea8dda`: authenticated dedicated asset and digest.
+- `ev_b09a0cfa9881d9c3db87f8f4e65bbeabd84bef34203d45087edef8ef3416df3f`: bounded model structure.
+- `ev_0ce3a5b0e0072c56684d2a8140e7b7bd4a8b8d488cb6bd7c41d37acf5fb48364`: external metadata buffers and GPU selection.
+- `ev_5b977e6af4dea5b4117b1194c11aeb80e6229e2cbacf033d61239281750f1fcd`: both public raw workers reject the original legacy format.

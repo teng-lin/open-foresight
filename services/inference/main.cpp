@@ -206,7 +206,7 @@ public:
                                           nullptr, "cpu"),
                LM(engine_settings_delete));
     LM(engine_settings_set_max_num_tokens)(settings.get(), query_detector ? 512 : 4096);
-    LM(engine_settings_set_num_threads)(settings.get(), 4);
+    if (!gpu) LM(engine_settings_set_num_threads)(settings.get(), 4);
     LM(engine_settings_set_audio_num_threads)(settings.get(), 4);
     LM(engine_settings_set_cache_dir)(settings.get(), cache.c_str());
     engine.reset(LM(engine_create)(settings.get()));
@@ -449,7 +449,8 @@ int main(int argc, char **argv) {
                        : (std::getenv("FORESIGHT_LITERT_BACKEND")
                               ? std::getenv("FORESIGHT_LITERT_BACKEND")
                               : "cpu");
-    if (query_detector) backend = "cpu";
+    // The original dedicated GEMMA4_200M asset declares backend=gpu.
+    if (query_detector) backend = "gpu";
     if (backend != "cpu" && backend != "gpu")
       throw std::runtime_error("Backend must be cpu or gpu");
     auto path = fs::canonical(args.at("--model"));

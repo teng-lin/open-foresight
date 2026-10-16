@@ -20,6 +20,7 @@ def main():
     parser.add_argument('--python', required=True)
     parser.add_argument('--library', required=True)
     parser.add_argument('--context', type=int, default=512)
+    parser.add_argument('--backend', choices=('cpu', 'gpu'), default='cpu')
     parser.add_argument('--prompt', default=' <ctrl1>When is the project review?')
     parser.add_argument('--report', required=True)
     args = parser.parse_args()
@@ -34,14 +35,15 @@ sys.stdout=protocol
 spec=importlib.util.spec_from_file_location('runner',sys.argv[1])
 runner=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
-with litert_lm.Engine(sys.argv[2],backend=litert_lm.Backend.CPU(thread_count=4),max_num_tokens=int(sys.argv[4])) as engine:
+backend=litert_lm.Backend.GPU() if sys.argv[5] == 'gpu' else litert_lm.Backend.CPU(thread_count=4)
+with litert_lm.Engine(sys.argv[2],backend=backend,max_num_tokens=int(sys.argv[4])) as engine:
  runner.run_query_detector(engine,sys.argv[3])
 """
     commands = {
-        'cpp': [args.native_probe, args.model, args.prompt, str(args.context)],
-        'python': [args.python, '-c', code, str(source), args.model, args.prompt, str(args.context)],
+        'cpp': [args.native_probe, args.model, args.prompt, str(args.context), args.backend],
+        'python': [args.python, '-c', code, str(source), args.model, args.prompt, str(args.context), args.backend],
     }
-    report = {'model': args.model, 'prompt': args.prompt, 'context': args.context,
+    report = {'model': args.model, 'prompt': args.prompt, 'context': args.context, 'backend': args.backend,
               'original_detector_parity_established': False}
     env = dict(os.environ, FORESIGHT_LITERT_LIBRARY=args.library)
     for name, command in commands.items():
@@ -56,7 +58,7 @@ with litert_lm.Engine(sys.argv[2],backend=litert_lm.Backend.CPU(thread_count=4),
         raise SystemExit('Raw runtime failed; see the retained diagnostic report')
     if report['cpp']['text'] != report['python']['text']:
         raise SystemExit('Raw runtime outputs differ; see the retained report')
-    print('Raw CPU implementations match; original detector parity remains unverified.')
+    print('Raw implementations match; original detector parity remains unverified.')
 
 
 if __name__ == '__main__':
