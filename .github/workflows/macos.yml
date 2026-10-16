@@ -49,6 +49,8 @@ jobs:
         with:
           path: build/sdk
           key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
+      - name: Verify SDK checkout guards
+        run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
       - name: Build macOS 15 compatible dependency SDK
         run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
       - name: Native, core, service, MCP, and Flutter gates

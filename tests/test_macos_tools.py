@@ -37,6 +37,25 @@ def portable_swap(first, second):
 
 
 class SdkSourceTests(unittest.TestCase):
+    def test_fresh_pinned_checkout_without_a_head(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / 'origin'
+            repository.mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(repository), *args],
+                                               text=True, stderr=subprocess.DEVNULL).strip()
+            git('init')
+            (repository / 'source.c').write_text('pinned')
+            git('add', 'source.c')
+            git('-c', 'user.name=SDK test', '-c', 'user.email=sdk@example.invalid',
+                'commit', '-m', 'Pinned source')
+            commit = git('rev-parse', 'HEAD')
+            destination = root / 'fresh'
+            sdk.checkout(destination, str(repository), commit)
+            self.assertEqual((destination / 'source.c').read_text(), 'pinned')
+            sdk.require_clean_sources(destination)
+
     def test_pinned_checkout_rejects_staged_and_unstaged_sources(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

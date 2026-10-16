@@ -28,7 +28,9 @@ def run(*args, **kwargs):
 
 
 def require_clean_sources(path, *, ignore_submodules=False):
-    args = ['git', '-C', str(path), 'diff', 'HEAD', '--name-only']
+    # Porcelain status covers index and working tree, including a newly
+    # initialized checkout whose first commit has not been checked out yet.
+    args = ['git', '-C', str(path), 'status', '--porcelain', '--untracked-files=no']
     if ignore_submodules:
         args.append('--ignore-submodules=all')
     dirty = subprocess.check_output(args, text=True).strip()
