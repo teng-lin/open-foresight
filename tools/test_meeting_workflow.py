@@ -46,6 +46,9 @@ def capture_gallery(directory, names):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--flutter', default='flutter')
+    parser.add_argument('--model-python', type=Path,
+                        default=Path(os.environ.get('FORESIGHT_MODEL_PYTHON', ROOT / '.venv/bin/python')),
+                        help='Python environment for non-LiteRT model adapters')
     parser.add_argument('--agent-desktop', type=Path, default=ROOT.parent / 'agent-desktop',
                         help='Agent Desktop checkout used for a dedicated headless display')
     parser.add_argument('--model-manifest', type=Path, default=ROOT / 'models/local/native/installed.json')
@@ -94,9 +97,9 @@ def main():
                 'FORESIGHT_RUNTIME': temporary + '/run',
                 'FORESIGHT_HELPER': str(helper_bundle / 'bin/ForesightHelper'),
                 'FORESIGHT_MODEL_ADAPTER': str(ROOT / 'services/helper/model_adapter.py'),
-                'FORESIGHT_MODEL_PYTHON': str(ROOT / '.venv/bin/python'),
+                'FORESIGHT_MODEL_PYTHON': str(args.model_python.expanduser().absolute()),
                 'FORESIGHT_MODEL_MANIFEST': str(args.model_manifest.resolve()),
-                'FORESIGHT_NATIVE': str(ROOT / 'build/native/libforesight_native.so'),
+                'FORESIGHT_NATIVE': str(helper_bundle / 'lib/libforesight_native.so'),
                 'FORESIGHT_PLAYBACK_TARGET': sink,
                 'FORESIGHT_MICROPHONE_TARGET': microphone,
                 'FORESIGHT_AUDIO_FIXTURE': str(ROOT / 'tests/fixtures/audio/jfk.wav'),
@@ -114,6 +117,9 @@ def main():
             }
             if args.real_inactivity:
                 env['FORESIGHT_REAL_INACTIVITY'] = '1'
+            bundled_runner = helper_bundle / 'share/open-foresight/litert-runner'
+            if bundled_runner.is_file():
+                env['FORESIGHT_LITERT_RUNNER'] = str(bundled_runner)
             for setting in ('FORESIGHT_LITERT_BACKEND', 'FORESIGHT_WHISPER_BACKEND',
                             'FORESIGHT_WHISPER_DEVICE', 'FORESIGHT_WHISPER_RUNTIME'):
                 if setting in os.environ:
