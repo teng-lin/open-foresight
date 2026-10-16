@@ -1,23 +1,9 @@
 import 'dart:async';
 import 'store.dart';
 
-String normalizeMeetingQuestion(String text) => text
-    .toLowerCase()
-    .replaceAll(RegExp(r'''[\s?？.!。！,，:：;；"“”'‘’]+'''), ' ')
-    .trim();
-
-// Pool-bound TextDeduplicator patterns, in their reference order.
-final _windowTimestamp = RegExp(r'^\[\d{2}:\d{2}:\d{2}\]\s*');
-final _windowPunctuation = RegExp(r"""[-.,?!:;"'()]+""");
-final _windowWhitespace = RegExp(r'\s+');
-
-String normalizeTranscriptWindow(String text) => text
-    .toLowerCase()
-    .trim()
-    .replaceAll(_windowTimestamp, ' ')
-    .replaceAll(_windowPunctuation, ' ')
-    .replaceAll(_windowWhitespace, ' ')
-    .trim();
+import 'question_dispatch.dart';
+export 'question_dispatch.dart'
+    show normalizeMeetingQuestion, normalizeTranscriptWindow;
 
 /// Service-owned transcript detection and durable grounded-answer jobs.
 /// Capture never waits for model work.
@@ -49,7 +35,9 @@ class ProactiveQuestions {
   final _examinedVersions = <int, int>{};
   final _interim = <int, Map<String, String>>{};
   final _lastInputIsFinal = <int, bool>{};
-  final _windowSeen = <int, Map<String, int>>{};
+  final _windowSeen = <int, QuestionTextDeduplicator>{};
+  final _dispatchers = <int, MeetingQuestionDispatcher>{};
+  final _activeQuestions = <int, Map<String, int>>{};
   final errors = <int, String>{};
   Timer? _timer;
   Future<void>? _inFlight;
@@ -175,20 +163,34 @@ class ProactiveQuestions {
     });
   }
 
+  bool _hasUnexaminedInput(int meetingId) {
+    if (_examinedVersions[meetingId] == (_inputVersions[meetingId] ?? 0))
+      return false;
+    if (_interim[meetingId]?.isNotEmpty ?? false) return true;
+    return store.rows(
+      'SELECT 1 FROM transcript t JOIN meeting_question_cursors c '
+      'ON c.meeting_id=t.meeting_id WHERE t.meeting_id=? AND t.final=1 '
+      'AND t.id>c.transcript_id LIMIT 1',
+      [meetingId],
+    ).isNotEmpty;
+  }
+
   bool get _allowed => !_closed && !_suspended && enabled;
   Future<void> _processOne() async {
     if (!_allowed || _pending.isEmpty || busy()) return;
     final meetingId = _pending.first;
     _activeMeeting = meetingId;
     _pending.remove(meetingId);
-    int? questionId;
+    int? questionId, examinedInput;
+    var queuedWork = false;
     try {
       errors.remove(meetingId);
       final queued = store.rows(
         "SELECT * FROM meeting_questions WHERE meeting_id=? AND state='queued' ORDER BY id LIMIT 1",
         [meetingId],
       ).firstOrNull;
-      if (queued != null) {
+      queuedWork = queued != null;
+      if (queued != null && !_hasUnexaminedInput(meetingId)) {
         questionId = queued['id'] as int;
         store.db.execute(
           "UPDATE meeting_questions SET state='answering',error='' WHERE id=?",
@@ -226,6 +228,7 @@ class ProactiveQuestions {
         );
       } else {
         final inputVersion = _inputVersions[meetingId] ?? 0;
+        examinedInput = inputVersion;
         if (_examinedVersions[meetingId] == inputVersion) return;
         final cursor = store.rows(
           'SELECT transcript_id FROM meeting_question_cursors WHERE meeting_id=?',
@@ -242,20 +245,28 @@ class ProactiveQuestions {
           ...?_interim[meetingId]?.values,
         ].join('\n').trim();
         _examinedVersions[meetingId] = inputVersion;
-        if (history.isEmpty) return;
+        if (history.isEmpty) {
+          if (queued != null) _pending.add(meetingId);
+          return;
+        }
         // The original hashes the complete window before preparing model input.
         // Finals still detect; only repeated interim input is suppressed.
-        final normalizedWindow = normalizeTranscriptWindow(history);
-        final now = _nowMilliseconds();
-        final seen = _windowSeen.putIfAbsent(meetingId, () => {});
-        final previous = seen[normalizedWindow];
-        seen.removeWhere((_, timestamp) => now - timestamp >= 5000);
-        if (normalizedWindow.isNotEmpty) seen[normalizedWindow] = now;
-        if (!isFinal && previous != null && now - previous < 5000) return;
+        final seen = _windowSeen.putIfAbsent(
+          meetingId,
+          QuestionTextDeduplicator.new,
+        );
+        final uniqueWindow = seen.process(history, _nowMilliseconds());
+        if (!isFinal && !uniqueWindow) {
+          if (queued != null) _pending.add(meetingId);
+          return;
+        }
         // The recovered splitter is \s+ and the join separator is a space.
         final units = RegExp(r'\S+').allMatches(history).toList();
         final eligible = units.length - (isFinal ? 0 : 5);
-        if (eligible <= 0) return;
+        if (eligible <= 0) {
+          if (queued != null) _pending.add(meetingId);
+          return;
+        }
         final first = eligible > 200 ? eligible - 200 : 0;
         final transcript = units
             .sublist(first, eligible)
@@ -270,39 +281,62 @@ class ProactiveQuestions {
           _pending.add(meetingId);
           return;
         }
-        if (questions.length > 32)
-          throw const FormatException('Too many detected questions');
+        final detectedQuestions = questions
+            .map((question) => question.trim())
+            .where(
+              (question) => question.isNotEmpty && !question.startsWith('>>'),
+            )
+            .toSet()
+            .toList();
+        final dispatcher =
+            (_dispatchers[meetingId] ?? MeetingQuestionDispatcher()).copy();
+        final activeQuestions = Map<String, int>.of(
+          _activeQuestions[meetingId] ?? {},
+        );
+        final detectedAt = _nowMilliseconds();
         store.db.execute('SAVEPOINT detect_meeting_questions');
         try {
-          for (final question in questions) {
-            final normalized = normalizeMeetingQuestion(question);
-            // The model selects transcript wording; it cannot introduce a new
-            // question or execute instructions embedded in recorded speech.
-            if (normalized.isEmpty ||
-                question.length > 1000 ||
-                !normalizeMeetingQuestion(transcript).contains(normalized))
-              continue;
+          for (final question in detectedQuestions) {
+            final result = dispatcher.process(question, detectedAt);
+            for (final key in result.expired) {
+              activeQuestions.remove(key);
+            }
+            for (final key in result.superseded) {
+              final previousId = activeQuestions.remove(key);
+              if (previousId != null) {
+                store.db.execute(
+                  "UPDATE meeting_questions SET state='superseded' WHERE id=? AND state='queued'",
+                  [previousId],
+                );
+              }
+            }
+            if (!result.accepted) continue;
             store.db.execute(
-              'INSERT OR IGNORE INTO meeting_questions(meeting_id,transcript_id,question,normalized,created) VALUES(?,?,?,?,?)',
+              'INSERT INTO meeting_questions(meeting_id,transcript_id,question,normalized,created) VALUES(?,?,?,?,?)',
               [
                 meetingId,
                 batch.isEmpty ? null : batch.last['id'],
-                question.trim(),
-                normalized,
-                DateTime.now().millisecondsSinceEpoch,
+                question,
+                result.normalized,
+                detectedAt,
               ],
             );
+            if (result.normalized.isNotEmpty) {
+              activeQuestions[result.normalized] = store.db.lastInsertRowId;
+            }
           }
           // The original advances history only when detection finds queries.
           // Empty results must retain context for a later segment to complete
           // a question. The input version avoids polling that unchanged text.
-          if (questions.isNotEmpty && batch.isNotEmpty) {
+          if (detectedQuestions.isNotEmpty && batch.isNotEmpty) {
             store.db.execute(
               'UPDATE meeting_question_cursors SET transcript_id=? WHERE meeting_id=?',
               [batch.last['id'], meetingId],
             );
           }
           store.db.execute('RELEASE detect_meeting_questions');
+          _dispatchers[meetingId] = dispatcher;
+          _activeQuestions[meetingId] = activeQuestions;
           _examinedVersions[meetingId] = inputVersion;
         } catch (_) {
           store.db.execute('ROLLBACK TO detect_meeting_questions');
@@ -323,6 +357,12 @@ class ProactiveQuestions {
         _pending.add(meetingId);
       } else {
         errors[meetingId] = error.toString();
+        if (questionId == null && examinedInput != null) {
+          // Explicit retry/new speech advances the version. A failed newer
+          // detection must still let previously queued answers run.
+          _examinedVersions[meetingId] = examinedInput;
+          if (queuedWork) _pending.add(meetingId);
+        }
         if (questionId != null)
           store.db.execute(
             "UPDATE meeting_questions SET state='failed',error=? WHERE id=?",
@@ -348,6 +388,8 @@ class ProactiveQuestions {
     _interim.clear();
     _lastInputIsFinal.clear();
     _windowSeen.clear();
+    _dispatchers.clear();
+    _activeQuestions.clear();
     errors.clear();
     _suspended = false;
   }

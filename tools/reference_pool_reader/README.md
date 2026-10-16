@@ -41,9 +41,9 @@ using ObjectPool::IndexFromOffset(offset - kHeapObjectTag), rather than
 treating the decompiler's array index as an ObjectPool element index.
 Immediate values must use RawValueAt; calling ObjectAt on them is invalid.
 
-String dispatch targets -4092 and -4090 are printed as offsets from the mapped
-image base for binding to original native symbols. Other selector probes are
-diagnostics and are not interpreted as valid string operations.
+String dispatch targets -4092 and -4090, one-byte/two-byte string hash dispatch
+targets, and the Smi expiry comparison are printed as offsets from the mapped
+image base for binding to original native symbols.
 
 See [the finding ledger](../../docs/proactive-reference-trace.md) for recovered
 values, REA Evidence IDs, and remaining dispatcher integration work.

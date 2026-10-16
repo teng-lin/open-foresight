@@ -107,7 +107,7 @@ void main() {
   );
 
   test(
-    'detects only new final speech, deduplicates multilingual questions and rejects invented ones',
+    'accepts detector wording and deduplicates multilingual questions',
     () async {
       store.transcript(
         meeting,
@@ -124,11 +124,11 @@ void main() {
         'What now?',
         'WHAT NOW？',
         '部署日期是什么？',
-        'Invented question?',
+        'Inferred question?',
       ];
       await drain();
       expect(detectedText, ['What now? 部署日期是什么？']);
-      expect(answered, ['What now?', '部署日期是什么？']);
+      expect(answered, ['What now?', '部署日期是什么？', 'Inferred question?']);
       expect(
         store
             .rows('SELECT state FROM meeting_questions')
@@ -144,8 +144,8 @@ void main() {
       append('WHAT NOW？');
       detectionResult = ['WHAT NOW？'];
       await drain();
-      expect(answered, hasLength(2));
-      expect(store.rows('SELECT * FROM meeting_questions'), hasLength(2));
+      expect(answered, hasLength(3));
+      expect(store.rows('SELECT * FROM meeting_questions'), hasLength(3));
     },
   );
 
@@ -409,38 +409,40 @@ void main() {
     },
   );
 
-  test(
-    'nullable origin migration preserves existing jobs, IDs, and answer links',
-    () async {
-      store.transcript(
-        meeting,
-        'Existing question?',
-        true,
-        0,
-        1000,
-        'microphone',
-      );
-      final transcriptId = store.db.lastInsertRowId;
-      store.answer(
-        'Existing question?',
-        'Existing answer',
-        'completed',
-        [],
-        'fixture',
-      );
-      final answerId = store.db.lastInsertRowId;
-      store.db.execute('DROP TABLE meeting_questions');
-      store.db.execute("""
+  for (final requiredOrigin in [true, false]) {
+    test(
+      'legacy origin=$requiredOrigin migration preserves jobs, IDs, and answer links',
+      () async {
+        store.transcript(
+          meeting,
+          'Existing question?',
+          true,
+          0,
+          1000,
+          'microphone',
+        );
+        final transcriptId = store.db.lastInsertRowId;
+        store.answer(
+          'Existing question?',
+          'Existing answer',
+          'completed',
+          [],
+          'fixture',
+        );
+        final answerId = store.db.lastInsertRowId;
+        store.db.execute('DROP TABLE meeting_questions');
+        store.db.execute("""
       CREATE TABLE meeting_questions(
         id INTEGER PRIMARY KEY,
         meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
-        transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+        transcript_id INTEGER ${requiredOrigin ? 'NOT NULL' : ''} REFERENCES transcript(id) ON DELETE CASCADE,
         question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',
         answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,
         error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL,UNIQUE(meeting_id,normalized));
     """);
-      store.db
-          .execute('INSERT INTO meeting_questions VALUES(?,?,?,?,?,?,?,?,?)', [
+        store.db.execute(
+          'INSERT INTO meeting_questions VALUES(?,?,?,?,?,?,?,?,?)',
+          [
             77,
             meeting,
             transcriptId,
@@ -450,38 +452,214 @@ void main() {
             answerId,
             '',
             123,
-          ]);
-      final before = store.rows('SELECT * FROM meeting_questions').single;
-      await queue.close();
-      store.close();
-      store = Store('${directory.path}/app.db');
-      queue = create();
-      expect(store.rows('SELECT * FROM meeting_questions').single, before);
-      expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+          ],
+        );
+        final before = store.rows('SELECT * FROM meeting_questions').single;
+        await queue.close();
+        store.close();
+        store = Store('${directory.path}/app.db');
+        queue = create();
+        expect(store.rows('SELECT * FROM meeting_questions').single, before);
+        expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+        queue.begin(meeting);
+        queue.updateInterim(
+          meeting,
+          'microphone',
+          'New question? one two three four five',
+        );
+        await drain();
+        expect(
+          store
+              .rows('SELECT transcript_id FROM meeting_questions ORDER BY id')
+              .last['transcript_id'],
+          isNull,
+        );
+        expect(
+          store.rows('SELECT body FROM answers ORDER BY id').first['body'],
+          'Existing answer',
+        );
+        // The removed lifetime constraint permits a fresh identical job after
+        // the dispatcher's twenty-second state expires.
+        milliseconds = 20000;
+        queue.updateInterim(
+          meeting,
+          'microphone',
+          'New question? one two three four five',
+        );
+        await drain();
+        expect(store.rows('SELECT * FROM meeting_questions'), hasLength(3));
+        // Reopening the migrated schema is idempotent.
+        await queue.close();
+        store.close();
+        store = Store('${directory.path}/app.db');
+        queue = create();
+        expect(store.rows('SELECT * FROM meeting_questions'), hasLength(3));
+        expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+      },
+    );
+  }
+
+  test(
+    'a repeated question can produce a new answer after twenty-second expiry',
+    () async {
       queue.begin(meeting);
-      queue.updateInterim(
-        meeting,
-        'microphone',
-        'New question? one two three four five',
-      );
+      append('When is launch?');
       await drain();
+      milliseconds = 4999;
+      append('When is launch?');
+      await drain();
+      expect(answered, ['When is launch?']);
+      milliseconds = 20000;
+      append('When is launch?');
+      await drain();
+      expect(answered, ['When is launch?', 'When is launch?']);
+      expect(store.rows('SELECT * FROM meeting_questions'), hasLength(2));
+    },
+  );
+
+  test(
+    'new input expands a queued question before starting its answer',
+    () async {
+      queue.begin(meeting);
+      append('Who?');
+      await queue.process();
+      append('Who owns the draft?');
+      await drain();
+      expect(answered, ['Who owns the draft?']);
+      expect(store.rows('SELECT question,state FROM meeting_questions'), [
+        {'question': 'Who?', 'state': 'superseded'},
+        {'question': 'Who owns the draft?', 'state': 'completed'},
+      ]);
+    },
+  );
+
+  test(
+    'a shorter revision is suppressed while the existing longer question answers',
+    () async {
+      queue.begin(meeting);
+      append('Who owns the draft?');
+      await queue.process();
+      detectionResult = ['Who owns?'];
+      append('Who owns?');
+      await drain();
+      expect(answered, ['Who owns the draft?']);
+      expect(store.rows('SELECT * FROM meeting_questions'), hasLength(1));
+    },
+  );
+
+  test('short interim input does not strand already queued answers', () async {
+    queue.begin(meeting);
+    append('Who owns the draft?');
+    await queue.process();
+    queue.updateInterim(meeting, 'microphone', 'short');
+    await drain();
+    expect(answered, ['Who owns the draft?']);
+  });
+
+  test(
+    'failed newer detection does not strand previously queued answers',
+    () async {
+      queue.begin(meeting);
+      append('Who owns the draft?');
+      await queue.process();
+      failDetection = true;
+      append('What is the deadline?');
+      await drain();
+      expect(answered, ['Who owns the draft?']);
+      failDetection = false;
+      queue.notify(meeting);
+      await drain();
+      expect(answered, ['Who owns the draft?', 'What is the deadline?']);
+    },
+  );
+
+  test(
+    'replacements preserve completed answers and exact meeting ownership',
+    () async {
+      queue.begin(meeting);
+      append('Who?');
+      await drain();
+      append('Who owns the draft?');
+      await drain();
+      expect(answered, ['Who?', 'Who owns the draft?']);
       expect(
         store
-            .rows('SELECT transcript_id FROM meeting_questions ORDER BY id')
-            .last['transcript_id'],
-        isNull,
+            .rows('SELECT state FROM meeting_questions')
+            .map((r) => r['state']),
+        everyElement('completed'),
       );
+      expect(store.rows('SELECT * FROM answers'), hasLength(2));
       expect(
-        store.rows('SELECT body FROM answers ORDER BY id').first['body'],
-        'Existing answer',
+        store
+            .rows('SELECT meeting_id FROM meeting_answers')
+            .map((r) => r['meeting_id']),
+        everyElement(meeting),
       );
-      // Reopening the migrated schema is idempotent.
-      await queue.close();
-      store.close();
-      store = Store('${directory.path}/app.db');
-      queue = create();
-      expect(store.rows('SELECT * FROM meeting_questions'), hasLength(2));
+    },
+  );
+
+  test(
+    'failed SQL dispatch rolls back jobs, replacements, and rolling eligibility',
+    () async {
+      queue.begin(meeting);
+      append('Who?');
+      await queue.process();
+      store.db.execute(
+        """CREATE TRIGGER reject_expansion BEFORE INSERT ON meeting_questions
+      WHEN NEW.question='Who owns the draft?' BEGIN SELECT RAISE(ABORT,'fixture rejection'); END;""",
+      );
+      append('Who owns the draft?');
+      detectionResult = ['Who owns the draft?'];
+      await queue.process();
+      expect(queue.errors[meeting], contains('fixture rejection'));
+      expect(store.rows('SELECT question,state FROM meeting_questions'), [
+        {'question': 'Who?', 'state': 'queued'},
+      ]);
+      store.db.execute('DROP TRIGGER reject_expansion');
+      queue.notify(meeting);
+      await drain();
+      expect(answered, ['Who owns the draft?']);
       expect(store.rows('PRAGMA foreign_key_check'), isEmpty);
+    },
+  );
+
+  test(
+    'rolling question suppression is scoped to each meeting and reset clears it',
+    () async {
+      queue.begin(meeting);
+      append('Who owns the draft?');
+      await drain();
+      final other = store.meeting('Other meeting');
+      queue.begin(other);
+      append('Who owns the draft?', id: other);
+      await drain();
+      expect(answered, hasLength(2));
+      await queue.reset();
+      append('Who owns the draft?');
+      await drain();
+      expect(answered, hasLength(3));
+    },
+  );
+
+  test(
+    'blank and excluded detector output retains history without dispatch',
+    () async {
+      queue.begin(meeting);
+      append('We need to decide');
+      detectionResult = ['', '   ', ' >> no questions'];
+      await drain();
+      expect(store.rows('SELECT * FROM meeting_questions'), isEmpty);
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_question_cursors')
+            .single['transcript_id'],
+        0,
+      );
+      append('when can we ship?');
+      detectionResult = ['When can we ship?', 'When can we ship?'];
+      await drain();
+      expect(detectedText.last, 'We need to decide when can we ship?');
+      expect(answered, ['When can we ship?']);
     },
   );
 
@@ -609,7 +787,17 @@ void main() {
 
   test('restart restores queued answers without duplicate answers', () async {
     queue.begin(meeting);
-    for (var i = 0; i < 8; i++) append('Question $i?');
+    const distinctQuestions = [
+      'Who approved budget?',
+      'When is launch?',
+      'Where are we meeting?',
+      'How should data be archived?',
+      'Which supplier ships equipment?',
+      'Does access expire tomorrow?',
+      'Can volunteers bring bicycles?',
+      'Why were receipts rejected?',
+    ];
+    for (final question in distinctQuestions) append(question);
     await queue.process(); // Detection commits durable jobs for the window.
     final first = store
         .rows('SELECT id FROM meeting_questions ORDER BY id LIMIT 1')
@@ -624,7 +812,7 @@ void main() {
     queue = create();
     queue.restore();
     await drain();
-    expect(answered, List.generate(8, (i) => 'Question $i?'));
+    expect(answered, distinctQuestions);
     expect(store.rows('SELECT * FROM answers'), hasLength(8));
     queue.restore();
     await drain();

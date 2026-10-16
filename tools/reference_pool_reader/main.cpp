@@ -41,9 +41,19 @@ int main(int argc, char** argv) {
       }
     }
     const auto origin = isolate->group()->dispatch_table()->ArrayOrigin();
-    for (intptr_t offset : {-4092,-4090,39309,42110,42400}) {
+    for (intptr_t offset : {-4092,-4090}) {
       auto entry = origin[95 + offset];
       std::printf("STRING_DISPATCH[%ld] CODE_OFFSET[0x%lx]\n",
+        (long)offset,(unsigned long)(entry - reinterpret_cast<dart::uword>(image.lib)));
+    }
+    for (intptr_t cid : {dart::kOneByteStringCid, dart::kTwoByteStringCid}) {
+      auto entry = origin[cid + 10470];
+      std::printf("STRING_HASH_CID[%ld] CODE_OFFSET[0x%lx]\n",
+        (long)cid,(unsigned long)(entry - reinterpret_cast<dart::uword>(image.lib)));
+    }
+    for (intptr_t offset : {-4010}) {
+      auto entry = origin[dart::kSmiCid + offset];
+      std::printf("SMI_DISPATCH[%ld] CODE_OFFSET[0x%lx]\n",
         (long)offset,(unsigned long)(entry - reinterpret_cast<dart::uword>(image.lib)));
     }
     Dart_ExitScope();

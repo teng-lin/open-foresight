@@ -21,7 +21,7 @@ retained there. No account credentials or profile contents were extracted.
 | Recording controls | `meeting_transcription_paused`, `meeting_transcription_resumed`, `Transcription paused`, `Transcription is paused. Would you like to resume?`, `Full screen`, `Exit Immersive View` | Pause/resume and immersive-view contracts exist. Exact gesture mapping, elapsed-time accounting and capture-handle ownership need live comparison. |
 | Echo cancellation | `InputRecorder` logs starting with voice processing (AEC), falling back to standard recording on failure, and toggling voice-processing bypass; native methods include `setEchoCancellationEnabled` | The Mac original uses an operating-system voice-processing path with fallback. It does not establish cancellation quality, defaults, or Linux behavior. |
 | Speaker labels | `SpeakerIdManager`, `speaker_id_manager.dart`, microphone/system/unknown label getters, and generated-note instructions distinguishing generic audio channels from real speaker names | A speaker-label layer exists. These findings alone do not prove a particular diarization model or accurate individual-speaker identification. |
-| Automatic questions | `QueryDetectorOnDevice`, `TranscriptManager`, `TranscriptBuffer`, `TextDeduplicator`, `QueryDispatcher`, `Query detected, advancing history cursor.`, and `Questions detected during the conversation will be answered here.` | The original buffers transcripts, runs local query detection, deduplicates, dispatches and advances a processing cursor. Exact prompts, thresholds and model behavior remain unresolved. |
+| Automatic questions | `QueryDetectorOnDevice`, `TranscriptManager`, `TranscriptBuffer`, `TextDeduplicator`, `QueryDispatcher`, `Query detected, advancing history cursor.`, and `Questions detected during the conversation will be answered here.` | The original buffers transcripts, runs local query detection, deduplicates, dispatches and advances a processing cursor. IDA and snapshot-pool tracing establish the detector prefix, normalization, thresholds and rolling filters; real-model behavior and timing comparisons remain incomplete. |
 | Web fallback | `enable_web_search`, web-search-toggle events, `google_search` function schema, and meeting-assistant prompt instructions | Search is switchable. The assistant is instructed to call Google search for factual queries outside its meeting context and cite tool results using `[Source:N]`. Endpoint, credential handling and complete orchestration need further inspection. |
 
 Further native investigation uses REA with IDA Pro. See the
@@ -81,9 +81,11 @@ The application service now owns a durable pipeline from captured
 speech to local question detection, deduplication, retrieval, and a cited answer.
 It stores a processing cursor and question jobs per meeting. Starting a meeting
 does not replay its previous transcript; restarting the service resumes pending
-work. Detection accepts only questions copied from the supplied transcript and
-rejects invented text. Case, punctuation, and whitespace normalization prevent
-duplicate jobs within the meeting.
+work. Detector wording is no longer required to be a transcript substring.
+Blank, excluded-prefix and exact duplicate outputs are discarded; questions
+then pass through the original's rolling hash and prefix/similarity filters.
+The current JSON detector prompt still requests copied wording, pending the
+original control-token generation/output integration.
 
 Generation waits while another model job is busy. Disabling Automatic answers
 retains queued questions and cancels only the pipeline's own request. Cancelling
@@ -111,19 +113,32 @@ transactional schema migration preserves existing job IDs and answer links.
 
 Repeated interim detection windows use a five-second timestamp filter that
 refreshes on suppressed repeats and allows input at exactly 5,000 ms. Final
-input bypasses suppression. Normalized string keys replace the original's
-unresolved hash implementation. Normalization now uses the pool-bound lowercase,
-leading timestamp, ASCII punctuation and whitespace rules. This is the transcript-window filter; question dispatch
-still uses lifetime database uniqueness and needs its separate rolling filter.
+input bypasses suppression. Both the window and question filters now hash the
+normalized Dart string, matching the recovered String.hashCode dispatch.
+Normalization uses the pool-bound lowercase, leading timestamp, ASCII
+punctuation and whitespace rules.
 
-Twenty-second prefix/similarity filtering and cursor boundary overlap still
-require integration. Snapshot-pool recovery has established the original detector control-token
-prefix, normalization patterns, thresholds (0.7/0.8/0.9), and token-set reduction
-(max). Scheduling details, expiry boundaries, output handling integration and
-retry behavior still require work; see the latest proactive reference trace. The copied-question restriction and per-meeting
-lifetime uniqueness above still differ from the inspected reference body.
+Question dispatch applies its separate five-second layer followed by the
+original twenty-second prefix/similarity state. Exact equality refreshes prefix
+state when it reaches that layer; expansions replace older entries; shorter
+revisions are suppressed without refreshing them. Jaccard (0.7), token-set
+ratio (0.8) and partial ratio (0.9) combine by OR and include threshold equality.
+The expiry comparison is resolved to greater-than-or-equal: exactly 20,000 ms
+expires. A transactional migration removes per-meeting lifetime uniqueness
+while preserving existing questions, IDs and answer links.
 
-Verification after this implementation:
+New input is checked before queued answers, allowing an expanded question to
+supersede queued work. Completed answers are retained as the reconstruction's
+durable history; the inspected original stream consumer does not establish
+answer-card deletion. The UI identifies superseded queued questions. Short
+interim input and failed newer detection do not strand earlier queued answers.
+SQL failure rolls back both job changes and rolling-filter eligibility.
+
+The original ctrl1 detector generation/output integration, history boundary
+overlap, exact scheduling (including the post-dispatch delay), provisional
+answer context, and real-model/runtime comparisons remain outstanding.
+
+Initial pipeline verification, before the later IDA integrations:
 
 - Core suite: **49 passed, 1 opt-in test skipped**.
 - Desktop suite: **165 passed, 10 existing opt-in tests skipped**.
@@ -140,10 +155,11 @@ comparison against the original remains outstanding.
 Subsequent IDA tracing established material differences in the first automatic
 Q&A reconstruction: the original uses rolling five-second duplicate suppression,
 a further twenty-second prefix/similarity filter, interim transcript input, and
-advances the history cursor only after nonempty detection. The current durable
-per-meeting uniqueness and six-row batches do not reproduce those rules. See
-[the function-level trace](proactive-reference-trace.md); correcting this behavior
-remains required before claiming proactive-Q&A parity.
+advances the history cursor only after nonempty detection. Those history and
+filter rules are now integrated; the initial lifetime uniqueness and six-row
+batching have been removed. See [the function-level trace](proactive-reference-trace.md)
+for remaining model, scheduling and runtime differences. Full proactive-Q&A
+parity remains unproven.
 
 ## macOS echo processing
 
@@ -201,3 +217,21 @@ Those reference and hardware checks remain outstanding.
 
 These deterministic fixtures do not establish physical microphone behavior,
 original model output quality, or full dispatcher parity.
+
+### Rolling dispatcher integration verification
+
+- Core suite: **91 passed, 1 opt-in test skipped**.
+- Desktop suite: **165 passed, 10 existing opt-in tests skipped**.
+- Both analyzers: no issues; git whitespace check clean.
+- Boundary tests independently exercise each similarity threshold while the
+  other two strategies do not match, exact five/twenty-second limits, timestamp
+  refresh, shorter-prefix suppression, Unicode normalization and wall-clock
+  adjustment behavior.
+- Service tests cover recurring questions after expiry, queued expansion,
+  retained completed answers, meeting isolation, reset, short/newer-failed
+  detection, excluded output, SQL rollback and migrations from both older
+  required-origin and nullable-origin schemas. Existing cancellation and
+  request/answer ownership tests still pass.
+
+These are deterministic reconstruction tests; they do not establish physical
+capture or end-to-end behavior of the original model.

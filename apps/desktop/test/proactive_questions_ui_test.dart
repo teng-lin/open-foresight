@@ -57,6 +57,7 @@ void main() {
       const markdown = '**Mira** owns the draft.';
       seed(id, 'Who owns the draft?', 'completed', body: markdown);
       final failed = seed(id, 'What is next?', 'failed');
+      seed(id, 'Who?', 'superseded');
       seed(
         other,
         'Unrelated question?',
@@ -84,6 +85,10 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Automatic · Answered'), findsOneWidget);
         expect(find.text('Automatic · Could not answer'), findsOneWidget);
+        expect(
+          find.text('Automatic · Replaced by an updated question'),
+          findsOneWidget,
+        );
         expect(
           find.text('Other meeting answer', findRichText: true),
           findsNothing,

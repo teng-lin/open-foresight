@@ -395,3 +395,65 @@ temporary executable path and terminated; the app/data were removed. The SDK
 checkout and reader build remain under /tmp/foresight-dart-pool for reuse.
 The successful constants above come from snapshot deserialization, not from the
 failed debugger attempts or normal original-app execution.
+
+## Integration: rolling dispatcher in the service pipeline
+
+The pipeline now uses independent transcript-window and question-level
+TextDeduplicator instances, followed by MeetingQuestionDispatcher's ordered
+prefix/similarity state. Its normalization, token sets and three strategy
+thresholds are the recovered ones. Similarity strategies combine by OR and
+accept equality. Equal prefix entries refresh timestamps only when the question
+passes the separate five-second layer. Shorter prefixes/similar revisions do
+not refresh the longer entry. Collected replacements still apply if a later
+entry suppresses the incoming question, following the inspected control flow.
+Empty prefix normalization is accepted without modifying/pruning prefix state.
+
+The remaining dynamic calls are now bound using the deserialized dispatch table:
+
+- TextDeduplicator._calculateHash at 0x1009f3a24 dispatches String CID + 10470.
+  OneByteString CID 95 resolves to image offset 0xbce2ec (String.hashCode);
+  TwoByteString CID 96 resolves to 0xbce258 (_StringBase.hashCode).
+- Prefix expiry assembly at 0x1009f2924 dispatches Smi CID - 4010. The recovered
+  table resolves it to image offset 0xd1a7a8, whose retained native symbol is
+  int.>=. The compared value is now minus the stored timestamp, against 20,000.
+  Expiry is therefore inclusive at exactly 20,000 ms.
+
+REA Evidence ev_c3d3e0b5707183470d37951cacef15addb6233ed2b735214851a9d9649ab0b7d
+captures these dispatch bindings and their original native-symbol matches.
+The reader source and its reproduction notes include these probes. Both
+five-second filters now use normalized String.hashCode keys, rather than the
+previous string-key adaptation. Hash timestamps are retained until reset,
+matching the original map behavior, including after wall-clock adjustments.
+No claim is made that hash values are portable across Dart SDK builds.
+
+The durable schema no longer has UNIQUE(meeting_id,normalized). A migration
+preserves row IDs, origins, state and answer links for both earlier NOT NULL
+origins and the later nullable-origin schema. Rolling filters are staged on
+copies and published only after the SQL savepoint commits, so a failed write
+cannot consume detection eligibility or lose an older queued question.
+
+New transcript input is examined before queued answers. Superseded entries
+cancel only the matching still-queued durable jobs; completed answers are
+retained and the UI labels replaced queued questions. Expiry removes filter
+tracking, without deleting saved history. This bridges ephemeral original query
+tracking to the reconstruction's durable jobs; original answer-card deletion
+was not established by the stream subscriber trace and is not inferred here.
+
+The code-level copied-substring guard and the unobserved 32-question/1,000-
+character limits have been removed. Empty, greater-than-greater-than-prefixed,
+and exact duplicate detector results are filtered before advancing history.
+The current application detector still uses its JSON/copied-wording prompt;
+matching the original ctrl1 generation and raw output handling is separate work.
+
+Verification: 91 core tests passed, one opt-in test skipped; 165 desktop tests
+passed, ten existing opt-in tests skipped; both analyzers clean. Tests cover
+independent threshold boundaries, exact expiry/refresh, Unicode, recurrence,
+queued expansion, shorter revisions, completed history, meeting/reset isolation,
+SQL rollback, both legacy migrations, failed newer detection and short interim
+input. These checks do not prove original model quality or runtime timing.
+
+Remaining Q&A work: original generation/control-token/output flow, transcript
+boundary overlap/pruning, exact detection/dispatch scheduling (including 100 ms
+accepted-addition delay), provisional context for answers, and original/runtime
+comparisons. This integration supersedes the earlier lifetime-uniqueness and
+unresolved-expiry notes; full Q&A parity is still unproven.

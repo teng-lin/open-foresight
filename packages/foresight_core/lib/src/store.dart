@@ -34,7 +34,7 @@ class Store {
     CREATE TABLE IF NOT EXISTS meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS meeting_answers(meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,answer_id INTEGER NOT NULL REFERENCES answers(id) ON DELETE CASCADE,PRIMARY KEY(meeting_id,answer_id));
     CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL,UNIQUE(meeting_id,normalized));
+    CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
     PRAGMA user_version=1;''',
     );
@@ -74,17 +74,31 @@ class Store {
     db.execute(
       'CREATE INDEX IF NOT EXISTS answer_request_id ON answers(request_id)',
     );
-    _allowInterimQuestionOrigins();
+    _migrateMeetingQuestions();
     _reconcileLabelRecords();
   }
 
-  // Interim speech can produce a question before any finalized transcript row.
-  // Rebuild the old NOT NULL schema without changing job IDs or answer links.
-  void _allowInterimQuestionOrigins() {
-    if (!db
+  // Keep durable history while allowing interim origins and repeated questions
+  // after rolling filter expiry. Rebuild legacy schemas without changing IDs.
+  void _migrateMeetingQuestions() {
+    final requiredOrigin = db
         .select('PRAGMA table_info(meeting_questions)')
-        .any((row) => row['name'] == 'transcript_id' && row['notnull'] == 1))
-      return;
+        .any((row) => row['name'] == 'transcript_id' && row['notnull'] == 1);
+    final lifetimeUnique = db
+        .select('PRAGMA index_list(meeting_questions)')
+        .any(
+          (row) =>
+              row['unique'] == 1 &&
+              db
+                      .select(
+                        'SELECT name FROM pragma_index_info(?) ORDER BY seqno',
+                        [row['name']],
+                      )
+                      .map((column) => column['name'])
+                      .join(',') ==
+                  'meeting_id,normalized',
+        );
+    if (!requiredOrigin && !lifetimeUnique) return;
     db.execute('BEGIN IMMEDIATE');
     try {
       db.execute("""
@@ -95,8 +109,7 @@ class Store {
           question TEXT NOT NULL,normalized TEXT NOT NULL,
           state TEXT NOT NULL DEFAULT 'queued',
           answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,
-          error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL,
-          UNIQUE(meeting_id,normalized));
+          error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
         INSERT INTO meeting_questions_interim
           SELECT id,meeting_id,transcript_id,question,normalized,state,answer_id,error,created
           FROM meeting_questions;

@@ -943,6 +943,8 @@ extension _MeetingWorkspace on _WorkspaceState {
                                   'Automatic · No supporting sources found',
                                 'failed' => 'Automatic · Could not answer',
                                 'cancelled' => 'Automatic · Cancelled',
+                                'superseded' =>
+                                  'Automatic · Replaced by an updated question',
                                 _ => 'Automatic · Saved question',
                               }),
                               if ((item['error'] as String).isNotEmpty)
