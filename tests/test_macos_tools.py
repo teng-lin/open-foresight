@@ -184,6 +184,17 @@ except Deferred:
                 installer.stop_owned_services(self.destination,{42:str(executable),43:str(self.destination/'worker')},['profile'])
         self.assertEqual([call.args[0][-1] for call in run.call_args_list],['--status'])
 
+    @unittest.skipUnless(sys.platform=='darwin','Darwin metadata copy')
+    def test_app_copy_preserves_extended_attributes_and_quarantine(self):
+        subprocess.run(['/usr/bin/xattr','-w','com.openforesight.test','retained',str(self.source)],check=True)
+        subprocess.run(['/usr/bin/xattr','-w','com.apple.quarantine','0081;12345678;OpenForesightTest;',str(self.source)],check=True)
+        copied=self.root/'Copied.app'
+        installer.copy_application(self.source,copied)
+        self.assertEqual(subprocess.check_output(['/usr/bin/xattr','-p','com.openforesight.test',str(copied)],text=True).strip(),'retained')
+        quarantine=subprocess.check_output(['/usr/bin/xattr','-p','com.apple.quarantine',str(copied)],text=True).strip()
+        # macOS may normalize provenance/time fields when propagating quarantine.
+        self.assertTrue(int(quarantine.split(';')[0],16) & 1,quarantine)
+
     @unittest.skipUnless(sys.platform=='darwin','Darwin atomic exchange')
     def test_real_darwin_atomic_exchange_of_nonempty_apps(self):
         installer.atomic_swap(self.source,self.destination)

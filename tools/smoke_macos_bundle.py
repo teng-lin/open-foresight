@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from install_macos import metadata, minimal_environment, process_path, SERVICE
+from install_macos import metadata, minimal_environment, process_path, copy_application, SERVICE
 
 
 class McpPeer:
@@ -135,7 +135,7 @@ def smoke(bundle, output, desktop=False):
         root = Path(temporary)
         app = root / 'Relocated App With Spaces' / 'Open Foresight.app'
         app.parent.mkdir()
-        shutil.copytree(bundle, app, symlinks=True)
+        copy_application(bundle, app)
         info = metadata(app)
         subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)], check=True, capture_output=True)
         report['linkage'] = audit_dependencies(app)

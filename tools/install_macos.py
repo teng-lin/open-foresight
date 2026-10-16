@@ -117,6 +117,17 @@ def stop_owned_services(app, active, profiles, timeout=1800):
             raise Deferred('Service is still running after graceful shutdown; app was not replaced')
 
 
+def copy_application(source, destination):
+    if sys.platform == 'darwin':
+        # shutil.copytree on macOS omits extended attributes/resource forks.
+        # Retain quarantine and stapled-ticket metadata rather than bypassing it.
+        subprocess.run(['/usr/bin/ditto', '--rsrc', '--extattr', '--qtn', '--acl',
+                        str(source), str(destination)], check=True,
+                       env=minimal_environment(Path.home()), capture_output=True)
+    else:
+        shutil.copytree(source, destination, symlinks=True)
+
+
 def installation_lock_path(app):
     identity = hashlib.sha256(str(Path(app).resolve()).encode('utf-8')).hexdigest()[:24]
     return Path(f'/tmp/of-install-{os.getuid()}-{identity}/lock')
@@ -188,7 +199,7 @@ def install(source, destination, *, allow_adhoc=False, stop_services=False, prof
         cleanup = True
         try:
             stage = Path(temp) / destination.name
-            shutil.copytree(source, stage, symlinks=True)
+            copy_application(source, stage)
             metadata(stage)
             if verify(stage) != incoming:
                 raise ValueError('Staged signature identity changed during copying')
