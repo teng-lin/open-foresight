@@ -12,8 +12,11 @@ class Helper {
   late final ClientChannel channel;
   late final RagServiceClient client;
   Process? process;
+  Future<Process>? _launching;
+  Future<PingResponse>? _startupProbe;
   bool stopping = false;
   bool shutdownVerified = true;
+  bool _adopted = false;
   int restarts = 0;
   String state = 'disconnected';
   control.State? snapshot;
@@ -73,19 +76,33 @@ class Helper {
     if (manageProcess && executable != null && process == null) {
       bool live = false;
       try {
-        await client.ping(
+        await (_startupProbe = client.ping(
           PingRequest(),
           options: CallOptions(timeout: const Duration(milliseconds: 400)),
-        );
+        ));
         live = true;
+        _adopted = true;
       } catch (_) {}
+      if (stopping) return;
       if (!live) {
-        process = await Process.start(executable, [
+        process = await (_launching = Process.start(executable, [
           socket,
           storage,
-        ], environment: runtimeConfiguration.environment);
+        ], environment: runtimeConfiguration.environment));
         process!.stdout.drain<void>();
         process!.stderr.drain<void>();
+        if (stopping) {
+          final late = process!;
+          late.kill();
+          try {
+            await late.exitCode.timeout(const Duration(seconds: 5));
+          } on TimeoutException {
+            late.kill(ProcessSignal.sigkill);
+            await late.exitCode;
+          }
+          process = null;
+          return;
+        }
         process!.exitCode.then((code) async {
           process = null;
           state = 'helper exited ($code)';
@@ -141,6 +158,17 @@ class Helper {
   Future<void> close() async {
     stopping = true;
     await watch?.cancel();
+    // Resolve launch/adoption races before deciding which process is owned.
+    try {
+      await _startupProbe;
+    } catch (_) {
+      /* No helper answered. */
+    }
+    try {
+      await _launching;
+    } catch (_) {
+      /* The helper could not start. */
+    }
     if (manageProcess) {
       final owned = process;
       if (owned != null) {
@@ -154,6 +182,7 @@ class Helper {
       } else {
         // A service restart can adopt its predecessor's surviving helper.
         // Verify the private profile arguments before releasing that owner.
+        if (_adopted || snapshot != null) shutdownVerified = false;
         final pid = int.tryParse(snapshot?.instanceId.split('-').first ?? '');
         if (pid != null) {
           shutdownVerified = false;
