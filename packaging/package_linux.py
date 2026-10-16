@@ -139,7 +139,7 @@ def make_arch(root, output, version, release, metadata, epoch):
             f'pkgdesc={metadata["summary"]!r}\narch=(x86_64)\nurl={metadata["url"]!r}\n'
             f'license=({metadata["license"]!r})\ndepends=({dependencies})\n'
             "provides=('open-foresight')\nconflicts=('open-foresight')\n"
-            "options=('!strip' '!debug')\nsource=('payload.tar.gz')\nnoextract=('payload.tar.gz')\n"
+            "options=('!strip' '!debug' 'staticlibs')\nsource=('payload.tar.gz')\nnoextract=('payload.tar.gz')\n"
             f"sha256sums=('{digest(source)}')\n"
             'package() {\n  bsdtar -xf "$srcdir/payload.tar.gz" --strip-components=1 -C "$pkgdir"\n}\n')
         subprocess.run(['makepkg', '--nodeps', '--noconfirm'], cwd=directory, check=True)

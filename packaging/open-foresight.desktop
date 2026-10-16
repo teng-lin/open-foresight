@@ -6,4 +6,4 @@ Exec=open-foresight
 Icon=open-foresight
 Terminal=false
 StartupWMClass=io.openforesight.App
-Categories=Office;Audio;
+Categories=Office;
