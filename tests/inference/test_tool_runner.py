@@ -3,6 +3,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import queue
+import sys
 from pathlib import Path
 import types
 import threading
@@ -373,5 +375,150 @@ class ToolRunnerTest(unittest.TestCase):
             self.assertTrue(engine.conversation.closed)
             self.assertEqual(len(engine.conversation.deleted_options), 1)
 
+
+
+class QueueInput:
+    def __init__(self): self.lines = queue.Queue()
+    def send(self, text): self.lines.put(text + '\n')
+    def __iter__(self): return self
+    def __next__(self):
+        line = self.lines.get(timeout=5)
+        if line is None: raise StopIteration
+        return line
+
+
+class QueueOutput:
+    def __init__(self): self.lines, self.pending = queue.Queue(), ''
+    def write(self, text):
+        self.pending += text
+        while '\n' in self.pending:
+            line, self.pending = self.pending.split('\n', 1)
+            self.lines.put(line)
+    def flush(self): pass
+    def read(self): return self.lines.get(timeout=5)
+
+
+class PersistentTest(unittest.TestCase):
+    definitions = {'tools': [{'name': 'search'}], 'system_message': 'System',
+                   'delegate_tool_detection': True, 'messages': []}
+
+    def start(self, engine, cache=None):
+        input_stream, output = QueueInput(), QueueOutput()
+        worker = runner.PersistentWorker(engine, API, input_stream, output, cache)
+        thread = threading.Thread(target=worker.serve)
+        thread.start()
+        self.assertEqual(output.read(), 'ready 1')
+        self.addCleanup(lambda: (input_stream.send('shutdown'), thread.join(5)))
+        return input_stream, output, thread
+
+    def request(self, input_stream, token, definitions=None):
+        input_stream.send('generate ' + str(token) + ' ' + json.dumps({
+            'prompt': 'Question', 'tools': definitions or self.definitions, 'max_output_tokens': 256}))
+
+    def finish(self, input_stream, output, token):
+        self.assertTrue(output.read().startswith(str(token) + ' delta '))
+        self.assertTrue(output.read().startswith(str(token) + ' model '))
+        # A stale reply must never resolve this request's control wait.
+        input_stream.send('reply ' + str(token - 1) + ' {"finish":true,"error":"stale"}')
+        input_stream.send('reply ' + str(token) + ' {"finish":true}')
+        self.assertTrue(output.read().startswith(str(token) + ' answer '))
+        self.assertEqual(output.read(), str(token) + ' done completed')
+
+    def test_reuses_only_matching_empty_history_base_and_closes_before_done(self):
+        events = []
+        class CloneFunction:
+            def __call__(self, pointer):
+                events.append(('clone', pointer))
+                return pointer + 100
+        clone = CloneFunction()
+        class TrackingConversation(Conversation):
+            def __init__(self, lib, ptr, **kwargs):
+                super().__init__([{'role': 'assistant', 'content': 'Answer'}])
+                self._ptr = ptr
+                self._lib.litert_lm_conversation_clone = clone
+            def close(self):
+                if self.closed: raise AssertionError('double close')
+                events.append(('close', self._ptr)); self.closed = True
+        class TrackingEngine:
+            def __init__(self): self.creations = []
+            def tokenize(self, text): return []
+            def create_conversation(self, **config):
+                self.creations.append(config)
+                return TrackingConversation(None, len(self.creations))
+        engine = TrackingEngine()
+        module = types.ModuleType('litert_lm.conversation')
+        module.Conversation = TrackingConversation
+        with patch.dict(sys.modules, {'litert_lm.conversation': module}):
+            input_stream, output, thread = self.start(engine)
+            self.request(input_stream, 1); self.finish(input_stream, output, 1)
+            self.assertIn(('close', 101), events)
+            self.request(input_stream, 2); self.finish(input_stream, output, 2)
+            self.assertEqual(len(engine.creations), 1)
+            history = dict(self.definitions, messages=[{'role': 'user', 'content': 'Past'}])
+            self.request(input_stream, 3, history); self.finish(input_stream, output, 3)
+            summary = dict(self.definitions, tools=[], system_message='')
+            self.request(input_stream, 4, summary); self.finish(input_stream, output, 4)
+            self.request(input_stream, 5); self.finish(input_stream, output, 5)
+            self.assertEqual(len(engine.creations), 3)
+            self.assertEqual(sum(event == ('clone', 1) for event in events), 3)
+            self.assertNotIn(('close', 1), events)
+            changed = dict(self.definitions, system_message='Different')
+            self.request(input_stream, 6, changed); self.finish(input_stream, output, 6)
+            self.assertIn(('close', 1), events)
+            input_stream.send('shutdown'); thread.join(5)
+            self.assertFalse(thread.is_alive())
+            self.assertIn(('close', 4), events)
+            self.assertEqual(clone.argtypes, [runner.ctypes.c_void_p])
+            self.assertIs(clone.restype, runner.ctypes.c_void_p)
+
+    def test_cancel_tool_wait_disconnect_and_failure_allow_next_request(self):
+        closed = []
+        class Cache:
+            def acquire(self, *args):
+                conversation = Conversation([{'role': 'assistant', 'content': 'Answer'}])
+                conversation.close = lambda: closed.append(True)
+                conversation._lib.litert_lm_conversation_cancel_process = lambda ptr: None
+                return conversation
+            def close(self): closed.append('base')
+        input_stream, output, thread = self.start(Engine([]), Cache())
+        self.request(input_stream, 1)
+        self.assertTrue(output.read().startswith('1 delta ')); self.assertTrue(output.read().startswith('1 model '))
+        input_stream.send('cancel 1')
+        self.assertEqual(output.read(), '1 done cancelled')
+        self.assertEqual(closed, [True])
+        input_stream.send('generate 2 {"prompt":null}')
+        self.assertTrue(output.read().startswith('2 error ')); self.assertEqual(output.read(), '2 done failed')
+        self.request(input_stream, 3); self.finish(input_stream, output, 3)
+        self.request(input_stream, 4)
+        self.assertTrue(output.read().startswith('4 delta ')); self.assertTrue(output.read().startswith('4 model '))
+        input_stream.lines.put(None)
+        self.assertEqual(output.read(), '4 done cancelled')
+        thread.join(5)
+        self.assertFalse(thread.is_alive()); self.assertEqual(closed, [True, True, True, 'base'])
+
+    def test_cancel_native_stream_waits_for_final_before_delete(self):
+        started, cancelled, finalized = threading.Event(), threading.Event(), threading.Event()
+        events = []
+        class AsyncLib(Lib):
+            def litert_lm_conversation_send_message_stream(self, ptr, message, context, optional, callback, data):
+                def produce():
+                    started.set(); cancelled.wait(5)
+                    self.chunks[50] = (None, True, 'CANCELLED')
+                    finalized.set(); callback(data, 50)
+                threading.Thread(target=produce).start()
+                return 0
+            def litert_lm_conversation_cancel_process(self, ptr):
+                events.append('cancel'); cancelled.set()
+        conversation = Conversation([]); conversation._lib = AsyncLib([])
+        def close():
+            self.assertTrue(finalized.is_set()); events.append('close')
+        conversation.close = close
+        cache = types.SimpleNamespace(acquire=lambda *args: conversation, close=lambda: None)
+        input_stream, output, thread = self.start(Engine([]), cache)
+        self.request(input_stream, 1); self.assertTrue(started.wait(5))
+        input_stream.send('cancel 1')
+        self.assertEqual(output.read(), '1 done cancelled')
+        self.assertEqual(events[-1], 'close')
+        self.assertTrue(events[:-1] and all(event == 'cancel' for event in events[:-1]))
 
 if __name__ == '__main__': unittest.main()

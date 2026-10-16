@@ -18,6 +18,7 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <poll.h>
 #include <set>
 #include <signal.h>
@@ -267,6 +268,7 @@ int run(Worker &w, std::vector<std::string> args,
 bool valid_asset(const char *runtime, const char *model) {
   return runtime && *runtime && model && *model && access(model, R_OK) == 0;
 }
+struct PersistentGeneration;
 struct Engine {
   int backend = 0;
   std::string runtime, model;
@@ -274,6 +276,10 @@ struct Engine {
   int refs = 0;
   bool busy = false;
   std::string state = "configured", error;
+  bool persistent_protocol = false;
+  uint64_t generation = 0;
+  std::unique_ptr<PersistentGeneration> persistent;
+  ~Engine();
 };
 struct Conversation : Worker {
   Engine *engine;
@@ -293,6 +299,8 @@ void failure(Worker &w, const std::string &id, uint64_t &seq,
                ",\"code\":" + quote(code) + ",\"message\":" + quote(message) +
                    ",\"retryable\":false"));
 }
+#include "persistent_generation.h"
+Engine::~Engine() { shutdown_persistent(*this); }
 struct Speech : Worker {
   std::string runtime, model;
   std::vector<int16_t> samples, pending;
@@ -446,7 +454,7 @@ char *fs_engine_state(void *h) {
                  ",\"backend\":" + quote(std::getenv("FORESIGHT_LITERT_BACKEND") &&
                      std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu"
                      ? "litert-lm-gpu-native" : "litert-lm-cpu-native") +
-                 ",\"load_policy\":\"per_request\","
+                 ",\"load_policy\":" + quote(e.persistent_protocol ? "persistent_worker" : "per_request") + ","
                  "\"context_length\":4096,\"temperature\":0.4,\"top_k\":40,\"top_p\":0.9,"
                  "\"thinking\":false,\"json\":\"ll_guidance_and_application_validation\",\"text\":true,\"tools\":true,\"error\":" + quote(e.error) + "}");
   return owned("{\"state\":" + quote(e.state) +
@@ -466,6 +474,7 @@ int fs_engine_probe(void *h) {
     e.busy = true;
     e.state = "loading";
   }
+  shutdown_persistent(e);
   Worker probe;
   std::string diagnostics;
   auto arguments = e.backend == 1
@@ -477,6 +486,9 @@ int fs_engine_probe(void *h) {
   {
     std::lock_guard lock(e.mu);
     e.busy = false;
+    e.persistent_protocol = status == 0 && e.backend == 1 &&
+        (diagnostics.find("\"worker_protocol\":1") != std::string::npos ||
+         diagnostics.find("\"worker_protocol\": 1") != std::string::npos);
     e.state = status == 0 ? "ready" : "failed";
     e.error = status == 0 ? ""
                           : "Model initialization probe failed with status " +
@@ -546,6 +558,28 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     std::string utf8;
     bool tool_answer_received = false;
     bool tool_protocol_failed = false;
+    bool worker_error_received = false;
+    auto tool_line = [&](const std::string &line) {
+      bool request = line.starts_with("tool ");
+      bool model = line.starts_with("model ");
+      bool answer = line.starts_with("answer ");
+      bool delta = line.starts_with("delta ");
+      if (line.starts_with("error ") && !tool_answer_received) {
+        worker_error_received = true;
+        failure(c, c.request, seq, "runtime_failure", line.substr(6));
+        return;
+      }
+      if ((!request && !model && !answer && !delta) || tool_answer_received ||
+          (delta && c.awaiting_tool)) {
+        tool_protocol_failed = true;
+        failure(c, c.request, seq, "tool_protocol", "Invalid tool worker frame");
+        c.stop(); return;
+      }
+      if (answer) tool_answer_received = true;
+      if (request || model) c.awaiting_tool = true;
+      c.emit(event(delta ? "model_delta" : model ? "model_response" : request ? "tool_request" : "tool_answer", c.request,
+                   seq++, ",\"text\":" + quote(line.substr(model || delta ? 6 : request ? 5 : 7))));
+    };
     std::vector<std::string> args{e.runtime,     "-m",
                                   e.model,       "-p",
                                   text,          "-n",
@@ -562,50 +596,48 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
       args.push_back(tools ? "--tools" : "--json-schema");
       args.push_back(json_schema);
     }
-    int status = run(c, std::move(args), [&](const char *data, size_t n) {
-      utf8.append(data, n);
-      if (tools) {
-        size_t newline;
-        while ((newline = utf8.find('\n')) != std::string::npos) {
-          auto line = utf8.substr(0, newline);
-          utf8.erase(0, newline + 1);
-          bool request = line.starts_with("tool ");
-          bool model = line.starts_with("model ");
-          bool answer = line.starts_with("answer ");
-          bool delta = line.starts_with("delta ");
-          if ((!request && !model && !answer && !delta) || tool_answer_received ||
-              (delta && c.awaiting_tool)) {
-            tool_protocol_failed = true;
-            failure(c, c.request, seq, "tool_protocol", "Invalid tool worker frame");
-            c.stop(); return;
+    int status;
+    if (tools && e.persistent_protocol) {
+      const auto payload = "{\"prompt\":" + quote(text) + ",\"tools\":" +
+          json_schema + ",\"max_output_tokens\":" + std::to_string(max_output_tokens) + "}";
+      status = run_persistent(e, c, payload, tool_line);
+      if (tool_protocol_failed) shutdown_persistent(e, false);
+    } else {
+      // A one-shot mode must not load another model alongside the retained worker.
+      shutdown_persistent(e);
+      status = run(c, std::move(args), [&](const char *data, size_t n) {
+        utf8.append(data, n);
+        if (tools) {
+          size_t newline;
+          while ((newline = utf8.find('\n')) != std::string::npos) {
+            auto line = utf8.substr(0, newline);
+            utf8.erase(0, newline + 1);
+            tool_line(line);
+            if (tool_protocol_failed) return;
           }
-          if (answer) tool_answer_received = true;
-          if (request || model) c.awaiting_tool = true;
-          c.emit(event(delta ? "model_delta" : model ? "model_response" : request ? "tool_request" : "tool_answer", c.request,
-                       seq++, ",\"text\":" + quote(line.substr(model || delta ? 6 : request ? 5 : 7))));
+          return;
         }
-        return;
-      }
-      size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
-      if (complete) {
-        size_t lead = complete - 1;
-        while (lead > 0 &&
-               (static_cast<unsigned char>(utf8[lead]) & 0xc0) == 0x80)
-          --lead;
-        unsigned char byte = utf8[lead];
-        size_t width = byte < 128              ? 1
-                       : (byte & 0xe0) == 0xc0 ? 2
-                       : (byte & 0xf0) == 0xe0 ? 3
-                                               : 4;
-        if (complete - lead < width)
-          complete = lead;
-      }
-      if (complete && !c.cancel) {
-        c.emit(event("delta", c.request, seq++,
-                     ",\"text\":" + quote(utf8.substr(0, complete))));
-        utf8.erase(0, complete);
-      }
-    }, tools);
+        size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
+        if (complete) {
+          size_t lead = complete - 1;
+          while (lead > 0 &&
+                 (static_cast<unsigned char>(utf8[lead]) & 0xc0) == 0x80)
+            --lead;
+          unsigned char byte = utf8[lead];
+          size_t width = byte < 128              ? 1
+                         : (byte & 0xe0) == 0xc0 ? 2
+                         : (byte & 0xf0) == 0xe0 ? 3
+                                                 : 4;
+          if (complete - lead < width)
+            complete = lead;
+        }
+        if (complete && !c.cancel) {
+          c.emit(event("delta", c.request, seq++,
+                       ",\"text\":" + quote(utf8.substr(0, complete))));
+          utf8.erase(0, complete);
+        }
+      }, tools);
+    }
     if (!c.cancel && !tools) {
       size_t marker = utf8.find(" [end of text]");
       if (marker != std::string::npos)
@@ -620,7 +652,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     if (tools && (!utf8.empty() || !tool_answer_received) && !c.cancel)
       terminal = "failed";
     c.awaiting_tool = false;
-    if (terminal == "failed" && !tool_protocol_failed)
+    if (terminal == "failed" && !tool_protocol_failed && !worker_error_received)
       failure(c, c.request, seq, "runtime_failure",
               tools && status == 0 ? "Tool worker exited without a complete answer"
               : "Generation runner exited with status " + std::to_string(status));

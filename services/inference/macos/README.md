@@ -32,3 +32,10 @@ system instruction, tools or schema. Its fixed 512-token setting and single
 candidate sampling follow the recovered detector options. CPU is currently a
 port testing choice; dedicated-asset compatibility and production integration
 remain unverified. See [runtime evidence](../../../docs/reference-query-runtime.md).
+
+Generation also implements the versioned persistent worker protocol described
+in [the shared inference README](../README.md#persistent-tool-worker). The pinned
+Python engine remains loaded across tool requests; each request owns an isolated
+conversation and receives a terminal acknowledgement only after that conversation
+closes. The native application can cancel decoding through the same input pipe
+without terminating the retained engine.

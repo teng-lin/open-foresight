@@ -1,5 +1,6 @@
 #include "tool_conversation.h"
 #include "conversation_stream.h"
+#include "persistent_worker.h"
 #include "fd_stream.h"
 #include "litert.h"
 #include "raw_query_detector.h"
@@ -236,11 +237,13 @@ void embeddings(LiteRt &lm, const std::string &path, bool gpu,
 class Generator {
   LiteRt &lm;
   std::unique_ptr<LiteRtLmEngine, void (*)(LiteRtLmEngine *)> engine;
+  std::unique_ptr<LiteRtLmConversation, void (*)(LiteRtLmConversation *)> base;
+  std::string base_key;
 
 public:
   Generator(LiteRt &api, const std::string &path, bool gpu,
             const std::string &cache, bool query_detector = false)
-      : lm(api), engine(nullptr, LM(engine_delete)) {
+      : lm(api), engine(nullptr, LM(engine_delete)), base(nullptr, LM(conversation_delete)) {
     auto settings =
         handle(LM(engine_settings_create)(path.c_str(), gpu ? "gpu" : "cpu",
                                           nullptr, "cpu"),
@@ -253,6 +256,9 @@ public:
     if (!engine)
       throw std::runtime_error("Cannot initialize generation model");
   }
+  void cancel(void *pointer) {
+    LM(conversation_cancel_process)(static_cast<LiteRtLmConversation *>(pointer));
+  }
   std::string detect_query(const std::string &prompt) {
     return raw_query_detector(lm, engine.get(), prompt);
   }
@@ -264,7 +270,9 @@ public:
   std::string generate(const std::string &prompt, int budget,
                        bool grounded = false, const json &schema = nullptr,
                        std::ostream *stream = nullptr,
-                       const json &tools = nullptr) {
+                       const json &tools = nullptr,
+                       std::istream *controls = nullptr,
+                       const std::function<bool(void *)> &register_conversation = {}) {
     const auto tool_request = tools.is_null() ? foresight::ToolRequest{} :
                                                foresight::parse_tool_request(tools);
     const auto tool_tokens = tools.is_null() ? 0 :
@@ -321,9 +329,33 @@ public:
     LM(thinking_config_set_enable_thinking)(thinking.get(), false);
     LM(conversation_config_set_thinking_config)(config.get(), thinking.get());
     std::vector<std::unique_ptr<ConversationStreamState>> callback_states;
-    auto conversation =
-        handle(LM(conversation_create)(engine.get(), config.get()),
-               LM(conversation_delete));
+    // The original retains only an empty-history base. Never promote the
+    // generated clone, and never evict the chat base for a plain summary.
+    const bool cache_eligible = register_conversation && !tools.is_null() &&
+        !tool_request.tools.empty() && tool_request.messages.empty();
+    LiteRtLmConversation *pointer = nullptr;
+    if (cache_eligible) {
+      const auto key = json::array({tool_request.system_message,
+                                   tool_request.tools, budget}).dump();
+      if (!base || key != base_key) {
+        auto replacement = handle(LM(conversation_create)(engine.get(), config.get()),
+                                  LM(conversation_delete));
+        if (!replacement) throw std::runtime_error("Cannot create conversation base");
+        base = std::move(replacement);
+        base_key = key;
+      }
+      pointer = LM(conversation_clone)(base.get());
+    } else {
+      pointer = LM(conversation_create)(engine.get(), config.get());
+    }
+    auto conversation = handle(pointer, LM(conversation_delete));
+    if (!conversation) throw std::runtime_error("Cannot create request conversation");
+    struct Registration {
+      const std::function<bool(void *)> &callback;
+      ~Registration() { if (callback) callback(nullptr); }
+    } registration{register_conversation};
+    if (register_conversation && register_conversation(conversation.get()))
+      throw std::runtime_error("Request cancelled");
     auto args = handle(LM(conversation_optional_args_create)(),
                        LM(conversation_optional_args_delete));
     LM(conversation_optional_args_set_max_output_tokens)(args.get(), budget);
@@ -341,6 +373,8 @@ public:
     if (!tools.is_null()) {
       if (!stream) throw std::runtime_error("Tool conversation requires a protocol stream");
       return foresight::tool_conversation([&](const std::string &input) {
+        if (register_conversation && register_conversation(conversation.get()))
+          throw std::runtime_error("Request cancelled");
         auto owned = std::make_unique<ConversationStreamState>(lm, *stream);
         auto *state = owned.get();
         callback_states.push_back(std::move(owned));
@@ -348,12 +382,15 @@ public:
                 conversation.get(), input.c_str(), nullptr, args.get(),
                 ConversationStreamState::receive, state))
           throw std::runtime_error("Tool generation stream failed to start");
+        // A cancel immediately before the native start may have had no work
+        // to interrupt. Re-register afterwards to cancel that race as well.
+        if (register_conversation) register_conversation(conversation.get());
         std::unique_lock lock(state->mutex);
         state->changed.wait(lock, [&] { return state->done; });
         if (!state->error.empty())
           throw std::runtime_error("Tool generation stream failed: " + state->error);
         return state->result.value();
-      }, message, std::cin, *stream, tool_request.delegate_tool_detection);
+      }, message, controls ? *controls : std::cin, *stream, tool_request.delegate_tool_detection);
     }
     auto decode = [](const char *raw) {
       if (!raw)
@@ -466,7 +503,7 @@ int main(int argc, char **argv) {
       std::string key = argv[i];
       if (key == "--gpu")
         gpu = true;
-      else if (key == "--probe" || key == "--check" || key == "--query-detector")
+      else if (key == "--probe" || key == "--check" || key == "--query-detector" || key == "--serve")
         args[key] = "true";
       else {
         if (i + 1 >= argc)
@@ -475,7 +512,7 @@ int main(int argc, char **argv) {
       }
     }
     const bool query_detector = args.count("--query-detector");
-    if (query_detector && (embedding || args.count("--tools") || args.count("--json-schema")))
+    if (query_detector && (embedding || args.count("--tools") || args.count("--json-schema") || args.count("--serve")))
       throw std::runtime_error("Raw query detection cannot use embedding, tools or a response schema");
     if (embedding && fs::is_directory(args.at("--embedding"))) {
       minilm_embeddings(args.at("--embedding"), gpu, protocol);
@@ -507,8 +544,20 @@ int main(int argc, char **argv) {
     cache /= backend;
     fs::create_directories(cache);
     Generator generator(lm, path, backend == "gpu", cache, query_detector);
-    if (args.count("--probe"))
+    if (args.count("--probe")) {
+      protocol << json({{"worker_protocol", 1}}).dump() << std::endl;
       return 0;
+    }
+    if (args.count("--serve")) {
+      foresight::persistent_worker(std::cin, protocol,
+          [&](const json &request, std::istream &controls, std::ostream &frames,
+              const std::function<bool(void *)> &registration) {
+            generator.generate(request.at("prompt").get<std::string>(),
+                request.value("max_output_tokens", 256), false, nullptr, &frames,
+                request.at("tools"), &controls, registration);
+          }, [&](void *pointer) { generator.cancel(pointer); });
+      return 0;
+    }
     if (query_detector) {
       protocol << generator.detect_query(args.at("--prompt")) << std::flush;
       return 0;

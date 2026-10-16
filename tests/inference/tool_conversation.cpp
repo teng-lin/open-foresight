@@ -1,6 +1,8 @@
 #include "../../services/inference/tool_conversation.h"
 #include "../../services/inference/conversation_stream.h"
+#include "../../services/inference/persistent_worker.h"
 #include <sstream>
+#include <algorithm>
 #include <vector>
 #include <iostream>
 using json = nlohmann::json;
@@ -103,6 +105,82 @@ int main() {
         }, "{}", bad_input, bad_output);
       } catch (const std::runtime_error &) { failed = true; }
       check(failed);
+    }
+
+    // A routed reply cannot cross request IDs. Completion is published only
+    // after the generator's native lease is closed, including cancellation.
+    {
+      foresight::ReplyBuffer commands;
+      std::istream owner_input(&commands);
+      std::vector<std::string> frames, lifecycle;
+      bool active = false, closed_before_terminal = true;
+      foresight::FrameBuffer capture([&](const std::string &line) {
+        frames.push_back(line);
+        if (line == "ready 1") commands.push("generate 1 {\"prompt\":\"First\",\"tools\":{}}");
+        else if (line.starts_with("1 model ")) {
+          commands.push("reply 0 {\"finish\":true,\"error\":\"stale\"}");
+          commands.push("reply 1 {\"finish\":true}");
+        } else if (line == "1 done completed") {
+          closed_before_terminal &= !active;
+          commands.push("generate 2 {\"prompt\":\"Cancel\",\"tools\":{}}");
+        } else if (line.starts_with("2 model ")) commands.push("cancel 2");
+        else if (line == "2 done cancelled") {
+          closed_before_terminal &= !active;
+          commands.push("generate 3 {\"prompt\":null}");
+        } else if (line == "3 done failed") commands.push("shutdown");
+      });
+      std::ostream framed_output(&capture);
+      foresight::persistent_worker(owner_input, framed_output,
+          [&](const json &request, std::istream &control, std::ostream &stream,
+              const std::function<bool(void *)> &registration) {
+            active = true;
+            registration(reinterpret_cast<void *>(42));
+            stream << "model {}" << std::endl;
+            std::string reply;
+            const bool got_reply = bool(std::getline(control, reply));
+            registration(nullptr);
+            active = false;
+            lifecycle.push_back("close");
+            if (!got_reply) throw std::runtime_error("Owner cancelled");
+            check(request.at("prompt") == "First");
+            check(json::parse(reply) == json({{"finish", true}}));
+            stream << "answer {}" << std::endl;
+          }, [&](void *pointer) {
+            check(pointer == reinterpret_cast<void *>(42));
+            lifecycle.push_back("cancel");
+          });
+      check(closed_before_terminal);
+      check(lifecycle == std::vector<std::string>({"close", "cancel", "close"}));
+      check(std::count(frames.begin(), frames.end(), "1 done completed") == 1);
+      check(std::count(frames.begin(), frames.end(), "2 done cancelled") == 1);
+      check(std::count(frames.begin(), frames.end(), "3 done failed") == 1);
+      check(std::none_of(frames.begin(), frames.end(), [](auto &line) { return line.starts_with("2 answer "); }));
+    }
+    // EOF while awaiting a tool reply cancels the owned clone and wakes its
+    // control reader; the worker still emits a terminal cleanup acknowledgement.
+    {
+      foresight::ReplyBuffer commands;
+      std::istream owner_input(&commands);
+      std::vector<std::string> frames;
+      bool cancelled = false, closed = false;
+      foresight::FrameBuffer capture([&](const std::string &line) {
+        frames.push_back(line);
+        if (line == "ready 1") commands.push("generate 1 {\"prompt\":\"Disconnect\",\"tools\":{}}");
+        if (line.starts_with("1 model ")) commands.close();
+        if (line == "1 done cancelled") check(closed);
+      });
+      std::ostream framed_output(&capture);
+      foresight::persistent_worker(owner_input, framed_output,
+          [&](const json &, std::istream &control, std::ostream &stream,
+              const std::function<bool(void *)> &registration) {
+            registration(reinterpret_cast<void *>(42));
+            stream << "model {}" << std::endl;
+            std::string reply;
+            check(!std::getline(control, reply));
+            registration(nullptr); closed = true;
+          }, [&](void *) { cancelled = true; });
+      check(cancelled && closed);
+      check(frames.back() == "1 done cancelled");
     }
     return 0;
   } catch (const std::exception &error) {

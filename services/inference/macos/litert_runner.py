@@ -14,6 +14,8 @@ import importlib.util
 import json
 import os
 import queue
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 
@@ -60,7 +62,8 @@ def merge_stream_message(result, chunk):
             result[key] = copy.deepcopy(value)
 
 
-def stream_tool_response(conversation, litert_lm, message, budget):
+def stream_tool_response(conversation, litert_lm, message, budget, emit=None, on_started=None):
+    emit = emit or (lambda kind, value: print(kind + " " + json.dumps(value, ensure_ascii=False), flush=True))
     # The C API owns callback chunks only during the callback. Copy their UTF-8
     # into an ordered queue, then parse/emit on the worker's main thread.
     pending = queue.Queue()
@@ -89,6 +92,8 @@ def stream_tool_response(conversation, litert_lm, message, budget):
             optional, callback, None)
         if status != 0:
             raise RuntimeError('Tool generation stream failed to start')
+        if on_started is not None:
+            on_started(conversation)
         result = {}
         while True:
             raw, final, error = pending.get()
@@ -100,14 +105,18 @@ def stream_tool_response(conversation, litert_lm, message, budget):
                 except json.JSONDecodeError:
                     chunk = {'role': 'assistant', 'content': [{'type': 'text', 'text': raw}]}
                 merge_stream_message(result, chunk)
-                print('delta ' + json.dumps(chunk, ensure_ascii=False), flush=True)
+                emit('delta', chunk)
             if final:
                 return result or {'role': 'assistant', 'content': []}
     finally:
         conversation._delete_optional_args(optional)
 
 
-def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
+def run_tool_conversation(engine, litert_lm, prompt, definitions, budget, *,
+                          emit=None, read_control=None, lease=None, on_stream_started=None):
+    emit = emit or (lambda kind, value: print(kind + " " + json.dumps(value, ensure_ascii=False), flush=True))
+    read_control = read_control or sys.stdin.readline
+    lease = lease or (lambda key, eligible, config: engine.create_conversation(**config))
     system = 'Follow the requested task faithfully. Do not invent facts.'
     delegate_tool_detection = False
     messages = []
@@ -148,7 +157,8 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
             (len(engine.tokenize(json.dumps(messages, ensure_ascii=False, separators=(',', ':')))) if messages else 0) > 4096):
         raise ValueError('Conversation input exceeds the 4096-token context')
 
-    with engine.create_conversation(
+    with lease(json.dumps([system, encoded_tools, budget], ensure_ascii=False),
+               bool(definitions) and not messages, dict(
             system_message=system,
             messages=messages or None,
             tools=delegated,
@@ -157,26 +167,26 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
             filter_channel_content_from_kv_cache=True,
             enable_speculative_decoding=True,
-            max_output_tokens=budget) as conversation:
+            max_output_tokens=budget)) as conversation:
         message = {'role': 'user', 'content': prompt}
         for turn in range(20):
             # The raw C callback preserves verbatim string tool arguments;
             # Python Message.from_json would JSON-decode those arguments.
-            value = stream_tool_response(conversation, litert_lm, message, budget)
+            value = stream_tool_response(conversation, litert_lm, message, budget, emit, on_stream_started)
             if not isinstance(value, dict):
                 raise ValueError('Invalid tool generation response')
             if delegate_tool_detection:
-                print('model ' + json.dumps(value, ensure_ascii=False), flush=True)
-                line = sys.stdin.readline()
+                emit('model', value)
+                line = read_control()
                 if not line:
                     raise RuntimeError('Tool conversation owner disconnected')
                 control = json.loads(line)
                 if control.get('finish', False):
                     result = {'error': control['error']} if 'error' in control else value
-                    print('answer ' + json.dumps(result, ensure_ascii=False), flush=True)
+                    emit('answer', result)
                     return
                 if turn == 19:
-                    print('answer ' + json.dumps({'error': 'Max turns reached after tool call detection'}), flush=True)
+                    emit('answer', {'error': 'Max turns reached after tool call detection'})
                     return
                 message = control['message']
                 if not isinstance(message, dict) or message.get('role') != 'user':
@@ -184,20 +194,194 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
                 continue
             calls = value.get('tool_calls')
             if not calls:
-                print('answer ' + json.dumps(value, ensure_ascii=False), flush=True)
+                emit('answer', value)
                 return
             if not isinstance(calls, list):
                 raise ValueError('Invalid tool calls')
             if turn == 19:
-                print('answer ' + json.dumps({'error': 'Max turns reached after tool call detection'}), flush=True)
+                emit('answer', {'error': 'Max turns reached after tool call detection'})
                 return
-            print('tool ' + json.dumps(calls, ensure_ascii=False), flush=True)
-            line = sys.stdin.readline()
+            emit('tool', calls)
+            line = read_control()
             if not line:
                 raise RuntimeError('Tool conversation owner disconnected')
             message = json.loads(line)
             if not isinstance(message, dict) or message.get('role') != 'user':
                 raise ValueError('Invalid tool response message')
+
+
+
+class RequestCancelled(RuntimeError):
+    pass
+
+
+class ConversationBase:
+    """One unmodified empty-history base, isolated from every generated turn."""
+    def __init__(self, engine, litert_lm):
+        self.engine, self.api = engine, litert_lm
+        self.base = None
+        self.key = None
+
+    def close(self):
+        if self.base is not None:
+            self.base.close()
+            self.base, self.key = None, None
+
+    def acquire(self, key, eligible, config):
+        if not eligible:
+            return self.engine.create_conversation(**config)
+        if self.base is None or key != self.key:
+            # Create before replacing so a failed creation preserves the base.
+            replacement = self.engine.create_conversation(**config)
+            self.close()
+            self.base, self.key = replacement, key
+        lib = self.base._lib
+        clone = lib.litert_lm_conversation_clone
+        # 0.18's Python FFI omits this public C entry point. In particular the
+        # default ctypes int return type would truncate the conversation pointer.
+        clone.argtypes = [ctypes.c_void_p]
+        clone.restype = ctypes.c_void_p
+        pointer = clone(self.base._ptr)
+        if not pointer:
+            raise RuntimeError('Cannot clone conversation base')
+        from litert_lm.conversation import Conversation
+        return Conversation(lib, pointer, engine=self.engine, automatic_tool_calling=False)
+
+
+class PersistentWorker:
+    """Serial requests, with a sole input owner able to cancel native decoding."""
+    def __init__(self, engine, api, input_stream, output_stream, cache=None):
+        self.engine, self.api = engine, api
+        self.input, self.output = input_stream, output_stream
+        self.cache = cache or ConversationBase(engine, api)
+        self.lock = threading.RLock()
+        self.output_lock = threading.Lock()
+        self.pending = queue.Queue()
+        self.current = None
+        self.closed = False
+        self.last_token = 0
+
+    def write(self, line):
+        with self.output_lock:
+            self.output.write(line + '\n')
+            self.output.flush()
+
+    def cancel_locked(self):
+        request = self.current
+        if request is None:
+            return
+        request['cancelled'] = True
+        request['controls'].put(None)
+        conversation = request['conversation']
+        if conversation is not None:
+            conversation._lib.litert_lm_conversation_cancel_process(conversation._ptr)
+
+    def read_input(self):
+        try:
+            for line in self.input:
+                if line.strip() == 'shutdown':
+                    break
+                fields = line.rstrip('\n').split(' ', 2)
+                if len(fields) < 2 or not fields[1].isascii() or not fields[1].isdigit():
+                    continue
+                command, token = fields[0], int(fields[1])
+                with self.lock:
+                    if command == 'generate':
+                        if token <= self.last_token or self.current is not None or len(fields) != 3:
+                            # Never emit a second terminal frame for an active or
+                            # stale token. The host owns monotonically increasing IDs.
+                            continue
+                        request = dict(token=token, payload=fields[2], controls=queue.Queue(),
+                                       cancelled=False, conversation=None)
+                        self.last_token, self.current = token, request
+                        self.pending.put(request)
+                    elif self.current is not None and token == self.current['token']:
+                        if command == 'cancel':
+                            self.cancel_locked()
+                        elif command == 'reply' and len(fields) == 3 and not self.current['cancelled']:
+                            self.current['controls'].put(fields[2])
+        finally:
+            with self.lock:
+                self.closed = True
+                self.cancel_locked()
+            self.pending.put(None)
+
+    def serve(self):
+        self.write('ready 1')
+        reader = threading.Thread(target=self.read_input, name='inference-input', daemon=True)
+        reader.start()
+        try:
+            while True:
+                request = self.pending.get()
+                if request is None:
+                    return
+                token = request['token']
+
+                def check_cancelled():
+                    with self.lock:
+                        if request['cancelled']:
+                            raise RequestCancelled('Request cancelled')
+
+                def emit(kind, value):
+                    check_cancelled()
+                    self.write(str(token) + ' ' + kind + ' ' + json.dumps(value, ensure_ascii=False))
+
+                def control():
+                    check_cancelled()
+                    value = request['controls'].get()
+                    check_cancelled()
+                    if value is None:
+                        raise RequestCancelled('Request cancelled')
+                    return value
+
+                @contextmanager
+                def lease(key, eligible, config):
+                    check_cancelled()
+                    conversation = self.cache.acquire(key, eligible, config)
+                    try:
+                        with self.lock:
+                            request['conversation'] = conversation
+                            check_cancelled()
+                        yield conversation
+                    finally:
+                        # Cancel holds this same lock while using the pointer.
+                        # Clear before delete, then terminal frames follow close.
+                        with self.lock:
+                            request['conversation'] = None
+                        conversation.close()
+
+                def stream_started(conversation):
+                    # Cancel may arrive between pointer registration and the
+                    # native start; repeat it once there is work to interrupt.
+                    with self.lock:
+                        if request['cancelled']:
+                            conversation._lib.litert_lm_conversation_cancel_process(conversation._ptr)
+
+                status = 'completed'
+                try:
+                    check_cancelled()
+                    value = json.loads(request['payload'])
+                    if not isinstance(value, dict) or not isinstance(value.get('prompt'), str):
+                        raise ValueError('Invalid generation request')
+                    budget = value.get('max_output_tokens', 256)
+                    if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 3072:
+                        raise ValueError('Output budget must be between 1 and 3072')
+                    run_tool_conversation(self.engine, self.api, value['prompt'], value['tools'], budget,
+                                          emit=emit, read_control=control, lease=lease, on_stream_started=stream_started)
+                    check_cancelled()
+                except Exception as error:
+                    with self.lock:
+                        status = 'cancelled' if request['cancelled'] else 'failed'
+                    if status == 'failed':
+                        self.write(str(token) + ' error ' + json.dumps(str(error), ensure_ascii=False))
+                with self.lock:
+                    # Serialize terminal publication and accepting the next ID.
+                    if request['cancelled']:
+                        status = 'cancelled'
+                    self.current = None
+                    self.write(str(token) + ' done ' + status)
+        finally:
+            self.cache.close()
 
 
 def run_query_detector(engine, prompt):
@@ -265,6 +449,10 @@ def run(args):
                          audio_backend=litert_lm.Backend.CPU(thread_count=4),
                          max_num_tokens=512 if args.query_detector else 4096, cache_dir=str(cache)) as engine:
         if args.probe:
+            print(json.dumps({"worker_protocol": 1}), flush=True)
+            return
+        if args.serve:
+            PersistentWorker(engine, litert_lm, sys.stdin, sys.stdout).serve()
             return
         if args.prompt is None:
             raise ValueError('A prompt is required')
@@ -335,6 +523,7 @@ def main():
                         default=os.environ.get('FORESIGHT_LITERT_BACKEND', 'cpu'))
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--probe', action='store_true')
+    parser.add_argument('--serve', action='store_true')
     parser.add_argument('--query-detector', action='store_true')
     parser.add_argument('--prompt')
     parser.add_argument('--json-schema')
@@ -342,7 +531,7 @@ def main():
     parser.add_argument('--max-output-tokens', type=int, default=256)
     args = parser.parse_args()
     if args.query_detector:
-        if args.tools or args.json_schema:
+        if args.tools or args.json_schema or args.serve:
             parser.error('Raw query detection cannot use tools or a response schema')
         # The original dedicated GEMMA4_200M asset declares backend=gpu.
         args.backend = 'gpu'

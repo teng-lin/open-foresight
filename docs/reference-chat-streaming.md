@@ -75,6 +75,28 @@ from persisted history. Python streaming fixtures and the C++ aggregation target
 pass. The changed full C++ inference source passes syntax compilation against
 pinned headers; a linked Linux build remains unverified.
 
-Original conversation cloning/cache reuse, empty-response recovery and exact
-original runtime comparison remain open. Streaming is now implemented; those
-other lifecycle requirements are not established by this transport work.
+The native bridge now negotiates `worker_protocol: 1` and retains one owned
+worker and model engine for tool conversations. Each request carries a monotonic
+identifier; cancellation waits for clone teardown before acknowledging completion.
+An unresponsive cancellation destroys the owned worker and the next request starts
+a fresh worker. Custom runners without the capability retain their existing path.
+One-shot generation shuts down the retained worker before loading another model.
+
+For empty-history text conversations, the worker retains an unused base keyed by
+system instruction, tool declarations and output budget, then clones it for each
+request. Historical conversations start independently. Plain summary requests use
+the retained engine without replacing the chat base. The SDK initializes the base
+lazily: this implements conversation reuse without claiming eager KV prefill.
+
+Native fixtures prove process reuse, cancellation acknowledgement, bounded fallback
+termination, stale-frame rejection and shutdown. The real GPU report
+`streaming/persistent-worker-report.json` proves clone isolation and reuse after
+cancellation. `streaming/persistent-integrated-web-model.json` verifies search,
+citation, replay and compression through the retained worker. The full core suite
+passes 193 tests; the full desktop suite passes 175 tests, with optional tests
+skipped. All four native test groups pass.
+
+Empty-response recovery, original runtime comparison and exhaustive lifecycle
+parity remain open. The retained worker covers the text configuration currently
+exposed by the port; original cache conditions for other modalities remain
+unverified.

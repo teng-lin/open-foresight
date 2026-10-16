@@ -51,8 +51,8 @@ prompt path.
 
 The four-answer window has been replaced for web-enabled sends by the recovered
 memory policy below. Streaming and provisional JSON-field extraction are now implemented; see
-[streaming evidence](reference-chat-streaming.md). Conversation cloning/cache
-reuse and history reset/lifecycle comparisons remain open. Response
+[streaming evidence](reference-chat-streaming.md). Conversation cloning and reuse are implemented for the port's text configuration.
+History reset and original runtime lifecycle comparisons remain open. Response
 normalization, number alignment and final sanitation are covered in
 [response processing](reference-chat-response.md).
 Helper tokenization and bundled defaults are covered in
