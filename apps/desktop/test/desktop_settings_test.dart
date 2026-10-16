@@ -13,6 +13,7 @@ void main() {
       final settings = DesktopSettings(
         Directory('${tmp.path}/config'),
         launcher.path,
+        macOS: false,
       );
       settings.legacyEntry.parent.createSync(recursive: true);
       settings.legacyEntry.writeAsStringSync('legacy application entry');

@@ -267,6 +267,18 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   String googleState = '';
   List<AudioDevice> availableAudioDevices = [];
   String audioDeviceState = '';
+  Map<String, dynamic> captureCapabilities = {};
+  String captureCapabilityError = '';
+  String loginState = '';
+  String get microphoneAccessLabel =>
+      const {
+        'authorized': 'Allowed',
+        'denied': 'Denied',
+        'restricted': 'Restricted by system policy',
+        'not_determined': 'Not requested',
+      }[captureCapabilities['microphone']] ??
+      'Checking';
+
   bool get googleSyncing => d is RemoteDomain
       ? (d as RemoteDomain).googleStatus['syncing'] == true
       : d.application.google.syncing;
@@ -317,6 +329,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     google; // Create the independently versioned connection tables.
     googleState = googleAuth.loadError;
     unawaited(refreshAudioDevices());
+    if (Platform.isMacOS) {
+      unawaited(refreshCaptureCapabilities());
+      unawaited(refreshLoginSetting());
+    }
 
     notifications = d.store.preference('notifications') == 'true';
     unawaited(refreshNotifications());
@@ -391,7 +407,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     } on MissingPluginException {
       /* pure widget tests */
     }
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       final active = await Process.run('hyprctl', ['activewindow', '-j']);
       if (active.exitCode == 0 &&
           (jsonDecode(active.stdout as String) as Map)['pid'] != pid) {
@@ -409,7 +426,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> enableGlobalShortcuts() async {
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
       await hyprShortcuts.install(
         d.store.preference('quickShortcut', 'CTRL + SHIFT + F'),
       );
@@ -440,7 +458,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> disableGlobalShortcuts() async {
-    if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
+    if (!Platform.isMacOS &&
+        Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null &&
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
     await globalShortcuts?.disable();
@@ -449,6 +468,58 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       'value': 'false',
     });
     if (mounted) setState(() => globalShortcutState = 'disabled');
+  }
+
+  Future<void> refreshLoginSetting() async {
+    try {
+      await desktopSettings.refresh();
+      if (mounted) setState(() => loginState = '');
+    } catch (error) {
+      if (mounted) setState(() => loginState = error.toString());
+    }
+  }
+
+  Future<void> setOpenAtLogin(bool value) async {
+    try {
+      await desktopSettings.setOpenAtLogin(value);
+      if (mounted) setState(() => loginState = '');
+    } catch (error) {
+      if (mounted) setState(() => loginState = error.toString());
+      rethrow;
+    }
+  }
+
+  Future<void> refreshCaptureCapabilities() async {
+    try {
+      final result = await d.command('audio.capabilities') as Map;
+      if (mounted)
+        setState(() {
+          captureCapabilities = Map<String, dynamic>.from(result);
+          captureCapabilityError =
+              result['microphone_purpose_present'] == false ||
+                  result['system_audio_purpose_present'] == false
+              ? 'The recording service is missing audio access configuration. Reinstall Open Foresight.'
+              : '';
+        });
+    } catch (error) {
+      if (mounted) setState(() => captureCapabilityError = error.toString());
+    }
+  }
+
+  Future<void> requestMicrophoneAccess() async {
+    try {
+      final result = await d.command('audio.request_microphone') as Map;
+      if (mounted)
+        setState(() {
+          captureCapabilities = Map<String, dynamic>.from(result);
+          captureCapabilityError = result['granted'] == true
+              ? ''
+              : 'Microphone access was denied. Enable Open Foresight in System Settings > Privacy & Security > Microphone, then refresh access status.';
+        });
+    } catch (error) {
+      if (mounted) setState(() => captureCapabilityError = error.toString());
+      rethrow;
+    }
   }
 
   Future<void> refreshAudioDevices() async {
@@ -584,6 +655,19 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     if (mounted)
       setState(() => googleState = 'Connected as ${googleAuth.email}');
     await google.syncCalendar();
+  }
+
+  Future<void> setMeetingReminders(bool value) async {
+    if (value && Platform.isMacOS) {
+      final result = await d.command('notifications.request_permission') as Map;
+      if (result['granted'] != true) {
+        throw StateError(
+          'Meeting reminders need notification access. Enable Open Foresight in System Settings > Notifications.',
+        );
+      }
+    }
+    await preference('googleReminders', value.toString());
+    await refreshNotifications();
   }
 
   Future<void> refreshNotifications() async {
