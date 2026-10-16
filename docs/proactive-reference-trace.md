@@ -199,3 +199,20 @@ Database durability and restart recovery can be intentional reconstruction
 choices. They should be described separately from behavior reproduced from
 the reference, especially where they change repeated-question or context
 retention behavior.
+
+## Integration: growing finalized history
+
+The reconstruction now reads finalized history after its cursor without a
+six-row cutoff. Empty detection retains that cursor; nonempty detection
+advances it to the last row included in the input snapshot. A per-meeting
+input version prevents repeatedly calling the model for unchanged empty
+results, while allowing speech arriving during a call to trigger another pass.
+The detector receives at most the final 200 whitespace units, retaining their
+line breaks. The 200-unit bound is recovered; whitespace splitting and the
+retained separators remain explicit approximations pending pool resolution.
+
+Regression tests cover cross-segment completion after an empty result, more
+than six segments, the 200-unit bound, concurrent speech arrival, restart with
+undetected history, cancellation, and durable answer ownership. Interim text,
+rolling deduplication, prefix/similarity replacement, and boundary overlap are
+still outstanding; this integration does not establish full Q&A parity.

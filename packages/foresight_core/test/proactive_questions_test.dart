@@ -131,6 +131,124 @@ void main() {
   );
 
   test(
+    'empty detection retains context without repeatedly invoking the model',
+    () async {
+      queue.begin(meeting);
+      append('When can we');
+      detectionResult = [];
+      await drain();
+      expect(detectedText, ['When can we']);
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_question_cursors')
+            .single['transcript_id'],
+        0,
+      );
+      await queue.process();
+      queue.wake();
+      await queue.process();
+      expect(detectedText, hasLength(1));
+
+      append('ship?');
+      detectionResult = ['When can we ship?'];
+      await drain();
+      expect(detectedText.last, 'When can we\nship?');
+      expect(answered, ['When can we ship?']);
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_question_cursors')
+            .single['transcript_id'],
+        store.rows('SELECT MAX(id) AS id FROM transcript').single['id'],
+      );
+    },
+  );
+
+  test(
+    'detection sees a growing window across more than six segments',
+    () async {
+      queue.begin(meeting);
+      for (final word in [
+        'When',
+        'will',
+        'the',
+        'team',
+        'be',
+        'ready',
+        'to',
+        'ship?',
+      ]) {
+        append(word);
+      }
+      detectionResult = ['When will the team be ready to ship?'];
+      await drain();
+      expect(
+        detectedText.single,
+        'When\nwill\nthe\nteam\nbe\nready\nto\nship?',
+      );
+      expect(answered, ['When will the team be ready to ship?']);
+    },
+  );
+
+  test(
+    'detection bounds the growing window to its last 200 whitespace units',
+    () async {
+      queue.begin(meeting);
+      append(List.generate(220, (i) => 'word$i').join(' '));
+      detectionResult = [];
+      await drain();
+      expect(
+        detectedText.single.split(' '),
+        List.generate(200, (i) => 'word${i + 20}'),
+      );
+      // Capping model input does not consume undetected history.
+      expect(
+        store
+            .rows('SELECT transcript_id FROM meeting_question_cursors')
+            .single['transcript_id'],
+        0,
+      );
+    },
+  );
+
+  test(
+    'new speech arriving during empty detection is processed next',
+    () async {
+      queue.begin(meeting);
+      append('When can we');
+      detectionGate = Completer<List<String>>();
+      final work = queue.process();
+      append('ship?');
+      detectionGate!.complete([]);
+      await work;
+      detectionGate = null;
+      detectionResult = ['When can we ship?'];
+      await drain();
+      expect(detectedText, ['When can we', 'When can we\nship?']);
+      expect(answered, ['When can we ship?']);
+    },
+  );
+
+  test(
+    'restart retains undetected history for the next transcript segment',
+    () async {
+      queue.begin(meeting);
+      append('When can we');
+      detectionResult = [];
+      await drain();
+      await queue.close();
+      store.close();
+      store = Store('${directory.path}/app.db');
+      queue = create();
+      queue.restore();
+      append('ship?');
+      detectionResult = ['When can we ship?'];
+      await drain();
+      expect(detectedText.last, 'When can we\nship?');
+      expect(answered, ['When can we ship?']);
+    },
+  );
+
+  test(
     'model busy and disabled settings retain work without invoking detection',
     () async {
       queue.begin(meeting);
@@ -252,33 +370,29 @@ void main() {
     },
   );
 
-  test(
-    'restart restores queued answers and unfinished transcript batches without duplicate answers',
-    () async {
-      queue.begin(meeting);
-      for (var i = 0; i < 8; i++) append('Question $i?');
-      await queue
-          .process(); // One detection batch of six segments is committed.
-      final first = store
-          .rows('SELECT id FROM meeting_questions ORDER BY id LIMIT 1')
-          .single['id'];
-      store.db.execute(
-        "UPDATE meeting_questions SET state='answering' WHERE id=?",
-        [first],
-      );
-      await queue.close();
-      store.close();
-      store = Store('${directory.path}/app.db');
-      queue = create();
-      queue.restore();
-      await drain();
-      expect(answered, List.generate(8, (i) => 'Question $i?'));
-      expect(store.rows('SELECT * FROM answers'), hasLength(8));
-      queue.restore();
-      await drain();
-      expect(answered, hasLength(8));
-    },
-  );
+  test('restart restores queued answers without duplicate answers', () async {
+    queue.begin(meeting);
+    for (var i = 0; i < 8; i++) append('Question $i?');
+    await queue.process(); // Detection commits durable jobs for the window.
+    final first = store
+        .rows('SELECT id FROM meeting_questions ORDER BY id LIMIT 1')
+        .single['id'];
+    store.db.execute(
+      "UPDATE meeting_questions SET state='answering' WHERE id=?",
+      [first],
+    );
+    await queue.close();
+    store.close();
+    store = Store('${directory.path}/app.db');
+    queue = create();
+    queue.restore();
+    await drain();
+    expect(answered, List.generate(8, (i) => 'Question $i?'));
+    expect(store.rows('SELECT * FROM answers'), hasLength(8));
+    queue.restore();
+    await drain();
+    expect(answered, hasLength(8));
+  });
 
   test(
     'reset waits for owned cancellation and clears work before workspace deletion',

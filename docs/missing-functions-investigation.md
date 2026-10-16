@@ -92,11 +92,21 @@ orphan answer writes. Each answer is saved with its exact request and meeting
 ownership. A failed question does not block later questions; the UI exposes retry
 actions and displays grounded answers, citations, and current-meeting status.
 
-These are tested reconstruction decisions. The original's exact detection
-prompt, buffer window, overlap, thresholds, scheduling, and retry policy have
-not been established from function-level evidence. In particular, detection
-currently batches six final transcript rows; questions split across batches
-remain a known quality limitation to investigate.
+These include tested reconstruction decisions. Subsequent IDA evidence is
+recorded in [proactive-reference-trace.md](proactive-reference-trace.md).
+Detection now uses growing finalized history rather than six-row batches,
+retains its cursor on empty results, and limits model input to the last 200
+whitespace units. The count is established by IDA; whitespace splitting and
+preserving line breaks are reconstruction choices pending the exact regex and
+join delimiter. Input versions prevent rerunning an unchanged empty window;
+new speech arriving during detection remains eligible for the next pass.
+Durable cursor recovery across restarts remains a reconstruction extension.
+
+Interim input, five-second deduplication, twenty-second prefix/similarity
+filtering, and cursor boundary overlap still require integration. The original
+prompt, normalization patterns, similarity thresholds, scheduling details, and
+retry policy remain unresolved. The copied-question restriction and per-meeting
+lifetime uniqueness above still differ from the inspected reference body.
 
 Verification after this implementation:
 

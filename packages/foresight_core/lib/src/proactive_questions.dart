@@ -6,8 +6,8 @@ String normalizeMeetingQuestion(String text) => text
     .replaceAll(RegExp(r'''[\s?？.!。！,，:：;；"“”'‘’]+'''), ' ')
     .trim();
 
-/// One service-owned pipeline: final transcript -> local detection -> durable
-/// deduplication -> grounded answer. Capture never waits for model work.
+/// Service-owned transcript detection and durable grounded-answer jobs.
+/// Capture never waits for model work.
 class ProactiveQuestions {
   ProactiveQuestions({
     required this.store,
@@ -27,6 +27,8 @@ class ProactiveQuestions {
   final void Function() changed;
   final Duration delay;
   final _pending = <int>{};
+  final _inputVersions = <int, int>{};
+  final _examinedVersions = <int, int>{};
   final errors = <int, String>{};
   Timer? _timer;
   Future<void>? _inFlight;
@@ -63,13 +65,14 @@ class ProactiveQuestions {
       'SELECT c.meeting_id FROM meeting_question_cursors c JOIN transcript t '
       'ON t.meeting_id=c.meeting_id WHERE t.final=1 AND t.id>c.transcript_id',
     )) {
-      _pending.add(row['meeting_id'] as int);
+      notify(row['meeting_id'] as int);
     }
     wake();
   }
 
   void notify(int meetingId) {
     if (_closed) return;
+    _inputVersions[meetingId] = (_inputVersions[meetingId] ?? 0) + 1;
     _pending.add(meetingId);
     wake();
   }
@@ -170,17 +173,25 @@ class ProactiveQuestions {
           ],
         );
       } else {
+        final inputVersion = _inputVersions[meetingId] ?? 0;
+        if (_examinedVersions[meetingId] == inputVersion) return;
         final cursor = store.rows(
           'SELECT transcript_id FROM meeting_question_cursors WHERE meeting_id=?',
           [meetingId],
         ).firstOrNull;
         if (cursor == null) return;
         final batch = store.rows(
-          'SELECT id,text FROM transcript WHERE meeting_id=? AND final=1 AND id>? ORDER BY id LIMIT 6',
+          'SELECT id,text FROM transcript WHERE meeting_id=? AND final=1 AND id>? ORDER BY id',
           [meetingId, cursor['transcript_id']],
         );
         if (batch.isEmpty) return;
-        final transcript = batch.map((row) => row['text']).join('\n');
+        final history = batch.map((row) => row['text']).join('\n').trim();
+        // IDA establishes the 200-unit tail; whitespace splitting is our
+        // reconstruction until the original Dart pool regex is resolved.
+        final units = RegExp(r'\S+').allMatches(history).toList();
+        final transcript = units.length > 200
+            ? history.substring(units[units.length - 200].start)
+            : history;
         _request =
             'proactive-detect-$meetingId-${DateTime.now().microsecondsSinceEpoch}';
         final questions = await detect(transcript, _request!);
@@ -211,11 +222,17 @@ class ProactiveQuestions {
               ],
             );
           }
-          store.db.execute(
-            'UPDATE meeting_question_cursors SET transcript_id=? WHERE meeting_id=?',
-            [batch.last['id'], meetingId],
-          );
+          // The original advances history only when detection finds queries.
+          // Empty results must retain context for a later segment to complete
+          // a question. The input version avoids polling that unchanged text.
+          if (questions.isNotEmpty) {
+            store.db.execute(
+              'UPDATE meeting_question_cursors SET transcript_id=? WHERE meeting_id=?',
+              [batch.last['id'], meetingId],
+            );
+          }
           store.db.execute('RELEASE detect_meeting_questions');
+          _examinedVersions[meetingId] = inputVersion;
         } catch (_) {
           store.db.execute('ROLLBACK TO detect_meeting_questions');
           store.db.execute('RELEASE detect_meeting_questions');
@@ -255,6 +272,8 @@ class ProactiveQuestions {
     if (_request != null) cancel(_request!);
     await _inFlight;
     _pending.clear();
+    _inputVersions.clear();
+    _examinedVersions.clear();
     errors.clear();
     _suspended = false;
   }
