@@ -534,6 +534,8 @@ extension _ScreenshotScreens on _WorkspaceState {
         'UTF-8 text; ',
         'pdftotext -layout (Linux adapter); ',
         'unrtf --text (Linux adapter); ',
+        'PDFKit (macOS adapter); ',
+        'NSAttributedString RTF (macOS adapter); ',
       ]) {
         if (provenance.startsWith(prefix))
           excluded.add(provenance.substring(prefix.length));

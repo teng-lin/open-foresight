@@ -194,3 +194,24 @@ service from another app copy or revision. Canonical aliases of the same app
 remain compatible. Mismatches require the user to explicitly stop the existing
 service; clients neither stop it automatically nor replay mutations. Development
 clients without a packaged revision keep the existing attachment behavior.
+
+macOS PDF and RTF imports use the bundled `FORESIGHT_FILE_PARSER` executable,
+backed by PDFKit and AppKit's attributed-string RTF reader. The CLI accepts
+`--pdf PATH` or `--rtf PATH`, writes extracted UTF-8 text only to stdout, and
+writes errors to stderr. It opens no Flutter window or permission dialog. A
+locked PDF requires an explicitly unlocked copy; scanned PDFs without selectable
+text report that OCR is needed. Empty or invalid documents fail before source
+creation. File-access failures direct the user to Files and Folders permissions
+or a readable copy. Linux retains its existing `pdftotext`/`unrtf` adapters and
+existing stored provenance remains readable.
+
+The actual Mac extractor can be checked with:
+
+```sh
+swiftc -O native/file_parser.swift -o /tmp/foresight-file-parser
+python3 tests/integration/test_file_parser.py /tmp/foresight-file-parser
+```
+
+These developer tests generate real Unicode PDF/RTF, password-protected, empty,
+malformed, and unreadable fixtures. The installed extractor itself requires no
+SDK, Python interpreter, or external document-processing tools.
