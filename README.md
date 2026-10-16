@@ -10,7 +10,8 @@ See [Mac build, bundle, and MCP instructions](docs/macos-support.md), the
 
 - `apps/desktop`: Flutter interface and read-only profile views.
 - `packages/foresight_core`: application operations, service/MCP entrypoints, persistence, sources, meetings, and cited answers.
-- `services/helper`: gRPC retrieval helper and local model workers.
+- `services/helper`: gRPC retrieval helper.
+- `services/inference`: native Linux LiteRT/ONNX worker and the Mac runtime adapter.
 - `native`: generation, speech, and audio capture adapters.
 - `proto`: required service definitions and protocol descriptor.
 - `tests`: reusable contract, lifecycle, and grounding tests with controlled fixtures.
@@ -23,7 +24,7 @@ For the reference investigation workflow, see [Replicating Foresight with REA on
 
 ## Build
 
-Requirements: Linux, a C++20 compiler, CMake, protobuf/gRPC development packages, SQLite3, nlohmann-json, Python, and Flutter with GTK3 Linux development dependencies. The source pins Flutter package dependencies; the originating toolchain used Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
+Requirements: Linux, a C++20 compiler, CMake, protobuf/gRPC development packages, SQLite3, nlohmann-json, OpenSSL, ICU, Python for build/test tooling, and Flutter with GTK3 Linux development dependencies. The source pins Flutter package dependencies; the originating toolchain used Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
 
 The commands below target Linux. Mac builds use the separate
 [macOS instructions](docs/macos-support.md), a source-built dependency SDK, and
@@ -32,6 +33,8 @@ The commands below target Linux. Mac builds use the separate
 ```sh
 uv venv .venv
 uv pip install --python .venv/bin/python -r requirements-dev.txt
+python3 tools/prepare_litert.py build/lib/liblitert-lm.so
+python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 ./tools/build.sh
 python3 tools/package.py
 ./tools/run_desktop.sh
@@ -50,16 +53,17 @@ Migration refuses active owners, unfinished recordings, and existing destination
 
 ## Local models
 
-First launch offers Gemma 4 12B, E4B, and E2B using the reference memory requirements of 30, 15, and 6 GB. Setup downloads the missing EmbeddingGemma 2 source-search model and selected generation model, verifies pinned sizes and SHA-256 hashes, and registers each only after loading succeeds. Completed files and registrations survive a later failure or restart; cancellation removes owned partial downloads. Settings can reopen model selection or register existing local files. A bundle built with `--litert-python` is required for automatic setup. Linux uses public LiteRT model artifacts and a GPU runtime rather than the Mac service’s encrypted artifacts. System RAM eligibility does not guarantee a model fits the selected GPU. Settings → Transcription Model offers multilingual Whisper Tiny, Base, Small, Medium, and Large v3 Turbo. Existing English-only registrations remain selected until changed; automatic language detection preserves Chinese and English speech. See [speech model behavior and validation](docs/speech-models.md). Gemma generation uses the pinned LiteRT runtime; Whisper supports registered CPU executables or an explicitly built Vulkan runtime.
+First launch offers Gemma 4 12B, E4B, and E2B using the reference memory requirements of 30, 15, and 6 GB. Setup downloads the missing EmbeddingGemma 2 source-search model and selected generation model, verifies pinned sizes and SHA-256 hashes, and registers each only after loading succeeds. Completed files and registrations survive a later failure or restart; cancellation removes owned partial downloads. Settings can reopen model selection or register existing local files. The packaged native LiteRT runtime supports automatic setup; users do not need Python. Linux uses public LiteRT model artifacts and a GPU runtime rather than the Mac service’s encrypted artifacts. System RAM eligibility does not guarantee a model fits the selected GPU. Settings → Transcription Model offers multilingual Whisper Tiny, Base, Small, Medium, and Large v3 Turbo. Existing English-only registrations remain selected until changed; automatic language detection preserves Chinese and English speech. See [speech model behavior and validation](docs/speech-models.md). Gemma generation uses the pinned LiteRT runtime; Whisper supports registered CPU executables or an explicitly built Vulkan runtime.
 
 ```sh
-uv pip install --python .venv/bin/python -r requirements-models.lock
-python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2
+# Optional native compatibility model; the app also offers EmbeddingGemma setup.
+python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2 --native
+# Optional CPU generation and speech runtimes:
 python3 native/setup_models.py --directory models/local/native
-uv venv --python 3.12 .venv-litert
-uv pip install --python .venv-litert/bin/python -r requirements-litert.txt
-python3 tools/package.py --output dist/open-foresight-gemma --litert-python "$PWD/.venv-litert/bin/python"
+python3 tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
 ```
+
+The distributed app uses native C++ inference and has no Python runtime dependency. Existing MiniLM directories need the pinned ONNX export and re-registration. See [native inference, migration, and verification](services/inference/README.md).
 
 Choose an unused package output directory. Pass `--generation-backend gpu` to package Gemma GPU generation; Whisper GPU packaging accepts `--whisper-gpu-runtime` and `--whisper-gpu-device`. Validate device indices on the target machine.
 

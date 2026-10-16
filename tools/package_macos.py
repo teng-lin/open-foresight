@@ -145,8 +145,10 @@ def main(argv=None):
     adapters = resources / 'adapters'
     adapters.mkdir(exist_ok=True)
     for name in ('model_adapter.py', 'litert_embedding_adapter.py', 'litert_runner.py', 'grounded_generation.py'):
-        shutil.copy2(ROOT / 'services/helper' / name, adapters / name)
-    values.update(FORESIGHT_MODEL_ADAPTER=adapters / 'model_adapter.py',
+        shutil.copy2(ROOT / 'services/inference/macos' / name, adapters / name)
+    shutil.copy2(ROOT / 'services/inference/macos/foresight-model', adapters / 'foresight-model')
+    values.update(FORESIGHT_MODEL_WORKER=adapters / 'foresight-model',
+                  FORESIGHT_MODEL_ADAPTER=adapters / 'model_adapter.py',
                   FORESIGHT_LITERT_EMBEDDING_ADAPTER=adapters / 'litert_embedding_adapter.py',
                   FORESIGHT_LITERT_BACKEND=args.generation_backend)
     if args.whisper_runtime:

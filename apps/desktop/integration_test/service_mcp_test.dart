@@ -88,6 +88,8 @@ void main() {
             workspace.d.generator?.effectiveState['state'] == 'ready' &&
             workspace.d.helper.snapshot?.pipeline == 'ready',
       );
+      // A ready snapshot may precede the current restore transaction finishing.
+      await workspace.d.resume();
       final initial = await workspace.d.command('status') as Map;
       final mcp = Mcp(
         await Process.start(

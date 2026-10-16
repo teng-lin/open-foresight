@@ -53,10 +53,16 @@ def main():
         env['FORESIGHT_RUNTIME'] = str(root / 'run')
         # Deliberately drop the build-time library path: test bundled resolution.
         env['LD_LIBRARY_PATH'] = str(relocated / 'lib') + ':' + str(relocated / 'app/lib')
+        forbidden = [str(p.relative_to(relocated)) for p in relocated.rglob('*')
+                     if p.is_file() and (p.suffix in ('.py', '.pyc', '.pyo') or
+                        p.name.startswith(('python', 'libpython')))]
+        assert not forbidden, forbidden
+        subprocess.run([str(relocated / 'bin/foresight-model'), '--check'], env=env, check=True)
         linkage = {}
-        for relative in ['bin/ForesightHelper', 'bin/foresight-service', 'bin/foresight-mcp', 'lib/libforesight_native.so', 'app/open-foresight']:
+        for relative in ['bin/ForesightHelper', 'bin/foresight-service', 'bin/foresight-mcp', 'lib/libforesight_native.so', 'bin/foresight-model', 'lib/liblitert-lm.so', 'lib/libonnxruntime.so', 'app/open-foresight']:
             value = subprocess.check_output(['ldd', str(relocated / relative)], env=env, text=True)
             assert 'not found' not in value, value
+            assert 'libpython' not in value, value
             linkage[relative] = value.splitlines()
         log = root / 'desktop.log'
         socket = str(root / 'run/helper.sock')
@@ -96,7 +102,7 @@ def main():
                     assert headless['pid'] != owner['pid'], 'Independent profiles shared an owner'
                 finally:
                     subprocess.run([str(relocated / 'open-foresight-service'), '--stop'], env=headless_env, capture_output=True, timeout=20, check=True)
-                report = {'mcp_same_profile_owner': True, 'headless_mcp_startup': True, 'mcp_launcher_relocation': True,
+                report = {'no_python_files_or_linkage': True, 'native_runtime_check': True, 'mcp_same_profile_owner': True, 'headless_mcp_startup': True, 'mcp_launcher_relocation': True,
                           'relocation': 'passed with spaces in bundle path and cwd=/',
                           'desktop_process_alive': True, 'startup_observation_seconds': 10, 'application_database_created': True,
                           'ping': {'success': ping.success, 'version': ping.version},

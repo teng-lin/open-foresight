@@ -1,4 +1,5 @@
 #pragma once
+#include "../../native/portable_process.h"
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -10,7 +11,6 @@
 #include <signal.h>
 #include <stdexcept>
 #include <string>
-#include "../../native/portable_process.h"
 #ifdef __linux__
 #include <sys/prctl.h>
 #endif
@@ -47,34 +47,37 @@ class ChildProcess {
   }
 
 public:
-  ChildProcess(std::string python, std::string adapter, std::string model,
+  ChildProcess(std::string executable, std::string mode, std::string model,
                int input, int output, std::string option = {}) {
     auto started = std::make_shared<std::promise<pid_t>>();
     auto result = started->get_future();
     const pid_t owner = getpid();
     creator_ = std::thread([this, started, owner, input, output,
-                            python = std::move(python),
-                            adapter = std::move(adapter),
-                            model = std::move(model),
+                            executable = std::move(executable),
+                            mode = std::move(mode), model = std::move(model),
                             option = std::move(option)]() mutable {
 #ifdef __APPLE__
       posix_spawn_file_actions_t actions;
       posix_spawn_file_actions_init(&actions);
       posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO);
       posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO);
-      posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+      posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
+                                       O_WRONLY, 0);
       posix_spawnattr_t attr;
       posix_spawnattr_init(&attr);
-      posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT);
+      posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP |
+                                          POSIX_SPAWN_CLOEXEC_DEFAULT);
       posix_spawnattr_setpgroup(&attr, 0);
-      std::vector<std::string> args{python, adapter, model};
-      if (!option.empty()) args.push_back(option);
+      std::vector<std::string> args{executable, mode, model};
+      if (!option.empty())
+        args.push_back(option);
       pid_t child = -1;
       foresight::OwnedSpawn owned;
       const int error = owned.spawn(&child, &actions, &attr, args);
       posix_spawn_file_actions_destroy(&actions);
       posix_spawnattr_destroy(&attr);
-      if (error) child = -1;
+      if (error)
+        child = -1;
 #else
       pid_t child = fork();
       if (child == 0) {
@@ -96,11 +99,11 @@ public:
         if (fcntl(STDERR_FILENO, F_SETFD, 0) < 0)
           _exit(127);
         if (option.empty())
-          execlp(python.c_str(), python.c_str(), adapter.c_str(), model.c_str(),
-                 static_cast<char *>(nullptr));
+          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
+                 model.c_str(), static_cast<char *>(nullptr));
         else
-          execlp(python.c_str(), python.c_str(), adapter.c_str(), model.c_str(),
-                 option.c_str(), static_cast<char *>(nullptr));
+          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
+                 model.c_str(), option.c_str(), static_cast<char *>(nullptr));
         _exit(127);
       }
 
@@ -128,7 +131,9 @@ public:
 #ifdef __APPLE__
       owned.stop();
       // The supervisor owns worker reaping and exits after bounded cleanup.
-      if (child > 0) while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+      if (child > 0)
+        while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+        }
 #else
       terminate(child);
 #endif

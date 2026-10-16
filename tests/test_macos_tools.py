@@ -20,6 +20,34 @@ from smoke_macos_bundle import (McpPeer, stop_desktop, parser_probe, source_grap
 SIGNATURE = {'team': 'test-team', 'adhoc': False}
 
 
+class MacModelWorkerTests(unittest.TestCase):
+    def test_worker_dispatch_preserves_relocated_paths_and_gpu_argument(self):
+        with tempfile.TemporaryDirectory(prefix='mac worker ') as temporary:
+            root = Path(temporary)
+            worker = root / 'foresight-model'
+            shutil.copy2(Path(__file__).resolve().parents[1] /
+                         'services/inference/macos/foresight-model', worker)
+            python = root / 'selected python'
+            python.write_text('#!' + sys.executable + '\nimport json,sys; print(json.dumps(sys.argv[1:]))\n')
+            python.chmod(0o755)
+            model = root / 'embedding model.litertlm'
+            model.touch()
+            directory = root / 'sentence transformer'
+            directory.mkdir()
+            for asset, adapter, option in ((model, 'litert_embedding_adapter.py', ['--gpu']),
+                                           (directory, 'model_adapter.py', [])):
+                env = {**os.environ, 'FORESIGHT_MODEL_PYTHON': str(python),
+                       'FORESIGHT_LITERT_PYTHON': str(python)}
+                env.pop('FORESIGHT_MODEL_ADAPTER', None)
+                env.pop('FORESIGHT_LITERT_EMBEDDING_ADAPTER', None)
+                actual = json.loads(subprocess.check_output(
+                    [str(worker), '--embedding', str(asset), *option], env=env,
+                    cwd='/', text=True))
+                self.assertEqual(actual, ['-I', '-B', str(root / adapter), str(asset), *option])
+            invalid = subprocess.run([str(worker), '--invalid'], capture_output=True)
+            self.assertEqual(invalid.returncode, 2)
+
+
 def bundle(path, version, identifier=installer.IDENTIFIER):
     (path/'Contents').mkdir(parents=True)
     with (path/'Contents/Info.plist').open('wb') as stream:

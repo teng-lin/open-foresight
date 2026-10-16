@@ -67,8 +67,7 @@ def main():
         env = os.environ.copy()
         env.update(FORESIGHT_DATA=str(root / 'data'), FORESIGHT_RUNTIME=str(root / 'run'),
                    FORESIGHT_MICROPHONE_TARGET=sink + '-microphone', FORESIGHT_PLAYBACK_TARGET=sink,
-                   FORESIGHT_MODEL_MANIFEST=str(args.model_manifest.resolve()),
-                   FORESIGHT_MODEL_PYTHON=str(args.model_python.expanduser().absolute()))
+                   FORESIGHT_MODEL_MANIFEST=str(args.model_manifest.resolve()))
         launcher.write_text('#!/bin/sh\n' + '\n'.join('export ' + key + '=' + shlex.quote(env[key]) for key in env if key.startswith('FORESIGHT_') or key in ('PULSE_SERVER', 'PIPEWIRE_REMOTE', 'PATH', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'WAYLAND_DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE')) +
                             '\nexec ' + shlex.quote(str(bundle / 'open-foresight')) + ' "$@" >>' + shlex.quote(str(root / 'app.log')) + ' 2>&1\n')
         launcher.chmod(0o700)

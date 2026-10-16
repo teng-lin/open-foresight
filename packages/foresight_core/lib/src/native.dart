@@ -1,8 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
+import 'platform_services.dart';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
+
+/// Packaged installations always use their bundled native worker, including
+/// profiles that still contain the former Python runner path.
+String liteRtRunner(String registered) =>
+    runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? registered;
 
 typedef CreateNative = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);
 typedef CreateDart = Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>);
@@ -120,6 +126,7 @@ class NativeRuntime {
     String model, {
     String backend = 'llama_cpp',
   }) async {
+    if (backend == 'litert_lm') runtime = liteRtRunner(runtime);
     if (!['llama_cpp', 'litert_lm'].contains(backend))
       throw ArgumentError.value(backend);
     close();
