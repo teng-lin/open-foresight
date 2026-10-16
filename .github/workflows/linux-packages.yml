@@ -1,0 +1,201 @@
+name: Linux packages
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, feature/linux-packaging]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Authenticate private SDK registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Find content-addressed SDK
+        id: sdk
+        env:
+          SDK_HASH: ${{ hashFiles('packaging/sdk.Dockerfile', 'packaging/minimal-grpc.cmake', 'requirements-dev.lock', 'requirements-litert.lock', 'tools/build_whisper_vulkan.py') }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/linux-sdk:$SDK_HASH"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT_NAME" == pull_request ]]; then
+            echo 'SDK not published: push SDK changes to a trusted branch and run Linux packages first.' >&2
+            exit 1
+          else
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify registry publication before compiling
+        if: steps.sdk.outputs.build == 'true'
+        env:
+          SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+        run: |
+          docker buildx build --push --tag "$SDK_IMAGE-publish-check" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" - <<'DOCKERFILE'
+          FROM scratch
+          LABEL org.opencontainers.image.description="SDK registry permission check"
+          DOCKERFILE
+      - name: Save reusable SDK core before GPU runner build
+        if: steps.sdk.outputs.build == 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/sdk.Dockerfile
+          target: core
+          push: true
+          tags: ${{ steps.sdk.outputs.image }}-core
+          cache-from: type=gha,scope=linux-sdk-core-x86-64
+          cache-to: type=gha,mode=max,scope=linux-sdk-core-x86-64
+      - name: Bootstrap reusable Linux SDK
+        if: steps.sdk.outputs.build == 'true'
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/sdk.Dockerfile
+          target: sdk
+          push: true
+          tags: ${{ steps.sdk.outputs.image }}
+          cache-from: |
+            type=gha,scope=linux-sdk-core-x86-64
+            type=gha,scope=linux-sdk-x86-64
+          cache-to: type=gha,mode=max,scope=linux-sdk-x86-64
+      - name: Resolve immutable SDK digest
+        id: resolve
+        env:
+          SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$SDK_IMAGE" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+          echo "image=${SDK_IMAGE%:*}@$digest" >> "$GITHUB_OUTPUT"
+
+  bundle:
+    needs: sdk
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      epoch: ${{ steps.version.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Packaging contracts
+        run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
+      - name: Package version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, subprocess
+          version = re.search(r'^version: (\d+\.\d+\.\d+)', pathlib.Path('apps/desktop/pubspec.yaml').read_text(), re.M)[1]
+          if os.environ['REF_TYPE'] == 'tag':
+              if os.environ['REF_NAME'] != 'v' + version:
+                  raise SystemExit('Release tag must match pubspec version')
+              release = '1'
+          else:
+              release = os.environ['GITHUB_RUN_NUMBER']
+          epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
+          PY
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Authenticate private SDK registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build and test baseline bundle
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/build.Dockerfile
+          target: artifact
+          outputs: type=local,dest=build/portable
+          build-args: |
+            SDK_IMAGE=${{ needs.sdk.outputs.image }}
+            SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=linux-packages-x86-64
+          cache-to: type=gha,mode=max,scope=linux-packages-x86-64
+      - name: Archive executable permissions and record checksums
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+        run: |
+          python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
+          cp build/portable/dist/abi.json dist/packages/abi.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: portable-bundle
+          path: dist/packages/
+          if-no-files-found: error
+          retention-days: 14
+
+  packages:
+    needs: bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: deb
+            image: ubuntu:24.04
+          - format: rpm
+            image: fedora:44
+          - format: arch
+            image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: portable-bundle
+          path: artifacts
+      - name: Native package and installation lifecycle
+        env:
+          FORMAT: ${{ matrix.format }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.bundle.outputs.version }}
+          RELEASE: ${{ needs.bundle.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ needs.bundle.outputs.epoch }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH "$IMAGE" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" "$RELEASE"
+      - name: Test Debian 13 with the Ubuntu-built DEB
+        if: matrix.format == 'deb'
+        run: |
+          docker run --rm -v "$PWD:/work:ro" -v "$PWD/dist/packages:/packages:ro" debian:13 bash /work/packaging/ci/test-debian.sh
+      - name: Collect package artifacts
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" dist/packages 2>/dev/null || true
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: success()
+        with:
+          name: open-foresight-${{ matrix.format }}-x86-64
+          path: dist/packages/
+          if-no-files-found: error
+          retention-days: 14

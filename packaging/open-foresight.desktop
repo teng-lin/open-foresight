@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Open Foresight
+Comment=Local knowledge, meeting notes and transcription
+Exec=open-foresight
+Icon=open-foresight
+Terminal=false
+StartupWMClass=io.openforesight.App
+Categories=Office;

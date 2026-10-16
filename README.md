@@ -44,6 +44,11 @@ python3 tools/migrate_profile.py ~/.local/share/foresight-linux-desktop \
 
 Migration refuses active owners, unfinished recordings, and existing destinations. It preserves a private backup, checks SQLite integrity, updates owned model/file paths, and optionally copies external model assets so other sessions retain their originals. Model downloads and GPU caches inside the profile move intact. Backups contain private application data; keep them outside Git. PDF/RTF import uses `pdftotext`/`unrtf`; recording requires PipeWire and `pw-record`.
 
+## Distribution packages
+
+For `.deb`, `.rpm`, and Arch/Omarchy installers and the CI build matrix, see
+[Linux packaging](docs/linux-packaging.md).
+
 ## Local models
 
 First launch offers Gemma 4 12B, E4B, and E2B using the reference memory requirements of 30, 15, and 6 GB. Setup downloads the missing EmbeddingGemma 2 source-search model and selected generation model, verifies pinned sizes and SHA-256 hashes, and registers each only after loading succeeds. Completed files and registrations survive a later failure or restart; cancellation removes owned partial downloads. Settings can reopen model selection or register existing local files. The packaged native LiteRT runtime supports automatic setup; users do not need Python. Linux uses public LiteRT model artifacts and a GPU runtime rather than the Mac service’s encrypted artifacts. System RAM eligibility does not guarantee a model fits the selected GPU. Settings → Transcription Model offers multilingual Whisper Tiny, Base, Small, Medium, and Large v3 Turbo. Existing English-only registrations remain selected until changed; automatic language detection preserves Chinese and English speech. See [speech model behavior and validation](docs/speech-models.md). Gemma generation uses the pinned LiteRT runtime; Whisper supports registered CPU executables or an explicitly built Vulkan runtime.

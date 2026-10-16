@@ -19,6 +19,7 @@ def main():
                         default=ROOT / 'apps/desktop/build/linux/x64/release/bundle')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/open-foresight')
     parser.add_argument('--google-client', type=Path, help='Optional application OAuth configuration; never account tokens')
+    parser.add_argument('--revision', help='Source commit for exported trees without .git')
     parser.add_argument('--litert-library', type=Path, default=ROOT / 'build/lib/liblitert-lm.so', help='Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py')
     parser.add_argument('--onnx-library', type=Path, default=ROOT / 'build/lib/libonnxruntime.so', help='Pinned ONNX Runtime from tools/prepare_onnx.py')
     parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
@@ -86,11 +87,15 @@ def main():
     bundled = []
     for name, path in re.findall(r'\s*(\S+) => (/\S+)', dependencies):
         if name.startswith(('libgrpc', 'libgpr', 'libprotobuf', 'libupb', 'libabsl',
-                            'libre2', 'libcares', 'libaddress_sorting', 'libutf8', 'libicu', 'libcrypto')):
+                            'libre2', 'libcares', 'libaddress_sorting', 'libutf8', 'libicu', 'libsqlite3.so')):
             destination = args.output / 'lib' / name
             if not destination.exists():
                 shutil.copy2(path, destination)
                 bundled.append(name)
+    # Dart sqlite3 opens the unversioned name, absent from runtime-only distro
+    # packages. Keep both names within the private bundle, without dev packages.
+    if (args.output / 'lib/libsqlite3.so.0').exists():
+        (args.output / 'lib/libsqlite3.so').symlink_to('libsqlite3.so.0')
     launcher = args.output / 'open-foresight'
     launcher.write_text('''#!/usr/bin/env bash
 set -euo pipefail
@@ -136,7 +141,9 @@ esac
         command = args.output / ('open-foresight-' + entry)
         command.write_text('#!/usr/bin/env bash\nset -euo pipefail\ntask_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)\nexport FORESIGHT_ENTRYPOINT=' + entry + '\nexec "$task_bundle/open-foresight" "$@"\n')
         command.chmod(0o755)
-    commit = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+    commit = args.revision or subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Revision must be a full lowercase Git commit hash')
     files = [{'path': str(file.relative_to(args.output)),
               'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}
              for file in sorted(args.output.rglob('*')) if file.is_file()]
