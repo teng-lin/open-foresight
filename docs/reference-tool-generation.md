@@ -79,9 +79,11 @@ and [Gemma tool processor](https://github.com/google-ai-edge/LiteRT-LM/blob/v0.1
 
 ## Remaining work
 
-This is a callable native generation/search bridge, not yet an enabled Ask or
-meeting feature. Production activation, source-URL/citation persistence, release
-credentials, real-model tool behavior and live service access remain unfinished.
+Ask and meeting Chat now call this bridge when their web toggle is selected.
+Source URLs and cited excerpts are persisted with each answer, and release
+packagers can bundle distribution credentials. See [chat citation evidence](reference-chat-web.md).
+Real-model tool behavior, provisioned release credentials and live service access
+remain unverified.
 The original also has textual tool-call extraction fallback; that parser and
 the streaming variant still need comparison. This new tool path currently emits
 its final answer as one delta. Generic model prompts, sampling and the port's

@@ -2616,7 +2616,11 @@ extension _ScreenshotScreens on _WorkspaceState {
       asking = true;
     });
     try {
-      await for (final text in d.askInConversation(
+      final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
+      final ask = webSearchScopes.contains(scope)
+          ? d.askWithWebInConversation
+          : d.askInConversation;
+      await for (final text in ask(
         question.text,
         meetingScope == null ? 'desktop' : 'meeting:$meetingScope',
         meetingId: meetingScope,
@@ -2628,6 +2632,8 @@ extension _ScreenshotScreens on _WorkspaceState {
     }
   });
   Widget chat({int? meetingScope, bool compact = false}) {
+    final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
+    final searchWeb = webSearchScopes.contains(scope);
     final history = d.store
         .rows(
           meetingScope == null
@@ -2689,18 +2695,18 @@ extension _ScreenshotScreens on _WorkspaceState {
                               if (a['status'] != 'completed')
                                 Text('Status: ${a['status']}'),
                               Wrap(
-                                children:
-                                    (jsonDecode(a['citations'] as String)
-                                            as List)
-                                        .map(
-                                          (c) => TextButton(
-                                            onPressed: () => citation(c as Map),
-                                            child: Text(
-                                              '[${c['citation']}] source revision ${c['revision']}',
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
+                                children: (jsonDecode(a['citations'] as String) as List)
+                                    .map(
+                                      (c) => TextButton(
+                                        onPressed: () => citation(c as Map),
+                                        child: Text(
+                                          c['kind'] == 'web'
+                                              ? '[${c['citation']}] ${c['title'] == '' ? c['url'] : c['title']}'
+                                              : '[${c['citation']}] source revision ${c['revision']}',
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
                               ),
                               const Divider(),
                             ],
@@ -2708,7 +2714,11 @@ extension _ScreenshotScreens on _WorkspaceState {
                         ),
                       if (asking)
                         GeneratedContent(
-                          answer.isEmpty ? 'Searching your knowledge…' : answer,
+                          answer.isEmpty
+                              ? searchWeb
+                                    ? 'Preparing your answer…'
+                                    : 'Searching your knowledge…'
+                              : answer,
                           fontSize: answerFontSize,
                         ),
                     ],
@@ -2725,6 +2735,23 @@ extension _ScreenshotScreens on _WorkspaceState {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                 ),
                 icon: const Icon(Icons.manage_search, size: 18),
+              ),
+              IconButton(
+                tooltip: d.webSearchAvailable
+                    ? 'Search the web'
+                    : 'Web search is unavailable in this build',
+                isSelected: searchWeb,
+                onPressed: asking || (!d.webSearchAvailable && !searchWeb)
+                    ? null
+                    : () => update(() {
+                        if (searchWeb) {
+                          webSearchScopes.remove(scope);
+                        } else {
+                          webSearchScopes.add(scope);
+                        }
+                      }),
+                icon: const Icon(Icons.public_outlined, size: 18),
+                selectedIcon: const Icon(Icons.public, size: 18, color: _ink),
               ),
               const Spacer(),
               if (history.isNotEmpty && !compact)

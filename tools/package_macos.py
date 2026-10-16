@@ -10,6 +10,7 @@ import subprocess
 import sys
 
 from app_version import read_version
+from web_search_release import release_web_search_keys
 from macos_bundle import audit_dependencies, relocate_dependencies, run, sign_application
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -100,6 +101,7 @@ def main(argv=None):
     parser.add_argument('--notary-profile', help='Existing notarytool keychain profile; requires a Developer ID identity')
     parser.add_argument('--archive', type=Path, help='Create a distributable ZIP after signing/notarization')
     args = parser.parse_args(argv)
+    web_search_keys = release_web_search_keys()
     if sys.platform != 'darwin':
         parser.error('Mac application packaging requires macOS')
     if args.output.suffix != '.app' or args.output.exists():
@@ -179,6 +181,7 @@ def main(argv=None):
         values['FORESIGHT_GOOGLE_CLIENT'] = target
     if args.python_runtime:
         copy_python(args.python_runtime, resources, values)
+    values.update(web_search_keys)
     write_runtime(resources, values)
     write_runtime(service_path.parent.parent / 'Resources', values)
     info = contents / 'Info.plist'

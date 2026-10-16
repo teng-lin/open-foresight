@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'domain.dart';
+import 'web_search.dart';
 import 'helper.dart';
 import 'model_setup.dart';
 import 'profile_paths.dart';
@@ -237,11 +238,14 @@ class ApplicationService {
       (_) => _broadcast(),
     );
   }
-  static Future<ApplicationService> start(ProfilePaths profile) async {
+  static Future<ApplicationService> start(
+    ProfilePaths profile, {
+    SearchCallbacks? webSearch,
+  }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
     try {
-      return await _start(profile, installationLock);
+      return await _start(profile, installationLock, webSearch: webSearch);
     } catch (_) {
       installationLock?.closeSync();
       rethrow;
@@ -250,8 +254,9 @@ class ApplicationService {
 
   static Future<ApplicationService> _start(
     ProfilePaths profile,
-    RandomAccessFile? installationLock,
-  ) async {
+    RandomAccessFile? installationLock, {
+    SearchCallbacks? webSearch,
+  }) async {
     privateDirectory(profile.data);
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
@@ -293,7 +298,7 @@ class ApplicationService {
         '${profile.runtime}/helper.sock',
         '${profile.data}/helper',
       );
-      final domain = Domain(store, helper);
+      final domain = Domain(store, helper, webSearch: webSearch);
       domain.application.startBackground();
       listener = await ServerSocket.bind(
         InternetAddress(path, type: InternetAddressType.unix),
@@ -356,6 +361,7 @@ class ApplicationService {
       'revision': domain.store.dataRevision,
       'sources_paused': domain.sourcesPaused,
       'generation': domain.application.generationState,
+      'web_search_available': domain.webSearchAvailable,
       'google': domain.application.googleState,
       'helper': domain.helper.snapshot?.toProto3Json(),
     };
@@ -433,13 +439,16 @@ class ApplicationService {
               final Stream<Object?> results =
                   request['method'] == 'answer.stream'
                   ? Stream.fromFuture(_ready).asyncExpand(
-                      (_) => domain.askInConversation(
-                        args['question'] as String,
-                        args['conversation'] as String,
-                        requestId: lease.id,
-                        meetingId: args['meeting_id'] as int?,
-                        current: () => !lease.cancelled,
-                      ),
+                      (_) =>
+                          (args['web_search'] == true
+                          ? domain.askWithWebInConversation
+                          : domain.askInConversation)(
+                            args['question'] as String,
+                            args['conversation'] as String,
+                            requestId: lease.id,
+                            meetingId: args['meeting_id'] as int?,
+                            current: () => !lease.cancelled,
+                          ),
                     )
                   : request['method'] == 'google.sign_in'
                   ? domain.application.signIn(lease.id)

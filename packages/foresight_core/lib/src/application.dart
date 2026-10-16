@@ -254,6 +254,7 @@ class Application {
             'sources_paused': domain.sourcesPaused,
             'helper': domain.helper.snapshot?.toProto3Json(),
             'generation': generationState,
+            'web_search_available': domain.webSearchAvailable,
             'revision': store.dataRevision,
             'google': googleState,
           };
@@ -325,15 +326,17 @@ class Application {
           }).toList();
         case 'answer':
           return {
-            'text': await domain
-                .askInConversation(
-                  a['question'] as String,
-                  a['conversation'] as String? ?? 'desktop',
-                  meetingId: a['meeting_id'] as int?,
-                  requestId: a['requestId'] as String?,
-                  current: current,
-                )
-                .last,
+            'text':
+                await (a['web_search'] == true
+                        ? domain.askWithWebInConversation
+                        : domain.askInConversation)(
+                      a['question'] as String,
+                      a['conversation'] as String? ?? 'desktop',
+                      meetingId: a['meeting_id'] as int?,
+                      requestId: a['requestId'] as String?,
+                      current: current,
+                    )
+                    .last,
           };
         case 'google.status':
           return googleState;

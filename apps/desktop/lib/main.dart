@@ -362,6 +362,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
   );
   bool busy = false, asking = false;
+  final webSearchScopes = <String>{};
   bool quickStarting = false;
   bool meetingImmersive = false;
   Duration recordingElapsed = Duration.zero;
@@ -1197,6 +1198,20 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   void citation(Map c) {
+    if (c['kind'] == 'web') {
+      unawaited(
+        run(() async {
+          final uri = Uri.tryParse(c['url'] as String? ?? '');
+          if (uri == null ||
+              !['http', 'https'].contains(uri.scheme) ||
+              uri.host.isEmpty) {
+            throw StateError('This citation has no valid web address.');
+          }
+          await openPlatformUri(uri);
+        }),
+      );
+      return;
+    }
     final s = d.store.rows('SELECT * FROM sources WHERE id=?', [
       c['document_id'],
     ]);

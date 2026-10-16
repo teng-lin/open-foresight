@@ -10,6 +10,7 @@ import subprocess
 from prepare_litert import LIBRARY_SHA256
 from prepare_onnx import LIBRARY_SHA256 as ONNX_LIBRARY_SHA256
 from app_version import read_version
+from web_search_release import release_web_search_keys, shell_web_search_keys
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -29,6 +30,7 @@ def main():
     parser.add_argument('--whisper-gpu-device', type=int, default=0,
                         help='Whisper Vulkan device index; override at launch with FORESIGHT_WHISPER_DEVICE')
     args = parser.parse_args()
+    web_search_keys = release_web_search_keys()
     assert args.whisper_gpu_device >= 0
     helper = args.build / 'services/helper/ForesightHelper'
     native = args.build / 'native/libforesight_native.so'
@@ -100,6 +102,7 @@ def main():
     launcher = args.output / 'open-foresight'
     launcher.write_text('''#!/usr/bin/env bash
 set -euo pipefail
+@WEB_SEARCH_RELEASE_ENV@
 task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LD_LIBRARY_PATH="$task_bundle/lib:$task_bundle/app/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export FORESIGHT_SERVICE="$task_bundle/bin/foresight-service"
@@ -135,7 +138,8 @@ case "${FORESIGHT_ENTRYPOINT:-desktop}" in
   service) exec "$task_bundle/bin/foresight-service" "$@" ;;
   *) echo "Unknown Open Foresight entrypoint" >&2; exit 2 ;;
 esac
-'''.replace('@GENERATION_BACKEND@', args.generation_backend)
+'''.replace('@WEB_SEARCH_RELEASE_ENV@', shell_web_search_keys(web_search_keys))
+   .replace('@GENERATION_BACKEND@', args.generation_backend)
    .replace('@WHISPER_DEVICE@', str(args.whisper_gpu_device)))
     launcher.chmod(0o755)
     for entry in ('mcp', 'service'):
