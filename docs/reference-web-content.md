@@ -69,11 +69,11 @@ channels remain caller-owned. `summarizeSearchPage` connects to SearchCallbacks'
 provider interface. No request is made until a caller invokes it.
 
 The subsequent [native tool bridge](reference-tool-generation.md) now connects
-generation callbacks to search. Production activation, citation persistence and
-release credentials remain outstanding.
-This is a remote Gemini summary path, distinct from ordinary local generation.
-Adding this client does not enable remote requests in the application, and no
-separate user project configuration UI has been added.
+generation callbacks to search. The [chat integration](reference-chat-web.md)
+now enables optional web-mode Ask/meeting requests and persists source citations.
+Release packagers accept distribution credentials; provisioning and live access
+remain unverified. This is a remote Gemini summary path, distinct from ordinary
+local generation. No separate user project configuration UI has been added.
 
 `web_content_test.dart` uses fixed wire bytes and a loopback gRPC server to check
 field presence, negative int32 encoding, one-request default, metadata, response

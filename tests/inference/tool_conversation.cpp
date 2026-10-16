@@ -22,6 +22,14 @@ int main() {
     auto wrapped = foresight::wrap_tools(json::array({{{"name", "google_search"}}}));
     check(wrapped[0]["type"] == "function" && wrapped[0]["function"]["name"] == "google_search");
     check(foresight::wrap_tools(wrapped) == wrapped);
+    auto options = foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Original instructions"}});
+    check(options.tools == wrapped && options.system_message == "Original instructions");
+    check(foresight::parse_tool_request(wrapped).tools == wrapped);
+    for (auto invalid : {json::object(), json({{"tools", wrapped}, {"system_message", 123}})}) {
+      bool rejected = false;
+      try { foresight::parse_tool_request(invalid); } catch (const std::exception &) { rejected = true; }
+      check(rejected);
+    }
     std::string replies;
     for (int i=0; i<19; ++i) replies += reply.dump() + "\n";
     std::istringstream repeated_input(replies);

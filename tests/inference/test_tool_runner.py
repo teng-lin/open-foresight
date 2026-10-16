@@ -57,6 +57,8 @@ class Engine:
         self.config = kwargs
         return self.conversation
 
+    def tokenize(self, text): return []
+
 
 def options(**kwargs): return kwargs
 API = types.SimpleNamespace(Tool=type('Tool', (), {}), SamplerConfig=options,
@@ -64,6 +66,22 @@ API = types.SimpleNamespace(Tool=type('Tool', (), {}), SamplerConfig=options,
 
 
 class ToolRunnerTest(unittest.TestCase):
+    def test_system_instructions_are_distinct_from_the_user_message(self):
+        engine = Engine([{'role': 'assistant', 'content': 'Answer'}])
+        request = {'tools': [{'name': 'google_search'}], 'system_message': 'Exact original instructions'}
+        with contextlib.redirect_stdout(io.StringIO()):
+            runner.run_tool_conversation(engine, API, 'Question', request, 256)
+        self.assertEqual(engine.config['system_message'], request['system_message'])
+        self.assertEqual(engine.conversation._lib.messages, [{'role': 'user', 'content': 'Question'}])
+
+    def test_system_and_tool_tokens_count_toward_context_limit(self):
+        engine = Engine([])
+        engine.tokenize = lambda text: list(text)
+        with self.assertRaisesRegex(ValueError, '4096-token context'):
+            runner.run_tool_conversation(engine, API, 'Question', {
+                'tools': [{'name': 'google_search'}], 'system_message': 'X' * 4096}, 256)
+        self.assertEqual(engine.creations, 0)
+
     def run_protocol(self, responses, replies):
         engine = Engine(responses)
         output = io.StringIO()

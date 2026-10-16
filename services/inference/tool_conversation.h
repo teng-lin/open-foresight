@@ -6,6 +6,11 @@
 #include <nlohmann/json.hpp>
 
 namespace foresight {
+struct ToolRequest {
+  nlohmann::json tools;
+  std::string system_message = "Follow the requested task faithfully. Do not invent facts.";
+};
+
 inline nlohmann::json wrap_tools(const nlohmann::json &tools) {
   if (!tools.is_array() || tools.empty())
     throw std::runtime_error("Tool definitions must be a nonempty array");
@@ -14,6 +19,19 @@ inline nlohmann::json wrap_tools(const nlohmann::json &tools) {
     if (!tool.is_object()) throw std::runtime_error("Tool definition must be an object");
     result.push_back(tool.contains("function") ? tool :
                      nlohmann::json({{"type", "function"}, {"function", tool}}));
+  }
+  return result;
+}
+
+// A legacy array retains the default system message. The application uses the
+// object form so system instructions never become part of user content.
+inline ToolRequest parse_tool_request(const nlohmann::json &value) {
+  ToolRequest result;
+  if (value.is_object()) {
+    result.tools = wrap_tools(value.at("tools"));
+    result.system_message = value.at("system_message").get<std::string>();
+  } else {
+    result.tools = wrap_tools(value);
   }
   return result;
 }

@@ -48,6 +48,9 @@ class ToolRuntime extends NativeRuntime {
     int maxOutputTokens = 256,
   }) async* {
     prompts.add(prompt);
+    expect(systemPrompt, referenceChatInstructions);
+    expect(prompt, contains('[Current Date: '));
+    expect(prompt, contains('Query: '));
     expect(tools.single['name'], 'google_search');
     yield {'type': 'delta', 'text': await answer(dispatcher)};
     yield {'type': 'done', 'status': 'completed'};

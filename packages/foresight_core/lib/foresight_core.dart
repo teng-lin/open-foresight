@@ -28,3 +28,4 @@ export 'src/web_search.dart';
 export 'src/web_content.dart';
 export 'src/reference_tools.dart';
 export 'src/chat_sources.dart';
+export 'src/reference_chat_prompt.dart';

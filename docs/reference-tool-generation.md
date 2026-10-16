@@ -68,8 +68,7 @@ The Linux C++ worker and packaged macOS compatibility adapter implement this
 path. Mac uses the pinned 0.18.0 C API through its owned Python conversation
 because Python Message.from_json would decode string arguments and change the
 recovered behavior. The adapter disables automatic Python tool execution; all
-callbacks belong to the application service. No credentials/network clients are
-added to the model subprocess.
+callbacks belong to the application service. HTTP callbacks and their clients remain in the application service.
 
 The public C API supports configuring tool definitions and keeping a conversation
 across sends. The port uses its normal function-definition wrapper; this is

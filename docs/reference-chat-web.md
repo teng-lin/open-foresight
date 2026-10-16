@@ -51,8 +51,10 @@ finish without calling search. Cancellation during a callback cannot save or
 link its late result. Toggle persistence and exact original UI scope are not
 proven; the port currently keeps toggle state only for the workspace lifetime.
 
-The port's web prompt, history/context bounds, sampling and 4096-token native
-context have not been shown equivalent to the original. The current tool path
+The recovered instruction string and text-only date/context/query envelope are
+now used for web-enabled sends; see the prompt section below. Structured history,
+sampling and the 4096-token native context have not been shown equivalent to the
+original. The current tool path
 publishes its final model answer in one delta; original streaming and textual
 tool-call fallback remain to be reproduced.
 
@@ -100,3 +102,59 @@ test skipped** with the native bridge configured; **168 desktop tests passed,
 10 opt-in tests skipped**. Core and desktop analyzers reported no issues. Both
 release credential tests passed. Live Google access, real-model tool selection
 and physical reference comparison are outside those fixture results.
+
+## Chat prompt reconstruction
+
+IDA pagination of `ChatService.initialize` (0x10091dadc, 1518 lines) shows an
+initial system message built at 0x10091ea20–0x10091eb34 using PP[31008]. The full
+6479-byte UTF-8 string is reproduced in `reference_chat_prompt.dart`; SHA-256 is
+`71a908bf5b041da7cff1c7ad1d397a62b2fc3d433774bad7dcaf26a351762f78`.
+It requires concise Markdown, personal-context priority, internal knowledge for
+certain general facts, native-tool fallback, source tags, passive treatment of
+context, and the `<|"|>` string delimiter in tool calls. It explicitly forbids
+JSON wrappers. Calendar answers have additional formatting rules, including
+suppressing source tags.
+
+The text-only message built at 0x100908994–0x100908b00 uses
+`DateFormat('EEEE, MMMM d, yyyy')`, a local DateTime.now, and this envelope:
+
+```text
+[Current Date: Friday, October 16, 2026]
+
+Here is some context from the local knowledge base that might be relevant:
+<gathered context>
+Query: <verbatim query>
+```
+
+The context header and its terminating newline are omitted when context is
+empty. The original caps the entire gathered context at 3000 UTF-16 units with
+the same truncation suffix used by search (0x100908750–0x1009087a4). The port now
+applies that cap after collecting source entries rather than imposing its prior
+per-excerpt byte cap in web mode. Its retrieval/ranking and gathered-source
+formatting still differ from the original InsightService and need comparison.
+No audio attachment path has been added by this text-only change.
+
+The native tool request now carries separate system-message and tool-definition
+fields. The C++ and macOS Python backends install those instructions as the
+conversation's system message and send the user prompt separately. Legacy
+array-only native requests keep their generic system default. Prompt admission
+counts system and tool-definition tokens as well as user text and output reserve.
+Replayed structured history, conversation cloning, original token limits and
+streaming remain integration work; exact prompt text and role placement alone
+do not establish those behaviors. Prior history still uses
+the port's bounded textual prefix. Tests verify the recovered instruction hash,
+date/query envelope, optional context and UTF-16 truncation, plus its use by the
+application's web-generation call.
+
+Additional REA evidence:
+
+- `ev_1e61b38db8b05fc9daad07d41a28bbe2603045d08eaa7d1565929e863f6d6966`: complete initialize pagination and date-format call-site assembly; IDA closed normally.
+- `ev_6eab863ec659bc7e95814ae838c62c7801fb230beaf6ea06bb27ca0dfabdcbe7`: exact public instruction/envelope/date constants decoded by the matching snapshot reader.
+
+Prompt/role follow-up validation: **139 core tests passed, one opt-in model test
+skipped**. The native tool integration fixture additionally verifies the exact
+recovered system-string hash crossing the FFI/child boundary separately from
+user text. All four CTest groups passed, including shared C++ request parsing
+and five macOS runner tests. Four focused desktop tests passed; both analyzers
+are clean. This macOS pass did not build the complete Linux inference worker or
+load a real model.

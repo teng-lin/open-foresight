@@ -16,10 +16,17 @@ void main() {
         );
         final runner = File('${directory.path}/runner');
         await runner.writeAsString('''#!/usr/bin/env python3
-import json,sys
+import hashlib,json,sys
 if '--probe' in sys.argv: sys.exit(0)
 assert '--tools' in sys.argv
-tools=json.loads(sys.argv[sys.argv.index('--tools')+1])
+options=json.loads(sys.argv[sys.argv.index('--tools')+1])
+tools=options['tools']
+prompt=sys.argv[sys.argv.index('--prompt')+1]
+if prompt=='Reference question':
+ assert hashlib.sha256(options['system_message'].encode()).hexdigest()=='71a908bf5b041da7cff1c7ad1d397a62b2fc3d433774bad7dcaf26a351762f78'
+else:
+ assert options['system_message']=='Follow the requested task faithfully. Do not invent facts.'
+ assert prompt=='Question', 'System instructions leaked into user content'
 assert tools[0]['name']=='google_search'
 print('tool '+json.dumps([{'function':{'name':'google_search','arguments':{'query':'Current query'}}}]),flush=True)
 message=json.loads(sys.stdin.readline())
@@ -67,7 +74,8 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
           final events = await runtime
               .generateWithTools(
                 'search-owner',
-                'Question',
+                'Reference question',
+                systemPrompt: referenceChatInstructions,
                 tools: [referenceGoogleSearchTool()],
                 dispatcher: dispatcher,
               )

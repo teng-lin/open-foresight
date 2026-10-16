@@ -35,6 +35,8 @@ int fs_generate_options(void *conversation, const char *request_id,
 int fs_generation_cancel(void *conversation);
 // Tool-enabled LiteRT conversation. Tool request/answer frames are polled as
 // events. Replies are scoped to the active request and accepted once per batch.
+// tools_json is {"tools":[...],"system_message":"..."}; a legacy array uses
+// the runner's default system message. prompt is always user content.
 int fs_generate_tools(void *conversation, const char *request_id,
                       const char *prompt, const char *tools_json,
                       int max_output_tokens);

@@ -246,16 +246,22 @@ class NativeRuntime {
     _active = owner;
     final clock = Stopwatch()..start();
     try {
-      if (template == 'chatml') {
-        prompt =
-            '<|im_start|>system\n$systemPrompt<|im_end|>\n'
-            '<|im_start|>user\n$prompt<|im_end|>\n<|im_start|>assistant\n';
-      } else {
-        prompt = '$systemPrompt\n\n$prompt';
+      // Tool conversations carry a distinct native system message below.
+      if (tools == null) {
+        if (template == 'chatml') {
+          prompt =
+              '<|im_start|>system\n$systemPrompt<|im_end|>\n'
+              '<|im_start|>user\n$prompt<|im_end|>\n<|im_start|>assistant\n';
+        } else {
+          prompt = '$systemPrompt\n\n$prompt';
+        }
       }
       final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
       final schema = tools != null
-          ? jsonEncode(tools).toNativeUtf8()
+          ? jsonEncode({
+              'tools': tools,
+              'system_message': systemPrompt,
+            }).toNativeUtf8()
           : responseSchema == null
           ? nullptr.cast<Utf8>()
           : jsonEncode(responseSchema).toNativeUtf8();

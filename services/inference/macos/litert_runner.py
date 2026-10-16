@@ -16,9 +16,14 @@ import sys
 
 
 def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
+    system = 'Follow the requested task faithfully. Do not invent facts.'
+    if isinstance(definitions, dict):
+        system = definitions['system_message']
+        definitions = definitions['tools']
+        if not isinstance(system, str):
+            raise ValueError('Tool system message must be a string')
     if not isinstance(definitions, list) or not definitions:
         raise ValueError('Tool definitions must be a nonempty array')
-
     class DelegatedTool(litert_lm.Tool):
         def __init__(self, definition):
             if not isinstance(definition, dict):
@@ -32,9 +37,16 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
         def execute(self, param):
             raise RuntimeError('Tool execution belongs to the application service')
 
+    delegated = [DelegatedTool(d) for d in definitions]
+    encoded_tools = json.dumps([tool.get_tool_description() for tool in delegated],
+                               ensure_ascii=False, separators=(',', ':'))
+    if (len(engine.tokenize(prompt)) + len(engine.tokenize(system)) +
+            len(engine.tokenize(encoded_tools)) + budget + 256 > 4096):
+        raise ValueError('Prompt and output reserve exceed the 4096-token context')
+
     with engine.create_conversation(
-            system_message='Follow the requested task faithfully. Do not invent facts.',
-            tools=[DelegatedTool(d) for d in definitions],
+            system_message=system,
+            tools=delegated,
             automatic_tool_calling=False,
             sampler_config=litert_lm.SamplerConfig(top_k=40, top_p=0.9, temperature=0.4, seed=0),
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
@@ -106,8 +118,6 @@ def run(args):
         if args.tools:
             if args.json_schema:
                 raise ValueError('Tools cannot be combined with a response schema')
-            if len(engine.tokenize(prompt)) + args.max_output_tokens + 256 > 4096:
-                raise ValueError('Prompt and output reserve exceed the 4096-token context')
             run_tool_conversation(engine, litert_lm, prompt, json.loads(args.tools), args.max_output_tokens)
             return
         schema = None
