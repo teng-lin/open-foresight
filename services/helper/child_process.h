@@ -10,7 +10,12 @@
 #include <signal.h>
 #include <stdexcept>
 #include <string>
+#include "../../native/portable_process.h"
+#ifdef __linux__
 #include <sys/prctl.h>
+#endif
+#include <spawn.h>
+extern char **environ;
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -51,7 +56,26 @@ public:
                             python = std::move(python),
                             adapter = std::move(adapter),
                             model = std::move(model),
-                            option = std::move(option)] {
+                            option = std::move(option)]() mutable {
+#ifdef __APPLE__
+      posix_spawn_file_actions_t actions;
+      posix_spawn_file_actions_init(&actions);
+      posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO);
+      posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO);
+      posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+      posix_spawnattr_t attr;
+      posix_spawnattr_init(&attr);
+      posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT);
+      posix_spawnattr_setpgroup(&attr, 0);
+      std::vector<std::string> args{python, adapter, model};
+      if (!option.empty()) args.push_back(option);
+      pid_t child = -1;
+      foresight::OwnedSpawn owned;
+      const int error = owned.spawn(&child, &actions, &attr, args);
+      posix_spawn_file_actions_destroy(&actions);
+      posix_spawnattr_destroy(&attr);
+      if (error) child = -1;
+#else
       pid_t child = fork();
       if (child == 0) {
         if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != owner)
@@ -79,7 +103,13 @@ public:
                  option.c_str(), static_cast<char *>(nullptr));
         _exit(127);
       }
+
+#endif
+#ifdef __APPLE__
+      pid_.store(child > 0 ? owned.worker : -1);
+#else
       pid_.store(child);
+#endif
       alive_.store(child > 0);
       started->set_value(child);
       std::unique_lock lock(mutex_);
@@ -95,7 +125,13 @@ public:
           }
         }
       }
+#ifdef __APPLE__
+      owned.stop();
+      // The supervisor owns worker reaping and exits after bounded cleanup.
+      if (child > 0) while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {}
+#else
       terminate(child);
+#endif
       pid_.store(-1);
       alive_.store(false);
     });

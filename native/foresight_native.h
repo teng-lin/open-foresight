@@ -10,6 +10,10 @@ extern "C" {
  * after release. All status codes: 0 success, -1 invalid/busy/unavailable. No
  * fake inference. */
 int fs_abi_version(void);
+/* Before worker startup only; 0 success, -1 unsupported key/invalid value. */
+int fs_set_runtime_environment(const char *key, const char *value);
+/* 1 verified same-user helper argv/instance, 0 mismatch, -1 unavailable. */
+int fs_process_matches(int64_t pid, const char *socket, const char *storage, const char *instance_id);
 void fs_string_free(char *string);
 char *fs_event_poll(void *handle, int timeout_ms);
 void *fs_engine_create(const char *runtime_executable, const char *model_path);
@@ -41,7 +45,14 @@ void fs_speech_destroy(void *speech);
  * sizes/even samples. Legacy channel map fields stay distinct; state/error
  * events use linux channel. */
 void *fs_capture_start(const char *target, int playback, int sample_rate);
+/* Stops callbacks and flushes final PCM events, retaining handle for polling.
+ * Call fs_capture_stop after draining to release the handle. */
+void fs_capture_finish(void *capture);
 void fs_capture_stop(void *capture);
+/* Owned JSON string, release with fs_string_free. Discovery never prompts. */
+char *fs_audio_capabilities(void);
+/* Explicit setup only. Call off the service event loop; can wait for TCC UI. */
+int fs_audio_request_microphone(void);
 /* Stateless utilities used by contract tests and import conversion. */
 double fs_pcm_rms(const int16_t *samples, size_t count);
 size_t fs_resample_pcm(const int16_t *input, size_t count, int input_rate,

@@ -59,7 +59,7 @@ void main() {
       final download = LocalDownload(embedding);
       var loaded = false;
       await tester.runAsync(
-        () => store.register('generation', generation.path, '/bin/true'),
+        () => store.register('generation', generation.path, '/usr/bin/true'),
       );
       final previous = store
           .rows("SELECT * FROM models WHERE kind='generation'")
@@ -76,7 +76,7 @@ void main() {
                       store: store,
                       directory: root,
                       library: '',
-                      runner: '/bin/true',
+                      runner: '/usr/bin/true',
                       memoryGb: 4,
                       firstRun: true,
                       needsEmbedding: true,

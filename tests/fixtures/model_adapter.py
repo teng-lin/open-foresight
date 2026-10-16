@@ -6,6 +6,9 @@ import signal
 import sys
 import time
 
+if log := os.environ.get('FORESIGHT_FIXTURE_PID_LOG'):
+    with open(log, 'a') as stream:
+        stream.write(f'{os.getpid()}\n')
 stubborn = Path(sys.argv[1]).name == 'stubborn'
 if stubborn:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)

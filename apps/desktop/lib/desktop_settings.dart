@@ -1,19 +1,31 @@
 import 'dart:io';
+import 'package:flutter/services.dart';
 
-/// Freedesktop autostart entry; invoked only when the user changes the switch.
+/// Native macOS login items or a managed Freedesktop autostart entry.
 class DesktopSettings {
   final Directory config;
   final String launcher;
-  DesktopSettings(this.config, this.launcher);
+  final bool macOS;
+  static const channel = MethodChannel('foresight/desktop');
+  bool _macOpenAtLogin = false;
+  DesktopSettings(this.config, this.launcher, {bool? macOS})
+    : macOS = macOS ?? Platform.isMacOS;
+  Future<void> refresh() async {
+    if (macOS)
+      _macOpenAtLogin = await channel.invokeMethod<bool>('login.get') ?? false;
+  }
+
   File get entry => File('${config.path}/autostart/open-foresight.desktop');
   File get legacyEntry =>
       File('${config.path}/autostart/foresight-linux.desktop');
   File get previousEntry => File('${config.path}/autostart/foresight.desktop');
-  bool get openAtLogin =>
-      entry.existsSync() ||
-      legacyEntry.existsSync() ||
-      previousEntry.existsSync();
+  bool get openAtLogin => macOS
+      ? _macOpenAtLogin
+      : entry.existsSync() ||
+            legacyEntry.existsSync() ||
+            previousEntry.existsSync();
   Future<void> ensureApplicationEntry() async {
+    if (macOS) return;
     if (!File(launcher).existsSync())
       throw StateError('Enable global shortcuts from the packaged Linux app.');
     final home = Platform.environment['HOME']!;
@@ -32,6 +44,11 @@ class DesktopSettings {
       .replaceAll(r'$', r'\$')
       .replaceAll('%', '%%');
   Future<void> setOpenAtLogin(bool value) async {
+    if (macOS) {
+      await channel.invokeMethod<void>('login.set', {'enabled': value});
+      await refresh();
+      return;
+    }
     if (!value) {
       if (entry.existsSync()) await entry.delete();
       if (legacyEntry.existsSync()) await legacyEntry.delete();

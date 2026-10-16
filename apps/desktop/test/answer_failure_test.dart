@@ -27,7 +27,8 @@ class AnswerService extends DelayedIndexService {
 }
 
 class FailedAnswerRuntime extends NativeRuntime {
-  FailedAnswerRuntime() : super('libc.so.6');
+  FailedAnswerRuntime()
+    : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
   Stream<Map<String, dynamic>> generate(
     String id,

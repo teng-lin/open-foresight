@@ -11,9 +11,7 @@ Future<void> main(List<String> args) async {
       if (args.length != 1 || !['--status', '--stop'].contains(args.single))
         throw ArgumentError('Usage: foresight-service [--status|--stop]');
       final profile = ProfilePaths.resolve(Platform.environment);
-      final client = await ServiceClient.connect(
-        '${profile.runtime}/application.sock',
-      );
+      final client = await ServiceClient.connect(serviceEndpoint(profile));
       try {
         final state = await client.call('status') as Map;
         if (args.single == '--status') {

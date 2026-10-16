@@ -70,7 +70,7 @@ struct Model {
     const char *adapter = getenv(litert ? "FORESIGHT_LITERT_EMBEDDING_ADAPTER"
                                         : "FORESIGHT_MODEL_ADAPTER");
     std::string installed =
-        (fs::read_symlink("/proc/self/exe").parent_path() /
+        (foresight::executable_path().parent_path() /
          "../share/open-foresight" /
          (litert ? "litert_embedding_adapter.py" : "model_adapter.py"))
             .lexically_normal()
@@ -84,7 +84,7 @@ struct Model {
     if (litert && !adapter)
       adapter = source_adapter.c_str();
     const std::string installed_python =
-        (fs::read_symlink("/proc/self/exe").parent_path() /
+        (foresight::executable_path().parent_path() /
          "../share/open-foresight/litert-python")
             .lexically_normal()
             .string();
@@ -92,10 +92,11 @@ struct Model {
       py = installed_python.c_str();
     if (litert && !py)
       py = getenv("FORESIGHT_MODEL_PYTHON");
+    std::unique_lock launch(foresight::launch_mutex);
     int in[2], out[2];
-    if (pipe2(in, O_CLOEXEC))
+    if (foresight::cloexec_pipe(in))
       throw std::runtime_error("Adapter input pipe failed");
-    if (pipe2(out, O_CLOEXEC)) {
+    if (foresight::cloexec_pipe(out)) {
       close(in[0]);
       close(in[1]);
       throw std::runtime_error("Adapter output pipe failed");
@@ -113,6 +114,7 @@ struct Model {
     }
     close(in[0]);
     close(out[1]);
+    launch.unlock();
     input = fdopen(in[1], "w");
     output = fdopen(out[0], "r");
     if (!input || !output) {

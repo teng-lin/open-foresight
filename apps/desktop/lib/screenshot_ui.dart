@@ -112,7 +112,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       control: parts.contains('CTRL'),
       shift: parts.contains('SHIFT'),
       alt: parts.contains('ALT'),
-      meta: parts.contains('SUPER'),
+      meta: parts.any({'SUPER', 'CMD', 'COMMAND', 'META'}.contains),
     );
   }
 
@@ -143,9 +143,22 @@ extension _ScreenshotScreens on _WorkspaceState {
     input.dispose();
     if (saved != true || !mounted) return;
     await run(() async {
-      final normalized = HyprShortcuts.normalize(value);
+      final normalized = HyprShortcuts.normalize(
+        Platform.isMacOS
+            ? value
+                  .toUpperCase()
+                  .replaceAll(RegExp(r'\b(CMD|COMMAND|META)\b'), 'SUPER')
+                  .replaceAll('OPTION', 'ALT')
+                  .replaceAll('CONTROL', 'CTRL')
+            : value,
+      );
       if (d.store.preference('globalShortcut') == 'true') {
-        if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
+        if (Platform.isMacOS) {
+          await globalShortcuts!.enable(
+            preferredTrigger: normalized.replaceAll(' ', ''),
+          );
+        } else if (Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] !=
+            null) {
           await hyprShortcuts.install(normalized);
         } else {
           await globalShortcuts!.configure();
@@ -158,29 +171,56 @@ extension _ScreenshotScreens on _WorkspaceState {
 
   Widget screenshotWorkspace(BuildContext context) => CallbackShortcuts(
     bindings: {
-      const SingleActivator(LogicalKeyboardKey.digit1, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit1,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 3),
-      const SingleActivator(LogicalKeyboardKey.digit2, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit2,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 1),
-      const SingleActivator(LogicalKeyboardKey.digit3, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit3,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 0),
-      const SingleActivator(LogicalKeyboardKey.digit4, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit4,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 5),
-      const SingleActivator(LogicalKeyboardKey.digit5, control: true): () =>
+      SingleActivator(
+        LogicalKeyboardKey.digit5,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () =>
           update(() => tab = 6),
       quickActivator: () {
         if (!busy && recording == null) unawaited(quickStart());
       },
-      const SingleActivator(LogicalKeyboardKey.keyO, control: true): () {
+      SingleActivator(
+        LogicalKeyboardKey.keyO,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () {
         if (!busy) unawaited(run(import));
       },
-      const SingleActivator(LogicalKeyboardKey.keyN, control: true): () =>
-          update(() {
-            tab = 2;
-            noteId = null;
-            noteTitle.clear();
-            noteBody.clear();
-          }),
+      SingleActivator(
+        LogicalKeyboardKey.keyN,
+        control: !Platform.isMacOS,
+        meta: Platform.isMacOS,
+      ): () => update(() {
+        tab = 2;
+        noteId = null;
+        noteTitle.clear();
+        noteBody.clear();
+      }),
     },
     child: Focus(
       autofocus: true,
@@ -3314,14 +3354,15 @@ extension _ScreenshotScreens on _WorkspaceState {
             children: [
               SwitchListTile(
                 title: const Text('Open at login'),
-                subtitle: const Text(
-                  'Automatically open Foresight when you log in to your computer.',
+                subtitle: Text(
+                  loginState.isEmpty
+                      ? 'Automatically open Foresight when you log in to your computer.'
+                      : loginState,
                 ),
                 value: desktopSettings.openAtLogin,
                 onChanged: busy
                     ? null
-                    : (value) =>
-                          run(() => desktopSettings.setOpenAtLogin(value)),
+                    : (value) => run(() => setOpenAtLogin(value)),
               ),
               const Divider(height: 1),
               SwitchListTile(
@@ -3330,8 +3371,9 @@ extension _ScreenshotScreens on _WorkspaceState {
                   'Notify five minutes before a timed Calendar meeting starts.',
                 ),
                 value: d.store.preference('googleReminders') == 'true',
-                onChanged: (value) =>
-                    preference('googleReminders', value.toString()),
+                onChanged: busy
+                    ? null
+                    : (value) => run(() => setMeetingReminders(value)),
               ),
               const Divider(height: 1),
               Padding(
@@ -3504,7 +3546,7 @@ extension _ScreenshotScreens on _WorkspaceState {
             '',
             TextButton(
               onPressed: () => update(() => tab = 2),
-              child: const Text('Ctrl + N'),
+              child: Text(Platform.isMacOS ? '⌘ + N' : 'Ctrl + N'),
             ),
           ),
         ),
@@ -3516,6 +3558,32 @@ extension _ScreenshotScreens on _WorkspaceState {
         Card(
           child: Column(
             children: [
+              if (Platform.isMacOS) ...[
+                ListTile(
+                  title: const Text('Recording access'),
+                  subtitle: Text(
+                    captureCapabilityError.isNotEmpty
+                        ? captureCapabilityError
+                        : 'Microphone: $microphoneAccessLabel\nSystem audio access is checked when you explicitly start recording. Enable Open Foresight under Privacy & Security > Screen & System Audio Recording if access is denied.',
+                  ),
+                ),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () => run(requestMicrophoneAccess),
+                      child: const Text('Allow microphone'),
+                    ),
+                    TextButton(
+                      onPressed: busy ? null : refreshCaptureCapabilities,
+                      child: const Text('Refresh access status'),
+                    ),
+                  ],
+                ),
+                const Divider(height: 1),
+              ],
               settingRow(
                 'Microphone',
                 'Select the microphone used for spoken transcription.',
@@ -3541,10 +3609,9 @@ extension _ScreenshotScreens on _WorkspaceState {
                 title: const Text('Desktop completion notifications'),
                 subtitle: Text(notificationState),
                 value: notifications,
-                onChanged: (value) => update(() {
-                  notifications = value;
-                  unawaited(preference('notifications', value.toString()));
-                }),
+                onChanged: busy
+                    ? null
+                    : (value) => run(() => setNotifications(value)),
               ),
               const Divider(height: 1),
             ],
