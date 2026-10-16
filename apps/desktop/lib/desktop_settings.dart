@@ -5,19 +5,23 @@ class DesktopSettings {
   final Directory config;
   final String launcher;
   DesktopSettings(this.config, this.launcher);
-  File get entry => File('${config.path}/autostart/foresight.desktop');
+  File get entry => File('${config.path}/autostart/open-foresight.desktop');
   File get legacyEntry =>
       File('${config.path}/autostart/foresight-linux.desktop');
-  bool get openAtLogin => entry.existsSync() || legacyEntry.existsSync();
+  File get previousEntry => File('${config.path}/autostart/foresight.desktop');
+  bool get openAtLogin =>
+      entry.existsSync() ||
+      legacyEntry.existsSync() ||
+      previousEntry.existsSync();
   Future<void> ensureApplicationEntry() async {
     if (!File(launcher).existsSync())
       throw StateError('Enable global shortcuts from the packaged Linux app.');
     final home = Platform.environment['HOME']!;
     final data = Platform.environment['XDG_DATA_HOME'] ?? '$home/.local/share';
-    final application = File('$data/applications/io.foresight.App.desktop');
+    final application = File('$data/applications/io.openforesight.App.desktop');
     await application.parent.create(recursive: true);
     await application.writeAsString(
-      '[Desktop Entry]\nType=Application\nName=Foresight\nExec="${_escapedLauncher()}"\nTerminal=false\nStartupWMClass=io.foresight.App\nCategories=Office;\n',
+      '[Desktop Entry]\nType=Application\nName=Open Foresight\nExec="${_escapedLauncher()}"\nTerminal=false\nStartupWMClass=io.openforesight.App\nCategories=Office;\n',
     );
   }
 
@@ -31,6 +35,7 @@ class DesktopSettings {
     if (!value) {
       if (entry.existsSync()) await entry.delete();
       if (legacyEntry.existsSync()) await legacyEntry.delete();
+      if (previousEntry.existsSync()) await previousEntry.delete();
       return;
     }
     if (!File(launcher).existsSync()) {
@@ -39,8 +44,9 @@ class DesktopSettings {
     final escaped = _escapedLauncher();
     await entry.parent.create(recursive: true);
     await entry.writeAsString(
-      '[Desktop Entry]\nType=Application\nName=Foresight\nExec="$escaped"\nTerminal=false\n',
+      '[Desktop Entry]\nType=Application\nName=Open Foresight\nExec="$escaped"\nTerminal=false\n',
     );
     if (legacyEntry.existsSync()) await legacyEntry.delete();
+    if (previousEntry.existsSync()) await previousEntry.delete();
   }
 }

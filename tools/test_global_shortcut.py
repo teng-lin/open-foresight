@@ -35,6 +35,7 @@ def main():
     parser.add_argument('bundle', type=Path)
     parser.add_argument('--keyboard', required=True, type=Path)
     parser.add_argument('--dart', default='dart')
+    parser.add_argument('--model-python', type=Path, default=Path(os.environ.get('FORESIGHT_MODEL_PYTHON', ROOT / '.venv/bin/python')))
     parser.add_argument('--private-runtime', required=True, type=Path)
     parser.add_argument('--private-config', required=True, type=Path)
     parser.add_argument('--report', type=Path, default=ROOT / 'test-results/global-shortcut-private.json')
@@ -55,7 +56,7 @@ def main():
     original = config.read_text()
     assert '-- BEGIN FORESIGHT GLOBAL SHORTCUT' not in original, 'Disable existing Foresight shortcut before isolated acceptance'
     before = json.loads(run('hyprctl', 'activewindow', '-j'))
-    assert before.get('pid') and before.get('class') != 'io.foresight.App', 'Focus a separate private sentinel window first'
+    assert before.get('pid') and before.get('class') != 'io.openforesight.App', 'Focus a separate private sentinel window first'
     audio_defaults = {kind: run('pactl', 'get-default-' + kind) for kind in ('sink', 'source')}
     sink = 'foresight-shortcut-' + str(os.getpid())
     modules = []
@@ -67,9 +68,9 @@ def main():
         env.update(FORESIGHT_DATA=str(root / 'data'), FORESIGHT_RUNTIME=str(root / 'run'),
                    FORESIGHT_MICROPHONE_TARGET=sink + '-microphone', FORESIGHT_PLAYBACK_TARGET=sink,
                    FORESIGHT_MODEL_MANIFEST=str(args.model_manifest.resolve()),
-                   FORESIGHT_MODEL_PYTHON=str(ROOT / '.venv/bin/python'))
+                   FORESIGHT_MODEL_PYTHON=str(args.model_python.expanduser().absolute()))
         launcher.write_text('#!/bin/sh\n' + '\n'.join('export ' + key + '=' + shlex.quote(env[key]) for key in env if key.startswith('FORESIGHT_') or key in ('PULSE_SERVER', 'PIPEWIRE_REMOTE', 'PATH', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'WAYLAND_DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE')) +
-                            '\nexec ' + shlex.quote(str(bundle / 'foresight')) + ' "$@" >>' + shlex.quote(str(root / 'app.log')) + ' 2>&1\n')
+                            '\nexec ' + shlex.quote(str(bundle / 'open-foresight')) + ' "$@" >>' + shlex.quote(str(root / 'app.log')) + ' 2>&1\n')
         launcher.chmod(0o700)
         manage = [args.dart, 'run', 'tool/manage_hypr_shortcut.dart']
         def meetings():
@@ -81,7 +82,7 @@ def main():
             except sqlite3.OperationalError: return []
         def owner():
             return [client for client in json.loads(run('hyprctl', 'clients', '-j'))
-                    if client.get('class') == 'io.foresight.App' and
+                    if client.get('class') == 'io.openforesight.App' and
                     Path('/proc/' + str(client['pid']) + '/environ').exists() and
                     ('FORESIGHT_DATA=' + str(root / 'data')).encode() in Path('/proc/' + str(client['pid']) + '/environ').read_bytes().split(b'\0')]
         def key(): run(str(args.keyboard.resolve()))
@@ -93,7 +94,7 @@ def main():
                 "print(json.dumps(control_snapshot(channel)))"
             )
             return json.loads(subprocess.check_output([
-                str(ROOT / '.venv/bin/python'), '-c', script,
+                str(args.model_python.expanduser().absolute()), '-c', script,
                 str(root / 'run/helper.sock'), str(ROOT / 'tools')], env=env, text=True, stderr=subprocess.DEVNULL))
         def configured_model():
             try:

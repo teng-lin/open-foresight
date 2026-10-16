@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/speech_models.dart';
-import 'package:foresight/gemma_download.dart';
-import 'package:foresight/store.dart';
+import 'package:open_foresight/speech_models.dart';
+import 'package:open_foresight/gemma_download.dart';
+import 'package:open_foresight/store.dart';
 
 void main() {
   test('speech candidates are pinned multilingual models', () {

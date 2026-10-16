@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Opt-in pinned real model/runtime installation (~1.2GB downloads).
-python3 native/setup_models.py --directory ~/.local/share/foresight/local-models
+python3 native/setup_models.py --directory ~/.local/share/open-foresight/local-models
 Requires git, cmake, a C/C++ compiler, Python3 and OpenSSL development headers.
 No system package changes. Existing verified assets are reused.
 """

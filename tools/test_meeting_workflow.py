@@ -49,7 +49,7 @@ def main():
     parser.add_argument('--agent-desktop', type=Path, default=ROOT.parent / 'agent-desktop',
                         help='Agent Desktop checkout used for a dedicated headless display')
     parser.add_argument('--model-manifest', type=Path, default=ROOT / 'models/local/native/installed.json')
-    parser.add_argument('--helper-bundle', type=Path, default=ROOT / 'dist/foresight',
+    parser.add_argument('--helper-bundle', type=Path, default=ROOT / 'dist/open-foresight',
                         help='Packaged helper/runtime to exercise before replacing the default launcher')
     parser.add_argument('--report', type=Path, default=ROOT / 'test-results/meeting-headless.json')
     parser.add_argument('--gallery', type=Path, help='Separate gallery for another evaluated model stack')
@@ -154,7 +154,7 @@ def main():
                     report = json.loads(report_path.read_text())
                     report['helper_bundle'] = str(helper_bundle)
                     report['packaged_embedding_adapter_sha256'] = hashlib.sha256(
-                        (helper_bundle / 'share/foresight/litert_embedding_adapter.py').read_bytes()).hexdigest()
+                        (helper_bundle / 'share/open-foresight/litert_embedding_adapter.py').read_bytes()).hexdigest()
                     gallery = args.gallery or ROOT / 'test-results/ui/foresight-headless'
                     report['source_revision'] = revision
                     report['reference_screen_captures'] = str(gallery)

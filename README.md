@@ -1,4 +1,4 @@
-# Foresight
+# Open Foresight
 
 A local knowledge and meeting desktop application built with Flutter, a C++ retrieval helper, SQLite, and local inference workers. The current desktop target is Linux; macOS requires platform integration work.
 
@@ -28,7 +28,16 @@ python3 tools/package.py
 ./tools/run_desktop.sh
 ```
 
-The executable is `dist/foresight/foresight`; `./tools/run_desktop.sh` launches it. New installations store their profile in `$XDG_DATA_HOME/foresight` (normally `~/.local/share/foresight`). Existing `foresight-linux-desktop` profiles and their runtime sockets are reused in place; `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` override these paths. The independently running legacy virtual-display profile is never selected implicitly. Building this source does not copy existing user data or model registrations. PDF/RTF import uses `pdftotext`/`unrtf`; recording requires PipeWire and `pw-record`.
+The executable is `dist/open-foresight/open-foresight`; `./tools/run_desktop.sh` launches it. The profile lives in `$XDG_DATA_HOME/open-foresight` (normally `~/.local/share/open-foresight`), with sockets in `$XDG_RUNTIME_DIR/open-foresight`. `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` override these paths for isolated sessions. Legacy profiles are never selected implicitly. To migrate an existing desktop profile, stop its app and helper, then run:
+
+```sh
+python3 tools/migrate_profile.py ~/.local/share/foresight-linux-desktop \
+  ~/.local/share/open-foresight --backup ~/.local/state/open-foresight/profile-backup \
+  --old-bundle /path/to/old/dist/foresight \
+  --new-bundle "$PWD/dist/open-foresight" --copy-external-models
+```
+
+Migration refuses active owners, unfinished recordings, and existing destinations. It preserves a private backup, checks SQLite integrity, updates owned model/file paths, and optionally copies external model assets so other sessions retain their originals. Model downloads and GPU caches inside the profile move intact. Backups contain private application data; keep them outside Git. PDF/RTF import uses `pdftotext`/`unrtf`; recording requires PipeWire and `pw-record`.
 
 ## Local models
 
@@ -40,7 +49,7 @@ python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2
 python3 native/setup_models.py --directory models/local/native
 uv venv --python 3.12 .venv-litert
 uv pip install --python .venv-litert/bin/python -r requirements-litert.txt
-python3 tools/package.py --output dist/foresight-gemma --litert-python "$PWD/.venv-litert/bin/python"
+python3 tools/package.py --output dist/open-foresight-gemma --litert-python "$PWD/.venv-litert/bin/python"
 ```
 
 Choose an unused package output directory. Pass `--generation-backend gpu` to package Gemma GPU generation; Whisper GPU packaging accepts `--whisper-gpu-runtime` and `--whisper-gpu-device`. Validate device indices on the target machine.

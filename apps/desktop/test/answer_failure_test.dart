@@ -1,11 +1,11 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
-import 'package:foresight/domain.dart';
-import 'package:foresight/helper.dart';
-import 'package:foresight/native.dart';
-import 'package:foresight/store.dart';
-import 'package:foresight/generated/rag_service.pbgrpc.dart';
+import 'package:open_foresight/domain.dart';
+import 'package:open_foresight/helper.dart';
+import 'package:open_foresight/native.dart';
+import 'package:open_foresight/store.dart';
+import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
 import 'domain_lifecycle_test.dart' show DelayedIndexService;
 
 class AnswerService extends DelayedIndexService {

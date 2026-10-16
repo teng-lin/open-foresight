@@ -1,6 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/graph_layout.dart';
+import 'package:open_foresight/graph_layout.dart';
 
 void main() {
   test('PCA recovers distinct covariance axes and ignores translation', () {

@@ -19,10 +19,10 @@ def main():
     parser.add_argument('--bundle', type=Path, help='Test a relocated native library, helper and isolated runner')
     parser.add_argument('--report', type=Path, default=ROOT / 'test-results/gemma4-linux.json')
     args = parser.parse_args()
-    bundle = args.bundle.resolve() if args.bundle else ROOT / 'dist/foresight'
+    bundle = args.bundle.resolve() if args.bundle else ROOT / 'dist/open-foresight'
     native = bundle / 'lib/libforesight_native.so' if args.bundle else ROOT / 'build/native/libforesight_native.so'
-    runner = bundle / 'share/foresight/litert-runner' if args.bundle else args.runner.resolve()
-    adapter = bundle / 'share/foresight/model_adapter.py' if args.bundle else ROOT / 'services/helper/model_adapter.py'
+    runner = bundle / 'share/open-foresight/litert-runner' if args.bundle else args.runner.resolve()
+    adapter = bundle / 'share/open-foresight/model_adapter.py' if args.bundle else ROOT / 'services/helper/model_adapter.py'
     report = args.report.resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -34,7 +34,7 @@ def main():
         'FORESIGHT_LITERT_RUNNER': str(runner),
         'FORESIGHT_HELPER': str(bundle / 'bin/ForesightHelper'),
         'FORESIGHT_MODEL_ADAPTER': str(adapter),
-        'FORESIGHT_MODEL_PYTHON': str(args.python.resolve()),
+        'FORESIGHT_MODEL_PYTHON': str(args.python.expanduser().absolute()),
         'FORESIGHT_EMBEDDING': str(args.embedding.resolve()),
         'FORESIGHT_GEMMA_REPORT': str(report),
         'LD_LIBRARY_PATH': str(bundle / 'lib'),

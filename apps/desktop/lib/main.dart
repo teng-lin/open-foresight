@@ -129,7 +129,7 @@ class Foresight extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Foresight',
+    title: 'Open Foresight',
     debugShowCheckedModeBanner: false,
     theme: foresightTheme(),
     home: Workspace(
@@ -250,7 +250,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       Platform.environment['XDG_CONFIG_HOME'] ??
           '${Platform.environment['HOME']}/.config',
     ),
-    '${File(Platform.resolvedExecutable).parent.parent.path}/foresight',
+    '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
   );
   bool busy = false, asking = false;
   int _operations = 0;
@@ -628,7 +628,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     googleReminding = true;
     try {
       await google.reminders(DateTime.now(), (message) async {
-        final result = await Process.run('notify-send', ['Foresight', message]);
+        final result = await Process.run('notify-send', ['Open Foresight', message]);
         if (result.exitCode != 0)
           throw StateError('Desktop could not deliver the meeting reminder.');
       });
@@ -670,7 +670,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   Future<void> notify(String message) async {
     if (!notifications) return;
     try {
-      final result = await Process.run('notify-send', ['Foresight', message]);
+      final result = await Process.run('notify-send', ['Open Foresight', message]);
       if (result.exitCode != 0 && mounted)
         setState(
           () => notificationState =

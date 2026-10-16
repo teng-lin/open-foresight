@@ -2,11 +2,11 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/graph_layout.dart';
-import 'package:foresight/graph_rendering.dart';
-import 'package:foresight/main.dart';
-import 'package:foresight/store.dart';
-import 'package:foresight/generated/helper_control.pb.dart' as control;
+import 'package:open_foresight/graph_layout.dart';
+import 'package:open_foresight/graph_rendering.dart';
+import 'package:open_foresight/main.dart';
+import 'package:open_foresight/store.dart';
+import 'package:open_foresight/generated/helper_control.pb.dart' as control;
 import 'graph_workflow_test.dart' show GraphDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
 

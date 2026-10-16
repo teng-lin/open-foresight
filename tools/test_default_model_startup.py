@@ -33,7 +33,7 @@ def main():
             launch = desktop('launch', session, '--', 'env', '-u', 'FORESIGHT_MODEL_MANIFEST',
                              'FORESIGHT_DATA=' + str(root / 'data'),
                              'FORESIGHT_RUNTIME=' + str(root / 'run'),
-                             str(bundle / 'foresight'))
+                             str(bundle / 'open-foresight'))
             print(json.dumps({'session': session, 'pid': launch['pid'], 'logs': launch['logs']}), flush=True)
             deadline = time.monotonic() + 90
             state = None

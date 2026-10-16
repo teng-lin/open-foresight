@@ -71,7 +71,7 @@ struct Model {
                                         : "FORESIGHT_MODEL_ADAPTER");
     std::string installed =
         (fs::read_symlink("/proc/self/exe").parent_path() /
-         "../share/foresight" /
+         "../share/open-foresight" /
          (litert ? "litert_embedding_adapter.py" : "model_adapter.py"))
             .lexically_normal()
             .string();
@@ -85,7 +85,7 @@ struct Model {
       adapter = source_adapter.c_str();
     const std::string installed_python =
         (fs::read_symlink("/proc/self/exe").parent_path() /
-         "../share/foresight/litert-python")
+         "../share/open-foresight/litert-python")
             .lexically_normal()
             .string();
     if (litert && !py && fs::exists(installed_python))

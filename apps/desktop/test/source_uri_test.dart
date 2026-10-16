@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/store.dart';
+import 'package:open_foresight/store.dart';
 
 void main() {
   test(

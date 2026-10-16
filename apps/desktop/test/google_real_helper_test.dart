@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/domain.dart';
-import 'package:foresight/google_auth.dart';
-import 'package:foresight/google_connections.dart';
-import 'package:foresight/helper.dart';
-import 'package:foresight/store.dart';
-import 'package:foresight/generated/rag_service.pbgrpc.dart';
+import 'package:open_foresight/domain.dart';
+import 'package:open_foresight/google_auth.dart';
+import 'package:open_foresight/google_connections.dart';
+import 'package:open_foresight/helper.dart';
+import 'package:open_foresight/store.dart';
+import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
 import 'google_connections_test.dart' show GoogleFixture;
 
 void main() {

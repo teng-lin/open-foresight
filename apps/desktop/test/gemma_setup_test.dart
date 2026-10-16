@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/gemma_download.dart';
-import 'package:foresight/gemma_setup_view.dart';
-import 'package:foresight/store.dart';
+import 'package:open_foresight/gemma_download.dart';
+import 'package:open_foresight/gemma_setup_view.dart';
+import 'package:open_foresight/store.dart';
 
 void main() {
   testWidgets('14 GB host offers E2B and prevents larger model installation', (

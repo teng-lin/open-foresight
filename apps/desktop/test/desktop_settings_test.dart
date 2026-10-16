@@ -1,6 +1,6 @@
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/desktop_settings.dart';
+import 'package:open_foresight/desktop_settings.dart';
 
 void main() {
   test(
@@ -16,9 +16,11 @@ void main() {
       );
       settings.legacyEntry.parent.createSync(recursive: true);
       settings.legacyEntry.writeAsStringSync('legacy application entry');
+      settings.previousEntry.writeAsStringSync('previous application entry');
       expect(settings.openAtLogin, true);
       await settings.setOpenAtLogin(true);
       expect(settings.legacyEntry.existsSync(), false);
+      expect(settings.previousEntry.existsSync(), false);
       expect(
         settings.entry.readAsStringSync(),
         contains('Exec="${launcher.path}"'),

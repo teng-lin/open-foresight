@@ -23,7 +23,7 @@ class GlobalShortcuts {
     this.activated, {
     this.changed,
     DBusClient? client,
-    this.appId = 'io.foresight.App',
+    this.appId = 'io.openforesight.App',
   }) : client = client ?? DBusClient.session();
 
   Future<Map<String, DBusValue>> _request(

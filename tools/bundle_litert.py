@@ -64,5 +64,5 @@ exec "$task_runtime/python/bin/python3" -I -B "$@"
     subprocess.run([str(launcher), '--check'], check=True, timeout=30,
                    capture_output=True, cwd='/')
     return {'version': config['version'], 'distributions': config['distributions'],
-            'runner': 'share/foresight/litert-runner',
+            'runner': 'share/open-foresight/litert-runner',
             'limits': 'Requires compatible Linux system libraries; model assets downloaded separately.'}

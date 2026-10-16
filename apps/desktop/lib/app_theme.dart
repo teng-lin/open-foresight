@@ -163,7 +163,7 @@ class ForesightBrand extends StatelessWidget {
         Image.asset('assets/images/foresight-logo.png', width: 34, height: 34),
       const SizedBox(width: 10),
       Text(
-        'foresight',
+        'open foresight',
         style: TextStyle(
           fontSize: 23,
           fontWeight: FontWeight.w700,

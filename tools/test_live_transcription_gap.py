@@ -15,7 +15,7 @@ def main():
     parser.add_argument('--flutter', default='flutter')
     parser.add_argument('--manifest', type=Path,
                         default=ROOT / 'models/local/native/installed-gemma-macos-gpu.json')
-    parser.add_argument('--bundle', type=Path, default=ROOT / 'dist/foresight')
+    parser.add_argument('--bundle', type=Path, default=ROOT / 'dist/open-foresight')
     parser.add_argument('--report', type=Path, required=True)
     parser.add_argument('--log', type=Path, required=True)
     args = parser.parse_args()

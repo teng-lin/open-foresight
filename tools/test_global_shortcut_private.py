@@ -19,6 +19,7 @@ def main():
     parser.add_argument('bundle', type=Path)
     parser.add_argument('--agent-desktop', type=Path, default=ROOT.parent / 'agent-desktop')
     parser.add_argument('--dart', default='dart')
+    parser.add_argument('--model-python', type=Path, default=Path(os.environ.get('FORESIGHT_MODEL_PYTHON', ROOT / '.venv/bin/python')))
     parser.add_argument('--render-device', type=Path)
     parser.add_argument('--model-manifest', type=Path, default=ROOT / 'models/local/native/installed.json')
     parser.add_argument('--expect-embedding-backend')
@@ -99,7 +100,7 @@ def main():
             flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'wayland-client', 'xkbcommon'], text=True))
             subprocess.run(['cc', str(ROOT / 'tools/hotkey_keyboard.c'), '-o', str(keyboard), *flags], check=True)
             test_report = root / 'report.json'
-            model_options = ' --model-manifest ' + shlex.quote(str(args.model_manifest.resolve()))
+            model_options = ' --model-python ' + shlex.quote(str(args.model_python.expanduser().absolute())) + ' --model-manifest ' + shlex.quote(str(args.model_manifest.resolve()))
             if args.expect_embedding_backend:
                 model_options += ' --expect-embedding-backend ' + shlex.quote(args.expect_embedding_backend)
             runner = root / 'run-test'

@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/speech_models.dart';
-import 'package:foresight/speech_setup_view.dart';
-import 'package:foresight/store.dart';
+import 'package:open_foresight/speech_models.dart';
+import 'package:open_foresight/speech_setup_view.dart';
+import 'package:open_foresight/store.dart';
 
 void main() {
   testWidgets(

@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight/store.dart';
-import 'package:foresight/domain.dart';
-import 'package:foresight/helper.dart';
+import 'package:open_foresight/store.dart';
+import 'package:open_foresight/domain.dart';
+import 'package:open_foresight/helper.dart';
 
 void main() {
   test(
