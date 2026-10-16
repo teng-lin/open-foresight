@@ -13,6 +13,18 @@ Flutter, gRPC (including its protobuf submodule) and Whisper to full source
 commits. The modern protobuf toolchain is intentional: our authoritative
 descriptor uses Edition 2024, which older distro protoc packages cannot generate.
 The original descriptor and its presence/UTF-8 semantics are retained.
+Python development and LiteRT dependency closures are pinned with hashes in
+`requirements-dev.lock` and `requirements-litert.lock` for Python 3.12. Update
+them deliberately with `uv pip compile --python-version 3.12 --generate-hashes`.
+The SDK (gRPC, Flutter, Python and Whisper) is a separate private GHCR image.
+Its tag hashes the SDK Dockerfile, CMake hook, dependency locks and Whisper builder;
+application CI consumes the resolved immutable image digest. Ordinary app changes
+skip the SDK build entirely. The first bootstrap is slower on two-core runners;
+unused duplicate gRPC libraries are excluded and compilation uses `-O2`.
+SDK publishing requires a trusted push or manual run. Pull requests consume an
+already published matching SDK; SDK changes must first be built on a trusted
+branch. Fork PRs cannot consume the private image without registry access.
+No larger paid runner is required. BuildKit caches intermediate SDK layers too.
 
 `packaging/check_abi.py` audits version requirements of every ELF file, including
 Python extensions, and rejects requirements above glibc 2.39 or GLIBCXX 3.4.33.
@@ -30,6 +42,7 @@ reproducible. Build manifests and ABI reports record what was produced.
 Run from a clean checkout with Docker/BuildKit available:
 
 ```sh
+docker build --file packaging/sdk.Dockerfile --tag open-foresight-sdk:local .
 docker build --file packaging/build.Dockerfile --target artifact \
   --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
   --output type=local,dest=build/portable .
@@ -87,7 +100,9 @@ GPU drivers, or deletes user data. Existing legacy profiles use the explicit
 offline migration documented in the main README.
 
 The bundle includes private protobuf/gRPC libraries and SQLite (including the
-unversioned name Dart opens). It does not replace the system glibc or GPU driver.
+unversioned name Dart opens). Python extension dependencies are bundled privately
+as well, avoiding distro-specific optional DBM/libcrypt dependencies. It does
+not replace the system glibc, C++ runtime or GPU driver.
 Distro dependency names are centralized in `packaging/metadata.json`. RPM host
 requirements are explicit: automatic scanning of private Python/protobuf
 libraries would otherwise require libraries already inside the payload.
@@ -98,13 +113,16 @@ All payload ELF linkage is checked after native installation.
 CI builds on ordinary hosted Linux runners without a GPU. After the baseline
 build, parallel native-container jobs create `.deb`, `.rpm`, and `.pkg.tar.zst`
 files. Each installs its dependencies and package, validates the desktop entry,
-checks every ELF for missing libraries, imports LiteRT, runs Whisper help, and
+checks every ELF for missing libraries, imports LiteRT, runs Whisper help and
+decodes the public JFK fixture on CPU with a SHA-verified Tiny model, then
 launches the installed app under Xvfb as an ordinary user. It checks activation
 IPC and a private SQLite profile, reinstalls the same version, removes the
 package, and verifies a per-user sentinel survives. The DEB also gets a separate
 Debian 13 installation/startup test.
 
-These tests do not certify GPU inference, physical audio, mixed-language accuracy,
+The Tiny download exists only in the temporary test directory and never enters
+the installer or a user profile. These tests do not certify GPU inference,
+physical audio, mixed-language accuracy,
 Wayland/global shortcut portals, or a real browser consent flow. Those require
 separate desktop/hardware acceptance. There is no automatic CPU fallback policy
 added by packaging. The bundled Whisper defaults to Vulkan device 0; override
@@ -128,6 +146,7 @@ that includes its OAuth application registration, supply the application-only
 configuration explicitly through a BuildKit secret:
 
 ```sh
+docker build --file packaging/sdk.Dockerfile --tag open-foresight-sdk:local .
 docker build --file packaging/build.Dockerfile --target artifact \
   --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
   --secret id=google_client,src=/path/to/google-client.json \

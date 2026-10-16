@@ -102,6 +102,36 @@ class LinuxPackagesTest(unittest.TestCase):
             entry = tar.getmember('open-foresight/open-foresight')
             self.assertEqual((entry.mode, entry.uid, entry.mtime), (0o755, 0, 1234))
 
+    @unittest.skipUnless(shutil.which('cmake') and shutil.which('cc'), 'CMake and C compiler required')
+    def test_minimal_sdk_installs_consumable_export_without_duplicate_library(self):
+        source = self.root / 'sdk'
+        source.mkdir()
+        (source / 'probe.c').write_text('int probe(void) { return 1; }\n')
+        (source / 'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.19)\nproject(gRPC C)\nadd_library(grpc SHARED probe.c)\nadd_library(grpc_unsecure SHARED probe.c)\ninstall(TARGETS grpc EXPORT gRPC LIBRARY DESTINATION lib)\ninstall(TARGETS grpc_unsecure EXPORT gRPC LIBRARY DESTINATION lib)\ninstall(EXPORT gRPC DESTINATION lib/cmake)\n')
+        build, prefix = self.root / 'build', self.root / 'prefix'
+        for command in (
+            ['cmake', '-S', str(source), '-B', str(build),
+             '-DCMAKE_PROJECT_gRPC_INCLUDE=' + str(ROOT / 'packaging/minimal-grpc.cmake'),
+             '-DCMAKE_INSTALL_PREFIX=' + str(prefix)],
+            ['cmake', '--build', str(build)],
+            ['cmake', '--install', str(build)],
+        ):
+            subprocess.run(command, check=True, capture_output=True, text=True)
+        self.assertTrue((prefix / 'lib/libgrpc.so').exists())
+        self.assertFalse((build / 'libgrpc_unsecure.so').exists())
+        self.assertNotIn('grpc_unsecure', (prefix / 'lib/cmake/gRPC.cmake').read_text())
+        consumer = self.root / 'consumer'
+        consumer.mkdir()
+        (consumer / 'main.c').write_text('int probe(void); int main(void) { return probe() != 1; }\n')
+        (consumer / 'CMakeLists.txt').write_text(
+            'cmake_minimum_required(VERSION 3.19)\nproject(consumer C)\n'
+            f'include("{prefix}/lib/cmake/gRPC.cmake")\n'
+            'add_executable(consumer main.c)\ntarget_link_libraries(consumer PRIVATE grpc)\n')
+        subprocess.run(['cmake', '-S', str(consumer), '-B', str(consumer / 'build')], check=True, capture_output=True)
+        subprocess.run(['cmake', '--build', str(consumer / 'build')], check=True, capture_output=True)
+        subprocess.run([str(consumer / 'build/consumer')], check=True,
+                       env={**os.environ, 'LD_LIBRARY_PATH': str(prefix / 'lib')})
+
     @unittest.skipUnless(shutil.which('cc') and shutil.which('readelf'), 'C compiler and readelf required')
     def test_abi_gate_rejects_newer_system_binaries(self):
         source = self.root / 'probe.c'

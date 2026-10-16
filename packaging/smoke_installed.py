@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Exercise installed files as an ordinary user in a disposable Xvfb session.
 
-No models, account authorization, microphone, physical display, or host profile
-are used. GPU/audio/portal acceptance belongs to separate hardware tests.
+A pinned Tiny model and public speech fixture exercise CPU decoding only in a
+temporary directory. No account, microphone, physical display, or host profile
+is used. GPU/audio/portal acceptance belongs to separate hardware tests.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import signal
@@ -13,6 +15,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+import urllib.request
 
 
 def main():
@@ -39,6 +42,21 @@ def main():
                    env=env, check=True, capture_output=True, timeout=30)
     with tempfile.TemporaryDirectory(prefix='foresight-install-') as temp:
         private = Path(temp)
+        model = private / 'ggml-tiny.bin'
+        request = urllib.request.Request(
+            'https://huggingface.co/ggerganov/whisper.cpp/resolve/'
+            '5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin',
+            headers={'User-Agent': 'open-foresight-ci'})
+        with urllib.request.urlopen(request, timeout=90) as response, model.open('wb') as output:
+            while block := response.read(1024 * 1024):
+                output.write(block)
+        with model.open('rb') as stream:
+            assert hashlib.file_digest(stream, 'sha256').hexdigest() == 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21'
+        fixture = Path(__file__).resolve().parents[1] / 'tests/fixtures/audio/jfk.wav'
+        decoded = subprocess.run([str(root / 'bin/whisper-cli-vulkan'), '-ng', '-t', '2',
+                                  '-m', str(model), '-f', str(fixture), '-l', 'en', '-nt'],
+                                 env=env, check=True, capture_output=True, text=True, timeout=90)
+        assert 'country' in decoded.stdout.lower(), decoded.stdout + decoded.stderr
         data, runtime = private / 'data', private / 'run'
         env.update(FORESIGHT_DATA=str(data), FORESIGHT_RUNTIME=str(runtime))
         log = private / 'desktop.log'
@@ -69,6 +87,7 @@ def main():
                 print(json.dumps({'installed_startup': True, 'activation_ipc': True,
                                   'elf_linkage_files': count, 'private_profile': True,
                                   'litert_import': True, 'whisper_cli': True,
+                                  'whisper_cpu_fixture': True,
                                   'physical_audio_or_gpu_inference_tested': False}))
             finally:
                 os.killpg(app.pid, signal.SIGTERM) if app.poll() is None else None

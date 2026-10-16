@@ -24,6 +24,9 @@ def digest(path):
 
 def validate(bundle):
     bundle = Path(bundle).resolve()
+    for path in bundle.rglob('*'):
+        if path.is_symlink() and not path.resolve().is_relative_to(bundle):
+            raise ValueError(f'Bundle symlink escapes its root: {path.relative_to(bundle)}')
     manifest = json.loads((bundle / 'manifest.json').read_text())
     listed = set()
     for entry in manifest['files']:

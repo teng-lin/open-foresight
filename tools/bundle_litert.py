@@ -1,6 +1,8 @@
 """Copy an explicitly selected, validated Gemma Python runtime into a bundle."""
 import json
+import filecmp
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
@@ -43,6 +45,33 @@ print(json.dumps(dict(executable=sys.executable, version=sys.version,
         if is_elf:
             if identify(file) != architecture:
                 raise ValueError(f'Mixed architecture in Python runtime: {file.name}')
+    # A system Python's extensions may link optional libraries such as Berkeley
+    # DB or libcrypt that do not exist on other distros. Resolve the complete
+    # dependency closure in the controlled build environment. Never bundle glibc,
+    # the C++ runtime, or graphics drivers/loaders from the builder.
+    host_libraries = ('ld-linux', 'libc.so.', 'libm.so.', 'libdl.so.',
+                      'libpthread.so.', 'librt.so.', 'libutil.so.', 'libresolv.so.',
+                      'libstdc++.so.', 'libgcc_s.so.', 'libcuda', 'libnvidia',
+                      'libvulkan', 'libOpenCL', 'libGL', 'libEGL', 'libdrm')
+    runtime_libraries = set()
+    for file in list(destination.rglob('*')):
+        if not file.is_file():
+            continue
+        with file.open('rb') as stream:
+            if stream.read(4) != b'\x7fELF':
+                continue
+        linked = subprocess.run(['ldd', str(file)], capture_output=True, text=True)
+        if 'not found' in linked.stdout:
+            raise ValueError(f'Python runtime dependency is missing: {file}\n{linked.stdout}')
+        for name, dependency in re.findall(r'\s*(\S+) => (/\S+)', linked.stdout):
+            if name.startswith(host_libraries):
+                continue
+            target = destination / 'lib' / name
+            if target.exists() and not filecmp.cmp(target, dependency, shallow=False):
+                raise ValueError(f'Conflicting Python runtime libraries: {name}')
+            if not target.exists():
+                shutil.copy2(dependency, target)
+            runtime_libraries.add(name)
     # Both executable and modules resolve relative to the relocated runtime.
     # Do not retain a venv's absolute shebangs, prefix, or user Python paths.
     launcher = destination.parent / 'litert-runner'
@@ -65,4 +94,5 @@ exec "$task_runtime/python/bin/python3" -I -B "$@"
                    capture_output=True, cwd='/')
     return {'version': config['version'], 'distributions': config['distributions'],
             'runner': 'share/open-foresight/litert-runner',
+            'bundled_libraries': sorted(runtime_libraries),
             'limits': 'Requires compatible Linux system libraries; model assets downloaded separately.'}

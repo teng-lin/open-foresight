@@ -15,7 +15,61 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  sdk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.resolve.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Authenticate private SDK registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Find content-addressed SDK
+        id: sdk
+        env:
+          SDK_HASH: ${{ hashFiles('packaging/sdk.Dockerfile', 'packaging/minimal-grpc.cmake', 'requirements-dev.lock', 'requirements-litert.lock', 'tools/build_whisper_vulkan.py') }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/linux-sdk:$SDK_HASH"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          if docker buildx imagetools inspect "$image" >/dev/null 2>&1; then
+            echo 'build=false' >> "$GITHUB_OUTPUT"
+          elif [[ "$EVENT_NAME" == pull_request ]]; then
+            echo 'SDK not published: push SDK changes to a trusted branch and run Linux packages first.' >&2
+            exit 1
+          else
+            echo 'build=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Bootstrap reusable Linux SDK
+        if: steps.sdk.outputs.build == 'true'
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: packaging/sdk.Dockerfile
+          push: true
+          tags: ${{ steps.sdk.outputs.image }}
+          cache-from: type=gha,scope=linux-sdk-x86-64
+          cache-to: type=gha,mode=max,scope=linux-sdk-x86-64
+      - name: Resolve immutable SDK digest
+        id: resolve
+        env:
+          SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+        run: |
+          digest=$(docker buildx imagetools inspect "$SDK_IMAGE" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+          echo "image=${SDK_IMAGE%:*}@$digest" >> "$GITHUB_OUTPUT"
+
   bundle:
+    needs: sdk
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
@@ -23,7 +77,7 @@ jobs:
       release: ${{ steps.version.outputs.release }}
       epoch: ${{ steps.version.outputs.epoch }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Packaging contracts
         run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
       - name: Package version
@@ -45,15 +99,20 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
           PY
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Authenticate private SDK registry
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       - name: Build and test baseline bundle
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: packaging/build.Dockerfile
           target: artifact
           outputs: type=local,dest=build/portable
           build-args: |
+            SDK_IMAGE=${{ needs.sdk.outputs.image }}
             SOURCE_REVISION=${{ github.sha }}
           cache-from: type=gha,scope=linux-packages-x86-64
           cache-to: type=gha,mode=max,scope=linux-packages-x86-64
@@ -65,7 +124,7 @@ jobs:
         run: |
           python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
           cp build/portable/dist/abi.json dist/packages/abi.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: portable-bundle
           path: dist/packages/
@@ -87,8 +146,8 @@ jobs:
           - format: arch
             image: archlinux:base-devel
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: portable-bundle
           path: artifacts
@@ -109,7 +168,7 @@ jobs:
         if: always()
         run: |
           sudo chown -R "$(id -u):$(id -g)" dist/packages 2>/dev/null || true
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: success()
         with:
           name: open-foresight-${{ matrix.format }}-x86-64
