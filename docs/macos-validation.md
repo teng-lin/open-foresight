@@ -22,16 +22,17 @@ Later packaging and integration changes are still under validation.
 | Mac native CTest | 5/5 passed | Helper contract, model worker lifetime, audio buffer/cancellation, native lifecycle, process identity; initial development build used newer Homebrew dependencies |
 | Mac service subprocess suite | 10 passed, 1 UI opt-in skipped | Real AOT service/MCP/helper, controlled capture process fixture; no physical audio claim |
 | Mac contract/grounding/migration suite | 17 passed, 9 subtests | Includes offline migration's actual open-profile guard |
-| Mach-O and installation tools | 26 passed | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral and lock behavior |
+| Mach-O and installation tools | 29 passed | Actual Mach-O relocation/run, missing/newer-OS dependency rejection, Darwin directory exchange, rollback, metadata, active-recording deferral, locks, actual AOT source/graph persistence, and Swift document extraction |
 | Flutter release runner | Built successfully | Unsigned/ad-hoc development, not installed-release validation |
 | Mac full Flutter suite with `2fb6445` | 135 passed, 10 skipped | Complete unit/widget suite, 104 s on this host |
 | Mac native desktop/service/MCP integration | Passed in 94 s | Actual Mac Flutter runner, read-only desktop DB, shared ownership, note propagation, recording survives Flutter state destruction/restart, final transcript/artifact persistence; capture/inference use controlled fixtures |
 | PDFKit/AppKit extraction | 5/5 passed | Actual generated Unicode PDF/RTF, spaced paths, encrypted PDF, empty/scanned documents, read failures, stderr-only usage errors |
 | Updated Mac application core | 17/17 passed | Includes Mac importer argv/error handling; analyses clean |
 | Linux native CTest on isolated MSI checkout | 4/4 passed | Integrated native/core changes; no edits to active MSI worktrees |
-| Linux application core | 14 passed | Includes concurrent helper shutdown and private profile/installation paths |
-| Linux service subprocess suite | 10 passed, 1 UI opt-in skipped | Actual service/MCP subprocesses |
+| Linux application core | 17 passed | Includes concurrent helper shutdown, Mac parser contract fixtures and private profile/installation paths |
+| Linux service/workflow suite at `bf22d50` | 11/11 passed | Includes actual native Flutter desktop/MCP capture/restart integration with controlled inference/audio |
 | Linux full Flutter suite with `2fb6445` | 135 passed, 10 skipped | Real-I/O widget disposal fixed; opt-in models/UI remain separate |
+| Linux prototype packaging and relocation at `bf22d50` | Passed | Release runner, 130-file folder bundle, paths with spaces, cwd `/`, native desktop/MCP shared owner, independent headless profile and note writes; same host glibc 2.44, no distro ABI/clean-machine or model-runtime claim |
 | AOT installation maintenance exclusion | Passed | Installer exclusive lock blocks startup before DB creation; two profile services coexist with shared locks and exclude replacement until both stop |
 | Standalone Python deployment metadata | 19 Mach-O files checked; none above 15.0 | Full relocated bundle execution and signing still separate |
 
