@@ -1,6 +1,46 @@
 part of 'main.dart';
 
 extension _MeetingWorkspace on _WorkspaceState {
+  Widget immersiveMeetingWorkspace() => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.escape): () =>
+          update(() => meetingImmersive = false),
+    },
+    child: Focus(
+      autofocus: true,
+      child: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => update(() => meetingImmersive = false),
+                        icon: const Icon(Icons.fullscreen_exit),
+                        label: const Text('Exit Immersive View'),
+                      ),
+                      if (recording != null) recordingHeader(),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Expanded(child: meetingWorkspace()),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
   Future<void> saveMeetingNotes() async {
     final id = loadedMeetingNotes;
     if (id == null) return;
@@ -192,7 +232,10 @@ extension _MeetingWorkspace on _WorkspaceState {
           children: [
             IconButton.filledTonal(
               tooltip: 'All meetings',
-              onPressed: () => update(() => meetingId = null),
+              onPressed: () => update(() {
+                meetingId = null;
+                meetingImmersive = false;
+              }),
               style: IconButton.styleFrom(backgroundColor: Colors.white),
               icon: const Icon(Icons.arrow_back),
             ),
@@ -234,6 +277,14 @@ extension _MeetingWorkspace on _WorkspaceState {
                 onPressed: () => update(() => meetingSidecarVisible = true),
                 icon: const Icon(Icons.chat_bubble_outline),
               ),
+            IconButton(
+              tooltip: meetingImmersive ? 'Exit Immersive View' : 'Full screen',
+              onPressed: () =>
+                  update(() => meetingImmersive = !meetingImmersive),
+              icon: Icon(
+                meetingImmersive ? Icons.fullscreen_exit : Icons.fullscreen,
+              ),
+            ),
             PopupMenuButton<String>(
               tooltip: 'Meeting options',
               onSelected: (action) {
@@ -1033,12 +1084,15 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   Widget recordingHeader() {
-    final elapsed = recordingBegan == null
-        ? Duration.zero
-        : DateTime.now().difference(recordingBegan!);
+    final elapsed =
+        recordingElapsed +
+        (recording!.paused
+            ? Duration.zero
+            : DateTime.now().difference(recordingElapsedAt));
     final clock =
         '${elapsed.inMinutes.toString().padLeft(2, '0')}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
     return Container(
+      key: const ValueKey('recording-pill'),
       width: MediaQuery.sizeOf(context).width > 1100 ? 400 : 310,
       padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
       decoration: BoxDecoration(
@@ -1057,11 +1111,41 @@ extension _MeetingWorkspace on _WorkspaceState {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: SizedBox(
-              height: 30,
-              child: CustomPaint(
-                painter: _CaptureWaveform(recording!.currentVolumes),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onDoubleTap: () => update(() {
+                tab = 3;
+                meetingId = recordingMeeting;
+                meetingSidecarVisible = true;
+                meetingImmersive = !meetingImmersive;
+              }),
+              child: SizedBox(
+                height: 30,
+                child: CustomPaint(
+                  painter: _CaptureWaveform(recording!.currentVolumes),
+                ),
               ),
+            ),
+          ),
+          IconButton(
+            tooltip: recording!.paused
+                ? 'Resume transcribing'
+                : 'Pause transcribing',
+            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+            padding: const EdgeInsets.all(6),
+            onPressed: busy || recording!.finishing
+                ? null
+                : () => run(() async {
+                    await d.command(
+                      recording!.paused ? 'meetings.resume' : 'meetings.pause',
+                      {'id': recordingMeeting},
+                    );
+                    if (mounted) update(syncCapture);
+                  }),
+            icon: Icon(
+              recording!.paused ? Icons.play_arrow : Icons.pause,
+              color: _ink,
+              size: 23,
             ),
           ),
           IconButton(

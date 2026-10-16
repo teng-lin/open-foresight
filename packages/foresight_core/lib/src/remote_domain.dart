@@ -243,6 +243,8 @@ class RemoteRecording implements Recording {
   @override
   bool get finishing => snapshot['finishing'] == true;
   @override
+  bool get paused => snapshot['paused'] == true;
+  @override
   List<int> get sampleCounts =>
       (snapshot['samples'] as List? ?? []).cast<int>();
   @override

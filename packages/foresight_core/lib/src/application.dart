@@ -26,6 +26,8 @@ class Application {
   Recording? recording;
   int? recordingMeeting;
   DateTime? recordingBegan;
+  DateTime? _recordingPausedAt;
+  int _recordingPausedMs = 0;
   String recordingState = '';
   final provisionalTranscript = <String, String>{};
   Timer? _liveIndex, _inactivity;
@@ -96,7 +98,14 @@ class Application {
     'meeting_id': recordingMeeting,
     'active': recording != null,
     'finishing': recording?.finishing ?? false,
+    'paused': recording?.paused ?? false,
     'began': recordingBegan?.millisecondsSinceEpoch,
+    'elapsed_ms': recordingBegan == null
+        ? 0
+        : (_recordingPausedAt ?? DateTime.now())
+                  .difference(recordingBegan!)
+                  .inMilliseconds -
+              _recordingPausedMs,
     'state': recordingState,
     'samples': recording?.sampleCounts ?? <int>[],
     'peaks': recording?.peakVolumes ?? <double>[],
@@ -373,6 +382,12 @@ class Application {
           return captureState;
         case 'meetings.stop':
           await stopRecording();
+          return captureState;
+        case 'meetings.pause':
+          pauseRecording(a['id'] as int?);
+          return captureState;
+        case 'meetings.resume':
+          resumeRecording(a['id'] as int?);
           return captureState;
         case 'artifacts.edit':
           store.editArtifact(a['id'] as int, a['text'] as String);
@@ -936,11 +951,14 @@ class Application {
     recording = active;
     recordingMeeting = id;
     recordingBegan = DateTime.now();
+    _recordingPausedAt = null;
+    _recordingPausedMs = 0;
     store.db.execute("UPDATE meetings SET state='recording' WHERE id=?", [id]);
     _inactivity = Timer.periodic(const Duration(seconds: 5), (_) {
       final minutes =
           double.tryParse(store.preference('inactivity', '15')) ?? 15;
       if (minutes > 0 &&
+          !active.paused &&
           !active.finishing &&
           DateTime.now().difference(active.lastAudioActivity).inSeconds >=
               minutes * 60) {
@@ -957,6 +975,42 @@ class Application {
 
   Future<void> stopRecording() =>
       _stopping ??= _stopRecording().whenComplete(() => _stopping = null);
+
+  Recording _activeRecording(int? id) {
+    final active = recording;
+    if (active == null || (id != null && id != recordingMeeting)) {
+      throw StateError('No matching active recording');
+    }
+    if (active.finishing || _stopping != null) {
+      throw StateError('Transcription is finalizing');
+    }
+    return active;
+  }
+
+  void pauseRecording([int? id]) {
+    _activeRecording(id).pause();
+    _recordingPausedAt ??= DateTime.now();
+    provisionalTranscript.clear();
+    store.db.execute("UPDATE meetings SET state='paused' WHERE id=?", [
+      recordingMeeting,
+    ]);
+    changed();
+  }
+
+  void resumeRecording([int? id]) {
+    _activeRecording(id).resume();
+    if (_recordingPausedAt != null) {
+      _recordingPausedMs += DateTime.now()
+          .difference(_recordingPausedAt!)
+          .inMilliseconds;
+      _recordingPausedAt = null;
+    }
+    store.db.execute("UPDATE meetings SET state='recording' WHERE id=?", [
+      recordingMeeting,
+    ]);
+    changed();
+  }
+
   Future<void> _stopRecording() async {
     final active = recording;
     final id = recordingMeeting;

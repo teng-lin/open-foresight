@@ -81,7 +81,7 @@ Both directories must be owned by the current user and inaccessible to other use
 | `list_meetings`, `create_meeting`, `get_meeting` | Meeting metadata, original notes, transcript segments, generated artifacts, and edits. |
 | `save_meeting_notes`, `import_transcript` | Save original notes or append final transcript evidence; index transcripts. |
 | `generate_meeting_artifact`, `enhance_meeting_notes`, `edit_artifact` | Generate summaries/actions, enrich notes using evidence, or retain edits separately from generated originals. |
-| `start_recording`, `stop_recording` | Use the shared microphone/playback capture and transcription lifecycle. |
+| `start_recording`, `pause_recording`, `resume_recording`, `stop_recording` | Use the shared microphone/playback capture and transcription lifecycle. Pause releases capture devices and retains queued pre-pause speech; Resume reacquires the same routes. |
 | `ask` | Generate a grounded answer with checked citations using the configured local generator. |
 
 Tool failures return `isError: true` with a useful message. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.

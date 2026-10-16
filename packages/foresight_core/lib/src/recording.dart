@@ -38,6 +38,8 @@ class Recording {
   final _workers = <int, Future<void>>{};
   Timer? timer;
   bool polling = false, finishing = false;
+  bool paused = false;
+  final _targets = <String>[];
   String lastError = '', _runtime = '', _model = '';
   DateTime lastAudioActivity = DateTime.now();
   int _epoch = 0, _transcriptCount = 0;
@@ -100,6 +102,7 @@ class Recording {
   }) {
     if (captures.isNotEmpty ||
         speeches.isNotEmpty ||
+        paused ||
         finishing ||
         _workers.isNotEmpty)
       throw StateError('A recording is already active');
@@ -124,26 +127,14 @@ class Recording {
     _voiced.clear();
     _nextSnapshot.clear();
     _queues.clear();
+    _targets
+      ..clear()
+      ..addAll([microphoneTarget, if (playback) playbackTarget]);
     try {
       final probe = _speech();
       _releaseSpeech(probe);
       for (var channel = 0; channel < (playback ? 2 : 1); channel++) {
-        final target = (channel == 0 ? microphoneTarget : playbackTarget)
-            .toNativeUtf8();
-        Pointer<Void> capture;
-        try {
-          capture = lib
-              .lookupFunction<
-                Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
-                Pointer<Void> Function(Pointer<Utf8>, int, int)
-              >('fs_capture_start')(target, channel, 48000);
-        } finally {
-          calloc.free(target);
-        }
-        if (capture == nullptr)
-          throw StateError(
-            'Audio capture unavailable; check device and microphone/system-audio permissions.',
-          );
+        final capture = _startCapture(channel);
         captures.add(capture);
         sampleCounts.add(0);
         peakVolumes.add(0);
@@ -162,6 +153,84 @@ class Recording {
       dispose();
       rethrow;
     }
+  }
+
+  Pointer<Void> _startCapture(int channel) {
+    final target = _targets[channel].toNativeUtf8();
+    try {
+      final capture = lib
+          .lookupFunction<
+            Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
+            Pointer<Void> Function(Pointer<Utf8>, int, int)
+          >('fs_capture_start')(target, channel, 48000);
+      if (capture == nullptr) {
+        throw StateError(
+          'Audio capture unavailable; check device and microphone/system-audio permissions.',
+        );
+      }
+      return capture;
+    } finally {
+      calloc.free(target);
+    }
+  }
+
+  /// Stop acquisition, retain and finalize pre-pause PCM, and release devices.
+  /// Speech workers may finish their existing segments while capture is paused.
+  void pause() {
+    if (finishing) throw StateError('Transcription is finalizing');
+    if (paused) return;
+    if (captures.isEmpty) throw StateError('No active recording');
+    timer?.cancel();
+    _finishCapture();
+    for (var channel = 0; channel < _buffers.length; channel++) {
+      _flush(channel);
+      currentVolumes[channel] = 0;
+      provisional?.call('', 0, 0, channel == 0 ? 'microphone' : 'playback');
+    }
+    paused = true;
+    state('Transcription paused');
+    levels?.call();
+  }
+
+  void resume() {
+    if (finishing) throw StateError('Transcription is finalizing');
+    if (!paused) throw StateError('Recording is not paused');
+    try {
+      for (var channel = 0; channel < _targets.length; channel++) {
+        captures.add(_startCapture(channel));
+      }
+    } catch (_) {
+      for (final capture in captures) {
+        lib.lookupFunction<
+          Void Function(Pointer<Void>),
+          void Function(Pointer<Void>)
+        >('fs_capture_stop')(capture);
+      }
+      captures.clear();
+      state('Resume failed; transcription remains paused');
+      rethrow;
+    }
+    paused = false;
+    lastAudioActivity = DateTime.now();
+    state('Listening · live transcription');
+    timer = Timer.periodic(const Duration(milliseconds: 20), (_) => drain());
+  }
+
+  void _finishCapture() {
+    for (final capture in captures) {
+      lib.lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_finish')(capture);
+    }
+    drain(flushAll: true);
+    for (final capture in captures) {
+      lib.lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_stop')(capture);
+    }
+    captures.clear();
   }
 
   void drain({bool flushAll = false}) {
@@ -349,7 +418,7 @@ class Recording {
                   (segment.pcm.length ~/ 2) * 1000 ~/ segment.sampleRate;
               final source = channel == 0 ? 'microphone' : 'playback';
               if (segment.provisional) {
-                provisional?.call(text, start, end, source);
+                if (!paused) provisional?.call(text, start, end, source);
               } else {
                 _transcriptCount++;
                 transcript(text, start, end, source);
@@ -383,20 +452,7 @@ class Recording {
     timer?.cancel();
     // Stop callbacks first while retaining queued PCM, then consume the tail.
     // Destroying handles before this drain loses the last captured audio.
-    for (final capture in captures) {
-      lib.lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_finish')(capture);
-    }
-    drain(flushAll: true);
-    for (final capture in captures) {
-      lib.lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_stop')(capture);
-    }
-    captures.clear();
+    _finishCapture();
     for (var channel = 0; channel < _buffers.length; channel++) {
       _flush(channel);
     }
@@ -421,6 +477,7 @@ class Recording {
 
   void dispose() {
     _epoch++;
+    paused = false;
     timer?.cancel();
     for (final capture in captures) {
       lib.lookupFunction<

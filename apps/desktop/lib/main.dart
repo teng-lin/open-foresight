@@ -360,6 +360,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   );
   bool busy = false, asking = false;
   bool quickStarting = false;
+  bool meetingImmersive = false;
+  Duration recordingElapsed = Duration.zero;
+  DateTime recordingElapsedAt = DateTime.now();
   bool systemAudioSetupReviewed = false;
   int _operations = 0;
   double answerFontSize = 16;
@@ -1425,6 +1428,14 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     recordingBegan = began == null
         ? null
         : DateTime.fromMillisecondsSinceEpoch(began);
+    recordingElapsedAt = DateTime.now();
+    recordingElapsed = Duration(
+      milliseconds:
+          state['elapsed_ms'] as int? ??
+          (recordingBegan == null
+              ? 0
+              : recordingElapsedAt.difference(recordingBegan!).inMilliseconds),
+    );
     provisionalTranscript
       ..clear()
       ..addAll(Map<String, String>.from(state['provisional'] as Map? ?? {}));
@@ -1494,6 +1505,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     syncGraphMotion();
-    return screenshotWorkspace(context);
+    return meetingImmersive && meetingId != null
+        ? immersiveMeetingWorkspace()
+        : screenshotWorkspace(context);
   }
 }

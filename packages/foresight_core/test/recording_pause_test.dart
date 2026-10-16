@@ -1,0 +1,235 @@
+import 'dart:convert';
+import 'dart:ffi';
+import 'dart:io';
+import 'dart:typed_data';
+import 'package:ffi/ffi.dart';
+import 'package:test/test.dart';
+import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/remote_domain.dart' show RemoteRecording;
+
+void main() {
+  late Directory directory;
+  late String library, model;
+  late DynamicLibrary fixture;
+  setUpAll(() async {
+    directory = Directory.systemTemp.createTempSync('recording-pause-');
+    library = '${directory.path}/fixture.${Platform.isMacOS ? 'dylib' : 'so'}';
+    final build = await Process.run('c++', [
+      '-std=c++17',
+      '-shared',
+      '-fPIC',
+      'test/fixtures/recording_native_stub.cpp',
+      '-o',
+      library,
+    ]);
+    expect(build.exitCode, 0, reason: '${build.stdout}\n${build.stderr}');
+    fixture = DynamicLibrary.open(library);
+    model = '${directory.path}/model';
+    File(model).writeAsStringSync('ABI fixture only');
+  });
+  tearDownAll(() => directory.deleteSync(recursive: true));
+  void fail(int channel) =>
+      fixture.lookupFunction<Void Function(Int32), void Function(int)>(
+        'fixture_fail_channel',
+      )(channel);
+  int emit(int channel, int marker) {
+    final bytes = ByteData(2000 * 2);
+    for (var i = 0; i < 2000; i++) bytes.setInt16(i * 2, marker, Endian.little);
+    final event = jsonEncode({
+      'type': 'pcm',
+      'sampleRate': 1000,
+      'volume': .02,
+      'data': base64Encode(bytes.buffer.asUint8List()),
+    }).toNativeUtf8();
+    try {
+      return fixture.lookupFunction<
+        Int32 Function(Int32, Pointer<Utf8>),
+        int Function(int, Pointer<Utf8>)
+      >('fixture_emit')(channel, event);
+    } finally {
+      calloc.free(event);
+    }
+  }
+
+  test(
+    'pause releases both devices, retains queued tail, and resumed timing excludes paused audio',
+    () async {
+      final rows = <Map<String, Object>>[];
+      final states = <String>[];
+      final recording = Recording(
+        library,
+        states.add,
+        (text, start, end, source) => rows.add({
+          'text': text,
+          'start': start,
+          'end': end,
+          'source': source,
+        }),
+      );
+      try {
+        recording.start('/usr/bin/true', model);
+        emit(0, 100);
+        emit(1, 200);
+        recording
+            .pause(); // Deliberately leave PCM queued until Pause drains it.
+        expect(recording.paused, true);
+        expect(recording.captures, isEmpty);
+        expect(recording.currentVolumes, [0, 0]);
+        expect(emit(0, 999), 0);
+        expect(emit(1, 999), 0);
+        expect(() => recording.start('/usr/bin/true', model), throwsStateError);
+        recording.pause(); // Idempotent pause preserves pending work.
+        recording.resume();
+        expect(recording.paused, false);
+        expect(recording.captures, hasLength(2));
+        emit(0, 300);
+        emit(1, 400);
+        await recording.stop();
+        expect(
+          rows,
+          unorderedEquals([
+            {
+              'text': 'marker_100',
+              'start': 0,
+              'end': 2000,
+              'source': 'microphone',
+            },
+            {
+              'text': 'marker_200',
+              'start': 0,
+              'end': 2000,
+              'source': 'playback',
+            },
+            {
+              'text': 'marker_300',
+              'start': 2000,
+              'end': 4000,
+              'source': 'microphone',
+            },
+            {
+              'text': 'marker_400',
+              'start': 2000,
+              'end': 4000,
+              'source': 'playback',
+            },
+          ]),
+        );
+        expect(states, contains('Transcription paused'));
+        expect(recording.captures, isEmpty);
+        expect(recording.speeches, isEmpty);
+        expect(recording.paused, false);
+      } finally {
+        recording.dispose();
+      }
+    },
+  );
+
+  test(
+    'failed resume releases partial channels, remains paused, and allows retry or Stop',
+    () async {
+      final text = <String>[];
+      final recording = Recording(
+        library,
+        (_) {},
+        (value, _, _, _) => text.add(value),
+      );
+      try {
+        recording.start('/usr/bin/true', model);
+        emit(0, 123);
+        recording.pause();
+        fail(1);
+        expect(recording.resume, throwsStateError);
+        expect(recording.paused, true);
+        expect(recording.captures, isEmpty);
+        expect(emit(0, 999), 0);
+        fail(-1);
+        recording.resume();
+        emit(0, 456);
+        recording.pause();
+        await recording.stop();
+        expect(text, ['marker_123', 'marker_456']);
+        expect(recording.captures, isEmpty);
+        expect(recording.speeches, isEmpty);
+        expect(recording.resume, throwsStateError);
+      } finally {
+        fail(-1);
+        recording.dispose();
+      }
+    },
+  );
+
+  test(
+    'service commands preserve active ownership while paused and reject stale meeting IDs',
+    () async {
+      final store = Store('${directory.path}/service.db');
+      final domain = Domain(
+        store,
+        Helper('${directory.path}/unused.sock', '${directory.path}/unused'),
+      );
+      final app = domain.application;
+      final id = store.meeting('Pause fixture');
+      final recording = Recording(
+        library,
+        (state) => app.recordingState = state,
+        (_, _, _, _) {},
+      );
+      try {
+        recording.start('/usr/bin/true', model);
+        app.recording = recording;
+        app.recordingMeeting = id;
+        app.recordingBegan = DateTime.now();
+        await expectLater(
+          domain.command('meetings.pause', {'id': id + 1}),
+          throwsStateError,
+        );
+        expect(recording.paused, false);
+        final paused =
+            await domain.command('meetings.pause', {'id': id}) as Map;
+        expect(paused['active'], true);
+        expect(paused['paused'], true);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(app.captureState['elapsed_ms'], paused['elapsed_ms']);
+        expect(RemoteRecording(Map<String, dynamic>.from(paused)).paused, true);
+        expect(
+          store.rows('SELECT state FROM meetings WHERE id=?', [
+            id,
+          ]).single['state'],
+          'paused',
+        );
+        await expectLater(
+          domain.command('models.speech', {
+            'path': 'unused',
+            'runtime': 'unused',
+          }),
+          throwsStateError,
+        );
+        final resumed =
+            await domain.command('meetings.resume', {'id': id}) as Map;
+        expect(resumed['paused'], false);
+        expect(
+          store.rows('SELECT state FROM meetings WHERE id=?', [
+            id,
+          ]).single['state'],
+          'recording',
+        );
+        await domain.command('meetings.pause');
+        final stopped = await domain.command('meetings.stop') as Map;
+        expect(stopped['active'], false);
+        expect(stopped['paused'], false);
+        expect(
+          store.rows('SELECT state FROM meetings WHERE id=?', [
+            id,
+          ]).single['state'],
+          'empty',
+        );
+        await expectLater(domain.command('meetings.resume'), throwsStateError);
+      } finally {
+        await app.close();
+        domain.close();
+        await domain.helper.close();
+        recording.dispose();
+        store.close();
+      }
+    },
+  );
+}

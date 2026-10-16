@@ -308,6 +308,20 @@ Future<void> main() async {
       ['id'],
     );
     tool(
+      'pause_recording',
+      'meetings.pause',
+      'Pause microphone and playback capture, retaining pre-pause transcription. An optional meeting ID guards ownership.',
+      {'id': integer},
+      [],
+    );
+    tool(
+      'resume_recording',
+      'meetings.resume',
+      'Resume a paused recording with the same audio routes and transcript timeline.',
+      {'id': integer},
+      [],
+    );
+    tool(
       'stop_recording',
       'meetings.stop',
       'Stop the current recording, finish transcription, and index final transcript evidence.',

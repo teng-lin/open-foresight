@@ -56,7 +56,7 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
   - Markdown notes, which can be enhanced live in a Standard or Concise style
   - a sidecar with meeting-scoped Chat, Live Q&A, Summary, Transcript, and Action items
 
-  Recording stops itself after a period of inactivity that you choose. Generated notes, summaries, action items and answers render as formatted, selectable Markdown, with original Markdown retained for editing and copying. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
+  Recording can be paused and resumed, and stops itself after a period of inactivity that you choose. Double-click its waveform or use Full screen to open the immersive meeting workspace. Generated notes, summaries, action items and answers render as formatted, selectable Markdown, with original Markdown retained for editing and copying. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
 - **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
 - **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
 - **MCP server.** Agents can import, search, ask, take notes, and record through the same application service the desktop uses.
@@ -86,10 +86,11 @@ These features of the original are not in Open Foresight yet:
 - **Speaker labels.** The original labels speakers in the transcript. Open Foresight has no speaker identification or echo cancellation.
 - **Proactive answers in meetings.** The original detects questions in the live transcript and answers them unprompted. Open Foresight's Live Q&A answers only when you ask.
 - **Web search fallback.** The original's meeting assistant can fall back to a Google web-search tool.
-- **Recording controls.** The original's recording pill has pause and fullscreen gestures. Open Foresight uses an explicit Stop button and a button that opens the transcription workspace.
 - **Cloud Gemini models.** The original's binary references cloud Gemini models. Open Foresight leaves these out on purpose and runs every model locally.
 
 The original's single-note Markdown export format has now been observed live and reproduced, with date filters, preview, copy and download. Additional export scenarios and label editing still need reference verification; see the [feature parity progress ledger](docs/feature-parity-progress.md).
+
+Pause/resume and an immersive workspace are implemented. Exact original gestures and physical-audio behavior remain under [investigation and validation](docs/missing-functions-investigation.md).
 
 ## Platform status
 
