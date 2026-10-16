@@ -225,6 +225,7 @@ Tests that use real models, real capture, or the desktop integration are opt-in.
 | Topic | Document |
 | --- | --- |
 | Reverse-engineering workflow | [Replicating Foresight with REA on Linux and herdr on Mac](docs/rea-linux-and-herdr-mac.md) |
+| Desktop UI parity with the original | [ui-parity-validation.md](docs/ui-parity-validation.md) |
 | Application service and MCP | [application-service.md](docs/application-service.md) · [design plan](docs/application-service-plan.md) |
 | Native inference | [services/inference](services/inference/README.md) · [validation](docs/native-inference-validation.md) |
 | Speech models | [speech-models.md](docs/speech-models.md) |
