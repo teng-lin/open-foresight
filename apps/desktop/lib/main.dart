@@ -48,6 +48,7 @@ import 'graph_layout.dart';
 import 'graph_rendering.dart';
 import 'graph_persistence.dart';
 import 'meeting_export.dart';
+import 'note_save_scheduler.dart';
 import 'generated_content.dart';
 
 part 'screenshot_ui.dart';
@@ -381,6 +382,20 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   int? noteId, meetingId, recordingMeeting, meetingPreviewId;
   String meetingPreviewTab = 'Notes';
   final meetingNotesController = TextEditingController();
+  late final meetingNoteSaves = NoteSaveScheduler(
+    (id, body) async {
+      await d.command('meetings.notes', {'id': id, 'body': body});
+      if (mounted) update(() {});
+    },
+    onError: (failure, stack) {
+      if (mounted)
+        update(() => error = 'Unable to save meeting notes: $failure');
+      else
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: failure, stack: stack),
+        );
+    },
+  );
   int? loadedMeetingNotes;
   bool meetingSidecarVisible = true,
       meetingEnhancedVisible = true,
@@ -510,7 +525,36 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   void dispose() {
     if (d is! RemoteDomain) google.close();
-    d.close();
+    void releaseDomain() {
+      d.close();
+      d.generator?.close();
+      unawaited(d.helper.close());
+      d.store.close();
+    }
+
+    void closeDomain() {
+      if (d is RemoteDomain)
+        releaseDomain();
+      else
+        unawaited(d.application.close().whenComplete(releaseDomain));
+    }
+
+    final hasPendingNoteSave = meetingNoteSaves.hasWork;
+    final pendingNoteSave = meetingNoteSaves.close();
+    if (!hasPendingNoteSave)
+      closeDomain();
+    else
+      unawaited(
+        pendingNoteSave.then(
+          (_) => closeDomain(),
+          onError: (Object failure, StackTrace stack) {
+            FlutterError.reportError(
+              FlutterErrorDetails(exception: failure, stack: stack),
+            );
+            closeDomain();
+          },
+        ),
+      );
     unawaited(googleAuth.close());
     unawaited(commands?.close() ?? Future<void>.value());
     unawaited(globalShortcuts?.close() ?? Future<void>.value());
@@ -519,9 +563,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     graphMotionFrames.dispose();
     graphTransform.dispose();
     recording?.dispose();
-    d.generator?.close();
-    unawaited(d.helper.close());
-    d.store.close();
     for (final c in [
       question,
       sourceSearchController,
@@ -1321,18 +1362,27 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         const Text('Choose a local model and load it on this computer.'),
         DropdownButton<String>(
           value: modelKind,
-          items: [
-            'embedding',
-            'generation',
-            'speech',
-          ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+          items: ['embedding', 'generation', 'speech', 'query-detection']
+              .map(
+                (s) => DropdownMenuItem(
+                  value: s,
+                  child: Text(
+                    s == 'query-detection' ? 'Automatic questions' : s,
+                  ),
+                ),
+              )
+              .toList(),
           onChanged: (s) => setState(() => modelKind = s!),
         ),
         TextField(
           controller: modelPath,
           decoration: const InputDecoration(labelText: 'Model file'),
         ),
-        if (modelKind != 'embedding')
+        if (modelKind == 'query-detection')
+          const Text(
+            'Import an already-decrypted dedicated question model. Its identity and bundled runtime are verified before replacing the current model. Automatic download is not available yet.',
+          ),
+        if (modelKind != 'embedding' && modelKind != 'query-detection')
           TextField(
             controller: runtimePath,
             decoration: const InputDecoration(
@@ -1361,13 +1411,23 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                     {
                       'kind': modelKind,
                       'path': modelPath.text,
-                      'runtime': runtimePath.text,
+                      'runtime': modelKind == 'query-detection'
+                          ? ''
+                          : runtimePath.text,
+                      if (modelKind == 'query-detection')
+                        'backend': 'legacy_query_cpu',
                       'gpu': embeddingGpu,
                     },
                   );
-                  modelState = '$modelKind ready';
+                  modelState = modelKind == 'query-detection'
+                      ? 'Automatic question model ready'
+                      : '$modelKind ready';
                 }),
-          child: const Text('Register and load'),
+          child: Text(
+            modelKind == 'query-detection'
+                ? 'Verify and import'
+                : 'Register and load',
+          ),
         ),
         if (modelState.isNotEmpty) Text('Last setup: $modelState'),
         Text(

@@ -190,3 +190,29 @@ reconstructed dedicated CPU worker. Four controlled parsed outputs agree with
 the original Metal runtime. Original GPU arithmetic, complete detector output
 parity and supported acquisition remain open. The public LiteRT workers still
 reject this legacy container.
+
+
+## Supported local import and acquisition boundary
+
+The existing Local models screen now offers Automatic questions. It accepts an
+already-decrypted dedicated asset and uses the bundled interpreter/worker without
+a new project configuration. Setup checks the fixed 179,437,568-byte size and
+SHA-256 above before starting the worker. The worker then authenticates/loads the
+asset and completes a fixed harmless fixture before the existing model registry
+is replaced. Failed verification or runtime startup preserves the previous
+registration. The service's existing `models.register` operation routes
+`kind=query-detection` through the same checks, with `backend=legacy_query_cpu`;
+a caller-supplied digest cannot authorize a different model. Existing explicit
+installed-model manifests may optionally include the same kind. This manifest is
+not required for interactive import.
+
+This is supported local import, not original automatic acquisition. Retained
+original analysis shows metadata-selected blob ID and expected size flowing
+through `OdmlService.downloadMediaInParallel` to `ModelDownloader` at
+`odml.pa.googleapis.com`, followed by type-4 encryption before local persistence.
+The downloader also uses original application authentication. No public detector
+blob ID/direct download URL or independently supported authenticated download
+contract has been established. This implementation does not read original API
+credentials, keys or configuration, and it does not offer the ignored diagnostic
+decryption tool as an ordinary setup flow. Original automatic acquisition remains
+open; the import UI says automatic download is unavailable.

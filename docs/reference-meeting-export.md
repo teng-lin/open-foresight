@@ -164,9 +164,10 @@ standalone notes with unknown dates use the existing epoch-zero display
 fallback. Those are compatibility policies for missing legacy data, not
 recovered original save times. Equal save timestamps likewise have no traced
 secondary acquisition order.
-Original UI save acceptance, stale-enhancement protection, and debounce/flush
-triggers require separate parity work; the persistence change does not claim
-to reproduce those guards.
+The editor now implements the original one-second debounce and snapshot flush
+on switch/close; see [note save evidence](reference-note-save.md). Exact clean
+save acceptance and stale-enhancement protection still require separate field
+and lifecycle binding; no guessed timestamp guard is added.
 
 Verification for the corrections: sixteen desktop export tests pass with
 `TZ=America/New_York`,

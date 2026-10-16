@@ -563,6 +563,18 @@ class Application {
           );
           return null;
         case 'models.register':
+          if (a['kind'] == dedicatedQueryModelKind) {
+            if (a['backend'] != null && a['backend'] != dedicatedQueryBackend)
+              throw StateError('Unsupported dedicated question model backend');
+            await configureDedicatedQuery(
+              store,
+              a['path'] as String,
+              runtime: a['runtime'] as String?,
+              expectedDigest: a['digest'] as String?,
+              current: () => !_closed && (current?.call() ?? true),
+            );
+            return null;
+          }
           await store.register(
             a['kind'] as String,
             a['path'] as String,
@@ -1225,8 +1237,6 @@ class Application {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    await proactive.close();
-    await _queryRuntime?.close();
     _googleTimer?.cancel();
     google.close();
     _liveIndex?.cancel();
@@ -1235,6 +1245,8 @@ class Application {
       timer.cancel();
     }
     _enhance.clear();
+    await proactive.close();
+    await _queryRuntime?.close();
     try {
       await googleAuth.close();
       if (recording != null) await stopRecording();

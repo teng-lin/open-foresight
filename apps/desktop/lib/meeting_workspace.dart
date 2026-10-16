@@ -44,11 +44,23 @@ extension _MeetingWorkspace on _WorkspaceState {
   Future<void> saveMeetingNotes() async {
     final id = loadedMeetingNotes;
     if (id == null) return;
-    await d.command('meetings.notes', {
-      'id': id,
-      'body': meetingNotesController.text,
-    });
-    if (mounted) update(() {});
+    meetingNoteSaves.schedule(id, meetingNotesController.text);
+    await flushMeetingNotesDraft();
+  }
+
+  Future<void> flushMeetingNotesDraft() async {
+    try {
+      await meetingNoteSaves.flush();
+    } catch (failure) {
+      if (mounted)
+        update(() => error = 'Unable to save meeting notes: $failure');
+      rethrow;
+    }
+  }
+
+  void scheduleMeetingNotesSave() {
+    final id = loadedMeetingNotes;
+    if (id != null) meetingNoteSaves.schedule(id, meetingNotesController.text);
   }
 
   void formatMeetingNotes(String before, [String after = '']) {
@@ -63,7 +75,7 @@ extension _MeetingWorkspace on _WorkspaceState {
         offset: start + replacement.length - after.length,
       ),
     );
-    saveMeetingNotes();
+    scheduleMeetingNotesSave();
   }
 
   Future<void> enhanceMeetingNotes(int id) async {
@@ -73,6 +85,7 @@ extension _MeetingWorkspace on _WorkspaceState {
       meetingEnhanceStatus = '';
     });
     try {
+      await flushMeetingNotesDraft();
       await d.command('meetings.enhance', {'id': id});
     } catch (e) {
       if (mounted) update(() => meetingEnhanceStatus = e.toString());
@@ -83,6 +96,7 @@ extension _MeetingWorkspace on _WorkspaceState {
 
   void loadMeetingNotes(int id) {
     if (loadedMeetingNotes != id) {
+      unawaited(flushMeetingNotesDraft().catchError((Object _) {}));
       loadedMeetingNotes = id;
       meetingNotesController.text =
           d.store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
@@ -164,7 +178,14 @@ extension _MeetingWorkspace on _WorkspaceState {
                     ),
                     IconButton(
                       tooltip: 'Close meeting preview',
-                      onPressed: () => update(() => meetingPreviewId = null),
+                      onPressed: () async {
+                        try {
+                          await flushMeetingNotesDraft();
+                        } catch (_) {
+                          return;
+                        }
+                        if (mounted) update(() => meetingPreviewId = null);
+                      },
                       icon: const Icon(Icons.close, size: 18),
                     ),
                   ],
@@ -232,10 +253,18 @@ extension _MeetingWorkspace on _WorkspaceState {
           children: [
             IconButton.filledTonal(
               tooltip: 'All meetings',
-              onPressed: () => update(() {
-                meetingId = null;
-                meetingImmersive = false;
-              }),
+              onPressed: () async {
+                try {
+                  await flushMeetingNotesDraft();
+                } catch (_) {
+                  return;
+                }
+                if (mounted)
+                  update(() {
+                    meetingId = null;
+                    meetingImmersive = false;
+                  });
+              },
               style: IconButton.styleFrom(backgroundColor: Colors.white),
               icon: const Icon(Icons.arrow_back),
             ),
@@ -449,7 +478,7 @@ extension _MeetingWorkspace on _WorkspaceState {
       minLines: null,
       textAlignVertical: TextAlignVertical.top,
       style: const TextStyle(fontSize: 16, height: 1.7),
-      onChanged: (_) => saveMeetingNotes(),
+      onChanged: (_) => scheduleMeetingNotesSave(),
       decoration: const InputDecoration(
         filled: false,
         border: InputBorder.none,
