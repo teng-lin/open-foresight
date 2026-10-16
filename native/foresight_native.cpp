@@ -1,4 +1,9 @@
 #include "foresight_native.h"
+#include "portable_process.h"
+#ifdef __APPLE__
+#include <libproc.h>
+#include <sys/sysctl.h>
+#endif
 #include <algorithm>
 #include <atomic>
 #include <cerrno>
@@ -62,12 +67,20 @@ struct Worker : Events {
   std::thread thread;
   std::atomic<bool> cancel{false}, active{false};
   std::atomic<pid_t> pid{-1};
+#ifdef __APPLE__
+  foresight::OwnedSpawn *owned_process = nullptr;
+#endif
   std::mutex life;
+  std::mutex process_mutex;
   void stop() {
     cancel = true;
+    std::lock_guard lock(process_mutex);
+#ifdef __APPLE__
+    if (owned_process) owned_process->stop();
+#else
     pid_t p = pid.load();
-    if (p > 0)
-      kill(-p, SIGKILL);
+    if (p > 0) kill(-p, SIGKILL);
+#endif
   }
   void join() {
     if (thread.joinable())
@@ -82,8 +95,9 @@ struct Worker : Events {
 // host.
 int run(Worker &w, std::vector<std::string> args,
         const std::function<void(const char *, size_t)> &output) {
+  std::unique_lock launch(foresight::launch_mutex);
   int pipes[2];
-  if (pipe2(pipes, O_CLOEXEC) < 0)
+  if (foresight::cloexec_pipe(pipes) < 0)
     return -1;
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
@@ -96,14 +110,23 @@ int run(Worker &w, std::vector<std::string> args,
   posix_spawn_file_actions_addclose(&actions, pipes[1]);
   posix_spawnattr_t attr;
   posix_spawnattr_init(&attr);
-  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP);
+  short flags = POSIX_SPAWN_SETPGROUP;
+#ifdef __APPLE__
+  flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+#endif
+  posix_spawnattr_setflags(&attr, flags);
   posix_spawnattr_setpgroup(&attr, 0);
   std::vector<char *> argv;
   for (auto &a : args)
     argv.push_back(a.data());
   argv.push_back(nullptr);
   pid_t p = -1;
+#ifdef __APPLE__
+  foresight::OwnedSpawn owned;
+  int err = owned.spawn(&p, &actions, &attr, args);
+#else
   int err = posix_spawnp(&p, argv[0], &actions, &attr, argv.data(), environ);
+#endif
   posix_spawn_file_actions_destroy(&actions);
   posix_spawnattr_destroy(&attr);
   close(pipes[1]);
@@ -111,9 +134,24 @@ int run(Worker &w, std::vector<std::string> args,
     close(pipes[0]);
     return -err;
   }
-  w.pid = p;
-  if (w.cancel)
+  launch.unlock();
+  {
+    std::lock_guard lock(w.process_mutex);
+#ifdef __APPLE__
+    w.pid = owned.worker;
+    w.owned_process = &owned;
+#else
+    w.pid = p;
+#endif
+  }
+  if (w.cancel) {
+#ifdef __APPLE__
+    std::lock_guard lock(w.process_mutex);
+    owned.stop();
+#else
     kill(-p, SIGKILL);
+#endif
+  }
   char buffer[4096];
   while (!w.cancel) {
     pollfd fd{pipes[0], POLLIN, 0};
@@ -126,13 +164,30 @@ int run(Worker &w, std::vector<std::string> args,
     } else if (r < 0 && errno != EINTR)
       break;
   }
-  if (w.cancel)
+  if (w.cancel) {
+#ifdef __APPLE__
+    std::lock_guard lock(w.process_mutex);
+    owned.stop();
+#else
     kill(-p, SIGKILL);
+#endif
+  }
   close(pipes[0]);
   int status = 0;
+  // Do not hold life while waiting: cancellation must still be able to signal
+  // a worker that closed stdout early. Keep its PID reserved until disarmed.
+  siginfo_t info{};
+  while (waitid(P_PID, p, &info, WEXITED | WNOWAIT) < 0 && errno == EINTR) {}
+#ifdef __APPLE__
+  // Supervisor has already completed worker cleanup.
+#endif
+  std::lock_guard lock(w.process_mutex);
   while (waitpid(p, &status, 0) < 0 && errno == EINTR) {
   }
   w.pid = -1;
+#ifdef __APPLE__
+  w.owned_process = nullptr;
+#endif
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 bool valid_asset(const char *runtime, const char *model) {
@@ -700,4 +755,77 @@ size_t fs_resample_pcm(const int16_t *input, size_t n, int in_rate,
   }
   return count;
 }
+}
+
+extern "C" int fs_process_matches(int64_t value, const char *socket,
+                                  const char *storage, const char *instance) {
+  if (value <= 0 || value > INT32_MAX || !socket || !storage || !instance)
+    return 0;
+  const auto prefix = std::to_string(value) + "-";
+  if (std::string(instance).rfind(prefix, 0) != 0) return 0;
+  std::vector<std::string> args;
+  std::string executable;
+#ifdef __APPLE__
+  char executable_buffer[PROC_PIDPATHINFO_MAXSIZE];
+  if (proc_pidpath(value, executable_buffer, sizeof(executable_buffer)) <= 0) return -1;
+  executable = executable_buffer;
+  proc_bsdinfo info{};
+  if (proc_pidinfo(value, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info)) return -1;
+  if (info.pbi_uid != getuid()) return 0;
+  // Helper IDs use system_clock's native ticks (microseconds on Apple libc++).
+  // Refuse an instance older than this process's creation, preventing stale
+  // persisted state from authorizing a reused PID with identical arguments.
+  std::string stamp = std::string(instance).substr(prefix.size());
+  if (stamp.empty() || stamp.find_first_not_of("0123456789") != std::string::npos) return 0;
+  try {
+    uint64_t ticks = std::stoull(stamp);
+    const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::duration(ticks)).count();
+    if (micros < int64_t(info.pbi_start_tvsec) * 1000000 + int64_t(info.pbi_start_tvusec)) return 0;
+  } catch (...) { return 0; }
+  int mib[] = {CTL_KERN, KERN_PROCARGS2, static_cast<int>(value)};
+  size_t size = 0;
+  if (sysctl(mib, 3, nullptr, &size, nullptr, 0)) return -1;
+  std::vector<char> bytes(size);
+  if (sysctl(mib, 3, bytes.data(), &size, nullptr, 0) || size < sizeof(int)) return -1;
+  int count = 0;
+  memcpy(&count, bytes.data(), sizeof(count));
+  size_t offset = sizeof(count);
+  while (offset < size && bytes[offset]) ++offset; // executable path
+  while (offset < size && !bytes[offset]) ++offset; // padding
+  for (int i = 0; i < count && offset < size; ++i) {
+    size_t end = offset;
+    while (end < size && bytes[end]) ++end;
+    if (end == size) return -1;
+    args.emplace_back(bytes.data() + offset, end - offset);
+    offset = end + 1;
+  }
+#else
+  struct stat info{};
+  std::string path = "/proc/" + std::to_string(value);
+  if (stat(path.c_str(), &info)) return -1;
+  if (info.st_uid != getuid()) return 0;
+  std::error_code error;
+  executable = std::filesystem::read_symlink(path + "/exe", error).string();
+  if (error) return -1;
+  std::ifstream input(path + "/cmdline", std::ios::binary);
+  if (!input) return -1;
+  std::string arg;
+  while (std::getline(input, arg, '\0')) args.push_back(arg);
+#endif
+  if (args.size() < 3 || args[1] != socket || args[2] != storage) return 0;
+  const auto name = std::filesystem::path(args[0]).filename().string();
+  const auto actual = std::filesystem::path(executable).filename().string();
+  return (name == "ForesightHelper" || name == "foresight-helper") && actual == name ? 1 : 0;
+}
+
+extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
+  if (!key || !value) return -1;
+  static const std::set<std::string> allowed{
+      "FORESIGHT_LITERT_BACKEND", "FORESIGHT_WHISPER_BACKEND",
+      "FORESIGHT_WHISPER_DEVICE", "FORESIGHT_HELPER", "FORESIGHT_LITERT_CACHE",
+      "FORESIGHT_WHISPER_RUNTIME", "PYTHONPYCACHEPREFIX"};
+  if (!allowed.count(key)) return -1;
+  std::lock_guard lock(foresight::launch_mutex);
+  return setenv(key, value, 1) == 0 ? 0 : -1;
 }

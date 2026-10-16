@@ -10,6 +10,10 @@ extern "C" {
  * after release. All status codes: 0 success, -1 invalid/busy/unavailable. No
  * fake inference. */
 int fs_abi_version(void);
+/* Before worker startup only; 0 success, -1 unsupported key/invalid value. */
+int fs_set_runtime_environment(const char *key, const char *value);
+/* 1 verified same-user helper argv/instance, 0 mismatch, -1 unavailable. */
+int fs_process_matches(int64_t pid, const char *socket, const char *storage, const char *instance_id);
 void fs_string_free(char *string);
 char *fs_event_poll(void *handle, int timeout_ms);
 void *fs_engine_create(const char *runtime_executable, const char *model_path);
