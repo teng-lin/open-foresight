@@ -1,0 +1,14 @@
+.git
+.venv*
+**/build
+**/.dart_tool
+dist
+test-results
+coverage
+models/local
+**/__pycache__
+**/*.pyc
+**/*.db*
+**/*.log
+.env*
+**/google-client*.json

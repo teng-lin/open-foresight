@@ -1,0 +1,118 @@
+name: Linux packages
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main, feature/linux-packaging]
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-packages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      epoch: ${{ steps.version.outputs.epoch }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Packaging contracts
+        run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
+      - name: Package version
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, subprocess
+          version = re.search(r'^version: (\d+\.\d+\.\d+)', pathlib.Path('apps/desktop/pubspec.yaml').read_text(), re.M)[1]
+          if os.environ['REF_TYPE'] == 'tag':
+              if os.environ['REF_NAME'] != 'v' + version:
+                  raise SystemExit('Release tag must match pubspec version')
+              release = '1'
+          else:
+              release = os.environ['GITHUB_RUN_NUMBER']
+          epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
+          PY
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Build and test baseline bundle
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: packaging/build.Dockerfile
+          target: artifact
+          outputs: type=local,dest=build/portable
+          build-args: |
+            SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=linux-packages-x86-64
+          cache-to: type=gha,mode=max,scope=linux-packages-x86-64
+      - name: Archive executable permissions and record checksums
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+        run: |
+          python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
+          cp build/portable/dist/abi.json dist/packages/abi.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: portable-bundle
+          path: dist/packages/
+          if-no-files-found: error
+          retention-days: 14
+
+  packages:
+    needs: bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - format: deb
+            image: ubuntu:24.04
+          - format: rpm
+            image: fedora:44
+          - format: arch
+            image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: portable-bundle
+          path: artifacts
+      - name: Native package and installation lifecycle
+        env:
+          FORMAT: ${{ matrix.format }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ needs.bundle.outputs.version }}
+          RELEASE: ${{ needs.bundle.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ needs.bundle.outputs.epoch }}
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH "$IMAGE" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" "$RELEASE"
+      - name: Test Debian 13 with the Ubuntu-built DEB
+        if: matrix.format == 'deb'
+        run: |
+          docker run --rm -v "$PWD:/work:ro" -v "$PWD/dist/packages:/packages:ro" debian:13 bash /work/packaging/ci/test-debian.sh
+      - name: Collect package artifacts
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" dist/packages 2>/dev/null || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: success()
+        with:
+          name: open-foresight-${{ matrix.format }}-x86-64
+          path: dist/packages/
+          if-no-files-found: error
+          retention-days: 14
