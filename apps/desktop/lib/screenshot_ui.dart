@@ -4,6 +4,25 @@ const _blue = Color(0xffbfe8ff);
 const _ink = Color(0xff07577b);
 
 extension _ScreenshotScreens on _WorkspaceState {
+  String get echoCancellationDescription {
+    final capture = d is RemoteDomain
+        ? (d as RemoteDomain).capture
+        : d.application.captureState;
+    final echo = capture['echo_cancellation'] as Map? ?? {};
+    if (capture['active'] != true)
+      return 'Reduce system playback picked up by your microphone.';
+    if (capture['paused'] == true)
+      return 'The selected setting will apply when recording resumes.';
+    if (echo['pending'] == true) return 'Applying echo cancellation…';
+    if ((echo['fallback_status'] as num? ?? 0) != 0)
+      return 'Echo cancellation is unavailable; microphone recording continues.';
+    if (echo['restart_required'] == true)
+      return 'Restart recording to enable echo cancellation.';
+    return echo['active'] == true
+        ? 'Echo cancellation is active for this microphone.'
+        : 'Echo cancellation is off.';
+  }
+
   bool get helperEmbeddingHealthy {
     final snapshot = d.helper.snapshot;
     return snapshot != null &&
@@ -3691,6 +3710,20 @@ extension _ScreenshotScreens on _WorkspaceState {
                   onChanged: (v) => preference('inactivity', v!),
                 ),
               ),
+              if (Platform.isMacOS) ...[
+                const Divider(height: 1),
+                settingRow(
+                  'Echo cancellation',
+                  echoCancellationDescription,
+                  Switch(
+                    value:
+                        d.store.preference('echoCancellation', 'false') ==
+                        'true',
+                    onChanged: (value) =>
+                        preference('echoCancellation', '$value'),
+                  ),
+                ),
+              ],
               const Divider(height: 1),
               settingRow(
                 'Launch Agent Monitor',

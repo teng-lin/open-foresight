@@ -99,8 +99,18 @@ bundle are under ignored `test-results/reference-functions/ida/`.
   defaults return false. Capture:
   `ev_8cce28a06d9cbd8c329a9c3b713e97c84691e1119691b36f2a4b7cc57e5ae91e`.
 
-Speaker-label implementation verification: core suite 49 passed (one opt-in
+Speaker-label implementation verification at that checkpoint: core suite 49 passed (one opt-in
 skip); both analyzers clean; two meeting-workspace widget tests passed. The
 expanded workflow checks all three displayed labels, derived API speaker IDs,
 preservation of original route values, and speaker-attribution instructions in
-note generation. Native AEC and web-search implementation remain outstanding.
+note generation. Native AEC implementation and its subsequent tests are tracked
+in [the implementation ledger](missing-functions-investigation.md). Web search
+and the remaining reference/runtime comparisons are still outstanding.
+
+The ready IDA worker later exited on its idle timeout and left a saved `.i64`.
+Reopening the retained original-input path reused that database and returned
+analysis/decompiler readiness without repeating the long initial analysis.
+After the focused query-pipeline investigation, `idb_save` returned `ok: true`.
+The worker then shut down normally on SIGINT and reported `All sessions closed`;
+its unified-exec session completed with exit code zero. The saved analysis is
+retained intentionally for the ongoing reconstruction, rather than deleted.

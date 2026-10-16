@@ -85,7 +85,6 @@ Open Foresight reproduces the original's main workflows, and adds features the o
 
 These features of the original are not in Open Foresight yet:
 
-- **Echo cancellation.** The original has an optional macOS voice-processing path. Its native implementation is being reproduced; physical echo-cancellation quality remains unverified.
 - **Web search fallback.** The original's meeting assistant can fall back to a Google web-search tool.
 - **Cloud Gemini models.** The original's binary references cloud Gemini models. Open Foresight leaves these out on purpose and runs every model locally.
 
@@ -96,6 +95,8 @@ Pause/resume and an immersive workspace are implemented. Exact original gestures
 Automatic meeting answers are implemented and tested, including with a real local question-detection model. The original's exact detection rules and scheduling still need reference verification. Search configuration is also [under investigation](docs/ida-search-investigation.md); a separate user project has not been established as a requirement.
 
 Transcripts label microphone and remote audio channels as Microphone and Remote, with Unknown for other sources. These are capture routes, not individual-speaker identification. Meeting generation is instructed to attribute statements only to clearly established real names.
+
+On macOS, Settings offers optional echo cancellation using system voice processing. The setting defaults to off, reports active processing or standard-recording fallback, and can bypass processing during a recording. Enabling it on a standard recording requires restarting that recording. Physical echo-cancellation quality and comparison with the original remain unverified; see the [implementation ledger](docs/missing-functions-investigation.md).
 
 ## Platform status
 

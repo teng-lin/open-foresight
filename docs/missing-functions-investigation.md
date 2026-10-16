@@ -111,3 +111,52 @@ Verification after this implementation:
 
 The model run covers detection only. Full real-audio, retrieval, and answer
 comparison against the original remains outstanding.
+
+Subsequent IDA tracing established material differences in the first automatic
+Q&A reconstruction: the original uses rolling five-second duplicate suppression,
+a further twenty-second prefix/similarity filter, interim transcript input, and
+advances the history cursor only after nonempty detection. The current durable
+per-meeting uniqueness and six-row batches do not reproduce those rules. See
+[the function-level trace](proactive-reference-trace.md); correcting this behavior
+remains required before claiming proactive-Q&A parity.
+
+## macOS echo processing
+
+The microphone now uses AVAudioEngine, matching the original native route.
+With echo cancellation requested, it initializes both I/O nodes, enables voice
+processing, disables AGC, unmutes input, and selects advanced ducking with the
+minimum ducking level. Invalid format discovery retries five times at 150 ms;
+voice-processing engine startup retries three times at 50 ms. Failed processed
+startup destroys that engine and its tap before creating a fresh standard engine.
+Standard startup has one attempt. The default setting is off, matching the
+inspected native defaults; an application-level override in the original has not
+been established.
+
+An already processed engine toggles bypass without restarting. Enabling on an
+already standard engine reports that a recording restart is needed. The service
+persists the requested preference and separately publishes actual processing,
+pending, fallback, and restart status. Paused/stopped capture never reports active
+processing. Pause/resume keeps the requested preference and reopens the same
+routes. Linux and external capture workers do not claim native AEC support.
+
+The tap retains a shared PCM ring rather than the capture-session owner, keeping
+late callback memory valid through stop/fallback. The microphone selects the
+first source channel for mono, matching the original converter's channel map;
+the preexisting system-tap downmix and continuous output resampling remain.
+Device/engine configuration changes enter the existing gap/reconnect path.
+
+The original native functions and REA evidence IDs are recorded in the
+[IDA investigation](ida-search-investigation.md). Apple's documentation confirms
+that [voice processing can be enabled only while the engine is stopped](https://developer.apple.com/documentation/avfaudio/avaudioionode/setvoiceprocessingenabled%28_%3A%29?language=objc)
+and that [automatic gain control is enabled by default](https://developer.apple.com/documentation/avfaudio/avaudioinputnode/isvoiceprocessingagcenabled?language=objc),
+which is why the reproduced path disables AGC explicitly and uses bypass for
+live toggling.
+
+Validation: **51 core tests passed, 1 opt-in skip; 165 desktop tests passed,
+10 existing opt-in skips; both analyzers clean; 2 native CTest tests passed**.
+New coverage verifies processed-engine disposal before fallback, fallback failure
+propagation, channel conversion, bypass/pause/resume state, explicit restart
+status, and continued recording after an AEC failure. These tests use native
+policy/PCM fixtures and the recording ABI fixture; they do not measure physical
+echo cancellation, microphone hardware startup, or the original's tap watchdog.
+Those reference and hardware checks remain outstanding.

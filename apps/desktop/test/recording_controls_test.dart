@@ -15,6 +15,11 @@ class _Recording implements Recording {
   bool finishing = false;
   bool failResume = false;
   @override
+  Map<String, dynamic> get echoCancellationState => {
+    'requested': false,
+    'active': false,
+  };
+  @override
   List<int> get sampleCounts => [0, 0];
   @override
   List<double> get peakVolumes => [0, 0];

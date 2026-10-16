@@ -205,6 +205,12 @@ class Application {
     'provisional': Map.of(provisionalTranscript),
     'volumes': recording?.currentVolumes ?? <double>[],
     'proactive': proactive.state,
+    'echo_cancellation':
+        recording?.echoCancellationState ??
+        {
+          'requested': store.preference('echoCancellation', 'false') == 'true',
+          'active': false,
+        },
   };
 
   Future<Object?> call(
@@ -376,6 +382,14 @@ class Application {
           );
           return {'id': a['id'] ?? store.db.lastInsertRowId};
         case 'preferences.set':
+          if (a['key'] == 'echoCancellation') {
+            final enabled = a['value'] == 'true';
+            if (enabled && !Platform.isMacOS)
+              throw StateError(
+                'Native echo cancellation is available on macOS',
+              );
+            recording?.setEchoCancellation(enabled);
+          }
           store.setPreference(a['key'] as String, a['value'] as String);
           if (a['key'] == 'proactiveAnswers') proactive.wake();
           return null;
@@ -1084,6 +1098,9 @@ class Application {
         playbackTarget:
             runtimeConfiguration['FORESIGHT_PLAYBACK_TARGET'] ??
             store.preference('playbackTarget', 'auto'),
+        echoCancellation:
+            Platform.isMacOS &&
+            store.preference('echoCancellation', 'false') == 'true',
       );
     } catch (_) {
       active.dispose();

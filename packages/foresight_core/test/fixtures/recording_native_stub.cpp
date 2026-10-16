@@ -4,7 +4,7 @@
 #include <cstring>
 #include <deque>
 #include <string>
-struct Handle { bool speech; int channel; int marker = 0; std::deque<std::string> events; };
+struct Handle { bool speech; int channel; int marker = 0; std::deque<std::string> events; bool processed = false; };
 static Handle* channels[2] = {};
 static int fail_channel = -1;
 static std::string speech_event;
@@ -20,6 +20,20 @@ void* fs_capture_start(const char*, int channel, int) {
   if (channel == fail_channel) return nullptr;
   auto* handle = new Handle{false, channel};
   channels[channel] = handle;
+  return handle;
+}
+int fs_capture_set_echo_cancellation(void* pointer, int enabled) {
+  auto* handle = static_cast<Handle*>(pointer);
+  if (!handle || handle->channel != 0) return 0;
+  handle->events.push_back(std::string("{\"type\":\"echo_cancellation\",\"supported\":true,\"requested\":") +
+      (enabled ? "true" : "false") + ",\"active\":" +
+      (enabled && handle->processed ? "true" : "false") + ",\"restart_required\":" +
+      (enabled && !handle->processed ? "true" : "false") + ",\"fallback_status\":0}");
+  return 1;
+}
+void* fs_capture_start_with_options(const char* target, int channel, int rate, int echo) {
+  auto* handle = static_cast<Handle*>(fs_capture_start(target, channel, rate));
+  if (handle && channel == 0) { handle->processed = echo != 0; fs_capture_set_echo_cancellation(handle, echo); }
   return handle;
 }
 void fs_capture_finish(void*) {}

@@ -46,7 +46,7 @@ void main() {
         true,
         0,
         1000,
-        'microphone',
+        'microphone; captured-sample timeline (gaps excluded)',
       );
       store.transcript(
         id,
@@ -54,7 +54,7 @@ void main() {
         true,
         1100,
         2000,
-        'playback',
+        'playback; captured-sample timeline (gaps excluded)',
       );
       store.transcript(
         id,
@@ -126,8 +126,8 @@ void main() {
         'Unknown',
       ]);
       expect(transcript.map((t) => t['source']), [
-        'microphone',
-        'playback',
+        'microphone; captured-sample timeline (gaps excluded)',
+        'playback; captured-sample timeline (gaps excluded)',
         'imported',
       ]);
       await tester.tap(find.byTooltip('Close assistant'));

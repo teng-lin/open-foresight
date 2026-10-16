@@ -52,6 +52,74 @@ void main() {
   }
 
   test(
+    'echo processing survives bypass, pause and resume without changing routes',
+    () async {
+      fail(-1);
+      final recording = Recording(library, (_) {}, (_, _, _, _) {});
+      try {
+        recording.start('/usr/bin/true', model, echoCancellation: true);
+        recording.drain();
+        expect(recording.echoCancellationState['active'], true);
+        recording.setEchoCancellation(false);
+        recording.drain();
+        expect(recording.echoCancellationState['active'], false);
+        recording.setEchoCancellation(true);
+        recording.drain();
+        expect(recording.echoCancellationState['active'], true);
+        recording.pause();
+        expect(recording.echoCancellationState['active'], false);
+        recording.resume();
+        expect(recording.echoCancellationState['active'], false);
+        expect(recording.echoCancellationState['pending'], true);
+        recording.drain();
+        expect(recording.echoCancellationState['active'], true);
+        await recording.stop();
+        expect(recording.echoCancellationState['active'], false);
+      } finally {
+        recording.dispose();
+      }
+    },
+  );
+
+  test(
+    'enabling a standard engine reports restart and fallback never claims processing',
+    () async {
+      fail(-1);
+      final states = <String>[];
+      final recording = Recording(library, states.add, (_, _, _, _) {});
+      try {
+        recording.start('/usr/bin/true', model);
+        recording.setEchoCancellation(true);
+        recording.drain();
+        expect(recording.echoCancellationState['requested'], true);
+        expect(recording.echoCancellationState['active'], false);
+        expect(recording.echoCancellationState['restart_required'], true);
+        expect(states.last, contains('Restart recording'));
+        final fallback = jsonEncode({
+          'type': 'echo_cancellation',
+          'active': false,
+          'fallback_status': -1,
+        }).toNativeUtf8();
+        try {
+          fixture.lookupFunction<
+            Int32 Function(Int32, Pointer<Utf8>),
+            int Function(int, Pointer<Utf8>)
+          >('fixture_emit')(0, fallback);
+        } finally {
+          calloc.free(fallback);
+        }
+        recording.drain();
+        expect(recording.echoCancellationState['active'], false);
+        expect(states.last, contains('continuing with standard'));
+        expect(recording.lastError, isEmpty);
+        await recording.stop();
+      } finally {
+        recording.dispose();
+      }
+    },
+  );
+
+  test(
     'pause releases both devices, retains queued tail, and resumed timing excludes paused audio',
     () async {
       final rows = <Map<String, Object>>[];
@@ -190,6 +258,12 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 20));
         expect(app.captureState['elapsed_ms'], paused['elapsed_ms']);
         expect(RemoteRecording(Map<String, dynamic>.from(paused)).paused, true);
+        expect(
+          RemoteRecording(
+            Map<String, dynamic>.from(paused),
+          ).echoCancellationState,
+          paused['echo_cancellation'],
+        );
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [
             id,

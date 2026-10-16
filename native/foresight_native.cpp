@@ -276,6 +276,7 @@ std::string base64(const std::vector<unsigned char> &in) {
 struct Capture : Worker {
   std::string target, runtime;
   bool playback = false;
+  std::atomic<bool> echoCancellation{false};
   int rate = 48000;
   uint64_t dropped = 0;
 };
@@ -675,6 +676,22 @@ void fs_speech_destroy(void *h) {
   delete s;
 }
 void *fs_capture_start(const char *target, int playback, int rate) {
+  return fs_capture_start_with_options(target, playback, rate, 0);
+}
+int fs_capture_set_echo_cancellation(void *handle, int enabled) {
+  if (!handle) return 0;
+#ifdef __APPLE__
+  auto *capture = static_cast<Capture *>(handle);
+  if (!capture->playback && capture->runtime.empty()) {
+    capture->echoCancellation = enabled != 0;
+    return 1;
+  }
+#else
+  (void)enabled;
+#endif
+  return 0;
+}
+void *fs_capture_start_with_options(const char *target, int playback, int rate, int echo) {
   if (rate < 8000 || rate > 192000)
     return nullptr;
   auto *c = new Capture;
@@ -684,6 +701,7 @@ void *fs_capture_start(const char *target, int playback, int rate) {
     c->runtime = runtime;
   }
   c->playback = playback != 0;
+  if (echo && !fs_capture_set_echo_cancellation(c, echo)) { delete c; return nullptr; }
   c->rate = rate;
   c->active = true;
   c->thread = std::thread([c] {
@@ -691,7 +709,7 @@ void *fs_capture_start(const char *target, int playback, int rate) {
     if (c->runtime.empty()) {
     fs_macos_capture(c->target, c->playback, c->rate, c->cancel,
                      [c](const auto &bytes) { audio_frame(*c, bytes); },
-                     [c](const auto &event) { c->emit(event); });
+                     [c](const auto &event) { c->emit(event); }, &c->echoCancellation);
     c->active = false;
     c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/audio_state_v1\",\"state\":\"stopped\"}");
     return;

@@ -251,6 +251,11 @@ class RemoteRecording implements Recording {
   @override
   bool get paused => snapshot['paused'] == true;
   @override
+  Map<String, dynamic> get echoCancellationState => Map<String, dynamic>.from(
+    snapshot['echo_cancellation'] as Map? ??
+        {'requested': false, 'active': false},
+  );
+  @override
   List<int> get sampleCounts =>
       (snapshot['samples'] as List? ?? []).cast<int>();
   @override

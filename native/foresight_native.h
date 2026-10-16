@@ -46,6 +46,11 @@ void fs_speech_destroy(void *speech);
  * sizes/even samples. Legacy channel map fields stay distinct; state/error
  * events use linux channel. */
 void *fs_capture_start(const char *target, int playback, int sample_rate);
+void *fs_capture_start_with_options(const char *target, int playback, int sample_rate, int echo_cancellation);
+// Returns 1 if the native microphone route can accept the setting. Enabling on
+// an existing standard engine takes effect on its next start; a processed engine
+// changes bypass in place. Unsupported routes return 0 without changing capture.
+int fs_capture_set_echo_cancellation(void *capture, int enabled);
 /* Stops callbacks and flushes final PCM events, retaining handle for polling.
  * Call fs_capture_stop after draining to release the handle. */
 void fs_capture_finish(void *capture);

@@ -15,11 +15,12 @@ enum MeetingSpeaker {
     _ => unknown,
   };
 
-  static MeetingSpeaker fromSource(String source) => switch (source) {
-    'microphone' || 'microphone-capture-interruption' => microphone,
-    'playback' || 'playback-capture-interruption' => remote,
-    _ => unknown,
-  };
+  static MeetingSpeaker fromSource(String source) =>
+      switch (source.split(';').first.trim()) {
+        'microphone' || 'microphone-capture-interruption' => microphone,
+        'playback' || 'playback-capture-interruption' => remote,
+        _ => unknown,
+      };
 }
 
 const meetingSpeakerInstructions =

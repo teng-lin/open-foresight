@@ -39,6 +39,40 @@ class Recording {
   Timer? timer;
   bool polling = false, finishing = false;
   bool paused = false;
+  bool _echoCancellation = false;
+  final _echoState = <String, dynamic>{};
+  Map<String, dynamic> get echoCancellationState => {
+    ..._echoState,
+    'requested': _echoCancellation,
+    'active': !paused && captures.isNotEmpty && _echoState['active'] == true,
+  };
+
+  void setEchoCancellation(bool enabled) {
+    var pending = false;
+    if (!lib.providesSymbol('fs_capture_set_echo_cancellation')) {
+      if (enabled)
+        throw StateError(
+          'Echo cancellation requires an updated native audio runtime',
+        );
+    } else if (captures.isNotEmpty) {
+      final accepted = lib
+          .lookupFunction<
+            Int32 Function(Pointer<Void>, Int32),
+            int Function(Pointer<Void>, int)
+          >(
+            'fs_capture_set_echo_cancellation',
+          )(captures.first, enabled ? 1 : 0);
+      pending = accepted == 1;
+      if (accepted == 0 && enabled)
+        throw StateError(
+          'Echo cancellation is unavailable for this audio route',
+        );
+    }
+    _echoCancellation = enabled;
+    _echoState['pending'] = pending;
+    levels?.call();
+  }
+
   final _targets = <String>[];
   String lastError = '', _runtime = '', _model = '';
   DateTime lastAudioActivity = DateTime.now();
@@ -99,6 +133,7 @@ class Recording {
     bool playback = true,
     String microphoneTarget = 'auto',
     String playbackTarget = 'auto',
+    bool echoCancellation = false,
   }) {
     if (captures.isNotEmpty ||
         speeches.isNotEmpty ||
@@ -113,6 +148,8 @@ class Recording {
       throw StateError('Speech runner is missing or not executable: $runtime');
     _runtime = runtime;
     _model = model;
+    _echoCancellation = echoCancellation;
+    _echoState.clear();
     _epoch++;
     _transcriptCount = 0;
     lastError = '';
@@ -158,11 +195,21 @@ class Recording {
   Pointer<Void> _startCapture(int channel) {
     final target = _targets[channel].toNativeUtf8();
     try {
-      final capture = lib
-          .lookupFunction<
-            Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
-            Pointer<Void> Function(Pointer<Utf8>, int, int)
-          >('fs_capture_start')(target, channel, 48000);
+      if (channel == 0 &&
+          _echoCancellation &&
+          !lib.providesSymbol('fs_capture_start_with_options'))
+        throw StateError(
+          'Echo cancellation requires an updated native audio runtime',
+        );
+      final capture = channel == 0 && _echoCancellation
+          ? lib.lookupFunction<
+              Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Int32),
+              Pointer<Void> Function(Pointer<Utf8>, int, int, int)
+            >('fs_capture_start_with_options')(target, channel, 48000, 1)
+          : lib.lookupFunction<
+              Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
+              Pointer<Void> Function(Pointer<Utf8>, int, int)
+            >('fs_capture_start')(target, channel, 48000);
       if (capture == nullptr) {
         throw StateError(
           'Audio capture unavailable; check device and microphone/system-audio permissions.',
@@ -195,6 +242,10 @@ class Recording {
   void resume() {
     if (finishing) throw StateError('Transcription is finalizing');
     if (!paused) throw StateError('Recording is not paused');
+    _echoState
+      ..clear()
+      ..['active'] = false
+      ..['pending'] = _echoCancellation;
     try {
       for (var channel = 0; channel < _targets.length; channel++) {
         captures.add(_startCapture(channel));
@@ -245,6 +296,22 @@ class Recording {
         ) {
           final event = poll(captures[channel]);
           if (event == null) break;
+          if (event['type'] == 'echo_cancellation' && channel == 0) {
+            _echoState
+              ..clear()
+              ..addAll(event)
+              ..['pending'] = false;
+            if (event['fallback_status'] != null &&
+                event['fallback_status'] != 0) {
+              state(
+                'Echo cancellation unavailable; continuing with standard microphone capture.',
+              );
+            } else if (event['restart_required'] == true) {
+              state('Restart recording to enable echo cancellation.');
+            }
+            levels?.call();
+            continue;
+          }
           if (event['type'] == 'gap') {
             _flush(channel);
             final gap = {
