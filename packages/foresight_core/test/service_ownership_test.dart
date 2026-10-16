@@ -221,6 +221,53 @@ void main() {
           serviceEndpoint(crashProfile),
           '${other.runtime}/application.sock',
         );
+        await first!.close();
+        first = null;
+        final administration = await Process.run(
+          Platform.resolvedExecutable,
+          [kernel.path, '--stop-if-idle=${owner.pid}'],
+          environment: {
+            'FORESIGHT_DATA': other.data,
+            'FORESIGHT_RUNTIME': other.runtime,
+          },
+        );
+        expect(
+          administration.exitCode,
+          0,
+          reason: administration.stderr.toString(),
+        );
+        expect(jsonDecode(administration.stdout.toString()), {
+          'stopped': true,
+          'shutdown_verified': true,
+        });
+        expect(await owner.exitCode.timeout(const Duration(seconds: 10)), 0);
+        owner = null;
+        // EOF from a fake peer cannot be mistaken for successful shutdown.
+        final fake = await ServerSocket.bind(
+          InternetAddress(
+            '${other.runtime}/application.sock',
+            type: InternetAddressType.unix,
+          ),
+          0,
+        );
+        final peer = fake.listen((socket) {
+          socket.listen((_) => socket.destroy());
+        });
+        try {
+          final missingAck = await Process.run(
+            Platform.resolvedExecutable,
+            [kernel.path, '--stop-if-idle'],
+            environment: {
+              'FORESIGHT_DATA': other.data,
+              'FORESIGHT_RUNTIME': other.runtime,
+            },
+          );
+          expect(missingAck.exitCode, isNot(0));
+          expect(missingAck.stdout, isEmpty);
+        } finally {
+          await peer.cancel();
+          await fake.close();
+        }
       } finally {
         await first?.close();
         await second?.close();

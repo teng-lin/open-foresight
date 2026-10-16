@@ -105,7 +105,17 @@ dist/open-foresight/open-foresight-service --status
 dist/open-foresight/open-foresight-service --stop
 ```
 
-`--stop` gracefully finalizes active recording. The next client starts a service again. An unexpected service crash marks unfinished recordings interrupted on restart and resumes pending source work. Stop an older, pre-service version of the desktop before upgrading a profile; that version does not participate in service ownership. Schema additions retain existing source, note, transcript, artifact, and model records.
+`--stop` gracefully finalizes active recording. For installers,
+`--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
+atomically refuses active/finalizing recording and in-flight operations, then
+blocks new calls before shutdown begins. It acknowledges success only after
+resource cleanup; EOF, a failed close, or unverified helper ownership fails the
+command. The optional PID and packaged installation/revision identity pin the
+owner authenticated by the installer. Normal `--stop` behavior is unchanged.
+Older services that lack idle-only shutdown must be stopped explicitly before
+upgrading; installers never fall back to an unverified signal/EOF shutdown.
+
+ The next client starts a service again. An unexpected service crash marks unfinished recordings interrupted on restart and resumes pending source work. Stop an older, pre-service version of the desktop before upgrading a profile; that version does not participate in service ownership. Schema additions retain existing source, note, transcript, artifact, and model records.
 
 ## Verification
 

@@ -186,6 +186,31 @@ except Deferred:
         self.assertEqual([call.args[0][-1] for call in run.call_args_list],['--status','--status'])
         self.assertEqual((self.destination/'version').read_text(),'old')
 
+    def test_idle_shutdown_acknowledgement_is_mandatory_and_recording_race_defers(self):
+        executable=(self.destination/installer.SERVICE).resolve()
+        status=SimpleNamespace(returncode=0,stdout=json.dumps({'pid':42,'capture':{'active':False}}),stderr='')
+        for response in [SimpleNamespace(returncode=1,stdout='',stderr='Recording became active'),
+                         SimpleNamespace(returncode=0,stdout='',stderr=''),
+                         SimpleNamespace(returncode=0,stdout=json.dumps({'stopped':True}),stderr=''),
+                         SimpleNamespace(returncode=2,stdout='',stderr='Unsupported --stop-if-idle')]:
+            with self.subTest(response=response), patch.object(installer.subprocess,'run',side_effect=[status,response]) as run, \
+                 patch.object(installer.subprocess,'check_output',return_value='42 1\n'), \
+                 patch.object(installer,'process_path',return_value=executable):
+                with self.assertRaises(installer.Deferred):
+                    installer.stop_owned_services(self.destination,{42:str(executable)},['profile'])
+                self.assertEqual([call.args[0][-1] for call in run.call_args_list],['--status','--stop-if-idle=42'])
+                self.assertEqual((self.destination/'version').read_text(),'old')
+
+    def test_verified_idle_shutdown_waits_for_owned_process_exit(self):
+        executable=(self.destination/installer.SERVICE).resolve()
+        status=SimpleNamespace(returncode=0,stdout=json.dumps({'pid':42,'capture':{'active':False}}),stderr='')
+        acknowledgement=SimpleNamespace(returncode=0,stdout=json.dumps({'stopped':True,'shutdown_verified':True}),stderr='')
+        with patch.object(installer.subprocess,'run',side_effect=[status,acknowledgement]) as run, \
+             patch.object(installer.subprocess,'check_output',return_value='42 1\n'), \
+             patch.object(installer,'process_path',side_effect=[executable,executable,None,None]):
+            installer.stop_owned_services(self.destination,{42:str(executable)},['profile'])
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list],['--status','--stop-if-idle=42'])
+
     def test_failed_service_shutdown_never_reaches_staging_or_swap(self):
         self.options.update(active=lambda _:{42:'service'},
             stopper=Mock(side_effect=subprocess.TimeoutExpired('service --stop',1800)))
