@@ -5,8 +5,8 @@
 <h1 align="center">Open Foresight</h1>
 
 <p align="center">
-  A local-first knowledge and meeting app for Linux and macOS.<br>
-  Import your sources, ask questions with checked citations, and record and transcribe meetings, all with models that run on your own machine.
+  Offline AI meeting notes, transcription, and a cited knowledge base for Linux and macOS.<br>
+  An open-source alternative to Google AI Edge Foresight and Granola. Record and transcribe meetings, import your sources, and ask questions with checked citations, all with models that run on your own machine.
 </p>
 
 ---
