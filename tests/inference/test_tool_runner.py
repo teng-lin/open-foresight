@@ -66,6 +66,18 @@ API = types.SimpleNamespace(Tool=type('Tool', (), {}), SamplerConfig=options,
 
 
 class ToolRunnerTest(unittest.TestCase):
+    def test_plain_summary_conversation_has_no_tools_history_or_system_preface(self):
+        engine = Engine([{'role': 'assistant', 'content': 'Memo'}])
+        output = io.StringIO()
+        with patch('sys.stdin', io.StringIO('{"finish":true}\n')), contextlib.redirect_stdout(output):
+            runner.run_tool_conversation(engine, API, 'Summary prompt', {
+                'tools': [], 'system_message': '', 'delegate_tool_detection': True}, 1024)
+        self.assertEqual(engine.config['tools'], [])
+        self.assertEqual(engine.config['system_message'], '')
+        self.assertIsNone(engine.config['messages'])
+        self.assertEqual(engine.conversation._lib.messages, [{'role': 'user', 'content': 'Summary prompt'}])
+        self.assertTrue(output.getvalue().endswith('answer {"role": "assistant", "content": "Memo"}\n'))
+
     def test_history_is_installed_as_messages_without_flattening_or_decoding(self):
         history = [
             {'role': 'user', 'content': [{'type': 'text', 'text': 'Earlier query 中文'}]},

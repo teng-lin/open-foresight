@@ -53,8 +53,8 @@ proven; the port currently keeps toggle state only for the workspace lifetime.
 
 The recovered instruction string and text-only date/context/query envelope are
 now used for web-enabled sends; see the prompt section below. Structured message replay is now implemented; see [history evidence](reference-chat-history.md).
-Its memory compression policy, sampling and model/context configuration remain
-under investigation. The current tool path
+Its 55% memory compression/FIFO policy is integrated. Original tokenizer,
+sampling and model/context configuration remain under investigation. The current tool path
 publishes its final model answer in one delta; original streaming remains to be reproduced. The [textual tool-call fallback](reference-tool-fallback.md)
 is now integrated and has a controlled-provider real-model check.
 
@@ -140,9 +140,9 @@ conversation's system message and send the user prompt separately. Legacy
 array-only native requests keep their generic system default. Prompt admission
 counts system and tool-definition tokens as well as user text and output reserve.
 Structured user/assistant replay is now implemented. Conversation cloning,
-automatic memory compression, original token configuration and streaming remain
-integration work. See the [history ledger](reference-chat-history.md) for the
-remaining four-answer window and the recovered compression policy. Tests verify the recovered instruction hash,
+original tokenizer/model configuration and streaming remain integration work.
+The [history ledger](reference-chat-history.md) describes implemented memory
+compression, FIFO fallback and durable checkpoints. Tests verify the recovered instruction hash,
 date/query envelope, optional context and UTF-16 truncation, plus its use by the
 application's web-generation call.
 

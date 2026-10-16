@@ -39,6 +39,7 @@ int fs_generation_cancel(void *conversation);
 // the runner's default system message. prompt is always user content.
 // delegate_tool_detection=true emits model_response events. Reply with
 // {"message":<user message>} to continue or {"finish":true} to accept the answer.
+// An object with an empty tools array supports a plain local conversation.
 int fs_generate_tools(void *conversation, const char *request_id,
                       const char *prompt, const char *tools_json,
                       int max_output_tokens);

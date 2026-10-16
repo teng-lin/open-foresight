@@ -19,6 +19,7 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
     system = 'Follow the requested task faithfully. Do not invent facts.'
     delegate_tool_detection = False
     messages = []
+    plain_conversation = isinstance(definitions, dict) and definitions.get('tools') == []
     if isinstance(definitions, dict):
         messages = definitions.get('messages', [])
         if not isinstance(messages, list) or any(
@@ -32,7 +33,7 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
         definitions = definitions['tools']
         if not isinstance(system, str):
             raise ValueError('Tool system message must be a string')
-    if not isinstance(definitions, list) or not definitions:
+    if not isinstance(definitions, list) or (not definitions and not plain_conversation):
         raise ValueError('Tool definitions must be a nonempty array')
     class DelegatedTool(litert_lm.Tool):
         def __init__(self, definition):

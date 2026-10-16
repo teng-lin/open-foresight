@@ -87,6 +87,59 @@ void main() {
         expect(followup.last, contains('CEDAR-8492'), reason: '$report');
         expect(queries.length, searchCount, reason: '$report');
         expect(store.rows('SELECT id FROM answers'), hasLength(2));
+        for (var i = 0; i < 6; i++) {
+          final body = i < 3
+              ? '${i == 0 ? 'The user chose violet as the project theme color. ' : ''}'
+                    '${'Planning context remains consistent across the project. ' * 75}'
+              : 'The current work is on schedule. ' * 16;
+          store.answer(
+            'Planning note $i',
+            body,
+            'completed',
+            [],
+            'controlled fixture',
+            conversation: 'controlled-compression-fixture',
+          );
+        }
+        final compressedAnswer = await domain
+            .askWithWebInConversation(
+              'What project theme color did I choose? Reply with just the color.',
+              'controlled-compression-fixture',
+            )
+            .toList();
+        final checkpoint = store
+            .rows(
+              "SELECT * FROM conversation_memory WHERE conversation='controlled-compression-fixture'",
+            )
+            .single;
+        final memory = List<Map<String, dynamic>>.from(
+          jsonDecode(checkpoint['messages'] as String) as List,
+        );
+        report['compression'] = {
+          'answer': compressedAnswer,
+          'messages': memory,
+        };
+        if (reportPath != null) {
+          File(reportPath).writeAsStringSync(
+            const JsonEncoder.withIndent('  ').convert(report),
+          );
+        }
+        expect(
+          referenceHistoryText(memory.first),
+          startsWith(referenceMemoryPrefix),
+          reason: '$report',
+        );
+        expect(
+          referenceHistoryText(memory.first).toLowerCase(),
+          contains('violet'),
+          reason: '$report',
+        );
+        expect(
+          compressedAnswer.last.toLowerCase(),
+          contains('violet'),
+          reason: '$report',
+        );
+        expect(queries.length, searchCount, reason: '$report');
       } finally {
         domain.close();
         runtime.close();

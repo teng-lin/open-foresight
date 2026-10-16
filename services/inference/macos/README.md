@@ -19,6 +19,8 @@ System, tool and user tokens count toward the existing context admission limit.
 Application requests also set `delegate_tool_detection: true`: every complete
 model response waits for a Dart decision so the recovered native/text fallback
 parser is shared by both backends. See [fallback evidence](../../../docs/reference-tool-fallback.md).
+Memory compression uses an empty-tool object with empty system text and no
+history, creating a separate plain local conversation. See [memory behavior](../../../docs/reference-chat-history.md).
 It retains one conversation
 while delegating callbacks to the application service over the private owned
 process connection. The model subprocess performs no network requests or tool

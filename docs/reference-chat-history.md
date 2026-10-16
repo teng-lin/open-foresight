@@ -48,14 +48,13 @@ This column is port storage for replay, not a claim about the original database
 schema or restart persistence. Ordinary local-only answering retains its prior
 prompt path.
 
-**Replay still uses the port's four-answer window.** The original automatic
-memory policy below remains to be integrated. Conversation cloning/cache reuse,
-full response alignment/sanitation, original tokenizer/model configuration and
-history lifecycle/reset behavior also remain open. This change establishes
-structured replay and the response data needed by that next integration; it
-does not establish exhaustive history parity.
+The four-answer window has been replaced for web-enabled sends by the recovered
+memory policy below. Conversation cloning/cache reuse, full response
+alignment/sanitation, the original tokenizer/model configuration and history
+reset/lifecycle comparisons remain open. Ordinary local-only answering retains
+its existing path. This does not establish exhaustive history parity.
 
-## Recovered memory policy, not yet integrated
+## Recovered memory policy and integration
 
 `_getTokenLimitForModel` (0x100916094) uses the model's configured token limit;
 without a model config it returns 4096. `_maybePruneHistory` (0x100914228)
@@ -75,10 +74,10 @@ It then removes first entries until the estimated history plus incoming message
 fits, or history is empty. An insufficient entry count or failed/empty
 compression falls back to the same FIFO removal. The memo itself can therefore
 be removed if it is too large. `_estimateMsgTokens` (0x1009164b8) has tokenizer
-and word-count fallback branches; its 632-line decompilation is only retained
-through line 500 in this pass, so its full contract remains under investigation.
-This policy must replace the four-answer window before long-history parity can
-be claimed.
+and word-count fallback branches; its full 632-line decompilation is now retained. The port implements its
+tokenizer-unavailable word estimate; use of the original tokenizer remains
+unverified.
+The implementation and remaining limits are detailed below.
 
 ## Verification and evidence
 
@@ -118,3 +117,79 @@ skipped**. All four CTest groups passed, including eight Python runner fixtures.
 Both analyzers are clean and `git diff --check` passed. As in prior macOS passes,
 the shared C++ protocol was compiled/tested; the full Linux inference executable
 was not built.
+
+## Compression implementation follow-up
+
+`ReferenceChatMemory` now implements the 55% threshold, oldest-half entry
+selection, memo replacement and FIFO fallback. It uses the recovered archivist
+prompt verbatim, formats each history message as `role: text`, concatenates
+text parts without a separator, and joins entries with `\n---\n`. A nonempty
+summary, including whitespace-only text, qualifies for memo insertion. Summaries
+are not pinned: FIFO can evict a memo that is still too large. An oversized
+incoming message can exhaust all prior memory.
+
+The word fallback splits trimmed nonempty text on `\s+`, divides the word count
+by 0.75, and **rounds**. Empty strings cost zero; nonempty whitespace-only text
+costs one. Text parts are estimated separately. This is confirmed by the
+pinned VM's LibcRound thread offset 1976, matching the indirect call in the
+original estimator; LibcCeil is at offset 1960. The helper also retains image
+and audio estimates (default 280 and 200); application chat remains text-only.
+An injectable token counter supports the separate tokenizer-backed branch, but
+Domain currently uses the original no-tokenizer fallback. Native admission
+independently counts actual model tokens and may reject an oversized request.
+The actual tokenizer branch, especially its effect on non-Latin context sizing,
+is still a parity limitation.
+
+The original `_simpleLlmExecutor` creates a fresh local conversation with a
+constant ConversationConfig whose slots are null except false booleans. It
+streams that separate response and closes the conversation. The new
+`NativeRuntime.generateConversation` supplies the summary prompt as user text,
+with empty system instructions, no tools and no history. The existing tools
+bridge carries this plain conversation; tool detection is bypassed so a quoted
+function example cannot invoke a callback. C++ and Python support this empty-tool
+object mode while the public generateWithTools method still requires tools.
+Original service recovery, default sampling, token limits and streaming details
+are not established by this change. The port uses its existing sampling and a
+1024-token summary output cap.
+
+Domain loads the current checkpoint plus completed answers after its cursor,
+prunes a request-local copy before generation, and commits the resulting memory
+with the answer and exact meeting link in one SQLite savepoint. The additive
+`conversation_memory` table stores conversation identity, through-answer ID and
+message JSON. All answers remain in the archive. A conversation/id index bounds
+tail lookups. Completed turns arriving during generation are merged before the
+new answer pair during commit, preventing a later checkpoint from skipping them.
+Cancelled or failed requests do not replace durable memory. Summary and answer
+phases use the same owned request ID so cancellation applies to either phase.
+Durable checkpoint storage is a port lifecycle choice; the original database
+persistence contract is not claimed.
+
+The real local-model fixture now also seeds six controlled historical pairs,
+forcing compression. Its oldest half contains the fact that violet is the
+project theme color. The generated memo retained that fact, and the next answer
+was `Violet` without another search. The committed checkpoint contained nine
+messages: the memo, three retained pairs and the new pair. The combined search,
+follow-up and compression fixture passed in 36 seconds. It used a deterministic
+search provider and did not contact Google/ODML. Artifacts are under ignored
+`test-results/reference-functions/memory-model/`.
+
+Additional REA evidence:
+
+- `ev_dc74a935a6cacfe538cf8554fa5cfdc9cf93ff91dd30b783197bab82e1463b29`: full summary executor, estimator tail and compression exception path; IDA closed normally.
+- `ev_80a2e189750e505f45d7b1034edd8d0307d9ac822ad168f2fb8b31b58f653b86`: exact archivist prompt and memo constants.
+- `ev_32abb94a0279c673e3662b9d125f65669c73f16bedd2ba8a0deff846cd491dc4`: default summary config slots, whitespace regex and round/ceil offsets.
+- `ev_1fb5c8c27d65aed13ee2cd1be65e2d8f313c99c6b00cd5372c6287896d877a2c`: image/audio type literals used by the estimator.
+
+Compression follow-up validation: **164 core tests passed, two opt-in model
+tests skipped**. The controlled real-model search/follow-up/compression fixture
+separately passed. **168 desktop tests passed, 10 opt-in tests skipped**. All
+four CTest groups passed, including nine Python runner fixtures. Both analyzers
+are clean; `git diff --check` passed. New application checks cover memo
+checkpoint persistence, FIFO recovery, cancellation, concurrent committed turns,
+correct meeting answer IDs after checkpoint writes and rollback of the complete
+answer/memory/link transaction.
+
+`ev_5fd331744809cd28cbe2c33b9fa3bf965456a3b9add0843bb26618095e05a764`
+retains the controlled generated memo, final answer, checkpoint message count
+and model test log. This macOS run compiled/tested the shared C++ protocol but
+did not build the complete Linux inference executable.

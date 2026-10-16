@@ -5,6 +5,7 @@ import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
+import 'package:sqlite3/sqlite3.dart' show SqliteException;
 import 'package:grpc/grpc.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
@@ -33,10 +34,34 @@ class ToolRuntime extends NativeRuntime {
   late Future<String> Function(ReferenceToolDispatcher) answer;
   final prompts = <String>[];
   final histories = <List<Map<String, dynamic>>>[];
+  int contextLimit = 4096;
+  final summaries = <String>[];
+  final summaryIds = <String>[];
+  final answerIds = <String>[];
+  Future<String> Function(String)? summarize;
+  @override
+  Stream<Map<String, dynamic>> generateConversation(
+    String id,
+    String prompt, {
+    int maxOutputTokens = 1024,
+    Duration timeout = const Duration(minutes: 5),
+  }) async* {
+    summaries.add(prompt);
+    summaryIds.add(id);
+    yield {
+      'type': 'delta',
+      'text':
+          await (summarize?.call(prompt) ??
+              Future.value('Important earlier facts')),
+    };
+    yield {'type': 'done', 'status': 'completed'};
+  }
+
   @override
   Map<String, dynamic> get effectiveState => {
     'state': 'ready',
     'backend': 'litert-lm-fixture',
+    'context_length': contextLimit,
   };
   @override
   Stream<Map<String, dynamic>> generateWithTools(
@@ -50,6 +75,7 @@ class ToolRuntime extends NativeRuntime {
     int maxOutputTokens = 256,
   }) async* {
     prompts.add(prompt);
+    answerIds.add(id);
     histories.add(messages);
     expect(systemPrompt, referenceChatInstructions);
     expect(prompt, contains('[Current Date: '));
@@ -356,6 +382,194 @@ void main() {
         referenceTextMessage('user', 'Old question'),
         referenceTextMessage('assistant', longBody),
       ]);
+    },
+  );
+  void seedMemory() {
+    for (var i = 0; i < 8; i++) {
+      store.answer(
+        'Old question $i',
+        'Fact $i',
+        'completed',
+        [],
+        'legacy',
+        conversation: 'history',
+      );
+    }
+  }
+
+  test(
+    'web history exceeds four answers and checkpoints survive Domain recreation',
+    () async {
+      seedMemory();
+      runtime.answer = (_) async => 'New answer';
+      await domain.askWithWebInConversation('Next?', 'history').toList();
+      expect(runtime.histories.last, hasLength(16));
+      expect(runtime.summaries, isEmpty);
+      domain.close();
+      domain = Domain(store, helper, webSearch: fixtureSearch())
+        ..generator = runtime;
+      await domain.askWithWebInConversation('Another?', 'history').toList();
+      expect(runtime.histories.last, hasLength(18));
+      expect(
+        referenceHistoryText(runtime.histories.last.first),
+        'Old question 0',
+      );
+    },
+  );
+
+  test(
+    'web memory compresses the oldest half and commits a memo with the answer',
+    () async {
+      seedMemory();
+      runtime.contextLimit = 100;
+      runtime.answer = (_) async => 'New answer';
+      await domain
+          .askWithWebInConversation('Next?', 'history', requestId: 'same-owner')
+          .toList();
+      expect(runtime.summaries, hasLength(1));
+      expect(runtime.summaries.single, startsWith(referenceMemoryInstructions));
+      expect(runtime.summaries.single, contains('Old question 3'));
+      expect(runtime.summaries.single, isNot(contains('Old question 4')));
+      expect(runtime.summaryIds, ['same-owner']);
+      expect(runtime.answerIds, ['same-owner']);
+      expect(
+        referenceHistoryText(runtime.histories.last.first),
+        startsWith(referenceMemoryPrefix),
+      );
+      final checkpoint = store.rows('SELECT * FROM conversation_memory').single;
+      final messages = List<Map<String, dynamic>>.from(
+        jsonDecode(checkpoint['messages'] as String) as List,
+      );
+      expect(
+        referenceHistoryText(messages.first),
+        contains('Important earlier facts'),
+      );
+      expect(referenceHistoryText(messages[messages.length - 2]), 'Next?');
+      expect(store.rows('SELECT * FROM answers'), hasLength(9));
+      expect(
+        checkpoint['through_answer_id'],
+        store.rows('SELECT max(id) AS id FROM answers').single['id'],
+      );
+    },
+  );
+
+  test(
+    'failed compression uses FIFO and cancelled compression saves no checkpoint or answer',
+    () async {
+      seedMemory();
+      runtime.contextLimit = 100;
+      runtime.summarize = (_) async => throw StateError('Unavailable');
+      runtime.answer = (_) async => 'Recovered answer';
+      await domain.askWithWebInConversation('Next?', 'history').toList();
+      expect(runtime.histories.last.length, lessThan(16));
+      expect(
+        referenceHistoryText(runtime.histories.last.first),
+        isNot(startsWith(referenceMemoryPrefix)),
+      );
+      final before = store.rows('SELECT * FROM conversation_memory').single;
+      final count = store.rows('SELECT * FROM answers').length;
+      var current = true;
+      runtime.contextLimit = 30;
+      runtime.summarize = (_) async {
+        current = false;
+        return 'Late memo';
+      };
+      await expectLater(
+        domain
+            .askWithWebInConversation(
+              'Next again?',
+              'history',
+              current: () => current,
+            )
+            .toList(),
+        throwsStateError,
+      );
+      expect(store.rows('SELECT * FROM answers'), hasLength(count));
+      expect(store.rows('SELECT * FROM conversation_memory').single, before);
+    },
+  );
+  test(
+    'memory checkpoint retains completed turns that arrive during generation',
+    () async {
+      runtime.answer = (_) async {
+        store.answer(
+          'Intervening query',
+          'Intervening answer',
+          'completed',
+          [],
+          'other client',
+          conversation: 'history',
+        );
+        store.answer(
+          'Unrelated query',
+          'Unrelated answer',
+          'completed',
+          [],
+          'other client',
+          conversation: 'separate',
+        );
+        return 'Own answer';
+      };
+      await domain.askWithWebInConversation('Own query', 'history').toList();
+      final saved =
+          jsonDecode(
+                store
+                        .rows(
+                          "SELECT messages FROM conversation_memory WHERE conversation='history'",
+                        )
+                        .single['messages']
+                    as String,
+              )
+              as List;
+      expect(saved, [
+        referenceTextMessage('user', 'Intervening query'),
+        referenceTextMessage('assistant', 'Intervening answer'),
+        referenceTextMessage('user', 'Own query'),
+        referenceTextMessage('assistant', 'Own answer'),
+      ]);
+    },
+  );
+  test(
+    'checkpoint writes keep the exact meeting answer ID and roll back with failed linking',
+    () async {
+      for (var i = 0; i < 3; i++)
+        store.answer('Old $i', 'Body', 'completed', [], 'legacy');
+      final meeting = store.meeting('Checkpoint fixture');
+      runtime.answer = (_) async => 'Meeting answer';
+      await domain
+          .askWithWebInConversation('Question', 'ignored', meetingId: meeting)
+          .toList();
+      final answerId = store
+          .rows('SELECT max(id) AS id FROM answers')
+          .single['id'];
+      expect(answerId, 4);
+      expect(
+        store.rows('SELECT answer_id FROM meeting_answers').single['answer_id'],
+        answerId,
+      );
+      expect(
+        store
+            .rows('SELECT through_answer_id FROM conversation_memory')
+            .single['through_answer_id'],
+        answerId,
+      );
+      final before = store.rows('SELECT * FROM conversation_memory').single;
+      store.db.execute(
+        "CREATE TRIGGER reject_memory_link BEFORE INSERT ON meeting_answers BEGIN SELECT RAISE(ABORT,'controlled fixture'); END",
+      );
+      await expectLater(
+        domain
+            .askWithWebInConversation(
+              'Rejected question',
+              'ignored',
+              meetingId: meeting,
+            )
+            .toList(),
+        throwsA(isA<SqliteException>()),
+      );
+      expect(store.rows('SELECT * FROM answers'), hasLength(4));
+      expect(store.rows('SELECT * FROM conversation_memory').single, before);
+      expect(store.rows('SELECT * FROM meeting_answers'), hasLength(1));
     },
   );
 }

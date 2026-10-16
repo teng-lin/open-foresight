@@ -345,6 +345,8 @@ class Domain {
       String model, {
       required String conversation,
       Map<String, dynamic>? modelResponse,
+      List<Map<String, dynamic>>? memoryMessages,
+      int? historyThroughAnswerId,
     }) {
       ensureCurrent();
       store.db.execute('SAVEPOINT persist_conversation_answer');
@@ -359,9 +361,29 @@ class Domain {
           requestId: requestId,
           modelResponse: modelResponse,
         );
+        // Capture before checkpoint writes can change lastInsertRowId.
+        final answerId = store.db.lastInsertRowId;
+        if (memoryMessages != null) {
+          // A completed turn may have arrived while this request was generating.
+          // Keep it between the replayed snapshot and this request's own pair.
+          final intervening = referenceChatHistory(
+            store.rows(
+              "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? AND id<? ORDER BY id",
+              [conversation, historyThroughAnswerId!, answerId],
+            ),
+          );
+          final committedMessages = [
+            ...memoryMessages.take(memoryMessages.length - 2),
+            ...intervening,
+            ...memoryMessages.skip(memoryMessages.length - 2),
+          ];
+          store.db.execute(
+            'INSERT INTO conversation_memory(conversation,through_answer_id,messages) VALUES(?,?,?) '
+            'ON CONFLICT(conversation) DO UPDATE SET through_answer_id=excluded.through_answer_id,messages=excluded.messages',
+            [conversation, answerId, jsonEncode(committedMessages)],
+          );
+        }
         if (meetingId != null) {
-          // Capture the exact inserted row before any other client can write.
-          final answerId = store.db.lastInsertRowId;
           store.db.execute(
             'INSERT INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
             [meetingId, answerId],
@@ -548,13 +570,37 @@ class Domain {
       throw StateError(
         'Generation model unavailable. Retrieved ${citations.length} excerpts; configure a local generator.',
       );
-    final historyRows = store
-        .rows(
-          'SELECT question,body,model_response FROM answers WHERE conversation=? AND status=\'completed\' ORDER BY id DESC LIMIT 4',
-          [conversation],
-        )
-        .reversed
-        .toList();
+    final memoryRows = useWeb
+        ? store.rows(
+            'SELECT through_answer_id,messages FROM conversation_memory WHERE conversation=?',
+            [conversation],
+          )
+        : <Map<String, Object?>>[];
+    final through = memoryRows.isEmpty
+        ? 0
+        : memoryRows.single['through_answer_id'] as int;
+    final historyRows = useWeb
+        ? store.rows(
+            "SELECT id,question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? ORDER BY id",
+            [conversation, through],
+          )
+        : store
+              .rows(
+                "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' ORDER BY id DESC LIMIT 4",
+                [conversation],
+              )
+              .reversed
+              .toList();
+    final memory = useWeb
+        ? await ReferenceChatMemory.load([
+            if (memoryRows.isNotEmpty)
+              ...List<Map<String, dynamic>>.from(
+                jsonDecode(memoryRows.single['messages'] as String) as List,
+              ),
+            ...referenceChatHistory(historyRows),
+          ])
+        : null;
+    ensureCurrent();
     final history = historyRows
         .map(
           (a) =>
@@ -570,6 +616,38 @@ class Domain {
             context.toString(),
             boundedQuestion,
           );
+    final generationId =
+        requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}';
+    if (memory != null) {
+      await memory.prune(
+        incomingTokens: await estimateReferenceHistoryTokens(
+          referenceTextMessage('user', prompt),
+        ),
+        tokenLimit: generator!.effectiveState['context_length'] as int? ?? 4096,
+        checkCurrent: ensureCurrent,
+        summarize: (summaryPrompt) async {
+          ensureCurrent();
+          var summary = '', summaryStatus = 'failed';
+          await for (final event in generator!.generateConversation(
+            generationId,
+            summaryPrompt,
+          )) {
+            ensureCurrent();
+            if (event['type'] == 'delta')
+              summary += event['text'] as String? ?? '';
+            if (event['type'] == 'error')
+              throw StateError('Memory compression failed');
+            if (event['type'] == 'done')
+              summaryStatus = event['status'] as String;
+          }
+          ensureCurrent();
+          if (summaryStatus != 'completed')
+            throw StateError('Memory compression failed');
+          return summary;
+        },
+      );
+      ensureCurrent();
+    }
     var body = '', raw = '', status = 'failed';
     Map<String, dynamic>? modelResponse;
     final allowed = citations.map((c) => c['citation'] as String).toSet();
@@ -601,10 +679,10 @@ class Domain {
     try {
       final events = useWeb
           ? generator!.generateWithTools(
-              requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}',
+              generationId,
               prompt,
               tools: [referenceGoogleSearchTool()],
-              messages: referenceChatHistory(historyRows),
+              messages: memory!.messages,
               systemPrompt: referenceChatInstructions,
               dispatcher: ReferenceToolDispatcher({
                 'google_search': (args) async {
@@ -635,7 +713,7 @@ class Domain {
               maxOutputTokens: 1024,
             )
           : generator!.generate(
-              requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}',
+              generationId,
               prompt,
               systemPrompt: groundedAnswerInstructions,
               responseSchema: schema,
@@ -693,6 +771,16 @@ class Domain {
         result?['method'] == 'source-fallback' ? 'source-fallback' : model,
         conversation: conversation,
         modelResponse: useWeb && status == 'completed' ? modelResponse : null,
+        memoryMessages: useWeb && status == 'completed'
+            ? [
+                ...memory!.messages,
+                referenceTextMessage('user', question),
+                modelResponse ?? referenceTextMessage('assistant', raw),
+              ]
+            : null,
+        historyThroughAnswerId: useWeb && historyRows.isNotEmpty
+            ? historyRows.last['id'] as int
+            : through,
       );
     } catch (e) {
       if (!_closed && (current == null || current()))

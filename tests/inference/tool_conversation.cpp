@@ -25,6 +25,8 @@ int main() {
     auto options = foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Original instructions"}});
     check(options.tools == wrapped && options.system_message == "Original instructions");
     check(foresight::parse_tool_request(wrapped).tools == wrapped);
+    auto plain = foresight::parse_tool_request({{"tools", json::array()}, {"system_message", ""}});
+    check(plain.tools.empty() && plain.system_message.empty());
     auto history = json::array({{{"role", "user"}, {"content", "Earlier query"}},
                                 {{"role", "assistant"}, {"content", "Earlier answer [Source:8]"}}});
     auto replay = foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Instructions"}, {"messages", history}});

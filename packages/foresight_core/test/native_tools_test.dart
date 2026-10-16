@@ -22,6 +22,15 @@ assert '--tools' in sys.argv
 options=json.loads(sys.argv[sys.argv.index('--tools')+1])
 tools=options['tools']
 prompt=sys.argv[sys.argv.index('--prompt')+1]
+if not tools:
+ assert options['system_message']==''
+ assert prompt=='Summary prompt'
+ assert options['messages']==[]
+ answer={'role':'assistant','content':[{'type':'text','text':'Memo with "name":"google_search", "arguments":{"query":"quoted example"}'}]}
+ print('model '+json.dumps(answer),flush=True)
+ assert json.loads(sys.stdin.readline())=={'finish':True}
+ print('answer '+json.dumps(answer),flush=True)
+ sys.exit(0)
 if prompt=='Reference question':
  assert hashlib.sha256(options['system_message'].encode()).hexdigest()=='71a908bf5b041da7cff1c7ad1d397a62b2fc3d433774bad7dcaf26a351762f78'
 else:
@@ -72,6 +81,20 @@ print('answer '+json.dumps(answer),flush=True)
         runtime.close();
         await directory.delete(recursive: true);
       });
+
+      test(
+        'plain summary uses a separate conversation without invoking quoted tools',
+        () async {
+          final events = await runtime
+              .generateConversation('summary-owner', 'Summary prompt')
+              .toList();
+          expect(events.last['status'], 'completed');
+          expect(
+            events.where((event) => event['type'] == 'delta').single['text'],
+            contains('quoted example'),
+          );
+        },
+      );
 
       test(
         'native worker calls search and receives its reference user message',

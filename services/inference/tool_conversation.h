@@ -30,7 +30,8 @@ inline nlohmann::json wrap_tools(const nlohmann::json &tools) {
 inline ToolRequest parse_tool_request(const nlohmann::json &value) {
   ToolRequest result;
   if (value.is_object()) {
-    result.tools = wrap_tools(value.at("tools"));
+    const auto &definitions = value.at("tools");
+    result.tools = definitions.is_array() && definitions.empty() ? definitions : wrap_tools(definitions);
     result.system_message = value.at("system_message").get<std::string>();
     result.delegate_tool_detection = value.value("delegate_tool_detection", false);
     result.messages = value.value("messages", nlohmann::json::array());

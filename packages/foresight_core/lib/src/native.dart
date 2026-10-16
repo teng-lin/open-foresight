@@ -212,6 +212,23 @@ class NativeRuntime {
     maxOutputTokens: maxOutputTokens,
   );
 
+  /// A fresh local conversation without tools or an implicit system preface.
+  Stream<Map<String, dynamic>> generateConversation(
+    String id,
+    String prompt, {
+    int maxOutputTokens = 1024,
+    Duration timeout = const Duration(minutes: 5),
+  }) => _generate(
+    id,
+    prompt,
+    tools: const [],
+    toolDispatcher: ReferenceToolDispatcher({}),
+    plainConversation: true,
+    systemPrompt: '',
+    maxOutputTokens: maxOutputTokens,
+    timeout: timeout,
+  );
+
   Stream<Map<String, dynamic>> _generate(
     String id,
     String prompt, {
@@ -221,6 +238,7 @@ class NativeRuntime {
     List<Map<String, dynamic>>? tools,
     ReferenceToolDispatcher? toolDispatcher,
     List<Map<String, dynamic>> initialMessages = const [],
+    bool plainConversation = false,
     Duration timeout = const Duration(minutes: 5),
     int maxOutputTokens = 256,
   }) async* {
@@ -229,7 +247,9 @@ class NativeRuntime {
     }
     if (_active != null) throw StateError('Generation already in progress');
     if ((tools == null) != (toolDispatcher == null) ||
-        (tools != null && (tools.isEmpty || responseSchema != null))) {
+        (tools != null &&
+            ((!plainConversation && tools.isEmpty) ||
+                responseSchema != null))) {
       throw ArgumentError('Tools require a dispatcher and no response schema');
     }
     if (id.isEmpty ||
@@ -379,7 +399,9 @@ class NativeRuntime {
           final delegated = event['type'] == 'model_response';
           final payload = jsonDecode(event['text'] as String);
           final calls = delegated
-              ? extractReferenceToolCalls(payload as Map<String, dynamic>)
+              ? plainConversation
+                    ? null
+                    : extractReferenceToolCalls(payload as Map<String, dynamic>)
               : payload as List<dynamic>;
           if (delegated) modelTurns++;
           late Map<String, dynamic> message;
