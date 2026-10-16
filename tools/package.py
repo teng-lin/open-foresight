@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from prepare_litert import LIBRARY_SHA256
 from prepare_onnx import LIBRARY_SHA256 as ONNX_LIBRARY_SHA256
+from app_version import read_version
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -147,7 +148,9 @@ esac
     files = [{'path': str(file.relative_to(args.output)),
               'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}
              for file in sorted(args.output.rglob('*')) if file.is_file()]
-    manifest = {'build_id': 'open-foresight-0.1.0+' + commit[:12], 'revision': commit,
+    version, build_number = read_version()
+    manifest = {'build_id': f'open-foresight-{version}+{commit[:12]}', 'revision': commit,
+                'version': version, 'build_number': build_number,
                 'gemma_runtime': litert_runtime,
                 'embedding_compatibility_runtime': {'kind': 'native-onnx', 'version': '1.31.0', 'sha256': ONNX_LIBRARY_SHA256},
                 'generation_backend_default': args.generation_backend,

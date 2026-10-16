@@ -103,8 +103,12 @@ jobs:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python3 - <<'PY'
-          import os, pathlib, re, subprocess
-          version = re.search(r'^version: (\d+\.\d+\.\d+)', pathlib.Path('apps/desktop/pubspec.yaml').read_text(), re.M)[1]
+          import os, subprocess, sys
+          sys.path.insert(0, 'tools')
+          from app_version import read_version, stale
+          if paths := stale():
+              raise SystemExit('Out of date with apps/desktop/pubspec.yaml: ' + ', '.join(paths))
+          version, _ = read_version()
           if os.environ['RELEASE_TAG'] != 'v' + version:
               raise SystemExit('Release tag must match pubspec version')
           release = '1'

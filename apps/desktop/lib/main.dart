@@ -4,6 +4,8 @@ import 'package:foresight_core/foresight_core.dart'
         privateDirectory,
         configureProfileRuntime,
         openPlatformUri,
+        openForesightBuildNumber,
+        openForesightVersion,
         platformNotification;
 import 'dart:async';
 import 'dart:convert';
