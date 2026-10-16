@@ -177,3 +177,14 @@ Additional REA evidence:
 - `ev_b09a0cfa9881d9c3db87f8f4e65bbeabd84bef34203d45087edef8ef3416df3f`: bounded model structure.
 - `ev_0ce3a5b0e0072c56684d2a8140e7b7bd4a8b8d488cb6bd7c41d37acf5fb48364`: external metadata buffers and GPU selection.
 - `ev_5b977e6af4dea5b4117b1194c11aeb80e6229e2cbacf033d61239281750f1fcd`: both public raw workers reject the original legacy format.
+
+## Legacy execution follow-up
+
+An isolated original-weight CPU evaluator now executes this asset; see
+[legacy detector execution](reference-legacy-detector-runtime.md). All 127 packed
+matrices match their stored row checksums. A question-bearing transcript yields
+a rewritten question, and a statement-only transcript yields empty/EOS. This
+resolves the ability to execute the dedicated weights outside the original app.
+Original GPU arithmetic, complete detector output parity, dependency packaging
+and production integration remain open. The public LiteRT workers still reject
+this legacy container, and the generic production detector has not been replaced.
