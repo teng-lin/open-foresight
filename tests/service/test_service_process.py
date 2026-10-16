@@ -440,6 +440,33 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running)
         assert db.execute('SELECT count(*) FROM transcript WHERE meeting_id=? AND final=1',[meeting]).fetchone()[0]>0
 
 
+def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running):
+    import sqlite3
+    peer=running['peer']
+    owner=running['process']
+    wrong=subprocess.run([str(SERVICE),f'--stop-if-idle={owner.pid+1}'],env=running['env'],capture_output=True,text=True,timeout=15)
+    assert wrong.returncode!=0 and 'ownership changed' in wrong.stderr
+    assert peer.call('status')['pid']==owner.pid and owner.poll() is None
+    peer.call('models.register',{'kind':'speech','path':str(running['asset']),'runtime':str(running['runner'])})
+    meeting=peer.call('meetings.create',{'title':'Upgrade must defer recording'})['id']
+    peer.call('meetings.start',{'id':meeting})
+    refused=subprocess.run([str(SERVICE),f'--stop-if-idle={owner.pid}'],env=running['env'],capture_output=True,text=True,timeout=15)
+    assert refused.returncode!=0 and 'final transcript' in refused.stderr
+    assert owner.poll() is None and peer.call('status')['capture']['active']
+    deadline=time.monotonic()+15
+    while sum(peer.call('status')['capture']['samples'])<24000:
+        assert time.monotonic()<deadline, 'capture stopped after deferred upgrade'
+        time.sleep(.02)
+    peer.call('meetings.stop')
+    stopped=subprocess.run([str(SERVICE),f'--stop-if-idle={owner.pid}'],env=running['env'],capture_output=True,text=True,timeout=15)
+    assert stopped.returncode==0,stopped.stderr
+    assert json.loads(stopped.stdout)=={'stopped':True,'shutdown_verified':True}
+    assert owner.wait(timeout=5)==0
+    with sqlite3.connect('file:'+str(running['root']/'data/application.db')+'?mode=ro',uri=True) as db:
+        assert db.execute('SELECT state FROM meetings WHERE id=?',[meeting]).fetchone()[0]=='completed'
+        assert db.execute('SELECT count(*) FROM transcript WHERE meeting_id=? AND final=1',[meeting]).fetchone()[0]>0
+
+
 def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running):
     peer=running['peer']
     peer.call('models.register',{'kind':'speech','path':str(running['asset']),'runtime':str(running['runner'])})
