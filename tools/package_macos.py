@@ -23,10 +23,11 @@ def helper_bundle(path, executable, identifier):
     macos.mkdir(parents=True)
     destination = macos / executable.name
     shutil.copy2(executable, destination)
+    name = 'Open Foresight' if identifier.endswith('.service') else path.stem
     with (path / 'Contents/Info.plist').open('wb') as stream:
         plistlib.dump({
             'CFBundleExecutable': executable.name, 'CFBundleIdentifier': identifier,
-            'CFBundleName': path.stem, 'CFBundlePackageType': 'APPL',
+            'CFBundleName': name, 'CFBundleDisplayName': name, 'CFBundlePackageType': 'APPL',
             'CFBundleVersion': '1', 'CFBundleShortVersionString': '0.1.0',
             'LSMinimumSystemVersion': '15.0', 'LSUIElement': True, **PURPOSES,
         }, stream)

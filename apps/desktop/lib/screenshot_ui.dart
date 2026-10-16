@@ -3425,6 +3425,24 @@ extension _ScreenshotScreens on _WorkspaceState {
               ),
               const Divider(height: 1),
               settingRow(
+                'Source Search Model',
+                'EmbeddingGemma 2 runs source search locally. The download is 485 MB.',
+                OutlinedButton(
+                  onPressed:
+                      busy ||
+                          recording != null ||
+                          !needsModel(d.store, 'embedding')
+                      ? null
+                      : () => chooseGemma(embeddingOnly: true),
+                  child: Text(
+                    needsModel(d.store, 'embedding')
+                        ? 'Download EmbeddingGemma 2'
+                        : 'Embedding model ready',
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              settingRow(
                 'Transcription Model',
                 'Choose multilingual speech recognition for Chinese and English.',
                 OutlinedButton.icon(

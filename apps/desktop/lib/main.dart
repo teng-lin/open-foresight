@@ -536,7 +536,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   bool modelSetupShown = false;
-  Future<void> chooseGemma({bool firstRun = false}) async {
+  Future<void> chooseGemma({
+    bool firstRun = false,
+    bool embeddingOnly = false,
+  }) async {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -544,7 +547,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         store: d.store,
         firstRun: firstRun,
         needsEmbedding: needsModel(d.store, 'embedding'),
-        needsGeneration: !firstRun || needsModel(d.store, 'generation'),
+        needsGeneration:
+            !embeddingOnly && (!firstRun || needsModel(d.store, 'generation')),
         installEmbedding: (asset, current) async {
           await d.commandCurrent('models.embedding', {
             'path': asset.path,
@@ -552,7 +556,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             'digest': embeddingGemmaModel.digest,
           }, current);
           if (!current()) return;
-          if (mounted) setState(() => embeddingGpu = true);
+          if (mounted)
+            setState(() {
+              embeddingGpu = true;
+              modelState = 'EmbeddingGemma 2 ready for local source search';
+            });
         },
         directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
         library: runtimeConfiguration.nativeLibrary,

@@ -262,7 +262,9 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     child: AlertDialog(
       title: Text(
         !widget.needsGeneration
-            ? 'Set up local source search'
+            ? 'Download EmbeddingGemma 2'
+            : widget.needsEmbedding
+            ? 'Set up local models'
             : widget.firstRun
             ? 'Choose your Gemma model'
             : 'Local Inference Model',
@@ -274,9 +276,27 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Foresight uses models run locally on your device. Choose the Gemma model that best fits your device. This is a one-time download, and you can switch models later in Settings.',
+              Text(
+                widget.needsGeneration
+                    ? 'Choose the Gemma model that best fits your device. Models run locally, and you can switch them later in Settings.'
+                    : 'Local source search needs an embedding model. Download it now or use an existing local model.',
               ),
+              if (!embeddingReady) ...[
+                const SizedBox(height: 16),
+                const ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.manage_search),
+                  title: Text('EmbeddingGemma 2'),
+                  subtitle: Text(
+                    '485 MB download · Required for local source search',
+                  ),
+                ),
+                Text(
+                  widget.needsGeneration
+                      ? 'Download models will install EmbeddingGemma 2 and the selected Gemma model.'
+                      : 'Nothing is downloaded until you choose Download EmbeddingGemma 2.',
+                ),
+              ],
               const SizedBox(height: 20),
               if (widget.needsGeneration)
                 RadioGroup<GemmaModel>(
@@ -306,9 +326,13 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                                       ? null
                                       : () {
                                           setState(() => selected = model);
-                                          install();
+                                          if (embeddingReady) install();
                                         },
-                                  child: const Text('Click to download'),
+                                  child: Text(
+                                    embeddingReady
+                                        ? 'Click to download'
+                                        : 'Select',
+                                  ),
                                 ),
                           value: model,
                           enabled:
@@ -327,8 +351,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
               ),
               const SizedBox(height: 8),
               Text(
-                widget.needsEmbedding
-                    ? 'EmbeddingGemma 2 (485 MB) will also be downloaded for local source search.'
+                !embeddingReady
+                    ? 'You can cancel setup without changing existing model registrations.'
                     : 'Speech models are configured separately in Settings.',
               ),
               if (widget.runner.isEmpty)
@@ -394,6 +418,10 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                 ? 'Done'
                 : error.isNotEmpty
                 ? 'Retry'
+                : !embeddingReady
+                ? widget.needsGeneration
+                      ? 'Download models'
+                      : 'Download EmbeddingGemma 2'
                 : downloaded[selected] == true
                 ? 'Use model'
                 : 'Continue',
