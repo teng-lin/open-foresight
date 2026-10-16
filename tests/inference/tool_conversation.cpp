@@ -25,6 +25,16 @@ int main() {
     auto options = foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Original instructions"}});
     check(options.tools == wrapped && options.system_message == "Original instructions");
     check(foresight::parse_tool_request(wrapped).tools == wrapped);
+    auto history = json::array({{{"role", "user"}, {"content", "Earlier query"}},
+                                {{"role", "assistant"}, {"content", "Earlier answer [Source:8]"}}});
+    auto replay = foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Instructions"}, {"messages", history}});
+    check(replay.messages == history);
+    bool bad_history = false;
+    try {
+      foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Instructions"},
+                                     {"messages", {{{"role", "system"}, {"content", "Invalid history role"}}}}});
+    } catch (const std::exception &) { bad_history = true; }
+    check(bad_history);
     std::istringstream delegated_input(json({{"message", reply}}).dump() + "\n{\"finish\":true}\n");
     std::ostringstream delegated_output;
     int delegated_turns = 0;

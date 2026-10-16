@@ -70,6 +70,23 @@ void main() {
           citations.single['url'],
           'https://example.invalid/controlled-parity-fixture',
         );
+        final searchCount = queries.length;
+        final followup = await domain
+            .askWithWebInConversation(
+              'What was that code? Reply with just the code.',
+              'controlled-model-fixture',
+            )
+            .toList();
+        report['followup'] = followup;
+        report['queries_after_followup'] = List<String>.of(queries);
+        if (reportPath != null) {
+          File(reportPath).writeAsStringSync(
+            const JsonEncoder.withIndent('  ').convert(report),
+          );
+        }
+        expect(followup.last, contains('CEDAR-8492'), reason: '$report');
+        expect(queries.length, searchCount, reason: '$report');
+        expect(store.rows('SELECT id FROM answers'), hasLength(2));
       } finally {
         domain.close();
         runtime.close();

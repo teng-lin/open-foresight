@@ -66,6 +66,25 @@ API = types.SimpleNamespace(Tool=type('Tool', (), {}), SamplerConfig=options,
 
 
 class ToolRunnerTest(unittest.TestCase):
+    def test_history_is_installed_as_messages_without_flattening_or_decoding(self):
+        history = [
+            {'role': 'user', 'content': [{'type': 'text', 'text': 'Earlier query 中文'}]},
+            {'role': 'assistant', 'content': [{'type': 'text', 'text': 'Earlier answer [Source:8]'}]},
+        ]
+        engine = Engine([{'role': 'assistant', 'content': 'Next answer'}])
+        with contextlib.redirect_stdout(io.StringIO()):
+            runner.run_tool_conversation(engine, API, 'New query', {
+                'tools': [{'name': 'google_search'}], 'system_message': 'Instructions',
+                'messages': history}, 256)
+        self.assertEqual(engine.config['messages'], history)
+        self.assertEqual(engine.conversation._lib.messages, [{'role': 'user', 'content': 'New query'}])
+        engine.tokenize = lambda text: list(text)
+        history[0]['content'][0]['text'] = 'X' * 4096
+        with self.assertRaisesRegex(ValueError, '4096-token context'):
+            runner.run_tool_conversation(engine, API, 'New query', {
+                'tools': [{'name': 'google_search'}], 'system_message': 'Instructions',
+                'messages': history}, 256)
+
     def test_delegated_detection_retains_conversation_and_waits_for_finish(self):
         value = {'content': [{'type': 'text', 'text': 'textual tool request'}]}
         answer = {'content': [{'type': 'text', 'text': 'Final answer'}]}

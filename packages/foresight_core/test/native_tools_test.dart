@@ -26,7 +26,9 @@ if prompt=='Reference question':
  assert hashlib.sha256(options['system_message'].encode()).hexdigest()=='71a908bf5b041da7cff1c7ad1d397a62b2fc3d433774bad7dcaf26a351762f78'
 else:
  assert options['system_message']=='Follow the requested task faithfully. Do not invent facts.'
- assert prompt in ['Question','Text fallback question','Turn limit question','Final turn question'], 'System instructions leaked into user content'
+ assert prompt in ['Question','Text fallback question','Turn limit question','Final turn question','History question'], 'System instructions leaked into user content'
+if prompt=='History question':
+ assert options['messages']==[{'role':'user','content':[{'type':'text','text':'Previous query 中文'}]},{'role':'assistant','content':[{'type':'text','text':'Previous answer [Source:8]'}]}]
 assert tools[0]['name']=='google_search'
 assert options['delegate_tool_detection'] is True
 calls=[{'function':{'name':'google_search','arguments':{'query':'Current query'}}}]
@@ -117,6 +119,37 @@ print('answer '+json.dumps(answer),flush=True)
           );
           expect(events.last['status'], 'completed');
           expect(runtime.generating, isFalse);
+        },
+      );
+
+      test(
+        'structured history crosses FFI separately from the current query',
+        () async {
+          final events = await runtime
+              .generateWithTools(
+                'history',
+                'History question',
+                tools: [referenceGoogleSearchTool()],
+                messages: [
+                  referenceTextMessage('user', 'Previous query 中文'),
+                  referenceTextMessage(
+                    'assistant',
+                    'Previous answer [Source:8]',
+                  ),
+                ],
+                dispatcher: ReferenceToolDispatcher({
+                  'google_search': (_) async => 'Search result',
+                }),
+              )
+              .toList();
+          expect(events.last['status'], 'completed');
+          final response = events
+              .where((event) => event['type'] == 'delta')
+              .single['response'];
+          expect(
+            response,
+            referenceTextMessage('assistant', 'Answer [Source:1]'),
+          );
         },
       );
 

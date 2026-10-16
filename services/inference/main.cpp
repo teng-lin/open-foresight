@@ -224,7 +224,8 @@ public:
     const auto tool_request = tools.is_null() ? foresight::ToolRequest{} :
                                                foresight::parse_tool_request(tools);
     const auto tool_tokens = tools.is_null() ? 0 :
-        tokens(tool_request.system_message) + tokens(tool_request.tools.dump());
+        tokens(tool_request.system_message) + tokens(tool_request.tools.dump()) +
+        (tool_request.messages.empty() ? 0 : tokens(tool_request.messages.dump()));
     if (tokens(prompt) + tool_tokens + budget + 256 > 4096)
       throw std::runtime_error(
           "Prompt and output reserve exceed the 4096-token context");
@@ -254,6 +255,10 @@ public:
         throw std::runtime_error("Tools cannot be combined with a response schema");
       auto definitions = tool_request.tools.dump();
       LM(conversation_config_set_tools)(config.get(), definitions.c_str());
+      if (!tool_request.messages.empty()) {
+        auto messages = tool_request.messages.dump();
+        LM(conversation_config_set_messages)(config.get(), messages.c_str());
+      }
     }
     if (!grounded)
       LM(conversation_config_set_filter_channel_content_from_kv_cache)(

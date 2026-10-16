@@ -30,3 +30,4 @@ export 'src/reference_tools.dart';
 export 'src/chat_sources.dart';
 export 'src/reference_chat_prompt.dart';
 export 'src/reference_tool_parser.dart';
+export 'src/reference_chat_history.dart';

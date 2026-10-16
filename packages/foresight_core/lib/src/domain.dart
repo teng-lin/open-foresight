@@ -15,6 +15,7 @@ import 'web_content.dart';
 import 'reference_tools.dart';
 import 'chat_sources.dart';
 import 'reference_chat_prompt.dart';
+import 'reference_chat_history.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
 class Domain {
@@ -343,6 +344,7 @@ class Domain {
       List<Map<String, Object?>> citations,
       String model, {
       required String conversation,
+      Map<String, dynamic>? modelResponse,
     }) {
       ensureCurrent();
       store.db.execute('SAVEPOINT persist_conversation_answer');
@@ -355,6 +357,7 @@ class Domain {
           model,
           conversation: conversation,
           requestId: requestId,
+          modelResponse: modelResponse,
         );
         if (meetingId != null) {
           // Capture the exact inserted row before any other client can write.
@@ -545,12 +548,14 @@ class Domain {
       throw StateError(
         'Generation model unavailable. Retrieved ${citations.length} excerpts; configure a local generator.',
       );
-    final history = store
+    final historyRows = store
         .rows(
-          'SELECT question,body FROM answers WHERE conversation=? AND status=\'completed\' ORDER BY id DESC LIMIT 4',
+          'SELECT question,body,model_response FROM answers WHERE conversation=? AND status=\'completed\' ORDER BY id DESC LIMIT 4',
           [conversation],
         )
         .reversed
+        .toList();
+    final history = historyRows
         .map(
           (a) =>
               'User: ${a['question']}\nAssistant: ${(a['body'] as String).substring(0, (a['body'] as String).length.clamp(0, 1500))}',
@@ -559,14 +564,14 @@ class Domain {
     final boundedHistory = boundUtf8(history, 500);
     final boundedQuestion = boundUtf8(question, 400);
     final prompt = useWeb
-        ? '${boundedHistory.isEmpty ? '' : 'Conversation:\n$boundedHistory\n\n'}'
-              '${referenceChatPrompt(question, context: context.toString())}'
+        ? referenceChatPrompt(question, context: context.toString())
         : groundedAnswerPrompt(
             boundedHistory,
             context.toString(),
             boundedQuestion,
           );
     var body = '', raw = '', status = 'failed';
+    Map<String, dynamic>? modelResponse;
     final allowed = citations.map((c) => c['citation'] as String).toSet();
     final schema = useWeb ? <String, dynamic>{} : groundedAnswerSchema(allowed);
     if (localGrounding && !useWeb) {
@@ -599,6 +604,7 @@ class Domain {
               requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}',
               prompt,
               tools: [referenceGoogleSearchTool()],
+              messages: referenceChatHistory(historyRows),
               systemPrompt: referenceChatInstructions,
               dispatcher: ReferenceToolDispatcher({
                 'google_search': (args) async {
@@ -638,6 +644,9 @@ class Domain {
       await for (final event in events) {
         ensureCurrent();
         if (event['type'] == 'delta') {
+          if (useWeb && event['response'] is Map<String, dynamic>) {
+            modelResponse = event['response'] as Map<String, dynamic>;
+          }
           raw += event['text'] as String? ?? '';
           body = useWeb ? raw : provisionalAnswer(raw) ?? body;
           yield body;
@@ -683,6 +692,7 @@ class Domain {
         citations,
         result?['method'] == 'source-fallback' ? 'source-fallback' : model,
         conversation: conversation,
+        modelResponse: useWeb && status == 'completed' ? modelResponse : null,
       );
     } catch (e) {
       if (!_closed && (current == null || current()))

@@ -196,6 +196,7 @@ class NativeRuntime {
     String prompt, {
     required List<Map<String, dynamic>> tools,
     required ReferenceToolDispatcher dispatcher,
+    List<Map<String, dynamic>> messages = const [],
     String systemPrompt =
         'Follow the requested task faithfully. Do not invent facts.',
     Duration timeout = const Duration(minutes: 5),
@@ -205,6 +206,7 @@ class NativeRuntime {
     prompt,
     tools: tools,
     toolDispatcher: dispatcher,
+    initialMessages: messages,
     systemPrompt: systemPrompt,
     timeout: timeout,
     maxOutputTokens: maxOutputTokens,
@@ -218,6 +220,7 @@ class NativeRuntime {
     Map<String, dynamic>? responseSchema,
     List<Map<String, dynamic>>? tools,
     ReferenceToolDispatcher? toolDispatcher,
+    List<Map<String, dynamic>> initialMessages = const [],
     Duration timeout = const Duration(minutes: 5),
     int maxOutputTokens = 256,
   }) async* {
@@ -263,6 +266,7 @@ class NativeRuntime {
               'tools': tools,
               'system_message': systemPrompt,
               'delegate_tool_detection': true,
+              'messages': initialMessages,
             }).toNativeUtf8()
           : responseSchema == null
           ? nullptr.cast<Utf8>()
@@ -452,7 +456,7 @@ class NativeRuntime {
           } else {
             throw FormatException('Invalid tool answer content');
           }
-          yield {...event, 'type': 'delta', 'text': text};
+          yield {...event, 'type': 'delta', 'text': text, 'response': response};
           continue;
         }
         yield event;

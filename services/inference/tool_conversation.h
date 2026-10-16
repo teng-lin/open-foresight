@@ -10,6 +10,7 @@ struct ToolRequest {
   nlohmann::json tools;
   std::string system_message = "Follow the requested task faithfully. Do not invent facts.";
   bool delegate_tool_detection = false;
+  nlohmann::json messages = nlohmann::json::array();
 };
 
 inline nlohmann::json wrap_tools(const nlohmann::json &tools) {
@@ -32,6 +33,14 @@ inline ToolRequest parse_tool_request(const nlohmann::json &value) {
     result.tools = wrap_tools(value.at("tools"));
     result.system_message = value.at("system_message").get<std::string>();
     result.delegate_tool_detection = value.value("delegate_tool_detection", false);
+    result.messages = value.value("messages", nlohmann::json::array());
+    if (!result.messages.is_array())
+      throw std::runtime_error("Conversation messages must be an array");
+    for (const auto &message : result.messages) {
+      if (!message.is_object() || !message.contains("content") ||
+          (message.value("role", "") != "user" && message.value("role", "") != "assistant"))
+        throw std::runtime_error("Invalid conversation history message");
+    }
   } else {
     result.tools = wrap_tools(value);
   }

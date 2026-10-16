@@ -32,6 +32,7 @@ class ToolRuntime extends NativeRuntime {
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   late Future<String> Function(ReferenceToolDispatcher) answer;
   final prompts = <String>[];
+  final histories = <List<Map<String, dynamic>>>[];
   @override
   Map<String, dynamic> get effectiveState => {
     'state': 'ready',
@@ -43,16 +44,23 @@ class ToolRuntime extends NativeRuntime {
     String prompt, {
     required List<Map<String, dynamic>> tools,
     required ReferenceToolDispatcher dispatcher,
+    List<Map<String, dynamic>> messages = const [],
     String systemPrompt = '',
     Duration timeout = const Duration(minutes: 5),
     int maxOutputTokens = 256,
   }) async* {
     prompts.add(prompt);
+    histories.add(messages);
     expect(systemPrompt, referenceChatInstructions);
     expect(prompt, contains('[Current Date: '));
     expect(prompt, contains('Query: '));
     expect(tools.single['name'], 'google_search');
-    yield {'type': 'delta', 'text': await answer(dispatcher)};
+    final text = await answer(dispatcher);
+    yield {
+      'type': 'delta',
+      'text': text,
+      'response': referenceTextMessage('assistant', text),
+    };
     yield {'type': 'done', 'status': 'completed'};
   }
 }
@@ -287,4 +295,67 @@ void main() {
       await server.shutdown();
     }
   });
+  test(
+    'web history replays plain queries and pre-renumbered structured responses',
+    () async {
+      runtime.answer = (dispatcher) async {
+        await dispatcher.handle([searchCall('first')]);
+        return 'Second result [Source:2]';
+      };
+      await domain
+          .askWithWebInConversation('First question', 'history')
+          .toList();
+      final first = store.rows('SELECT * FROM answers').single;
+      expect(first['body'], 'Second result [Source:1]');
+      expect(
+        jsonDecode(first['model_response'] as String),
+        referenceTextMessage('assistant', 'Second result [Source:2]'),
+      );
+      runtime.answer = (_) async => 'Follow-up answer';
+      await domain
+          .askWithWebInConversation('Follow-up question', 'history')
+          .toList();
+      expect(runtime.histories.last, [
+        referenceTextMessage('user', 'First question'),
+        referenceTextMessage('assistant', 'Second result [Source:2]'),
+      ]);
+      expect(runtime.prompts.last, isNot(contains('Conversation:')));
+      expect(runtime.prompts.last, isNot(contains('First question')));
+      await domain
+          .askWithWebInConversation('Another conversation', 'separate')
+          .toList();
+      expect(runtime.histories.last, isEmpty);
+    },
+  );
+
+  test(
+    'legacy completed answers become full structured text and failed answers stay out',
+    () async {
+      final longBody = 'Legacy answer ' * 200;
+      store.answer(
+        'Old question',
+        longBody,
+        'completed',
+        [],
+        'legacy',
+        conversation: 'history',
+      );
+      store.answer(
+        'Failed question',
+        'Partial answer',
+        'failed',
+        [],
+        'legacy',
+        conversation: 'history',
+      );
+      runtime.answer = (_) async => 'New answer';
+      await domain
+          .askWithWebInConversation('Next question', 'history')
+          .toList();
+      expect(runtime.histories.last, [
+        referenceTextMessage('user', 'Old question'),
+        referenceTextMessage('assistant', longBody),
+      ]);
+    },
+  );
 }

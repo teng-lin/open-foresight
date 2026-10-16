@@ -71,6 +71,11 @@ class Store {
         .any((r) => r['name'] == 'request_id')) {
       db.execute('ALTER TABLE answers ADD COLUMN request_id TEXT');
     }
+    if (!db
+        .select('PRAGMA table_info(answers)')
+        .any((r) => r['name'] == 'model_response')) {
+      db.execute('ALTER TABLE answers ADD COLUMN model_response TEXT');
+    }
     db.execute(
       'CREATE INDEX IF NOT EXISTS answer_request_id ON answers(request_id)',
     );
@@ -260,8 +265,9 @@ class Store {
     String model, {
     String conversation = 'desktop',
     String? requestId,
+    Map<String, dynamic>? modelResponse,
   }) => db.execute(
-    'INSERT INTO answers(question,body,status,citations,model,created,conversation,request_id) VALUES(?,?,?,?,?,?,?,?)',
+    'INSERT INTO answers(question,body,status,citations,model,created,conversation,request_id,model_response) VALUES(?,?,?,?,?,?,?,?,?)',
     [
       question,
       body,
@@ -271,6 +277,7 @@ class Store {
       DateTime.now().millisecondsSinceEpoch,
       conversation,
       requestId,
+      modelResponse == null ? null : jsonEncode(modelResponse),
     ],
   );
   void saveNote(int? id, String title, String body) {

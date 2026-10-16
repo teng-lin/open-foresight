@@ -52,9 +52,9 @@ link its late result. Toggle persistence and exact original UI scope are not
 proven; the port currently keeps toggle state only for the workspace lifetime.
 
 The recovered instruction string and text-only date/context/query envelope are
-now used for web-enabled sends; see the prompt section below. Structured history,
-sampling and the 4096-token native context have not been shown equivalent to the
-original. The current tool path
+now used for web-enabled sends; see the prompt section below. Structured message replay is now implemented; see [history evidence](reference-chat-history.md).
+Its memory compression policy, sampling and model/context configuration remain
+under investigation. The current tool path
 publishes its final model answer in one delta; original streaming remains to be reproduced. The [textual tool-call fallback](reference-tool-fallback.md)
 is now integrated and has a controlled-provider real-model check.
 
@@ -139,10 +139,10 @@ fields. The C++ and macOS Python backends install those instructions as the
 conversation's system message and send the user prompt separately. Legacy
 array-only native requests keep their generic system default. Prompt admission
 counts system and tool-definition tokens as well as user text and output reserve.
-Replayed structured history, conversation cloning, original token limits and
-streaming remain integration work; exact prompt text and role placement alone
-do not establish those behaviors. Prior history still uses
-the port's bounded textual prefix. Tests verify the recovered instruction hash,
+Structured user/assistant replay is now implemented. Conversation cloning,
+automatic memory compression, original token configuration and streaming remain
+integration work. See the [history ledger](reference-chat-history.md) for the
+remaining four-answer window and the recovered compression policy. Tests verify the recovered instruction hash,
 date/query envelope, optional context and UTF-16 truncation, plus its use by the
 application's web-generation call.
 

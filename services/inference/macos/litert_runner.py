@@ -18,7 +18,13 @@ import sys
 def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
     system = 'Follow the requested task faithfully. Do not invent facts.'
     delegate_tool_detection = False
+    messages = []
     if isinstance(definitions, dict):
+        messages = definitions.get('messages', [])
+        if not isinstance(messages, list) or any(
+                not isinstance(message, dict) or 'content' not in message or
+                message.get('role') not in ('user', 'assistant') for message in messages):
+            raise ValueError('Invalid conversation history messages')
         delegate_tool_detection = definitions.get('delegate_tool_detection', False)
         if not isinstance(delegate_tool_detection, bool):
             raise ValueError('Tool detection delegation must be a boolean')
@@ -45,11 +51,14 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
     encoded_tools = json.dumps([tool.get_tool_description() for tool in delegated],
                                ensure_ascii=False, separators=(',', ':'))
     if (len(engine.tokenize(prompt)) + len(engine.tokenize(system)) +
-            len(engine.tokenize(encoded_tools)) + budget + 256 > 4096):
+            len(engine.tokenize(encoded_tools)) +
+            (len(engine.tokenize(json.dumps(messages, ensure_ascii=False, separators=(',', ':')))) if messages else 0) +
+            budget + 256 > 4096):
         raise ValueError('Prompt and output reserve exceed the 4096-token context')
 
     with engine.create_conversation(
             system_message=system,
+            messages=messages or None,
             tools=delegated,
             automatic_tool_calling=False,
             sampler_config=litert_lm.SamplerConfig(top_k=40, top_p=0.9, temperature=0.4, seed=0),

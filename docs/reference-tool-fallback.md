@@ -79,7 +79,8 @@ closure, deadlines and nonblocking reply transport apply to these decisions.
 Legacy worker `tool` frames remain supported. LiteRT engine status now reports
 `tools: true`; the GGUF backend retains `tools: false`.
 
-Streaming and original structured history/conversation cloning remain open.
+Structured replay is now implemented; [memory compression](reference-chat-history.md),
+streaming and original conversation cloning remain open.
 This implementation receives each complete model turn before extraction.
 
 ## Verification
