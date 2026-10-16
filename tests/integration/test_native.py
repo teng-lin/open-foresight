@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 import sys
 
-LIBRARY = sys.argv.pop(1) if len(sys.argv)>1 and sys.argv[1].endswith('.so') else os.environ.get('FORESIGHT_NATIVE_LIBRARY','build/native/libforesight_native.so')
+LIBRARY = sys.argv.pop(1) if len(sys.argv)>1 and sys.argv[1].endswith(('.so', '.dylib')) else os.environ.get('FORESIGHT_NATIVE_LIBRARY', 'build/native/libforesight_native' + ('.dylib' if sys.platform == 'darwin' else '.so'))
 
 def load(path=LIBRARY):
     lib=C.CDLL(path)
@@ -32,7 +32,9 @@ def load(path=LIBRARY):
         ('fs_speech_destroy',[C.c_void_p],None),
         ('fs_speech_cancel',[C.c_void_p],C.c_int),
         ('fs_capture_start',[C.c_char_p,C.c_int,C.c_int],C.c_void_p),
+        ('fs_capture_finish',[C.c_void_p],None),
         ('fs_capture_stop',[C.c_void_p],None),
+        ('fs_audio_capabilities',[],C.c_void_p),
         ('fs_event_poll',[C.c_void_p,C.c_int],C.c_void_p),
         ('fs_string_free',[C.c_void_p],None),
         ('fs_pcm_rms',[C.POINTER(C.c_int16),C.c_size_t],C.c_double),
@@ -59,6 +61,32 @@ class NativeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.lib=load()
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS permission contract')
+    def test_macos_capture_permission_failure_and_finish_retains_events(self):
+        capabilities = owned_json(self.lib, self.lib.fs_audio_capabilities())
+        self.assertEqual(capabilities['backend'], 'core_audio_tap')
+        self.assertEqual(capabilities['system_audio'], 'permission_checked_on_capture')
+        if capabilities['microphone'] == 'authorized':
+            self.skipTest('Microphone already granted; do not open a physical recording in CI')
+        handle = self.lib.fs_capture_start(b'auto', 0, 48000)
+        self.assertTrue(handle)
+        try:
+            deadline = time.monotonic() + 2
+            events = []
+            while time.monotonic() < deadline:
+                event = owned_json(self.lib, self.lib.fs_event_poll(handle, 100))
+                if event:
+                    events.append(event)
+                    if event.get('state') == 'failed': break
+            self.assertTrue(any(event.get('code') == 'microphone_permission_required' for event in events), events)
+            self.lib.fs_capture_finish(handle)
+            # finish joins but keeps the final lifecycle event available to poll.
+            final = owned_json(self.lib, self.lib.fs_event_poll(handle, 100))
+            self.assertEqual(final['state'], 'stopped')
+        finally:
+            self.lib.fs_capture_stop(handle)
+        self.assertEqual(owned_json(self.lib, self.lib.fs_audio_capabilities())['microphone'], capabilities['microphone'])
+
     def setUp(self):
         self.directory=tempfile.TemporaryDirectory();self.path=Path(self.directory.name)
         self.model=self.path/'asset';self.model.write_text('test only')
@@ -129,6 +157,8 @@ class NativeTest(unittest.TestCase):
         self.assertEqual(self.lib.fs_resample_pcm(inp,6,48000,out,3,24000),3);self.assertEqual(list(out),[0,2000,4000])
     def test_capture_fixed_playback_frames_and_legacy_microphone_map(self):
         runner=self.path/'pw-record';runner.write_text('#!/usr/bin/env python3\nimport os,time,sys\ntarget=sys.argv[sys.argv.index("--target")+1]\nif target != "auto":\n props=sys.argv[sys.argv.index("--properties")+1]\n assert "node.dont-fallback = true" in props\n assert "node.dont-reconnect = true" in props\nfor n in [1,500,4000,3219]:\n os.write(1,b"\\0"*n);time.sleep(.02)\ntime.sleep(60)\n');runner.chmod(0o755)
+        override=patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME':str(runner)})
+        override.start()
         old=os.environ['PATH'];os.environ['PATH']=str(self.path)+':'+old
         try:
             for playback,rate,target in [(0,48000,b'auto'),(1,48000,b'auto'),(1,16000,b'auto'),(0,48000,b'selected-microphone'),(1,48000,b'selected-playback')]:
@@ -144,13 +174,43 @@ class NativeTest(unittest.TestCase):
                     self.assertEqual(frame['event']['type'],'output' if playback else 'input')
                     self.assertEqual(set(frame['event']),{'type','payload','volume','sampleRate','bufferDurationMs'} if playback else {'type','payload','volume'})
                     if playback:self.assertEqual(len(base64.b64decode(frame['data'])),rate*2*40//1000)
-        finally:os.environ['PATH']=old
+        finally:
+            os.environ['PATH']=old
+            override.stop()
+    def test_capture_finish_preserves_partial_final_frame(self):
+        import base64
+        runner=self.path/'capture-tail'
+        runner.write_text('#!/usr/bin/env python3\nimport os,time\nos.write(1,b"A"*18)\ntime.sleep(60)\n')
+        runner.chmod(0o755)
+        with patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME': str(runner)}):
+            handle=self.lib.fs_capture_start(b'auto',1,48000)
+        self.assertTrue(handle)
+        try:
+            deadline=time.monotonic()+3
+            while time.monotonic()<deadline:
+                event=owned_json(self.lib,self.lib.fs_event_poll(handle,100))
+                if event and event.get('state') == 'capturing': break
+            else: self.fail('capture fixture did not start')
+            self.lib.fs_capture_finish(handle)
+            events=[]
+            while True:
+                event=owned_json(self.lib,self.lib.fs_event_poll(handle,0))
+                if not event: break
+                events.append(event)
+            frames=[event for event in events if event['type']=='pcm']
+            self.assertEqual([base64.b64decode(frame['data']) for frame in frames], [b'A'*18])
+            self.assertEqual(events[-1]['state'], 'stopped')
+        finally: self.lib.fs_capture_stop(handle)
+
     def test_capture_device_loss_retries_discard_partial_playback_frame(self):
         import base64
         marker=self.path/'capture-attempt'
         runner=self.path/'pw-record'
         runner.write_text('#!/usr/bin/env python3\nimport os,time,pathlib\np=pathlib.Path('+repr(str(marker))+')\nif not p.exists():\n p.write_text("started")\n os.write(1,b"A"*17)\nelse:\n os.write(1,b"B"*3840)\n time.sleep(60)\n')
-        runner.chmod(0o755);old=os.environ['PATH'];os.environ['PATH']=str(self.path)+':'+old
+        runner.chmod(0o755)
+        override=patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME':str(runner)})
+        override.start()
+        old=os.environ['PATH'];os.environ['PATH']=str(self.path)+':'+old
         h=None
         try:
             h=self.lib.fs_capture_start(b'auto',1,48000);events=[];deadline=time.monotonic()+5
@@ -173,6 +233,7 @@ class NativeTest(unittest.TestCase):
         finally:
             if h:self.lib.fs_capture_stop(h)
             os.environ['PATH']=old
+            override.stop()
     def test_speech_cancel_finish_and_destroy_active_reaps_worker(self):
         marker=self.path/'speech-worker-pid'
         runner=self.runner('import os,time,pathlib\npathlib.Path('+repr(str(marker))+').write_text(str(os.getpid()))\ntime.sleep(60)\n')

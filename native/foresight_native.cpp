@@ -3,6 +3,7 @@
 #ifdef __APPLE__
 #include <libproc.h>
 #include <sys/sysctl.h>
+#include "macos_audio.h"
 #endif
 #include <algorithm>
 #include <atomic>
@@ -273,7 +274,7 @@ std::string base64(const std::vector<unsigned char> &in) {
   return out;
 }
 struct Capture : Worker {
-  std::string target;
+  std::string target, runtime;
   bool playback = false;
   int rate = 48000;
   uint64_t dropped = 0;
@@ -311,6 +312,20 @@ void audio_frame(Capture &c, const std::vector<unsigned char> &bytes) {
 } // namespace
 extern "C" {
 int fs_abi_version() { return 1; }
+char *fs_audio_capabilities() {
+#ifdef __APPLE__
+  return owned(fs_macos_capabilities());
+#else
+  return owned("{\"backend\":\"pipewire\"}");
+#endif
+}
+int fs_audio_request_microphone() {
+#ifdef __APPLE__
+  return fs_macos_request_microphone() ? 0 : 1;
+#else
+  return 0;
+#endif
+}
 void fs_string_free(char *p) { free(p); }
 char *fs_event_poll(void *h, int timeout) {
   if (!h)
@@ -656,15 +671,29 @@ void *fs_capture_start(const char *target, int playback, int rate) {
     return nullptr;
   auto *c = new Capture;
   c->target = target && *target ? target : "auto";
+  if (const char *runtime = getenv("FORESIGHT_CAPTURE_RUNTIME"); runtime && *runtime) {
+    if (runtime[0] != '/' || access(runtime, X_OK) != 0) { delete c; return nullptr; }
+    c->runtime = runtime;
+  }
   c->playback = playback != 0;
   c->rate = rate;
   c->active = true;
   c->thread = std::thread([c] {
+#ifdef __APPLE__
+    if (c->runtime.empty()) {
+    fs_macos_capture(c->target, c->playback, c->rate, c->cancel,
+                     [c](const auto &bytes) { audio_frame(*c, bytes); },
+                     [c](const auto &event) { c->emit(event); });
+    c->active = false;
+    c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/audio_state_v1\",\"state\":\"stopped\"}");
+    return;
+    }
+#endif
     int attempt = 0;
     while (!c->cancel) {
       c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
               "audio_state_v1\",\"state\":\"connecting\"}");
-      std::vector<std::string> args{"pw-record",  "--raw",
+      std::vector<std::string> args{c->runtime.empty() ? "pw-record" : c->runtime,  "--raw",
                                     "--format",   "s16",
                                     "--rate",     std::to_string(c->rate),
                                     "--channels", "1",
@@ -703,8 +732,11 @@ void *fs_capture_start(const char *target, int playback, int rate) {
             break;
         }
       });
-      if (c->cancel)
+      if (c->cancel) {
+        residual.resize(residual.size() & ~size_t(1));
+        if (!residual.empty()) audio_frame(*c, residual);
         break;
+      }
       c->emit("{\"type\":\"gap\",\"channel\":\"foresight.linux/"
               "audio_state_v1\",\"reason\":\"device_or_pipewire_lost\","
               "\"discarded_bytes\":" +
@@ -724,6 +756,12 @@ void *fs_capture_start(const char *target, int playback, int rate) {
             "audio_state_v1\",\"state\":\"stopped\"}");
   });
   return c;
+}
+void fs_capture_finish(void *h) {
+  if (!h) return;
+  auto *c = static_cast<Capture *>(h);
+  c->stop();
+  c->join();
 }
 void fs_capture_stop(void *h) {
   if (!h)
