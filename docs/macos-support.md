@@ -64,12 +64,29 @@ sealed into the application.
 ```
 
 The default signing identity `-` produces an ad-hoc development artifact. For a
+development signature only, library validation is disabled because ad-hoc code
+has no Team ID to match its Python extensions and FFI libraries. Developer ID
+release signing retains library validation and signs every nested binary with
+the same identity. The standalone Dart service and MCP executable require
+`allow-unsigned-executable-memory` for their embedded AOT snapshot loader, in both
+development and release signing. That exception is restricted to those two
+executables and the service bundle's executable signature; it is not applied to
+Flutter, Python, or native workers. `allow-jit` is not needed. For a
 release, supply `--identity 'Developer ID Application: …'`, an existing
 `--notary-profile`, and `--archive /path/to/Open-Foresight.zip`. The packager
 relocates non-system Mach-O dependencies, audits arm64 and minimum OS metadata,
 signs nested binaries before containers, submits notarization, staples the ticket,
 and assesses the app. It writes its provenance/verification manifest beside the
 sealed app. Release builds require both model runtimes and dependency licenses.
+
+The AOT exception follows Dart 3.9.2's
+[Mach-O snapshot loader](https://github.com/dart-lang/sdk/blob/3.9.2/runtime/bin/macho_loader.cc)
+and [Mac memory mapping implementation](https://github.com/dart-lang/sdk/blob/3.9.2/runtime/bin/file_macos.cc):
+the loader reserves anonymous writable memory, copies executable snapshot
+segments into it, and changes protection to executable. It does not use a
+`MAP_JIT` mapping in that path. On this host, baseline and `allow-jit`-only
+signatures were killed; the unsigned-memory entitlement alone allowed both AOT
+entrypoints to execute. Developer ID notarization remains its own release gate.
 
 `Contents/Resources/runtime.json` records bundle-relative resources, installation
 identity, and the source revision. The nested service receives the same runtime

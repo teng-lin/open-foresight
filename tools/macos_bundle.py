@@ -9,6 +9,8 @@ import os
 import re
 import shutil
 import subprocess
+import plistlib
+import tempfile
 
 MACHO = {b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
          b'\xfe\xed\xfa\xce', b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
@@ -177,14 +179,45 @@ def audit_dependencies(app):
 
 
 def sign_application(app, identity, entitlements):
-    # An ad-hoc identity is a runnable developer artifact, never a release.
-    for binary in sorted(binaries(app), key=lambda p: len(p.parts), reverse=True):
-        run('codesign', '--force', '--sign', identity, '--options', 'runtime',
-            '--timestamp=none' if identity == '-' else '--timestamp',
-            '--entitlements', entitlements, binary)
-    containers = [p for p in app.rglob('*') if p.is_dir() and p.suffix in ('.app', '.framework') and not p.is_symlink()]
-    for container in sorted(containers, key=lambda p: len(p.parts), reverse=True) + [app]:
-        run('codesign', '--force', '--sign', identity, '--options', 'runtime',
-            '--timestamp=none' if identity == '-' else '--timestamp',
-            '--entitlements', entitlements, container)
-    run('codesign', '--verify', '--deep', '--strict', app)
+    if identity == '-':
+        # Ad-hoc signatures have no Team ID, so hardened runtime cannot match
+        # the host with its re-signed Python/FFI modules. Keep this exception
+        # exclusive to development; Developer ID signs all code with one team.
+        with tempfile.TemporaryDirectory(prefix='foresight-dev-sign-') as folder:
+            with Path(entitlements).open('rb') as stream:
+                values = plistlib.load(stream)
+            values['com.apple.security.cs.disable-library-validation'] = True
+            development = Path(folder) / 'Development.entitlements'
+            with development.open('wb') as stream:
+                plistlib.dump(values, stream)
+            return _sign_application(app, identity, development)
+    return _sign_application(app, identity, entitlements)
+
+
+def _sign_application(app, identity, entitlements):
+    app = app.resolve()
+    service = app / 'Contents/Library/Services/Open Foresight Service.app'
+    aot_paths = {app / 'Contents/MacOS/foresight-mcp', service,
+                 service / 'Contents/MacOS/foresight-service'}
+    with tempfile.TemporaryDirectory(prefix='foresight-aot-sign-') as folder:
+        with Path(entitlements).open('rb') as stream:
+            values = plistlib.load(stream)
+        # Dart's embedded AOT snapshot is mapped as executable memory outside
+        # the Mach-O image. This is required even without JIT compilation.
+        values['com.apple.security.cs.allow-unsigned-executable-memory'] = True
+        aot = Path(folder) / 'AOT.entitlements'
+        with aot.open('wb') as stream:
+            plistlib.dump(values, stream)
+
+        def sign(path):
+            selected = aot if path.resolve() in aot_paths else entitlements
+            run('codesign', '--force', '--sign', identity, '--options', 'runtime',
+                '--timestamp=none' if identity == '-' else '--timestamp',
+                '--entitlements', selected, path)
+
+        for binary in sorted(binaries(app), key=lambda p: len(p.parts), reverse=True):
+            sign(binary)
+        containers = [p for p in app.rglob('*') if p.is_dir() and p.suffix in ('.app', '.framework') and not p.is_symlink()]
+        for container in sorted(containers, key=lambda p: len(p.parts), reverse=True) + [app]:
+            sign(container)
+        run('codesign', '--verify', '--deep', '--strict', app)
