@@ -250,3 +250,13 @@ Current core validation: **97 passed, 1 opt-in model test skipped**; analyzer
 clean. See the latest section of proactive-reference-trace.md for the exact
 native paths, output rules, evidence and remaining integration requirements.
 No physical audio or original detector generation was observed in this pass.
+
+### Search transport and callback protocol
+
+The recovered search client and callback are implemented in `web_search.dart`.
+Eleven focused tests cover the request and result contract; the full core suite
+passes 108 tests (one opt-in skipped), with clean analysis. This is not yet wired
+into production answers: native page summarization, tool/citation integration
+and release credential provisioning remain. No separate user project setup was
+added. See [the search evidence](ida-search-investigation.md) for exact recovered
+constants, IDA addresses and runtime limits.

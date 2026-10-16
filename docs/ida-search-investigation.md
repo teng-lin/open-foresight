@@ -114,3 +114,85 @@ After the focused query-pipeline investigation, `idb_save` returned `ok: true`.
 The worker then shut down normally on SIGINT and reported `All sessions closed`;
 its unified-exec session completed with exit code zero. The saved analysis is
 retained intentionally for the ongoing reconstruction, rather than deleted.
+
+## Recovered search protocol and first implementation
+
+The focused snapshot reader now resolves the public request/format constants:
+
+- GET `https://customsearch.googleapis.com/customsearch/v1`, with `cx` equal to
+  `67f1d2112dbb54ce4`, `num=10`, and `q` equal to the untrimmed input.
+- The handler's argument key is `query`. Null/empty produces
+  `Error: Search query was not provided.`; null/empty result items produce
+  `No results found.`.
+- Pool entry 11620 is a Duration with unboxed microseconds 5,000,000 at raw
+  offset +8. Both search and each page-summary future use this five-second
+  timeout. The layout probe checks the class unboxed-field bitmap.
+- The first three ranks are selected before filtering missing links. Summaries
+  run concurrently. Null links are excluded from output; empty links remain in
+  output but are not summarized. Null title/snippet becomes an empty string.
+- Output is exactly `title: <title>\nsummary: <summary>` for nonempty summary,
+  otherwise `title: <title>\nsnippet: <snippet>`. Whitespace is not trimmed.
+- Sources are positional `(title, URL)` records. The instructions at
+  0x1008e603c–0x1008e6044 pass title in X2 and link in X3 to AllocateRecord2.
+  Results/sources preserve rank. Duplicate URLs are not deduplicated: each gets
+  a summary task and the last completed nonempty summary wins in the shared map.
+- `_summarizeLinkContent` has no catch around its timeout/await. Summary failure
+  propagates through Future.wait; a missing/empty summary uses the snippet.
+
+REA evidence: `ev_771e591203ef243448bd334e7c4623df56fbfeed0ca15b5192247d1389703703`
+(public constants/duration),
+`ev_4f833cb59af9a76dfe1632317bb1827c5f7c7f926de025bc9a12aac31c11ef16`
+(argument and HTTP-method constants), and
+`ev_11537f3930a17d5c8e15d0040caaec0eac81eb508861bd0354859eeb6955d057`
+(source-record assembly). Both focused IDA batch workers closed normally.
+The reader explicitly excludes API-key entry 27425.
+
+`packages/foresight_core/lib/src/web_search.dart` implements the search transport
+and callback protocol, with an injectable summary backend. The transport owns
+and releases one HTTP client per request, including timeout. Its status-only
+HTTP error is a reconstruction choice; exact original HTTP error presentation
+has not been established. No credential from the reference is redistributed.
+The service accepts a distribution credential internally; no user project
+configuration screen is introduced.
+
+This is not yet an end-to-end web-answer feature. Production wiring, release
+credential provisioning, native fetch/summarization, tool dispatch and cancellation still need completion. The original summarizer
+passes budget 100, whose unit is unproven, and defaults to three candidates
+before choosing the highest score. The injected interface retains the budget
+without claiming those native internals have been reproduced.
+
+Verification: eleven focused tests pass, including a loopback HTTP server checking
+encoded parameters, nullable items, errors and the response-body deadline;
+callback fixtures check concurrency, order, duplicates, empty/null links,
+whitespace, fallback, and exception propagation. Full core suite: 108 passed,
+one opt-in skipped; analyzer clean. No real search or native model inference
+was invoked by these fixtures.
+
+### Tool-visible source numbering and fetch-error boundary
+
+`InferencePipeline._ensureSearchCallbacksInitialized.<anonymous closure>` at
+0x1008e5868 wraps each result with `[Source:<one-based index>] ` and two final
+newlines. It returns the error string when the result list is empty. Its string
+dispatch is an identity stub (0x100d1abac); there is no trimming step. Pool entry
+3656 is exactly two LF units (000a 000a). `formatSearchToolResult` reproduces this
+layer, including per-invocation numbering. This does not yet establish how the
+application retains source URLs or presents clickable citations.
+
+The native `_parallelizeTasks` scheduler attaches catchError to each fetch task;
+its error closure at 0x1008e78d4 logs and returns null. This inner fetch-error
+handling is distinct from the outer callback timeout, which still propagates.
+The scheduler/native fetch implementation remains unfinished.
+
+REA evidence: ev_2ac9b82ad85e5a91a198613e4d420f302e4b8f10acfcf7d53f1e5ef761efda97
+(tool wrapper and scheduler),
+ev_97521e2ed3c62903dfb4ab89a7c79a013d1fdda6e84bcdfccd70c104160e0546
+(format constants),
+ev_114663d726e7a2cc92e72bc1eb797f48f491532e149c263b82e97e63fe1d1f4d
+(identity stub and fetch-error closure), and
+ev_9f5d0d98fc8796ccf78591ff9800c42ba4f1855b59c41410122de61f63d7e42d
+(separator UTF-16 units). IDA workers closed normally.
+
+Final core validation: 108 passed, one opt-in skipped; analyzer clean. The first
+full-suite rerun exposed an overly short 300 ms timeout in ordinary loopback
+fixtures under concurrent load. Ordinary fixtures now use the production five
+seconds; only the unfinished-body timeout fixture uses a short deadline.

@@ -24,3 +24,4 @@ export 'src/label_propagation.dart';
 export 'src/force_layout.dart';
 export 'src/platform_services.dart';
 export 'src/version.dart';
+export 'src/web_search.dart';

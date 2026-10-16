@@ -65,3 +65,11 @@ UTF-16 units to distinguish spaces, replacement characters and control tokens.
 
 The reader does not decrypt or run the model, initialize the original app's
 text-cache engine, or establish production support for its model format.
+
+## Search protocol probes
+
+The allowlist also includes public search keys, endpoint, CSE identifier, output
+labels and timeout. API-key entry 27425 is explicitly excluded. For Duration
+entry 11620, the reader prints the raw +8 field and verifies its unboxed bitmap
+bit before interpreting it as microseconds. These offsets are specific to the
+validated snapshot. See [search findings](../../docs/ida-search-investigation.md).

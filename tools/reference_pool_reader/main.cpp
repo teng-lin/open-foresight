@@ -4,6 +4,7 @@
 #include <vm/isolate.h>
 #include <vm/thread.h>
 #include <vm/dispatch_table.h>
+#include <vm/class_table.h>
 #include <vm/heap/safepoint.h>
 #include <cstdio>
 int main(int argc, char** argv) {
@@ -18,7 +19,7 @@ int main(int argc, char** argv) {
     auto& pool = *reinterpret_cast<dart::ObjectPool*>(dart::VMHandles::AllocateHandle(zone));
     pool = isolate->group()->object_store()->global_object_pool();
     std::printf("POOL_LENGTH %ld\n",static_cast<long>(pool.Length()));
-    for (intptr_t pp : {27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921}) {
+    for (intptr_t pp : {26972,5940,3656,492,4518,4523,27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921,11620,21079,26976,26978,26981,26989,26990,26995,26996,27001,27002,27003,27004,27424}) {
       const auto offset = pp * 8;
       const auto index = dart::ObjectPool::IndexFromOffset(offset - dart::kHeapObjectTag);
       if (pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) {
@@ -32,11 +33,17 @@ int main(int argc, char** argv) {
       std::printf("PP[%ld] OFFSET[0x%lx] INDEX[%ld] CID[%ld] %s\n",
         static_cast<long>(pp),static_cast<unsigned long>(offset),
         static_cast<long>(index),static_cast<long>(obj.GetClassId()),obj.ToCString());
-      if (obj.IsString() && (pp == 4265 || pp == 23921 || pp == 25006 || pp == 25007 || pp == 24980)) {
+      if (obj.IsString() && (pp == 3656 || pp == 4265 || pp == 23921 || pp == 25006 || pp == 25007 || pp == 24980)) {
         const auto& str = dart::String::Cast(obj);
         std::printf("STRING_UNITS[%ld]",(long)pp);
         for (intptr_t j=0;j<str.Length();j++) std::printf(" %04x",str.CharAt(j));
         std::printf("\n");
+      }
+      if (pp == 11620 && obj.IsInstance()) {
+        const auto raw = dart::UntaggedObject::ToAddr(obj.ptr()->untag());
+        int64_t stored; std::memcpy(&stored,reinterpret_cast<void*>(raw+8),sizeof(stored));
+        const auto bitmap = isolate->group()->class_table()->GetUnboxedFieldsMapAt(obj.GetClassId());
+        std::printf("TIMEOUT_FIELD[0x8] RAW[%lld] UNBOXED[%d]\n",(long long)stored,bitmap.Get(1));
       }
       if (pp == 25030 && obj.IsInstance()) {
         // Layout bound by ProtobufEnum.toString at 0x100b51e00.
@@ -56,7 +63,7 @@ int main(int argc, char** argv) {
       }
     }
     const auto origin = isolate->group()->dispatch_table()->ArrayOrigin();
-    for (intptr_t offset : {-4092,-4090,-4096}) {
+    for (intptr_t offset : {-4092,-4090,-4096,23776}) {
       auto entry = origin[95 + offset];
       std::printf("STRING_DISPATCH[%ld] CODE_OFFSET[0x%lx]\n",
         (long)offset,(unsigned long)(entry - reinterpret_cast<dart::uword>(image.lib)));
