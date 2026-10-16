@@ -47,6 +47,29 @@ parallelism. Build-time Python and Flutter are not installed-app dependencies.
 
 ## Bundle
 
+### Release CI disk image
+
+`.github/workflows/macos-release.yml` runs only when a GitHub release is published
+(including prereleases). Its tag must match `v` plus the version in
+`apps/desktop/pubspec.yaml`, for example `v0.1.0`. A tag push alone, pull request,
+or branch push does not generate a DMG.
+
+The release workflow reuses the macOS build and regression gates in `macos.yml`,
+archives the tested application with `ditto` to preserve executable permissions
+and symlinks, then creates and verifies a compressed Apple Silicon disk image
+containing `Open Foresight.app` and an `/Applications` shortcut. It attaches the
+versioned `.dmg`, SHA-256 sidecar, and bundle manifest to the GitHub release after
+the checks succeed. Reruns replace assets with matching names. Actions copies
+are retained for 14 days. The regular PR workflow continues to run its existing
+build and regression checks.
+
+This CI DMG currently contains the existing ad-hoc development bundle. It is not
+Developer ID signed or notarized and does not bundle Python/LiteRT or Whisper
+runtimes. Signed distribution still requires the runtimes, credentials, and
+release validation described below.
+
+### Local assembly and signed distribution
+
 Prepare a relocatable standalone arm64 Python 3.13 prefix, not a virtual
 environment or Homebrew Python. Install `requirements-litert-macos.lock` into
 that prefix. Build the pinned Whisper runtime described in

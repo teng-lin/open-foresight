@@ -1,0 +1,57 @@
+name: macOS release DMG
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    uses: ./.github/workflows/macos.yml
+    with:
+      package-release: true
+
+  dmg:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-release-application
+          path: artifacts
+      - name: Restore tested application and create disk image
+        run: |
+          set -euo pipefail
+          mkdir -p staging dist
+          ditto -x -k artifacts/Open-Foresight-macos-arm64.zip staging
+          codesign --verify --deep --strict --verbose=2 'staging/Open Foresight.app'
+          ln -s /Applications staging/Applications
+          dmg="Open-Foresight-${RELEASE_TAG}-macos-arm64.dmg"
+          hdiutil create -volname 'Open Foresight' -srcfolder staging \
+            -format UDZO "dist/$dmg"
+          hdiutil verify "dist/$dmg"
+          (cd dist && shasum -a 256 "$dmg" > "$dmg.sha256")
+          cp 'artifacts/Open Foresight.manifest.json' "dist/$dmg.manifest.json"
+      - name: Retain disk image and provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: open-foresight-macos-arm64-dmg
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attach disk image to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$RELEASE_TAG" dist/* --clobber

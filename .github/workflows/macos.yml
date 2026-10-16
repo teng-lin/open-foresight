@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      package-release:
+        description: Archive the tested application for the release DMG workflow
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -28,6 +34,17 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+      - name: Verify release version
+        if: inputs.package-release
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+          version = re.search(r'^version: (\d+\.\d+\.\d+)', pathlib.Path('apps/desktop/pubspec.yaml').read_text(), re.M)[1]
+          if os.environ['RELEASE_TAG'] != 'v' + version:
+              raise SystemExit('Release tag must match pubspec version (v' + version + ')')
+          PY
       - name: Verify Apple Silicon host
         run: |
           test "$RUNNER_ARCH" = ARM64
@@ -99,6 +116,19 @@ jobs:
             build/Testing/Temporary/LastTest.log
             test-results/
           if-no-files-found: ignore
+      - name: Archive tested application for DMG packaging
+        if: inputs.package-release
+        run: ditto -c -k --keepParent 'dist/Open Foresight.app' dist/Open-Foresight-macos-arm64.zip
+      - name: Retain release application
+        if: inputs.package-release
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-release-application
+          path: |
+            dist/Open-Foresight-macos-arm64.zip
+            dist/Open Foresight.manifest.json
+          if-no-files-found: error
+          retention-days: 14
 
   linux-native:
     # Arch provides a current Edition 2024 capable protoc and the matching
