@@ -191,11 +191,7 @@ void main() {
       await show(tester);
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Existing meeting'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Meeting options'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Record microphone + playback'));
+      await tester.tap(find.text('Start').first);
       // The operation remains busy while the permission dialog is open.
       await tester.pump(const Duration(milliseconds: 400));
       expect(find.text('Allow recording access'), findsOneWidget);

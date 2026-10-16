@@ -5,6 +5,59 @@ import 'package:open_foresight/gemma_download.dart';
 
 void main() {
   test(
+    'registered asset outside the cache is verified and reused without network access',
+    () async {
+      final root = Directory.systemTemp.createTempSync('existing-model-');
+      final bytes = List.generate(1024, (i) => i % 251);
+      final model = GemmaModel(
+        'fixture',
+        '',
+        '',
+        'fixture.bin',
+        sha256.convert(bytes).toString(),
+        bytes.length,
+        0,
+      );
+      final file = File('${root.path}/custom/model.bin')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(bytes);
+      final cache = Directory('${root.path}/new-cache');
+      final registration = <String, Object?>{
+        'digest': model.digest,
+        'path': file.path,
+        'runtime': '/missing/runner',
+      };
+      final phases = <ModelDownloadPhase>[];
+      try {
+        expect(
+          localModelFile(model, cache, registration: registration)?.path,
+          file.path,
+        );
+        final reused = await GemmaDownload(
+          createClient: () => throw StateError('Network must not be used'),
+        ).download(model, cache, existingFile: file, phase: phases.add);
+        expect(reused.path, file.path);
+        expect(phases, [
+          ModelDownloadPhase.checkingCache,
+          ModelDownloadPhase.verifyingCache,
+        ]);
+        expect(cache.existsSync(), false);
+        // Same-length corruption must not bypass the digest check or trigger a download.
+        file.writeAsBytesSync(List.filled(bytes.length, 0));
+        await expectLater(
+          GemmaDownload(
+            createClient: () => throw StateError('Network must not be used'),
+          ).download(model, cache, existingFile: file),
+          throwsStateError,
+        );
+        expect(file.readAsBytesSync(), List.filled(bytes.length, 0));
+      } finally {
+        root.deleteSync(recursive: true);
+      }
+    },
+  );
+
+  test(
     'range download verifies bytes, reuse and preserves invalid existing files',
     () async {
       final bytes = List<int>.generate(4096, (i) => i % 251);

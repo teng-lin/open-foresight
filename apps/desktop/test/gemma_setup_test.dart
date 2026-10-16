@@ -6,6 +6,98 @@ import 'package:open_foresight/gemma_setup_view.dart';
 import 'package:open_foresight/store.dart';
 
 void main() {
+  testWidgets('missing runner reuses a registered model outside the cache', (
+    tester,
+  ) async {
+    final root = Directory.systemTemp.createTempSync('gemma-runner-repair-');
+    final store = Store('${root.path}/application.db');
+    final model = gemmaModels.first;
+    final file = File('${root.path}/custom.litertlm');
+    file.openSync(mode: FileMode.write)
+      ..truncateSync(model.bytes)
+      ..closeSync();
+    store.db.execute(
+      'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?)',
+      ['generation', file.path, model.digest, '/missing/runner', 'litert_lm'],
+    );
+    try {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: GemmaSetupDialog(
+              store: store,
+              directory: Directory('${root.path}/cache'),
+              library: '',
+              runner: '/usr/bin/true',
+              memoryGb: 64,
+              installed: (_, _) {},
+              localSetup: () {},
+            ),
+          ),
+        ),
+      );
+      expect(find.text('Use model'), findsOneWidget);
+      final option = tester.widget<RadioListTile<GemmaModel>>(
+        find.byWidgetPredicate(
+          (w) => w is RadioListTile<GemmaModel> && w.value == model,
+        ),
+      );
+      expect(option.secondary, isNull);
+      expect(find.text('Done'), findsNothing);
+    } finally {
+      await tester.pumpWidget(const SizedBox());
+      store.close();
+      root.deleteSync(recursive: true);
+    }
+  });
+
+  testWidgets(
+    'cached embedding setup offers reuse instead of another download',
+    (tester) async {
+      final root = Directory.systemTemp.createTempSync('embedding-cache-ui-');
+      final store = Store('${root.path}/application.db');
+      final model = embeddingGemmaModel;
+      final file = File(
+        '${root.path}/embeddinggemma2/${model.directory}/${model.filename}',
+      )..createSync(recursive: true);
+      file.openSync(mode: FileMode.write)
+        ..truncateSync(model.bytes)
+        ..closeSync();
+      try {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: GemmaSetupDialog(
+                store: store,
+                directory: Directory('${root.path}/gemma4'),
+                library: '',
+                runner: '/usr/bin/true',
+                memoryGb: 16,
+                needsEmbedding: true,
+                needsGeneration: false,
+                installed: (_, _) {},
+                localSetup: () {},
+              ),
+            ),
+          ),
+        );
+        expect(
+          find.widgetWithText(FilledButton, 'Use EmbeddingGemma 2'),
+          findsOneWidget,
+        );
+        expect(find.text('Download EmbeddingGemma 2'), findsNothing);
+        expect(
+          find.text('Downloaded · Ready to use for local source search'),
+          findsOneWidget,
+        );
+      } finally {
+        await tester.pumpWidget(const SizedBox());
+        store.close();
+        root.deleteSync(recursive: true);
+      }
+    },
+  );
+
   testWidgets('14 GB host offers E2B and prevents larger model installation', (
     tester,
   ) async {

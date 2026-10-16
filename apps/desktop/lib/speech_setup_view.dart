@@ -26,6 +26,7 @@ class SpeechSetupDialog extends StatefulWidget {
 class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   late GemmaModel selected;
   String? currentDigest, currentPath, currentRunner;
+  Map<String, Object?>? registration;
   bool working = false, cancelled = false;
   String status = '', error = '';
   double? progress;
@@ -39,11 +40,12 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
                 .rows("SELECT digest FROM models WHERE kind='speech'")
                 .firstOrNull?['digest']
             as String?;
-    final registration = widget.store.model('speech');
+    registration = widget.store.model('speech');
     currentPath = registration?['path'] as String?;
     currentRunner = registration?['runtime'] as String?;
     selected =
         speechModels.where((m) => m.digest == currentDigest).firstOrNull ??
+        speechModels.where(cached).firstOrNull ??
         speechModels[2];
   }
 
@@ -55,13 +57,9 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
       currentRunner != null &&
       File(currentRunner!).existsSync() &&
       (File(currentRunner!).statSync().mode & 0x49) != 0;
-  bool cached(GemmaModel model) {
-    final file = File(
-      '${widget.directory.path}/${model.directory}/${model.filename}',
-    );
-    return isCurrent(model) ||
-        (file.existsSync() && file.lengthSync() == model.bytes);
-  }
+  File? localFile(GemmaModel model) =>
+      localModelFile(model, widget.directory, registration: registration);
+  bool cached(GemmaModel model) => localFile(model) != null;
 
   void cancel() {
     cancelled = true;
@@ -93,6 +91,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
       final asset = await download!.download(
         model,
         widget.directory,
+        existingFile: localFile(model),
         phase: (phase) {
           if (mounted && !cancelled)
             setState(
@@ -176,7 +175,11 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
                       enabled: !working,
                       title: Text(model.name),
                       subtitle: Text(
-                        '${(model.bytes / 1000000).round()} MB download',
+                        '${(model.bytes / 1000000).round()} MB · ${isCurrent(model)
+                            ? 'Current model'
+                            : cached(model)
+                            ? 'Downloaded'
+                            : 'Download required'}',
                       ),
                       secondary: cached(model)
                           ? null

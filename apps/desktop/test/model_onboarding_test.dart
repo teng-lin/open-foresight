@@ -17,6 +17,7 @@ class LocalDownload extends GemmaDownload {
     void Function(int, int)? progress,
     void Function(ModelDownloadPhase)? phase,
     Uri? sourceForTesting,
+    File? existingFile,
   }) async {
     calls.add(model);
     progress?.call(model.bytes, model.bytes);

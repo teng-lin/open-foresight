@@ -21,6 +21,24 @@ class GemmaModel {
       '${filename.replaceAll('.litertlm', '')}-${digest.substring(0, 12)}';
 }
 
+/// Find a completed asset independently of whether its runner is ready.
+/// Size is sufficient for UI availability; download() verifies the hash before use.
+File? localModelFile(
+  GemmaModel model,
+  Directory root, {
+  Map<String, Object?>? registration,
+}) {
+  final candidates = [
+    if (registration?['digest'] == model.digest)
+      File(registration!['path'] as String),
+    File('${root.path}/${model.directory}/${model.filename}'),
+  ];
+  for (final file in candidates) {
+    if (file.existsSync() && file.lengthSync() == model.bytes) return file;
+  }
+  return null;
+}
+
 // Pinned public artifact metadata, independently verified 2026-10-13. These
 // are not assumed identical to Foresight's encrypted Mac service artifacts.
 const gemmaModels = [
@@ -106,6 +124,7 @@ class GemmaDownload {
     void Function(int received, int total)? progress,
     void Function(ModelDownloadPhase)? phase,
     Uri? sourceForTesting,
+    File? existingFile,
   }) async {
     if (_active || _cancelled)
       throw StateError('Download is active or cancelled');
@@ -124,8 +143,8 @@ class GemmaDownload {
         throw ArgumentError('Invalid model metadata');
       phase?.call(ModelDownloadPhase.checkingCache);
       final directory = Directory('${root.path}/${model.directory}');
-      await directory.create(recursive: true);
-      final destination = File('${directory.path}/${model.filename}');
+      final destination =
+          existingFile ?? File('${directory.path}/${model.filename}');
       final type = await FileSystemEntity.type(
         destination.path,
         followLinks: false,
@@ -144,6 +163,11 @@ class GemmaDownload {
         return destination;
       }
       _check();
+      if (existingFile != null)
+        throw StateError(
+          'The selected local model is missing; choose a model again.',
+        );
+      await directory.create(recursive: true);
       final temporary = await directory.createTemp('.download-');
       partial = File('${temporary.path}/model.part');
       sink = partial.openWrite();

@@ -183,7 +183,8 @@ void main() {
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      expect(state.meetingId, existing);
+      expect(state.meetingPreviewId, existing);
+      expect(state.meetingId, isNull);
       expect(store.rows('SELECT * FROM meetings').length, 1);
       expect(find.text('Transcription Model'), findsOneWidget);
       await tester.tap(find.text('Cancel'));

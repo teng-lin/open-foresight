@@ -273,6 +273,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       gemmaExplanation = true;
   String sourceQuery = '', meetingQuery = '', labelFilter = '';
   final sourceSearchController = TextEditingController();
+  final meetingSearchController = TextEditingController();
+  final meetingNowKey = GlobalKey();
   String sourceSearchCacheKey = '';
   Set<String> sourceSearchMatches = {};
   SourceType? typeFilter;
@@ -367,7 +369,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       modelPath = TextEditingController(),
       runtimePath = TextEditingController(),
       tokenizer = TextEditingController();
-  int? noteId, meetingId, recordingMeeting;
+  int? noteId, meetingId, recordingMeeting, meetingPreviewId;
+  String meetingPreviewTab = 'Notes';
   final meetingNotesController = TextEditingController();
   int? loadedMeetingNotes;
   bool meetingSidecarVisible = true,
@@ -520,6 +523,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       runtimePath,
       tokenizer,
       meetingNotesController,
+      meetingSearchController,
     ]) {
       c.dispose();
     }
@@ -932,6 +936,40 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> connectGoogle() async {
+    if (googleAuth.client == null) {
+      final configure = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Set up Google Drive and Calendar'),
+          content: const SizedBox(
+            width: 480,
+            child: SingleChildScrollView(
+              child: SelectableText(
+                'This build needs a Google sign-in configuration before it can connect.\n\n'
+                '1. In Google Cloud Console, enable the Google Drive API and Google Calendar API.\n'
+                '2. Configure the OAuth consent screen and add your account as a test user if the app is in testing.\n'
+                '3. Create an OAuth client with application type Desktop app and download its JSON file.\n'
+                '4. Import that JSON here, then sign in with Google in your browser.\n\n'
+                'Open Foresight requests read-only access to Drive and Calendar. Your Google password stays in your browser.',
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Import client JSON'),
+            ),
+          ],
+        ),
+      );
+      if (configure != true || !mounted) return;
+      await importGoogleClient();
+      if (!mounted || googleAuth.client == null) return;
+    }
     await googleAuth.signIn((uri) async {
       if (mounted)
         setState(
@@ -1346,7 +1384,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       ],
     ),
   );
-  Widget meetings() => meetingId == null ? meetingList() : meetingWorkspace();
+  Widget meetings() =>
+      meetingId == null ? meetingCollection() : meetingWorkspace();
   Future<String> importText(
     String title,
     String text,
@@ -1408,8 +1447,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     await d.command('meetings.index', {'id': id});
   }
 
-  Future<void> generateMeeting(String kind) async {
-    await d.command('meetings.generate', {'id': meetingId!, 'kind': kind});
+  Future<void> generateMeeting(String kind, {int? id}) async {
+    await d.command('meetings.generate', {
+      'id': id ?? meetingId!,
+      'kind': kind,
+    });
   }
 
   void editArtifact(Map<String, Object?> a) async {
