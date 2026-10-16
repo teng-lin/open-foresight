@@ -533,9 +533,7 @@ extension _ScreenshotScreens on _WorkspaceState {
   );
 
   String generationName() {
-    final model = d.store
-        .rows("SELECT * FROM models WHERE kind='generation'")
-        .firstOrNull;
+    final model = d.store.model('generation');
     if (model == null) return 'Choose a local model';
     final known = gemmaModels
         .where((candidate) => candidate.digest == model['digest'])
