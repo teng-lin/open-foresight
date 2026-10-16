@@ -6,6 +6,7 @@ import 'package:foresight_core/foresight_core.dart'
         openPlatformUri,
         openForesightBuildNumber,
         openForesightVersion,
+        MeetingSpeaker,
         platformNotification;
 import 'dart:async';
 import 'dart:convert';

@@ -3,6 +3,7 @@ export 'src/store.dart';
 export 'src/helper.dart';
 export 'src/native.dart';
 export 'src/recording.dart';
+export 'src/meeting_speakers.dart';
 export 'src/model_setup.dart';
 export 'src/speech_models.dart';
 export 'src/gemma_download.dart';

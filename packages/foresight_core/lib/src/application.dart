@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'domain.dart';
 import 'recording.dart';
+import 'meeting_speakers.dart';
 import 'proactive_questions.dart';
 import 'store.dart';
 import 'graph_labels.dart';
@@ -392,10 +393,23 @@ class Application {
               'SELECT * FROM meeting_notes WHERE meeting_id=?',
               [id],
             ),
-            'transcript': store.rows(
-              'SELECT * FROM transcript WHERE meeting_id=? ORDER BY id',
-              [id],
-            ),
+            'transcript': store
+                .rows(
+                  'SELECT * FROM transcript WHERE meeting_id=? ORDER BY id',
+                  [id],
+                )
+                .map(
+                  (t) => {
+                    ...t,
+                    'speaker_id': MeetingSpeaker.fromSource(
+                      t['source'] as String,
+                    ).id,
+                    'speaker_label': MeetingSpeaker.fromSource(
+                      t['source'] as String,
+                    ).label,
+                  },
+                )
+                .toList(),
             'artifacts': store.rows(
               'SELECT * FROM artifacts WHERE meeting_id=? ORDER BY id',
               [id],
@@ -840,7 +854,7 @@ class Application {
         )
         .map(
           (t) =>
-              '[${t['source']} ${t['start_ms']}–${t['end_ms']} ms] ${t['text']}',
+              '[${MeetingSpeaker.fromSource(t['source'] as String).label} ${t['start_ms']}–${t['end_ms']} ms] ${t['text']}',
         )
         .join('\n');
     if (text.trim().isEmpty) return;
@@ -892,7 +906,7 @@ class Application {
     if (text.isEmpty) throw StateError('No final transcript');
     final result = await _generate(
       'meeting',
-      'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details.\n${boundUtf8(text, 2800)}',
+      'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n${boundUtf8(text, 2800)}',
     );
     store.artifact(
       id,
@@ -977,7 +991,7 @@ class Application {
     final revision = _meeting(id)['revision'] as int;
     final result = await _generate(
       'notes',
-      'Enrich each shorthand note using only the transcript below. Preserve the user names and spelling. Do not add unsupported details. Write ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}, one bullet per note. Notes:\n${boundUtf8(notes['body'] as String, 1500)}\nTranscript:\n${boundUtf8(transcript, 2800)}',
+      'Enrich each shorthand note using only the transcript below. Preserve the user names and spelling. Do not add unsupported details. $meetingSpeakerInstructions Write ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}, one bullet per note. Notes:\n${boundUtf8(notes['body'] as String, 1500)}\nTranscript:\n${boundUtf8(transcript, 2800)}',
       maxTokens: 512,
     );
     final current = store.rows(

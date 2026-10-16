@@ -48,6 +48,22 @@ void main() {
         1000,
         'microphone',
       );
+      store.transcript(
+        id,
+        'The remote channel confirms the date.',
+        true,
+        1100,
+        2000,
+        'playback',
+      );
+      store.transcript(
+        id,
+        'Imported background context.',
+        true,
+        2000,
+        3000,
+        'imported',
+      );
       final helper = OfflineHelper(
         '${directory.path}/helper.sock',
         '${directory.path}/helper',
@@ -75,6 +91,8 @@ void main() {
         'Mira draft Tuesday',
       );
       expect(generator.prompt, contains('Mira draft Tuesday'));
+      expect(generator.prompt, contains('audio channel labels, not people'));
+      expect(generator.prompt, contains('real person only when their name'));
       expect(
         generator.prompt,
         contains('Mira will send the draft on Tuesday.'),
@@ -91,6 +109,27 @@ void main() {
         find.textContaining('Microphone', findRichText: true),
         findsOneWidget,
       );
+      expect(
+        find.textContaining('Remote\n', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Unknown\n', findRichText: true),
+        findsOneWidget,
+      );
+      final snapshot = await domain.command('meetings.get', {'id': id}) as Map;
+      final transcript = snapshot['transcript'] as List;
+      expect(transcript.map((t) => t['speaker_id']), [0, 1, null]);
+      expect(transcript.map((t) => t['speaker_label']), [
+        'Microphone',
+        'Remote',
+        'Unknown',
+      ]);
+      expect(transcript.map((t) => t['source']), [
+        'microphone',
+        'playback',
+        'imported',
+      ]);
       await tester.tap(find.byTooltip('Close assistant'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Open assistant'), findsOneWidget);

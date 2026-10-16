@@ -1084,11 +1084,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                             ) ...[
                               TextSpan(
                                 text:
-                                    '${(rows[index]['source'] as String).startsWith('microphone')
-                                        ? 'Microphone'
-                                        : (rows[index]['source'] as String).startsWith('playback')
-                                        ? 'System audio'
-                                        : 'Transcript'}\n',
+                                    '${MeetingSpeaker.fromSource(rows[index]['source'] as String).label}\n',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                               TextSpan(text: rows[index]['text'] as String),
@@ -1105,11 +1101,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                           contentPadding: EdgeInsets.zero,
                           title: SelectableText(t['text'] as String),
                           subtitle: Text(
-                            (t['source'] as String).startsWith('microphone')
-                                ? 'Microphone'
-                                : (t['source'] as String).startsWith('playback')
-                                ? 'System audio'
-                                : 'Transcript',
+                            MeetingSpeaker.fromSource(
+                              t['source'] as String,
+                            ).label,
                           ),
                           trailing: questions
                               ? IconButton(
@@ -1137,7 +1131,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                             entry.value,
                             style: const TextStyle(color: Color(0xff818995)),
                           ),
-                          subtitle: const Text('Live'),
+                          subtitle: Text(
+                            '${MeetingSpeaker.fromSource(entry.key).label} · Live',
+                          ),
                         ),
                   ],
                 ),
