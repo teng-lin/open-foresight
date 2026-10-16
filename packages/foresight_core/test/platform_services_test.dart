@@ -69,6 +69,25 @@ void main() {
     },
   );
 
+  test('native runner resolves Finder resource configuration', () {
+    const key = 'FORESIGHT_LITERT_RUNNER';
+    final previous = runtimeConfiguration.environment[key];
+    try {
+      runtimeConfiguration.environment[key] =
+          '/bundle with spaces/bin/foresight-model';
+      expect(
+        liteRtRunner('/obsolete/python-runner'),
+        '/bundle with spaces/bin/foresight-model',
+      );
+    } finally {
+      if (previous == null) {
+        runtimeConfiguration.environment.remove(key);
+      } else {
+        runtimeConfiguration.environment[key] = previous;
+      }
+    }
+  });
+
   test(
     'canonical aliases resolve to one profile and short deterministic Mac runtime',
     () {

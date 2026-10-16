@@ -36,12 +36,11 @@ int main(int argc, char **argv) {
   setenv("FORESIGHT_HELPER", foresight::executable_path().c_str(), 1);
 #endif
   std::string directory =
-      "/tmp/foresight-model-lifetime-" + std::to_string(getpid());
+      (fs::temp_directory_path().string()+"/foresight-model-lifetime-") + std::to_string(getpid());
   fs::create_directories(directory + "/stubborn");
   try {
     REQUIRE(argc == 2);
-    setenv("FORESIGHT_MODEL_PYTHON", argv[1], 1);
-    setenv("FORESIGHT_MODEL_ADAPTER", MODEL_ADAPTER_PATH, 1);
+    setenv("FORESIGHT_MODEL_WORKER", argv[1], 1);
     std::unique_ptr<Model> model;
     std::thread request(
         [&] { model = std::make_unique<Model>(directory, false); });

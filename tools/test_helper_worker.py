@@ -14,8 +14,7 @@ from evaluate_models import PACKAGE, ROOT, messages, control_snapshot, process_m
 def main():
     classes = messages()
     env = os.environ.copy()
-    env.update(FORESIGHT_MODEL_PYTHON='/usr/bin/python3',
-               FORESIGHT_MODEL_ADAPTER=str(ROOT / 'tests/fixtures/model_adapter.py'))
+    env.update(FORESIGHT_MODEL_WORKER=str(ROOT / 'build/services/helper/model_worker_fixture'))
     with tempfile.TemporaryDirectory(prefix='foresight-worker-health-') as temporary:
         root = Path(temporary)
         model = root / 'model'

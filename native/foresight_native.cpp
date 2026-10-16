@@ -362,7 +362,7 @@ char *fs_engine_state(void *h) {
     return owned("{\"state\":" + quote(e.state) +
                  ",\"backend\":" + quote(std::getenv("FORESIGHT_LITERT_BACKEND") &&
                      std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu"
-                     ? "litert-lm-gpu-python" : "litert-lm-cpu-python") +
+                     ? "litert-lm-gpu-native" : "litert-lm-cpu-native") +
                  ",\"load_policy\":\"per_request\","
                  "\"context_length\":4096,\"temperature\":0.4,\"top_k\":40,\"top_p\":0.9,"
                  "\"thinking\":false,\"json\":\"ll_guidance_and_application_validation\",\"text\":true,\"tools\":false,\"error\":" + quote(e.error) + "}");
@@ -860,6 +860,7 @@ extern "C" int fs_process_matches(int64_t value, const char *socket,
 extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
   if (!key || !value) return -1;
   static const std::set<std::string> allowed{
+      "FORESIGHT_LITERT_LIBRARY", "FORESIGHT_ONNX_LIBRARY",
       "FORESIGHT_LITERT_BACKEND", "FORESIGHT_WHISPER_BACKEND",
       "FORESIGHT_WHISPER_DEVICE", "FORESIGHT_HELPER", "FORESIGHT_LITERT_CACHE",
       "FORESIGHT_WHISPER_RUNTIME", "PYTHONPYCACHEPREFIX"};

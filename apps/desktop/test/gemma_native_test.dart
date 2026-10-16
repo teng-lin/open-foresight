@@ -28,7 +28,7 @@ void main() {
         );
         expect(
           domain.generator!.effectiveState['backend'],
-          'litert-lm-${env['FORESIGHT_LITERT_BACKEND'] ?? 'cpu'}-python',
+          'litert-lm-${env['FORESIGHT_LITERT_BACKEND'] ?? 'cpu'}-native',
         );
         expect(
           store

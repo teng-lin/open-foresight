@@ -14,6 +14,7 @@ class Helper {
   Process? process;
   Future<Process>? _launching;
   Future<PingResponse>? _startupProbe;
+  Future<void>? _closing;
   bool stopping = false;
   bool shutdownVerified = true;
   bool _adopted = false;
@@ -57,7 +58,7 @@ class Helper {
             ? 'litert-lm-embedding-gpu'
             : path.endsWith('.litertlm')
             ? 'litert-lm-embedding-cpu'
-            : 'sentence-transformers-cpu';
+            : 'onnx-bert-cpu';
         return current.pipeline == 'ready' &&
             current.tokenizerReady &&
             current.lastError.isEmpty &&
@@ -155,7 +156,9 @@ class Helper {
     changed?.call();
   }
 
-  Future<void> close() async {
+  Future<void> close() => _closing ??= _close();
+
+  Future<void> _close() async {
     stopping = true;
     await watch?.cancel();
     // Resolve launch/adoption races before deciding which process is owned.

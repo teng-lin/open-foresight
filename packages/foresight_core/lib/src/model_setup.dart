@@ -15,6 +15,7 @@ Future<NativeRuntime> configureGeneration(
   void Function(NativeRuntime)? onCandidate,
   void Function()? onRegister,
 }) async {
+  if (backend == 'litert_lm') runner = liteRtRunner(runner);
   final candidate = NativeRuntime(library);
   try {
     onCandidate?.call(candidate);
@@ -51,7 +52,11 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
     final entry = manifest[kind] as Map<String, dynamic>?;
     if (entry == null) continue;
     final model = entry['model'] as String;
-    final runtime = kind == 'embedding' ? '' : entry['runtime'] as String;
+    final runtime = kind == 'embedding'
+        ? ''
+        : kind == 'generation' && entry['backend'] == 'litert_lm'
+        ? liteRtRunner(entry['runtime'] as String)
+        : entry['runtime'] as String;
     String? expectedDigest;
     if (kind == 'embedding' && Directory(model).existsSync()) {
       // Legacy SentenceTransformers installations are directory manifests.
@@ -104,14 +109,24 @@ bool needsModel(Store store, String kind) {
   ]).firstOrNull;
   if (model == null) return true;
   final path = model['path'] as String;
+  if (kind == 'embedding' &&
+      Directory(path).existsSync() &&
+      !File('$path/onnx/model.onnx').existsSync())
+    return true;
   if (!File(path).existsSync() &&
       !(kind == 'embedding' && Directory(path).existsSync()))
     return true;
   if (kind == 'generation') {
-    final registration = store.rows('SELECT runtime FROM models WHERE kind=?', [
-      kind,
-    ]).single;
-    final runtime = File(registration['runtime'] as String);
+    final registration = store.rows(
+      'SELECT runtime,backend FROM models WHERE kind=?',
+      [kind],
+    ).single;
+    final registered = registration['runtime'] as String;
+    final runtime = File(
+      registration['backend'] == 'litert_lm'
+          ? liteRtRunner(registered)
+          : registered,
+    );
     return !runtime.existsSync() || (runtime.statSync().mode & 0x49) == 0;
   }
   return false;
