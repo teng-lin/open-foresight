@@ -127,9 +127,25 @@ def wait_stopped(pid, executable, timeout=15):
         raise AssertionError('Service still live after graceful stop')
 
 
+def stop_desktop(process, timeout=15):
+    if process.poll() is not None:
+        return process.returncode
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return process.wait(timeout=timeout)
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        return process.wait(timeout=timeout)
+
+
 def smoke(bundle, output, desktop=False):
+    if not __debug__:
+        raise RuntimeError('Smoke verification requires assertions; run Python without -O or PYTHONOPTIMIZE')
     from macos_bundle import audit_dependencies
-    report = {'gates': {key:'not_run' for key in ('desktop','physical_audio','real_models',
+    report = {'gates': {key:'not_run' for key in ('desktop','desktop_window_close','physical_audio','real_models',
         'signed_permission_attribution','fresh_user','quarantine','notarization','minimum_os')}}
     with tempfile.TemporaryDirectory(prefix='of-smoke-', dir='/tmp') as temporary:
         root = Path(temporary)
@@ -148,6 +164,23 @@ def smoke(bundle, output, desktop=False):
         peers, desktop_process = [], None
         owner = None
         try:
+            desktop_owner = None
+            if desktop:
+                desktop_log = (root/'desktop.log').open('wb')
+                try:
+                    desktop_process = subprocess.Popen([str(app/'Contents/MacOS'/info['CFBundleExecutable'])],
+                        cwd='/',env=env,stdout=desktop_log,stderr=desktop_log)
+                    deadline = time.monotonic()+30
+                    while True:
+                        assert desktop_process.poll() is None, 'Desktop exited during first launch'
+                        try:
+                            desktop_owner = service_command(service,env,'--status')['pid']
+                            break
+                        except subprocess.CalledProcessError:
+                            assert time.monotonic()<deadline, 'Desktop did not launch its service'
+                            time.sleep(.1)
+                finally:
+                    desktop_log.close()
             # Both are real separately running AOT MCP processes with an env -i
             # equivalent environment; no SDK, shell init, DYLD or checkout paths.
             first = McpPeer(executable,env)
@@ -157,6 +190,8 @@ def smoke(bundle, output, desktop=False):
             left, right = first.tool('get_status'), second.tool('get_status')
             owner = left['pid']
             assert owner == right['pid'], 'Two MCP adapters acquired competing owners'
+            if desktop:
+                assert desktop_owner == owner, 'MCP did not attach to desktop-first service'
             assert process_path(owner) == service.resolve(), 'Owner is outside relocated bundle'
             assert left['installation_root'] == str(app.resolve()), 'Service installation identity differs from relocated app'
             try:
@@ -168,20 +203,11 @@ def smoke(bundle, output, desktop=False):
             notes = second.tool('list_notes')
             assert any(item['id'] == note['id'] and item['body'] == 'Persist across clients and service restart' for item in notes), notes
             if desktop:
-                desktop_log = (root/'desktop.log').open('wb')
-                try:
-                    desktop_process = subprocess.Popen([str(app/'Contents/MacOS'/info['CFBundleExecutable'])],
-                        cwd='/',env=env,stdout=desktop_log,stderr=desktop_log)
-                    time.sleep(3)
-                    assert desktop_process.poll() is None, 'Desktop exited during launch'
-                    assert service_command(service,env,'--status')['pid'] == owner
-                    desktop_process.terminate()
-                    desktop_process.wait(timeout=15)
-                    desktop_process = None
-                    assert service_command(service,env,'--status')['pid'] == owner
-                    report['gates']['desktop'] = 'passed_launch_attach_close'
-                finally:
-                    desktop_log.close()
+                assert desktop_process.poll() is None, 'Desktop exited before explicit closure'
+                report['desktop_exit_code'] = stop_desktop(desktop_process)
+                desktop_process = None
+                assert service_command(service,env,'--status')['pid'] == owner
+                report['gates']['desktop'] = 'passed_desktop_first_mcp_attach_and_desktop_process_exit'
             for peer in peers:
                 peer.close()
             peers.clear()
@@ -220,8 +246,7 @@ def smoke(bundle, output, desktop=False):
                 try: peer.close()
                 except Exception: pass
             if desktop_process is not None and desktop_process.poll() is None:
-                desktop_process.terminate()
-                desktop_process.wait(timeout=15)
+                report['desktop_exit_code'] = stop_desktop(desktop_process)
             if owner is None:
                 try: owner = service_command(service,env,'--status')['pid']
                 except (subprocess.SubprocessError, ValueError, OSError): pass
@@ -237,7 +262,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('bundle',type=Path)
     parser.add_argument('--output',type=Path,required=True)
-    parser.add_argument('--desktop',action='store_true',help='Also launch/close the desktop; requires a logged-in GUI session')
+    parser.add_argument('--desktop',action='store_true',help='Launch desktop first, attach MCP, then terminate desktop process; window-close behavior remains a physical gate')
     args = parser.parse_args(argv)
     if sys.platform != 'darwin':
         parser.error('Installed Mac bundle smoke requires macOS')

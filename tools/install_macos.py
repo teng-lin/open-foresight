@@ -93,6 +93,8 @@ def stop_owned_services(app, active, profiles, timeout=1800):
         pid = state['pid']
         if pid not in active or process_path(pid) != executable:
             raise Deferred(f'Profile {profile} is not owned by this installed service')
+        if state.get('capture', {}).get('active'):
+            raise Deferred(f'Recording is active for profile {profile}. Stop recording and wait for the final transcript before upgrading; the application was not replaced')
         owners[pid] = env
     if set(owners) != services:
         raise Deferred('Some running service profiles were not supplied; upgrade deferred')
@@ -105,7 +107,8 @@ def stop_owned_services(app, active, profiles, timeout=1800):
             ancestor = parents[ancestor]
         if ancestor not in services:
             raise Deferred('The desktop, MCP client, or an unrelated worker is running. Close clients before upgrading')
-    # Existing --stop waits for final recording transcription and worker cleanup.
+    # Recording must finish before this transaction. --stop then waits for
+    # idle service shutdown and worker cleanup; EOF cannot certify transcription.
     for pid, env in owners.items():
         if process_path(pid) != executable:
             raise Deferred('Service identity changed before shutdown; retry')
@@ -236,7 +239,7 @@ def main(argv=None):
     parser.add_argument('source', type=Path)
     parser.add_argument('--destination', type=Path, required=True)
     parser.add_argument('--defer-if-running', action='store_true', help='Default: leave running applications unchanged')
-    parser.add_argument('--stop-services', action='store_true', help='Explicitly finalize recordings through verified service --stop')
+    parser.add_argument('--stop-services', action='store_true', help='Stop verified idle services; defer active recordings until final transcription finishes')
     parser.add_argument('--profile', type=Path, action='append', default=[])
     parser.add_argument('--allow-ad-hoc', action='store_true')
     args = parser.parse_args(argv)

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
 import install_macos as installer
-from smoke_macos_bundle import McpPeer
+from smoke_macos_bundle import McpPeer, stop_desktop
 
 SIGNATURE = {'team': 'test-team', 'adhoc': False}
 
@@ -174,6 +174,25 @@ except Deferred:
                 installer.stop_owned_services(self.destination,{42:str(executable)},['profile'])
         self.assertEqual([call.args[0][-1] for call in run.call_args_list],['--status'])
 
+    def test_recording_upgrade_defers_before_stopping_any_profile(self):
+        executable=(self.destination/installer.SERVICE).resolve()
+        responses=[SimpleNamespace(returncode=0,stdout=json.dumps({'pid':42,'capture':{'active':False}}),stderr=''),
+                   SimpleNamespace(returncode=0,stdout=json.dumps({'pid':43,'capture':{'active':True}}),stderr='')]
+        with patch.object(installer.subprocess,'run',side_effect=responses) as run, \
+             patch.object(installer,'process_path',return_value=executable):
+            with self.assertRaisesRegex(installer.Deferred,'final transcript'):
+                installer.stop_owned_services(self.destination,{42:str(executable),43:str(executable)},['first','recording'])
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list],['--status','--status'])
+        self.assertEqual((self.destination/'version').read_text(),'old')
+
+    def test_failed_service_shutdown_never_reaches_staging_or_swap(self):
+        self.options.update(active=lambda _:{42:'service'},
+            stopper=Mock(side_effect=subprocess.TimeoutExpired('service --stop',1800)))
+        with self.assertRaises(subprocess.TimeoutExpired):
+            installer.install(self.source,self.destination,stop_services=True,profiles=['profile'],**self.options)
+        self.assertEqual((self.destination/'version').read_text(),'old')
+        self.assertEqual(list(self.root.glob('.open-foresight-install-*')),[])
+
     def test_unowned_worker_is_never_treated_as_service_descendant(self):
         executable=(self.destination/installer.SERVICE).resolve()
         response=SimpleNamespace(returncode=0,stdout=json.dumps({'pid':42}),stderr='')
@@ -233,6 +252,23 @@ for line in sys.stdin:
             self.assertEqual(peer.tool('echo'),{})
             with self.assertRaisesRegex(RuntimeError,'Non-protocol'):
                 peer.close()
+
+    def test_owned_desktop_cleanup_reaps_process_ignoring_sigterm(self):
+        process=subprocess.Popen([sys.executable,'-c',"import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print('ready',flush=True); time.sleep(60)"],stdout=subprocess.PIPE)
+        try:
+            self.assertEqual(process.stdout.readline(),b'ready\n')
+            self.assertEqual(stop_desktop(process,timeout=.1),-9)
+            self.assertIsNotNone(process.poll())
+        finally:
+            if process.poll() is None:
+                process.kill();process.wait()
+            process.stdout.close()
+
+    def test_optimized_python_cannot_skip_smoke_assertions(self):
+        result=subprocess.run([sys.executable,'-O','-c',"from smoke_macos_bundle import smoke; smoke(None,None)"],
+            env={**os.environ,'PYTHONPATH':str(Path(installer.__file__).parent)},capture_output=True,text=True)
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('run Python without -O',result.stderr)
 
     def test_minimal_environment_has_no_developer_runtime_leaks(self):
         env=installer.minimal_environment('/tmp/home','/tmp/profile')

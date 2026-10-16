@@ -16,7 +16,7 @@ The **responsible capture service executable** needs `NSMicrophoneUsageDescripti
 
 ## Executed evidence (2026-10-15)
 
-Actual machine: Apple Silicon, macOS 26.6, Xcode 27 / AppleClang 21.0.0.21000334. Built with a macOS 15 deployment target:
+Actual machine: arm64 Apple Silicon, macOS 26.6.2 (25G83), Xcode 27.0 / macOS SDK 27.0 / AppleClang 21.0.0.21000334. Verified with `sw_vers`, `uname -m`, the Xcode bundle version, and `xcrun --show-sdk-version`. Built with a macOS 15 deployment target:
 
 ```
 cmake -S native -B /tmp/foresight-audio-build -DBUILD_TESTING=ON
@@ -31,3 +31,31 @@ Ran `foresight-audio --probe system` while playing `/System/Library/Sounds/Glass
 ## Remaining physical/release gates
 
 This evidence does not establish signed installed-service permission attribution, microphone content, actual meeting transcription, MCP-first signed capture, permission revocation, Bluetooth changes, sleep/wake, a fresh user, macOS 15 hardware, or notarization. Those require the installed runtime and actual interaction. Record results separately; compilation and synthetic buffer tests cannot satisfy those gates.
+
+## Installed-audio acceptance procedure (all rows currently unverified)
+
+Run these checks with an installed Developer ID signed/notarized artifact in a separate test profile and a logged-in GUI session. Do not set `FORESIGHT_CAPTURE_RUNTIME`, `FORESIGHT_ALLOW_TEST_MODELS`, or a developer library/Python path. Retain the bundle manifest/revision, actual macOS version/hardware, model digests, effective inference backend, MCP host/version, and each process's resolved executable path. Capture signing identity with `codesign -dv --verbose=4` for both the outer app and nested service. Record the actual permission attribution displayed by macOS; the nested bundle identifier alone does not establish the responsible process.
+
+Use the service's `audio.capabilities` operation (MCP tool `audio_capabilities`) before capture. Connecting/listing capabilities must not request protected resources, download models, or print audio/diagnostics on MCP stdout. Explicit microphone setup is `audio.request_microphone` (MCP tool `audio_request_microphone`) or **Settings → Recording access → Allow microphone**. This must run in the capture service's identity, not the standalone diagnostic CLI. Store logs locally; do not retain meeting content or credentials in release evidence unless intentionally supplied as a test fixture.
+
+| Check | Action | Evidence required | Status |
+| --- | --- | --- | --- |
+| Desktop-first identity | Launch installed desktop, explicitly grant microphone/system-audio access, then start a meeting with microphone speech and a known local spoken playback clip. | Service PID/path/signing identity, actual TCC labels, both channels' sample counts and nonzero levels, final transcripts containing the supplied phrases. | Unverified |
+| MCP-first identity | Quit the desktop; launch the installed MCP executable from a GUI MCP host with a minimal environment and a fresh profile. Request microphone access explicitly, then start recording. | No Flutter window/process required, same responsible permission identity, actionable setup/denial responses, both channels' final transcripts. | Unverified |
+| Client closure | While capturing, close the starting window; separately repeat with desktop Quit and with the initiating MCP disconnecting. Observe through a second client. | Same service PID, `capture.active=true`, advancing channel samples, later final transcript includes speech delivered after client closure. Closing a window and terminating a process are separate checks. | Unverified |
+| Explicit Stop | Speak near the end of a capture buffer, then stop from the other client. | Stop waits for final transcription, retains the final partial PCM/phrase, no provisional text committed as final, final rows persist after service restart. | Unverified |
+| Denied permission | Deny each requested permission in isolation; leave the peer channel enabled. | Actionable channel-specific failure, no crash or indefinite Stop, no claim that zero PCM proves valid silence; explicit retry works after granting access. | Unverified |
+| Revoked permission | Revoke access while a meeting is active, then stop. | Observable failure/interruption and preserved prior final transcript. Record actual system-tap behavior: public preflight cannot reliably classify permission independently of capture. | Unverified |
+| Valid silence | Capture an unmuted but quiet microphone and a silent output after known speech succeeded under the same permission state. | Callbacks/sample counts continue with low levels; absence of speech is distinguished from permission/device failure using the preceding known-content control. | Unverified |
+| Default-device following | Select `auto`, change default input/output during capture, including headset insertion/removal. | Gap/lifecycle events; capture resumes on the new default without mixing pre-gap partial audio; later speech is transcribed. | Unverified |
+| Pinned device removal | Select an explicit UID, disconnect it while another microphone/output remains available, then reconnect it. | No fallback to the unrelated device; visible gap/retries/failure; retry/restart resumes the selected UID only. Include Bluetooth format/sample-rate changes. | Unverified |
+| Output selection | Play distinguishable clips on different outputs and select each output UID. | Only stream 0 of the selected output is captured; unsupported multi-stream devices are documented rather than represented as global capture. | Unverified |
+| Sleep/wake | Sleep and wake during capture; repeat with headset and built-in audio. | Interruption/lifecycle events, no deadlock, successful recovery or actionable restart, persisted pre-sleep transcript. | Unverified |
+| Service crash | In the isolated profile, verify the owner executable, crash that service during recording, then reconnect. | Committed data survives; unfinished meeting is interrupted/recoverable; no orphan capture/model workers or competing profile owners. | Unverified |
+| Upgrade while recording | Attempt installation during an active meeting; do not stop it merely to pass the test. | Installer explicitly defers before stopping any profile/replacing the bundle; recording remains active. Stop normally, wait for the final transcript, then retry the upgrade. | Unverified |
+| Installed upgrade/rollback | Upgrade with the desktop/MCP closed and idle services; separately inject a post-swap verification failure in a temporary installation. | Shared lifetime locks block service starts during exchange; graceful idle shutdown, atomic app exchange, same signing team, preserved data, verified rollback/recovery artifact. | Unverified |
+| Support floor/clean account | Repeat installed permission, capture, Stop, and MCP checks on macOS 15 Apple Silicon and a fresh user with a quarantined downloaded release. | No Homebrew/SDK/source/runtime dependencies, Gatekeeper/notarization acceptance, retained results from the actual account/OS. | Unverified |
+
+The automated `smoke_macos_bundle.py --desktop` gate starts the desktop before two MCP clients and verifies that terminating the desktop process leaves the shared service alive. It does not close an individual NSWindow and does not record real audio. The report retains `desktop_window_close`, `physical_audio`, `real_models`, and `signed_permission_attribution` as `not_run` until those checks have their own evidence.
+
+The installer deliberately defers active recordings, even with `--stop-services`. The existing service control command observes socket closure, which cannot certify that a failed final transcription succeeded. Once recording is stopped and final transcription acknowledged through the normal application operation, the installer can gracefully stop idle service owners and hold the per-installation exclusive maintenance lock across exchange and rollback.
