@@ -135,6 +135,13 @@ Future<void> main() async {
       [],
     );
     tool(
+      'audio_request_system',
+      'audio.request_system',
+      'Explicitly request system audio recording consent for the application service. May show macOS consent UI; requires an interactive logged-in session. CoreAudio cannot verify authorization: completed or unknown does not prove permission or audible input. Inspect the returned message and settings guidance.',
+      {},
+      [],
+    );
+    tool(
       'get_status',
       'status',
       'Get local model readiness, indexing state, and active recording.',

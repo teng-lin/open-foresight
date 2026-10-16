@@ -105,7 +105,17 @@ dist/open-foresight/open-foresight-service --status
 dist/open-foresight/open-foresight-service --stop
 ```
 
-`--stop` gracefully finalizes active recording. The next client starts a service again. An unexpected service crash marks unfinished recordings interrupted on restart and resumes pending source work. Stop an older, pre-service version of the desktop before upgrading a profile; that version does not participate in service ownership. Schema additions retain existing source, note, transcript, artifact, and model records.
+`--stop` gracefully finalizes active recording. For installers,
+`--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
+atomically refuses active/finalizing recording and in-flight operations, then
+blocks new calls before shutdown begins. It acknowledges success only after
+resource cleanup; EOF, a failed close, or unverified helper ownership fails the
+command. The optional PID and packaged installation/revision identity pin the
+owner authenticated by the installer. Normal `--stop` behavior is unchanged.
+Older services that lack idle-only shutdown must be stopped explicitly before
+upgrading; installers never fall back to an unverified signal/EOF shutdown.
+
+ The next client starts a service again. An unexpected service crash marks unfinished recordings interrupted on restart and resumes pending source work. Stop an older, pre-service version of the desktop before upgrading a profile; that version does not participate in service ownership. Schema additions retain existing source, note, transcript, artifact, and model records.
 
 ## Verification
 
@@ -150,7 +160,13 @@ Resources directory; absolute explicit environment overrides win. Nested service
 bundles can refer to the outer app through relative `../` paths. This map must
 contain the service, helper, native library, model runners, audio-device adapter,
 and notification adapter as applicable. All resolved values propagate to detached
-service launches and helper subprocesses. Profile content and downloaded models
+service launches and helper subprocesses. Packaged Mac services launch through
+LaunchServices (`open -g -n --env KEY=value service.app`) with explicit runtime
+and profile overrides, allowing the background service bundle to own its app
+identity without a Flutter window. Plain development executables launch directly.
+Service startup stderr is retained in the private runtime directory as
+`service-startup.log`. The installed app must still verify the actual TCC
+attribution. Profile content and downloaded models
 remain outside the bundle. With no HOME environment variable on macOS, the system
 user directory is obtained from Directory Services.
 
@@ -167,11 +183,73 @@ backend and permission state without prompting. `audio.request_microphone`
 (MCP: `audio_request_microphone`) explicitly requests microphone authorization in
 the service process; the blocking native request runs on another Dart isolate.
 An improperly packaged service with no microphone purpose string receives an
-actionable setup failure before entering the OS permission API. System-audio
-permission is checked on capture because no public preflight API is available.
+actionable setup failure before entering the OS permission API.
+`audio.request_system` (MCP: `audio_request_system`) explicitly exercises a short
+system-audio tap consent request in the service, also off the event loop and
+requiring the system-audio purpose string. Its JSON preserves `system_audio`
+(`unknown`, `pending`, `denied`, `unavailable`), `system_audio_request`,
+`permission_verified: false`, and native code/message/settings guidance. There is
+no public CoreAudio permission preflight: a completed request or a successfully
+started silent tap does not prove permission. Connecting, listing MCP tools, or
+querying capabilities never invokes either permission request. User consent and
+actual captured audio remain separate installed-app checks.
+
+Configured generation and speech models retain runner provenance when an explicit
+registration selects the current `FORESIGHT_LITERT_RUNNER` or
+`FORESIGHT_WHISPER_RUNTIME` executable inside the canonical installation root.
+The model row and its `modelRuntimeResource.<kind>` preference are committed
+atomically. Metadata records the resource key, original runtime path, model
+digest, and backend. After the app moves, model restoration, recording, readiness
+checks, and setup UI resolve that resource from the current bundle without
+rewriting the original row. A missing/non-executable resource or one pointing
+outside the current installation is not substituted. External registrations,
+legacy rows without provenance, and mismatched/corrupt metadata retain their
+original runner paths. Re-register a legacy bundled runner explicitly through
+model setup after backing up the profile; no automatic legacy migration guesses
+ownership from a filename or an `.app` directory name.
 
 Before native workers start, the shared runtime adapter copies its supported
 settings into native process state using `fs_set_runtime_environment`. A Dart
 configuration map alone cannot configure C/C++ `getenv` consumers. LiteRT and
 Python bytecode caches default to `<profile>/cache/litert` and
 `<profile>/cache/python` when an installed native runtime is configured.
+
+Packaged runtimes also set `FORESIGHT_INSTALL_ROOT` to the canonical outer `.app`
+and `FORESIGHT_RUNTIME_REVISION` to their build revision. Before loading native
+code, opening the database, or starting workers, the service takes a shared,
+nonblocking POSIX lock at
+`/tmp/of-install-<uid>-<sha256(canonical app path) first 24 hex digits>/lock`.
+The private directory is 0700 and the lock is 0600. The descriptor remains open
+for the service lifetime. The installer takes the exclusive version of that
+same lock after explicitly stopping services and holds it through revalidation
+and replacement. A service launched during replacement fails with an actionable
+update-in-progress message before it opens profile state or native components.
+
+Status includes additive `application_api_version` (currently 1),
+`installation_root`, and `runtime_revision` fields. Clients carrying a packaged
+revision validate all three before attaching, including an already-running
+service from another app copy or revision. Canonical aliases of the same app
+remain compatible. Mismatches require the user to explicitly stop the existing
+service; clients neither stop it automatically nor replay mutations. Development
+clients without a packaged revision keep the existing attachment behavior.
+
+macOS PDF and RTF imports use the bundled `FORESIGHT_FILE_PARSER` executable,
+backed by PDFKit and AppKit's attributed-string RTF reader. The CLI accepts
+`--pdf PATH` or `--rtf PATH`, writes extracted UTF-8 text only to stdout, and
+writes errors to stderr. It opens no Flutter window or permission dialog. A
+locked PDF requires an explicitly unlocked copy; scanned PDFs without selectable
+text report that OCR is needed. Empty or invalid documents fail before source
+creation. File-access failures direct the user to Files and Folders permissions
+or a readable copy. Linux retains its existing `pdftotext`/`unrtf` adapters and
+existing stored provenance remains readable.
+
+The actual Mac extractor can be checked with:
+
+```sh
+swiftc -O native/file_parser.swift -o /tmp/foresight-file-parser
+python3 tests/integration/test_file_parser.py /tmp/foresight-file-parser
+```
+
+These developer tests generate real Unicode PDF/RTF, password-protected, empty,
+malformed, and unreadable fixtures. The installed extractor itself requires no
+SDK, Python interpreter, or external document-processing tools.

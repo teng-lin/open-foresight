@@ -1,0 +1,19 @@
+#!/bin/bash
+# Preserve the tested Mac Python backend behind the shared worker interface.
+set -euo pipefail
+task_adapters=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if [[ "${1:-}" != --embedding || $# -lt 2 ]]; then
+  echo 'Expected --embedding MODEL [--gpu]' >&2
+  exit 2
+fi
+shift
+task_model=$1
+shift
+if [[ -f "$task_model" && "$task_model" == *.litertlm ]]; then
+  task_python=${FORESIGHT_LITERT_PYTHON:-${FORESIGHT_MODEL_PYTHON:-python3}}
+  task_adapter=${FORESIGHT_LITERT_EMBEDDING_ADAPTER:-$task_adapters/litert_embedding_adapter.py}
+else
+  task_python=${FORESIGHT_MODEL_PYTHON:-python3}
+  task_adapter=${FORESIGHT_MODEL_ADAPTER:-$task_adapters/model_adapter.py}
+fi
+exec "$task_python" -I -B "$task_adapter" "$task_model" "$@"

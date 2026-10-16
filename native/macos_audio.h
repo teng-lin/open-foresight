@@ -11,3 +11,6 @@ void fs_macos_capture(const std::string &target, bool playback, int rate,
 std::string fs_macos_devices();
 std::string fs_macos_capabilities();
 bool fs_macos_request_microphone();
+// Explicit consent probe; discards buffers without reading PCM. Timeout 0..30000 ms.
+// Completion does not prove authorization; Core Audio exposes no public check.
+std::string fs_macos_request_system(int timeout_ms);

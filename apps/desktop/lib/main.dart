@@ -50,41 +50,167 @@ part 'meeting_workspace.dart';
 
 Future<void> main([List<String> arguments = const []]) async {
   WidgetsFlutterBinding.ensureInitialized();
-  final profile = ProfilePaths.resolve(Platform.environment);
-  final data = profile.data;
-  final runtime = profile.runtime;
-  ensurePrivateDirectory(data);
-  ensurePrivateDirectory(runtime);
-  configureProfileRuntime(data);
-  final commandPath = '$runtime/commands.sock';
-  final launchCommand = arguments.contains('--stop-meeting')
-      ? 'stop-meeting'
-      : arguments.contains('--quick-meeting')
-      ? 'quick-meeting'
-      : 'activate';
-  if (await AppCommands.forward(
-    commandPath,
-    command: launchCommand,
-    activationToken: Platform.environment['XDG_ACTIVATION_TOKEN'],
-  ))
-    exit(0);
-  if (launchCommand == 'stop-meeting') exit(0);
-  AppCommands ownedCommands;
-  try {
-    ownedCommands = await AppCommands.bind(commandPath);
-  } catch (error) {
-    if (error is! SocketException && error is! FileSystemException) rethrow;
-    if (await AppCommands.forward(commandPath, command: launchCommand)) exit(0);
-    rethrow;
+  runApp(DesktopStartup(arguments: arguments));
+}
+
+Future<Domain> connectDesktopDomain(ProfilePaths profile) =>
+    RemoteDomain.connect(profile);
+void quitDesktop() => exit(0);
+
+/// Mount before connecting so service/profile failures remain visible and can
+/// be retried without retaining the failed attempt's activation socket.
+class DesktopStartup extends StatefulWidget {
+  final List<String> arguments;
+  final ProfilePaths? profile;
+  final Future<Domain> Function(ProfilePaths) connect;
+  final VoidCallback quit;
+  final void Function(String) configureRuntime;
+  const DesktopStartup({
+    super.key,
+    this.arguments = const [],
+    this.profile,
+    this.connect = connectDesktopDomain,
+    this.quit = quitDesktop,
+    this.configureRuntime = configureProfileRuntime,
+  });
+  @override
+  State<DesktopStartup> createState() => _DesktopStartupState();
+}
+
+class _DesktopStartupState extends State<DesktopStartup> {
+  Widget? application;
+  Object? failure;
+  bool starting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(start());
   }
-  final domain = await RemoteDomain.connect(profile);
-  runApp(
-    Foresight(
-      domain,
-      commands: ownedCommands,
-      quickOnLaunch: arguments.contains('--quick-meeting'),
-    ),
-  );
+
+  Future<void> start() async {
+    if (starting) return;
+    setState(() {
+      starting = true;
+      failure = null;
+    });
+    AppCommands? ownedCommands;
+    try {
+      final profile =
+          widget.profile ?? ProfilePaths.resolve(Platform.environment);
+      ensurePrivateDirectory(profile.data);
+      ensurePrivateDirectory(profile.runtime);
+      widget.configureRuntime(profile.data);
+      final commandPath = '${profile.runtime}/commands.sock';
+      final launchCommand = widget.arguments.contains('--stop-meeting')
+          ? 'stop-meeting'
+          : widget.arguments.contains('--quick-meeting')
+          ? 'quick-meeting'
+          : 'activate';
+      if (await AppCommands.forward(
+        commandPath,
+        command: launchCommand,
+        activationToken: Platform.environment['XDG_ACTIVATION_TOKEN'],
+      )) {
+        widget.quit();
+        return;
+      }
+      if (launchCommand == 'stop-meeting') {
+        widget.quit();
+        return;
+      }
+      try {
+        ownedCommands = await AppCommands.bind(commandPath);
+      } catch (error) {
+        if (error is! SocketException && error is! FileSystemException) rethrow;
+        if (await AppCommands.forward(commandPath, command: launchCommand)) {
+          widget.quit();
+          return;
+        }
+        rethrow;
+      }
+      final domain = await widget.connect(profile);
+      if (!mounted) {
+        await ownedCommands.close();
+        ownedCommands = null;
+        domain.close();
+        return;
+      }
+      setState(
+        () => application = Foresight(
+          domain,
+          commands: ownedCommands,
+          quickOnLaunch: widget.arguments.contains('--quick-meeting'),
+        ),
+      );
+      ownedCommands = null; // Workspace now owns the successful connection.
+    } catch (error) {
+      // Cleanup finishes before Retry becomes available or another app binds.
+      try {
+        await ownedCommands?.close();
+      } catch (_) {
+        // Preserve the actionable connection error if cleanup also fails.
+      }
+      if (mounted) setState(() => failure = error);
+    } finally {
+      if (mounted) setState(() => starting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      application ??
+      MaterialApp(
+        title: 'Open Foresight',
+        debugShowCheckedModeBanner: false,
+        theme: foresightTheme(),
+        home: Scaffold(
+          body: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 620),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      starting
+                          ? 'Starting Open Foresight…'
+                          : 'Open Foresight could not start',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 16),
+                    if (starting)
+                      const LinearProgressIndicator()
+                    else ...[
+                      SelectableText(failure.toString()),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Resolve the problem above, then retry. If another installation owns this profile, stop its application service explicitly or use a different profile.',
+                      ),
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          FilledButton(
+                            onPressed: start,
+                            child: const Text('Retry'),
+                          ),
+                          const SizedBox(width: 12),
+                          TextButton(
+                            onPressed: widget.quit,
+                            child: const Text('Quit'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
@@ -229,6 +355,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
   );
   bool busy = false, asking = false;
+  bool quickStarting = false;
+  bool systemAudioSetupReviewed = false;
   int _operations = 0;
   double answerFontSize = 16;
   final hiddenAnswers = <int>{};
@@ -522,6 +650,161 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     }
   }
 
+  Future<bool> ensureRecordingAccess() async {
+    if (!Platform.isMacOS) return true;
+    final capabilities = await d.command('audio.capabilities') as Map;
+    if (!mounted) return false;
+    if (capabilities['microphone_purpose_present'] == false ||
+        capabilities['system_audio_purpose_present'] == false) {
+      throw StateError(
+        'The recording service is missing audio access configuration. Reinstall Open Foresight.',
+      );
+    }
+    if (capabilities['microphone'] == 'authorized') {
+      if (systemAudioSetupReviewed ||
+          capabilities['system_audio_request'] == 'completed')
+        return true;
+      return setupSystemAudioAccess(forRecording: true);
+    }
+    final allow = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Allow recording access'),
+        content: const Text(
+          'Allow microphone access to transcribe your voice. macOS may also ask for Screen & System Audio Recording access when recording starts. If access was denied, enable Open Foresight in System Settings > Privacy & Security.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Allow microphone'),
+          ),
+        ],
+      ),
+    );
+    if (allow != true || !mounted) return false;
+    await requestMicrophoneAccess();
+    if (!mounted) return false;
+    if (captureCapabilities['microphone'] != 'authorized') {
+      throw StateError(
+        captureCapabilityError.isNotEmpty
+            ? captureCapabilityError
+            : 'Microphone access is required. Enable Open Foresight in System Settings > Privacy & Security > Microphone.',
+      );
+    }
+    if (systemAudioSetupReviewed ||
+        capabilities['system_audio_request'] == 'completed')
+      return true;
+    return setupSystemAudioAccess(forRecording: true);
+  }
+
+  Future<bool> setupSystemAudioAccess({bool forRecording = false}) async {
+    var requesting = false;
+    var completed = false;
+    var message =
+        'Allow Open Foresight under System Settings > Privacy & Security > Screen & System Audio Recording > System Audio Recording Only. The exact wording varies by macOS version.';
+    String? settingsUrl;
+    final proceed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, updateDialog) => AlertDialog(
+          title: const Text('Allow system audio recording'),
+          content: SizedBox(
+            width: 460,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Permission requested: System Audio Recording Only. This lets Foresight transcribe audio playing on your Mac.',
+                ),
+                const SizedBox(height: 12),
+                Text(message),
+                if (requesting) ...[
+                  const SizedBox(height: 12),
+                  const LinearProgressIndicator(),
+                  const Text('Waiting for the macOS audio access request…'),
+                ],
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            if (settingsUrl != null)
+              TextButton(
+                onPressed: () async {
+                  try {
+                    await openPlatformUri(Uri.parse(settingsUrl!));
+                  } catch (error) {
+                    if (dialogContext.mounted)
+                      updateDialog(() => message = error.toString());
+                  }
+                },
+                child: const Text('Open System Settings'),
+              ),
+            TextButton(
+              onPressed: requesting
+                  ? null
+                  : () async {
+                      updateDialog(() {
+                        requesting = true;
+                        completed = false;
+                      });
+                      try {
+                        final result =
+                            await d.command('audio.request_system') as Map;
+                        if (!dialogContext.mounted) return;
+                        updateDialog(() {
+                          requesting = false;
+                          completed =
+                              result['system_audio_request'] == 'completed';
+                          settingsUrl = result['settings_url'] as String?;
+                          message =
+                              '${result['message'] ?? 'The request was sent to macOS.'}\nTurn on Open Foresight under System Audio Recording Only, then return and continue. Permission is checked by actual capture.';
+                        });
+                        if (mounted)
+                          setState(
+                            () => captureCapabilities = {
+                              ...captureCapabilities,
+                              ...Map<String, dynamic>.from(result),
+                            },
+                          );
+                      } catch (error) {
+                        if (dialogContext.mounted)
+                          updateDialog(() {
+                            requesting = false;
+                            message = error.toString();
+                          });
+                      }
+                    },
+              child: Text(
+                settingsUrl == null ? 'Request access' : 'Retry request',
+              ),
+            ),
+            FilledButton(
+              onPressed: !completed || requesting
+                  ? null
+                  : () => Navigator.pop(dialogContext, true),
+              child: Text(forRecording ? 'Continue recording' : 'Done'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (proceed == true && mounted) {
+      systemAudioSetupReviewed = true;
+      return true;
+    }
+    return false;
+  }
+
   Future<void> refreshAudioDevices() async {
     try {
       final devices = await widget.deviceLoader();
@@ -536,7 +819,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   bool modelSetupShown = false;
-  Future<void> chooseGemma({bool firstRun = false}) async {
+  Future<void> chooseGemma({
+    bool firstRun = false,
+    bool embeddingOnly = false,
+  }) async {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -544,7 +830,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         store: d.store,
         firstRun: firstRun,
         needsEmbedding: needsModel(d.store, 'embedding'),
-        needsGeneration: !firstRun || needsModel(d.store, 'generation'),
+        needsGeneration:
+            !embeddingOnly && (!firstRun || needsModel(d.store, 'generation')),
         installEmbedding: (asset, current) async {
           await d.commandCurrent('models.embedding', {
             'path': asset.path,
@@ -552,7 +839,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             'digest': embeddingGemmaModel.digest,
           }, current);
           if (!current()) return;
-          if (mounted) setState(() => embeddingGpu = true);
+          if (mounted)
+            setState(() {
+              embeddingGpu = true;
+              modelState = 'EmbeddingGemma 2 ready for local source search';
+            });
         },
         directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
         library: runtimeConfiguration.nativeLibrary,
@@ -584,9 +875,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   String speechModelName() {
-    final registration = d.store
-        .rows("SELECT * FROM models WHERE kind='speech'")
-        .firstOrNull;
+    final registration = d.store.model('speech');
     if (registration == null) return 'Select a transcription model';
     final known = speechModels
         .where((model) => model.digest == registration['digest'])
@@ -597,9 +886,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> chooseSpeech() async {
-    final registration = d.store
-        .rows("SELECT runtime FROM models WHERE kind='speech'")
-        .firstOrNull;
+    final registration = d.store.model('speech');
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -1045,8 +1332,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ListView(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
-          children: d.store
-              .rows('SELECT * FROM models')
+          children: d.store.models
               .map(
                 (m) => ListTile(
                   title: Text('${m['kind']}: ${m['path']}'),
@@ -1103,7 +1389,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       ..addAll(Map<String, String>.from(state['provisional'] as Map? ?? {}));
   }
 
-  Future<void> startRecording() async {
+  Future<void> startRecording({bool accessReviewed = false}) async {
+    if (!accessReviewed && !await ensureRecordingAccess()) return;
+    if (!mounted) return;
     await d.command('meetings.start', {'id': meetingId!});
     syncCapture();
     if (mounted) setState(() {});

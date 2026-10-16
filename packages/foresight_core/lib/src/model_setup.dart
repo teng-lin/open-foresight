@@ -87,9 +87,7 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
 }
 
 String? speechSetupProblem(Store store) {
-  final model = store
-      .rows("SELECT * FROM models WHERE kind='speech'")
-      .firstOrNull;
+  final model = store.model('speech');
   if (model == null)
     return 'Set up a speech model and runner before recording.';
   final asset = File(model['path'] as String);
@@ -104,12 +102,11 @@ String? speechSetupProblem(Store store) {
 
 /// Registration alone is insufficient when a user has moved a model file.
 bool needsModel(Store store, String kind) {
-  final model = store.rows('SELECT path FROM models WHERE kind=?', [
-    kind,
-  ]).firstOrNull;
+  final model = store.model(kind);
   if (model == null) return true;
   final path = model['path'] as String;
-  if (kind == 'embedding' &&
+  if (!Platform.isMacOS &&
+      kind == 'embedding' &&
       Directory(path).existsSync() &&
       !File('$path/onnx/model.onnx').existsSync())
     return true;
@@ -117,15 +114,9 @@ bool needsModel(Store store, String kind) {
       !(kind == 'embedding' && Directory(path).existsSync()))
     return true;
   if (kind == 'generation') {
-    final registration = store.rows(
-      'SELECT runtime,backend FROM models WHERE kind=?',
-      [kind],
-    ).single;
-    final registered = registration['runtime'] as String;
+    final registered = model['runtime'] as String;
     final runtime = File(
-      registration['backend'] == 'litert_lm'
-          ? liteRtRunner(registered)
-          : registered,
+      model['backend'] == 'litert_lm' ? liteRtRunner(registered) : registered,
     );
     return !runtime.existsSync() || (runtime.statSync().mode & 0x49) == 0;
   }

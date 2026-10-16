@@ -13,6 +13,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -442,6 +443,33 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running)
         assert db.execute('SELECT count(*) FROM transcript WHERE meeting_id=? AND final=1',[meeting]).fetchone()[0]>0
 
 
+def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running):
+    import sqlite3
+    peer=running['peer']
+    owner=running['process']
+    wrong=subprocess.run([str(SERVICE),f'--stop-if-idle={owner.pid+1}'],env=running['env'],capture_output=True,text=True,timeout=15)
+    assert wrong.returncode!=0 and 'ownership changed' in wrong.stderr
+    assert peer.call('status')['pid']==owner.pid and owner.poll() is None
+    peer.call('models.register',{'kind':'speech','path':str(running['asset']),'runtime':str(running['runner'])})
+    meeting=peer.call('meetings.create',{'title':'Upgrade must defer recording'})['id']
+    peer.call('meetings.start',{'id':meeting})
+    refused=subprocess.run([str(SERVICE),f'--stop-if-idle={owner.pid}'],env=running['env'],capture_output=True,text=True,timeout=15)
+    assert refused.returncode!=0 and 'final transcript' in refused.stderr
+    assert owner.poll() is None and peer.call('status')['capture']['active']
+    deadline=time.monotonic()+15
+    while sum(peer.call('status')['capture']['samples'])<24000:
+        assert time.monotonic()<deadline, 'capture stopped after deferred upgrade'
+        time.sleep(.02)
+    peer.call('meetings.stop')
+    stopped=subprocess.run([str(SERVICE),f'--stop-if-idle={owner.pid}'],env=running['env'],capture_output=True,text=True,timeout=15)
+    assert stopped.returncode==0,stopped.stderr
+    assert json.loads(stopped.stdout)=={'stopped':True,'shutdown_verified':True}
+    assert owner.wait(timeout=5)==0
+    with sqlite3.connect('file:'+str(running['root']/'data/application.db')+'?mode=ro',uri=True) as db:
+        assert db.execute('SELECT state FROM meetings WHERE id=?',[meeting]).fetchone()[0]=='completed'
+        assert db.execute('SELECT count(*) FROM transcript WHERE meeting_id=? AND final=1',[meeting]).fetchone()[0]>0
+
+
 def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running):
     peer=running['peer']
     peer.call('models.register',{'kind':'speech','path':str(running['asset']),'runtime':str(running['runner'])})
@@ -468,3 +496,63 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
             time.sleep(.05)
     finally:
         process.terminate();process.wait(timeout=15);log.close()
+
+
+@pytest.mark.parametrize("helper_exits_first", [False, True])
+def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_first):
+    """A predecessor's surviving helper is stopped and positively acknowledged."""
+    data, runtime = tmp_path / 'data', tmp_path / 'run'
+    data.mkdir(mode=0o700)
+    runtime.mkdir(mode=0o700)
+    env = os.environ.copy()
+    for key in ('FORESIGHT_MODEL_MANIFEST', 'FORESIGHT_RESOURCES',
+                'FORESIGHT_RUNTIME_REVISION', 'FORESIGHT_INSTALL_ROOT'):
+        env.pop(key, None)
+    env.update(FORESIGHT_DATA=str(data), FORESIGHT_RUNTIME=str(runtime),
+               FORESIGHT_HELPER=str(HELPER), FORESIGHT_NATIVE=str(NATIVE))
+    with (tmp_path / 'adopted-helper.log').open('w+') as log:
+        helper = subprocess.Popen([str(HELPER), str(runtime / 'helper.sock'),
+                                   str(data / 'helper')], env=env, stdout=log, stderr=log)
+        # Simulate launchd's prompt reaping of the predecessor's orphan helper.
+        # An unreaped test-owned zombie still reserves its PID by definition.
+        threading.Thread(target=helper.wait, daemon=True).start()
+        service = None
+        peer = None
+        try:
+            deadline = time.monotonic() + 15
+            while not (runtime / 'helper.sock').exists():
+                assert helper.poll() is None
+                assert time.monotonic() < deadline
+                time.sleep(.025)
+            service = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
+            while peer is None:
+                assert service.poll() is None
+                assert time.monotonic() < deadline
+                try:
+                    peer = Peer(runtime / 'application.sock')
+                except (FileNotFoundError, ConnectionRefusedError):
+                    time.sleep(.025)
+            while True:
+                state = peer.call('status')
+                identity = (state.get('helper') or {}).get('instanceId', '')
+                if identity.startswith(f'{helper.pid}-'):
+                    break
+                assert time.monotonic() < deadline, state
+                time.sleep(.025)
+            if helper_exits_first:
+                helper.terminate()
+                helper.wait(timeout=10)
+            stopped = subprocess.run([str(SERVICE), f'--stop-if-idle={service.pid}'],
+                                     env=env, text=True, capture_output=True, timeout=20)
+            assert stopped.returncode == 0, stopped.stderr
+            assert json.loads(stopped.stdout) == {'stopped': True, 'shutdown_verified': True}
+            assert service.wait(timeout=10) == 0
+            assert helper.wait(timeout=10) == -signal.SIGTERM
+            assert not (data / '.application-endpoint.json').exists()
+        finally:
+            if peer is not None:
+                peer.close()
+            for process in (service, helper):
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)

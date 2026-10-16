@@ -35,6 +35,7 @@ def load(path=LIBRARY):
         ('fs_capture_finish',[C.c_void_p],None),
         ('fs_capture_stop',[C.c_void_p],None),
         ('fs_audio_capabilities',[],C.c_void_p),
+        ('fs_audio_request_system',[C.c_int32],C.c_void_p),
         ('fs_event_poll',[C.c_void_p,C.c_int],C.c_void_p),
         ('fs_string_free',[C.c_void_p],None),
         ('fs_pcm_rms',[C.POINTER(C.c_int16),C.c_size_t],C.c_double),
@@ -65,7 +66,13 @@ class NativeTest(unittest.TestCase):
     def test_macos_capture_permission_failure_and_finish_retains_events(self):
         capabilities = owned_json(self.lib, self.lib.fs_audio_capabilities())
         self.assertEqual(capabilities['backend'], 'core_audio_tap')
-        self.assertEqual(capabilities['system_audio'], 'permission_checked_on_capture')
+        self.assertEqual(capabilities['system_audio'], 'unknown')
+        self.assertEqual(capabilities['system_audio_request'], 'not_requested')
+        self.assertFalse(capabilities['permission_verified'])
+        if not capabilities['system_audio_purpose_present']:
+            result = owned_json(self.lib, self.lib.fs_audio_request_system(0))
+            self.assertEqual(result['code'], 'capture_bundle_misconfigured')
+            self.assertFalse(result['permission_verified'])
         if capabilities['microphone'] == 'authorized':
             self.skipTest('Microphone already granted; do not open a physical recording in CI')
         handle = self.lib.fs_capture_start(b'auto', 0, 48000)

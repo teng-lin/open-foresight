@@ -1,3 +1,13 @@
+if(APPLE)
+  # The standalone native LiteRT/ONNX archives are currently Linux x86-64.
+  # Keep Mac's validated runtime and expose the same helper worker protocol.
+  foreach(name foresight-model model_adapter.py litert_embedding_adapter.py litert_runner.py grounded_generation.py)
+    configure_file("macos/${name}" "${CMAKE_CURRENT_BINARY_DIR}/${name}" COPYONLY)
+  endforeach()
+  file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/foresight-model"
+    PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+  return()
+endif()
 include(FetchContent)
 set(SPM_ENABLE_SHARED OFF CACHE BOOL "" FORCE)
 set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "" FORCE)

@@ -2,6 +2,11 @@
 
 Add macOS support on top of the application-service refactor being developed on MSI. Keep Flutter for presentation, the plain Dart application core for business operations, and the existing retrieval and inference engines. Desktop and MCP must share one service, database writer, recording session, and model lifecycle per profile.
 
+Implementation evidence is tracked in [macos-validation.md](macos-validation.md).
+Build, bundle, MCP, and update commands are in [macos-support.md](macos-support.md).
+The implementation has not yet passed the complete signed installed-release and
+physical-audio gates; the acceptance checklist retains that distinction.
+
 ## Baseline and scope
 
 Reviewed on 2026-10-15:
@@ -113,7 +118,7 @@ Exit: a signed, notarized artifact passes installed-app checks with no developme
 
 ## Acceptance checklist
 
-- [ ] Application-service baseline is committed and its original Linux verification is recorded.
+- [x] Application-service baseline is committed and its original Linux verification is recorded.
 - [ ] Mac desktop and two MCP clients resolve the same profile and create exactly one service owner.
 - [ ] Service/MCP work without Flutter installed or a desktop window open; stdout stays protocol-only.
 - [ ] Source mutations, revision checks, read-only desktop queries, citations, graph persistence, and restart recovery retain their contracts.

@@ -1,0 +1,126 @@
+name: Mac support and Linux native regression
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    # GitHub's standard macos-15 label is Apple Silicon; Intel has its own
+    # macos-15-intel label. Fail early if runner allocation ever changes.
+    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      FORESIGHT_BUILD_JOBS: '3'
+      FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify Apple Silicon host
+        run: |
+          test "$RUNNER_ARCH" = ARM64
+          test "$(uname -m)" = arm64
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - name: Install build tools
+        run: brew install cmake ninja cocoapods
+      - name: Install Python development dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-dev.txt
+      - name: Install pinned Flutter
+        run: |
+          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
+          "$RUNNER_TEMP/flutter/bin/flutter" --version
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: sdk-cache
+        with:
+          path: build/sdk
+          key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
+      - name: Verify SDK checkout guards
+        run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
+      - name: Build macOS 15 compatible dependency SDK
+        run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
+      - name: Expose SDK code generators
+        run: echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
+      - name: Save completed dependency SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/sdk
+          key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
+      - name: Native, core, service, MCP, and Flutter gates
+        run: |
+          tools/build.sh --platform macos \
+            -DCMAKE_PREFIX_PATH="$PWD/build/sdk" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local'
+      - name: Verify native helper identity boundary
+        run: |
+          .venv/bin/python tests/integration/test_native_process.py \
+            build/native/libforesight_native.dylib build/services/helper/ForesightHelper
+      - name: Python contracts
+        run: |
+          .venv/bin/python -m pytest tests/contracts \
+            tests/models/test_grounded_generation.py tests/test_profile_migration.py \
+            tests/test_macos_bundle.py -v
+      - name: Assemble ad hoc development application
+        run: |
+          .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk
+          codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
+      - name: Installed application tooling tests
+        run: .venv/bin/python -m unittest discover -s tests -p test_macos_tools.py -v
+      - name: Relocated application MCP smoke with minimal environment
+        run: |
+          .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
+            --output test-results/macos-bundle.json
+      - name: Retain development package evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-development-evidence
+          path: |
+            dist/*.manifest.json
+            build/Testing/Temporary/LastTest.log
+            test-results/
+          if-no-files-found: ignore
+
+  linux-native:
+    # Arch provides a current Edition 2024 capable protoc and the matching
+    # gRPC runtime; Ubuntu's older distro protobuf cannot compile this schema.
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    timeout-minutes: 30
+    steps:
+      - name: Install Linux native toolchain
+        run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install Python development dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install -r requirements-dev.txt
+      - name: Build native helper and run Linux regression gates
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
+          cmake --build build --parallel 4
+          ctest --test-dir build --output-on-failure
+          .venv/bin/python tests/integration/test_native_process.py \
+            build/native/libforesight_native.so build/services/helper/ForesightHelper

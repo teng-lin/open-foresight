@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
-import 'package:foresight_core/src/service.dart' show serviceEndpoint;
+import 'package:foresight_core/src/service.dart'
+    show serviceEndpoint, serviceLaunchCommand;
 
 void main() {
   late Directory scratch;
@@ -14,6 +15,53 @@ void main() {
     );
   });
   tearDown(() => scratch.deleteSync(recursive: true));
+
+  test(
+    'packaged service uses LaunchServices with isolated explicit overrides',
+    () {
+      final bundle =
+          '${scratch.path}/App With Spaces.app/Contents/Library/Services/Service.app';
+      final executable = File('$bundle/Contents/MacOS/service')
+        ..createSync(recursive: true);
+      File('$bundle/Contents/Info.plist').writeAsStringSync('<plist/>');
+      final command = serviceLaunchCommand(executable.path, {
+        'FORESIGHT_DATA': '/private/profile with spaces',
+        'FORESIGHT_RUNTIME': '/private/runtime',
+        'FORESIGHT_LITERT_BACKEND': 'gpu',
+        'PYTHONPYCACHEPREFIX': '/private/cache',
+        'UNRELATED_SECRET': 'must not be forwarded',
+      }, macOS: true);
+      expect(command.executable, '/usr/bin/open');
+      expect(command.arguments.take(2), ['-g', '-n']);
+      expect(
+        command.arguments.last,
+        Directory(bundle).resolveSymbolicLinksSync(),
+      );
+      expect(
+        command.arguments,
+        contains('FORESIGHT_DATA=/private/profile with spaces'),
+      );
+      expect(command.arguments, contains('FORESIGHT_LITERT_BACKEND=gpu'));
+      expect(
+        command.arguments.join(' '),
+        isNot(contains('must not be forwarded')),
+      );
+      expect(
+        serviceLaunchCommand(executable.path, {}, macOS: false).executable,
+        executable.path,
+      );
+      final plain = File('${scratch.path}/dev-service')..createSync();
+      expect(
+        serviceLaunchCommand(plain.path, {}, macOS: true).executable,
+        plain.path,
+      );
+      File('$bundle/Contents/Info.plist').deleteSync();
+      expect(
+        () => serviceLaunchCommand(executable.path, {}, macOS: true),
+        throwsStateError,
+      );
+    },
+  );
 
   test(
     'bundle resource lookup survives spaces, nested service and minimal environment',
@@ -177,7 +225,7 @@ void main() {
       try {
         final startup = helper.start();
         await Future<void>.delayed(const Duration(milliseconds: 10));
-        await helper.close();
+        await Future.wait([helper.close(), helper.close()]);
         await startup;
         expect(marker.existsSync(), false);
       } finally {

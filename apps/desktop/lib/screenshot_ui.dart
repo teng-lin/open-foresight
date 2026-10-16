@@ -93,14 +93,30 @@ extension _ScreenshotScreens on _WorkspaceState {
   );
 
   Future<void> quickStart() async {
-    final created =
-        await d.command('meetings.create', {'title': '[New Meeting]'}) as Map;
-    update(() {
-      tab = 3;
-      meetingId = created['id'] as int;
-    });
-    if (speechSetupProblem(d.store) != null) return;
-    await run(startRecording);
+    if (!mounted || quickStarting || busy || recording != null) return;
+    update(() => quickStarting = true);
+    try {
+      if (speechSetupProblem(d.store) != null) {
+        await chooseSpeech();
+        if (!mounted || speechSetupProblem(d.store) != null) return;
+      }
+      if (!await ensureRecordingAccess() || !mounted) return;
+      await run(() async {
+        final created =
+            await d.command('meetings.create', {'title': '[New Meeting]'})
+                as Map;
+        if (!mounted) return;
+        update(() {
+          tab = 3;
+          meetingId = created['id'] as int;
+        });
+        await startRecording(accessReviewed: true);
+      });
+    } catch (failure, stack) {
+      if (mounted) await run(() => Future<void>.error(failure, stack));
+    } finally {
+      if (mounted) update(() => quickStarting = false);
+    }
   }
 
   SingleActivator get quickActivator {
@@ -264,16 +280,14 @@ extension _ScreenshotScreens on _WorkspaceState {
                                 Flexible(
                                   child: Text.rich(
                                     TextSpan(
-                                      children: [
-                                        if (MediaQuery.sizeOf(context).width >
-                                            900)
-                                          const TextSpan(
-                                            text: 'Google AI Edge ',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w700,
-                                            ),
+                                      children: const [
+                                        TextSpan(
+                                          text: 'Open ',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w700,
                                           ),
-                                        const TextSpan(text: 'Foresight'),
+                                        ),
+                                        TextSpan(text: 'Foresight'),
                                       ],
                                     ),
                                     style: const TextStyle(fontSize: 18),
@@ -322,7 +336,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                         recordingHeader()
                       else
                         FilledButton.icon(
-                          onPressed: busy || meetingEnhancing
+                          onPressed: busy || quickStarting || meetingEnhancing
                               ? null
                               : quickStart,
                           icon: Icon(
@@ -519,9 +533,7 @@ extension _ScreenshotScreens on _WorkspaceState {
   );
 
   String generationName() {
-    final model = d.store
-        .rows("SELECT * FROM models WHERE kind='generation'")
-        .firstOrNull;
+    final model = d.store.model('generation');
     if (model == null) return 'Choose a local model';
     final known = gemmaModels
         .where((candidate) => candidate.digest == model['digest'])
@@ -574,6 +586,8 @@ extension _ScreenshotScreens on _WorkspaceState {
         'UTF-8 text; ',
         'pdftotext -layout (Linux adapter); ',
         'unrtf --text (Linux adapter); ',
+        'PDFKit (macOS adapter); ',
+        'NSAttributedString RTF (macOS adapter); ',
       ]) {
         if (provenance.startsWith(prefix))
           excluded.add(provenance.substring(prefix.length));
@@ -3423,6 +3437,24 @@ extension _ScreenshotScreens on _WorkspaceState {
               ),
               const Divider(height: 1),
               settingRow(
+                'Source Search Model',
+                'EmbeddingGemma 2 runs source search locally. The download is 485 MB.',
+                OutlinedButton(
+                  onPressed:
+                      busy ||
+                          recording != null ||
+                          !needsModel(d.store, 'embedding')
+                      ? null
+                      : () => chooseGemma(embeddingOnly: true),
+                  child: Text(
+                    needsModel(d.store, 'embedding')
+                        ? 'Download EmbeddingGemma 2'
+                        : 'Embedding model ready',
+                  ),
+                ),
+              ),
+              const Divider(height: 1),
+              settingRow(
                 'Transcription Model',
                 'Choose multilingual speech recognition for Chinese and English.',
                 OutlinedButton.icon(
@@ -3564,7 +3596,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                   subtitle: Text(
                     captureCapabilityError.isNotEmpty
                         ? captureCapabilityError
-                        : 'Microphone: $microphoneAccessLabel\nSystem audio access is checked when you explicitly start recording. Enable Open Foresight under Privacy & Security > Screen & System Audio Recording if access is denied.',
+                        : 'Microphone: $microphoneAccessLabel\nSystem audio access is checked when you explicitly start recording. Enable Open Foresight under Privacy & Security > Screen & System Audio Recording > System Audio Recording Only if access is denied.',
                   ),
                 ),
                 Wrap(
@@ -3575,6 +3607,14 @@ extension _ScreenshotScreens on _WorkspaceState {
                           ? null
                           : () => run(requestMicrophoneAccess),
                       child: const Text('Allow microphone'),
+                    ),
+                    TextButton(
+                      onPressed: busy
+                          ? null
+                          : () => run(() async {
+                              await setupSystemAudioAccess();
+                            }),
+                      child: const Text('Allow system audio'),
                     ),
                     TextButton(
                       onPressed: busy ? null : refreshCaptureCapabilities,

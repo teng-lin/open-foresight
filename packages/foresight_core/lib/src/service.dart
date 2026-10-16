@@ -211,15 +211,25 @@ class ApplicationService {
   final ServerSocket listener;
   final String path;
   final RandomAccessFile lock;
+  final RandomAccessFile? installationLock;
   final _clients = <Socket>{};
   final _leases = <Socket, Map<int, _RequestLease>>{};
   final _subscriptions = <Socket, Map<int, StreamSubscription<Object?>>>{};
   StreamSubscription<void>? _changes;
   Timer? _heartbeat;
   bool _closing = false;
+  Future<void>? _shutdown;
+  final _closed = Completer<void>();
+  Future<void> get closed => _closed.future;
   int _connectionSequence = 0;
   Future<void> _ready = Future<void>.value();
-  ApplicationService._(this.domain, this.listener, this.path, this.lock) {
+  ApplicationService._(
+    this.domain,
+    this.listener,
+    this.path,
+    this.lock,
+    this.installationLock,
+  ) {
     listener.listen(_accept);
     _changes = domain.application.changes.stream.listen((_) => _broadcast());
     _heartbeat = Timer.periodic(
@@ -228,6 +238,20 @@ class ApplicationService {
     );
   }
   static Future<ApplicationService> start(ProfilePaths profile) async {
+    // This must precede native loads, database opens, and worker creation.
+    final installationLock = acquireInstallationLock();
+    try {
+      return await _start(profile, installationLock);
+    } catch (_) {
+      installationLock?.closeSync();
+      rethrow;
+    }
+  }
+
+  static Future<ApplicationService> _start(
+    ProfilePaths profile,
+    RandomAccessFile? installationLock,
+  ) async {
     privateDirectory(profile.data);
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
@@ -287,7 +311,13 @@ class ApplicationService {
         throw StateError('Cannot protect service endpoint record');
       }
       temporary.renameSync(endpoint.path);
-      final service = ApplicationService._(domain, listener, path, lock);
+      final service = ApplicationService._(
+        domain,
+        listener,
+        path,
+        lock,
+        installationLock,
+      );
       final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
         domain.initialize(
@@ -365,6 +395,25 @@ class ApplicationService {
                   request['method'] is! String ||
                   request['args'] is! Map)
                 throw FormatException('Invalid request');
+              if (_closing) {
+                _send(client, {
+                  'id': id,
+                  'error':
+                      'Application service is shutting down; retry after it exits.',
+                  'done': true,
+                });
+                return;
+              }
+              if (request['method'] == 'service.stop_if_idle') {
+                unawaited(
+                  _stopIfIdle(
+                    client,
+                    id,
+                    Map<String, dynamic>.from(request['args'] as Map),
+                  ),
+                );
+                return;
+              }
               if ((_subscriptions[client]?.length ?? 0) >= 32) {
                 _send(client, {
                   'id': id,
@@ -435,17 +484,72 @@ class ApplicationService {
         );
   }
 
+  Future<void> _stopIfIdle(
+    Socket client,
+    int id,
+    Map<String, dynamic> args,
+  ) async {
+    try {
+      if ((args['expected_pid'] != null && args['expected_pid'] != pid) ||
+          (args['installation_root'] != null &&
+              args['installation_root'] != configuredInstallationRoot) ||
+          (args['runtime_revision'] != null &&
+              args['runtime_revision'] !=
+                  runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'])) {
+        throw StateError(
+          'Application service ownership changed before idle shutdown; retry without replacing the app.',
+        );
+      }
+      final capture = domain.application.captureState;
+      if (capture['active'] == true || capture['finishing'] == true) {
+        throw StateError(
+          'Recording is active or finalizing. Stop recording and wait for the final transcript before upgrading.',
+        );
+      }
+      // The request callback and close's barrier execute without yielding. In
+      // particular, a recording-start request awaiting helper/model readiness
+      // must not slip between an idle status check and shutdown acceptance.
+      if (_leases.values.any(
+        (leases) => leases.values.any((lease) => lease.method != 'status'),
+      )) {
+        throw StateError(
+          'Application operations are in progress. Retry the upgrade after they finish.',
+        );
+      }
+      await close(acknowledgementClient: client);
+      if (!domain.helper.shutdownVerified)
+        throw StateError(
+          'Helper shutdown could not be verified. The application was not cleared for upgrade.',
+        );
+      _send(client, {
+        'id': id,
+        'result': {'stopped': true, 'shutdown_verified': true},
+        'done': true,
+      });
+    } catch (error) {
+      _send(client, {'id': id, 'error': error.toString(), 'done': true});
+    }
+    try {
+      await client.flush();
+    } catch (_) {
+      /* Missing acknowledgement is failure for the caller. */
+    }
+    if (_closing) client.destroy();
+  }
+
   Future<Object?> _execute(
     String method,
     Map<String, dynamic> args,
     _RequestLease lease,
   ) async {
+    if (_closing) throw StateError('Application service is shutting down');
     if (!{
       'status',
       'audio.capabilities',
       'notifications.capabilities',
       'notifications.request_permission',
       'audio.request_microphone',
+      'audio.request_system',
       'sources.list',
       'sources.get',
       'notes.list',
@@ -460,6 +564,7 @@ class ApplicationService {
       'google.configure',
     }.contains(method))
       await _ready;
+    if (_closing) throw StateError('Application service is shutting down');
     return domain.application.call(
       method,
       args,
@@ -478,45 +583,114 @@ class ApplicationService {
     unawaited(_subscriptions[client]?.remove(id)?.cancel());
   }
 
-  Future<void> close() async {
-    if (_closing) return;
+  Future<void> close({Socket? acknowledgementClient}) => _shutdown ??=
+      _close(acknowledgementClient: acknowledgementClient).whenComplete(() {
+        if (!_closed.isCompleted) _closed.complete();
+      });
+
+  Future<void> _close({Socket? acknowledgementClient}) async {
     _closing = true;
     _heartbeat?.cancel();
-    await _changes?.cancel();
     Object? failure;
-    try {
-      await domain.application.close();
-    } catch (error) {
-      failure = error;
+    Future<void> attempt(FutureOr<void> Function() action) async {
+      try {
+        await action();
+      } catch (error) {
+        failure ??= error;
+      }
     }
-    domain.close();
-    domain.generator?.close();
-    await domain.helper.close();
+
+    // Application.close synchronously rejects new business calls and cancels
+    // background timers before its first await.
+    await attempt(domain.application.close);
+    await attempt(() async {
+      await _changes?.cancel();
+    });
+    await attempt(domain.close);
+    await attempt(() => domain.generator?.close());
+    await attempt(domain.helper.close);
     for (final client in _clients.toList()) {
-      client.destroy();
+      if (client != acknowledgementClient) client.destroy();
     }
-    await listener.close();
-    domain.store.close();
-    if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
-      File(path).deleteSync();
-    final endpoint = File(
-      '${File(domain.store.path).parent.path}/.application-endpoint.json',
-    );
-    if (domain.helper.shutdownVerified &&
-        failure == null &&
-        endpoint.existsSync())
-      endpoint.deleteSync();
-    lock.closeSync();
+    await attempt(listener.close);
+    await attempt(domain.store.close);
+    await attempt(() {
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
+        File(path).deleteSync();
+      final endpoint = File(
+        '${File(domain.store.path).parent.path}/.application-endpoint.json',
+      );
+      if (domain.helper.shutdownVerified &&
+          failure == null &&
+          endpoint.existsSync())
+        endpoint.deleteSync();
+    });
+    await attempt(lock.closeSync);
+    await attempt(() => installationLock?.closeSync());
     if (failure != null)
       throw StateError('Application shutdown failed: $failure');
   }
+}
+
+Future<ServiceClient> _connectCompatibleService(String path) async {
+  final client = await ServiceClient.connect(path);
+  if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
+    try {
+      validateServiceCompatibility(await client.call('status') as Map);
+    } catch (_) {
+      await client.close();
+      rethrow;
+    }
+  }
+  return client;
+}
+
+/// Start packaged services as applications through LaunchServices so macOS can
+/// attribute protected operations to the service bundle. Installed TCC attribution
+/// still requires an integration check.
+/// Forward profile/runtime overrides explicitly; an agent host's unrelated
+/// environment must not become command-line arguments or service configuration.
+({String executable, List<String> arguments}) serviceLaunchCommand(
+  String executable,
+  Map<String, String> environment, {
+  bool? macOS,
+}) {
+  if (macOS ?? Platform.isMacOS) {
+    final canonical = File(executable).resolveSymbolicLinksSync();
+    const executableMarker = '.app/Contents/MacOS/';
+    final marker = canonical.lastIndexOf(executableMarker);
+    if (marker >= 0 &&
+        !canonical.substring(marker + executableMarker.length).contains('/')) {
+      final bundle = canonical.substring(0, marker + 4);
+      if (!File('$bundle/Contents/Info.plist').existsSync()) {
+        throw StateError(
+          'Application service bundle is missing Info.plist: $bundle',
+        );
+      }
+      return (
+        executable: '/usr/bin/open',
+        arguments: [
+          '-g',
+          '-n',
+          for (final entry in environment.entries)
+            if (entry.key.startsWith('FORESIGHT_') ||
+                entry.key == 'PYTHONPYCACHEPREFIX') ...[
+              '--env',
+              '${entry.key}=${entry.value}',
+            ],
+          bundle,
+        ],
+      );
+    }
+  }
+  return (executable: executable, arguments: const []);
 }
 
 /// Attach first; competing launchers may race safely on the service's OS lock.
 Future<ServiceClient> ensureService(ProfilePaths profile) async {
   var path = serviceEndpoint(profile);
   try {
-    return await ServiceClient.connect(path);
+    return await _connectCompatibleService(path);
   } on SocketException {
     /* launch */
   }
@@ -527,25 +701,50 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
     throw StateError(
       'Set FORESIGHT_SERVICE to the application-service executable',
     );
-  await Process.start(
-    executable,
-    const [],
-    mode: ProcessStartMode.detached,
-    environment: {
-      ...runtimeConfiguration.environment,
-      'FORESIGHT_DATA': profile.data,
-      'FORESIGHT_RUNTIME': profile.runtime,
-    },
-  );
+  final environment = {
+    ...runtimeConfiguration.environment,
+    'FORESIGHT_DATA': profile.data,
+    'FORESIGHT_RUNTIME': profile.runtime,
+  };
+  final launch = serviceLaunchCommand(executable, environment);
+  String? startupLog;
+  if (launch.executable == '/usr/bin/open') {
+    startupLog = '${profile.runtime}/service-startup.log';
+    if (FileSystemEntity.typeSync(startupLog, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw StateError(
+        'Service startup log must not be a symbolic link: $startupLog',
+      );
+    }
+    File(startupLog).openSync(mode: FileMode.append).closeSync();
+    final protect = await Process.run('/bin/chmod', ['600', startupLog]);
+    if (protect.exitCode != 0) throw StateError('Cannot protect $startupLog');
+    launch.arguments.insertAll(2, ['--stderr', startupLog]);
+    final result = await Process.run(launch.executable, launch.arguments);
+    if (result.exitCode != 0) {
+      throw StateError(
+        'LaunchServices could not start the application service: ${result.stderr}. See $startupLog.',
+      );
+    }
+  } else {
+    await Process.start(
+      launch.executable,
+      launch.arguments,
+      mode: ProcessStartMode.detached,
+      environment: environment,
+    );
+  }
   for (var attempt = 0; attempt < 100; attempt++) {
     try {
       path = serviceEndpoint(profile);
-      return await ServiceClient.connect(path);
+      return await _connectCompatibleService(path);
     } on SocketException {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }
   throw StateError(
-    'Application service did not start. Run $executable directly to inspect the startup error.',
+    startupLog == null
+        ? 'Application service did not start. Run $executable directly to inspect the startup error.'
+        : 'Application service did not start. Inspect $startupLog for startup diagnostics.',
   );
 }

@@ -130,11 +130,17 @@ class Application {
           return await notificationCapabilities(requestPermission: true);
         case 'audio.capabilities':
           return audioCapabilities();
+        case 'audio.request_system':
+          return await requestSystemAudioPermission();
         case 'audio.request_microphone':
           return await requestMicrophonePermission();
         case 'status':
           return {
             'pid': pid,
+            'application_api_version': 1,
+            'installation_root': configuredInstallationRoot,
+            'runtime_revision':
+                runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
             'models_busy': modelBusy,
             'capture': captureState,
             'sources_paused': domain.sourcesPaused,
@@ -859,9 +865,7 @@ class Application {
     if (modelBusy) throw StateError('Model configuration is busy');
     _meeting(id);
     if (recording != null) throw StateError('A meeting is already recording');
-    final speech = store
-        .rows("SELECT * FROM models WHERE kind='speech'")
-        .firstOrNull;
+    final speech = store.model('speech');
     if (speech == null)
       throw StateError('Register speech model and whisper.cpp runner first');
     provisionalTranscript.clear();
@@ -980,7 +984,6 @@ class Application {
     _closed = true;
     _googleTimer?.cancel();
     google.close();
-    await googleAuth.close();
     _liveIndex?.cancel();
     _inactivity?.cancel();
     for (final timer in _enhance.values) {
@@ -988,6 +991,7 @@ class Application {
     }
     _enhance.clear();
     try {
+      await googleAuth.close();
       if (recording != null) await stopRecording();
     } finally {
       await changes.close();

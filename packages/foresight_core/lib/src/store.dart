@@ -1,3 +1,4 @@
+import 'platform_services.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'graph_labels.dart';
@@ -225,6 +226,60 @@ class Store {
     }
   }
 
+  static const _runtimeResources = {
+    'generation': 'FORESIGHT_LITERT_RUNNER',
+    'speech': 'FORESIGHT_WHISPER_RUNTIME',
+  };
+
+  String? _ownedRuntime(String resource) {
+    final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
+    final path = runtimeConfiguration[resource];
+    if (root == null || path == null) return null;
+    try {
+      final canonicalRoot = Directory(root).resolveSymbolicLinksSync();
+      final file = File(path);
+      final canonical = file.resolveSymbolicLinksSync();
+      if (!canonical.startsWith('$canonicalRoot/') ||
+          (file.statSync().mode & 0x49) == 0)
+        return null;
+      return canonical;
+    } on FileSystemException {
+      return null;
+    }
+  }
+
+  /// Resolve only provenance recorded during an explicit model registration.
+  /// Legacy absolute paths and external runners never acquire inferred ownership.
+  Map<String, Object?> resolveModelRuntime(Map<String, Object?> model) {
+    final kind = model['kind'];
+    final resource = _runtimeResources[kind];
+    if (resource == null) return model;
+    try {
+      final record = jsonDecode(preference('modelRuntimeResource.$kind'));
+      if (record is! Map ||
+          record['resource'] != resource ||
+          record['runtime'] != model['runtime'] ||
+          record['digest'] != model['digest'] ||
+          record['backend'] != model['backend'])
+        return model;
+      final current = _ownedRuntime(resource);
+      if (current == null) return model;
+      return {...model, 'runtime': current};
+    } on FormatException {
+      return model;
+    }
+  }
+
+  Map<String, Object?>? model(String kind) {
+    final registration = rows('SELECT * FROM models WHERE kind=?', [
+      kind,
+    ]).firstOrNull;
+    return registration == null ? null : resolveModelRuntime(registration);
+  }
+
+  List<Map<String, Object?>> get models =>
+      rows('SELECT * FROM models').map(resolveModelRuntime).toList();
+
   Future<void> register(
     String kind,
     String path,
@@ -268,10 +323,44 @@ class Store {
       throw StateError(
         'The $kind model does not match its installation digest',
       );
-    db.execute(
-      'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?) ON CONFLICT(kind) DO UPDATE SET path=excluded.path,digest=excluded.digest,runtime=excluded.runtime,backend=excluded.backend',
-      [kind, File(path).absolute.path, digest.toString(), runtime, backend],
-    );
+    String? resource = _runtimeResources[kind];
+    if (resource != null) {
+      final owned = _ownedRuntime(resource);
+      try {
+        if (owned == null || File(runtime).resolveSymbolicLinksSync() != owned)
+          resource = null;
+        else
+          runtime = File(runtime).absolute.path;
+      } on FileSystemException {
+        resource = null;
+      }
+    }
+    db.execute('SAVEPOINT register_model_runtime');
+    try {
+      db.execute(
+        'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?) ON CONFLICT(kind) DO UPDATE SET path=excluded.path,digest=excluded.digest,runtime=excluded.runtime,backend=excluded.backend',
+        [kind, File(path).absolute.path, digest.toString(), runtime, backend],
+      );
+      final key = 'modelRuntimeResource.$kind';
+      if (resource == null) {
+        db.execute('DELETE FROM preferences WHERE key=?', [key]);
+      } else {
+        setPreference(
+          key,
+          jsonEncode({
+            'resource': resource,
+            'runtime': runtime,
+            'digest': digest.toString(),
+            'backend': backend,
+          }),
+        );
+      }
+      db.execute('RELEASE register_model_runtime');
+    } catch (_) {
+      db.execute('ROLLBACK TO register_model_runtime');
+      db.execute('RELEASE register_model_runtime');
+      rethrow;
+    }
   }
 
   int meeting(String title) {
@@ -443,8 +532,45 @@ class Store {
 }
 
 class Parser {
+  final bool _macOS;
+  final String? _macParser;
+  Parser({bool? macOS, String? macParser})
+    : _macOS = macOS ?? Platform.isMacOS,
+      _macParser = macParser;
   Future<(String, String)> extract(String path) async {
     final lower = path.toLowerCase();
+    if (_macOS && (lower.endsWith('.pdf') || lower.endsWith('.rtf'))) {
+      final executable =
+          _macParser ?? runtimeConfiguration['FORESIGHT_FILE_PARSER'];
+      if (executable == null || executable.isEmpty)
+        throw StateError(
+          'The bundled PDF/RTF extractor is unavailable. Reinstall Open Foresight.',
+        );
+      ProcessResult result;
+      try {
+        result = await Process.run(executable, [
+          lower.endsWith('.pdf') ? '--pdf' : '--rtf',
+          path,
+        ]);
+      } on ProcessException catch (error) {
+        throw StateError(
+          'Cannot launch the bundled file extractor. Reinstall Open Foresight: ${error.message}',
+        );
+      }
+      if (result.exitCode != 0)
+        throw StateError(
+          'File extraction failed: ${result.stderr.toString().trim()}',
+        );
+      final text = result.stdout as String;
+      if (text.trim().isEmpty)
+        throw StateError('The selected document contains no extractable text.');
+      return (
+        text,
+        lower.endsWith('.pdf')
+            ? 'PDFKit (macOS adapter)'
+            : 'NSAttributedString RTF (macOS adapter)',
+      );
+    }
     if (lower.endsWith('.pdf')) {
       final r = await Process.run('pdftotext', ['-layout', path, '-']);
       if (r.exitCode != 0)

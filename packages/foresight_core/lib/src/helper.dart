@@ -133,8 +133,10 @@ class Helper {
         await Future<void>.delayed(const Duration(milliseconds: 250));
         continue;
       }
+      if (stopping) return;
       state = 'live (compatibility ${ping.version})';
       await watch?.cancel();
+      if (stopping) return;
       watch = control.HelperControlClient(channel)
           .watchState(control.WatchRequest())
           .listen(
@@ -163,12 +165,12 @@ class Helper {
     await watch?.cancel();
     // Resolve launch/adoption races before deciding which process is owned.
     try {
-      await _startupProbe;
+      if (_startupProbe != null) await _startupProbe;
     } catch (_) {
       /* No helper answered. */
     }
     try {
-      await _launching;
+      if (_launching != null) await _launching;
     } catch (_) {
       /* The helper could not start. */
     }
@@ -186,8 +188,11 @@ class Helper {
         // A service restart can adopt its predecessor's surviving helper.
         // Verify the private profile arguments before releasing that owner.
         if (_adopted || snapshot != null) shutdownVerified = false;
-        final pid = int.tryParse(snapshot?.instanceId.split('-').first ?? '');
-        if (pid != null) {
+        final instance = snapshot?.instanceId ?? '';
+        final pid = int.tryParse(instance.split('-').first);
+        if (pid != null &&
+            pid > 0 &&
+            RegExp(r'^[1-9][0-9]*-[1-9][0-9]*$').hasMatch(instance)) {
           shutdownVerified = false;
           try {
             final library = DynamicLibrary.open(
@@ -206,7 +211,12 @@ class Helper {
             final a = socket.toNativeUtf8(), b = storage.toNativeUtf8();
             final identity = snapshot!.instanceId.toNativeUtf8();
             try {
-              if (matches(pid, a, b, identity) == 1) {
+              final match = matches(pid, a, b, identity);
+              if (match == 0) {
+                // The adopted identity is positively gone or replaced. Never
+                // signal a mismatching PID; unknown inspection remains unsafe.
+                shutdownVerified = true;
+              } else if (match == 1) {
                 Process.killPid(pid, ProcessSignal.sigterm);
                 for (var attempt = 0; attempt < 50; attempt++) {
                   if (matches(pid, a, b, identity) == 0) {

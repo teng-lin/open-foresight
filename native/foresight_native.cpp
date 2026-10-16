@@ -319,6 +319,14 @@ char *fs_audio_capabilities() {
   return owned("{\"backend\":\"pipewire\"}");
 #endif
 }
+char *fs_audio_request_system(int32_t timeout_ms) {
+#ifdef __APPLE__
+  return owned(fs_macos_request_system(timeout_ms));
+#else
+  (void)timeout_ms;
+  return owned("{\"system_audio\":\"unavailable\",\"system_audio_request\":\"failed\",\"permission_verified\":false,\"code\":\"unsupported_platform\",\"message\":\"System audio permission requests are specific to macOS.\"}");
+#endif
+}
 int fs_audio_request_microphone() {
 #ifdef __APPLE__
   return fs_macos_request_microphone() ? 0 : 1;
@@ -795,6 +803,14 @@ size_t fs_resample_pcm(const int16_t *input, size_t n, int in_rate,
 }
 }
 
+// ESRCH positively proves that the process no longer exists. Inspection errors
+// such as EPERM or inaccessible /proc remain unknown; they must never authorize
+// signalling an unverified PID or certify successful shutdown.
+static int process_inspection_failure(pid_t value) {
+  if (kill(value, 0) < 0 && errno == ESRCH) return 0;
+  return -1;
+}
+
 extern "C" int fs_process_matches(int64_t value, const char *socket,
                                   const char *storage, const char *instance) {
   if (value <= 0 || value > INT32_MAX || !socket || !storage || !instance)
@@ -805,10 +821,10 @@ extern "C" int fs_process_matches(int64_t value, const char *socket,
   std::string executable;
 #ifdef __APPLE__
   char executable_buffer[PROC_PIDPATHINFO_MAXSIZE];
-  if (proc_pidpath(value, executable_buffer, sizeof(executable_buffer)) <= 0) return -1;
+  if (proc_pidpath(value, executable_buffer, sizeof(executable_buffer)) <= 0) return process_inspection_failure(static_cast<pid_t>(value));
   executable = executable_buffer;
   proc_bsdinfo info{};
-  if (proc_pidinfo(value, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info)) return -1;
+  if (proc_pidinfo(value, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info)) return process_inspection_failure(static_cast<pid_t>(value));
   if (info.pbi_uid != getuid()) return 0;
   // Helper IDs use system_clock's native ticks (microseconds on Apple libc++).
   // Refuse an instance older than this process's creation, preventing stale
@@ -823,9 +839,9 @@ extern "C" int fs_process_matches(int64_t value, const char *socket,
   } catch (...) { return 0; }
   int mib[] = {CTL_KERN, KERN_PROCARGS2, static_cast<int>(value)};
   size_t size = 0;
-  if (sysctl(mib, 3, nullptr, &size, nullptr, 0)) return -1;
+  if (sysctl(mib, 3, nullptr, &size, nullptr, 0)) return process_inspection_failure(static_cast<pid_t>(value));
   std::vector<char> bytes(size);
-  if (sysctl(mib, 3, bytes.data(), &size, nullptr, 0) || size < sizeof(int)) return -1;
+  if (sysctl(mib, 3, bytes.data(), &size, nullptr, 0) || size < sizeof(int)) return process_inspection_failure(static_cast<pid_t>(value));
   int count = 0;
   memcpy(&count, bytes.data(), sizeof(count));
   size_t offset = sizeof(count);
@@ -834,20 +850,20 @@ extern "C" int fs_process_matches(int64_t value, const char *socket,
   for (int i = 0; i < count && offset < size; ++i) {
     size_t end = offset;
     while (end < size && bytes[end]) ++end;
-    if (end == size) return -1;
+    if (end == size) return process_inspection_failure(static_cast<pid_t>(value));
     args.emplace_back(bytes.data() + offset, end - offset);
     offset = end + 1;
   }
 #else
   struct stat info{};
   std::string path = "/proc/" + std::to_string(value);
-  if (stat(path.c_str(), &info)) return -1;
+  if (stat(path.c_str(), &info)) return process_inspection_failure(static_cast<pid_t>(value));
   if (info.st_uid != getuid()) return 0;
   std::error_code error;
   executable = std::filesystem::read_symlink(path + "/exe", error).string();
-  if (error) return -1;
+  if (error) return process_inspection_failure(static_cast<pid_t>(value));
   std::ifstream input(path + "/cmdline", std::ios::binary);
-  if (!input) return -1;
+  if (!input) return process_inspection_failure(static_cast<pid_t>(value));
   std::string arg;
   while (std::getline(input, arg, '\0')) args.push_back(arg);
 #endif

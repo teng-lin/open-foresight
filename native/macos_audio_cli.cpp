@@ -6,6 +6,9 @@ int main(int argc, char **argv) {
   std::string action = argc > 1 ? argv[1] : "--capabilities";
   if (action == "--list-devices") std::cout << fs_macos_devices() << '\n';
   else if (action == "--capabilities") std::cout << fs_macos_capabilities() << '\n';
+  else if (action == "--request-system") {
+    std::cout << fs_macos_request_system(30000) << '\n';
+  }
   else if (action == "--request-microphone") {
     bool granted = fs_macos_request_microphone();
     std::cout << "{\"granted\":" << (granted ? "true" : "false") << "}\n";
@@ -20,5 +23,5 @@ int main(int argc, char **argv) {
     deadline.join();
     std::cout << "{\"pcm_bytes\":" << bytes << ",\"nonzero_bytes\":" << nonzero << ",\"failed\":" << (failed ? "true" : "false") << "}\n";
     return failed || !bytes ? 1 : 0;
-  } else { std::cerr << "Usage: foresight-audio --list-devices|--capabilities|--request-microphone|--probe microphone|system [device-uid]\n"; return 2; }
+  } else { std::cerr << "Usage: foresight-audio --list-devices|--capabilities|--request-microphone|--request-system|--probe microphone|system [device-uid]\n"; return 2; }
 }
