@@ -6,6 +6,14 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Header-only application dependency, independent of the expensive SDK build.
 RUN apt-get update && apt-get install -y --no-install-recommends nlohmann-json3-dev && \
     rm -rf /var/lib/apt/lists/*
+# The cached SDK uses a shallow, commit-pinned Flutter checkout. Restore its
+# matching release tag before pub resolves packages, verifying the tag cannot
+# change the pinned framework revision. Discard the previously cached unknown
+# version so Flutter derives it from that tag.
+RUN git -C /opt/flutter fetch --depth=1 origin refs/tags/3.35.7:refs/tags/3.35.7 && \
+    test "$(git -C /opt/flutter rev-parse refs/tags/3.35.7)" = "$(git -C /opt/flutter rev-parse HEAD)" && \
+    rm -f /opt/flutter/bin/cache/flutter.version.json && \
+    flutter --version --machine | python3 -c 'import json, sys; assert json.load(sys.stdin)["frameworkVersion"] == "3.35.7"'
 WORKDIR /src
 COPY . .
 ARG SOURCE_REVISION
