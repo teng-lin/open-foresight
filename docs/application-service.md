@@ -164,7 +164,9 @@ service launches and helper subprocesses. Packaged Mac services launch through
 LaunchServices (`open -g -n --env KEY=value service.app`) with explicit runtime
 and profile overrides, allowing the background service bundle to own its app
 identity without a Flutter window. Plain development executables launch directly.
-The installed app must still verify the actual TCC attribution. Profile content and downloaded models
+Service startup stderr is retained in the private runtime directory as
+`service-startup.log`. The installed app must still verify the actual TCC
+attribution. Profile content and downloaded models
 remain outside the bundle. With no HOME environment variable on macOS, the system
 user directory is obtained from Directory Services.
 

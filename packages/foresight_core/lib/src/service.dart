@@ -707,11 +707,23 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
     'FORESIGHT_RUNTIME': profile.runtime,
   };
   final launch = serviceLaunchCommand(executable, environment);
+  String? startupLog;
   if (launch.executable == '/usr/bin/open') {
+    startupLog = '${profile.runtime}/service-startup.log';
+    if (FileSystemEntity.typeSync(startupLog, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw StateError(
+        'Service startup log must not be a symbolic link: $startupLog',
+      );
+    }
+    File(startupLog).openSync(mode: FileMode.append).closeSync();
+    final protect = await Process.run('/bin/chmod', ['600', startupLog]);
+    if (protect.exitCode != 0) throw StateError('Cannot protect $startupLog');
+    launch.arguments.insertAll(2, ['--stderr', startupLog]);
     final result = await Process.run(launch.executable, launch.arguments);
     if (result.exitCode != 0) {
       throw StateError(
-        'LaunchServices could not start the application service: ${result.stderr}',
+        'LaunchServices could not start the application service: ${result.stderr}. See $startupLog.',
       );
     }
   } else {
@@ -731,6 +743,8 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
     }
   }
   throw StateError(
-    'Application service did not start. Run $executable directly to inspect the startup error.',
+    startupLog == null
+        ? 'Application service did not start. Run $executable directly to inspect the startup error.'
+        : 'Application service did not start. Inspect $startupLog for startup diagnostics.',
   );
 }
