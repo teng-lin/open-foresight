@@ -49,6 +49,15 @@ def copy_python(source, resources, values):
     base, stdlib = json.loads(run(python, '-I', '-c', query))
     if not Path(base).resolve().is_relative_to(source.resolve()) or not Path(stdlib).resolve().is_relative_to(source.resolve()):
         raise ValueError('Use a standalone Python runtime, not a venv linked to system/Homebrew Python')
+    lock = ROOT / 'requirements-litert-macos.lock'
+    expected = dict(line.split('==', 1) for line in lock.read_text().splitlines()
+                    if line.strip() and not line.startswith('#'))
+    query = ('import sys,json,importlib.metadata as m; '
+             'print(json.dumps([list(sys.version_info[:2]),'
+             '{name:m.version(name) for name in sys.argv[1:]}]))')
+    version, installed = json.loads(run(python, '-I', '-c', query, *expected))
+    if version != [3, 13] or installed != expected:
+        raise ValueError('Use Python 3.13 with the exact requirements-litert-macos.lock dependencies')
     target = resources / 'python'
     shutil.copytree(source, target, symlinks=True,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc', '*.a', 'test', 'tests'))
@@ -68,6 +77,9 @@ def copy_python(source, resources, values):
     values.update(FORESIGHT_LITERT_RUNNER=adapters / 'litert-runner',
                   FORESIGHT_LITERT_PYTHON=adapters / 'litert-python',
                   FORESIGHT_MODEL_PYTHON=runtime)
+    notices = resources / 'licenses'
+    notices.mkdir(exist_ok=True)
+    shutil.copy2(lock, notices / lock.name)
 
 
 def main(argv=None):
