@@ -21,8 +21,9 @@ intermediates are not added by these history calls.
 History insertion precedes final citation selection/renumbering. Consequently,
 the displayed answer alone cannot reproduce its original assistant history:
 an answer citing Source:2 can later display Source:1 after source compaction.
-The original also has response-number alignment/sanitation before insertion;
-those transformations have not yet been fully reproduced by this port.
+The original also normalizes timestamps and aligns response numbers before
+insertion, then sanitizes the displayed answer. These transformations are now
+implemented; see [response processing](reference-chat-response.md).
 
 ## Implementation
 
@@ -49,8 +50,10 @@ schema or restart persistence. Ordinary local-only answering retains its prior
 prompt path.
 
 The four-answer window has been replaced for web-enabled sends by the recovered
-memory policy below. Conversation cloning/cache reuse, full response
-alignment/sanitation and history reset/lifecycle comparisons remain open.
+memory policy below. Conversation cloning/cache reuse, streamed JSON-field
+extraction and history reset/lifecycle comparisons remain open. Response
+normalization, number alignment and final sanitation are covered in
+[response processing](reference-chat-response.md).
 Helper tokenization and bundled defaults are covered in
 [the tokenizer evidence](reference-tokenizer.md). Ordinary local-only answering retains
 its existing path. This does not establish exhaustive history parity.

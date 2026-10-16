@@ -1,0 +1,163 @@
+import 'package:foresight_core/src/reference_chat_response.dart';
+import 'package:test/test.dart';
+
+void main() {
+  test('cleanup unwraps text envelopes and removes internal metadata', () {
+    expect(
+      sanitizeReferenceChatResponse(
+        '```json\n{"text":"First\\nSecond", "analysis":"private"}\n```',
+      ),
+      'First\nSecond',
+    );
+    expect(
+      sanitizeReferenceChatResponse('"reasoning": {"details":"private"}'),
+      '',
+    );
+  });
+  test('cleanup removes thought spans and incomplete channel prefixes', () {
+    expect(
+      sanitizeReferenceChatResponse(
+        'Visible <|channel>thought hidden<channel|>\nanswer',
+      ),
+      'Visible answer',
+    );
+    expect(
+      sanitizeReferenceChatResponse('Visible <|channel>thought hidden'),
+      'Visible',
+    );
+    expect(sanitizeReferenceChatResponse('Visible <|chan'), 'Visible');
+  });
+  test('cleanup strips terminal loops while preserving formatting tokens', () {
+    expect(
+      sanitizeReferenceChatResponse('Useful. ${'Again! ' * 8}'),
+      'Useful.',
+    );
+    expect(
+      sanitizeReferenceChatResponse(
+        'Useful<channel|>${'alpha beta gamma delta ' * 2}',
+      ),
+      'Useful',
+    );
+    expect(sanitizeReferenceChatResponse('= ' * 8), '= = = = = = = =');
+  });
+  test(
+    'cleanup balances unescaped quotes and normalizes visible timestamps',
+    () {
+      expect(sanitizeReferenceChatResponse('"Hello'), '"Hello"');
+      expect(sanitizeReferenceChatResponse('Hello"'), 'Hello');
+      expect(
+        sanitizeReferenceChatResponse('```May11,202026```'),
+        'May 11, 2026',
+      );
+    },
+  );
+  test('original trailing cleanup strips a bare terminal citation bracket', () {
+    expect(
+      sanitizeReferenceChatResponse('Answer [Source:2]'),
+      'Answer [Source:2',
+    );
+    expect(
+      sanitizeReferenceChatResponse('Answer [Source:2].'),
+      'Answer [Source:2].',
+    );
+  });
+  test('number alignment repairs both sides without shifting later spans', () {
+    expect(
+      alignReferenceResponseNumbers(
+        'There are 123 widgets. The invoice total is 876.',
+        'There are 12 widgets. The invoice total is 87.',
+      ),
+      'There are 12 widgets. The invoice total is 87.',
+    );
+  });
+  test('number alignment preserves calendar phrases and long prefixes', () {
+    expect(
+      alignReferenceResponseNumbers(
+        '123 minutes and 123456 widgets',
+        '12 minutes and 12 widgets',
+      ),
+      '123 minutes and 123456 widgets',
+    );
+  });
+  test(
+    'number alignment requires a neighboring phrase in retrieved context',
+    () {
+      expect(
+        alignReferenceResponseNumbers(
+          'There are 15 widgets.',
+          'Available 2 crates.',
+        ),
+        'There are 15 widgets.',
+      );
+      expect(alignReferenceResponseNumbers('123 x', '12 x'), '123 x');
+    },
+  );
+  test('timestamp repair handles malformed dates in the recovered order', () {
+    expect(normalizeReferenceTimestamps('May 11, 202026'), 'May 11, 2026');
+    expect(normalizeReferenceTimestamps('May11,2026'), 'May 11, 2026');
+    expect(normalizeReferenceTimestamps('May 111, 2026'), 'May 11, 2026');
+    expect(normalizeReferenceTimestamps('May 391, 2026'), 'May 3, 2026');
+  });
+  test(
+    'timestamp repair normalizes seconds, overlong minutes and time ranges',
+    () {
+      expect(
+        normalizeReferenceTimestamps('10:000 AM-11:5PM'),
+        '10:00 AM - 11:05 PM',
+      );
+      expect(normalizeReferenceTimestamps('10:5:1234 pm'), '10:05 PM');
+      expect(normalizeReferenceTimestamps(' -10:00am'), ' - 10:00 AM');
+    },
+  );
+  test('valid dates and unrelated Unicode stay unchanged', () {
+    const text = '中文 🧭 Monday, May 11, 2026, 10:00 AM - 11:30 AM';
+    expect(normalizeReferenceTimestamps(text), text);
+    expect(normalizeReferenceTimestamps(''), '');
+  });
+  test('year fragments and three-digit hours retain original repair rules', () {
+    for (final fragment in ['226', '2, 026', '0226', '206', '20202026']) {
+      expect(
+        normalizeReferenceTimestamps('May 11, $fragment'),
+        'May 11, 2026',
+        reason: fragment,
+      );
+    }
+    for (final entry in {
+      '111': '11',
+      '222': '22',
+      '122': '12',
+      '108': '8',
+      '117': '7',
+      '109': '10',
+      '120': '12',
+      '333': '3',
+    }.entries) {
+      expect(
+        normalizeReferenceTimestamps('${entry.key}:000 PM'),
+        '${entry.value}:00 PM',
+      );
+    }
+  });
+  test(
+    'rewritten history preserves metadata without mutating the model map',
+    () {
+      final response = {
+        'role': 'assistant',
+        'metadata': {'channel': 'final'},
+        'content': [
+          {'type': 'text', 'text': 'Earlier', 'annotation': 'keep'},
+          {'type': 'image', 'url': 'fixture://image'},
+          {'type': 'text', 'text': ' part'},
+        ],
+      };
+      final rewritten = referenceResponseWithText(response, 'Repaired 中文');
+      expect(rewritten['metadata'], response['metadata']);
+      expect(rewritten['content'], [
+        {'type': 'text', 'text': 'Repaired 中文', 'annotation': 'keep'},
+        {'type': 'image', 'url': 'fixture://image'},
+      ]);
+      expect((response['content'] as List).length, 3);
+      expect((response['content'] as List).first['text'], 'Earlier');
+    },
+  );
+}

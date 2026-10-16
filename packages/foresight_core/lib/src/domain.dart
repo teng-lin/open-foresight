@@ -16,6 +16,7 @@ import 'reference_tools.dart';
 import 'chat_sources.dart';
 import 'reference_chat_prompt.dart';
 import 'reference_chat_history.dart';
+import 'reference_chat_response.dart';
 import 'reference_tokenizer.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
@@ -768,7 +769,9 @@ class Domain {
             modelResponse = event['response'] as Map<String, dynamic>;
           }
           raw += event['text'] as String? ?? '';
-          body = useWeb ? raw : provisionalAnswer(raw) ?? body;
+          body = useWeb
+              ? sanitizeReferenceChatResponse(raw)
+              : provisionalAnswer(raw) ?? body;
           yield body;
         }
         if (event['type'] == 'error') {
@@ -787,7 +790,18 @@ class Domain {
         yield body;
       }
       if (status == 'completed' && useWeb) {
-        final resolved = resolveChatCitations(raw, chatSources.values.length);
+        raw = alignReferenceResponseNumbers(
+          normalizeReferenceTimestamps(raw),
+          truncateChatToolResult(context.toString(), 3000),
+        );
+        modelResponse = referenceResponseWithText(
+          modelResponse ?? referenceTextMessage('assistant', raw),
+          raw,
+        );
+        final resolved = resolveChatCitations(
+          sanitizeReferenceChatResponse(raw),
+          chatSources.values.length,
+        );
         body = resolved.text;
         citations
           ..clear()

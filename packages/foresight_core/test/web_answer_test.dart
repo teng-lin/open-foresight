@@ -12,6 +12,7 @@ import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 class LocalRetrieval extends RagServiceBase {
   late String document;
+  String text = 'Mira owns the draft and sends it on Tuesday.';
   final encoded = <String>[];
   int Function(String)? tokenCount;
   @override
@@ -28,11 +29,7 @@ class LocalRetrieval extends RagServiceBase {
     RetrieveRequest request,
   ) async => RetrieveResponse(
     chunks: [
-      RetrievedChunk(
-        documentId: document,
-        text: 'Mira owns the draft and sends it on Tuesday.',
-        relevanceScore: .9,
-      ),
+      RetrievedChunk(documentId: document, text: text, relevanceScore: .9),
     ],
   );
   @override
@@ -247,7 +244,7 @@ void main() {
       final serviceRuntime = ToolRuntime();
       serviceRuntime.answer = (dispatcher) async {
         await dispatcher.handle([searchCall('first')]);
-        return 'Answer [Source:1]';
+        return 'Answer [Source:1].';
       };
       service.domain.generator = serviceRuntime;
       RemoteDomain? client;
@@ -264,7 +261,7 @@ void main() {
           await client
               .askWithWebInConversation('Current?', 'desktop', meetingId: id)
               .last,
-          'Answer [Source:1]',
+          'Answer [Source:1].',
         );
         final saved = service.domain.store.rows('SELECT * FROM answers').single;
         expect(saved['conversation'], 'meeting:$id');
@@ -333,20 +330,92 @@ void main() {
     }
   });
   test(
+    'web response aligns numbers against retrieved local context before history',
+    () async {
+      final retrieval = LocalRetrieval()
+        ..text = 'There are 12 widgets. The invoice total is 87.';
+      retrieval.document = store.importText(
+        'Invoice',
+        retrieval.text,
+        'text/plain',
+        'number repair fixture',
+      );
+      store.state(retrieval.document, 'indexed');
+      final server = Server.create(services: [retrieval]);
+      await server.serve(
+        address: InternetAddress(
+          '${directory.path}/unused.sock',
+          type: InternetAddressType.unix,
+        ),
+        port: 0,
+      );
+      try {
+        runtime.answer = (_) async =>
+            'There are 123 widgets. The invoice total is 876 [Source:1].';
+        expect(
+          await domain
+              .askWithWebInConversation('What are the figures?', 'numbers')
+              .last,
+          'There are 12 widgets. The invoice total is 87 [Source:1].',
+        );
+        final saved = store.rows('SELECT model_response FROM answers').single;
+        expect(
+          jsonDecode(saved['model_response'] as String),
+          referenceTextMessage(
+            'assistant',
+            'There are 12 widgets. The invoice total is 87 [Source:1].',
+          ),
+        );
+      } finally {
+        await server.shutdown();
+      }
+    },
+  );
+  test(
+    'web response repairs dates before display and structured history replay',
+    () async {
+      runtime.answer = (dispatcher) async {
+        await dispatcher.handle([searchCall('first')]);
+        return 'May11,202026 at 10:000 AM [Source:2].';
+      };
+      expect(
+        await domain.askWithWebInConversation('When?', 'time-repair').last,
+        'May 11, 2026 at 10:00 AM [Source:1].',
+      );
+      final row = store.rows('SELECT * FROM answers').single;
+      expect(
+        jsonDecode(row['model_response'] as String),
+        referenceTextMessage(
+          'assistant',
+          'May 11, 2026 at 10:00 AM [Source:2].',
+        ),
+      );
+      runtime.answer = (_) async => 'Next answer';
+      await domain.askWithWebInConversation('Again?', 'time-repair').last;
+      expect(
+        runtime.histories.last.last,
+        referenceTextMessage(
+          'assistant',
+          'May 11, 2026 at 10:00 AM [Source:2].',
+        ),
+      );
+    },
+  );
+  test(
     'web history replays plain queries and pre-renumbered structured responses',
     () async {
       runtime.answer = (dispatcher) async {
         await dispatcher.handle([searchCall('first')]);
-        return 'Second result [Source:2]';
+        return 'Second result [Source:2].';
       };
       await domain
           .askWithWebInConversation('First question', 'history')
           .toList();
       final first = store.rows('SELECT * FROM answers').single;
-      expect(first['body'], 'Second result [Source:1]');
+      expect(first['body'], 'Second result [Source:1].');
       expect(
         jsonDecode(first['model_response'] as String),
-        referenceTextMessage('assistant', 'Second result [Source:2]'),
+        referenceTextMessage('assistant', 'Second result [Source:2].'),
       );
       runtime.answer = (_) async => 'Follow-up answer';
       await domain
@@ -354,7 +423,7 @@ void main() {
           .toList();
       expect(runtime.histories.last, [
         referenceTextMessage('user', 'First question'),
-        referenceTextMessage('assistant', 'Second result [Source:2]'),
+        referenceTextMessage('assistant', 'Second result [Source:2].'),
       ]);
       expect(runtime.prompts.last, isNot(contains('Conversation:')));
       expect(runtime.prompts.last, isNot(contains('First question')));
