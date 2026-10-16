@@ -2,6 +2,62 @@ import 'package:foresight_core/src/reference_chat_response.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'completion recovers sanitized raw text before considering date fallback',
+    () {
+      final now = DateTime(2026, 10, 16, 23, 59);
+      expect(
+        completeReferenceChatResponse(
+          'Aligned answer.',
+          raw: 'Original answer.',
+          question: 'current date',
+          now: now,
+        ),
+        'Aligned answer.',
+      );
+      expect(
+        completeReferenceChatResponse(
+          '<|channel>thought hidden',
+          raw: '```json\n{"text":"Recovered answer."}\n```',
+          question: 'current date',
+          now: now,
+        ),
+        'Recovered answer.',
+      );
+    },
+  );
+  test('empty completion uses only the recovered date-query substrings', () {
+    final now = DateTime(2026, 10, 16, 23, 59);
+    for (final query in [
+      'WHAT DAY IS TODAY?',
+      'Please tell me what is today.',
+      "What's today?",
+      'today date',
+      'Show the current date please',
+    ]) {
+      expect(
+        completeReferenceChatResponse(
+          '',
+          raw: '<|channel>thought hidden',
+          question: query,
+          now: now,
+        ),
+        'Today is Friday, October 16, 2026.',
+        reason: query,
+      );
+    }
+    for (final query in [
+      'What is the date?',
+      'What day is tomorrow?',
+      'Hello',
+    ]) {
+      expect(
+        completeReferenceChatResponse('', raw: '', question: query, now: now),
+        '',
+        reason: query,
+      );
+    }
+  });
   test('stream previews hide JSON headers and select the last text field', () {
     expect(provisionalReferenceChatResponse('{"analysis":"private"'), isNull);
     expect(provisionalReferenceChatResponse('```js'), isNull);

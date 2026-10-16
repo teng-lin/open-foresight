@@ -74,6 +74,43 @@ regression covers both cases. Existing history/link fixtures use punctuated
 sentences to keep testing valid citation transport. This is established by
 static call/regex evidence, not an original-app live output comparison.
 
+Final completion now implements the separate empty-display recovery at
+`0x10090c940`–`0x10090cad0`: sanitize the aligned text first, then sanitize the
+decoded raw response if the first result is empty. If both are empty, the
+original lowercases the question and checks the literal substrings
+`what day is today`, `what is today`, `what's today`, `today date`, and
+`current date`. A matching question receives `Today is ` followed by the
+request's local date formatted as `EEEE, MMMM d, yyyy` and a final period.
+Other questions keep the empty result. Existing nonempty answers always take
+precedence. The request date is captured once for both prompt and fallback,
+so a long generation crossing midnight does not change the displayed date.
+
+This recovery happens after assistant history insertion and before display
+citation selection. The port preserves the model's processed response in
+history while saving the recovered display text separately. It does not
+regenerate or retry the model request. The malformed-JSON recovery region at
+`0x10090be84` extracts fields from the existing response; that is a separate
+path whose full metadata fallback remains under investigation.
+
+Exact completion branches and date construction are retained in
+`ida/chat-empty-completion-fallback.json` and
+`ida/chat-empty-fallback-date-format.json`. Public PP30682–30687, PP28, and
+PP30099 are captured in `ida/chat-empty-fallback-pool.txt`, successful REA
+evidence `ev_ce9d972ed8f102ecdda07e77bf3adef9829d06627003820aed7fd333ae695672`.
+The exact dispatch targets are confirmed as `String.toLowerCase`
+(`0x100d1ffd4`) and `String.contains` (`0x100d20a34`), retained in
+`ida/chat-date-lowercase-dispatch.json` and
+`ida/chat-date-predicate-dispatch.json`.
+Two completion fixtures cover aligned/raw precedence and all five query
+substrings with a fixed date; an application fixture checks one generation,
+the prompt's date, empty unrelated results, and unchanged model memory.
+
+The native `sendMessageStream` entry at `0x100913288` checks the handle state,
+creates a stream controller, and schedules PP24541 through `Pool.withResource`.
+That wrapper, retained in `ida/chat-native-send-stream.json`, contains no retry
+or empty-result policy. Its scheduled closure and downstream event handling
+must be inspected before drawing a conclusion about model-level recovery.
+
 Sanitizer delegation is retained in
 `ida/chat-sanitize-delegate-<address>.json`; additional helpers are
 `chat-clean-three-digit-hour.json`, `chat-words-equal.json`, and

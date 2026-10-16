@@ -156,6 +156,43 @@ void main() {
     directory.deleteSync(recursive: true);
   });
   test(
+    'empty date completion uses request date without rewriting model memory',
+    () async {
+      runtime.answer = (_) async => '';
+      final visible = await domain
+          .askWithWebInConversation('What day is today?', 'desktop')
+          .last;
+      final promptDate = RegExp(
+        r'\[Current Date: ([^\]]+)\]',
+      ).firstMatch(runtime.prompts.single)!.group(1)!;
+      expect(visible, 'Today is $promptDate.');
+      expect(runtime.answerIds, hasLength(1));
+      final saved = store.rows('SELECT * FROM answers').single;
+      expect(saved['status'], 'completed');
+      expect(saved['body'], visible);
+      expect(jsonDecode(saved['citations'] as String), isEmpty);
+      expect(
+        referenceHistoryText(
+          jsonDecode(saved['model_response'] as String) as Map<String, dynamic>,
+        ),
+        '',
+      );
+      final memory = store.rows('SELECT * FROM conversation_memory').single;
+      final messages = List<Map<String, dynamic>>.from(
+        jsonDecode(memory['messages'] as String) as List,
+      );
+      expect(referenceHistoryText(messages.last), '');
+
+      expect(
+        await domain
+            .askWithWebInConversation('Unrelated empty response', 'other')
+            .last,
+        '',
+      );
+      expect(runtime.answerIds, hasLength(2));
+    },
+  );
+  test(
     'web answer works without imported sources and saves remapped cited URLs',
     () async {
       runtime.answer = (dispatcher) async {

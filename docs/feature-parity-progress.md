@@ -31,7 +31,7 @@ detector has been authenticated/decrypted; its legacy weights-only format is
 rejected by the current public runtime on CPU and GPU. It is not connected to
 production automatic Q&A.
 
-Current checks: 198 core tests passed with three opt-in skips, 178 desktop tests
+Current checks: 201 core tests passed with three opt-in skips, 178 desktop tests
 passed with ten opt-in skips, and all four native CTest groups passed. Python
 runner fixtures cover the persistent protocol. Real GPU checks verify retained
 worker cancellation and clone isolation, plus web search, citation, replay and

@@ -1,6 +1,32 @@
 // Response transformations recovered from the original Foresight Dart snapshot.
 // See docs/reference-chat-response.md for addresses and evidence boundaries.
 import 'dart:convert';
+import 'package:intl/intl.dart';
+
+/// Final display recovery follows history processing; it does not regenerate
+/// the model response or replace the assistant message stored in memory.
+String completeReferenceChatResponse(
+  String aligned, {
+  required String raw,
+  required String question,
+  required DateTime now,
+}) {
+  var text = sanitizeReferenceChatResponse(aligned);
+  if (text.isEmpty) text = sanitizeReferenceChatResponse(raw);
+  if (text.isEmpty) {
+    final query = question.toLowerCase();
+    if (const [
+      'what day is today',
+      'what is today',
+      "what's today",
+      'today date',
+      'current date',
+    ].any(query.contains)) {
+      return 'Today is ${DateFormat('EEEE, MMMM d, yyyy').format(now)}.';
+    }
+  }
+  return text;
+}
 
 final _streamedTextField = RegExp(
   r'"text":\s*"((?:[^"\\]|\\.|"(?!\s*(?:,\s*"[^"]+"\s*:|}|\s*$)))*)',

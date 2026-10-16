@@ -652,8 +652,13 @@ class Domain {
         .join('\n');
     final boundedHistory = boundUtf8(history, 500);
     final boundedQuestion = boundUtf8(question, 400);
+    final requestDate = useWeb ? DateTime.now() : null;
     final prompt = useWeb
-        ? referenceChatPrompt(question, context: context.toString())
+        ? referenceChatPrompt(
+            question,
+            context: context.toString(),
+            now: requestDate,
+          )
         : groundedAnswerPrompt(
             boundedHistory,
             context.toString(),
@@ -799,6 +804,7 @@ class Domain {
         yield body;
       }
       if (status == 'completed' && useWeb) {
+        final decodedRaw = raw;
         raw = alignReferenceResponseNumbers(
           normalizeReferenceTimestamps(raw),
           truncateChatToolResult(context.toString(), 3000),
@@ -808,7 +814,12 @@ class Domain {
           raw,
         );
         final resolved = resolveChatCitations(
-          sanitizeReferenceChatResponse(raw),
+          completeReferenceChatResponse(
+            raw,
+            raw: decodedRaw,
+            question: question,
+            now: requestDate!,
+          ),
           chatSources.values.length,
         );
         body = resolved.text;
