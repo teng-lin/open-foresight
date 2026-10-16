@@ -98,25 +98,32 @@ Future<void> configureEncryptedDedicatedQuery(
   final digest = (await sha256.bind(encrypted.openRead()).first).toString();
   final ownedVault = vault ?? MacModelVault(root: encrypted.parent);
   ModelVaultLease? lease;
+  late final String python;
   try {
     lease = await ownedVault.openLease(encrypted);
-    final python = await _prepareDedicatedQuery(
+    python = await _prepareDedicatedQuery(
       lease.path,
       runtime: runtime,
       current: current,
     );
-    await store.register(
-      dedicatedQueryModelKind,
-      encrypted.absolute.path,
-      python,
-      backend: dedicatedEncryptedQueryBackend,
-      expectedDigest: digest,
-      current: current,
-    );
   } finally {
-    if (vault == null) await ownedVault.close();
-    await lease?.close();
+    try {
+      if (vault == null) await ownedVault.close();
+    } finally {
+      await lease?.close();
+    }
   }
+  // Adoption is the final fallible step. A lease-cleanup failure must not leave
+  // a new registration that the acquisition owner will treat as rejected and
+  // remove from disk.
+  await store.register(
+    dedicatedQueryModelKind,
+    encrypted.absolute.path,
+    python,
+    backend: dedicatedEncryptedQueryBackend,
+    expectedDigest: digest,
+    current: current,
+  );
 }
 
 Future<String> _prepareDedicatedQuery(

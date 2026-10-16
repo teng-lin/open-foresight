@@ -43,8 +43,92 @@ class _LocalDownload implements ModelBlobDownloader {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _FailingLeaseCleanup implements ModelVaultLease {
+  _FailingLeaseCleanup(this.lease);
+  final ModelVaultLease lease;
+  @override
+  String get path => lease.path;
+  @override
+  Future<void> close() async {
+    await lease.close();
+    throw StateError('Fixture lease cleanup failed');
+  }
+}
+
+class _LeaseCleanupFailureVault extends MacModelVault {
+  _LeaseCleanupFailureVault({
+    required super.root,
+    required super.helperPath,
+    required super.tempRoot,
+  });
+  @override
+  Future<ModelVaultLease> openLease(File encrypted) async =>
+      _FailingLeaseCleanup(await super.openLease(encrypted));
+}
+
 void main() {
   final env = Platform.environment;
+  test(
+    'lease cleanup failure rejects acquisition before replacing registration',
+    () async {
+      final directory = Directory.systemTemp.createTempSync(
+        'query-cleanup-failure-',
+      );
+      final store = Store('${directory.path}/app.db');
+      try {
+        final previous = File('${directory.path}/previous')
+          ..writeAsStringSync('previous');
+        await store.register(
+          dedicatedQueryModelKind,
+          previous.path,
+          '/bin/false',
+          backend: dedicatedQueryBackend,
+        );
+        final registration = Map.of(store.model(dedicatedQueryModelKind)!);
+        final helper = File('${directory.path}/vault-fixture');
+        helper.writeAsStringSync(
+          '#!/bin/sh\nset -eu\numask 077\nif [ "\$1" = encrypt ]; then\n  { printf "%033d" 0; /bin/cat "\$3"; } > "\$5"\nelse\n  /usr/bin/tail -c +34 "\$3" > "\$5"\nfi\n',
+        );
+        expect(
+          (await Process.run('/bin/chmod', ['700', helper.path])).exitCode,
+          0,
+        );
+        final leases = Directory('${directory.path}/leases')..createSync();
+        final models = Directory('${directory.path}/models');
+        final acquisition = DedicatedQueryAcquisition(
+          store: store,
+          config: _LocalMetadata(),
+          downloader: _LocalDownload(env['FORESIGHT_QUERY_MODEL']!),
+          vault: _LeaseCleanupFailureVault(
+            root: models,
+            helperPath: helper.path,
+            tempRoot: leases,
+          ),
+        );
+        await expectLater(
+          acquisition.run(),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'reason',
+              'Fixture lease cleanup failed',
+            ),
+          ),
+        );
+        expect(store.model(dedicatedQueryModelKind), registration);
+        expect(previous.readAsStringSync(), 'previous');
+        expect(models.listSync(), isEmpty);
+        expect(leases.listSync(), isEmpty);
+      } finally {
+        store.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+    skip: env['FORESIGHT_QUERY_MODEL_TEST'] != '1'
+        ? 'Set supported asset and bundled runtime for cleanup integration'
+        : false,
+  );
   test(
     'fixture acquisition registers encrypted storage and real detector reopens a private lease',
     () async {
