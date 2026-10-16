@@ -457,3 +457,97 @@ boundary overlap/pruning, exact detection/dispatch scheduling (including 100 ms
 accepted-addition delay), provisional context for answers, and original/runtime
 comparisons. This integration supersedes the earlier lifetime-uniqueness and
 unresolved-expiry notes; full Q&A parity is still unproven.
+
+## Dedicated detector model and raw output protocol
+
+Focused IDA tracing establishes that the on-device detector code path is not a
+question prompt applied to the selected chat model:
+
+- QueryDetectorOnDevice.initialize at 0x1009ee07c requests
+  AssetManager.queryDetectorModelPath, then TextGenerator.create.
+- AssetManager.queryDetectorModelPath at 0x1009ef74c passes pool entry 25030 to
+  _getLocalModelPath. The focused reader binds it to
+  OnDeviceModelMetadata_ModelType: raw enum value 4,
+  MODEL_TYPE_QUERY_DETECTOR.
+- The enum layout is independently bound by ProtobufEnum.toString at
+  0x100b51e00: value at tagged receiver +7, name at +15. Field metadata is
+  absent in the release snapshot, so generic field reflection cannot resolve it.
+  The reader uses these two code-bound offsets only for the selected model enum.
+- The installed type-4 asset is models/4/1.1/f450f245265502c7760774e.tflite
+  under the original support directory, 179,437,601 bytes. Its at-rest bytes
+  do not contain the ordinary TFLite identifier at the expected header offset.
+  AssetManager._getLocalModelPath includes a decryptFilePath path. The usable
+  dedicated model/decryption/runtime path has not been reproduced.
+- TextGenerator uses the process-native text-generator asset, rather than the
+  generic LiteRT-LM chat conversation adapter in this reconstruction.
+  TextGenerator.create builds empty cache/system strings and task placeholders
+  $CONTEXT$ and $USER_INPUT$. The caller's backend option is the literal native
+  value 35; its semantic enum name remains unbound. Its options also contain a
+  token-limit value 512. These do not establish the selected chat model's
+  settings or prove that the current generic runner can execute this model.
+
+The raw generation prefix is exactly eight UTF-16 units:
+space, less-than, c, t, r, l, 1, greater-than. It is concatenated directly with
+the prepared transcript, with no JSON schema or additional chat instructions.
+TextGenerator.generate creates a request carrying this input and an empty
+context string. Native session construction at 0x101b79e8c configures sampler
+parameters, including a top-k lower bound of one and a temperature fallback of
+0.3; a full compatible model backend is still needed before using this path.
+
+### Output postprocessing
+
+JsonUtils.sanitizeStringForUtf8 at 0x1008e7308 round-trips through UTF-8 with
+malformed decoding allowed, removes replacement character U+FFFD, then applies
+pool entry 23921: printable ASCII plus CR/LF only. The recovered regex is
+[^\x20-\x7E\n\r]. Pool entry 4265 is exactly U+FFFD. The dynamic selector
+-4096 resolves to String.contains, confirming its replacement-character check.
+This means non-ASCII detector output is stripped in the inspected path; it does
+not imply deletion of non-ASCII captured transcripts or answer bodies.
+
+splitIntoQuestions searches ASCII question marks, keeps each mark in its
+trimmed piece and retains a final nonempty remainder without a question mark.
+The detector reverses the pieces, removes empty / >>-prefixed pieces and exact
+duplicates, then creates timestamped entities. It does not require every piece
+to end with a question mark and does not require copied transcript wording.
+
+Implemented reference_query_detector.dart with the exact prefix, sanitization,
+splitter, reversed/filtered output parser and a raw-completion protocol adapter.
+Five focused tests cover request ownership, malformed UTF-16, control and
+non-ASCII characters, punctuation, remainders, ordering, exclusions, duplicates
+and backend failures. A service fixture injects this adapter into the existing
+ProactiveQuestions callback and verifies reversed durable question dispatch,
+linked answers and an unchanged multilingual transcript.
+
+The deployed Application callback is deliberately still its existing generic
+chat/JSON implementation. The new adapter requires a compatible dedicated raw
+completion backend; the inspected type-4 native/decryption path is not yet
+implemented. Sending ctrl1 to the chat model and calling that parity would be
+unsupported by this evidence. The generic detector's existing bilingual test
+therefore describes that compatibility path, not the original type-4 model.
+
+Validation: 97 core tests passed, one opt-in model test skipped; analyzer clean.
+The retained reader source rebuilt and successfully recovered the enum and
+exact prefix code units. There was no physical audio or original detector
+generation test. A bounded normal-app startup observation found no relevant
+initialization log; the original settings surface exposed no detector toggle.
+Only settings navigation was performed, no values were changed, no recording
+was started, and the Ask view was restored. This does not prove the detector
+cannot initialize or determine which path executes during actual transcription.
+
+Evidence:
+- ev_589286d6e179cec78a6135dcc45853ec928eba8699d8aabc6c0fb361b638a173:
+  initialization, native generator creation/generation and output sanitizer.
+- ev_7bfb02dd0c300ae1d7efa1ade3253bfdbf4acb3383bd8381db2c5bfc7779cbc3:
+  dedicated asset path, native-create options and engine construction.
+- ev_6fa9bd21ef3bf0446a641b572dd3e2357046f9063c4b8098b552e07af6b8b16f:
+  enum field layout, local model selection, native session and backend literal.
+- ev_1629844b994b5f99b1008a7160f2808c5ed72c7198eef038734baea5adb6524f:
+  native task placeholders and exact sanitizer strings/code units.
+- ev_e57dd925df9007fcac7045cb1c0f43d36bf56835623f91815f4b1a4eb29302b6,
+  ev_82b73409b4d002704122ee62d6145019b31efa8748b1036ef205a99944ac0ea1:
+  dedicated model enum and exact generation-prefix code units.
+
+Remaining: dedicated model acquisition/decryption and compatible native raw
+generation, production adapter selection, original real-model comparisons,
+history boundary/pruning and precise scheduling. Web search and physical
+recording parity also remain separate unfinished parts of the overall goal.

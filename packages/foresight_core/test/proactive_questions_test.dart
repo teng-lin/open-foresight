@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/proactive_questions.dart';
+import 'package:foresight_core/src/reference_query_detector.dart';
 
 void main() {
   late Directory directory;
@@ -13,6 +14,7 @@ void main() {
   var busy = false, failDetection = false;
   var milliseconds = 0;
   String? failAnswer;
+  ReferenceQueryDetector? referenceDetector;
   List<String>? detectionResult;
   Completer<List<String>>? detectionGate;
   ProactiveQuestions create() => ProactiveQuestions(
@@ -24,9 +26,11 @@ void main() {
     cancel: (id) {
       cancelled.add(id);
     },
-    detect: (text, _) async {
+    detect: (text, request) async {
       detectedText.add(text);
       if (failDetection) throw StateError('Detection fixture failure');
+      if (referenceDetector != null)
+        return referenceDetector!.detect(text, request);
       if (detectionGate != null) return detectionGate!.future;
       return detectionResult ??
           RegExp(
@@ -64,6 +68,7 @@ void main() {
     milliseconds = 0;
     failDetection = false;
     failAnswer = null;
+    referenceDetector = null;
     detectionResult = null;
     detectionGate = null;
     queue = create();
@@ -660,6 +665,27 @@ void main() {
       await drain();
       expect(detectedText.last, 'We need to decide when can we ship?');
       expect(answered, ['When can we ship?']);
+    },
+  );
+
+  test(
+    'reference completion protocol dispatches reversed questions without changing transcript',
+    () async {
+      queue.begin(meeting);
+      referenceDetector = ReferenceQueryDetector((prompt, request) async {
+        expect(prompt, ' <ctrl1>Who owns the draft? 谁负责测试？ When is launch?');
+        expect(request, startsWith('proactive-detect-'));
+        return 'Who owns the draft? 谁负责测试？ When is launch? >> no more questions';
+      });
+      append('Who owns the draft? 谁负责测试？ When is launch?');
+      await drain();
+      expect(answered, ['When is launch?', 'Who owns the draft?']);
+      expect(
+        store.rows('SELECT text FROM transcript').single['text'],
+        'Who owns the draft? 谁负责测试？ When is launch?',
+      );
+      expect(store.rows('SELECT * FROM meeting_answers'), hasLength(2));
+      expect(queue.errors, isEmpty);
     },
   );
 

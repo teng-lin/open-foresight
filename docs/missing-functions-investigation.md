@@ -235,3 +235,18 @@ original model output quality, or full dispatcher parity.
 
 These are deterministic reconstruction tests; they do not establish physical
 capture or end-to-end behavior of the original model.
+
+### Dedicated query detector protocol
+
+Further tracing identifies a separate MODEL_TYPE_QUERY_DETECTOR (type 4)
+native model, not the selected chat model. Its generation prefix and raw
+ASCII-output postprocessing are implemented in reference_query_detector.dart
+and tested through the service callback. The production application still uses
+its generic chat/JSON detector: a compatible dedicated native model/decryption
+backend must be reproduced before switching it. The original postprocessor
+strips non-ASCII detector output; captured transcripts are unaffected.
+
+Current core validation: **97 passed, 1 opt-in model test skipped**; analyzer
+clean. See the latest section of proactive-reference-trace.md for the exact
+native paths, output rules, evidence and remaining integration requirements.
+No physical audio or original detector generation was observed in this pass.

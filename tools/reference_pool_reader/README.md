@@ -52,3 +52,16 @@ Upstream sources:
 - https://github.com/worawit/blutter/pull/216
 - https://github.com/worawit/blutter/pull/213
 - https://github.com/dart-lang/sdk/tree/ac1a97aae47d12e81d772ad45ab6d1fe57a02cf4
+
+## Detector protocol probes
+
+The allowlist also includes the model-type enum, raw text-cache placeholders
+and sanitizer constants. For pool entry 25030 only, the model enum's two fields
+are read using offsets established by IDA's ProtobufEnum.toString: unboxed value
+at tagged pointer +7 and name at +15. This is pinned to the validated artifact;
+it is not a generic reflection mechanism. The release snapshot has no field
+metadata for this enum. Exact selected strings are additionally printed as
+UTF-16 units to distinguish spaces, replacement characters and control tokens.
+
+The reader does not decrypt or run the model, initialize the original app's
+text-cache engine, or establish production support for its model format.
