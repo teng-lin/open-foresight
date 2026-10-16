@@ -45,7 +45,8 @@ jobs:
           echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
           "$RUNNER_TEMP/flutter/bin/flutter" --version
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: sdk-cache
         with:
           path: build/sdk
           key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
@@ -53,6 +54,12 @@ jobs:
         run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
       - name: Build macOS 15 compatible dependency SDK
         run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
+      - name: Save completed dependency SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: build/sdk
+          key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
       - name: Native, core, service, MCP, and Flutter gates
         run: |
           tools/build.sh --platform macos \
