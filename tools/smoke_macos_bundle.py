@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from install_macos import metadata, minimal_environment, process_path, copy_application, SERVICE
+from install_macos import metadata, minimal_environment, process_path, copy_application, installation_lock, Deferred, SERVICE
 
 
 class McpPeer:
@@ -158,6 +158,12 @@ def smoke(bundle, output, desktop=False):
             owner = left['pid']
             assert owner == right['pid'], 'Two MCP adapters acquired competing owners'
             assert process_path(owner) == service.resolve(), 'Owner is outside relocated bundle'
+            assert left['installation_root'] == str(app.resolve()), 'Service installation identity differs from relocated app'
+            try:
+                with installation_lock(app): pass
+                raise AssertionError('Installer acquired exclusive lock over a live service')
+            except Deferred:
+                pass
             note = first.tool('save_note',{'title':'Installed bundle smoke', 'body':'Persist across clients and service restart'})
             notes = second.tool('list_notes')
             assert any(item['id'] == note['id'] and item['body'] == 'Persist across clients and service restart' for item in notes), notes
@@ -182,6 +188,13 @@ def smoke(bundle, output, desktop=False):
             assert service_command(service,env,'--status')['pid'] == owner, 'MCP disconnect stopped service'
             service_command(service,env,'--stop')
             wait_stopped(owner,service)
+            with installation_lock(app):
+                racing_env = {**env, 'FORESIGHT_DATA': str(root/'blocked-data'), 'FORESIGHT_RUNTIME': str(root/'blocked-run')}
+                blocked = subprocess.run([str(service)], cwd='/', env=racing_env,
+                    capture_output=True, text=True, timeout=15)
+                assert blocked.returncode != 0, 'Service started while installer held exclusive maintenance lock'
+                assert not (root/'blocked-data/application.db').exists(), 'Racing service opened the database during installation'
+                assert 'updat' in blocked.stderr.lower() or 'install' in blocked.stderr.lower(), blocked.stderr
             third = McpPeer(executable,env)
             peers.append(third)
             replacement = third.tool('get_status')['pid']
@@ -201,7 +214,7 @@ def smoke(bundle, output, desktop=False):
                 'environment_keys':sorted(env), 'two_aot_mcp_shared_owner':True,
                 'mcp_stdout_protocol_only':True, 'service_survives_client_disconnect':True,
                 'committed_note_survives_restart':True, 'graceful_stop_process_exit_verified':True,
-                'private_profile':True, 'service_pids':[left['pid'],replacement]})
+                'private_profile':True, 'maintenance_lock_blocks_racing_service_start':True, 'service_pids':[left['pid'],replacement]})
         finally:
             for peer in peers:
                 try: peer.close()
