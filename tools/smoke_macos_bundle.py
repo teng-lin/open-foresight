@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Verify a relocated Mac bundle using real AOT MCP/service subprocesses.
+"""Verify a relocated Mac bundle, real AOT clients, and an idle app upgrade.
 
 Physical audio, signed permission attribution, local-model inference, fresh-user
 installation and notarization are separate gates, explicitly reported unrun.
+Only disposable application/profile copies are changed; the input is untouched.
 """
 import argparse
 from contextlib import closing
@@ -18,7 +19,7 @@ import sys
 import tempfile
 import threading
 import time
-from install_macos import metadata, minimal_environment, process_path, copy_application, installation_lock, Deferred, SERVICE
+from install_macos import metadata, minimal_environment, process_path, copy_application, installation_lock, install, verify_signature, Deferred, SERVICE
 
 
 class McpPeer:
@@ -273,6 +274,28 @@ def stop_desktop(process, timeout=15):
         return process.wait(timeout=timeout)
 
 
+def verify_transaction_rollback(source, destination):
+    """Inject a post-swap check failure; real signatures and Darwin swap remain."""
+    class InjectedVerificationFailure(RuntimeError):
+        pass
+    original_inode = destination.stat().st_ino
+    def verifier(path):
+        identity = verify_signature(path)
+        if path.resolve()==destination.resolve() and path.stat().st_ino!=original_inode:
+            raise InjectedVerificationFailure('Intentional post-swap verification failure')
+        return identity
+    try:
+        install(source,destination,allow_adhoc=True,verify=verifier)
+    except InjectedVerificationFailure:
+        pass
+    else:
+        raise AssertionError('Rollback probe did not reach post-swap verification')
+    assert destination.stat().st_ino==original_inode, 'Rollback did not restore the original application directory'
+    verify_signature(destination)
+    return {'status':'passed_original_bundle_restored',
+            'fault':'injected_post_swap_verification_failure', 'signature':'verified_after_rollback'}
+
+
 def smoke(bundle, output, desktop=False):
     if not __debug__:
         raise RuntimeError('Smoke verification requires assertions; run Python without -O or PYTHONOPTIMIZE')
@@ -285,6 +308,9 @@ def smoke(bundle, output, desktop=False):
         app.parent.mkdir()
         copy_application(bundle, app)
         info = metadata(app)
+        report['runtime_revision'] = json.loads((app/'Contents/Resources/runtime.json').read_text()).get('FORESIGHT_RUNTIME_REVISION')
+        upgrade_source = root/'Upgrade Source.app'
+        copy_application(app,upgrade_source)
         subprocess.run(['/usr/bin/codesign','--verify','--deep','--strict',str(app)], check=True, capture_output=True)
         report['linkage'] = audit_dependencies(app)
         home, data, runtime = root/'home', root/'data', root/'run'
@@ -346,8 +372,19 @@ def smoke(bundle, output, desktop=False):
                 peer.close()
             peers.clear()
             assert service_command(service,env,'--status')['pid'] == owner, 'MCP disconnect stopped service'
-            service_command(service,env,'--stop')
-            wait_stopped(owner,service)
+            try:
+                install(upgrade_source,app,allow_adhoc=True)
+                raise AssertionError('Default installer replaced a live service bundle')
+            except Deferred:
+                pass
+            assert service_command(service,env,'--status')['pid'] == owner, 'Deferred upgrade stopped its service owner'
+            report['idle_upgrade'] = install(upgrade_source,app,allow_adhoc=True,
+                stop_services=True,profiles=[data])
+            assert report['idle_upgrade']['upgraded'] is True
+            assert report['idle_upgrade']['maintenance_lock']=='exclusive'
+            previous_owner = owner
+            wait_stopped(previous_owner,service)
+            owner = None
             with installation_lock(app):
                 racing_env = {**env, 'FORESIGHT_DATA': str(root/'blocked-data'), 'FORESIGHT_RUNTIME': str(root/'blocked-run')}
                 blocked = subprocess.run([str(service)], cwd='/', env=racing_env,
@@ -355,10 +392,11 @@ def smoke(bundle, output, desktop=False):
                 assert blocked.returncode != 0, 'Service started while installer held exclusive maintenance lock'
                 assert not (root/'blocked-data/application.db').exists(), 'Racing service opened the database during installation'
                 assert 'updat' in blocked.stderr.lower() or 'install' in blocked.stderr.lower(), blocked.stderr
+            report['transaction_rollback'] = verify_transaction_rollback(upgrade_source,app)
             third = McpPeer(executable,env)
             peers.append(third)
             replacement = third.tool('get_status')['pid']
-            assert replacement != owner, 'Service was not restarted'
+            assert replacement != previous_owner, 'Service was not restarted after the bundle exchange'
             owner = replacement
             assert process_path(owner) == service.resolve()
             verify_source_graph_restart(third,data/'application.db',source_graph)
@@ -377,7 +415,8 @@ def smoke(bundle, output, desktop=False):
                 'committed_note_survives_restart':True, 'sources_revisions_labels_graph_survive_restart':True,
                 'stale_graph_save_rejected':True, 'source_indexing_real_embeddings':'not_run', 'graph_ui_restore':'not_run',
                 'graph_verification':'service_writes_readonly_sqlite_persistence', 'graceful_stop_process_exit_verified':True,
-                'private_profile':True, 'maintenance_lock_blocks_racing_service_start':True, 'service_pids':[left['pid'],replacement]})
+                'default_running_upgrade_deferred':True, 'verified_idle_shutdown_and_atomic_upgrade':True,
+                'upgrade_probe_same_artifact':True, 'private_profile':True, 'maintenance_lock_blocks_racing_service_start':True, 'service_pids':[left['pid'],replacement]})
         finally:
             for peer in peers:
                 try: peer.close()
