@@ -3,6 +3,9 @@
 ARG SDK_IMAGE=open-foresight-sdk:local
 FROM ${SDK_IMAGE} AS builder
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+# Header-only application dependency, independent of the expensive SDK build.
+RUN apt-get update && apt-get install -y --no-install-recommends nlohmann-json3-dev && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
 ARG SOURCE_REVISION

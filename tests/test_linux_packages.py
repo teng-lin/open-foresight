@@ -107,11 +107,11 @@ class LinuxPackagesTest(unittest.TestCase):
         source = self.root / 'sdk'
         source.mkdir()
         (source / 'probe.c').write_text('int probe(void) { return 1; }\n')
-        (source / 'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.19)\nproject(gRPC C)\nadd_library(grpc SHARED probe.c)\nadd_library(grpc_unsecure SHARED probe.c)\ninstall(TARGETS grpc EXPORT gRPC LIBRARY DESTINATION lib)\ninstall(TARGETS grpc_unsecure EXPORT gRPC LIBRARY DESTINATION lib)\ninstall(EXPORT gRPC DESTINATION lib/cmake)\n')
+        (source / 'CMakeLists.txt').write_text('cmake_minimum_required(VERSION 3.19)\nproject(grpc C)\nadd_library(grpc SHARED probe.c)\nadd_library(grpc_unsecure SHARED probe.c)\ninstall(TARGETS grpc EXPORT gRPC LIBRARY DESTINATION lib)\ninstall(TARGETS grpc_unsecure EXPORT gRPC LIBRARY DESTINATION lib)\ninstall(EXPORT gRPC DESTINATION lib/cmake)\n')
         build, prefix = self.root / 'build', self.root / 'prefix'
         for command in (
             ['cmake', '-S', str(source), '-B', str(build),
-             '-DCMAKE_PROJECT_gRPC_INCLUDE=' + str(ROOT / 'packaging/minimal-grpc.cmake'),
+             '-DCMAKE_PROJECT_grpc_INCLUDE=' + str(ROOT / 'packaging/minimal-grpc.cmake'),
              '-DCMAKE_INSTALL_PREFIX=' + str(prefix)],
             ['cmake', '--build', str(build)],
             ['cmake', '--install', str(build)],

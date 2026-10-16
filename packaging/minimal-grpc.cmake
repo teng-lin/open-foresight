@@ -1,4 +1,4 @@
-# Include after gRPC's project() via CMAKE_PROJECT_gRPC_INCLUDE. Keep the full
+# Include after gRPC's project() via CMAKE_PROJECT_grpc_INCLUDE. Keep the full
 # secure grpc/grpc++ implementation and C++ plugin; omit duplicate unsecure
 # libraries and optional wrappers not used by Foresight. This does not disable
 # insecure Unix-socket transport in the normal grpc library.

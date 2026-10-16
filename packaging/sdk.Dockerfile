@@ -18,7 +18,7 @@ RUN git init /opt/grpc && cd /opt/grpc && git remote add origin https://github.c
     git submodule update --init --recursive --depth=1 && \
     cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_INSTALL_PREFIX=/opt/toolchain -DCMAKE_CXX_STANDARD=20 \
-      -DCMAKE_PROJECT_gRPC_INCLUDE=/opt/minimal-grpc.cmake \
+      -DCMAKE_PROJECT_grpc_INCLUDE=/opt/minimal-grpc.cmake \
       '-DCMAKE_CXX_FLAGS_RELEASE=-O2 -DNDEBUG' '-DCMAKE_C_FLAGS_RELEASE=-O2 -DNDEBUG' \
       -DCMAKE_CXX_FLAGS='-march=x86-64 -mtune=generic' \
       -DBUILD_SHARED_LIBS=ON -DgRPC_BUILD_TESTS=OFF -Dprotobuf_BUILD_TESTS=OFF \
