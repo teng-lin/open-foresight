@@ -137,17 +137,39 @@ audio, notarization, quarantine, minimum-OS, and fresh-user checks.
 
 The installer defers replacement while the destination is running by default.
 Its explicit stop-services option requires verified profile ownership, graceful
-service shutdown, and closed desktop clients. A shared installation lock held
+idle-only service shutdown, and closed desktop clients. Recording, final
+transcription, or another active operation defers the upgrade. A shared installation lock held
 through every service lifetime excludes replacement; the installer holds the
 exclusive counterpart through staging, atomic exchange, verification, and
 rollback. Copying uses `ditto` to preserve quarantine and extended metadata.
 Ad-hoc installation requires the explicit development option. Do not replace an
 active bundle with an ordinary recursive copy.
 
+Bundled model runners registered by this version retain resource provenance, so
+moving the app resolves generation and speech runners in the new bundle. External
+runners keep their explicit paths. Older registrations without provenance must be
+registered again through model setup; the app never guesses ownership from an
+old `.app` filename. Back up the profile before migrating legacy registrations.
+
+If another installation owns the profile, startup reports that conflict visibly.
+Stop that owner explicitly after its work finishes, then retry this installation;
+clients do not kill an incompatible owner or replay failed mutations.
+
 ## Recording and desktop setup
 
 The service owns Core Audio capture, including when started by MCP. Microphone
 authorization is an explicit setup operation; attach/status calls do not prompt.
+Both quick start and recording an existing meeting guide microphone and system
+audio setup before capture. Use **Request access**, enable Open Foresight under
+System Settings > Privacy & Security > Screen & System Audio Recording > System
+Audio Recording Only, then return and continue. The exact section name varies by
+macOS version. A completed Core Audio request does not prove authorization; actual
+capture reports failures. Settings also provides explicit access setup actions.
+
+Local source search separately prompts for the 485 MB EmbeddingGemma 2 download.
+Selecting a generation model while this embedding model is missing does not start
+the combined download until the user chooses **Download models**.
+
 The responsible service bundle includes microphone and system-audio purpose
 strings. Permission attribution must be tested on the signed installed layout.
 See [the audio feasibility record](macos-audio-feasibility.md) for measured probes
