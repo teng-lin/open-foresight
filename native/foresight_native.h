@@ -33,6 +33,13 @@ int fs_generate_json(void *conversation, const char *request_id,
 int fs_generate_options(void *conversation, const char *request_id,
                         const char *prompt, const char *json_schema, int max_output_tokens);
 int fs_generation_cancel(void *conversation);
+// Tool-enabled LiteRT conversation. Tool request/answer frames are polled as
+// events. Replies are scoped to the active request and accepted once per batch.
+int fs_generate_tools(void *conversation, const char *request_id,
+                      const char *prompt, const char *tools_json,
+                      int max_output_tokens);
+int fs_generation_tool_reply(void *conversation, const char *request_id,
+                             const char *message_json);
 int fs_conversation_destroy(void *conversation, int cancel_and_drain);
 void *fs_speech_create(const char *runtime_executable, const char *model_path);
 int fs_speech_push(void *speech, const int16_t *samples, size_t count,

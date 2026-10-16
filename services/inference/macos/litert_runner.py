@@ -2,7 +2,8 @@
 """Explicit CPU/GPU LiteRT-LM runner for the native generation worker.
 
 Requires requirements-litert.txt in the selected Python environment. No
-downloads, authentication, remote inference, attachment access or tools.
+downloads, authentication, remote inference or attachment access. Optional
+tool calls are delegated over stdin/stdout to the owning application service.
 The native worker owns this process group and cancels it on close/timeout.
 """
 import argparse
@@ -12,6 +13,72 @@ import json
 import os
 from pathlib import Path
 import sys
+
+
+def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
+    if not isinstance(definitions, list) or not definitions:
+        raise ValueError('Tool definitions must be a nonempty array')
+
+    class DelegatedTool(litert_lm.Tool):
+        def __init__(self, definition):
+            if not isinstance(definition, dict):
+                raise ValueError('Tool definition must be an object')
+            self.definition = (definition if 'function' in definition else
+                               {'type': 'function', 'function': definition})
+
+        def get_tool_description(self):
+            return self.definition
+
+        def execute(self, param):
+            raise RuntimeError('Tool execution belongs to the application service')
+
+    with engine.create_conversation(
+            system_message='Follow the requested task faithfully. Do not invent facts.',
+            tools=[DelegatedTool(d) for d in definitions],
+            automatic_tool_calling=False,
+            sampler_config=litert_lm.SamplerConfig(top_k=40, top_p=0.9, temperature=0.4, seed=0),
+            thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
+            filter_channel_content_from_kv_cache=True,
+            enable_speculative_decoding=True,
+            max_output_tokens=budget) as conversation:
+        message = {'role': 'user', 'content': prompt}
+        for turn in range(20):
+            # Use the pinned 0.18.0 C API through its owned conversation. The
+            # public Python Message parser JSON-decodes string arguments, while
+            # original Foresight treats them as a verbatim search query.
+            optional = conversation._create_optional_args(
+                max_output_tokens=budget,
+                repetition_penalty_config=litert_lm.RepetitionPenaltyConfig(repetition_penalty=1.05))
+            try:
+                response = conversation._lib.litert_lm_conversation_send_message(
+                    conversation._ptr, json.dumps(message), '{}', optional)
+                if not response:
+                    raise RuntimeError('Tool generation failed')
+                try:
+                    raw = conversation._lib.litert_lm_json_response_get_string(response)
+                    value = json.loads(raw.decode('utf-8'))
+                finally:
+                    conversation._lib.litert_lm_json_response_delete(response)
+            finally:
+                conversation._delete_optional_args(optional)
+            if not isinstance(value, dict):
+                raise ValueError('Invalid tool generation response')
+            calls = value.get('tool_calls')
+            if not calls:
+                print('answer ' + json.dumps(value, ensure_ascii=False), flush=True)
+                return
+            if not isinstance(calls, list):
+                raise ValueError('Invalid tool calls')
+            if turn == 19:
+                print('answer ' + json.dumps({'error': 'Max turns reached after tool call detection'}), flush=True)
+                return
+            print('tool ' + json.dumps(calls, ensure_ascii=False), flush=True)
+            line = sys.stdin.readline()
+            if not line:
+                raise RuntimeError('Tool conversation owner disconnected')
+            message = json.loads(line)
+            if not isinstance(message, dict) or message.get('role') != 'user':
+                raise ValueError('Invalid tool response message')
 
 
 def run(args):
@@ -36,6 +103,13 @@ def run(args):
         if args.prompt is None:
             raise ValueError('A prompt is required')
         prompt = args.prompt
+        if args.tools:
+            if args.json_schema:
+                raise ValueError('Tools cannot be combined with a response schema')
+            if len(engine.tokenize(prompt)) + args.max_output_tokens + 256 > 4096:
+                raise ValueError('Prompt and output reserve exceed the 4096-token context')
+            run_tool_conversation(engine, litert_lm, prompt, json.loads(args.tools), args.max_output_tokens)
+            return
         schema = None
         if args.json_schema:
             schema = json.loads(args.json_schema)
@@ -96,6 +170,7 @@ def main():
     parser.add_argument('--probe', action='store_true')
     parser.add_argument('--prompt')
     parser.add_argument('--json-schema')
+    parser.add_argument('--tools')
     parser.add_argument('--max-output-tokens', type=int, default=256)
     args = parser.parse_args()
     if args.backend not in ('cpu', 'gpu'):

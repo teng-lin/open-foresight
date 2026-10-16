@@ -79,3 +79,8 @@ The web-content probes include the RPC path, endpoint, header name, model ID,
 and protobuf field names. Boolean offsets from null bind the ranking branch
 without inferring truth from decompiler bit tests.
 See [web-content evidence](../../docs/reference-web-content.md).
+
+
+The tool-generation probes decode the google_search schema and result/error
+strings, with UTF-16 units for formatting constants. They retain the same explicit
+credential exclusions. See [tool-generation findings](../../docs/reference-tool-generation.md).

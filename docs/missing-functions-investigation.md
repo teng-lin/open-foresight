@@ -275,3 +275,24 @@ Current core suite: **116 passed, one opt-in skipped**; analyzer clean. Actual
 Google access and remote summary quality remain unverified. The client is not
 yet wired into production answers and requires distribution credentials, with
 no separate user project setup UI. See [the full evidence](reference-web-content.md).
+
+
+### Native search tool generation bridge
+
+The recovered tool schema, concurrent batch dispatcher, result/error records,
+user-role result block, UTF-16 bound and 20-turn limit are implemented. Native
+generation now retains one model conversation while the application executes
+callbacks over a request-owned process connection. Both the C++ worker and
+the packaged Mac adapter support it. SearchCallbacks runs through the compiled
+native bridge in deterministic integration tests.
+
+Validation: **126 core tests passed, one opt-in model skip** with the bridge
+enabled; both analyzers clean; all four native CTest groups passed. Tests cover
+large Unicode replies, scoped/single reply acceptance, late results after
+cancellation or closure, deadlines and malformed worker output.
+
+This does not enable web answers in the normal Ask/meeting flow yet. Production
+activation, citation/source-URL persistence, release credentials, real model
+tool behavior and original streaming/textual-parser comparison remain. The
+complete Linux executable was not built in this pass; its shared C++ loop was
+compiled and tested. See [tool-generation evidence](reference-tool-generation.md).

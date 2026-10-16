@@ -68,7 +68,9 @@ supplied distribution credential. It shuts down its default channel; injected
 channels remain caller-owned. `summarizeSearchPage` connects to SearchCallbacks'
 provider interface. No request is made until a caller invokes it.
 
-Production answer/tool integration and release credentials remain outstanding.
+The subsequent [native tool bridge](reference-tool-generation.md) now connects
+generation callbacks to search. Production activation, citation persistence and
+release credentials remain outstanding.
 This is a remote Gemini summary path, distinct from ordinary local generation.
 Adding this client does not enable remote requests in the application, and no
 separate user project configuration UI has been added.

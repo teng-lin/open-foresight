@@ -11,3 +11,9 @@ beside the development worker; Mac packaging copies it into the application's
 adapters directory and records `FORESIGHT_MODEL_WORKER` in `runtime.json`.
 Generation continues through the packaged `litert-runner`. Linux packaging does
 not copy this directory or include a Python runtime.
+
+Generation accepts optional `--tools` definitions. It retains one conversation
+while delegating callbacks to the application service over the private owned
+process connection. The model subprocess performs no network requests or tool
+callbacks itself. See [reference tool behavior](../../../docs/reference-tool-generation.md)
+for protocol, ownership, tests and remaining production integration.

@@ -1,3 +1,4 @@
+#include "tool_conversation.h"
 #include "fd_stream.h"
 #include "litert.h"
 #include "litertlm_header_schema_generated.h"
@@ -218,7 +219,8 @@ public:
   }
   std::string generate(const std::string &prompt, int budget,
                        bool grounded = false, const json &schema = nullptr,
-                       std::ostream *stream = nullptr) {
+                       std::ostream *stream = nullptr,
+                       const json &tools = nullptr) {
     if (tokens(prompt) + budget + 256 > 4096)
       throw std::runtime_error(
           "Prompt and output reserve exceed the 4096-token context");
@@ -242,6 +244,12 @@ public:
                    "instructions."
                  : "Follow the requested task faithfully. Do not invent facts.";
     LM(conversation_config_set_system_message)(config.get(), system);
+    if (!tools.is_null()) {
+      if (!tools.is_array() || tools.empty() || !schema.is_null())
+        throw std::runtime_error("Tool definitions must be a nonempty array without a response schema");
+      auto definitions = foresight::wrap_tools(tools).dump();
+      LM(conversation_config_set_tools)(config.get(), definitions.c_str());
+    }
     if (!grounded)
       LM(conversation_config_set_filter_channel_content_from_kv_cache)(
           config.get(), true);
@@ -271,6 +279,17 @@ public:
       LM(conversation_optional_args_set_constraint)(
           args.get(), kLiteRtLmConstraintTypeJsonSchema, constraint.c_str());
     auto message = json({{"role", "user"}, {"content", prompt}}).dump();
+    if (!tools.is_null()) {
+      if (!stream) throw std::runtime_error("Tool conversation requires a protocol stream");
+      return foresight::tool_conversation([&](const std::string &input) {
+        auto response = handle(LM(conversation_send_message)(
+            conversation.get(), input.c_str(), nullptr, args.get()),
+            LM(json_response_delete));
+        const char *raw = LM(json_response_get_string)(response.get());
+        if (!raw) throw std::runtime_error("Missing tool generation response");
+        return json::parse(raw);
+      }, message, std::cin, *stream);
+    }
     auto decode = [](const char *raw) {
       if (!raw)
         throw std::runtime_error("Missing generation response");
@@ -430,7 +449,12 @@ int main(int argc, char **argv) {
                       : json(nullptr);
     if (!schema.is_null() && !schema.is_object())
       throw std::runtime_error("JSON schema must be an object");
-    if (schema.contains("x-foresight-grounded-request"))
+    if (args.count("--tools") && !schema.is_null())
+      throw std::runtime_error("Tools cannot be combined with a response schema");
+    if (args.count("--tools"))
+      generator.generate(args.at("--prompt"), budget, false, nullptr, &protocol,
+                         json::parse(args.at("--tools")));
+    else if (schema.contains("x-foresight-grounded-request"))
       protocol << grounded_answer(
                       generator, schema["x-foresight-grounded-request"], budget)
                       .dump()

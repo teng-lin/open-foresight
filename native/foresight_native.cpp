@@ -24,6 +24,7 @@
 #include <spawn.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -73,6 +74,8 @@ struct Worker : Events {
 #endif
   std::mutex life;
   std::mutex process_mutex;
+  std::mutex input_mutex;
+  std::deque<std::string> input;
   void stop() {
     cancel = true;
     std::lock_guard lock(process_mutex);
@@ -95,18 +98,59 @@ struct Worker : Events {
 // posix_spawn avoids unsafe post-fork work inside a multi-threaded Flutter
 // host.
 int run(Worker &w, std::vector<std::string> args,
-        const std::function<void(const char *, size_t)> &output) {
+        const std::function<void(const char *, size_t)> &output,
+        bool duplex = false) {
   std::unique_lock launch(foresight::launch_mutex);
   int pipes[2];
   if (foresight::cloexec_pipe(pipes) < 0)
     return -1;
+  int input[2] = {-1, -1};
+  if (duplex) {
+#ifdef __APPLE__
+    constexpr int input_type = SOCK_STREAM;
+#else
+    constexpr int input_type = SOCK_STREAM | SOCK_CLOEXEC;
+#endif
+    if (socketpair(AF_UNIX, input_type, 0, input) < 0) {
+      close(pipes[0]); close(pipes[1]); return -1;
+    }
+    // Keep descriptors away from stdio, including a host with closed stdin.
+    for (auto slot : {&pipes[0], &pipes[1], &input[0], &input[1]}) {
+      int moved = fcntl(*slot, F_DUPFD_CLOEXEC, 10);
+      if (moved < 0) {
+        int error = errno;
+        close(pipes[0]); close(pipes[1]); close(input[0]); close(input[1]);
+        return -error;
+      }
+      close(*slot); *slot = moved;
+    }
+#ifdef __APPLE__
+    int enabled = 1;
+    if (setsockopt(input[1], SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled))) {
+      int error = errno;
+      close(pipes[0]); close(pipes[1]); close(input[0]); close(input[1]);
+      return -error;
+    }
+#endif
+    if (fcntl(input[1], F_SETFL, O_NONBLOCK) < 0) {
+      int error = errno;
+      close(pipes[0]); close(pipes[1]); close(input[0]); close(input[1]);
+      return -error;
+    }
+  }
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
   posix_spawn_file_actions_adddup2(&actions, pipes[1], STDOUT_FILENO);
   posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
                                    O_WRONLY, 0);
-  posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null",
-                                   O_RDONLY, 0);
+  if (duplex) {
+    posix_spawn_file_actions_adddup2(&actions, input[0], STDIN_FILENO);
+    posix_spawn_file_actions_addclose(&actions, input[0]);
+    posix_spawn_file_actions_addclose(&actions, input[1]);
+  } else {
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null",
+                                     O_RDONLY, 0);
+  }
   posix_spawn_file_actions_addclose(&actions, pipes[0]);
   posix_spawn_file_actions_addclose(&actions, pipes[1]);
   posix_spawnattr_t attr;
@@ -131,8 +175,10 @@ int run(Worker &w, std::vector<std::string> args,
   posix_spawn_file_actions_destroy(&actions);
   posix_spawnattr_destroy(&attr);
   close(pipes[1]);
+  if (duplex) close(input[0]);
   if (err) {
     close(pipes[0]);
+    if (duplex) close(input[1]);
     return -err;
   }
   launch.unlock();
@@ -154,14 +200,40 @@ int run(Worker &w, std::vector<std::string> args,
 #endif
   }
   char buffer[4096];
+  std::string pending_input;
+  size_t sent = 0;
   while (!w.cancel) {
-    pollfd fd{pipes[0], POLLIN, 0};
-    int r = poll(&fd, 1, 100);
+    if (duplex && pending_input.empty()) {
+      std::lock_guard lock(w.input_mutex);
+      if (!w.input.empty()) {
+        pending_input = std::move(w.input.front());
+        w.input.pop_front(); sent = 0;
+      }
+    }
+    pollfd fds[2]{{pipes[0], POLLIN, 0},
+                  {input[1], short(pending_input.empty() ? 0 : POLLOUT), 0}};
+    int r = poll(fds, duplex ? 2 : 1, 100);
     if (r > 0) {
-      ssize_t n = read(pipes[0], buffer, sizeof(buffer));
-      if (n <= 0)
-        break;
-      output(buffer, size_t(n));
+      if (duplex && (fds[1].revents & POLLOUT)) {
+#ifdef __APPLE__
+        constexpr int send_flags = 0;
+#else
+        constexpr int send_flags = MSG_NOSIGNAL;
+#endif
+        auto n = send(input[1], pending_input.data() + sent,
+                      pending_input.size() - sent, send_flags);
+        if (n > 0) {
+          sent += size_t(n);
+          if (sent == pending_input.size()) pending_input.clear();
+        } else if (n < 0 && errno != EAGAIN && errno != EINTR) {
+          w.stop(); break;
+        }
+      }
+      if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+        ssize_t n = read(pipes[0], buffer, sizeof(buffer));
+        if (n <= 0) break;
+        output(buffer, size_t(n));
+      }
     } else if (r < 0 && errno != EINTR)
       break;
   }
@@ -174,6 +246,7 @@ int run(Worker &w, std::vector<std::string> args,
 #endif
   }
   close(pipes[0]);
+  if (duplex) close(input[1]);
   int status = 0;
   // Do not hold life while waiting: cancellation must still be able to signal
   // a worker that closed stdout early. Keep its PID reserved until disarmed.
@@ -207,6 +280,7 @@ struct Conversation : Worker {
   std::set<std::string> requests;
   std::string request;
   uint64_t sequence = 0;
+  std::atomic<bool> awaiting_tool{false};
 };
 std::string event(const std::string &type, const std::string &id,
                   uint64_t sequence, const std::string &extra) {
@@ -433,7 +507,8 @@ void *fs_conversation_create(void *h) {
   return c;
 }
 static int generate_with_schema(void *h, const char *id, const char *prompt,
-                                const char *schema, int max_output_tokens = 256) {
+                                const char *schema, int max_output_tokens = 256,
+                                bool tools = false) {
   if (max_output_tokens < 1 || max_output_tokens > 3072) return -1;
   if (!h || !id || !*id || !prompt)
     return -1;
@@ -443,6 +518,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     return -1;
   c.join();
   auto &e = *c.engine;
+  if (tools && e.backend != 1) return -1;
   {
     std::lock_guard lock(e.mu);
     if (e.busy)
@@ -454,15 +530,22 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
   c.request = id;
   c.sequence = 0;
   c.cancel = false;
+  c.awaiting_tool = false;
+  {
+    std::lock_guard lock(c.input_mutex);
+    c.input.clear();
+  }
   c.active = true;
   std::string text = prompt;
   std::string json_schema = schema ? schema : "";
-  c.thread = std::thread([&c, text, json_schema, max_output_tokens] {
+  c.thread = std::thread([&c, text, json_schema, max_output_tokens, tools] {
     auto &e = *c.engine;
     uint64_t seq = 0;
     // Completion mode avoids runner UI/chat banners; app assembles structured
     // prompt.
     std::string utf8;
+    bool tool_answer_received = false;
+    bool tool_protocol_failed = false;
     std::vector<std::string> args{e.runtime,     "-m",
                                   e.model,       "-p",
                                   text,          "-n",
@@ -476,11 +559,30 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
       args = {e.runtime, "--model", e.model, "--prompt", text,
               "--max-output-tokens", std::to_string(max_output_tokens)};
     if (!json_schema.empty()) {
-      args.push_back("--json-schema");
+      args.push_back(tools ? "--tools" : "--json-schema");
       args.push_back(json_schema);
     }
     int status = run(c, std::move(args), [&](const char *data, size_t n) {
       utf8.append(data, n);
+      if (tools) {
+        size_t newline;
+        while ((newline = utf8.find('\n')) != std::string::npos) {
+          auto line = utf8.substr(0, newline);
+          utf8.erase(0, newline + 1);
+          bool request = line.starts_with("tool ");
+          bool answer = line.starts_with("answer ");
+          if ((!request && !answer) || tool_answer_received) {
+            tool_protocol_failed = true;
+            failure(c, c.request, seq, "tool_protocol", "Invalid tool worker frame");
+            c.stop(); return;
+          }
+          if (answer) tool_answer_received = true;
+          if (request) c.awaiting_tool = true;
+          c.emit(event(request ? "tool_request" : "tool_answer", c.request,
+                       seq++, ",\"text\":" + quote(line.substr(request ? 5 : 7))));
+        }
+        return;
+      }
       size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
       if (complete) {
         size_t lead = complete - 1;
@@ -500,20 +602,25 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
                      ",\"text\":" + quote(utf8.substr(0, complete))));
         utf8.erase(0, complete);
       }
-    });
-    if (!c.cancel) {
+    }, tools);
+    if (!c.cancel && !tools) {
       size_t marker = utf8.find(" [end of text]");
       if (marker != std::string::npos)
         utf8.erase(marker);
       if (!utf8.empty())
         c.emit(event("delta", c.request, seq++, ",\"text\":" + quote(utf8)));
     }
-    std::string terminal = c.cancel      ? "cancelled"
+    std::string terminal = tool_protocol_failed ? "failed"
+                           : c.cancel      ? "cancelled"
                            : status == 0 ? "completed"
                                          : "failed";
-    if (terminal == "failed")
+    if (tools && (!utf8.empty() || !tool_answer_received) && !c.cancel)
+      terminal = "failed";
+    c.awaiting_tool = false;
+    if (terminal == "failed" && !tool_protocol_failed)
       failure(c, c.request, seq, "runtime_failure",
-              "Generation runner exited with status " + std::to_string(status));
+              tools && status == 0 ? "Tool worker exited without a complete answer"
+              : "Generation runner exited with status " + std::to_string(status));
     c.emit(event("done", c.request, seq++, ",\"status\":" + quote(terminal)));
     {
       std::lock_guard lock(e.mu);
@@ -537,6 +644,21 @@ int fs_generate_json(void *h, const char *id, const char *prompt,
 int fs_generate_options(void *h, const char *id, const char *prompt,
                         const char *schema, int max_output_tokens) {
   return generate_with_schema(h, id, prompt, schema, max_output_tokens);
+}
+int fs_generate_tools(void *h, const char *id, const char *prompt,
+                      const char *tools, int max_output_tokens) {
+  if (!tools || !*tools) return -1;
+  return generate_with_schema(h, id, prompt, tools, max_output_tokens, true);
+}
+int fs_generation_tool_reply(void *h, const char *id, const char *message) {
+  if (!h || !id || !message) return -1;
+  auto &c = *static_cast<Conversation *>(h);
+  std::lock_guard life(c.life);
+  if (!c.active || c.cancel || c.request != id || !c.awaiting_tool.exchange(false))
+    return -1;
+  std::lock_guard lock(c.input_mutex);
+  c.input.push_back(std::string(message) + "\n");
+  return 0;
 }
 int fs_generation_cancel(void *h) {
   if (!h)

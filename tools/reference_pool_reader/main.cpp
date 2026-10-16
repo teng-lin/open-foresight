@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
       (unsigned long)(dart::UntaggedObject::ToAddr(dart::Bool::True().ptr()->untag()) - dart::UntaggedObject::ToAddr(dart::Object::null()->untag())),
       (unsigned long)(dart::UntaggedObject::ToAddr(dart::Bool::False().ptr()->untag()) - dart::UntaggedObject::ToAddr(dart::Object::null()->untag())));
     std::printf("POOL_LENGTH %ld\n",static_cast<long>(pool.Length()));
-    for (intptr_t pp : {8511,9018,9245,23909,23910,23911,23918,23926,23929,26597,26598,26599,26600,26601,26602,26604,26605,26606,2765,21048,9836,9089,4620,9663,82,20693,5845,26972,5940,3656,492,4518,4523,27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921,11620,21079,26976,26978,26981,26989,26990,26995,26996,27001,27002,27003,27004,27424}) {
+    for (intptr_t pp : {1109,7976,12640,12600,12601,12602,12603,12604,12605,12606,12607,12608,12609,12610,12611,12612,12613,12614,12621,12622,12625,12626,12627,12628,12629,12630,12631,12634,12635,12636,12637,12638,12639,12641,12642,12643,12644,12645,4632,26969,4563,31045,9969,66,16,4659,10206,31046,31047,31049,4777,4924,4920,5265,8324,9779,3012,5279,10495,9018,8511,9018,9245,23909,23910,23911,23918,23926,23929,26597,26598,26599,26600,26601,26602,26604,26605,26606,2765,21048,9836,9089,4620,9663,82,20693,5845,26972,5940,3656,492,4518,4523,27,566,635,855,11631,22356,13118,11291,24954,24977,24980,24985,24986,26550,25030,25006,25007,4265,23921,11620,21079,26976,26978,26981,26989,26990,26995,26996,27001,27002,27003,27004,27424}) {
       const auto offset = pp * 8;
       const auto index = dart::ObjectPool::IndexFromOffset(offset - dart::kHeapObjectTag);
       if (pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) {
@@ -36,7 +36,7 @@ int main(int argc, char** argv) {
       std::printf("PP[%ld] OFFSET[0x%lx] INDEX[%ld] CID[%ld] %s\n",
         static_cast<long>(pp),static_cast<unsigned long>(offset),
         static_cast<long>(index),static_cast<long>(obj.GetClassId()),obj.ToCString());
-      if (obj.IsString() && (pp == 3656 || pp == 4265 || pp == 23921 || pp == 25006 || pp == 25007 || pp == 24980)) {
+      if (obj.IsString() && ((pp >= 12600 && pp <= 12647) || pp == 31045 || pp == 31046 || pp == 1109 || pp == 3656 || pp == 4265 || pp == 23921 || pp == 25006 || pp == 25007 || pp == 24980)) {
         const auto& str = dart::String::Cast(obj);
         std::printf("STRING_UNITS[%ld]",(long)pp);
         for (intptr_t j=0;j<str.Length();j++) std::printf(" %04x",str.CharAt(j));

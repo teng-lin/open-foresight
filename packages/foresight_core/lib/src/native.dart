@@ -4,6 +4,7 @@ import 'dart:ffi';
 import 'platform_services.dart';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
+import 'reference_tools.dart';
 
 /// Packaged installations always use their bundled native worker, including
 /// profiles that still contain the former Python runner path.
@@ -87,6 +88,7 @@ class _GenerationRequest {
   final Pointer<Void> handle;
   final int epoch;
   bool released = false;
+  bool cancelled = false;
   _GenerationRequest(this.id, this.handle, this.epoch);
 }
 
@@ -179,11 +181,53 @@ class NativeRuntime {
     Map<String, dynamic>? responseSchema,
     Duration timeout = const Duration(minutes: 5),
     int maxOutputTokens = 256,
+  }) => _generate(
+    id,
+    prompt,
+    systemPrompt: systemPrompt,
+    responseSchema: responseSchema,
+    timeout: timeout,
+    maxOutputTokens: maxOutputTokens,
+  );
+
+  Stream<Map<String, dynamic>> generateWithTools(
+    String id,
+    String prompt, {
+    required List<Map<String, dynamic>> tools,
+    required ReferenceToolDispatcher dispatcher,
+    String systemPrompt =
+        'Follow the requested task faithfully. Do not invent facts.',
+    Duration timeout = const Duration(minutes: 5),
+    int maxOutputTokens = 256,
+  }) => _generate(
+    id,
+    prompt,
+    tools: tools,
+    toolDispatcher: dispatcher,
+    systemPrompt: systemPrompt,
+    timeout: timeout,
+    maxOutputTokens: maxOutputTokens,
+  );
+
+  Stream<Map<String, dynamic>> _generate(
+    String id,
+    String prompt, {
+    String systemPrompt =
+        'Follow the requested task faithfully. Do not invent facts.',
+    Map<String, dynamic>? responseSchema,
+    List<Map<String, dynamic>>? tools,
+    ReferenceToolDispatcher? toolDispatcher,
+    Duration timeout = const Duration(minutes: 5),
+    int maxOutputTokens = 256,
   }) async* {
     if (engine == nullptr || conversation == nullptr) {
       throw StateError('Generation model unavailable');
     }
     if (_active != null) throw StateError('Generation already in progress');
+    if ((tools == null) != (toolDispatcher == null) ||
+        (tools != null && (tools.isEmpty || responseSchema != null))) {
+      throw ArgumentError('Tools require a dispatcher and no response schema');
+    }
     if (id.isEmpty ||
         timeout <= Duration.zero ||
         maxOutputTokens < 1 ||
@@ -210,12 +254,32 @@ class NativeRuntime {
         prompt = '$systemPrompt\n\n$prompt';
       }
       final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
-      final schema = responseSchema == null
+      final schema = tools != null
+          ? jsonEncode(tools).toNativeUtf8()
+          : responseSchema == null
           ? nullptr.cast<Utf8>()
           : jsonEncode(responseSchema).toNativeUtf8();
       late int rc;
       try {
-        if (maxOutputTokens != 256) {
+        if (tools != null) {
+          rc = lib
+              .lookupFunction<
+                Int32 Function(
+                  Pointer<Void>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  Int32,
+                ),
+                int Function(
+                  Pointer<Void>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  int,
+                )
+              >('fs_generate_tools')(handle, a, b, schema, maxOutputTokens);
+        } else if (maxOutputTokens != 256) {
           rc = lib
               .lookupFunction<
                 Int32 Function(
@@ -295,6 +359,75 @@ class NativeRuntime {
         if (event['request_id'] != id) {
           throw StateError('Native generation returned a different request ID');
         }
+        if (event['type'] == 'tool_request') {
+          if (toolDispatcher == null)
+            throw StateError('Unexpected tool request');
+          final calls = jsonDecode(event['text'] as String) as List<dynamic>;
+          final interrupted = Completer<Map<String, dynamic>>();
+          final monitor = Timer.periodic(const Duration(milliseconds: 20), (_) {
+            if (interrupted.isCompleted) return;
+            if (owner.released || owner.epoch != _epoch || owner.cancelled) {
+              interrupted.completeError(
+                StateError('Tool request is no longer current'),
+              );
+            } else if (clock.elapsed >= timeout) {
+              interrupted.completeError(
+                TimeoutException('Native generation timed out', timeout),
+              );
+            }
+          });
+          late Map<String, dynamic> message;
+          try {
+            message = await Future.any([
+              toolDispatcher.handle(calls, maxTokens: 4096),
+              interrupted.future,
+            ]);
+          } finally {
+            monitor.cancel();
+          }
+          if (owner.released || owner.epoch != _epoch || owner.cancelled) {
+            throw StateError('Tool request is no longer current');
+          }
+          if (clock.elapsed >= timeout)
+            throw TimeoutException('Native generation timed out', timeout);
+          final request = id.toNativeUtf8();
+          final reply = jsonEncode(message).toNativeUtf8();
+          try {
+            final result = lib
+                .lookupFunction<
+                  Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
+                  int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+                >('fs_generation_tool_reply')(handle, request, reply);
+            if (result != 0)
+              throw StateError(
+                'Tool request was cancelled or already answered',
+              );
+          } finally {
+            calloc.free(request);
+            calloc.free(reply);
+          }
+          continue;
+        }
+        if (event['type'] == 'tool_answer') {
+          final response =
+              jsonDecode(event['text'] as String) as Map<String, dynamic>;
+          if (response['error'] != null)
+            throw StateError(response['error'].toString());
+          final content = response['content'];
+          final String text;
+          if (content is String) {
+            text = content;
+          } else if (content is List) {
+            text = content
+                .where((part) => part is Map && part['type'] == 'text')
+                .map((part) => part['text'] as String)
+                .join();
+          } else {
+            throw FormatException('Invalid tool answer content');
+          }
+          yield {...event, 'type': 'delta', 'text': text};
+          continue;
+        }
         yield event;
         if (event['type'] == 'done') break;
       }
@@ -320,6 +453,7 @@ class NativeRuntime {
         owner.released ||
         (requestId != null && owner.id != requestId))
       return false;
+    owner.cancelled = true;
     lib.lookupFunction<
       Int32 Function(Pointer<Void>),
       int Function(Pointer<Void>)

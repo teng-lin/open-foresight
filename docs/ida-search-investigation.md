@@ -209,3 +209,13 @@ default. Production wiring and distribution credentials remain unfinished.
 Current core validation: **116 passed, one opt-in skipped**; analyzer clean.
 Eight new wire/gRPC tests cover the reconstructed service without contacting
 Google or invoking any remote/local model.
+
+
+### Tool-generation bridge
+
+The subsequent [tool-generation reconstruction](reference-tool-generation.md)
+recovers and implements the schema, callback argument/error contract, concurrent
+batch formatting, user-role response and 20-turn limit. A native bridge now
+retains the model conversation while search callbacks run. Production Ask/meeting
+activation, citation persistence, release credentials and live model/service
+verification remain outstanding.

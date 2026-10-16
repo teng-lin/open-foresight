@@ -1,8 +1,9 @@
 # Native inference
 
 `foresight-model` is a C++ worker shared by the retrieval helper and native
-generation adapter. Distributed applications contain no Python interpreter,
-Python scripts, or Python inference packages. Python remains a build/test tool.
+generation adapter. Linux distributions contain no Python interpreter, scripts,
+or inference packages. macOS currently uses the pinned
+[compatibility runtime](macos/README.md).
 
 - LiteRT-LM 0.18.0 uses Google's public C API for Gemma generation and
   EmbeddingGemma 2. Engine configuration, streaming, structured JSON, bounded
