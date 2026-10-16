@@ -53,6 +53,18 @@ class MacBundleTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Unresolved dependency'):
                 resolve_dependency('/missing/foresight-test.dylib', app / 'Contents/MacOS/app', app)
 
+    def test_newer_os_dependency_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder) / 'Example.app'
+            binary = app / 'Contents/Resources/lib/libnew.dylib'
+            binary.parent.mkdir(parents=True)
+            source = Path(folder) / 'new.c'
+            source.write_text('int example(void) { return 1; }\n')
+            subprocess.run(['clang', '-arch', 'arm64', '-mmacosx-version-min=26.0',
+                            '-dynamiclib', str(source), '-o', str(binary)], check=True)
+            with self.assertRaisesRegex(ValueError, 'above supported 15.0'):
+                audit_dependencies(app)
+
 
 if __name__ == '__main__':
     unittest.main()

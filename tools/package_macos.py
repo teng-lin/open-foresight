@@ -76,7 +76,9 @@ def main(argv=None):
     parser.add_argument('--flutter-app', type=Path, default=ROOT / 'apps/desktop/build/macos/Build/Products/Release/Open Foresight.app')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/Open Foresight.app')
     parser.add_argument('--python-runtime', type=Path, help='Standalone relocatable Python prefix with pinned LiteRT dependencies installed')
+    parser.add_argument('--sdk', type=Path, help='Pinned source SDK prefix; includes its static dependency licenses')
     parser.add_argument('--whisper-runtime', type=Path)
+    parser.add_argument('--whisper-license', type=Path, help='LICENSE from the source used to build the Whisper runtime')
     parser.add_argument('--google-client', type=Path)
     parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
     parser.add_argument('--identity', default='-', help='Developer ID Application identity; default is ad-hoc development only')
@@ -91,6 +93,8 @@ def main(argv=None):
         parser.error('Notarization requires --identity with a Developer ID Application identity')
     if args.identity != '-' and (not args.python_runtime or not args.whisper_runtime):
         parser.error('Developer ID release requires bundled --python-runtime and --whisper-runtime; use ad-hoc signing for incomplete developer builds')
+    if args.identity != '-' and (not args.sdk or not args.whisper_license):
+        parser.error('Developer ID release requires --sdk and --whisper-license to include third-party notices')
     if args.generation_backend == 'gpu' and not args.python_runtime:
         parser.error('GPU generation requires a validated --python-runtime')
     required = {
@@ -98,6 +102,7 @@ def main(argv=None):
         'FORESIGHT_NATIVE': args.build / 'native/libforesight_native.dylib',
         'FORESIGHT_AUDIO_DEVICES': args.build / 'native/foresight-audio',
         'FORESIGHT_NOTIFICATIONS': args.build / 'macos/foresight-notifications',
+        'FORESIGHT_FILE_PARSER': args.build / 'macos/foresight-file-parser',
     }
     service = args.build / 'application/foresight-service'
     mcp = args.build / 'application/foresight-mcp'
@@ -112,6 +117,8 @@ def main(argv=None):
     values = {}
     service_path = helper_bundle(contents / 'Library/Services/Open Foresight Service.app', service, 'io.openforesight.App.service')
     values['FORESIGHT_SERVICE'] = service_path
+    values['FORESIGHT_INSTALL_ROOT'] = app
+    values['FORESIGHT_RUNTIME_REVISION'] = run('git', '-C', ROOT, 'rev-parse', 'HEAD').strip()
     shutil.copy2(mcp, contents / 'MacOS/foresight-mcp')
     for key, source in required.items():
         target = resources / ('lib' if source.suffix == '.dylib' else 'bin') / source.name
@@ -133,6 +140,16 @@ def main(argv=None):
         target = resources / 'bin/whisper-cli'
         shutil.copy2(args.whisper_runtime, target)
         values['FORESIGHT_WHISPER_RUNTIME'] = target
+        if args.whisper_license:
+            notices = resources / 'licenses'
+            notices.mkdir(exist_ok=True)
+            shutil.copy2(args.whisper_license, notices / 'whisper-LICENSE')
+    if args.sdk:
+        sdk_manifest = args.sdk / 'foresight-sdk.json'
+        if not sdk_manifest.is_file():
+            parser.error('--sdk must be a completed source SDK with foresight-sdk.json')
+        shutil.copytree(args.sdk / 'share/foresight-sdk/licenses', resources / 'licenses/sdk')
+        shutil.copy2(sdk_manifest, resources / 'licenses/sdk-provenance.json')
     if args.google_client:
         config = json.loads(args.google_client.read_text())
         if set(config) != {'installed'} or 'client_id' not in config['installed']:

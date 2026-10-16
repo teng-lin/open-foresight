@@ -40,7 +40,7 @@ def rpaths(binary):
 
 
 def system_library(name):
-    return name.startswith(('/System/Library/', '/usr/lib/'))
+    return os.path.normpath(name).startswith(('/System/Library/', '/usr/lib/'))
 
 
 def resolve_dependency(name, owner, app, executable=None, inherited_rpaths=()):
