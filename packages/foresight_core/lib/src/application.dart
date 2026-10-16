@@ -1,3 +1,5 @@
+import 'audio_devices.dart';
+import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -63,12 +65,7 @@ class Application {
     _googleBusy = true;
     try {
       await google.reminders(DateTime.now(), (message) async {
-        final delivered = await Process.run('notify-send', [
-          'Open Foresight',
-          message,
-        ]);
-        if (delivered.exitCode != 0)
-          throw StateError('Could not deliver meeting reminder');
+        await platformNotification('Open Foresight', message);
       });
       final hours =
           int.tryParse(store.preference('googleRefreshHours', '4')) ?? 4;
@@ -127,6 +124,10 @@ class Application {
     if (modelOperation) _modelBusy = true;
     try {
       switch (method) {
+        case 'audio.capabilities':
+          return audioCapabilities();
+        case 'audio.request_microphone':
+          return await requestMicrophonePermission();
         case 'status':
           return {
             'pid': pid,
@@ -387,8 +388,7 @@ class Application {
         case 'models.generation':
           final candidate = await configureGeneration(
             store,
-            Platform.environment['FORESIGHT_NATIVE'] ??
-                'libforesight_native.so',
+            runtimeConfiguration.nativeLibrary,
             a['path'] as String,
             a['runtime'] as String,
             backend: a['backend'] as String? ?? 'llama_cpp',
@@ -492,6 +492,7 @@ class Application {
       if (modelOperation) _modelBusy = false;
       if (!{
         'status',
+        'audio.capabilities',
         'sources.list',
         'sources.get',
         'sources.search',
@@ -860,7 +861,7 @@ class Application {
       throw StateError('Register speech model and whisper.cpp runner first');
     provisionalTranscript.clear();
     final active = Recording(
-      Platform.environment['FORESIGHT_NATIVE'] ?? 'libforesight_native.so',
+      runtimeConfiguration.nativeLibrary,
       (state) {
         recordingState = state;
         changed();
@@ -912,10 +913,10 @@ class Application {
         speech['runtime'] as String,
         speech['path'] as String,
         microphoneTarget:
-            Platform.environment['FORESIGHT_MICROPHONE_TARGET'] ??
+            runtimeConfiguration['FORESIGHT_MICROPHONE_TARGET'] ??
             store.preference('microphoneTarget', 'auto'),
         playbackTarget:
-            Platform.environment['FORESIGHT_PLAYBACK_TARGET'] ??
+            runtimeConfiguration['FORESIGHT_PLAYBACK_TARGET'] ??
             store.preference('playbackTarget', 'auto'),
       );
     } catch (_) {

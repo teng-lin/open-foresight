@@ -15,7 +15,8 @@ class TestDomain extends Domain {
 
 class DelayedGenerator extends NativeRuntime {
   final entered = Completer<void>(), release = Completer<void>();
-  DelayedGenerator() : super('libc.so.6');
+  DelayedGenerator()
+    : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
   Stream<Map<String, dynamic>> generate(
     String id,

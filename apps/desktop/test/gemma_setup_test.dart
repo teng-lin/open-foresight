@@ -73,7 +73,7 @@ void main() {
       handle.closeSync();
       store.db.execute(
         'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?)',
-        ['generation', file.path, model.digest, '/bin/true', 'litert_lm'],
+        ['generation', file.path, model.digest, '/usr/bin/true', 'litert_lm'],
       );
       final before = store.rows('SELECT * FROM models').single;
       try {
@@ -145,7 +145,7 @@ void main() {
               store: store,
               directory: root,
               library: '',
-              runner: '/bin/true',
+              runner: '/usr/bin/true',
               memoryGb: 14,
               installed: (_, _) => fail('No activation requested'),
               localSetup: () {},

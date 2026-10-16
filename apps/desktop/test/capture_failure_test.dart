@@ -18,7 +18,7 @@ void main() {
       );
       try {
         recorder.start(
-          '/bin/true',
+          '/usr/bin/true',
           model.path,
           playback: false,
           microphoneTarget: 'owned-failure-fixture',

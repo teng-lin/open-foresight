@@ -1,3 +1,10 @@
+import 'package:foresight_core/foresight_core.dart'
+    show
+        runtimeConfiguration,
+        privateDirectory,
+        configureProfileRuntime,
+        openPlatformUri,
+        platformNotification;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -48,6 +55,7 @@ Future<void> main([List<String> arguments = const []]) async {
   final runtime = profile.runtime;
   ensurePrivateDirectory(data);
   ensurePrivateDirectory(runtime);
+  configureProfileRuntime(data);
   final commandPath = '$runtime/commands.sock';
   final launchCommand = arguments.contains('--stop-meeting')
       ? 'stop-meeting'
@@ -79,28 +87,8 @@ Future<void> main([List<String> arguments = const []]) async {
   );
 }
 
-Future<void> openSourceLink(Uri uri) async {
-  final result = await Process.run('xdg-open', [uri.toString()]);
-  if (result.exitCode != 0) throw StateError('Could not open the source link.');
-}
-
-void ensurePrivateDirectory(String path) {
-  final directory = Directory(path);
-  if (!directory.existsSync()) {
-    directory.createSync(recursive: true);
-    final changed = Process.runSync('chmod', ['700', path]);
-    if (changed.exitCode != 0)
-      throw StateError('Cannot create private directory: $path');
-  }
-  final owner = Process.runSync('stat', ['-Lc', '%u', path]);
-  final user = Process.runSync('id', ['-u']);
-  if (owner.exitCode != 0 ||
-      user.exitCode != 0 ||
-      owner.stdout.toString().trim() != user.stdout.toString().trim() ||
-      directory.statSync().mode & 0x3f != 0) {
-    throw StateError('A private user-owned directory is required: $path');
-  }
-}
+Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
+void ensurePrivateDirectory(String path) => privateDirectory(path);
 
 class Foresight extends StatelessWidget {
   final Domain domain;
@@ -331,16 +319,23 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     unawaited(refreshAudioDevices());
 
     notifications = d.store.preference('notifications') == 'true';
-    unawaited(
-      Process.run('sh', ['-c', 'command -v notify-send']).then((result) {
-        if (mounted)
-          setState(
-            () => notificationState = result.exitCode == 0
-                ? 'notify-send available; delivery depends on desktop service'
-                : 'notify-send unavailable',
-          );
-      }),
-    );
+    if (Platform.isMacOS) {
+      notificationState =
+          runtimeConfiguration['FORESIGHT_NOTIFICATIONS'] != null
+          ? 'Notifications available; allow delivery in System Settings'
+          : 'Notification adapter unavailable';
+    } else {
+      unawaited(
+        Process.run('sh', ['-c', 'command -v notify-send']).then((result) {
+          if (mounted)
+            setState(
+              () => notificationState = result.exitCode == 0
+                  ? 'Notifications available; delivery depends on desktop service'
+                  : 'Notifications unavailable',
+            );
+        }),
+      );
+    }
     syncCapture();
     d.helper.changed = () {
       if (mounted) setState(syncCapture);
@@ -487,12 +482,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   bool modelSetupShown = false;
   Future<void> chooseGemma({bool firstRun = false}) async {
-    final info = File('/proc/meminfo').readAsStringSync();
-    final memoryKb =
-        int.tryParse(
-          RegExp(r'MemTotal:\s+(\d+)').firstMatch(info)?.group(1) ?? '',
-        ) ??
-        0;
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
@@ -511,11 +500,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           if (mounted) setState(() => embeddingGpu = true);
         },
         directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
-        library:
-            Platform.environment['FORESIGHT_NATIVE'] ??
-            'libforesight_native.so',
-        runner: Platform.environment['FORESIGHT_LITERT_RUNNER'] ?? '',
-        memoryGb: (memoryKb / 1048576).round(),
+        library: runtimeConfiguration.nativeLibrary,
+        runner: runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? '',
+        memoryGb: physicalMemoryGb(),
         installGeneration: (path, runtime, current) async {
           await d.commandCurrent('models.generation', {
             'path': path,
@@ -567,7 +554,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           '${File(d.store.path).parent.path}/models/whisper',
         ),
         runner:
-            Platform.environment['FORESIGHT_WHISPER_RUNTIME'] ??
+            runtimeConfiguration['FORESIGHT_WHISPER_RUNTIME'] ??
             registration?['runtime'] as String? ??
             '',
         installSpeech: (asset, runner, digest, current) async {
@@ -608,9 +595,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         setState(
           () => googleState = 'Complete Google sign-in in your browser.',
         );
-      final opened = await Process.run('xdg-open', [uri.toString()]);
-      if (opened.exitCode != 0)
-        throw StateError('Could not open your browser.');
+      await openPlatformUri(uri);
     });
     if (mounted)
       setState(() => googleState = 'Connected as ${googleAuth.email}');
@@ -620,15 +605,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   Future<void> notify(String message) async {
     if (!notifications) return;
     try {
-      final result = await Process.run('notify-send', [
-        'Open Foresight',
-        message,
-      ]);
-      if (result.exitCode != 0 && mounted)
-        setState(
-          () => notificationState =
-              'notification delivery failed: ${result.stderr}',
-        );
+      await platformNotification('Open Foresight', message);
     } catch (e) {
       if (mounted)
         setState(() => notificationState = 'notification unavailable: $e');
@@ -952,7 +929,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         ),
         CheckboxListTile(
           value: notifications,
-          onChanged: notificationState.startsWith('notify-send available')
+          onChanged: notificationState.startsWith('Notifications available')
               ? (value) => setState(() => notifications = value!)
               : null,
           title: const Text('Desktop completion/error notifications'),

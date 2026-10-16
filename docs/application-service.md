@@ -129,3 +129,51 @@ python3 -m pytest tests/service/test_service_process.py::test_native_desktop_and
 ```
 
 This launches the actual Flutter app alongside MCP and checks visible meeting updates, shared capture, desktop teardown/restart, transcription, summary persistence, and the read-only desktop connection. Its evidence is written to `test-results/desktop-service-integration.json`. Controlled fixtures verify ownership and data flow; they do not measure real-model accuracy or physical microphone quality. The existing opt-in real meeting workflow remains available through `tools/test_meeting_workflow.py`.
+
+## macOS runtime and profile ownership
+
+On macOS the default profile is `~/Library/Application Support/Open Foresight`.
+Existing profile ancestors are canonicalized, so a symlink alias identifies the
+same profile. `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` remain explicit overrides.
+The default runtime is a short private `/tmp/of-<uid>-<profile hash>` directory;
+long explicit paths are rejected before attempting to bind a Unix socket.
+
+The service takes a nonblocking POSIX advisory lock on
+`<canonical profile>/.application.lock`, independent of runtime overrides. Its
+private `.application-endpoint.json` records the active runtime directory. Clients
+validate that directory and attach to the recorded endpoint. A service launched
+with another runtime cannot acquire a competing profile writer. Stale endpoint
+records are replaced only after acquiring the profile lock and binding a new
+socket. Disconnected mutations with unknown commit state are still never replayed.
+
+Installed executables discover `Contents/Resources/runtime.json` in the nearest
+enclosing `.app`. It maps `FORESIGHT_*` resource-path keys to paths relative to that
+Resources directory; absolute explicit environment overrides win. Nested service
+bundles can refer to the outer app through relative `../` paths. This map must
+contain the service, helper, native library, model runners, audio-device adapter,
+and notification adapter as applicable. All resolved values propagate to detached
+service launches and helper subprocesses. Profile content and downloaded models
+remain outside the bundle. With no HOME environment variable on macOS, the system
+user directory is obtained from Directory Services.
+
+The Mac audio discovery adapter uses `FORESIGHT_AUDIO_DEVICES --list-devices` and
+returns a JSON array of `{ "id": "stable-device-id", "label": "Device", "playback": false }`.
+The Mac notification adapter uses `FORESIGHT_NOTIFICATIONS --title TITLE --message MESSAGE`;
+errors are surfaced rather than treated as successful delivery. Discovery and
+configuration do not request capture permission. Real TCC identity, recording,
+model execution, and signed installed-bundle behavior require separate integration
+gates; these interfaces alone do not prove those workflows.
+
+`audio.capabilities` (MCP: `audio_capabilities`) inspects the service's audio
+backend and permission state without prompting. `audio.request_microphone`
+(MCP: `audio_request_microphone`) explicitly requests microphone authorization in
+the service process; the blocking native request runs on another Dart isolate.
+An improperly packaged service with no microphone purpose string receives an
+actionable setup failure before entering the OS permission API. System-audio
+permission is checked on capture because no public preflight API is available.
+
+Before native workers start, the shared runtime adapter copies its supported
+settings into native process state using `fs_set_runtime_environment`. A Dart
+configuration map alone cannot configure C/C++ `getenv` consumers. LiteRT and
+Python bytecode caches default to `<profile>/cache/litert` and
+`<profile>/cache/python` when an installed native runtime is configured.

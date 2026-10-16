@@ -120,6 +120,21 @@ Future<void> main() async {
     }
 
     tool(
+      'audio_capabilities',
+      'audio.capabilities',
+      'Inspect audio backend and permission state without requesting permission or starting capture.',
+      {},
+      [],
+      readOnly: true,
+    );
+    tool(
+      'audio_request_microphone',
+      'audio.request_microphone',
+      'Explicitly request microphone permission for the application service. May show macOS system consent UI; requires an interactive logged-in session.',
+      {},
+      [],
+    );
+    tool(
       'get_status',
       'status',
       'Get local model readiness, indexing state, and active recording.',

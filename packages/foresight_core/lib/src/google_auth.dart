@@ -1,3 +1,4 @@
+import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -88,9 +89,9 @@ class GoogleAuth {
       else {
         final bundled =
             defaultClient ??
-            (Platform.environment['FORESIGHT_GOOGLE_CLIENT'] == null
+            (runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT'] == null
                 ? null
-                : File(Platform.environment['FORESIGHT_GOOGLE_CLIENT']!));
+                : File(runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT']!));
         if (bundled?.existsSync() == true)
           client = GoogleClient.parse(
             jsonDecode(bundled!.readAsStringSync()) as Map<String, dynamic>,
