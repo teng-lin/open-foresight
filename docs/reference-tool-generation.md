@@ -81,10 +81,12 @@ and [Gemma tool processor](https://github.com/google-ai-edge/LiteRT-LM/blob/v0.1
 Ask and meeting Chat now call this bridge when their web toggle is selected.
 Source URLs and cited excerpts are persisted with each answer, and release
 packagers can bundle distribution credentials. See [chat citation evidence](reference-chat-web.md).
-Real-model tool behavior, provisioned release credentials and live service access
-remain unverified.
-The original also has textual tool-call extraction fallback; that parser and
-the streaming variant still need comparison. This new tool path currently emits
+Local-model tool selection and continuation now pass a controlled-provider
+check documented in the fallback ledger. Provisioned release credentials and
+live service access remain unverified.
+The original text tool-call fallback is now recovered and integrated; see
+[fallback evidence](reference-tool-fallback.md). The streaming variant still
+needs comparison. This new tool path currently emits
 its final answer as one delta. Generic model prompts, sampling and the port's
 4096-token context have not been shown equivalent to the original.
 

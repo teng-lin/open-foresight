@@ -37,6 +37,8 @@ int fs_generation_cancel(void *conversation);
 // events. Replies are scoped to the active request and accepted once per batch.
 // tools_json is {"tools":[...],"system_message":"..."}; a legacy array uses
 // the runner's default system message. prompt is always user content.
+// delegate_tool_detection=true emits model_response events. Reply with
+// {"message":<user message>} to continue or {"finish":true} to accept the answer.
 int fs_generate_tools(void *conversation, const char *request_id,
                       const char *prompt, const char *tools_json,
                       int max_output_tokens);

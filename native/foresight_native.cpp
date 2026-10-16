@@ -448,7 +448,7 @@ char *fs_engine_state(void *h) {
                      ? "litert-lm-gpu-native" : "litert-lm-cpu-native") +
                  ",\"load_policy\":\"per_request\","
                  "\"context_length\":4096,\"temperature\":0.4,\"top_k\":40,\"top_p\":0.9,"
-                 "\"thinking\":false,\"json\":\"ll_guidance_and_application_validation\",\"text\":true,\"tools\":false,\"error\":" + quote(e.error) + "}");
+                 "\"thinking\":false,\"json\":\"ll_guidance_and_application_validation\",\"text\":true,\"tools\":true,\"error\":" + quote(e.error) + "}");
   return owned("{\"state\":" + quote(e.state) +
                ",\"backend\":\"llama.cpp-cpu-cli\",\"load_policy\":\"per_"
                "request\",\"context_length\":4096,\"max_output_tokens\":256,"
@@ -570,16 +570,17 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           auto line = utf8.substr(0, newline);
           utf8.erase(0, newline + 1);
           bool request = line.starts_with("tool ");
+          bool model = line.starts_with("model ");
           bool answer = line.starts_with("answer ");
-          if ((!request && !answer) || tool_answer_received) {
+          if ((!request && !model && !answer) || tool_answer_received) {
             tool_protocol_failed = true;
             failure(c, c.request, seq, "tool_protocol", "Invalid tool worker frame");
             c.stop(); return;
           }
           if (answer) tool_answer_received = true;
-          if (request) c.awaiting_tool = true;
-          c.emit(event(request ? "tool_request" : "tool_answer", c.request,
-                       seq++, ",\"text\":" + quote(line.substr(request ? 5 : 7))));
+          if (request || model) c.awaiting_tool = true;
+          c.emit(event(model ? "model_response" : request ? "tool_request" : "tool_answer", c.request,
+                       seq++, ",\"text\":" + quote(line.substr(model ? 6 : request ? 5 : 7))));
         }
         return;
       }

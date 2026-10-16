@@ -66,6 +66,33 @@ API = types.SimpleNamespace(Tool=type('Tool', (), {}), SamplerConfig=options,
 
 
 class ToolRunnerTest(unittest.TestCase):
+    def test_delegated_detection_retains_conversation_and_waits_for_finish(self):
+        value = {'content': [{'type': 'text', 'text': 'textual tool request'}]}
+        answer = {'content': [{'type': 'text', 'text': 'Final answer'}]}
+        message = {'role': 'user', 'content': 'Tool result'}
+        engine = Engine([value, answer])
+        output = io.StringIO()
+        controls = json.dumps({'message': message}) + '\n' + json.dumps({'finish': True}) + '\n'
+        with patch('sys.stdin', io.StringIO(controls)), contextlib.redirect_stdout(output):
+            runner.run_tool_conversation(engine, API, 'Question', {
+                'tools': [{'name': 'google_search'}], 'system_message': 'Instructions',
+                'delegate_tool_detection': True}, 256)
+        frames = [(line.split(' ', 1)[0], json.loads(line.split(' ', 1)[1])) for line in output.getvalue().splitlines()]
+        self.assertEqual(frames, [('model', value), ('model', answer), ('answer', answer)])
+        self.assertEqual(engine.conversation._lib.messages, [{'role': 'user', 'content': 'Question'}, message])
+        self.assertEqual(engine.creations, 1)
+        self.assertTrue(engine.conversation.closed)
+
+    def test_delegated_error_finishes_without_another_generation(self):
+        engine = Engine([{'tool_calls': [{'function': {'name': 'google_search'}}]}])
+        output = io.StringIO()
+        with patch('sys.stdin', io.StringIO('{"finish":true,"error":"Max turns reached after tool call detection"}\n')), contextlib.redirect_stdout(output):
+            runner.run_tool_conversation(engine, API, 'Question', {
+                'tools': [{'name': 'google_search'}], 'system_message': 'Instructions',
+                'delegate_tool_detection': True}, 256)
+        self.assertIn('Max turns reached after tool call detection', output.getvalue())
+        self.assertEqual(len(engine.conversation._lib.messages), 1)
+
     def test_system_instructions_are_distinct_from_the_user_message(self):
         engine = Engine([{'role': 'assistant', 'content': 'Answer'}])
         request = {'tools': [{'name': 'google_search'}], 'system_message': 'Exact original instructions'}

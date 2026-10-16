@@ -26,19 +26,45 @@ if prompt=='Reference question':
  assert hashlib.sha256(options['system_message'].encode()).hexdigest()=='71a908bf5b041da7cff1c7ad1d397a62b2fc3d433774bad7dcaf26a351762f78'
 else:
  assert options['system_message']=='Follow the requested task faithfully. Do not invent facts.'
- assert prompt=='Question', 'System instructions leaked into user content'
+ assert prompt in ['Question','Text fallback question','Turn limit question','Final turn question'], 'System instructions leaked into user content'
 assert tools[0]['name']=='google_search'
-print('tool '+json.dumps([{'function':{'name':'google_search','arguments':{'query':'Current query'}}}]),flush=True)
-message=json.loads(sys.stdin.readline())
+assert options['delegate_tool_detection'] is True
+calls=[{'function':{'name':'google_search','arguments':{'query':'Current query'}}}]
+answer={'role':'assistant','content':[{'type':'text','text':'Answer [Source:1]'}]}
+if prompt=='Reference question':
+ print('tool '+json.dumps(calls),flush=True)
+ message=json.loads(sys.stdin.readline())
+else:
+ for turn in range(20):
+  value={'tool_calls':calls}
+  if prompt=='Text fallback question':
+   value={'content':[{'type':'text','text':json.dumps({'tool_calls':calls},separators=(',',':'))[:-1]}]}
+  if prompt=='Final turn question' and turn==19: value=answer
+  print('model '+json.dumps(value),flush=True)
+  control=json.loads(sys.stdin.readline())
+  if prompt=='Final turn question' and turn==19:
+   assert control=={'finish':True}
+   print('answer '+json.dumps(answer),flush=True)
+   sys.exit(0)
+  if turn==19:
+   assert control=={'finish':True,'error':'Max turns reached after tool call detection'}
+   print('answer '+json.dumps({'error':control['error']}),flush=True)
+   sys.exit(0)
+  message=control['message']
+  if prompt not in ['Turn limit question','Final turn question']: break
 assert message['role']=='user'
 assert message['content'][0]['text'].startswith('The search results for the previous request are provided below:')
-print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':'Answer [Source:1]'}]}),flush=True)
+if prompt!='Reference question':
+ print('model '+json.dumps(answer),flush=True)
+ assert json.loads(sys.stdin.readline())=={'finish':True}
+print('answer '+json.dumps(answer),flush=True)
 ''');
         await Process.run('chmod', ['+x', runner.path]);
         final model = File('${directory.path}/asset');
         await model.writeAsString('fixture');
         runtime = NativeRuntime(library!);
         await runtime.load(runner.path, model.path, backend: 'litert_lm');
+        expect(runtime.effectiveState['tools'], isTrue);
       });
       tearDown(() async {
         runtime.close();
@@ -91,6 +117,85 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
           );
           expect(events.last['status'], 'completed');
           expect(runtime.generating, isFalse);
+        },
+      );
+
+      test(
+        'textual calls are repaired and delegated before accepting the final answer',
+        () async {
+          var batches = 0;
+          final events = await runtime
+              .generateWithTools(
+                'text-fallback',
+                'Text fallback question',
+                tools: [referenceGoogleSearchTool()],
+                dispatcher: ReferenceToolDispatcher({
+                  'google_search': (args) async {
+                    batches++;
+                    expect(args, {'query': 'Current query'});
+                    return 'Search result';
+                  },
+                }),
+              )
+              .toList();
+          expect(batches, 1);
+          expect(
+            events.where((event) => event['type'] == 'delta').single['text'],
+            'Answer [Source:1]',
+          );
+          expect(events.last['status'], 'completed');
+        },
+      );
+
+      test(
+        'delegated ordinary twentieth answer completes after nineteen batches',
+        () async {
+          var batches = 0;
+          final events = await runtime
+              .generateWithTools(
+                'final-turn',
+                'Final turn question',
+                tools: [referenceGoogleSearchTool()],
+                dispatcher: ReferenceToolDispatcher({
+                  'google_search': (_) async {
+                    batches++;
+                    return 'Search result';
+                  },
+                }),
+              )
+              .toList();
+          expect(batches, 19);
+          expect(events.last['status'], 'completed');
+        },
+      );
+
+      test(
+        'delegated twentieth call fails without executing a twentieth batch',
+        () async {
+          var batches = 0;
+          await expectLater(
+            runtime
+                .generateWithTools(
+                  'turn-limit',
+                  'Turn limit question',
+                  tools: [referenceGoogleSearchTool()],
+                  dispatcher: ReferenceToolDispatcher({
+                    'google_search': (_) async {
+                      batches++;
+                      return 'Search result';
+                    },
+                  }),
+                )
+                .toList(),
+            throwsA(
+              isA<StateError>().having(
+                (error) => error.message,
+                'message',
+                'Max turns reached after tool call detection',
+              ),
+            ),
+          );
+          expect(batches, 19);
         },
       );
 

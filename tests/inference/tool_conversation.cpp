@@ -25,6 +25,23 @@ int main() {
     auto options = foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Original instructions"}});
     check(options.tools == wrapped && options.system_message == "Original instructions");
     check(foresight::parse_tool_request(wrapped).tools == wrapped);
+    std::istringstream delegated_input(json({{"message", reply}}).dump() + "\n{\"finish\":true}\n");
+    std::ostringstream delegated_output;
+    int delegated_turns = 0;
+    auto delegated_answer = foresight::tool_conversation([&](const std::string &message) {
+      if (++delegated_turns == 1)
+        return json({{"content", {{{"type", "text"}, {"text", "textual tool request"}}}}});
+      check(json::parse(message) == reply);
+      return json({{"content", "Final answer"}});
+    }, "{}", delegated_input, delegated_output, true);
+    check(delegated_turns == 2 && json::parse(delegated_answer)["content"] == "Final answer");
+    check(delegated_output.str().starts_with("model "));
+    std::istringstream finish_error("{\"finish\":true,\"error\":\"Max turns reached after tool call detection\"}\n");
+    std::ostringstream error_output;
+    auto delegated_error = foresight::tool_conversation([](const std::string &) {
+      return json({{"content", "pending call"}});
+    }, "{}", finish_error, error_output, true);
+    check(json::parse(delegated_error).contains("error"));
     for (auto invalid : {json::object(), json({{"tools", wrapped}, {"system_message", 123}})}) {
       bool rejected = false;
       try { foresight::parse_tool_request(invalid); } catch (const std::exception &) { rejected = true; }

@@ -17,7 +17,11 @@ import sys
 
 def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
     system = 'Follow the requested task faithfully. Do not invent facts.'
+    delegate_tool_detection = False
     if isinstance(definitions, dict):
+        delegate_tool_detection = definitions.get('delegate_tool_detection', False)
+        if not isinstance(delegate_tool_detection, bool):
+            raise ValueError('Tool detection delegation must be a boolean')
         system = definitions['system_message']
         definitions = definitions['tools']
         if not isinstance(system, str):
@@ -75,6 +79,23 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget):
                 conversation._delete_optional_args(optional)
             if not isinstance(value, dict):
                 raise ValueError('Invalid tool generation response')
+            if delegate_tool_detection:
+                print('model ' + json.dumps(value, ensure_ascii=False), flush=True)
+                line = sys.stdin.readline()
+                if not line:
+                    raise RuntimeError('Tool conversation owner disconnected')
+                control = json.loads(line)
+                if control.get('finish', False):
+                    result = {'error': control['error']} if 'error' in control else value
+                    print('answer ' + json.dumps(result, ensure_ascii=False), flush=True)
+                    return
+                if turn == 19:
+                    print('answer ' + json.dumps({'error': 'Max turns reached after tool call detection'}), flush=True)
+                    return
+                message = control['message']
+                if not isinstance(message, dict) or message.get('role') != 'user':
+                    raise ValueError('Invalid tool response message')
+                continue
             calls = value.get('tool_calls')
             if not calls:
                 print('answer ' + json.dumps(value, ensure_ascii=False), flush=True)

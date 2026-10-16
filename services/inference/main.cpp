@@ -293,7 +293,7 @@ public:
         const char *raw = LM(json_response_get_string)(response.get());
         if (!raw) throw std::runtime_error("Missing tool generation response");
         return json::parse(raw);
-      }, message, std::cin, *stream);
+      }, message, std::cin, *stream, tool_request.delegate_tool_detection);
     }
     auto decode = [](const char *raw) {
       if (!raw)

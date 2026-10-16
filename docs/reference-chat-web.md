@@ -55,8 +55,8 @@ The recovered instruction string and text-only date/context/query envelope are
 now used for web-enabled sends; see the prompt section below. Structured history,
 sampling and the 4096-token native context have not been shown equivalent to the
 original. The current tool path
-publishes its final model answer in one delta; original streaming and textual
-tool-call fallback remain to be reproduced.
+publishes its final model answer in one delta; original streaming remains to be reproduced. The [textual tool-call fallback](reference-tool-fallback.md)
+is now integrated and has a controlled-provider real-model check.
 
 ## Release credentials
 

@@ -5,6 +5,7 @@ import 'platform_services.dart';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
 import 'reference_tools.dart';
+import 'reference_tool_parser.dart';
 
 /// Packaged installations always use their bundled native worker, including
 /// profiles that still contain the former Python runner path.
@@ -261,6 +262,7 @@ class NativeRuntime {
           ? jsonEncode({
               'tools': tools,
               'system_message': systemPrompt,
+              'delegate_tool_detection': true,
             }).toNativeUtf8()
           : responseSchema == null
           ? nullptr.cast<Utf8>()
@@ -342,6 +344,7 @@ class NativeRuntime {
             Void Function(Pointer<Utf8>),
             void Function(Pointer<Utf8>)
           >('fs_string_free');
+      var modelTurns = 0;
       while (true) {
         // close/load may have destroyed this handle while awaiting the timer
         // or while a consumer was processing a yielded event.
@@ -365,31 +368,49 @@ class NativeRuntime {
         if (event['request_id'] != id) {
           throw StateError('Native generation returned a different request ID');
         }
-        if (event['type'] == 'tool_request') {
+        if (event['type'] == 'tool_request' ||
+            event['type'] == 'model_response') {
           if (toolDispatcher == null)
             throw StateError('Unexpected tool request');
-          final calls = jsonDecode(event['text'] as String) as List<dynamic>;
-          final interrupted = Completer<Map<String, dynamic>>();
-          final monitor = Timer.periodic(const Duration(milliseconds: 20), (_) {
-            if (interrupted.isCompleted) return;
-            if (owner.released || owner.epoch != _epoch || owner.cancelled) {
-              interrupted.completeError(
-                StateError('Tool request is no longer current'),
-              );
-            } else if (clock.elapsed >= timeout) {
-              interrupted.completeError(
-                TimeoutException('Native generation timed out', timeout),
-              );
-            }
-          });
+          final delegated = event['type'] == 'model_response';
+          final payload = jsonDecode(event['text'] as String);
+          final calls = delegated
+              ? extractReferenceToolCalls(payload as Map<String, dynamic>)
+              : payload as List<dynamic>;
+          if (delegated) modelTurns++;
           late Map<String, dynamic> message;
-          try {
-            message = await Future.any([
-              toolDispatcher.handle(calls, maxTokens: 4096),
-              interrupted.future,
-            ]);
-          } finally {
-            monitor.cancel();
+          if (delegated && (calls == null || calls.isEmpty)) {
+            message = {'finish': true};
+          } else if (delegated && modelTurns >= 20) {
+            message = {
+              'finish': true,
+              'error': 'Max turns reached after tool call detection',
+            };
+          } else {
+            final interrupted = Completer<Map<String, dynamic>>();
+            final monitor = Timer.periodic(const Duration(milliseconds: 20), (
+              _,
+            ) {
+              if (interrupted.isCompleted) return;
+              if (owner.released || owner.epoch != _epoch || owner.cancelled) {
+                interrupted.completeError(
+                  StateError('Tool request is no longer current'),
+                );
+              } else if (clock.elapsed >= timeout) {
+                interrupted.completeError(
+                  TimeoutException('Native generation timed out', timeout),
+                );
+              }
+            });
+            try {
+              final reply = await Future.any([
+                toolDispatcher.handle(calls!, maxTokens: 4096),
+                interrupted.future,
+              ]);
+              message = delegated ? {'message': reply} : reply;
+            } finally {
+              monitor.cancel();
+            }
           }
           if (owner.released || owner.epoch != _epoch || owner.cancelled) {
             throw StateError('Tool request is no longer current');

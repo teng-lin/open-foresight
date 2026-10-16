@@ -9,6 +9,7 @@ namespace foresight {
 struct ToolRequest {
   nlohmann::json tools;
   std::string system_message = "Follow the requested task faithfully. Do not invent facts.";
+  bool delegate_tool_detection = false;
 };
 
 inline nlohmann::json wrap_tools(const nlohmann::json &tools) {
@@ -30,6 +31,7 @@ inline ToolRequest parse_tool_request(const nlohmann::json &value) {
   if (value.is_object()) {
     result.tools = wrap_tools(value.at("tools"));
     result.system_message = value.at("system_message").get<std::string>();
+    result.delegate_tool_detection = value.value("delegate_tool_detection", false);
   } else {
     result.tools = wrap_tools(value);
   }
@@ -39,11 +41,35 @@ inline ToolRequest parse_tool_request(const nlohmann::json &value) {
 // send retains its native conversation across all callback round trips.
 template <class Send>
 std::string tool_conversation(Send &&send, std::string message,
-                              std::istream &input, std::ostream &output) {
+                              std::istream &input, std::ostream &output,
+                              bool delegate_tool_detection = false) {
   using json = nlohmann::json;
   for (int turn = 0; turn < 20; ++turn) {
     auto value = send(message);
     if (!value.is_object()) throw std::runtime_error("Invalid tool generation response");
+    if (delegate_tool_detection) {
+      // The Dart application applies the original native/text extraction rules.
+      output << "model " << value.dump() << std::endl;
+      std::string control_text;
+      if (!std::getline(input, control_text))
+        throw std::runtime_error("Tool conversation owner disconnected");
+      auto control = json::parse(control_text);
+      if (control.value("finish", false)) {
+        auto result = control.contains("error") ? json({{"error", control.at("error")}}) : value;
+        output << "answer " << result.dump() << std::endl;
+        return result.dump();
+      }
+      if (turn == 19) {
+        auto error = json({{"error", "Max turns reached after tool call detection"}}).dump();
+        output << "answer " << error << std::endl;
+        return error;
+      }
+      auto reply = control.at("message");
+      if (!reply.is_object() || reply.value("role", "") != "user")
+        throw std::runtime_error("Invalid tool response message");
+      message = reply.dump();
+      continue;
+    }
     auto calls = value.value("tool_calls", json::array());
     if (calls.is_null() || calls.empty()) {
       output << "answer " << value.dump() << std::endl;
