@@ -87,8 +87,16 @@ uses split halves and geometric timescales. Original `MakeRotaryEmbedding` at
 `0x102822970` forwards its three floats to `SplitRoPEConcat` with planar mode.
 Original `QKVRoPE` at `0x10285f434` selects minimum timescale 1, local maximum
 10,000, the metadata global maximum 1,000,000, and proportion 1 when no partial
-proportion is configured. Exact global-layer placement still needs the
-corresponding original caller.
+proportion is configured.
+
+`CreateStackedTransformerModel` binds the global-layer schedule at
+`0x102836564–0x102836620`: it compares the zero-based layer index modulo
+`num_local_layers_per_global + 1` with the configured global-layer offset,
+falling back to `num_local_layers_per_global` when that optional offset is
+absent. The original asset therefore selects global layers **5, 11 and 17**
+(zero-based). The same comparison selects the full attention mask and is
+forwarded to the layer builder. This agrees with the diagnostic's existing
+`(layer + 1) % 6 == 0` schedule.
 
 The original GPU scalar is now bound directly. `PerDimScale` at `0x10281d148`
 reads attention-scale enum 4 from builder offset 140 and multiplies Q by the
@@ -102,15 +110,29 @@ The full fused-builder body and shader, including their retained tails,
 establish that `MakeTransformQKVRmsNormApplyRoPE` applies Q/K RMS with epsilon
 1e-6, optional learned gamma, and RoPE, then writes Q without an additional
 attention scalar. This agrees with scaling in the outer attention caller.
-Selection of the optional Q/K gamma tensors and the V1/V2 attention path still
-need their original caller. `IsModelv3` at `0x1027fa940` returns false for this
+`MakeLayer` constructs a nonempty `.self_attention` weight prefix and forwards
+it through virtual slot 32 (`0x10282def0`). The ordinary `MakeSelfAttention`
+passes that prefix to `QKVRoPE` with normalization shift 1.0, so this fused V1
+path loads the Q/K scale vectors. All 36 original Q/K scale vectors contain
+only zeros, verified from the authenticated asset: adding 1 gives the same
+identity scale as the diagnostic's metadata-selected no-gamma path.
+
+The outer `LlmWebGpu::InitModel` dispatch at `0x101e2bc80` rejects V2
+for this asset because the extra embedding-configuration optionals required by
+that branch are absent. Its fallback at `0x101e2c174–0x101e2c188` selects the
+ordinary V1 call at `0x101e2c2cc` when the optional global-head configuration
+flag at builder offset 40 is false. `CreateTransformerConfig` leaves that flag
+false unless the protobuf integer at offset 244 is positive.
+`IsModelv3` at `0x1027fa940` returns false for this
 model's absent/default configuration fields, excluding the V3 builder path.
 
 Retained IDA evidence files include `detector-gpu-model-builder.json`,
 `detector-gpu-normalization-default.json`, `detector-gpu-rms-builder.json`,
-`detector-gpu-rms-kernel.json`, `detector-gpu-qkv-rotary.json`, and
+`detector-gpu-rms-kernel.json`, `detector-gpu-qkv-rotary.json`,
 `detector-gpu-transformer-config.json`, `detector-gpu-query-scale-dispatch.json`,
-and `detector-gpu-self-attention.json` under `test-results/reference-functions/ida/`.
+`detector-gpu-self-attention.json`, `detector-gpu-stacked-v1-final.json`,
+`detector-gpu-make-layer.json`, `detector-gpu-init-model-dispatch-final.json`,
+and `detector-gpu-v1-fallback-dispatch.json` under `test-results/reference-functions/ida/`.
 
 ## Isolated execution and results
 
@@ -154,8 +176,7 @@ has SentencePiece but currently lacks NumPy.
 ## Remaining fidelity work
 
 Float32 CPU execution changes the original packed-int8 GPU arithmetic. Original
-GPU reduction/rounding, exact attention-path selection, GELU implementation,
-local/global layer placement,
+GPU reduction/rounding, GELU implementation,
 tokenizer/session boundaries and output behavior still require direct reference
 comparison. Public legacy XNN math is an explicit diagnostic adaptation until
 that comparison is established. The current successful CPU output proves the

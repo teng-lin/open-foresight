@@ -108,8 +108,26 @@ the prompt's date, empty unrelated results, and unchanged model memory.
 The native `sendMessageStream` entry at `0x100913288` checks the handle state,
 creates a stream controller, and schedules PP24541 through `Pool.withResource`.
 That wrapper, retained in `ida/chat-native-send-stream.json`, contains no retry
-or empty-result policy. Its scheduled closure and downstream event handling
-must be inspected before drawing a conclusion about model-level recovery.
+or empty-result policy. Selected callback PP24541 resolves to `0x1009133a8`,
+captured under successful REA evidence
+`ev_5199a0eb198407d52d6860610d98255ac5e7bb5abea80f7d7820825bf80eab2b`.
+The complete pooled closure is retained in
+`ida/chat-native-stream-pooled-closure.json`, successful REA evidence
+`ev_1d9ba606e40ac2dbbf7361083e6b3c7c2917cebcd6df3a46054d47650bb534d0`.
+It runs at most 20 model/tool rounds. Each streamed result is parsed; a
+response without tool calls is added to the output stream. Tool calls are
+withheld, collected, and dispatched after the round's input stream ends.
+The next round receives the tool results. A tool-bearing twentieth round
+emits an error rather than dispatching another tool batch. Ordinary responses
+on that round can still complete.
+
+When the input stream ends with no pending tool calls, the closure closes the
+output controller. That branch does not test text emptiness or send the model
+another message. Thus the traced Dart wrapper has no generic empty-response
+retry: its loop continues for tool calls. Empty final display recovery is the
+two-stage sanitation and narrowly matched date fallback above. Lower-level
+native engine internals and exact original runtime output still require their
+own comparison; this trace does not establish their full lifecycle parity.
 
 Sanitizer delegation is retained in
 `ida/chat-sanitize-delegate-<address>.json`; additional helpers are

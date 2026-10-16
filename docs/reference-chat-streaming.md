@@ -96,7 +96,9 @@ citation, replay and compression through the retained worker. The full core suit
 passes 193 tests; the full desktop suite passes 175 tests, with optional tests
 skipped. All four native test groups pass.
 
-Empty-response recovery, original runtime comparison and exhaustive lifecycle
-parity remain open. The retained worker covers the text configuration currently
+The original two-stage cleanup and date-specific empty-response fallback are
+implemented; the pooled stream wrapper has no generic empty-text retry.
+Malformed-JSON metadata reconstruction, original runtime comparison and exhaustive
+lifecycle parity remain open. The retained worker covers the text configuration currently
 exposed by the port; original cache conditions for other modalities remain
 unverified.

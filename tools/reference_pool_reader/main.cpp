@@ -128,7 +128,7 @@ int main(int argc, char** argv) {
       }
     }
     // Public export/label callback identities only; never print object contents.
-    for (intptr_t pp : {14905,14906,40651,40646,40647}) {
+    for (intptr_t pp : {24541,14905,14906,40651,40646,40647}) {
       const auto index = dart::ObjectPool::IndexFromOffset(pp * 8 - dart::kHeapObjectTag);
       const auto& callback = dart::Object::Handle(zone, pool.ObjectAt(index));
       if (callback.IsFunction()) {
