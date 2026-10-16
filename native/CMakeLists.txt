@@ -35,4 +35,10 @@ if(BUILD_TESTING)
   endif()
   find_package(Python3 COMPONENTS Interpreter REQUIRED)
   add_test(NAME native_lifecycle COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native.py $<TARGET_FILE:foresight_native>)
+  if(TARGET ForesightHelper)
+    set_tests_properties(native_lifecycle PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:ForesightHelper>")
+    add_test(NAME native_process_identity COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native_process.py
+      $<TARGET_FILE:foresight_native> $<TARGET_FILE:ForesightHelper>)
+  endif()
 endif()

@@ -11,6 +11,40 @@ import os
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
+import sys
+
+
+def check_open_profile(source):
+    """Refuse live users on both supported hosts; fail closed on scan errors."""
+    if sys.platform == 'darwin':
+        scan = subprocess.run(
+            ['/usr/sbin/lsof', '-nP', '-Fpn', '+D', str(source)],
+            text=True, capture_output=True, timeout=30)
+        if scan.returncode not in (0, 1) or scan.stderr.strip():
+            raise RuntimeError('Cannot verify offline profile: ' + scan.stderr.strip())
+        owner = None
+        for line in scan.stdout.splitlines():
+            if line.startswith('p'):
+                owner = line[1:]
+            elif line.startswith('n') and owner != str(os.getpid()):
+                raise RuntimeError(f'Profile is open in process {owner}; stop it first')
+        return
+    if not Path('/proc/self/fd').is_dir():
+        raise RuntimeError('Cannot verify offline profile on this platform')
+    for process in Path('/proc').glob('[0-9]*'):
+        if process.name == str(os.getpid()):
+            continue
+        try:
+            for fd in (process / 'fd').iterdir():
+                try:
+                    target = os.readlink(fd)
+                except (FileNotFoundError, PermissionError):
+                    continue
+                if target.startswith(str(source) + '/'):
+                    raise RuntimeError(f'Profile is open in process {process.name}; stop it first')
+        except (FileNotFoundError, PermissionError):
+            continue
 
 
 def replace_prefix(value, mappings):
@@ -38,21 +72,11 @@ def migrate(source, destination, backup, old_bundle, new_bundle, copy_external=F
     # and worker descriptors. Do not move SQLite WALs from a running process.
     lock_path = source / 'helper/.helper.lock'
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with lock_path.open('a') as lock:
+    with lock_path.open('a') as lock, (source / '.application.lock').open('a') as application_lock:
+        # Dart FileLock uses POSIX record locks, distinct from flock on Linux.
+        fcntl.lockf(application_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        for process in Path('/proc').glob('[0-9]*'):
-            if process.name == str(os.getpid()):
-                continue
-            try:
-                for fd in (process / 'fd').iterdir():
-                    try:
-                        target = os.readlink(fd)
-                    except (FileNotFoundError, PermissionError):
-                        continue
-                    if target.startswith(str(source) + '/'):
-                        raise RuntimeError(f'Profile is open in process {process.name}; stop it first')
-            except (FileNotFoundError, PermissionError):
-                continue
+        check_open_profile(source)
         with sqlite3.connect(source / 'application.db') as db:
             active = db.execute("SELECT count(*) FROM meetings WHERE state IN ('recording','transcribing')").fetchone()[0]
             if active:

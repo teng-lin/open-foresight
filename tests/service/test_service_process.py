@@ -12,6 +12,7 @@ import select
 import signal
 import socket
 import subprocess
+import sys
 import time
 
 import pytest
@@ -20,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SERVICE = Path(os.environ.get('FORESIGHT_SERVICE_EXECUTABLE', ROOT / 'build/application/foresight-service'))
 MCP = Path(os.environ.get('FORESIGHT_MCP_EXECUTABLE', ROOT / 'build/application/foresight-mcp'))
 HELPER = Path(os.environ.get('FORESIGHT_HELPER_EXECUTABLE', ROOT / 'build/services/helper/ForesightHelper'))
-NATIVE = Path(os.environ.get('FORESIGHT_NATIVE_LIBRARY', ROOT / 'build/native/libforesight_native.so'))
+NATIVE = Path(os.environ.get('FORESIGHT_NATIVE_LIBRARY', ROOT / ('build/native/libforesight_native.dylib' if sys.platform == 'darwin' else 'build/native/libforesight_native.so')))
 
 class Peer:
     def __init__(self, path):
@@ -133,6 +134,7 @@ def running(tmp_path):
     env.update(FORESIGHT_DATA=str(tmp_path/'data'), FORESIGHT_RUNTIME=str(tmp_path/'run'),
         FORESIGHT_SERVICE=str(SERVICE), FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
+        FORESIGHT_CAPTURE_RUNTIME=str(capture),
         FORESIGHT_MODEL_ADAPTER=str(ROOT/'tests/fixtures/model_adapter.py'),
         FORESIGHT_MODEL_PYTHON=os.sys.executable, FORESIGHT_DELAY_GENERATION=str(fixtures/'delay'),
         PATH=str(fixtures)+':'+env['PATH'])
@@ -182,7 +184,11 @@ def test_shared_owner_concurrent_writes_search_and_mcp(running):
         results=list(pool.map(lambda args:args[0].call('sources.import',{'title':args[1],'text':'Mira sends the draft Tuesday.'}),[(a,'desktop'),(b,'mcp')]))
     assert len({r['id'] for r in results})==2
     assert len(a.call('sources.search',{'query':'draft'}))==2
-    assert any(e['event']=='changed' for e in b.events)
+    deadline=time.monotonic()+5
+    while not any(e['event']=='changed' for e in b.events):
+        assert time.monotonic()<deadline, 'peer did not receive a committed-change notification'
+        b.call('status')  # Read queued asynchronous events as well as the reply.
+        time.sleep(.02)
     mcp=McpPeer(running['env'])
     try:
         mcp.initialize()
@@ -217,7 +223,10 @@ def test_capture_survives_client_disconnect_and_other_client_cannot_start_second
         b.call('meetings.start',{'id':meeting})
     with pytest.raises(RuntimeError,match='recording'):
         b.call('workspace.clear')
-    time.sleep(1)
+    deadline=time.monotonic()+15
+    while sum(b.call('status')['capture']['samples']) < 24000:
+        assert time.monotonic()<deadline, 'shared capture did not deliver audio after client disconnect'
+        time.sleep(.02)
     b.call('meetings.stop')
     assert not b.call('status')['capture']['active']
     content=b.call('meetings.get',{'id':meeting})
@@ -289,7 +298,8 @@ def test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations
 def test_native_desktop_and_mcp_share_service(running):
     session=os.environ.get('FORESIGHT_DESKTOP_SESSION')
     flutter=os.environ.get('FORESIGHT_FLUTTER_EXECUTABLE')
-    if not session or not flutter:
+    mac_ui = sys.platform == 'darwin' and os.environ.get('FORESIGHT_MACOS_UI_TEST') == '1'
+    if not flutter or (not mac_ui and not session):
         pytest.skip('Set FORESIGHT_DESKTOP_SESSION and FORESIGHT_FLUTTER_EXECUTABLE for isolated native UI integration')
     peer=running['peer']
     peer.call('models.generation',{'path':str(running['asset']),'runtime':str(running['runner'])})
@@ -298,6 +308,15 @@ def test_native_desktop_and_mcp_share_service(running):
     report=ROOT/'test-results/desktop-service-integration.json'
     report.parent.mkdir(exist_ok=True)
     env={**running['env'], 'FORESIGHT_MCP_EXECUTABLE':str(MCP),'FORESIGHT_SERVICE_UI_REPORT':str(report),'GDK_BACKEND':'wayland'}
+    if mac_ui:
+        env.pop('GDK_BACKEND', None)
+        completed = subprocess.run([flutter, 'test', '--no-pub', '-d', 'macos',
+            'integration_test/service_mcp_test.dart', '--reporter', 'expanded'],
+            cwd=ROOT/'apps/desktop', env=env, capture_output=True, text=True, timeout=300)
+        assert completed.returncode == 0, completed.stdout + '\n' + completed.stderr
+        evidence=json.loads(report.read_text())
+        assert evidence and all(evidence.values())
+        return
     desk=['uv','run','--directory',str(ROOT.parent/'agent-desktop'),'--no-sync','agent-desktop']
     launch=json.loads(subprocess.check_output(desk+['launch',session,'--','env','-C',str(ROOT/'apps/desktop')]+
         [key+'='+value for key,value in env.items()]+[flutter,'test','--no-pub','-d','linux','integration_test/service_mcp_test.dart','--reporter','expanded'],text=True))
@@ -409,7 +428,10 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running)
     peer.call('models.register',{'kind':'speech','path':str(running['asset']),'runtime':str(running['runner'])})
     meeting=peer.call('meetings.create',{'title':'Graceful stop'})['id']
     peer.call('meetings.start',{'id':meeting})
-    time.sleep(.5)
+    deadline=time.monotonic()+15
+    while sum(peer.call('status')['capture']['samples']) < 24000:
+        assert time.monotonic()<deadline, 'fixture did not deliver audio before shutdown'
+        time.sleep(.02)
     stopped=subprocess.run([str(SERVICE),'--stop'],env=running['env'],capture_output=True,text=True,timeout=15)
     assert stopped.returncode==0,stopped.stderr
     assert running['process'].wait(timeout=5)==0
@@ -438,6 +460,9 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
         assert not other.call('status')['capture']['active']
         assert other.call('meetings.get',{'id':meeting})['meeting']['state']=='interrupted'
         other.call('application.resume')
-        assert other.call('status')['helper']['pipeline']=='ready'
+        deadline=time.monotonic()+15
+        while other.call('status')['helper']['pipeline']!='ready':
+            assert time.monotonic()<deadline, 'recovered helper did not become ready'
+            time.sleep(.05)
     finally:
         process.terminate();process.wait(timeout=15);log.close()
