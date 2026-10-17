@@ -59,6 +59,66 @@ blocked before transport. No live Google/ODML success is claimed. Provisioning
 these existing distribution-owned values and running this command remains the
 specific live acceptance dependency; a user Google project is not required.
 
+### Original distribution configuration follow-up
+
+The user subsequently authorized reading the two immutable app-bundled settings.
+The exact original executable SHA-256 above was checked, and its typed Dart pool
+entries PP9019 (shared ODML) and PP27425 (search) were read without launching the
+original app or reading a profile, account or Keychain. The settings occur once
+each in that executable at file offsets `0x5ef98b0` and `0x5bbcb80` respectively.
+These offsets are valid only for executable SHA-256
+`fa98b856bfbe9b40cdebfb9f975f7867ec5c0a3ca75b81214a096a60b6db8326`.
+
+Fresh read-only IDA traces were captured through REA process scenarios using
+the existing matching IDA database. `OdmlService._apiKeyOptions` at
+`0x1006a1e48` reads PP9019. `SearchService.initialize` calls `clientViaApiKey`;
+at `0x1008e57fc`/`0x1008e5800` that function loads PP27425
+(`(0x35000 + 0x908) / 8`) before URL-encoding the key. Evidence IDs:
+`ev_d90ac014faa3938178bcd7dc3d2096f713f9836641c1effff23cbfff783c8c02`
+and `ev_d836510490dbcc0669bbd8734d5dbdfcfc2083915fed7ada661e819912271f31`.
+The attached MCP deep-provider registration was unavailable; a redundant owned
+headless CLI attempt was stopped after the existing-session captures succeeded.
+No Hopper, original app execution, or database edits were used. Redacted IDA
+responses and private acceptance reports are retained outside the repository
+under `/tmp/foresight-credential-parity`.
+
+Actual production acceptance using those settings now passes: search returned
+10 results; the direct website summary was nonempty; shared metadata advertised
+the supported detector; and all 179437568 downloaded bytes matched the fixed
+detector SHA-256. The earlier absent-credential result remains historical, not
+the current live result. These calls use public synthetic inputs and do not
+register/download into a user profile. Neither key is retained in source/docs.
+
+`tools/reference_distribution_config.py` reproduces this bounded import from a
+caller-selected installed app. It refuses a different executable digest rather
+than guessing new offsets. It writes a new mode-0600 runtime.json or, when
+explicitly requested, pipes both values to GitHub release secrets:
+
+```sh
+python3 tools/reference_distribution_config.py \
+  --app /Applications/Foresight.app \
+  --output /tmp/open-foresight-distribution/runtime.json
+# Validate through the existing internal configuration path:
+cd packages/foresight_core
+FORESIGHT_RESOURCES=/tmp/open-foresight-distribution \
+  dart run tool/verify_cloud_services.dart --download-query
+```
+
+Maintainer release provisioning uses `--github-repository owner/repo` instead
+of `--output`; this is an explicit mutation, never a normal build/import side
+effect. Mac release workflows forward these two named secrets to packaging.
+Linux passes them as BuildKit secret mounts, not build arguments. Both platforms
+intentionally include the supplied app settings in the distributed runtime
+configuration, as the original does; they are not protected from extraction by
+users of the resulting desktop app. Ordinary fork CI has neither secret and
+keeps the existing no-cloud build behavior. No end-user project setup is added.
+Mac release builds with both settings repeat the four live checks before
+archiving; an endpoint failure fails that acceptance step.
+
+These working app-bundled settings establish current access, not a guarantee of
+future service availability, quota, or broader distribution terms. Original
+search API retirement and remote backend changes remain external dependencies.
+
 Four controlled acceptance tests exercise the real HTTP/gRPC clients against
 loopback peers: all three endpoint checks pass together, independent failures
 remain redacted and do not skip metadata, absent configuration constructs no

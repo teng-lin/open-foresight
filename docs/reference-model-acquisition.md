@@ -7,7 +7,10 @@ The inspected app's `CFBundleShortVersionString` is `1.0.0`.
 metadata RPC and blob transport. The existing Local models screen now connects
 these to dedicated model setup, authenticated encrypted storage and private
 plaintext runtime leases. Guided local import remains available.
-No live metadata or blob request was made during this reconstruction.
+The initial reconstruction made no live metadata or blob request. The subsequent
+[original distribution configuration check](reference-live-cloud-services.md#original-distribution-configuration-follow-up)
+successfully fetched both metadata and the fixed-digest detector blob using the
+two original app-bundled settings.
 
 ## Metadata and shared distribution credential
 
