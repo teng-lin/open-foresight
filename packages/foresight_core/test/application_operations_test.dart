@@ -15,12 +15,15 @@ class OperationsRag extends RagServiceBase {
   RetrieveRequest? query;
   bool reject = false;
   Completer<void>? entered, release;
+  Completer<void>? retrievalEntered, retrievalRelease;
   @override
   Future<RetrieveResponse> retrieveContext(
     ServiceCall call,
     RetrieveRequest request,
   ) async {
     query = request;
+    retrievalEntered?.complete();
+    await retrievalRelease?.future;
     return RetrieveResponse(
       chunks: [
         for (final id in request.allowedDocumentIds)
@@ -103,6 +106,8 @@ class ArtifactGenerator extends NativeRuntime {
     {'type': 'done', 'status': 'completed'},
   ];
   final prompts = <String>[];
+  final requestIds = <String>[];
+  Completer<void>? entered, release;
   @override
   bool get generating => false;
   @override
@@ -119,6 +124,9 @@ class ArtifactGenerator extends NativeRuntime {
     int maxOutputTokens = 256,
   }) async* {
     prompts.add(prompt);
+    requestIds.add(id);
+    entered?.complete();
+    await release?.future;
     yield* Stream.fromIterable(events);
   }
 }
@@ -685,4 +693,128 @@ void main() {
       expect((view['notes'] as List).single['body'], '- Original shorthand');
     },
   );
+  for (final kind in ['summary', 'actions', 'action_items', 'questions']) {
+    test(
+      'cancelled $kind generation retains request identity and saves no artifact',
+      () async {
+        final meeting = domain.store.meeting('Cancellation');
+        domain.store.transcript(
+          meeting,
+          'Meeting facts',
+          true,
+          0,
+          1,
+          'imported',
+        );
+        final generator = ArtifactGenerator()
+          ..entered = Completer<void>()
+          ..release = Completer<void>();
+        domain.generator = generator;
+        var current = true;
+        final pending = expectLater(
+          app.call('meetings.generate', {
+            'id': meeting,
+            'kind': kind,
+            'requestId': 'cancel-$kind',
+          }, current: () => current),
+          throwsStateError,
+        );
+        await generator.entered!.future;
+        expect(generator.requestIds, ['cancel-$kind']);
+        current = false;
+        generator.release!.complete();
+        await pending;
+        expect(domain.store.rows('SELECT * FROM artifacts'), isEmpty);
+      },
+    );
+  }
+
+  test(
+    'search drops changed and deleted revisions while retaining valid results',
+    () async {
+      final ids = [
+        for (final title in ['changed', 'deleted', 'stable'])
+          domain.store.importText(title, 'Old passage', 'text/plain', 'test'),
+      ];
+      for (final id in ids) domain.store.state(id, 'indexed');
+      rag.retrievalEntered = Completer<void>();
+      rag.retrievalRelease = Completer<void>();
+      final pending = app.call('sources.search', {'query': 'Old passage'});
+      await rag.retrievalEntered!.future;
+      domain.store.importText(
+        'changed v2',
+        'New passage',
+        'text/plain',
+        'test',
+        id: ids.first,
+      );
+      domain.store.state(ids.first, 'indexed');
+      domain.store.tombstone(ids[1]);
+      rag.retrievalRelease!.complete();
+      final results = await pending as List;
+      expect(results, hasLength(1));
+      expect(results.single['id'], ids.last);
+      expect(results.single['revision'], 1);
+    },
+  );
+
+  test(
+    'refresh retains a locally edited file source and its revision',
+    () async {
+      final file = File('${root.path}/private.txt')
+        ..writeAsStringSync('Original');
+      final id = await app.importFile(file.path);
+      final source = domain.store.sources.single;
+      domain.store.importText(
+        'Private',
+        'My local edit',
+        'text/plain',
+        "user edit; ${source['provenance']}",
+        id: id,
+      );
+      file.writeAsStringSync('External replacement');
+      await app.reimport();
+      final refreshed = domain.store.sources.single;
+      expect(refreshed['content'], 'My local edit');
+      expect(refreshed['revision'], 2);
+    },
+  );
+
+  test('refresh cannot overwrite an edit made during URL retrieval', () async {
+    final entered = Completer<void>(), release = Completer<void>();
+    final http = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final url = 'http://127.0.0.1:${http.port}/page';
+    http.listen((request) async {
+      entered.complete();
+      await release.future;
+      request.response.headers.contentType = ContentType.text;
+      request.response.write('External replacement');
+      await request.response.close();
+    });
+    final id = domain.store.importText(
+      'Page',
+      'Original',
+      'text/plain',
+      'url:$url',
+    );
+    try {
+      final pending = expectLater(app.reimport(), throwsStateError);
+      await entered.future;
+      domain.store.importText(
+        'Page',
+        'My concurrent edit',
+        'text/plain',
+        'user edit; url:$url',
+        id: id,
+      );
+      release.complete();
+      await pending;
+      final refreshed = domain.store.sources.single;
+      expect(refreshed['content'], 'My concurrent edit');
+      expect(refreshed['revision'], 2);
+    } finally {
+      if (!release.isCompleted) release.complete();
+      await http.close(force: true);
+    }
+  });
 }

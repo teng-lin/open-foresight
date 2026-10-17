@@ -448,6 +448,7 @@ class Application {
             'capture': captureState,
             'sources_paused': domain.sourcesPaused,
             'helper': domain.helper.snapshot?.toProto3Json(),
+            'helper_state': domain.helper.state,
             'generation': generationState,
             'web_search_available': domain.webSearchAvailable,
             'revision': store.dataRevision,
@@ -478,7 +479,9 @@ class Application {
           await reimport(current: current);
           return null;
         case 'sources.import_file':
-          return {'id': await importFile(a['path'] as String)};
+          return {
+            'id': await importFile(a['path'] as String, current: current),
+          };
         case 'sources.index':
           await domain.index(a['id'] as String);
           return null;
@@ -492,10 +495,11 @@ class Application {
           domain.resumeSources();
           return null;
         case 'sources.search':
-          final allowed = store.sourceSummaries
-              .where((s) => s['state'] == 'indexed')
-              .map((s) => s['id'] as String)
-              .toList();
+          final allowed = {
+            for (final source in store.sourceSummaries)
+              if (source['state'] == 'indexed')
+                source['id'] as String: source['revision'] as int,
+          };
           if (allowed.isEmpty) return <Object>[];
           final limit = a['limit'] as int? ?? 10;
           if (limit < 1 || limit > 100)
@@ -506,19 +510,26 @@ class Application {
               maxResults: limit,
               minSimilarityScore: 0,
               userId: 'local_user',
-              allowedDocumentIds: allowed,
+              allowedDocumentIds: allowed.keys,
             ),
           );
-          return result.chunks.map((c) {
-            final source = _source(c.documentId);
-            return {
-              'id': c.documentId,
-              'text': c.text,
-              'score': c.relevanceScore,
-              'title': source['title'],
-              'revision': source['revision'],
-            };
-          }).toList();
+          if (current != null && !current())
+            throw StateError('Search cancelled');
+          return [
+            for (final chunk in result.chunks)
+              if (allowed.containsKey(chunk.documentId))
+                for (final source in store.rows(
+                  "SELECT title,revision FROM sources WHERE id=? AND revision=? AND deleted=0 AND state='indexed'",
+                  [chunk.documentId, allowed[chunk.documentId]],
+                ))
+                  {
+                    'id': chunk.documentId,
+                    'text': chunk.text,
+                    'score': chunk.relevanceScore,
+                    'title': source['title'],
+                    'revision': source['revision'],
+                  },
+          ];
         case 'answer':
           return {
             'text':
@@ -745,12 +756,19 @@ class Application {
           await indexMeeting(a['id'] as int);
           return null;
         case 'meetings.generate':
-          await generateMeeting(a['id'] as int, a['kind'] as String);
+          await generateMeeting(
+            a['id'] as int,
+            a['kind'] as String,
+            requestId: a['requestId'] as String?,
+            current: current,
+          );
           return null;
         case 'meetings.enhance':
           await enhanceNotes(
             a['id'] as int,
             forceRegenerate: a['force_regenerate'] == true,
+            requestId: a['requestId'] as String?,
+            current: current,
           );
           return null;
         case 'meetings.cancel_enhance':
@@ -1041,10 +1059,13 @@ class Application {
     return rows.single;
   }
 
-  Future<String> importFile(String path) async {
+  Future<String> importFile(String path, {bool Function()? current}) async {
     await domain.waitForSourceWork();
     final file = File(path).absolute;
     final (text, provenance) = await Parser().extract(file.path);
+    final modified = (await file.stat()).modified.millisecondsSinceEpoch;
+    if (current != null && !current())
+      throw StateError('Import cancelled or source changed');
     final uri = Uri.file(file.path).toString();
     final existing = store.sources
         .where((s) => s['source_uri'] == uri)
@@ -1055,7 +1076,7 @@ class Application {
       path.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain',
       '$provenance; ${file.path}',
       id: existing?['id'] as String?,
-      modifiedAtMs: (await file.stat()).modified.millisecondsSinceEpoch,
+      modifiedAtMs: modified,
       sourceUri: uri,
     );
     await domain.index(id);
@@ -1108,6 +1129,8 @@ class Application {
           'URL must contain HTML or plain text. Add binary documents as files.',
         );
       }
+      if (current != null && !current())
+        throw StateError('Import cancelled or source changed');
       if (text.isEmpty) throw StateError('No readable text found.');
       final existing = store.sources
           .where((s) => s['provenance'] == 'url:$uri')
@@ -1143,7 +1166,7 @@ class Application {
       if (current != null && !current())
         throw StateError('Operation cancelled');
       try {
-        await importFile(file.path);
+        await importFile(file.path, current: current);
       } catch (e) {
         failures.add('${file.path.split('/').last}: $e');
       }
@@ -1159,12 +1182,19 @@ class Application {
     for (final s in store.sources) {
       if (current != null && !current())
         throw StateError('Operation cancelled');
+      if ((s['provenance'] as String).startsWith('user edit; ')) continue;
+      bool sourceCurrent() =>
+          (current?.call() ?? true) &&
+          store.rows(
+            'SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0',
+            [s['id'], s['revision']],
+          ).isNotEmpty;
       final path = (s['provenance'] as String).split('; ').last;
       try {
         if (path.startsWith('url:')) {
-          await importUrl(path.substring(4));
+          await importUrl(path.substring(4), current: sourceCurrent);
         } else if (File(path).existsSync()) {
-          await importFile(path);
+          await importFile(path, current: sourceCurrent);
         } else if (path.startsWith('/')) {
           throw StateError('Imported file is missing: $path');
         } else {
@@ -1225,7 +1255,13 @@ class Application {
     }
   }
 
-  Future<void> generateMeeting(int id, String kind) async {
+  Future<void> generateMeeting(
+    int id,
+    String kind, {
+    String? requestId,
+    bool Function()? current,
+  }) async {
+    if (current != null && !current()) throw StateError('Generation cancelled');
     if (![
       'summary',
       'actions',
@@ -1235,7 +1271,7 @@ class Application {
     ].contains(kind))
       throw ArgumentError('Unsupported artifact kind');
     if (kind == 'enhanced_notes') {
-      await enhanceNotes(id);
+      await enhanceNotes(id, requestId: requestId, current: current);
       return;
     }
     final meeting = _meeting(id);
@@ -1250,7 +1286,10 @@ class Application {
     final result = await _generate(
       'meeting',
       'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n${boundUtf8(text, 2800)}',
+      requestId: requestId,
+      current: current,
     );
+    if (current != null && !current()) throw StateError('Generation cancelled');
     store.artifact(
       id,
       kind,
@@ -1296,6 +1335,7 @@ class Application {
       if (event['type'] == 'done') status = event['status'] as String;
       if (event['type'] == 'error') failure = event['message'].toString();
     }
+    if (current != null && !current()) throw StateError('Generation cancelled');
     if (status != 'completed') throw StateError('Generation $status: $failure');
     return result;
   }
@@ -1349,7 +1389,10 @@ class Application {
     bool isLive = false,
     bool forceRegenerate = false,
     Set<int>? targetBulletIndices,
+    String? requestId,
+    bool Function()? current,
   }) async {
+    if (current != null && !current()) throw StateError('Generation cancelled');
     if (_closed) throw StateError('Application closed');
     if (domain.generator?.generating == true ||
         _noteEnhancements.values.any((state) => state.active)) {
@@ -1392,8 +1435,10 @@ class Application {
     final previousState = _noteEnhancements[id];
     previousState?.saveTimer?.cancel();
     final enhancement = _NoteEnhancement(
-      'notes-${DateTime.now().microsecondsSinceEpoch}-${++_noteEnhancementSerial}',
+      requestId ??
+          'notes-${DateTime.now().microsecondsSinceEpoch}-${++_noteEnhancementSerial}',
       notes['body'] as String,
+      current: current,
     );
     final previous =
         previousState != null &&
@@ -1437,6 +1482,7 @@ class Application {
           }
           if (_closed ||
               enhancement.cancelRequested ||
+              !(current?.call() ?? true) ||
               !identical(_noteEnhancements[id], enhancement)) {
             throw StateError('Generation cancelled');
           }
@@ -1478,6 +1524,7 @@ class Application {
       )) {
         if (_closed ||
             enhancement.cancelRequested ||
+            !(current?.call() ?? true) ||
             !identical(_noteEnhancements[id], enhancement)) {
           throw StateError('Generation cancelled');
         }
@@ -1492,6 +1539,7 @@ class Application {
       }
       if (_closed ||
           enhancement.cancelRequested ||
+          !(current?.call() ?? true) ||
           !identical(_noteEnhancements[id], enhancement))
         throw StateError('Generation cancelled');
       enhancement.saveTimer?.cancel();
@@ -1519,7 +1567,7 @@ class Application {
         enhancement.saveTimer?.cancel();
         return;
       }
-      if (_closed) {
+      if (_closed || !(current?.call() ?? true)) {
         enhancement.saveTimer?.cancel();
         _noteEnhancements.remove(id);
         return;
@@ -1575,7 +1623,10 @@ class Application {
     enhancement.saveTimer?.cancel();
     enhancement.saveTimer = Timer(const Duration(seconds: 1), () {
       enhancement.saveTimer = null;
-      if (_closed || !identical(_noteEnhancements[id], enhancement)) return;
+      if (_closed ||
+          !(enhancement.current?.call() ?? true) ||
+          !identical(_noteEnhancements[id], enhancement))
+        return;
       try {
         store.saveMeetingEnhancedDraft(id, enhancement.body);
         if (!enhancement.active && enhancement.status.isEmpty)
@@ -1816,7 +1867,8 @@ class Application {
 }
 
 class _NoteEnhancement {
-  _NoteEnhancement(this.requestId, this.body);
+  _NoteEnhancement(this.requestId, this.body, {this.current});
+  final bool Function()? current;
   final String requestId;
   String body, status = '';
   bool active = true, cancelRequested = false;
