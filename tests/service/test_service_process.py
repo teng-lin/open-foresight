@@ -62,6 +62,7 @@ class ApprovalDesktop:
     """Explicit synthetic UI host for tests that exercise approved operations."""
     def __init__(self, path, profile, root):
         self.peer = Peer(path)
+        self.peer.call('status')  # Wait until service initialization publishes the capability.
         self.peer.call('security.attach_desktop', {'token': (profile / '.desktop-capability').read_text()})
         self.peer.call('security.allow_import_root', {'path': str(root)})
         self.thread = threading.Thread(target=self._review, daemon=True)

@@ -11,8 +11,8 @@ Future<void> waitFor(WidgetTester tester, bool Function() ready) async {
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  expect(ready(), true);
-  expect(tester.takeException(), isNull);
+  expectSync(ready(), true);
+  expectSync(tester.takeException(), isNull);
 }
 
 class Mcp {
@@ -43,7 +43,7 @@ class Mcp {
     while (await responses.moveNext()) {
       final value = responses.current;
       if (value['id'] == id) {
-        expect(value['error'], isNull);
+        expectSync(value['error'], isNull);
         return Map<String, dynamic>.from(value['result'] as Map);
       }
     }
@@ -52,7 +52,7 @@ class Mcp {
 
   Future<Map> tool(String name, [Map<String, dynamic> args = const {}]) async {
     final result = await call('tools/call', {'name': name, 'arguments': args});
-    expect(result['isError'], isNot(true));
+    expectSync(result['isError'], isNot(true));
     return result;
   }
 
@@ -69,7 +69,7 @@ class Mcp {
 
   Future<void> close() async {
     await process.stdin.close();
-    expect(await process.exitCode.timeout(const Duration(seconds: 5)), 0);
+    expectSync(await process.exitCode.timeout(const Duration(seconds: 5)), 0);
     await responses.cancel();
   }
 }
