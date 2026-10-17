@@ -428,8 +428,8 @@ def test_url_and_directory_imports_run_in_the_service(running):
     peer=running['peer']
     try:
         url='http://127.0.0.1:'+str(http.server_port)+'/planning'
-        first=peer.call('sources.import_url',{'url':url})['id']
-        second=peer.call('sources.import_url',{'url':url})['id']
+        first=peer.call('sources.import_url',{'url':url,'allow_private_network':True})['id']
+        second=peer.call('sources.import_url',{'url':url,'allow_private_network':True})['id']
         assert first==second
         source=peer.call('sources.get',{'id':first})
         assert source['revision']==2 and 'hidden' not in source['content']
