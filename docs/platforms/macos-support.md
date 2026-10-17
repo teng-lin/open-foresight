@@ -49,25 +49,25 @@ parallelism. Build-time Python and Flutter are not installed-app dependencies.
 
 ### Release CI disk image
 
-`.github/workflows/macos-release.yml` runs only when a GitHub release is published
-(including prereleases). Its tag must match `v` plus the version in
-`apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
-[Versioning and releases](../../README.md#versioning-and-releases). A tag push alone, pull request,
-or branch push does not generate a DMG.
+The release coordinator calls `.github/workflows/macos-release.yml` with an
+immutable tag after verifying exact-commit main candidates and creating a draft.
+Its tag must match `v` plus the application version, for example `v0.1.1`; see
+[Versioning and releases](../../README.md#versioning-and-releases). A tag push,
+pull request, or manually published release does not generate a DMG.
 
-The release workflow reuses the macOS build and regression gates in `macos.yml`,
-archives the tested application with `ditto` to preserve executable permissions
-and symlinks, then creates and verifies a compressed Apple Silicon disk image
-containing `Open Foresight.app` and an `/Applications` shortcut. It attaches the
-versioned `.dmg`, SHA-256 sidecar, and bundle manifest to the GitHub release after
-the checks succeed. Reruns replace assets with matching names. Actions copies
-are retained for 14 days. The regular PR workflow continues to run its existing
-build and regression checks.
+Promotion retrieves the tested macOS candidate, preserving executable permissions
+and symlinks with `ditto`. Runtime verification, real CPU model tests, and bundled
+Google/cloud configuration checks must pass before creating and verifying a
+compressed Apple Silicon disk image containing `Open Foresight.app` and an
+`/Applications` shortcut. The versioned DMG, checksum, and bundle manifest are
+uploaded to the draft without overwriting assets. Actions copies last 14 days.
 
-This CI DMG currently contains the existing ad-hoc development bundle. It is not
-Developer ID signed or notarized and does not bundle Python/LiteRT or Whisper
-runtimes. Signed distribution still requires the runtimes, credentials, and
-release validation described below.
+Downloaded-installer acceptance runs before publication, alongside all Linux
+formats. A missing runtime, installer, or acceptance gate leaves the release
+unpublished. A failed draft can be rebuilt by rerunning all coordinator jobs;
+public releases require a new version. The DMG remains ad-hoc signed and is not
+Developer ID signed or notarized. Signed distribution still requires the setup
+and release validation below.
 
 ### Local assembly and signed distribution
 

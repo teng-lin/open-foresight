@@ -3,11 +3,13 @@
 Main CI builds and tests one portable x86-64 application bundle.
 `.github/workflows/linux-packages.yml` retrieves that exact-commit candidate and
 wraps it with the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy.
-The packaging workflow runs when a GitHub release is published (including
-prereleases), or through a manual recovery run. Pull requests, branch pushes,
-and tag pushes alone do not start packaging. The release tag must be `v` followed by the version in
-`apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
-[Versioning and releases](../../README.md#versioning-and-releases).
+The release coordinator, `.github/workflows/release.yml`, calls both platform
+packagers after successful candidates exist for one reviewed main commit. It
+creates the tag and a draft, then every packaging job checks out that exact tag.
+The tag must be `v` followed by the version in `apps/desktop/pubspec.yaml`, for
+example `v0.1.1`; see [Versioning and releases](../../README.md#versioning-and-releases).
+Pull requests, tag pushes, and manually publishing a release do not invoke these
+reusable packagers. Publication follows installed-package acceptance.
 
 ## Compatibility baseline
 
@@ -153,26 +155,27 @@ added by packaging. The bundled Whisper defaults to Vulkan device 0; override
 Artifacts are retained for 14 days with SHA-256 sidecars, the source revision,
 version/release, source-date epoch and ABI report. Tar preserves executable modes
 across Actions artifact upload/download. Release tags must match pubspec, and the
-native package release is `1`. After all package installation tests pass, CI
-attaches the portable archive, `.deb`, `.rpm`, `.pkg.tar.zst`, checksums, build
-manifests, and ABI report to the triggering GitHub release. Reruns replace assets
-with matching names. CI does not create the release, sign Linux packages, or
-configure apt/dnf/pacman repositories.
+native package release is a durable per-draft counter that increases on every
+full rebuild, including when an older workflow is rerun. After native installation
+tests pass, CI attaches the portable archive, `.deb`, `.rpm`, `.pkg.tar.zst`,
+checksums, provenance and ABI report to the draft. The coordinator publishes only
+after every downloaded installer passes acceptance. Public assets are immutable;
+cut a new application version for a correction. Linux packages are not signed and
+no apt/dnf/pacman repository is configured.
 
-To rebuild Linux packages from a fixed branch and attach them to an existing
-published release, run:
+Prepare a release from reviewed main with:
 
 ```sh
-gh workflow run linux-packages.yml --repo teng-lin/open-foresight --ref main -f tag=v0.1.0
+gh workflow run release.yml --repo teng-lin/open-foresight --ref main -f tag=v0.1.1
 ```
 
-The selected branch must contain the fixes and have the same application version
-as the release tag. Its exact source commit must have a successful main CI
-candidate; run main CI first if it is missing or expired. Recovery promotes that
-tested portable bundle rather than rebuilding the application or SDK. The bundle
-records its actual source commit as its revision.
-The release tag and macOS assets are left in place. Release-triggered and manual
-builds for the same target release are serialized.
+Missing, expired, and documentation-only candidates cause the coordinator to force
+main CI before creating the tag. A failed build leaves no new tag. To rebuild a
+failed draft, rerun all coordinator jobs: preparation reserves the next package
+release and removes only the draft's old assets before both platforms rebuild.
+Uploading to an existing public release from a different branch is unsupported.
+See [installer acceptance](../validation/release-acceptance.md) for exact-source
+verification and the explicit historical recovery audit option.
 
 
 GitHub Actions must be enabled and its account spending/payment limits must allow

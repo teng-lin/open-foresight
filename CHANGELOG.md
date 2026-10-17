@@ -6,6 +6,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-17
+
 ### Added
 
 - Published installer acceptance tests the packages downloaded from a GitHub release. Installer provenance must match the release tag; explicit recovery audits remain available for historical assets.
@@ -21,8 +23,13 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
-- Release builds check out their tag, reject mismatched source revisions, and assign increasing Linux package releases on draft rebuilds.
+- Clearing a workspace removes private conversation checkpoints locally, works offline, and rejects work from the cleared generation.
+- Citation groups are checked consistently by the shipped C++ and macOS Python checkers. The shared Dart contract rejects malformed answer payloads, and unverified drafts are not saved as answers.
+- Cancelled meeting generation does not save artifacts; search and refresh validate source revisions, preserve local edits, and follow the service's adopted helper state.
+- Meeting worker failures retain indexed transcript segments, paused meetings recover after a crash, Stop has a deadline, and explicit resume restores an exhausted helper. Speech retries on CPU; failed GPU generation prepares CPU for a retry.
+- Native capture overflow writes interruption rows, and global shortcut failures appear in the workspace.
 
+- Release builds check out their tag, reject mismatched source revisions, and assign increasing Linux package releases on draft rebuilds.
 - Drive and Calendar sign-in uses the Google application registration bundled in a release build. Sign-in can be cancelled from the import flows.
 - Linux CPU generation keeps modality executors on CPU.
 - Linux packages retain the SDK libraries those binaries need at load time.
@@ -30,6 +37,9 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Installed-release acceptance runs generation on CPU and fails when the probe exits without a result.
 
 ### Security
+
+- Agent file imports require selected roots and bounded regular files, and cannot read the private profile. Sensitive actions require visible desktop approval; recording shows an indicator and stops when the desktop is hidden or closed.
+- URL imports pin validated public addresses, recheck redirects, refuse HTTPS downgrades, and parse bounded HTML outside the service isolate. Private network access requires an explicit opt-in; response charsets are decoded correctly.
 
 - Private temporary directories are created atomically with `mkdtemp` and mode 0700.
 
@@ -53,5 +63,6 @@ The macOS disk image in this release is ad-hoc signed and is not notarized.
 Physical-device recovery and echo-cancellation quality were not validated across
 hardware. Model weights are downloaded after install and are not inside the packages.
 
-[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.1
 [0.1.0]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.0
