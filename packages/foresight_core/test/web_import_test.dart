@@ -535,9 +535,12 @@ void main() {
       final client = await ServiceClient.connect(
         '${profile.runtime}/application.sock',
       );
-      await client.call('security.attach_desktop', {
-        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
-      });
+      final desktopCapability = File('${profile.data}/.desktop-capability');
+      if (desktopCapability.existsSync()) {
+        await client.call('security.attach_desktop', {
+          'token': desktopCapability.readAsStringSync(),
+        });
+      }
       final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       final sent = Completer<void>();
       server.listen((request) async {
