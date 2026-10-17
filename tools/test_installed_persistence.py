@@ -26,6 +26,7 @@ def run(bundle, profile, state_path, phase):
             nonce = 'Installed persistence ' + uuid.uuid4().hex
             note = peer.tool('save_note', {'title': 'Installer persistence', 'body': nonce})
             app = ApplicationPeer(profile / 'run/application.sock')
+            app.attach_test_desktop(profile / 'data')
             source = app.call('sources.import', {'title': 'Installer source', 'text': nonce, 'index': False})
             state = {'note': note['id'], 'source': source['id'], 'body': nonce,
                      'database': str(profile / 'data/application.db'), 'status': 'created'}
