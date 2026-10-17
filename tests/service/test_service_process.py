@@ -58,6 +58,32 @@ class Peer:
         self.reader.close()
         self.socket.close()
 
+class ApprovalDesktop:
+    """Explicit synthetic UI host for tests that exercise approved operations."""
+    def __init__(self, path, profile, root):
+        self.peer = Peer(path)
+        self.peer.call('security.attach_desktop', {'token': (profile / '.desktop-capability').read_text()})
+        self.peer.call('security.allow_import_root', {'path': str(root)})
+        self.thread = threading.Thread(target=self._review, daemon=True)
+        self.thread.start()
+    def _review(self):
+        try:
+            for line in self.peer.reader:
+                value = json.loads(line)
+                if value.get('event') == 'approval':
+                    self.peer.send('security.decide', {'approval_id': value['approval_id'], 'allow': True})
+        except (OSError, ValueError):
+            pass
+    def close(self):
+        if self.peer.socket.fileno() < 0:
+            return
+        try:
+            self.peer.socket.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+        self.thread.join(timeout=3)
+        self.peer.close()
+
 class McpPeer:
     def __init__(self, env):
         self.process = subprocess.Popen([str(MCP)], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -144,6 +170,7 @@ def running(tmp_path):
     log = (tmp_path/'service.log').open('w+')
     process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
     peers=[]
+    desktop=None
     try:
         deadline=time.monotonic()+15
         while True:
@@ -156,6 +183,7 @@ def running(tmp_path):
                     log.seek(0)
                     raise AssertionError(log.read())
                 time.sleep(.05)
+        desktop=ApprovalDesktop(tmp_path/'run/application.sock', tmp_path/'data', tmp_path)
         for _ in range(100):
             try:
                 peer.call('models.embedding', {'path': str(model)})
@@ -165,8 +193,10 @@ def running(tmp_path):
         else:
             raise AssertionError('embedding fixture failed to load')
         yield {'peer':peer, 'peers':peers, 'env':env, 'path':tmp_path/'run/application.sock',
-            'process':process, 'runner':runner, 'asset':asset, 'root':tmp_path}
+            'process':process, 'runner':runner, 'asset':asset, 'root':tmp_path, 'desktop':desktop}
     finally:
+        if desktop is not None:
+            desktop.close()
         for peer in peers:
             peer.close()
         if process.poll() is None:
@@ -322,6 +352,7 @@ def test_native_desktop_and_mcp_share_service(running):
     peer.call('models.generation',{'path':str(running['asset']),'runtime':str(running['runner'])})
     peer.call('models.register',{'kind':'speech','path':str(running['asset']),'runtime':str(running['runner'])})
     peer.call('preferences.set',{'key':'inactivity','value':'0'})
+    running['desktop'].close()  # The real desktop owns approval and the capture indicator below.
     report=ROOT/'test-results/desktop-service-integration.json'
     report.parent.mkdir(exist_ok=True)
     env={**running['env'], 'FORESIGHT_MCP_EXECUTABLE':str(MCP),'FORESIGHT_SERVICE_UI_REPORT':str(report),'GDK_BACKEND':'wayland'}

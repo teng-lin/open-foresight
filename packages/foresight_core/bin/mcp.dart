@@ -187,7 +187,7 @@ Future<void> main() async {
     tool(
       'import_file',
       'sources.import_file',
-      'Import and index a local UTF-8, PDF, or RTF file.',
+      'Request desktop approval to import a regular local UTF-8, PDF, or RTF file (up to 10 MiB) within a folder selected in the desktop. The application profile is excluded.',
       {'path': text},
       ['path'],
     );
@@ -307,7 +307,7 @@ Future<void> main() async {
     tool(
       'start_recording',
       'meetings.start',
-      'Start microphone and playback recording for a meeting. Only one meeting can record per profile.',
+      'Request visible desktop confirmation to start microphone and playback recording. Requires an open desktop with a recording indicator. Only one meeting can record per profile.',
       {'id': integer},
       ['id'],
     );
@@ -321,7 +321,7 @@ Future<void> main() async {
     tool(
       'resume_recording',
       'meetings.resume',
-      'Resume a paused recording with the same audio routes and transcript timeline.',
+      'Request visible desktop confirmation to resume a paused recording with the same audio routes and transcript timeline.',
       {'id': integer},
       [],
     );

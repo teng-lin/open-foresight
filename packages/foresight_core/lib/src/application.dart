@@ -1,4 +1,5 @@
 import 'audio_devices.dart';
+import 'agent_access.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -37,6 +38,7 @@ import 'package:grpc/grpc.dart';
 /// This object, its database, and its capture/model handles belong to one owner.
 class Application {
   final Domain domain;
+  ImportPolicy? importPolicy;
   Store get store => domain.store;
   final changes = StreamController<void>.broadcast();
   Recording? recording;
@@ -1070,7 +1072,11 @@ class Application {
     final generation = domain.workspaceGeneration;
     await domain.waitForSourceWork();
     domain.checkWorkspace(generation);
-    final file = File(path).absolute;
+    final file = File(importPolicy?.validate(path) ?? path).absolute;
+    if (FileSystemEntity.typeSync(file.path) != FileSystemEntityType.file ||
+        file.lengthSync() > ImportPolicy.maxFileBytes) {
+      throw StateError('Import requires a regular file no larger than 10 MiB');
+    }
     final (text, provenance) = await Parser().extract(file.path);
     final modified = (await file.stat()).modified.millisecondsSinceEpoch;
     domain.checkWorkspace(generation);
@@ -1163,16 +1169,18 @@ class Application {
 
   Future<void> importDirectory(String path, {bool Function()? current}) async {
     final generation = domain.workspaceGeneration;
-    final files = Directory(path)
-        .listSync(recursive: true, followLinks: false)
-        .whereType<File>()
-        .where(
-          (file) => RegExp(
-            r'\.(txt|md|pdf|rtf)$',
-            caseSensitive: false,
-          ).hasMatch(file.path),
-        )
-        .toList();
+    final files = importPolicy != null
+        ? (await importPolicy!.directoryFiles(path)).map(File.new).toList()
+        : Directory(path)
+              .listSync(recursive: true, followLinks: false)
+              .whereType<File>()
+              .where(
+                (file) => RegExp(
+                  r'\.(txt|md|pdf|rtf)$',
+                  caseSensitive: false,
+                ).hasMatch(file.path),
+              )
+              .toList();
     final failures = <String>[];
     for (final file in files) {
       domain.checkWorkspace(generation);

@@ -1,6 +1,8 @@
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
+import 'dart:async';
 import 'dart:convert';
+import 'agent_access.dart';
 import 'dart:io';
 import 'graph_labels.dart';
 import 'package:crypto/crypto.dart';
@@ -801,7 +803,48 @@ class Parser {
   Parser({bool? macOS, String? macParser})
     : _macOS = macOS ?? Platform.isMacOS,
       _macParser = macParser;
+  Future<ProcessResult> _extractProcess(
+    String executable,
+    List<String> arguments,
+  ) async {
+    final process = await Process.start(executable, arguments);
+    final timer = Timer(
+      const Duration(seconds: 30),
+      () => process.kill(ProcessSignal.sigkill),
+    );
+    Future<String> bounded(Stream<List<int>> stream) async {
+      final bytes = <int>[];
+      await for (final chunk in stream) {
+        if (bytes.length + chunk.length > ImportPolicy.maxFileBytes) {
+          process.kill(ProcessSignal.sigkill);
+          throw StateError('Extracted document exceeds the 10 MiB limit');
+        }
+        bytes.addAll(chunk);
+      }
+      return utf8.decode(bytes);
+    }
+
+    try {
+      final output = await Future.wait([
+        bounded(process.stdout),
+        bounded(process.stderr),
+      ]);
+      return ProcessResult(
+        process.pid,
+        await process.exitCode,
+        output[0],
+        output[1],
+      );
+    } finally {
+      timer.cancel();
+    }
+  }
+
   Future<(String, String)> extract(String path) async {
+    if (FileSystemEntity.typeSync(path) != FileSystemEntityType.file ||
+        File(path).lengthSync() > ImportPolicy.maxFileBytes) {
+      throw StateError('Import requires a regular file no larger than 10 MiB');
+    }
     final lower = path.toLowerCase();
     if (_macOS && (lower.endsWith('.pdf') || lower.endsWith('.rtf'))) {
       final executable =
@@ -812,7 +855,7 @@ class Parser {
         );
       ProcessResult result;
       try {
-        result = await Process.run(executable, [
+        result = await _extractProcess(executable, [
           lower.endsWith('.pdf') ? '--pdf' : '--rtf',
           path,
         ]);
@@ -836,17 +879,26 @@ class Parser {
       );
     }
     if (lower.endsWith('.pdf')) {
-      final r = await Process.run('pdftotext', ['-layout', path, '-']);
+      final r = await _extractProcess('pdftotext', ['-layout', path, '-']);
       if (r.exitCode != 0)
         throw StateError('PDF extraction failed: ${r.stderr}');
       return (r.stdout as String, 'pdftotext -layout (Linux adapter)');
     }
     if (lower.endsWith('.rtf')) {
-      final r = await Process.run('unrtf', ['--text', path]);
+      final r = await _extractProcess('unrtf', ['--text', path]);
       if (r.exitCode != 0)
         throw StateError('RTF extraction failed: ${r.stderr}');
       return (r.stdout as String, 'unrtf --text (Linux adapter)');
     }
-    return (await File(path).readAsString(), 'UTF-8 text');
+    final bytes = <int>[];
+    await for (final chunk in File(
+      path,
+    ).openRead().timeout(const Duration(seconds: 30))) {
+      if (bytes.length + chunk.length > ImportPolicy.maxFileBytes) {
+        throw StateError('File exceeds the 10 MiB import limit');
+      }
+      bytes.addAll(chunk);
+    }
+    return (utf8.decode(bytes), 'UTF-8 text');
   }
 }
