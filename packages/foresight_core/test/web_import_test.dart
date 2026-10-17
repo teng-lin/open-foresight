@@ -8,6 +8,94 @@ import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/profile_paths.dart';
 import 'package:test/test.dart';
 
+// Generate fresh, short-lived certificates so macOS TLS policy is exercised
+// without a checked-in server certificate expiring or exceeding lifetime limits.
+Future<({String ca, String cert, String key})> webImportTlsFixture() async {
+  final root = Directory.systemTemp.createTempSync('web-import-tls-');
+  addTearDown(() => root.deleteSync(recursive: true));
+  final ca = '${root.path}/ca.pem',
+      cert = '${root.path}/server.pem',
+      key = '${root.path}/server.key';
+  final config = File('${root.path}/ca.cnf')
+    ..writeAsStringSync(r"""
+[req]
+distinguished_name=dn
+[dn]
+CN=Open Foresight Offline Web Import Test CA
+[v3_ca]
+basicConstraints=critical,CA:TRUE
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+""");
+  final leafExtensions = File('${root.path}/leaf.ext')
+    ..writeAsStringSync(r"""
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:web-import.test
+""");
+  for (final arguments in [
+    [
+      'req',
+      '-x509',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      '${root.path}/ca.key',
+      '-out',
+      ca,
+      '-days',
+      '2',
+      '-sha256',
+      '-subj',
+      '/CN=Open Foresight Offline Web Import Test CA',
+      '-extensions',
+      'v3_ca',
+      '-config',
+      config.path,
+    ],
+    [
+      'req',
+      '-new',
+      '-newkey',
+      'rsa:2048',
+      '-nodes',
+      '-keyout',
+      key,
+      '-out',
+      '${root.path}/server.csr',
+      '-subj',
+      '/CN=web-import.test',
+    ],
+    [
+      'x509',
+      '-req',
+      '-in',
+      '${root.path}/server.csr',
+      '-CA',
+      ca,
+      '-CAkey',
+      '${root.path}/ca.key',
+      '-CAcreateserial',
+      '-days',
+      '1',
+      '-sha256',
+      '-extfile',
+      leafExtensions.path,
+      '-out',
+      cert,
+    ],
+  ]) {
+    final generated = await Process.run('openssl', arguments);
+    if (generated.exitCode != 0)
+      throw StateError(
+        'Unable to generate offline TLS fixture: ${generated.stderr}',
+      );
+  }
+  return (ca: ca, cert: cert, key: key);
+}
+
 final privateAddresses = [
   '0.0.0.0',
   '0.1.2.3',
@@ -341,9 +429,10 @@ void main() {
   test(
     'TLS validates the URL hostname on the pinned socket and refuses downgrade',
     () async {
+      final fixture = await webImportTlsFixture();
       final serverContext = SecurityContext()
-        ..useCertificateChain('test/fixtures/web_import/cert.pem')
-        ..usePrivateKey('test/fixtures/web_import/key.pem');
+        ..useCertificateChain(fixture.cert)
+        ..usePrivateKey(fixture.key);
       final server = await HttpServer.bindSecure(
         InternetAddress.loopbackIPv4,
         0,
@@ -363,8 +452,7 @@ void main() {
         await request.response.close();
       });
       final importer = WebPageImporter(
-        securityContext: SecurityContext()
-          ..setTrustedCertificates('test/fixtures/web_import/cert.pem'),
+        securityContext: SecurityContext()..setTrustedCertificates(fixture.ca),
         lookup: (_) async => [InternetAddress('8.8.8.8')],
         connect: (_, port) =>
             Socket.startConnect(InternetAddress.loopbackIPv4, port),
