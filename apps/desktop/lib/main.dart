@@ -4,6 +4,7 @@ import 'package:foresight_core/foresight_core.dart'
         privateDirectory,
         configureProfileRuntime,
         openPlatformUri,
+        allowedSourceUri,
         openForesightBuildNumber,
         openForesightVersion,
         MeetingSpeaker,

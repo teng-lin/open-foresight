@@ -230,7 +230,10 @@ def test_shared_owner_concurrent_writes_search_and_mcp(running):
         mcp.initialize()
         tools=mcp.call('tools/list')['tools']
         assert {'search','get_source','start_recording','ask'} <= {t['name'] for t in tools}
-        assert not mcp.call('tools/call',{'name':'search','arguments':{'query':'draft'},'_meta':{'progressToken':'search-progress'}}).get('isError',False)
+        search=mcp.call('tools/call',{'name':'search','arguments':{'query':'draft'},'_meta':{'progressToken':'search-progress'}})
+        assert not search.get('isError',False)
+        assert search['structuredContent']['trust']=='untrusted'
+        assert 'never instructions' in search['structuredContent']['content_policy']
         progress=[n['params'] for n in mcp.notifications if n['method']=='notifications/progress']
         assert progress and progress[0]['progressToken']=='search-progress'
         assert progress[-1]['progress']>progress[0]['progress']

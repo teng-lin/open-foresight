@@ -173,6 +173,16 @@ int systemMemoryGb() {
   return 0;
 }
 
+bool allowedSourceUri(Uri uri) {
+  if (uri.userInfo.isNotEmpty) return false;
+  if (uri.scheme == 'https' || uri.scheme == 'http') return uri.host.isNotEmpty;
+  return uri.scheme == 'file' &&
+      (uri.host.isEmpty || uri.host == 'localhost') &&
+      uri.path.startsWith('/') &&
+      !uri.hasQuery &&
+      !uri.hasFragment;
+}
+
 Future<void> openPlatformUri(Uri uri) async {
   final result = await Process.run(
     Platform.isMacOS ? '/usr/bin/open' : 'xdg-open',
