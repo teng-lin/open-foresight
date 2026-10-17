@@ -300,7 +300,7 @@ void failure(Worker &w, const std::string &id, uint64_t &seq,
 }
 #include "persistent_generation.h"
 Engine::~Engine() { shutdown_persistent(*this); }
-struct SpeechEngine { Engine engine; std::mutex mutex; };
+struct SpeechEngine { Engine engine; std::timed_mutex mutex; };
 std::mutex speech_engines_mutex;
 std::map<std::string,std::weak_ptr<SpeechEngine>> speech_engines;
 struct Speech : Worker {
@@ -1128,7 +1128,11 @@ int fs_speech_finish(void *h, const char *id) {
       };
       auto recognize = [&](bool cpu_only) {
         if (s.worker_engine) {
-          std::lock_guard lock(s.worker_engine->mutex);
+          std::unique_lock lock(s.worker_engine->mutex, std::defer_lock);
+          while (!lock.try_lock_for(std::chrono::milliseconds(20))) {
+            if (s.cancel) return -1;
+          }
+          if (s.cancel) return -1;
           auto &engine = s.worker_engine->engine;
           if (cpu_only && !engine.cpu_fallback) { shutdown_persistent(engine, false); engine.cpu_fallback = true; }
           bool received = false, invalid = false;
