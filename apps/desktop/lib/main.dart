@@ -56,6 +56,7 @@ import 'meeting_export.dart';
 import 'note_save_scheduler.dart';
 import 'meeting_note_state.dart';
 import 'generated_content.dart';
+import 'agent_approval_surface.dart';
 
 part 'screenshot_ui.dart';
 part 'meeting_workspace.dart';
@@ -1697,8 +1698,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     syncGraphMotion();
-    return meetingImmersive && meetingId != null
+    final workspace = meetingImmersive && meetingId != null
         ? immersiveMeetingWorkspace()
         : screenshotWorkspace(context);
+    return d is RemoteDomain
+        ? AgentApprovalSurface(domain: d as RemoteDomain, child: workspace)
+        : workspace;
   }
 }

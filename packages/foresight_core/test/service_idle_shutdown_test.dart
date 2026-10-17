@@ -112,6 +112,9 @@ void main() {
   test(
     'a recording request awaiting readiness prevents idle shutdown acceptance',
     () async {
+      await client.call('security.attach_desktop', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      });
       final id = service.domain.store.meeting('competing start');
       final recording = client
           .stream('meetings.start', {'id': id})

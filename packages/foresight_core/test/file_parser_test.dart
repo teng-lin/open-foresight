@@ -19,6 +19,8 @@ void main() {
     () async {
       final helper = executable('printf \'%s\\n\' "\$1" "\$2"');
       final source = '${directory.path}/\$(touch unexpected); café.PDF';
+      File(source).writeAsStringSync('fixture');
+      File('${directory.path}/notes.RTF').writeAsStringSync('fixture');
       final (text, provenance) = await Parser(
         macOS: true,
         macParser: helper.path,
@@ -38,9 +40,15 @@ void main() {
   test(
     'Mac extraction failures preserve actionable diagnostics and reject empty output',
     () async {
+      for (final name in ['locked.pdf', 'empty.rtf', 'file.pdf']) {
+        File('${directory.path}/$name').writeAsStringSync('fixture');
+      }
       final failure = executable('echo "Import an unlocked copy" >&2\nexit 4');
       await expectLater(
-        Parser(macOS: true, macParser: failure.path).extract('locked.pdf'),
+        Parser(
+          macOS: true,
+          macParser: failure.path,
+        ).extract('${directory.path}/locked.pdf'),
         throwsA(
           isA<StateError>().having(
             (error) => error.message,
@@ -51,7 +59,10 @@ void main() {
       );
       final empty = executable('exit 0');
       await expectLater(
-        Parser(macOS: true, macParser: empty.path).extract('empty.rtf'),
+        Parser(
+          macOS: true,
+          macParser: empty.path,
+        ).extract('${directory.path}/empty.rtf'),
         throwsA(
           isA<StateError>().having(
             (error) => error.message,
@@ -64,7 +75,7 @@ void main() {
         Parser(
           macOS: true,
           macParser: '${directory.path}/missing',
-        ).extract('file.pdf'),
+        ).extract('${directory.path}/file.pdf'),
         throwsA(
           isA<StateError>().having(
             (error) => error.message,

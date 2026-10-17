@@ -122,7 +122,14 @@ void main() {
             .rows("SELECT * FROM notes WHERE title='MCP note'")
             .isNotEmpty,
       );
-      await mcp.tool('start_recording', {'id': id});
+      final starting = mcp.tool('start_recording', {'id': id});
+      await waitFor(
+        tester,
+        () => find.text('Allow once').evaluate().isNotEmpty,
+      );
+      await tester.tap(find.text('Allow once'));
+      await tester.pumpAndSettle();
+      await starting;
       await waitFor(
         tester,
         () =>
@@ -138,7 +145,7 @@ void main() {
         (await workspace.d.command('status') as Map)['capture']['active'],
         true,
       );
-      // Destroy the actual Flutter state. Service-owned capture must continue.
+      // Closing the desktop removes its visible indicator and must stop capture.
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
       await app.main();
@@ -147,8 +154,8 @@ void main() {
         () => find.byType(app.Workspace).evaluate().isNotEmpty,
       );
       workspace = tester.state(find.byType(app.Workspace));
-      await waitFor(tester, () => workspace.recording != null);
-      // Capture survives independently of desktop startup. Wait for this
+      await waitFor(tester, () => workspace.recording == null);
+      // Final transcription persists independently of desktop startup. Wait for this
       // client's restore/reconciliation to finish before requesting generation.
       await workspace.d.resume();
       expect(
@@ -186,7 +193,7 @@ void main() {
           jsonEncode({
             'desktop_and_mcp_same_owner': true,
             'mcp_changes_visible': true,
-            'recording_survived_both_clients_disconnecting': true,
+            'recording_stopped_when_desktop_indicator_closed': true,
             'desktop_restart_preserved_owner': true,
             'transcript_and_artifact_persisted': true,
             'desktop_database_read_only': true,
