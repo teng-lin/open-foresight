@@ -728,6 +728,9 @@ class Application {
               ]) {
                 store.db.execute('DELETE FROM $table');
               }
+              store.db.execute(
+                "DELETE FROM preferences WHERE key GLOB 'webAnswer.v1.*'",
+              );
               store.db.execute('COMMIT');
             } catch (_) {
               store.db.execute('ROLLBACK');

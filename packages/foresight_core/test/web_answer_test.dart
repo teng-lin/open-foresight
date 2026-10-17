@@ -565,7 +565,7 @@ void main() {
   );
 
   test(
-    'legacy completed answers become full structured text and failed answers stay out',
+    'legacy and local answers stay outside the web-only model history',
     () async {
       final longBody = 'Legacy answer ' * 200;
       store.answer(
@@ -588,12 +588,92 @@ void main() {
       await domain
           .askWithWebInConversation('Next question', 'history')
           .toList();
-      expect(runtime.histories.last, [
-        referenceTextMessage('user', 'Old question'),
-        referenceTextMessage('assistant', longBody),
-      ]);
+      expect(runtime.histories.last, isEmpty);
     },
   );
+  test(
+    'old mixed checkpoints and local turns cannot enter web model messages',
+    () async {
+      store.answer(
+        'Old local query',
+        'LOCAL_HISTORY_SECRET',
+        'completed',
+        [],
+        'local',
+        conversation: 'mixed',
+      );
+      store.db.execute(
+        'INSERT INTO conversation_memory(conversation,through_answer_id,messages,token_counts) VALUES(?,?,?,?)',
+        [
+          'mixed',
+          store.db.lastInsertRowId,
+          jsonEncode([
+            referenceTextMessage(
+              'user',
+              'Source excerpts: LOCAL_CHECKPOINT_SECRET',
+            ),
+          ]),
+          jsonEncode([1]),
+        ],
+      );
+      store.db.execute(
+        'INSERT INTO conversation_memory(conversation,through_answer_id,messages,token_counts) VALUES(?,?,?,?)',
+        [
+          'web-only-v1:mixed',
+          store.db.lastInsertRowId,
+          jsonEncode([
+            referenceTextMessage('user', 'LOCAL_PREFIX_COLLISION_SECRET'),
+          ]),
+          jsonEncode([1]),
+        ],
+      );
+      final queries = <String>[];
+      domain.close();
+      domain = Domain(
+        store,
+        helper,
+        webSearch: SearchCallbacks(
+          search: (query) async {
+            queries.add(query);
+            return [
+              const WebSearchItem(
+                title: 'Public',
+                link: 'https://example.test',
+                snippet: 'public data',
+              ),
+            ];
+          },
+          summarize: (_, _) async => '',
+        ),
+      )..generator = runtime;
+      runtime.answer = (_) async {
+        expect(jsonEncode(runtime.histories.last), isNot(contains('LOCAL_')));
+        expect(runtime.prompts.last, isNot(contains('LOCAL_')));
+        return 'Safe first answer';
+      };
+      await domain
+          .askWithWebInConversation('Exact first user query', 'mixed')
+          .last;
+      expect(runtime.histories.last, isEmpty);
+      store.answer(
+        'New local query',
+        'LOCAL_MODE_SWITCH_SECRET',
+        'completed',
+        [],
+        'local',
+        conversation: 'mixed',
+      );
+      await domain
+          .askWithWebInConversation('Exact second user query', 'mixed')
+          .last;
+      expect(runtime.histories.last, [
+        referenceTextMessage('user', 'Exact first user query'),
+        canonicalAssistant('Safe first answer'),
+      ]);
+      expect(queries, ['Exact first user query', 'Exact second user query']);
+    },
+  );
+
   void seedMemory() {
     for (var i = 0; i < 8; i++) {
       store.answer(
@@ -604,6 +684,7 @@ void main() {
         'legacy',
         conversation: 'history',
       );
+      store.setPreference('webAnswer.v1.${store.db.lastInsertRowId}', 'true');
     }
   }
 
@@ -710,6 +791,7 @@ void main() {
           'other client',
           conversation: 'history',
         );
+        store.setPreference('webAnswer.v1.${store.db.lastInsertRowId}', 'true');
         store.answer(
           'Unrelated query',
           'Unrelated answer',
@@ -725,7 +807,7 @@ void main() {
           jsonDecode(
                 store
                         .rows(
-                          "SELECT messages FROM conversation_memory WHERE conversation='history'",
+                          "SELECT messages FROM conversation_memory WHERE conversation='web-only-v1:history'",
                         )
                         .single['messages']
                     as String,
@@ -793,7 +875,7 @@ void main() {
         port: 0,
       );
       helper.snapshot = control.State(tokenizerReady: true);
-      for (var i = 0; i < 6; i++)
+      for (var i = 0; i < 6; i++) {
         store.answer(
           'Old question $i',
           '字' * 40,
@@ -802,6 +884,8 @@ void main() {
           'legacy',
           conversation: 'history',
         );
+        store.setPreference('webAnswer.v1.${store.db.lastInsertRowId}', 'true');
+      }
       runtime.contextLimit = 100;
       runtime.answer = (_) async => 'New answer';
       try {
@@ -817,7 +901,7 @@ void main() {
         );
         final first = store
             .rows(
-              "SELECT token_counts FROM conversation_memory WHERE conversation='history'",
+              "SELECT token_counts FROM conversation_memory WHERE conversation='web-only-v1:history'",
             )
             .single;
         expect(jsonDecode(first['token_counts'] as String), [1, 40, 1, 1]);
@@ -835,7 +919,7 @@ void main() {
             jsonDecode(
                   store
                           .rows(
-                            "SELECT token_counts FROM conversation_memory WHERE conversation='history'",
+                            "SELECT token_counts FROM conversation_memory WHERE conversation='web-only-v1:history'",
                           )
                           .single['token_counts']
                       as String,

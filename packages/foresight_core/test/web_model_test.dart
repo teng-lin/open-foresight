@@ -107,6 +107,10 @@ void main() {
             'controlled fixture',
             conversation: 'controlled-compression-fixture',
           );
+          store.setPreference(
+            'webAnswer.v1.${store.db.lastInsertRowId}',
+            'true',
+          );
         }
         final compressedAnswer = await domain
             .askWithWebInConversation(
@@ -126,7 +130,7 @@ void main() {
           );
         final checkpoint = store
             .rows(
-              "SELECT * FROM conversation_memory WHERE conversation='controlled-compression-fixture'",
+              "SELECT * FROM conversation_memory WHERE conversation='web-only-v1:controlled-compression-fixture'",
             )
             .single;
         final memory = List<Map<String, dynamic>>.from(
