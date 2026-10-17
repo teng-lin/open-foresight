@@ -263,6 +263,9 @@ class Application {
 
   Future<List<String>> _detectQuestions(String text, String request) async {
     if (!_providedQueryRuntime) {
+      if (store.model(dedicatedQueryModelKind) == null) {
+        await discoverDedicatedQueryModel(store, current: () => !_closed);
+      }
       final model = store.model(dedicatedQueryModelKind);
       final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
       if (model == null ||
@@ -863,6 +866,7 @@ class Application {
             a['runtime'] as String? ?? '',
             backend: a['backend'] as String? ?? 'llama_cpp',
             expectedDigest: a['digest'] as String?,
+            modelType: a['model_type'] as int?,
             current: () => !_closed && (current?.call() ?? true),
           );
           return null;
@@ -873,6 +877,7 @@ class Application {
             a['path'] as String,
             a['runtime'] as String,
             backend: a['backend'] as String? ?? 'llama_cpp',
+            modelType: a['model_type'] as int?,
             current: () => !_closed && (current?.call() ?? true),
           );
           domain.generator?.close();

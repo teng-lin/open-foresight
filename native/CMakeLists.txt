@@ -55,14 +55,16 @@ if(BUILD_TESTING)
   target_include_directories(native_raw_query_probe PRIVATE ../third_party/litert_lm)
   target_link_libraries(native_raw_query_probe PRIVATE ${CMAKE_DL_LIBS})
   add_test(NAME macos_tool_runner_protocol COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/inference/test_tool_runner.py)
+  add_test(NAME native_model_type COMMAND ${Python3_EXECUTABLE}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_model_type.py $<TARGET_FILE:foresight_native>)
   add_test(NAME native_lifecycle COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native.py $<TARGET_FILE:foresight_native>)
   if(APPLE AND NOT TARGET ForesightHelper)
     add_executable(native_test_supervisor ../tests/native/supervisor.cpp)
     target_compile_features(native_test_supervisor PRIVATE cxx_std_20)
-    set_tests_properties(native_lifecycle PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:native_test_supervisor>")
+    set_tests_properties(native_lifecycle native_model_type PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:native_test_supervisor>")
   endif()
   if(TARGET ForesightHelper)
-    set_tests_properties(native_lifecycle PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:ForesightHelper>")
+    set_tests_properties(native_lifecycle native_model_type PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:ForesightHelper>")
     add_test(NAME native_process_identity COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native_process.py
       $<TARGET_FILE:foresight_native> $<TARGET_FILE:ForesightHelper>)

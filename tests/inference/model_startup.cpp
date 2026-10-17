@@ -1,4 +1,5 @@
 #include "model_startup.h"
+#include "generation_model_config.h"
 #include <fstream>
 #include <stdexcept>
 #include <vector>
@@ -165,7 +166,38 @@ void inference_not_retried() {
   check(attempts == 1 && recovery == 0, "inference failure retried initialization");
 }
 
+void vision_fallback() {
+  for (bool final_failure : {false, true}) {
+    bool vision = true;
+    int attempts = 0, clears = 0, closes = 0;
+    std::vector<bool> observed;
+    try {
+      foresight::initialize_generation_engine(false, [&] {
+        observed.push_back(vision);
+        if (++attempts <= 2 || final_failure) throw std::runtime_error("startup");
+      }, [&] { ++clears; }, [] {}, [&] { ++closes; }, [](const auto &) {},
+      true, [&] { vision = false; });
+      check(!final_failure, "final fallback failure swallowed");
+    } catch (const std::runtime_error &) {
+      check(final_failure, "successful text-only fallback rejected");
+    }
+    check(observed == std::vector<bool>({true, true, false}), "wrong vision attempts");
+    check(clears == 1 && closes == (final_failure ? 3 : 2), "wrong fallback cleanup");
+  }
+  for (int type : {8, 9, 10, 14, 15}) {
+    const auto c = foresight::generation_model_config(type);
+    check(c.vision && std::string(c.vision_backend) == "gpu" &&
+          std::string(c.audio_backend) == "cpu" && c.visual_tokens == 280, "wrong small model config");
+  }
+  for (int type : {12, 16}) {
+    const auto c = foresight::generation_model_config(type);
+    check(c.vision && std::string(c.audio_backend) == "gpu" && c.visual_tokens == 560, "wrong large model config");
+  }
+  check(!foresight::generation_model_config(0).vision, "unknown model enabled vision");
+}
+
 int main() {
+  vision_fallback();
   cache_scope();
   listing_failure_stops_scan();
   deletion_retry();

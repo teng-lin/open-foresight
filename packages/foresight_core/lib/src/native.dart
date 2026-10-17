@@ -20,8 +20,17 @@ Future<int> probeNativeModel(
   String runtime,
   String model, {
   String backend = 'llama_cpp',
-}) => Isolate.run(() => _createAndProbe(libraryPath, runtime, model, backend));
-int _createAndProbe(String path, String runtime, String model, String backend) {
+  int modelType = 0,
+}) => Isolate.run(
+  () => _createAndProbe(libraryPath, runtime, model, backend, modelType),
+);
+int _createAndProbe(
+  String path,
+  String runtime,
+  String model,
+  String backend,
+  int modelType,
+) {
   final lib = DynamicLibrary.open(path);
   final a = runtime.toNativeUtf8(), b = model.toNativeUtf8();
   Pointer<Void> engine = nullptr;
@@ -32,11 +41,19 @@ int _createAndProbe(String path, String runtime, String model, String backend) {
         b,
       );
     } else if (backend == 'litert_lm') {
-      engine = lib
-          .lookupFunction<
-            Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, Int32),
-            Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, int)
-          >('fs_engine_create_backend')(a, b, 1);
+      if (modelType != 0) {
+        engine = lib
+            .lookupFunction<
+              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, Int32),
+              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, int)
+            >('fs_engine_create_model_type')(a, b, modelType);
+      } else {
+        engine = lib
+            .lookupFunction<
+              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, Int32),
+              Pointer<Void> Function(Pointer<Utf8>, Pointer<Utf8>, int)
+            >('fs_engine_create_backend')(a, b, 1);
+      }
     } else {
       throw ArgumentError.value(backend, 'backend');
     }
@@ -97,6 +114,7 @@ class NativeRuntime {
   late final DynamicLibrary lib;
   Pointer<Void> engine = nullptr, conversation = nullptr;
   String template = 'raw';
+  int modelType = 0;
   final String libraryPath;
   int _epoch = 0;
   _GenerationRequest? _active;
@@ -145,6 +163,7 @@ class NativeRuntime {
         runtime,
         model,
         backend: backend,
+        modelType: modelType,
       );
       final loaded = Pointer<Void>.fromAddress(address);
       if (epoch != _epoch) {

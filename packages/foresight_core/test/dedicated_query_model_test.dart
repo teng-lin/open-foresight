@@ -5,6 +5,7 @@ import 'package:fixnum/fixnum.dart';
 import 'package:foresight_core/src/dedicated_query_acquisition.dart';
 import 'package:foresight_core/src/encrypted_query_runtime.dart';
 import 'package:foresight_core/src/model_acquisition.dart';
+import 'package:foresight_core/src/model_asset_lifecycle.dart';
 import 'package:foresight_core/src/model_vault.dart';
 import 'package:foresight_core/src/dedicated_query_runtime.dart';
 import 'package:foresight_core/src/reference_query_detector.dart';
@@ -19,6 +20,8 @@ class _LocalMetadata implements ModelConfigService {
         onDeviceModelMetadatas: [
           OnDeviceModelMetadata(
             modelType: 4,
+            name: 'detector.tflite',
+            version: '1.0',
             blobId: '/fixture/detector.tflite',
             size: Int64(dedicatedQueryModelBytes),
           ),
@@ -155,6 +158,12 @@ void main() {
           store: store,
           config: _LocalMetadata(),
           downloader: _LocalDownload(env['FORESIGHT_QUERY_MODEL']!),
+          catalog: ModelAssetLifecycle(
+            root: Directory('${directory.path}/distribution-assets'),
+            fetch: () => _LocalMetadata().fetch(appVersion: '1.0.0'),
+            protectedPaths: () =>
+                store.models.map((model) => model['path'] as String),
+          ),
           vault: MacModelVault(
             root: models,
             helperPath: helper.path,
@@ -163,6 +172,37 @@ void main() {
         );
         await operation.run();
         final registered = store.model(dedicatedQueryModelKind)!;
+        expect(
+          registered['path'],
+          '${directory.path}/distribution-assets/models/4/1.0/detector.tflite',
+        );
+        // A lost registry entry is restored from our own distribution tree,
+        // authenticated and probed again without contacting the distribution.
+        store.db.execute('DELETE FROM models WHERE kind=?', [
+          dedicatedQueryModelKind,
+        ]);
+        final recoveryVault = MacModelVault(
+          root: models,
+          helperPath: helper.path,
+          tempRoot: leases,
+        );
+        try {
+          expect(
+            await discoverDedicatedQueryModel(
+              store,
+              vault: recoveryVault,
+              runtime: env['FORESIGHT_QUERY_PYTHON'],
+            ),
+            isTrue,
+          );
+        } finally {
+          await recoveryVault.close();
+        }
+        expect(
+          store.model(dedicatedQueryModelKind)!['path'],
+          registered['path'],
+        );
+
         expect(registered['backend'], dedicatedEncryptedQueryBackend);
         expect(
           File(registered['path'] as String).lengthSync(),
