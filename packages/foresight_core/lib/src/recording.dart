@@ -584,9 +584,13 @@ class Recording {
       final deadline = DateTime.now().add(stopTimeout);
       while (_workers.isNotEmpty && epoch == _epoch) {
         final remaining = deadline.difference(DateTime.now());
-        if (remaining <= Duration.zero)
-          throw TimeoutException('Speech finalization timed out', stopTimeout);
         try {
+          if (remaining <= Duration.zero) {
+            throw TimeoutException(
+              'Speech finalization timed out',
+              stopTimeout,
+            );
+          }
           await Future.wait(_workers.values.toList()).timeout(remaining);
         } on TimeoutException {
           lastError =
