@@ -55,8 +55,9 @@ static pid_t last_pid(const fs::path &log) {
 
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
-  const fs::path root =
-      fs::temp_directory_path() / ("foresight-adapter-faults-" + std::to_string(getpid()));
+  // macOS sockaddr_un.sun_path is 104 bytes including NUL. Hosted TMPDIR is
+  // already a long /var/folders path, so the helper socket stays under /tmp.
+  const fs::path root = fs::path("/tmp") / ("of-af-" + std::to_string(getpid()));
   pid_t helpers[2] = {-1, -1};
   try {
     REQUIRE(argc == 3);

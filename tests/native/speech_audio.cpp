@@ -1,4 +1,5 @@
 #include "speech_audio.h"
+#include <cstdlib>
 #include <dirent.h>
 #include <iostream>
 #include <stdexcept>
@@ -31,8 +32,12 @@ static int count_tmp_asr() {
 }
 
 int main() {
+  // The profile must be writable and outside /tmp. A fixed workstation path
+  // cannot be created on the macOS runner.
+  const char *home = std::getenv("HOME");
+  REQUIRE(home && *home);
   const std::string root =
-      "/home/blackmyth/src/open-foresight-issue52/build/issue52-home";
+      std::string(home) + "/.of-speech-" + std::to_string(getpid());
   const std::string profile = root + "/profile";
   try {
     std::filesystem::remove_all(root);
