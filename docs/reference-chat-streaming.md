@@ -98,7 +98,46 @@ skipped. All four native test groups pass.
 
 The original two-stage cleanup and date-specific empty-response fallback are
 implemented; the pooled stream wrapper has no generic empty-text retry.
-Malformed-JSON metadata reconstruction, original runtime comparison and exhaustive
-lifecycle parity remain open. The retained worker covers the text configuration currently
-exposed by the port; original cache conditions for other modalities remain
-unverified.
+Malformed-JSON metadata reconstruction is implemented; see the response document.
+Original runtime comparison and exhaustive lifecycle parity remain open.
+
+## Cache failure and non-text boundary
+
+A fresh REA/IDA pass confirms the send-path clone exception handler at
+`0x10090a638`–`0x10090a6b8`: after warning about the clone failure, the original
+uses its independently initialized request conversation. It does not evict the
+untouched base or fail the send solely because cloning failed. Both workers now
+create the configured request conversation when native cloning fails. Python
+also handles a raised clone exception. Failure of the fallback creation still
+propagates. A functional regression checks fallback isolation, subsequent reuse
+of the same base, and exactly one close per owned conversation.
+
+The flag checked at `0x10090a554` is the send argument `addToHistory`, not a
+generic text-only predicate. The original initializer at `0x10091eda4`–
+`0x10091ee60` additionally requires empty history, a live base, matching output
+budget, and equality of cached/current configuration slots `+79/+159`,
+`+87/+167`, and `+95/+239` before cloning. The preceding paths change vision
+and audio configuration; the base is configuration-specific, rather than
+unconditionally prohibited for every non-text request. This is static
+control-flow evidence, not a live multimodal observation.
+
+The port currently exposes string prompts with fixed text inference settings.
+Its history path, including image/audio content parts, bypasses base cloning
+and installs the full history unchanged; controlled runner fixtures verify
+that admission policy without claiming that a real media encoder ran. Current
+image/audio prompt transport and original multimodal engine/configuration
+transitions are not implemented by this change. Those require a supported
+transport before the remaining original configuration conditions can be
+exercised; adding unused modality flags would not establish parity.
+
+Evidence: `ev_b81a4d88ca1196b1ba3a9fbca444e8b6e79804b42f9dcb1b3962562e022dbe1a`
+retains the ready matching IDA database and clone gate/handler;
+`ev_927b42d21cc758a3869c52144d464507c94d527f0ebfa115962937799779eae4`
+and `ev_ad56c721b915e4730a565f39b3e8acafbdad3da238bb79d0695d896c1507b8bb`
+retain initialization/reuse/base replacement branches. The first capture has
+complete raw output but truncated rendered terminal frames. Selected public
+argument names `addToHistory`, `createHandle`, and `hasAudioQuery` are bound by
+`ev_907d6cbe7a39e8029cf25cf00f16fe100ef944de1f7dc149484115aebfbf9fcc`.
+Retained files are `ida/chat-cache-clone-gate.json` and
+`ida/chat-cache-initialize{,-tail,-completion}.json`. The matching original
+and IDA input both hash to the reference executable digest above.

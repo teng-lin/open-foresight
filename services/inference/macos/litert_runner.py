@@ -298,9 +298,14 @@ class ConversationBase:
         # default ctypes int return type would truncate the conversation pointer.
         clone.argtypes = [ctypes.c_void_p]
         clone.restype = ctypes.c_void_p
-        pointer = clone(self.base._ptr)
+        # The original catches a failed base clone and uses the independently
+        # initialized request conversation. Keep the untouched base for retry.
+        try:
+            pointer = clone(self.base._ptr)
+        except Exception:
+            return create_configured_conversation(self.engine, config)
         if not pointer:
-            raise RuntimeError('Cannot clone conversation base')
+            return create_configured_conversation(self.engine, config)
         from litert_lm.conversation import Conversation
         return Conversation(lib, pointer, engine=self.engine, automatic_tool_calling=False)
 

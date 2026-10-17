@@ -371,6 +371,10 @@ public:
         base_key = key;
       }
       pointer = LM(conversation_clone)(base.get());
+      // Original sendMessage catches clone failure and falls back to the
+      // independently configured request conversation, preserving its base.
+      if (!pointer)
+        pointer = LM(conversation_create)(engine.get(), config.get());
     } else {
       pointer = LM(conversation_create)(engine.get(), config.get());
     }

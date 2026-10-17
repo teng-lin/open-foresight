@@ -173,6 +173,10 @@ class ReferenceNoteEnhancer {
       } finally {
         // Cancellation during yield runs both finally blocks without accepting
         // or failing the batch. Iterator disposal precedes conversation disposal.
+        // This is outside batch recovery: a close failure ends the producer,
+        // without starting another batch or emitting its final merged body.
+        // If recovery itself throws, a successful close preserves that error
+        // and stack; a failing close replaces it using Dart finally semantics.
         await conversation.close();
       }
     }

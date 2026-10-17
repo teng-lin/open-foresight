@@ -4,11 +4,20 @@ import 'package:foresight_core/src/reference_note_enhancer.dart';
 import 'package:test/test.dart';
 
 class FakeConversation implements NoteEnhancementConversation {
-  FakeConversation(this.id, this.events, this.deltas, {this.failure});
+  FakeConversation(
+    this.id,
+    this.events,
+    this.deltas, {
+    this.failure,
+    this.onClose,
+    this.onCancel,
+  });
   final int id;
   final List<String> events;
   final List<String> deltas;
   final Object? failure;
+  final Future<void> Function()? onClose;
+  final Future<void> Function()? onCancel;
   String? prompt;
 
   @override
@@ -26,9 +35,16 @@ class FakeConversation implements NoteEnhancementConversation {
   }
 
   @override
-  Future<void> cancelProcess() async => events.add('cancel$id');
+  Future<void> cancelProcess() async {
+    events.add('cancel$id');
+    await onCancel?.call();
+  }
+
   @override
-  Future<void> close() async => events.add('close$id');
+  Future<void> close() async {
+    events.add('close$id');
+    await onClose?.call();
+  }
 }
 
 void main() {
@@ -315,5 +331,178 @@ void main() {
       throwsA(same(failure)),
     );
     expect(created, 0);
+  });
+
+  test('close is awaited before the next batch is created', () async {
+    final closing = Completer<void>();
+    final enteredClose = Completer<void>();
+    final events = <String>[];
+    var created = 0;
+    final enhancer = ReferenceNoteEnhancer(
+      ensureReady: () async {},
+      loadEmbeddedTranscript: () async => [],
+      createConversation: (_) async {
+        final id = created++;
+        return FakeConversation(
+          id,
+          events,
+          ['- Accepted'],
+          onClose: () async {
+            if (id == 0) {
+              enteredClose.complete();
+              await closing.future;
+            }
+          },
+        );
+      },
+    );
+    final output = enhancer.enhance(notes: 'a\nb\nc\nd\ne\nf').toList();
+    await enteredClose.future;
+    expect(created, 1);
+    closing.complete();
+    await output;
+    expect(created, 2);
+    expect(events.indexOf('close0'), lessThan(events.indexOf('send1')));
+  });
+
+  for (final batchFails in [false, true]) {
+    test(
+      'close failure escapes ${batchFails ? 'recovered' : 'successful'} batch',
+      () async {
+        final events = <String>[];
+        final errors = <Object>[];
+        final active = <int?>[];
+        final output = <String>[];
+        final closeFailure = StateError('close failed');
+        final closeStack = StackTrace.fromString('original close stack');
+        final batchFailure = StateError('generation failed');
+        var created = 0;
+        final enhancer = ReferenceNoteEnhancer(
+          ensureReady: () async {},
+          loadEmbeddedTranscript: () async => [],
+          createConversation: (_) async => FakeConversation(
+            created++,
+            events,
+            ['- Partial'],
+            failure: batchFails ? batchFailure : null,
+            onClose: () async =>
+                Error.throwWithStackTrace(closeFailure, closeStack),
+          ),
+          logBatchError: (error, _) => errors.add(error),
+        );
+        Object? caught;
+        StackTrace? caughtStack;
+        try {
+          await for (final value in enhancer.enhance(
+            notes: 'a\nb\nc\nd\ne\nf',
+            onActiveIndexChanged: active.add,
+          )) {
+            output.add(value);
+          }
+        } catch (error, stack) {
+          caught = error;
+          caughtStack = stack;
+        }
+        expect(caught, same(closeFailure));
+        expect(caughtStack.toString(), closeStack.toString());
+        expect(errors, batchFails ? [same(batchFailure)] : isEmpty);
+        expect(created, 1);
+        expect(events, ['send0', 'iterator0', 'close0']);
+        expect(output.last, contains('Partial'));
+        expect(active, isNot(contains(null)));
+      },
+    );
+  }
+
+  test(
+    'outer cleanup rethrows a failing batch handler with its stack',
+    () async {
+      final events = <String>[];
+      final failure = StateError('handler failed');
+      final failureStack = StackTrace.fromString('original handler stack');
+      final enhancer = ReferenceNoteEnhancer(
+        ensureReady: () async {},
+        loadEmbeddedTranscript: () async => [],
+        createConversation: (_) async => FakeConversation(
+          0,
+          events,
+          [],
+          failure: StateError('generation failed'),
+        ),
+        logBatchError: (_, _) =>
+            Error.throwWithStackTrace(failure, failureStack),
+      );
+      Object? caught;
+      StackTrace? caughtStack;
+      try {
+        await enhancer.enhance(notes: 'raw').toList();
+      } catch (error, stack) {
+        caught = error;
+        caughtStack = stack;
+      }
+      expect(caught, same(failure));
+      expect(caughtStack.toString(), failureStack.toString());
+      expect(events, ['send0', 'iterator0', 'close0']);
+    },
+  );
+
+  test(
+    'stop cancellation failure recovers the batch after disposing resources',
+    () async {
+      final events = <String>[];
+      final errors = <Object>[];
+      final failure = StateError('cancel failed');
+      final enhancer = ReferenceNoteEnhancer(
+        ensureReady: () async {},
+        loadEmbeddedTranscript: () async => [],
+        createConversation: (_) async => FakeConversation(0, events, [
+          '- Partial</output>',
+        ], onCancel: () async => throw failure),
+        logBatchError: (error, _) => errors.add(error),
+      );
+      final output = await enhancer.enhance(notes: 'raw').toList();
+      expect(output.last, '* raw');
+      expect(errors, [same(failure)]);
+      expect(events, ['send0', 'cancel0', 'iterator0', 'close0']);
+    },
+  );
+
+  test('close failure replaces a pending outer-handler failure', () async {
+    final events = <String>[];
+    final handlerFailure = StateError('handler failed');
+    final closeFailure = StateError('close failed');
+    final enhancer = ReferenceNoteEnhancer(
+      ensureReady: () async {},
+      loadEmbeddedTranscript: () async => [],
+      createConversation: (_) async => FakeConversation(
+        0,
+        events,
+        [],
+        failure: StateError('generation failed'),
+        onClose: () async => throw closeFailure,
+      ),
+      logBatchError: (_, _) => throw handlerFailure,
+    );
+    await expectLater(
+      enhancer.enhance(notes: 'raw').toList(),
+      throwsA(same(closeFailure)),
+    );
+    expect(events, ['send0', 'iterator0', 'close0']);
+  });
+
+  test('conversation creation failure escapes before batch recovery', () async {
+    final failure = StateError('creation failed');
+    final errors = <Object>[];
+    final enhancer = ReferenceNoteEnhancer(
+      ensureReady: () async {},
+      loadEmbeddedTranscript: () async => [],
+      createConversation: (_) async => throw failure,
+      logBatchError: (error, _) => errors.add(error),
+    );
+    await expectLater(
+      enhancer.enhance(notes: 'raw').toList(),
+      throwsA(same(failure)),
+    );
+    expect(errors, isEmpty);
   });
 }
