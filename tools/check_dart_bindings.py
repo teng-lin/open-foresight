@@ -26,6 +26,11 @@ def main():
         for directory, name in [('linux', 'helper_control'), ('foresight', 'web_content')]:
             subprocess.run([args.protoc, f'-I{ROOT / "proto" / directory}',
                             f'--dart_out=grpc:{output}', f'{name}.proto'], check=True)
+        generated_names = {file.name for file in output.glob('*.dart')}
+        for destination in DESTINATIONS:
+            stale = {file.name for file in destination.glob('*.dart')} - generated_names
+            if stale:
+                raise SystemExit(f'Stale generated Dart files in {destination}: {sorted(stale)}')
         for generated in sorted(output.glob('*.dart')):
             for destination in DESTINATIONS:
                 target = destination / generated.name
