@@ -56,13 +56,13 @@ void main() {
     );
     test(
       'directory scan rejects nested profile and skips symlink traversal',
-      () {
+      () async {
         File('${profile.path}/secret.txt').writeAsStringSync('secret');
-        expect(() => policy.directoryFiles(root.path), throwsStateError);
+        await expectLater(policy.directoryFiles(root.path), throwsStateError);
         profile.deleteSync(recursive: true);
         File('${root.path}/ok.txt').writeAsStringSync('hello');
         Link('${root.path}/escape.txt').createSync('/dev/zero');
-        expect(policy.directoryFiles(root.path), ['${root.path}/ok.txt']);
+        expect(await policy.directoryFiles(root.path), ['${root.path}/ok.txt']);
       },
     );
   });

@@ -41,15 +41,15 @@ class ImportPolicy {
     return canonical;
   }
 
-  List<String> directoryFiles(String path) {
+  Future<List<String>> directoryFiles(String path) async {
     final pending = [validate(path, directory: true)];
     final files = <String>[];
     var entries = 0;
     var bytes = 0;
     while (pending.isNotEmpty) {
-      for (final entry in Directory(
+      await for (final entry in Directory(
         pending.removeLast(),
-      ).listSync(followLinks: false)) {
+      ).list(followLinks: false)) {
         if (++entries > maxDirectoryEntries)
           throw StateError('Directory entry limit exceeded');
         if (entry is Directory) {
@@ -137,6 +137,7 @@ class AgentAccessGate {
       'meetings.stop',
       'answer',
       'answer.stream',
+      'application.resume',
       'google.status',
       'artifacts.edit',
       'meetings.generate',

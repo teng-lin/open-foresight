@@ -1135,7 +1135,7 @@ class Application {
 
   Future<void> importDirectory(String path, {bool Function()? current}) async {
     final files = importPolicy != null
-        ? importPolicy!.directoryFiles(path).map(File.new).toList()
+        ? (await importPolicy!.directoryFiles(path)).map(File.new).toList()
         : Directory(path)
               .listSync(recursive: true, followLinks: false)
               .whereType<File>()
