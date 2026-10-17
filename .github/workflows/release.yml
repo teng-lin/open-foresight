@@ -54,6 +54,9 @@ jobs:
       tag: ${{ needs.prepare.outputs.tag }}
   acceptance:
     needs: [prepare, linux, macos]
+    permissions:
+      # Draft release metadata/assets are visible only with push access.
+      contents: write
     uses: ./.github/workflows/release-acceptance.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}

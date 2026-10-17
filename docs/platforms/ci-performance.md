@@ -69,10 +69,17 @@ the coordinator publishes the draft. No release job compiles an SDK or applicati
 The Linux package release increases for each full draft rebuild. Public release
 assets cannot be overwritten; corrections require a new app version.
 
+After an orchestration fix, dispatch the coordinator from reviewed main with the
+same unpublished tag. It resumes the immutable product commit using that commit's
+successful candidates; missing or expired historical candidates fail rather than
+substituting a newer main build. Packagers still check out the product tag, while
+orchestration and acceptance tools use the reviewed control commit. Preparation
+records both commits in its job summary. Draft discovery uses authenticated release
+listing, with push access to read unpublished metadata and assets.
+
 Main candidates require the bundled Google application registration. Rotated
 distribution settings require a fresh candidate; promotion does not change its
-bundled configuration. Existing tags retain their historical committed workflows;
-v0.1.0 is not rewritten or retagged. The v0.1.1 release supersedes the mismatched
+bundled configuration. Product tags are never rewritten or retagged. The v0.1.1 release supersedes the mismatched
 v0.1.0 release.
 
 ## Recovery

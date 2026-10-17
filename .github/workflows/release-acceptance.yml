@@ -23,6 +23,8 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Read unpublished draft metadata before publication.
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       ready: ${{ steps.release.outputs.ready }}
@@ -30,7 +32,9 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          ref: refs/tags/${{ inputs.tag }}
+          # Acceptance tooling follows the reviewed coordinator; installers
+          # remain independently pinned to the immutable product tag.
+          ref: ${{ github.sha }}
       - name: Require all installers before acceptance
         id: release
         env:
@@ -38,13 +42,14 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           python3 - <<'PYCODE'
-          import json, os, re, subprocess, sys
+          import os, re, sys
           sys.path.insert(0, 'tools')
           from release_asset_acceptance import select_asset
+          from github_release import release_for_tag
           tag = os.environ['RELEASE_TAG']
           if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
               raise ValueError('An explicit stable release tag is required')
-          release = json.loads(subprocess.check_output(['gh', 'api', f'repos/{os.environ["GITHUB_REPOSITORY"]}/releases/tags/{tag}']))
+          release = release_for_tag(os.environ['GITHUB_REPOSITORY'], tag)
           for kind in ('deb', 'rpm', 'arch', 'dmg'):
               select_asset(release, kind)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -55,6 +60,8 @@ jobs:
     needs: release
     if: needs.release.outputs.ready == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write # Read draft metadata and download unpublished assets.
     timeout-minutes: 90
     strategy:
       fail-fast: false
@@ -68,7 +75,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
@@ -116,12 +123,14 @@ jobs:
     needs: release
     if: needs.release.outputs.ready == 'true'
     runs-on: macos-15
+    permissions:
+      contents: write # Read draft metadata and download unpublished assets.
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-          ref: refs/tags/${{ inputs.tag }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'

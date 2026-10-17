@@ -11,6 +11,26 @@ from tools import prepare_release as release
 
 
 class PrepareReleaseTest(unittest.TestCase):
+    def test_created_draft_uses_list_lookup_when_tag_endpoint_is_unavailable(self):
+        draft = {'tag_name': 'v0.1.1', 'id': 42, 'draft': True, 'assets': [], 'body': ''}
+        lists = iter([[], [draft]])
+
+        def response(repository, route):
+            if route == 'git/matching-refs/tags/v0.1.1':
+                return [{'ref': 'refs/tags/v0.1.1'}]
+            if route == 'commits/v0.1.1':
+                return {'sha': 'a' * 40}
+            if route == 'releases?per_page=100&page=1':
+                return next(lists)
+            raise subprocess.CalledProcessError(1, ['gh', 'api', route], stderr='HTTP 404')
+
+        with patch.object(release, 'api', side_effect=response), \
+                patch.object(release.subprocess, 'run') as command:
+            self.assertEqual(release.create_draft('owner/repo', 'v0.1.1', 'a' * 40), '1')
+        self.assertEqual(command.call_count, 2)
+        self.assertEqual(command.call_args_list[0].args[0][:4], ['gh', 'release', 'create', 'v0.1.1'])
+        self.assertIn('repos/owner/repo/releases/42', command.call_args_list[1].args[0])
+
     def test_package_release_increases_even_when_an_older_workflow_is_rerun(self):
         body = 'Release notes'
         for expected in (1, 2, 3):
@@ -18,6 +38,16 @@ class PrepareReleaseTest(unittest.TestCase):
             generation = release.package_release(body)
             self.assertEqual(generation, str(expected))
             body += f'\n<!-- foresight-package-release: {generation} -->'
+
+    def test_release_published_during_creation_is_not_modified(self):
+        with patch.object(release, 'api', side_effect=[
+                [{'ref': 'refs/tags/v0.1.1'}], {'sha': 'a' * 40}, [],
+                [{'tag_name': 'v0.1.1', 'draft': False, 'id': 42}]]), \
+                patch.object(release.subprocess, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'Public releases are immutable'):
+                release.create_draft('owner/repo', 'v0.1.1', 'a' * 40)
+        self.assertEqual(command.call_count, 1)
+        self.assertEqual(command.call_args.args[0][:4], ['gh', 'release', 'create', 'v0.1.1'])
 
     def test_candidate_requires_successful_exact_main_and_both_platforms(self):
         commit = 'a' * 40
