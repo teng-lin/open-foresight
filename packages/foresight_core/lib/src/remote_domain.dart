@@ -17,6 +17,21 @@ class RemoteDomain extends Domain {
   ServiceClient client;
   final RemoteRuntime runtime;
   final ProfilePaths profile;
+  void Function(Map<String, dynamic>)? _approvalEvents;
+  Future<void> enableDesktopApprovals(
+    void Function(Map<String, dynamic>) events,
+  ) async {
+    _approvalEvents = events;
+    await client.call('security.attach_desktop', {
+      'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+    });
+  }
+
+  Future<void> disableDesktopApprovals() async {
+    _approvalEvents = null;
+    await client.call('security.detach_desktop');
+  }
+
   bool _disposed = false;
   bool _reconnecting = false;
   Map<String, dynamic> capture = {};
@@ -37,6 +52,10 @@ class RemoteDomain extends Domain {
     _listen();
   }
   void _apply(Map<String, dynamic> event) {
+    if (event['event'] == 'approval' || event['event'] == 'approval_closed') {
+      _approvalEvents?.call(event);
+      return;
+    }
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
@@ -74,6 +93,8 @@ class RemoteDomain extends Domain {
           client = next;
           runtime.client = next;
           _listen();
+          final approvals = _approvalEvents;
+          if (approvals != null) await enableDesktopApprovals(approvals);
           _apply(Map<String, dynamic>.from(await next.call('status') as Map));
           return;
         } catch (error) {
@@ -121,7 +142,20 @@ class RemoteDomain extends Domain {
   Future<Object?> command(
     String method, [
     Map<String, dynamic> args = const {},
-  ]) => client.call(method, args);
+  ]) async {
+    if (_approvalEvents != null &&
+        (method == 'sources.import_file' ||
+            method == 'sources.import_directory')) {
+      final path = args['path'] as String;
+      await client.call('security.allow_import_root', {
+        'path': method == 'sources.import_directory'
+            ? path
+            : File(path).parent.path,
+      });
+    }
+    return client.call(method, args);
+  }
+
   @override
   Future<Object?> commandCurrent(
     String method,

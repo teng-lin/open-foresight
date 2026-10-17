@@ -35,7 +35,7 @@ dart compile exe packages/foresight_core/bin/service.dart -o build/application/f
 dart compile exe packages/foresight_core/bin/mcp.dart -o build/application/foresight-mcp
 ```
 
-A packaged service or MCP adapter requires no Flutter SDK, Dart SDK, or open desktop window. The existing native runtime and model prerequisites still apply. No model downloads occur merely because an MCP client connects.
+A packaged service or MCP adapter requires no Flutter SDK or Dart SDK. Reads work without an open desktop window; protected operations need the visible desktop approval flow. The existing native runtime and model prerequisites still apply. No model downloads occur merely because an MCP client connects.
 
 ## Configure an MCP client
 
@@ -69,6 +69,16 @@ The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share
 
 Both directories must be owned by the current user and inaccessible to other users. The launcher creates missing directories with mode 0700, and the service socket uses mode 0600. It opens no TCP listener. The adapter uses the pinned `mcp_dart` SDK for protocol negotiation, validation, stdio framing, progress, and cancellation. Stdout contains only MCP messages; diagnostics go to stderr.
 
+## Agent approval and file access
+
+Notes, source reads, local search, and local answers remain available to same-user clients. Agent requests to import, delete, clear the workspace, configure models/accounts, or send a question to web search require an **Allow once** decision in the desktop. Without a connected desktop they fail. The desktop uses a random private capability to register its connection; approval IDs are bound to the requesting operation and expire after two minutes. A client cannot approve its own request by declaring a desktop role.
+
+Every recording start or resume, including desktop quick start, requires a visible confirmation. A persistent microphone/system-audio banner provides **Stop recording**. Hiding or closing the desktop stops capture and finishes transcription. Disconnecting just the MCP client leaves capture running while the desktop indicator remains visible.
+
+Import folders start empty. Selecting a local file or folder through the desktop adds its containing folder to the profile's import roots. Agents can then request imports within those roots, subject to approval. Canonical paths reject symlink escapes and always deny the application profile, including Google tokens and the desktop capability. Only regular files up to 10 MiB are accepted. Directory imports inspect at most 10,000 entries, import at most 1,000 supported files, and accept at most 100 MiB in total. Extraction output is bounded and external extractors have a 30-second deadline. These checks also apply when refreshing previously imported files.
+
+The capability file is not a sandbox against arbitrary malicious programs running as the same OS user. It separates normal agent RPC access and imported untrusted content from the desktop approval connection; private OS profile permissions remain required.
+
 ## Tools
 
 | Tools | Behavior |
@@ -88,7 +98,7 @@ Tool failures return `isError: true` with a useful message. Invalid protocol req
 
 ## Shared operation and lifecycle
 
-Launching either client attaches to an existing service or starts one. A per-profile OS lock prevents two launchers from creating competing owners. Clients can disconnect independently. Closing the desktop or MCP adapter does not stop a meeting, unload the generator, or mark another client's capture interrupted.
+Launching either client attaches to an existing service or starts one. A per-profile OS lock prevents two launchers from creating competing owners. Clients can disconnect independently. Closing or hiding the desktop stops capture because its on-screen indicator is no longer available. Closing the MCP adapter leaves the meeting running while the desktop remains visible; neither client disconnect unloads the generator.
 
 There is one recording and one active generation per profile. A second recording or simultaneous generation returns a busy error. Model configuration is rejected while another configuration, generation, or recording is active. Clients receive change events; the desktop observes content written through MCP and reconnects after a service restart. MCP reconnects on its next request after a lost connection. An in-flight mutation that loses its connection fails visibly and is not replayed automatically.
 
