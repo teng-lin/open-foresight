@@ -27,8 +27,15 @@ def enhanced(meeting, deadline):
     bullets = [line for line in main.splitlines()
                if re.match(r'^\s*[-*+•]\s+', line)]
     clauses = [clause for bullet in bullets for clause in re.split(r'[.;]', bullet)]
+    def affirmative(clause):
+        if deadline.lower() == 'friday':
+            clause = re.sub(r'\bnot\s+(?:on\s+)?Tuesday\b', '', clause, flags=re.I)
+        return not re.search(r'\b(?:not|never|instead of|rather than)\b.*\b'
+                             + deadline + r'\b', clause, re.I)
     if not any(all(re.search(r'\b' + word + r'\b', clause, re.I)
-                   for word in ('mira', 'draft', deadline.lower())) for clause in clauses):
+                   for word in ('mira', 'draft', deadline.lower()))
+               and affirmative(clause)
+               for clause in clauses):
         raise AssertionError(f'Enhanced notes omit the explicit {deadline} deadline: {text!r}')
     if deadline.lower() == 'friday':
         # A correction in missed topics or a different person's deadline must

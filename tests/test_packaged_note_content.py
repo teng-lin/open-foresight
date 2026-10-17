@@ -27,6 +27,10 @@ class PackagedNoteContentTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.check_output('- Mira sends draft Tuesday.\n- Mira sends draft Friday.')
 
+    def test_negated_friday_deadline_is_rejected(self):
+        with self.assertRaises(AssertionError):
+            self.check_output('- Mira will not send the draft on Friday.')
+
 
 if __name__ == '__main__':
     unittest.main()
