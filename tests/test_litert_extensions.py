@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -20,21 +21,34 @@ class ExtensionArtifactsTest(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
 
     def fixture(self, *, platform='darwin', extra=None, embedded=None, native=b'new native',
-                version='0.18.0', tag=None):
+                version='0.18.0', tag=None, missing_vendor=None):
         library = self.root / ('liblitert-lm.dylib' if platform == 'darwin' else 'liblitert-lm.so')
         library.write_bytes(native)
         wheel = self.root / 'api.whl'
         metadata = 'litert_lm_api-0.18.0.dist-info/'
         tag = tag or ('py3-none-macosx_12_0_arm64' if platform == 'darwin' else
                       'py3-none-manylinux_2_27_x86_64')
+        vendors = (extensions.MACOS_VENDOR_LIBRARIES if platform == 'darwin'
+                   else extensions.LINUX_VENDOR_LIBRARIES)
+        vendor_payloads = {'litert_lm/' + name: self.elf(name.encode())
+                           if platform == 'linux' else ('vendor-' + name).encode()
+                           for name in vendors}
+        additional = []
+        for name, payload in (extra if isinstance(extra, list) else [extra] if extra else []):
+            if name in vendor_payloads:
+                vendor_payloads[name] = payload
+            else:
+                additional.append((name, payload))
         with zipfile.ZipFile(wheel, 'w') as archive:
             archive.writestr(metadata + 'METADATA', f'Name: litert-lm-api\nVersion: {version}\n')
             archive.writestr(metadata + 'WHEEL', 'Wheel-Version: 1.0\nTag: ' + tag + '\n')
             archive.writestr('litert_lm/' + library.name, native if embedded is None else embedded)
             archive.writestr('litert_lm/engine.py', 'source-built API')
-            if extra:
-                for entry in extra if isinstance(extra, list) else [extra]:
-                    archive.writestr(*entry)
+            for name, payload in vendor_payloads.items():
+                if name != 'litert_lm/' + str(missing_vendor):
+                    archive.writestr(name, payload)
+            for entry in additional:
+                archive.writestr(*entry)
         log = self.root / 'native-test.log'
         log.write_text('[ RUN      ] ' + extensions.NATIVE_TEST + '\n[       OK ] ' + extensions.NATIVE_TEST)
         self.manifest = {
@@ -44,6 +58,8 @@ class ExtensionArtifactsTest(unittest.TestCase):
             'wheel': wheel.name, 'wheel_sha256': extensions.file_sha256(wheel),
             'library': library.name, 'library_sha256': extensions.file_sha256(library),
             'native_test_log': log.name, 'native_test_log_sha256': extensions.file_sha256(log),
+            'vendor_libraries': {Path(name).name: hashlib.sha256(payload).hexdigest()
+                                 for name, payload in vendor_payloads.items()},
         }
         self.path = self.root / 'manifest.json'
         self.save()
@@ -132,7 +148,7 @@ class ExtensionArtifactsTest(unittest.TestCase):
         target = destination / source_site.relative_to(source)
         return source, source_site, destination, target
 
-    def test_overlay_changes_only_copy_and_preserves_existing_backend_libraries(self):
+    def test_overlay_changes_only_copy_and_installs_verified_backend_libraries(self):
         bundle = extensions.verify_extensions_manifest(self.fixture(), platform_name='darwin')
         source, source_site, destination, target = self.copied_prefix()
         extensions.install_extension_wheel(bundle, site_packages=target,
@@ -141,7 +157,9 @@ class ExtensionArtifactsTest(unittest.TestCase):
         self.assertEqual((source_site / 'litert_lm/liblitert-lm.dylib').read_bytes(), b'original native')
         self.assertEqual((target / 'litert_lm/engine.py').read_text(), 'source-built API')
         self.assertEqual((target / 'litert_lm/liblitert-lm.dylib').read_bytes(), b'new native')
-        self.assertEqual((target / 'litert_lm/libLiteRtMetalAccelerator.dylib').read_bytes(), b'preserve backend')
+        self.assertEqual((source_site / 'litert_lm/libLiteRtMetalAccelerator.dylib').read_bytes(), b'preserve backend')
+        self.assertEqual((target / 'litert_lm/libLiteRtMetalAccelerator.dylib').read_bytes(),
+                         b'vendor-libLiteRtMetalAccelerator.dylib')
 
     def test_overlay_rejects_source_prefix_and_external_symlink_destinations(self):
         bundle = extensions.verify_extensions_manifest(self.fixture(), platform_name='darwin')
@@ -201,16 +219,46 @@ class ExtensionArtifactsTest(unittest.TestCase):
         for name, content in payloads:
             self.assertEqual((destination / Path(name).name).read_bytes(), content)
 
-    def test_linux_wheel_requires_complete_vendor_payloads_and_x86_64_elf(self):
-        for payload in (b'not ELF', self.elf(b'valid')):
-            with self.subTest(payload=payload):
+    def test_linux_wheel_requires_x86_64_elf_payloads(self):
+        for native, extra in ((b'not ELF', None), (self.elf(b'valid'),
+                ('litert_lm/libwebgpu_dawn.so', b'not ELF'))):
+            with self.subTest(native=native, extra=extra):
                 bundle = extensions.verify_extensions_manifest(
-                    self.fixture(platform='linux', native=payload), platform_name='linux')
-                destination = self.root / ('lib-' + str(len(payload)))
+                    self.fixture(platform='linux', native=native, extra=extra), platform_name='linux')
+                destination = self.root / ('lib-' + str(len(native)))
                 destination.mkdir()
                 shutil.copy2(bundle.library, destination / bundle.library.name)
                 with self.assertRaises(ValueError):
                     extensions.copy_linux_extension_dependencies(bundle, destination)
+
+    def test_required_gpu_closure_is_present_and_materialized_for_each_platform(self):
+        for platform, names in (('darwin', extensions.MACOS_VENDOR_LIBRARIES),
+                                ('linux', extensions.LINUX_VENDOR_LIBRARIES)):
+            for name in names:
+                with self.subTest(platform=platform, missing=name):
+                    with self.assertRaisesRegex(ValueError, 'required GPU dependency'):
+                        extensions.verify_extensions_manifest(
+                            self.fixture(platform=platform, missing_vendor=name), platform_name=platform)
+            name = names[-1]
+            for payload in (b'', b'version https://git-lfs.github.com/spec/v1\noid sha256:fixture\n'):
+                with self.subTest(platform=platform, payload=payload):
+                    with self.assertRaises(ValueError):
+                        extensions.verify_extensions_manifest(self.fixture(platform=platform,
+                            extra=('litert_lm/' + name, payload)), platform_name=platform)
+
+    def test_vendor_provenance_cannot_omit_or_misidentify_dawn(self):
+        for value in (None, {}, {'libwebgpu_dawn.dylib': 'wrong'}):
+            with self.subTest(value=value):
+                self.fixture()
+                self.manifest['vendor_libraries'] = value
+                self.save()
+                with self.assertRaisesRegex(ValueError, 'complete GPU runtime closure'):
+                    extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+        self.fixture()
+        self.manifest['vendor_libraries']['libwebgpu_dawn.dylib'] = 'incorrect hash'
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'GPU dependency checksum mismatch'):
+            extensions.verify_extensions_manifest(self.path, platform_name='darwin')
 
     def test_linux_dependency_validation_rejects_missing_and_external_vendor_libraries(self):
         destination = self.root / 'lib'

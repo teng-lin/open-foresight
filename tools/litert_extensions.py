@@ -19,6 +19,13 @@ NATIVE_TEST = 'EngineCTest.AppendStopTokenSequencesBeforeConversationConfigCopy'
 LINUX_VENDOR_LIBRARIES = (
     'libGemmaModelConstraintProvider.so', 'libLiteRt.so',
     'libLiteRtWebGpuAccelerator.so', 'libLiteRtTopKWebGpuSampler.so',
+    'libwebgpu_dawn.so',
+)
+MACOS_VENDOR_LIBRARIES = (
+    'libGemmaModelConstraintProvider.dylib', 'libLiteRt.dylib',
+    'libLiteRtWebGpuAccelerator.dylib', 'libLiteRtTopKWebGpuSampler.dylib',
+    'libwebgpu_dawn.dylib', 'libLiteRtMetalAccelerator.dylib',
+    'libLiteRtTopKMetalSampler.dylib',
 )
 
 
@@ -104,6 +111,25 @@ def verify_extensions_manifest(path, *, platform_name):
         tags = BytesParser().parsebytes(archive.read(wheel_metadata)).get_all('Tag', [])
         if tags != [tag]:
             raise ValueError('LiteRT extension wheel platform does not match this release')
+        required_vendors = (MACOS_VENDOR_LIBRARIES if platform_name == 'darwin'
+                            else LINUX_VENDOR_LIBRARIES)
+        vendor_hashes = manifest.get('vendor_libraries')
+        if not isinstance(vendor_hashes, dict) or set(vendor_hashes) != set(required_vendors):
+            raise ValueError('LiteRT extension manifest lacks the complete GPU runtime closure')
+        for name in required_vendors:
+            entry = 'litert_lm/' + name
+            if entry not in entries or archive.getinfo(entry).file_size == 0:
+                raise ValueError('LiteRT extension wheel lacks required GPU dependency: ' + name)
+            vendor_hash = hashlib.sha256()
+            with archive.open(entry) as stream:
+                first = stream.read(128)
+                if first.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
+                    raise ValueError('LiteRT extension wheel contains a Git LFS pointer: ' + name)
+                vendor_hash.update(first)
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    vendor_hash.update(chunk)
+            if vendor_hash.hexdigest() != vendor_hashes[name]:
+                raise ValueError('LiteRT extension GPU dependency checksum mismatch: ' + name)
         native_hash = hashlib.sha256()
         with archive.open(library_entry) as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b''):

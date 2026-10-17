@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'tools'))
@@ -15,6 +16,63 @@ from macos_bundle import audit_dependencies, relocate_dependencies, sign_applica
 
 @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('clang'), 'requires Mac toolchain')
 class MacBundleTest(unittest.TestCase):
+    def test_missing_private_rpath_library_is_not_invented_in_system_swift_directory(self):
+        from macos_bundle import resolve_dependency, shared_cache_library
+        with tempfile.TemporaryDirectory() as folder:
+            app = Path(folder) / 'Example.app'
+            owner = app / 'Contents/Resources/python/site-packages/litert_lm/libplugin.dylib'
+            name = '@rpath/libwebgpu_dawn.dylib'
+            with patch('macos_bundle.rpaths', return_value=['/usr/lib/swift']):
+                with self.assertRaisesRegex(ValueError, 'Unresolved dependency'):
+                    resolve_dependency(name, owner, app)
+                sibling = owner.parent / 'libwebgpu_dawn.dylib'
+                sibling.parent.mkdir(parents=True)
+                sibling.write_bytes(b'pinned sibling fixture')
+                with self.assertRaisesRegex(ValueError, 'Unresolved dependency'):
+                    resolve_dependency(name, owner, app)
+                self.assertEqual(resolve_dependency(name, owner, app, allow_colocated=True), sibling.resolve())
+            self.assertTrue(shared_cache_library(Path('/usr/lib/swift/libswiftCore.dylib')))
+            self.assertFalse(shared_cache_library(Path('/usr/lib/swift/libwebgpu_dawn.dylib')))
+            self.assertEqual(resolve_dependency('/usr/lib/libSystem.B.dylib', owner, app),
+                             Path('/usr/lib/libSystem.B.dylib'))
+
+    def test_bare_gpu_plugin_and_transitive_dependency_load_after_relocation(self):
+        with tempfile.TemporaryDirectory(prefix='foresight-plugin-') as folder:
+            root = Path(folder)
+            source = root / 'source'
+            source.mkdir()
+            (source / 'dawn.c').write_text('int dawn(void) { return 40; }\n')
+            (source / 'plugin.c').write_text('extern int dawn(void); int plugin(void) { return dawn()+2; }\n')
+            (source / 'parent.c').write_text('#include <dlfcn.h>\nint probe(void) { void* h=dlopen("libplugin.dylib", RTLD_NOW|RTLD_LOCAL); if(!h)return -1; int(*f)(void)=(int(*)(void))dlsym(h,"plugin"); return f ? f() : -2; }\n')
+            app = root / 'Original.app'
+            libs = app / 'Contents/Resources/python/lib/python3.13/site-packages/litert_lm'
+            libs.mkdir(parents=True)
+            common = ['clang', '-arch', 'arm64', '-mmacosx-version-min=15.0',
+                      '-dynamiclib', '-Wl,-headerpad_max_install_names']
+            dawn, plugin, parent = (libs / name for name in
+                                    ('libdawn.dylib', 'libplugin.dylib', 'libparent.dylib'))
+            subprocess.run([*common, str(source / 'dawn.c'), '-o', str(dawn),
+                            '-Wl,-install_name,@rpath/libdawn.dylib'], check=True)
+            subprocess.run([*common, str(source / 'plugin.c'), str(dawn), '-o', str(plugin),
+                            '-Wl,-install_name,@rpath/libplugin.dylib', '-Wl,-rpath,/usr/lib/swift'], check=True)
+            subprocess.run([*common, str(source / 'parent.c'), '-o', str(parent),
+                            '-Wl,-install_name,@rpath/libparent.dylib', '-Wl,-rpath,@loader_path'], check=True)
+            relocate_dependencies(app)
+            self.assertEqual(len(audit_dependencies(app)), 3)
+            for binary in (dawn, plugin, parent):
+                subprocess.run(['codesign', '--force', '--sign', '-', str(binary)],
+                               check=True, capture_output=True)
+            moved = root / 'a path with spaces/Relocated.app'
+            moved.parent.mkdir()
+            app.rename(moved)
+            shutil.rmtree(source)
+            code = ('import ctypes,sys; lib=ctypes.CDLL(sys.argv[1]); '
+                    'lib.probe.restype=ctypes.c_int; print(lib.probe())')
+            output = subprocess.check_output([sys.executable, '-I', '-c', code,
+                str(moved / parent.relative_to(app))], cwd='/', env={'PATH': '/usr/bin:/bin'},
+                text=True, timeout=15)
+            self.assertEqual(output.strip(), '42')
+
     def test_transitive_dependencies_survive_relocation_without_environment(self):
         with tempfile.TemporaryDirectory(prefix='foresight-mach-o-') as folder:
             root = Path(folder)

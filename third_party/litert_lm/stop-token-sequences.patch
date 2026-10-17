@@ -1,5 +1,5 @@
 diff --git a/c/BUILD b/c/BUILD
-index f7a352b9..df701e0d 100644
+index f7a352b9..d4f5e6bb 100644
 --- a/c/BUILD
 +++ b/c/BUILD
 @@ -487,7 +487,10 @@ cc_binary(
@@ -10,7 +10,7 @@ index f7a352b9..df701e0d 100644
 +        # Keep statically linked protobuf/Abseil symbols private. Otherwise a
 +        # previously initialized SentencePiece extension can coalesce their
 +        # globals and deadlock this library's descriptor initializers.
-+        "@platforms//os:macos": ["-Wl,-exported_symbol,_litert_lm_*"],
++        "@platforms//os:macos": ["-Wl,-exported_symbol,_litert_lm_*", "-Wl,-rpath,@loader_path"],
          "@platforms//os:ios": [],
          "@platforms//os:windows": [],
          "//conditions:default": [
@@ -92,6 +92,38 @@ index 181574bd..2a46b396 100644
  TEST(EngineCTest, CreateSessionConfigWithNoSamplerParams) {
    SessionConfigPtr config(litert_lm_session_config_create(),
                            &litert_lm_session_config_delete);
+diff --git a/python/litert_lm/BUILD b/python/litert_lm/BUILD
+index 6e69f9d5..9e4a6072 100644
+--- a/python/litert_lm/BUILD
++++ b/python/litert_lm/BUILD
+@@ -234,6 +234,14 @@ _PREBUILT_LIBS = [
+     "libLiteRtWebGpuAccelerator",
+     "libLiteRtTopKWebGpuSampler",
+     "libLiteRt",
++    "libwebgpu_dawn",
++]
++
++# macOS GPU discovery supports both WebGPU and native Metal. Dawn is a
++# transitive dependency of WebGPU; all runtime payloads must travel in the wheel.
++_MACOS_PREBUILT_LIBS = _PREBUILT_LIBS + [
++    "libLiteRtMetalAccelerator",
++    "libLiteRtTopKMetalSampler",
+ ]
+ 
+ genrule(
+@@ -266,10 +274,10 @@ genrule(
+ genrule(
+     name = "copy_prebuilt_libs_dylib",
+     srcs = select({
+-        "@platforms//os:macos": ["//prebuilt/macos_arm64:" + lib + ".dylib" for lib in _PREBUILT_LIBS],
++        "@platforms//os:macos": ["//prebuilt/macos_arm64:" + lib + ".dylib" for lib in _MACOS_PREBUILT_LIBS],
+         "//conditions:default": [],
+     }),
+-    outs = [lib + ".dylib" for lib in _PREBUILT_LIBS],
++    outs = [lib + ".dylib" for lib in _MACOS_PREBUILT_LIBS],
+     cmd = """
+         SRCS_ARRAY=($(SRCS))
+         OUTS_ARRAY=($(OUTS))
 diff --git a/python/litert_lm/engine.py b/python/litert_lm/engine.py
 index c1b36110..985f2cb3 100644
 --- a/python/litert_lm/engine.py

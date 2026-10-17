@@ -17,6 +17,14 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = 'b2f686e2ed4718fb84ec398a61dd59ca0f0aff27'
 PATCH = ROOT / 'third_party/litert_lm/stop-token-sequences.patch'
+# Keep this standalone builder's closure aligned with the release verifier.
+VENDOR_BASENAMES = (
+    'libGemmaModelConstraintProvider', 'libLiteRt',
+    'libLiteRtWebGpuAccelerator', 'libLiteRtTopKWebGpuSampler', 'libwebgpu_dawn',
+)
+MACOS_VENDOR_BASENAMES = VENDOR_BASENAMES + (
+    'libLiteRtMetalAccelerator', 'libLiteRtTopKMetalSampler',
+)
 
 
 def run(source, *args, capture=False):
@@ -40,6 +48,28 @@ def require_materialized_prebuilts(source, directory, suffix):
                     f'Git LFS object is not materialized: {path}. Run git lfs install --local '
                     f"and git lfs pull --include='prebuilt/{directory}/*' --exclude='' "
                     'in the source checkout before building.')
+
+
+def wheel_vendor_hashes(archive, system):
+    """Reject incomplete wheels before publishing their provenance manifest."""
+    basenames = MACOS_VENDOR_BASENAMES if system == 'Darwin' else VENDOR_BASENAMES
+    suffix = '.dylib' if system == 'Darwin' else '.so'
+    result = {}
+    for base in basenames:
+        name = base + suffix
+        entry = 'litert_lm/' + name
+        if entry not in archive.namelist() or archive.getinfo(entry).file_size == 0:
+            raise RuntimeError('Built wheel lacks required GPU runtime dependency: ' + name)
+        digest = hashlib.sha256()
+        with archive.open(entry) as stream:
+            first = stream.read(128)
+            if first.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
+                raise RuntimeError('Built wheel contains a Git LFS pointer: ' + name)
+            digest.update(first)
+            for block in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(block)
+        result[name] = digest.hexdigest()
+    return result
 
 
 def main():
@@ -114,6 +144,7 @@ def main():
         package = BytesParser().parsebytes(archive.read(metadata[0]))
         if package['Name'] != 'litert-lm-api' or package['Version'] != '0.18.0':
             raise RuntimeError('Built wheel must be litert-lm-api==0.18.0')
+        vendor_libraries = wheel_vendor_hashes(archive, platform.system())
     args.output.mkdir(parents=True, exist_ok=True)
     retained_test_log = args.output / 'native-stop-config-test.log'
     shutil.copy2(test_log, retained_test_log)
@@ -146,6 +177,7 @@ def main():
         'distribution': package['Name'], 'version': package['Version'],
         'wheel': destination.name, 'wheel_sha256': sha256(destination),
         'library': library.name, 'library_sha256': sha256(library),
+        'vendor_libraries': vendor_libraries,
         'native_test_log': retained_test_log.name,
         'native_test_log_sha256': sha256(retained_test_log),
         'native_test_command': test, 'build_command': build,
