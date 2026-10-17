@@ -120,6 +120,7 @@ void main() {
         expect(ready, 0);
         expect(helper.process, isNull);
         expect(helper.state, contains('incompatible helper'));
+        expect(helper.incompatible, isTrue);
         await expectLater(
           helper.client.ping(PingRequest()),
           throwsA(isA<GrpcError>()),
