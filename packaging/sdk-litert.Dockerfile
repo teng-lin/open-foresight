@@ -19,4 +19,3 @@ RUN --mount=type=cache,target=/tmp/litert-bazel \
     python3 /opt/foresight-extension/tools/build_litert_extensions.py /opt/litert-source \
       --output /opt/litert-extensions --output-user-root /tmp/litert-bazel --jobs 2 && \
     rm -rf /opt/litert-source
-
