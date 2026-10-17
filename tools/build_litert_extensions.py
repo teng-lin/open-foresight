@@ -12,12 +12,15 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 COMMIT = 'b2f686e2ed4718fb84ec398a61dd59ca0f0aff27'
 PATCH = ROOT / 'third_party/litert_lm/stop-token-sequences.patch'
 MACOS_ABI_PATCH = ROOT / 'third_party/litert_lm/macos-trivial-abi.patch'
+LINUX_ABI_PATCH = ROOT / 'third_party/litert_lm/linux-trivial-abi.patch'
 # Keep this standalone builder's closure aligned with the release verifier.
 VENDOR_BASENAMES = (
     'libGemmaModelConstraintProvider', 'libLiteRt',
@@ -49,6 +52,19 @@ def require_materialized_prebuilts(source, directory, suffix):
                     f'Git LFS object is not materialized: {path}. Run git lfs install --local '
                     f"and git lfs pull --include='prebuilt/{directory}/*' --exclude='' "
                     'in the source checkout before building.')
+
+
+def verify_linux_library_abi(library):
+    dynamic = subprocess.check_output(['readelf', '-d', str(library)], text=True)
+    versions = subprocess.check_output(['readelf', '--version-info', str(library)], text=True)
+    needs = versions.partition('Version needs section')[2]
+    for forbidden in ('libstdc++.so', 'libc++.so', 'libc++abi.so'):
+        if f'[{forbidden}' in dynamic:
+            raise RuntimeError(f'Linux LiteRT library must not dynamically link {forbidden}')
+    for family in ('GLIBCXX_', 'CXXABI_'):
+        if family in needs:
+            raise RuntimeError(f'Linux LiteRT library must not require {family} symbols')
+    return dynamic + '\n' + versions
 
 
 def wheel_vendor_hashes(archive, system):
@@ -98,19 +114,22 @@ def main():
     diff = source_diff()
     patch = PATCH.read_bytes()
     patch_digest = hashlib.sha256(patch).hexdigest()
-    macos_patch = MACOS_ABI_PATCH.read_bytes() if platform.system() == 'Darwin' else b''
-    expected_patch = patch + macos_patch
-    if diff == patch and macos_patch:
-        run(source, 'git', 'apply', '--check', str(MACOS_ABI_PATCH))
-        run(source, 'git', 'apply', str(MACOS_ABI_PATCH))
+    platform_patch_path = (MACOS_ABI_PATCH if platform.system() == 'Darwin'
+                           else LINUX_ABI_PATCH if platform.system() == 'Linux'
+                           else None)
+    platform_patch = platform_patch_path.read_bytes() if platform_patch_path else b''
+    expected_patch = patch + platform_patch
+    if diff == patch and platform_patch:
+        run(source, 'git', 'apply', '--check', str(platform_patch_path))
+        run(source, 'git', 'apply', str(platform_patch_path))
     elif diff != expected_patch:
         if diff:
             parser.error('Source has unrelated changes; use a clean checkout')
         run(source, 'git', 'apply', '--check', str(PATCH))
         run(source, 'git', 'apply', str(PATCH))
-        if macos_patch:
-            run(source, 'git', 'apply', '--check', str(MACOS_ABI_PATCH))
-            run(source, 'git', 'apply', str(MACOS_ABI_PATCH))
+        if platform_patch:
+            run(source, 'git', 'apply', '--check', str(platform_patch_path))
+            run(source, 'git', 'apply', str(platform_patch_path))
     def verify_source_snapshot():
         current_commit = run(source, 'git', 'rev-parse', 'HEAD', capture=True).decode().strip()
         current_diff = source_diff()
@@ -132,10 +151,26 @@ def main():
         flags += ['--config=macos', '--config=macos_arm64',
                   '--define=wheel_platform=macos_arm64']
     elif platform.system() == 'Linux' and platform.machine() == 'x86_64':
+        from test_litert_status_abi import find_linux_libcxx
         require_materialized_prebuilts(source, 'linux_x86_64', '.so')
+        include_dir, lib_dir = find_linux_libcxx()
         # Exercise the same PIC objects that the shipped shared C API uses,
         # avoiding a second full runtime compilation after the native test.
-        flags += ['--force_pic', '--define=wheel_platform=linux_x86_64']
+        # Match the prebuilt vendor accelerators' Clang + static libc++ ABI.
+        flags += [
+            '--force_pic',
+            '--define=wheel_platform=linux_x86_64',
+            '--repo_env=CC=clang',
+            '--repo_env=CXX=clang++',
+            f'--repo_env=BAZEL_CXXOPTS=-nostdinc++:-isystem{include_dir}',
+            '--cxxopt=-nostdinc++',
+            f'--cxxopt=-isystem{include_dir}',
+            '--host_cxxopt=-nostdinc++',
+            f'--host_cxxopt=-isystem{include_dir}',
+            f'--repo_env=BAZEL_LINKLIBS={lib_dir}/libc++.a:{lib_dir}/libc++abi.a:-lm',
+            '--linkopt=-Wl,--exclude-libs,libc++.a:libc++abi.a',
+            '--host_linkopt=-Wl,--exclude-libs,libc++.a:libc++abi.a',
+        ]
     else:
         parser.error('Supported build hosts are macOS arm64 and Linux x86_64')
     test = bazel + ['test', *flags, '//c:engine_test',
@@ -180,16 +215,16 @@ def main():
         with archive.open(entries[0]) as source_stream, temporary.open('wb') as output_stream:
             shutil.copyfileobj(source_stream, output_stream)
         temporary.replace(library)
-    export_report = {}
+    # The vendor accelerator expects libc++ container layout and trivial-ABI
+    # Status returns. Verify the actual patched headers selected by this build
+    # across a DSO call on both macOS and Linux.
+    from test_litert_status_abi import verify_status_abi
+    output_base = Path(run(source, *bazel, 'info', 'output_base', capture=True).decode().strip())
+    abi_directory = args.output / 'native-status-abi'
+    verify_status_abi(output_base / 'external/com_google_absl', abi_directory)
+    abi_report = args.output / 'native-status-abi-report.json'
+    shutil.copy2(abi_directory / 'report.json', abi_report)
     if platform.system() == 'Darwin':
-        # The vendor accelerator expects trivial-ABI Status returns. Verify
-        # the actual patched headers selected by this build across a DSO call.
-        from test_litert_status_abi import verify_status_abi
-        output_base = Path(run(source, *bazel, 'info', 'output_base', capture=True).decode().strip())
-        abi_directory = args.output / 'native-status-abi'
-        verify_status_abi(output_base / 'external/com_google_absl', abi_directory)
-        abi_report = args.output / 'native-status-abi-report.json'
-        shutil.copy2(abi_directory / 'report.json', abi_report)
         exported = subprocess.check_output(['/usr/bin/nm', '-gUj', str(library)], text=True)
         symbols = set(exported.splitlines())
         required = {'_litert_lm_engine_create', '_litert_lm_embedding_engine_create',
@@ -200,7 +235,12 @@ def main():
         export_log.write_text(exported)
         export_report = {'native_export_log': export_log.name,
                          'native_export_log_sha256': sha256(export_log),
-                         'macos_abi_patch_sha256': hashlib.sha256(macos_patch).hexdigest(),
+                         'macos_abi_patch_sha256': hashlib.sha256(platform_patch).hexdigest(),
+                         'native_status_abi_report': abi_report.name,
+                         'native_status_abi_report_sha256': sha256(abi_report)}
+    else:
+        verify_linux_library_abi(library)
+        export_report = {'linux_abi_patch_sha256': hashlib.sha256(platform_patch).hexdigest(),
                          'native_status_abi_report': abi_report.name,
                          'native_status_abi_report_sha256': sha256(abi_report)}
     (args.output / 'build-manifest.json').write_text(json.dumps({

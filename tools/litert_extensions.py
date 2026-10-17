@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_COMMIT = 'b2f686e2ed4718fb84ec398a61dd59ca0f0aff27'
 PATCH = ROOT / 'third_party/litert_lm/stop-token-sequences.patch'
 MACOS_ABI_PATCH = ROOT / 'third_party/litert_lm/macos-trivial-abi.patch'
+LINUX_ABI_PATCH = ROOT / 'third_party/litert_lm/linux-trivial-abi.patch'
 NATIVE_TEST = 'EngineCTest.AppendStopTokenSequencesBeforeConversationConfigCopy'
 LINUX_VENDOR_LIBRARIES = (
     'libGemmaModelConstraintProvider.so', 'libLiteRt.so',
@@ -87,12 +88,19 @@ def verify_extensions_manifest(path, *, platform_name):
     if platform_name == 'darwin':
         if manifest.get('macos_abi_patch_sha256') != file_sha256(MACOS_ABI_PATCH):
             raise ValueError('LiteRT extension macOS accelerator ABI patch is not pinned')
-        abi_report = json.loads(_artifact(path.parent, manifest, 'native_status_abi_report').read_text())
-        if (abi_report.get('status') != 'passed' or abi_report.get('exit_code') != 0 or
-                abi_report.get('stdout', '').strip() != 'vendor_register_return_callback_ok'):
-            raise ValueError('LiteRT extension macOS Status callback ABI regression did not pass')
-    elif manifest.get('macos_abi_patch_sha256') is not None:
-        raise ValueError('macOS accelerator ABI patch cannot describe a Linux build')
+        if manifest.get('linux_abi_patch_sha256') is not None:
+            raise ValueError('Linux accelerator ABI patch cannot describe a macOS build')
+    elif platform_name == 'linux':
+        if manifest.get('macos_abi_patch_sha256') is not None:
+            raise ValueError('macOS accelerator ABI patch cannot describe a Linux build')
+        if manifest.get('linux_abi_patch_sha256') != file_sha256(LINUX_ABI_PATCH):
+            raise ValueError('LiteRT extension Linux accelerator ABI patch is not pinned')
+    else:
+        raise ValueError('Unsupported LiteRT extension release platform')
+    abi_report = json.loads(_artifact(path.parent, manifest, 'native_status_abi_report').read_text())
+    if (abi_report.get('status') != 'passed' or abi_report.get('exit_code') != 0 or
+            abi_report.get('stdout', '').strip() != 'vendor_register_return_callback_ok'):
+        raise ValueError('LiteRT extension Status callback ABI regression did not pass')
     wheel = _artifact(path.parent, manifest, 'wheel')
     library = _artifact(path.parent, manifest, 'library')
     test_log = _artifact(path.parent, manifest, 'native_test_log')
@@ -288,6 +296,8 @@ def validate_linux_extension_dependencies(libraries, destination):
     pinned = {'liblitert-lm.so', *LINUX_VENDOR_LIBRARIES}
     system_roots = [Path(name).resolve() for name in ('/lib', '/lib64', '/usr/lib', '/usr/lib64')]
     for name, location in re.findall(r'\s*(\S+) => (/\S+)', output):
+        if name.startswith(('libstdc++.so', 'libc++.so', 'libc++abi.so')):
+            raise ValueError('LiteRT extension must not dynamically link C++ standard library: ' + name)
         path = Path(location).resolve()
         if name in pinned:
             if path != (destination / name).resolve():
@@ -301,7 +311,7 @@ def validate_linux_extension_dependencies(libraries, destination):
 def write_extension_provenance(bundle, destination):
     keys = ('upstream_commit', 'patch_sha256', 'distribution', 'version',
             'wheel_sha256', 'library_sha256', 'native_test_log_sha256',
-            'vendor_libraries', 'macos_abi_patch_sha256',
+            'vendor_libraries', 'macos_abi_patch_sha256', 'linux_abi_patch_sha256',
             'native_status_abi_report_sha256', 'native_export_log_sha256')
     Path(destination).write_text(json.dumps(
         {key: bundle.manifest[key] for key in keys if key in bundle.manifest}, indent=2) + '\n')

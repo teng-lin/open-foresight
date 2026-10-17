@@ -64,10 +64,10 @@ class ExtensionArtifactsTest(unittest.TestCase):
             'vendor_libraries': {Path(name).name: hashlib.sha256(payload).hexdigest()
                                  for name, payload in vendor_payloads.items()},
             **({'macos_abi_patch_sha256': extensions.file_sha256(extensions.MACOS_ABI_PATCH)}
-               if platform == 'darwin' else {}),
-            **({'native_status_abi_report': abi_report.name,
-                'native_status_abi_report_sha256': extensions.file_sha256(abi_report)}
-               if platform == 'darwin' else {}),
+               if platform == 'darwin' else
+               {'linux_abi_patch_sha256': extensions.file_sha256(extensions.LINUX_ABI_PATCH)}),
+            'native_status_abi_report': abi_report.name,
+            'native_status_abi_report_sha256': extensions.file_sha256(abi_report),
         }
         self.path = self.root / 'manifest.json'
         self.save()
@@ -93,49 +93,61 @@ class ExtensionArtifactsTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'not pinned'):
                     extensions.verify_extensions_manifest(self.path, platform_name='darwin')
 
-    def test_macos_abi_patch_is_required_only_on_macos(self):
-        for value in (None, 'incorrect'):
-            with self.subTest(value=value):
-                self.fixture()
-                self.manifest['macos_abi_patch_sha256'] = value
-                self.save()
-                with self.assertRaisesRegex(ValueError, 'ABI patch is not pinned'):
-                    extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+    def test_platform_abi_patches_are_required_and_cannot_cross_platforms(self):
+        for platform, key in (('darwin', 'macos_abi_patch_sha256'),
+                              ('linux', 'linux_abi_patch_sha256')):
+            for value in (None, 'incorrect'):
+                with self.subTest(platform=platform, value=value):
+                    self.fixture(platform=platform)
+                    self.manifest[key] = value
+                    self.save()
+                    with self.assertRaisesRegex(ValueError, 'ABI patch is not pinned'):
+                        extensions.verify_extensions_manifest(self.path, platform_name=platform)
         self.fixture(platform='linux')
         self.manifest['macos_abi_patch_sha256'] = extensions.file_sha256(extensions.MACOS_ABI_PATCH)
         self.save()
         with self.assertRaisesRegex(ValueError, 'cannot describe a Linux build'):
             extensions.verify_extensions_manifest(self.path, platform_name='linux')
-
-    def test_macos_status_callback_regression_report_is_verified(self):
-        self.fixture()
-        del self.manifest['native_status_abi_report']
+        self.fixture(platform='darwin')
+        self.manifest['linux_abi_patch_sha256'] = extensions.file_sha256(extensions.LINUX_ABI_PATCH)
         self.save()
-        with self.assertRaisesRegex(ValueError, 'filename'):
+        with self.assertRaisesRegex(ValueError, 'cannot describe a macOS build'):
             extensions.verify_extensions_manifest(self.path, platform_name='darwin')
-        for report in ({'status': 'failed', 'exit_code': -10},
-                       {'status': 'passed', 'exit_code': 0, 'stdout': 'wrong fixture'}):
-            with self.subTest(report=report):
-                self.fixture()
-                path = self.root / self.manifest['native_status_abi_report']
-                path.write_text(json.dumps(report))
-                self.manifest['native_status_abi_report_sha256'] = extensions.file_sha256(path)
+
+    def test_status_callback_regression_report_is_verified_on_all_platforms(self):
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform):
+                self.fixture(platform=platform)
+                del self.manifest['native_status_abi_report']
                 self.save()
-                with self.assertRaisesRegex(ValueError, 'ABI regression did not pass'):
-                    extensions.verify_extensions_manifest(self.path, platform_name='darwin')
-        self.fixture()
-        path = self.root / self.manifest['native_status_abi_report']
-        path.write_text('tampered')
-        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
-            extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+                with self.assertRaisesRegex(ValueError, 'filename'):
+                    extensions.verify_extensions_manifest(self.path, platform_name=platform)
+                for report in ({'status': 'failed', 'exit_code': -11},
+                               {'status': 'passed', 'exit_code': 0, 'stdout': 'wrong fixture'}):
+                    self.fixture(platform=platform)
+                    path = self.root / self.manifest['native_status_abi_report']
+                    path.write_text(json.dumps(report))
+                    self.manifest['native_status_abi_report_sha256'] = extensions.file_sha256(path)
+                    self.save()
+                    with self.assertRaisesRegex(ValueError, 'ABI regression did not pass'):
+                        extensions.verify_extensions_manifest(self.path, platform_name=platform)
+                self.fixture(platform=platform)
+                path = self.root / self.manifest['native_status_abi_report']
+                path.write_text('tampered')
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    extensions.verify_extensions_manifest(self.path, platform_name=platform)
 
     def test_packaged_provenance_retains_vendor_and_platform_abi_hashes(self):
-        bundle = extensions.verify_extensions_manifest(self.fixture(), platform_name='darwin')
-        destination = self.root / 'packaged-provenance.json'
-        extensions.write_extension_provenance(bundle, destination)
-        value = json.loads(destination.read_text())
-        for key in ('vendor_libraries', 'macos_abi_patch_sha256', 'native_status_abi_report_sha256'):
-            self.assertEqual(value[key], self.manifest[key])
+        for platform, patch_key in (('darwin', 'macos_abi_patch_sha256'),
+                                    ('linux', 'linux_abi_patch_sha256')):
+            with self.subTest(platform=platform):
+                bundle = extensions.verify_extensions_manifest(self.fixture(platform=platform),
+                                                               platform_name=platform)
+                destination = self.root / f'packaged-provenance-{platform}.json'
+                extensions.write_extension_provenance(bundle, destination)
+                value = json.loads(destination.read_text())
+                for key in ('vendor_libraries', patch_key, 'native_status_abi_report_sha256'):
+                    self.assertEqual(value[key], self.manifest[key])
 
     def test_modified_wheel_library_and_test_log_are_rejected(self):
         for name in ('wheel', 'library', 'native_test_log'):
@@ -318,7 +330,10 @@ class ExtensionArtifactsTest(unittest.TestCase):
         provider = 'libGemmaModelConstraintProvider.so'
         for output in (provider + ' => not found\n',
                        provider + ' => /outside/' + provider + ' (0x0)\n',
-                       'libarbitrary.so => /outside/libarbitrary.so (0x0)\n'):
+                       'libarbitrary.so => /outside/libarbitrary.so (0x0)\n',
+                       'libstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x0)\n',
+                       'libc++.so.1 => /usr/lib/libc++.so.1 (0x0)\n',
+                       'libc++abi.so.1 => /usr/lib/libc++abi.so.1 (0x0)\n'):
             with self.subTest(output=output), patch.object(
                     extensions.subprocess, 'check_output', return_value=output):
                 with self.assertRaises(ValueError):
@@ -329,6 +344,27 @@ class ExtensionArtifactsTest(unittest.TestCase):
             environment = extensions.validate_linux_extension_dependencies([], destination)
         self.assertEqual(environment['LD_LIBRARY_PATH'], str(destination))
         self.assertEqual(check.call_args.kwargs['env']['LD_LIBRARY_PATH'], str(destination))
+
+
+class StatusAbiToolTest(unittest.TestCase):
+    def test_find_linux_libcxx_resolves_static_libraries_and_headers(self):
+        import test_litert_status_abi as status_abi
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'include/c++/v1').mkdir(parents=True)
+            (root / 'include/c++/v1/string').write_text('// header\n')
+            (root / 'lib').mkdir(parents=True)
+            (root / 'lib/libc++.a').write_bytes(b'!<arch>\n')
+            (root / 'lib/libc++abi.a').write_bytes(b'!<arch>\n')
+            with patch.dict(status_abi.os.environ, {'FORESIGHT_LIBCXX_ROOT': str(root)}):
+                inc, lib = status_abi.find_linux_libcxx('nonexistent-clang++')
+            self.assertEqual(inc, (root / 'include/c++/v1').resolve())
+            self.assertEqual(lib, (root / 'lib').resolve())
+            with patch.dict(status_abi.os.environ, {}, clear=True), \
+                    patch.object(status_abi.shutil, 'which', return_value=None), \
+                    patch.object(Path, 'is_file', return_value=False):
+                with self.assertRaisesRegex(RuntimeError, 'libc\\+\\+-dev'):
+                    status_abi.find_linux_libcxx('nonexistent-clang++')
 
 
 if __name__ == '__main__':

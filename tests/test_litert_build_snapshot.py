@@ -36,42 +36,60 @@ class BuildSnapshotTest(unittest.TestCase):
         self.second = self.make_patch('second patch\n')
         self.patch_path = self.root / 'source.patch'
         self.patch_path.write_bytes(self.first)
-        self.abi_patch = self.make_patch('vendor ABI\n', 'z_abi.txt')
-        self.abi_patch_path = self.root / 'macos.patch'
-        self.abi_patch_path.write_bytes(self.abi_patch)
+        self.macos_abi_patch = self.make_patch('macos vendor ABI\n', 'z_abi.txt')
+        self.macos_abi_patch_path = self.root / 'macos.patch'
+        self.macos_abi_patch_path.write_bytes(self.macos_abi_patch)
+        self.linux_abi_patch = self.make_patch('linux vendor ABI\n', 'z_abi.txt')
+        self.linux_abi_patch_path = self.root / 'linux.patch'
+        self.linux_abi_patch_path.write_bytes(self.linux_abi_patch)
 
     def git(self, *args):
         return subprocess.check_output(['git', *args], cwd=self.source, stderr=subprocess.PIPE)
 
+    def diff(self):
+        return self.git('-c', 'core.abbrev=8', 'diff', '--no-ext-diff', '--no-textconv',
+                        '--no-color', '--src-prefix=a/', '--dst-prefix=b/', 'HEAD', '--binary')
+
     def make_patch(self, value, name='input.txt'):
         (self.source / name).write_text(value)
-        result = self.git('diff', 'HEAD', '--binary')
+        result = self.diff()
         self.git('checkout', '--', name)
         return result
 
     def invoke(self, system='Linux'):
         with patch.object(builder, 'COMMIT', self.commit), patch.object(builder, 'PATCH', self.patch_path), \
-                patch.object(builder, 'MACOS_ABI_PATCH', self.abi_patch_path), \
+                patch.object(builder, 'MACOS_ABI_PATCH', self.macos_abi_patch_path), \
+                patch.object(builder, 'LINUX_ABI_PATCH', self.linux_abi_patch_path), \
                 patch.object(builder.platform, 'system', return_value=system), \
                 patch('sys.argv', ['builder', str(self.source), '--apply-only']):
             builder.main()
 
     def test_applied_source_matches_the_captured_patch(self):
-        self.invoke()
+        self.invoke(system='FreeBSD')
         self.assertEqual(self.file.read_text(), 'first patch\n')
-        self.assertEqual(self.git('diff', 'HEAD', '--binary'), self.first)
+        self.assertEqual(self.diff(), self.first)
         self.assertEqual(self.abi_file.read_text(), 'original ABI\n')
 
     def test_macos_patch_applies_after_common_patch_and_is_idempotent(self):
-        self.invoke()
-        self.invoke(system='Darwin')
-        self.invoke(system='Darwin')
-        self.assertEqual(self.git('diff', 'HEAD', '--binary'), self.first + self.abi_patch)
-        self.assertEqual(self.abi_file.read_text(), 'vendor ABI\n')
+        for system, expected_patch, expected_text in (
+            ('Darwin', self.macos_abi_patch, 'macos vendor ABI\n'),
+            ('Linux', self.linux_abi_patch, 'linux vendor ABI\n'),
+        ):
+            with self.subTest(system=system):
+                self.git('checkout', '--', 'input.txt', 'z_abi.txt')
+                self.invoke(system='FreeBSD')
+                self.invoke(system=system)
+                self.invoke(system=system)
+                self.assertEqual(self.diff(), self.first + expected_patch)
+                self.assertEqual(self.abi_file.read_text(), expected_text)
 
     def test_clean_macos_source_gets_both_pinned_patches(self):
-        self.invoke(system='Darwin')
-        self.assertEqual(self.git('diff', 'HEAD', '--binary'), self.first + self.abi_patch)
+        for system, expected_patch in (('Darwin', self.macos_abi_patch),
+                                       ('Linux', self.linux_abi_patch)):
+            with self.subTest(system=system):
+                self.git('checkout', '--', 'input.txt', 'z_abi.txt')
+                self.invoke(system=system)
+                self.assertEqual(self.diff(), self.first + expected_patch)
 
     def test_source_attestation_ignores_git_display_defaults(self):
         # A shallow hosted checkout defaults to seven-character IDs; global
@@ -79,10 +97,14 @@ class BuildSnapshotTest(unittest.TestCase):
         self.git('config', 'core.abbrev', '7')
         self.git('config', 'diff.noprefix', 'true')
         self.git('config', 'color.ui', 'always')
-        self.invoke(system='Darwin')
-        self.invoke(system='Darwin')
-        self.assertEqual(self.file.read_text(), 'first patch\n')
-        self.assertEqual(self.abi_file.read_text(), 'vendor ABI\n')
+        for system, expected_text in (('Darwin', 'macos vendor ABI\n'),
+                                      ('Linux', 'linux vendor ABI\n')):
+            with self.subTest(system=system):
+                self.git('checkout', '--', 'input.txt', 'z_abi.txt')
+                self.invoke(system=system)
+                self.invoke(system=system)
+                self.assertEqual(self.file.read_text(), 'first patch\n')
+                self.assertEqual(self.abi_file.read_text(), expected_text)
 
     def test_patch_changed_between_read_and_apply_is_rejected(self):
         original_run = builder.run
@@ -96,6 +118,22 @@ class BuildSnapshotTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'changed from the verified'):
                 self.invoke()
         self.assertEqual(self.file.read_text(), 'second patch\n')
+
+    def test_verify_linux_library_abi_rejects_dynamic_stdlib_and_glibcxx_needs(self):
+        for dynamic, versions in (
+            ('0x1 (NEEDED) Shared library: [libstdc++.so.6]\n', 'Version needs section\n'),
+            ('0x1 (NEEDED) Shared library: [libc++.so.1]\n', 'Version needs section\n'),
+            ('0x1 (NEEDED) Shared library: [libc.so.6]\n', 'Version needs section\n  Name: GLIBCXX_3.4.30\n'),
+            ('0x1 (NEEDED) Shared library: [libc.so.6]\n', 'Version needs section\n  Name: CXXABI_1.3\n'),
+        ):
+            with self.subTest(dynamic=dynamic, versions=versions), patch.object(
+                    builder.subprocess, 'check_output', side_effect=[dynamic, versions]):
+                with self.assertRaisesRegex(RuntimeError, 'Linux LiteRT library must not'):
+                    builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
+        with patch.object(builder.subprocess, 'check_output', side_effect=[
+                '0x1 (NEEDED) Shared library: [libc.so.6]\n',
+                'Version needs section\n  Name: GLIBC_2.34\n']):
+            builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
 
 
 if __name__ == '__main__':
