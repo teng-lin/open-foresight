@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -59,8 +60,8 @@ def copy_python(source, resources, values, extensions=None):
     if not Path(base).resolve().is_relative_to(source.resolve()) or not Path(stdlib).resolve().is_relative_to(source.resolve()):
         raise ValueError('Use a standalone Python runtime, not a venv linked to system/Homebrew Python')
     lock = ROOT / 'requirements-litert-macos.lock'
-    expected = dict(line.split('==', 1) for line in lock.read_text().splitlines()
-                    if line.strip() and not line.startswith('#'))
+    expected = dict(re.findall(r'^([A-Za-z0-9_.-]+)==([^\s\\]+)',
+                               lock.read_text(), re.MULTILINE))
     query = ('import sys,json,importlib.metadata as m; '
              'print(json.dumps([list(sys.version_info[:2]),'
              '{name:m.version(name) for name in sys.argv[1:]}]))')

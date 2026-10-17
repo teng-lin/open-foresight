@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -58,6 +59,30 @@ verify_descriptor.verify('must-not-execute-protoc')
 
 
 class BuildPolicyTests(unittest.TestCase):
+    def test_macos_runtime_checks_versions_from_the_hashed_lock(self):
+        sys.path.insert(0, str(ROOT / 'tools'))
+        import package_macos
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / 'bin').mkdir()
+            (source / 'bin/python3').touch()
+            checked = {}
+
+            def query(*args):
+                if 'sys.base_prefix' in args[3]:
+                    return json.dumps([str(source), str(source / 'lib')])
+                checked.update(dict.fromkeys(args[4:]))
+                # Stop after the metadata check; no macOS runtime is needed.
+                return json.dumps([[3, 12], {}])
+
+            with patch.object(package_macos, 'run', side_effect=query):
+                with self.assertRaisesRegex(ValueError, 'Use Python 3.13'):
+                    package_macos.copy_python(source, source / 'resources', {})
+            self.assertIn('litert-lm', checked)
+            self.assertIn('numpy', checked)
+            self.assertTrue(all(re.fullmatch(r'[A-Za-z0-9_.-]+', name)
+                                for name in checked))
+
     def test_every_python_lock_requirement_has_hashes(self):
         for path in ROOT.glob('requirements-*.lock'):
             text = re.sub(r'\\\n\s*', ' ', path.read_text())
