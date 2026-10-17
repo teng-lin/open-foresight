@@ -44,7 +44,7 @@ awaits document-label insertion, clears the controller, awaits propagation,
 reloads data and runs organization. `_removeLabelFromSelectedDocument (_2)` at
 `0x100988ee4` awaits per-document removal then reloads; it does not propagate or
 run organization. The existing editor's focus-loss draft retention is covered
-in [the label trace](reference-source-labels.md).
+in [the label trace](../research/reference-source-labels.md).
 
 `_loadData` at `0x1009880fc` uses `DocumentGraphDataLoader.loadData`
 (`0x10094b7f0`), whose recovered calls acquire persisted document embeddings,
@@ -77,7 +77,7 @@ save dialogs and physical gesture latency still need live comparison. Original
 locale initialization policy, pixel-level renderer parity and all graph input
 sensitivity constants are not established by this pass. The existing single-note
 original export capture and recovered composer contract remain documented in
-[the export trace](reference-meeting-export.md).
+[the export trace](../notes/reference-meeting-export.md).
 
 Validation: 31 desktop tests pass across `meeting_export_test`,
 `graph_workflow_test`, `graph_restore_workflow_test`,

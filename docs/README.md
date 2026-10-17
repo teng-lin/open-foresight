@@ -10,6 +10,7 @@ runs rather than the current test suite.
 - [Application service and MCP](architecture/application-service.md)
 - [Linux packaging and CI](platforms/linux-packaging.md)
 - [macOS build, bundle, and installation](platforms/macos-support.md)
+- [macOS CI timing and parallel gates](platforms/ci-performance.md)
 - [macOS support plan and remaining acceptance gates](platforms/macos-support-plan.md)
 - [macOS audio feasibility](platforms/macos-audio-feasibility.md)
 - [Windows support plan](platforms/windows-support-plan.md)
@@ -21,11 +22,13 @@ runs rather than the current test suite.
 - [Production models and packaged runtime acceptance](validation/reference-production-runtime-acceptance.md)
 - [Native inference replacement validation](validation/native-inference-validation.md)
 - [Desktop UI parity validation](validation/ui-parity-validation.md)
+- [Exact desktop UI behavior](validation/reference-exact-ui-behavior.md)
 
 ## Models and inference
 
 - [Speech models](models/speech-models.md)
 - [Model acquisition and encrypted storage](models/reference-model-acquisition.md)
+- [Distribution asset and vision startup lifecycle](models/reference-model-lifecycle.md)
 - [Dedicated query runtime investigation](models/reference-query-runtime.md)
 - [Legacy detector runtime](models/reference-legacy-detector-runtime.md)
 - [Tokenizer evidence](models/reference-tokenizer.md)
@@ -50,7 +53,9 @@ runs rather than the current test suite.
 - [Enhancement planning and merging](notes/reference-note-enhancement-planning.md)
 - [Live enhancement scheduling](notes/reference-note-live-scheduling.md)
 - [Note service readiness and recovery](notes/reference-note-service-recovery.md)
+- [Note enhancement cleanup and error edges](notes/reference-note-enhancement-error-edges.md)
 - [Transcript cache and enhancement lifecycle](notes/reference-note-lifecycle.md)
+- [Saved transcript parsing](notes/reference-saved-transcript-parsing.md)
 - [Note saving](notes/reference-note-save.md)
 - [Meeting Markdown export](notes/reference-meeting-export.md)
 
