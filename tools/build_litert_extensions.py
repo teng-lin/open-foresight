@@ -86,7 +86,16 @@ def main():
     commit = run(source, 'git', 'rev-parse', 'HEAD', capture=True).decode().strip()
     if commit != COMMIT:
         parser.error(f'Source must be exactly {COMMIT}')
-    diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
+    def source_diff():
+        # Patch files use eight-character blob IDs. Git's automatic abbreviation
+        # differs between a shallow CI checkout and a full developer checkout;
+        # user diff formatting must not change this exact source attestation.
+        return run(source, 'git', '-c', 'core.abbrev=8',
+                   'diff', '--no-ext-diff', '--no-textconv', '--no-color',
+                   '--src-prefix=a/', '--dst-prefix=b/', 'HEAD', '--binary',
+                   capture=True)
+
+    diff = source_diff()
     patch = PATCH.read_bytes()
     patch_digest = hashlib.sha256(patch).hexdigest()
     macos_patch = MACOS_ABI_PATCH.read_bytes() if platform.system() == 'Darwin' else b''
@@ -104,7 +113,7 @@ def main():
             run(source, 'git', 'apply', str(MACOS_ABI_PATCH))
     def verify_source_snapshot():
         current_commit = run(source, 'git', 'rev-parse', 'HEAD', capture=True).decode().strip()
-        current_diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
+        current_diff = source_diff()
         if current_commit != COMMIT or current_diff != expected_patch:
             raise RuntimeError('LiteRT source changed from the verified commit/patch snapshot')
 
