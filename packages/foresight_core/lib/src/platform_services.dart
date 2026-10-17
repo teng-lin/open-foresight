@@ -101,20 +101,54 @@ void privateDirectory(String path) {
   }
 }
 
-/// Protect only a temporary directory freshly created by this operation.
-/// Dart's Linux createTemp honors umask and can otherwise produce mode 0755.
+final _mkdtemp = DynamicLibrary.process()
+    .lookupFunction<
+      Pointer<Utf8> Function(Pointer<Utf8>),
+      Pointer<Utf8> Function(Pointer<Utf8>)
+    >('mkdtemp');
+
+/// Create a temporary directory atomically with mode 0700 via POSIX mkdtemp.
+/// Dart's Linux createTemp honors umask and can otherwise expose mode 0755.
 /// Keep privateDirectory strict for existing caller-supplied directories.
 Future<Directory> createPrivateTempDirectory(
   Directory parent,
   String prefix,
 ) async {
-  final directory = await parent.createTemp(prefix);
+  if (prefix.contains('/')) {
+    throw ArgumentError.value(
+      prefix,
+      'prefix',
+      'Temporary directory prefix must not contain path separators',
+    );
+  }
+  final template = '${parent.path}/${prefix}XXXXXX'.toNativeUtf8();
+  final String createdPath;
   try {
-    final result = await Process.run('/bin/chmod', ['700', directory.path]);
-    if (result.exitCode != 0) {
-      throw StateError('Cannot protect ${directory.path}');
+    final result = _mkdtemp(template);
+    if (result == nullptr) {
+      throw FileSystemException(
+        'Cannot create private temporary directory',
+        parent.path,
+      );
+    }
+    createdPath = result.toDartString();
+  } finally {
+    calloc.free(template);
+  }
+  final directory = Directory(createdPath);
+  try {
+    if ((directory.statSync().mode & 0x1ff) != 0x1c0) {
+      final result = await Process.run('/bin/chmod', ['700', directory.path]);
+      if (result.exitCode != 0) {
+        throw StateError('Cannot protect ${directory.path}');
+      }
     }
     privateDirectory(directory.path);
+    if (directory.listSync(followLinks: false).isNotEmpty) {
+      throw StateError(
+        'Private temporary directory must be empty: ${directory.path}',
+      );
+    }
     return directory;
   } catch (_) {
     await directory.delete(recursive: true);

@@ -197,6 +197,14 @@ void main() {
       expect(modes['publicRejected'], isTrue);
       expect(modes['linkRejected'], isTrue);
       expect(scratch.listSync(), isEmpty);
+      await expectLater(
+        createPrivateTempDirectory(scratch, '../escape-'),
+        throwsArgumentError,
+      );
+      await expectLater(
+        createPrivateTempDirectory(Directory('${scratch.path}/missing'), 'p-'),
+        throwsA(isA<FileSystemException>()),
+      );
     },
   );
 
