@@ -1136,8 +1136,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   Future<void> chooseDrive({bool folder = false}) async {
-    if (!googleAuth.connected)
-      throw StateError('Connect Google in Settings first.');
+    if (!googleAuth.connected) await connectGoogle();
+    if (!mounted || !googleAuth.connected) return;
     final selection = await showDialog<List<String>>(
       context: context,
       builder: (_) => GoogleDrivePicker(google, folder: folder),

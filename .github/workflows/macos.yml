@@ -7,6 +7,8 @@ on:
   workflow_dispatch:
   workflow_call:
     secrets:
+      FORESIGHT_GOOGLE_CLIENT_JSON:
+        required: false
       FORESIGHT_SEARCH_API_KEY:
         required: false
       FORESIGHT_WEB_CONTENT_API_KEY:
@@ -133,15 +135,24 @@ jobs:
         run: .venv/bin/python tools/clean_macos_runtime_sources.py
       - name: Assemble complete ad hoc application
         env:
+          FORESIGHT_GOOGLE_CLIENT_JSON: ${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
+          REQUIRE_GOOGLE_CLIENT: ${{ inputs.package-release }}
           FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
           FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
         run: |
-          .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
+          task_args=()
+          if [[ "$REQUIRE_GOOGLE_CLIENT" == 'true' ]]; then task_args+=(--require-google-client); fi
+          .venv/bin/python tools/package_macos.py "${task_args[@]}" --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
             --python-runtime build/macos-runtimes/python \
             --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
             --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
             --whisper-license build/macos-runtimes/whisper/LICENSE
           codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
+          if [[ -n "$FORESIGHT_GOOGLE_CLIENT_JSON" ]]; then
+            task_resources="$PWD/dist/Open Foresight.app/Contents/Resources"
+            (cd packages/foresight_core && env -u FORESIGHT_GOOGLE_CLIENT_JSON \
+              FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_google_configuration.dart)
+          fi
       - name: Verify bundled inference without developer environment
         run: |
           .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \

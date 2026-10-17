@@ -131,8 +131,10 @@ jobs:
           build-args: |
             SDK_IMAGE=${{ needs.sdk.outputs.image }}
             SOURCE_REVISION=${{ github.sha }}
+            REQUIRE_GOOGLE_CLIENT=1
             DISTRIBUTION_CONFIG_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
           secrets: |
+            google_client=${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
             foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
             foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
           cache-from: type=gha,scope=linux-packages-x86-64

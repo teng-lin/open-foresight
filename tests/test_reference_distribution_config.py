@@ -18,6 +18,22 @@ class ReferenceDistributionTest(unittest.TestCase):
             binary.write_bytes(b'different release')
             with self.assertRaisesRegex(ValueError, 'Reference build differs'):
                 config.read_configuration(binary)
+            with self.assertRaisesRegex(ValueError, 'Reference build differs'):
+                config.read_google_configuration(binary)
+
+    def test_google_configuration_reads_only_verified_application_bytes(self):
+        client_id = b'123456789012-abcdefghijklmnopqrstuvwxyz123456.apps.googleusercontent.com'
+        self.assertEqual(len(client_id), 72)
+        secret = b'GOCSPX-' + b'x' * 28
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / 'Foresight'
+            binary.write_bytes(client_id + secret)
+            with patch.object(config, 'reference_bytes', return_value=binary.read_bytes()), \
+                 patch.object(config, 'GOOGLE_CLIENT_ID_OFFSET', 0), \
+                 patch.object(config, 'GOOGLE_CLIENT_SECRET_OFFSET', 72):
+                result = config.read_google_configuration(binary)
+            self.assertEqual(result['installed']['client_id'], client_id.decode())
+            self.assertEqual(result['installed']['client_secret'], secret.decode())
 
     def test_private_output_is_exclusive_and_not_world_readable(self):
         with tempfile.TemporaryDirectory() as directory:

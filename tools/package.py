@@ -12,6 +12,7 @@ from litert_extensions import (verify_extensions_manifest, file_sha256,
     probe_native_extensions, write_extension_provenance,
     copy_linux_extension_dependencies, validate_linux_extension_dependencies)
 from prepare_onnx import LIBRARY_SHA256 as ONNX_LIBRARY_SHA256
+from google_client_release import release_google_client, write_google_client
 from app_version import read_version
 from query_worker_packaging import copy_worker as copy_query_worker, copy_runtime as copy_query_runtime
 from web_search_release import release_web_search_keys, shell_web_search_keys
@@ -25,6 +26,8 @@ def main():
                         default=ROOT / 'apps/desktop/build/linux/x64/release/bundle')
     parser.add_argument('--output', type=Path, default=ROOT / 'dist/open-foresight')
     parser.add_argument('--google-client', type=Path, help='Optional application OAuth configuration; never account tokens')
+    parser.add_argument('--require-google-client', action='store_true',
+                        help='Reject a release that would send users to Cloud Console setup')
     parser.add_argument('--revision', help='Source commit for exported trees without .git')
     parser.add_argument('--litert-library', type=Path, default=ROOT / 'build/lib/liblitert-lm.so', help='Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py')
     parser.add_argument('--litert-extensions-manifest', type=Path,
@@ -38,6 +41,7 @@ def main():
     parser.add_argument('--whisper-gpu-device', type=int, default=0,
                         help='Whisper Vulkan device index; override at launch with FORESIGHT_WHISPER_DEVICE')
     args = parser.parse_args()
+    google_client = release_google_client(args.google_client, required=args.require_google_client)
     web_search_keys = release_web_search_keys()
     assert args.whisper_gpu_device >= 0
     helper = args.build / 'services/helper/ForesightHelper'
@@ -106,15 +110,8 @@ def main():
         query_python.chmod(0o755)
     litert_runtime = {'kind': 'native', 'version': '0.18.0', 'runner': 'bin/foresight-model',
                       'library': 'lib/liblitert-lm.so', 'sha256': hashlib.sha256(args.litert_library.read_bytes()).hexdigest()}
-    client = args.google_client
-    if client is not None:
-        configuration = json.loads(client.read_text())
-        assert set(configuration) == {'installed'} and 'client_id' in configuration['installed'], 'Use application OAuth configuration, never account tokens'
-        installed = configuration['installed']
-        assert isinstance(installed['client_id'], str) and isinstance(installed.get('client_secret', ''), str), 'Invalid application OAuth configuration'
-        (args.output / 'share/open-foresight/google-client.json').write_text(json.dumps({'installed': {
-            'client_id': installed['client_id'], 'client_secret': installed.get('client_secret', '')}}))
-        (args.output / 'share/open-foresight/google-client.json').chmod(0o600)
+    if google_client is not None:
+        write_google_client(args.output / 'share/open-foresight/google-client.json', google_client)
     # Bundle helper inference/protocol dependencies, keep the Linux C ABI and desktop
     # GTK stack as explicit host prerequisites. ldd is run only on our built binaries.
     dependencies = subprocess.check_output(['ldd', str(helper), str(native), str(worker), str(args.litert_library), str(args.onnx_library)], text=True, env=environment)

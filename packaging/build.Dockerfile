@@ -27,11 +27,13 @@ RUN test -n "$SOURCE_REVISION" && \
 # Secret contents do not invalidate BuildKit caches; refresh this final packaging
 # layer for each release attempt so rotating distribution settings takes effect.
 ARG DISTRIBUTION_CONFIG_REVISION=local
+ARG REQUIRE_GOOGLE_CLIENT=0
 RUN --mount=type=secret,id=google_client \
     --mount=type=secret,id=foresight_search_api_key \
     --mount=type=secret,id=foresight_web_content_api_key \
     test -n "$DISTRIBUTION_CONFIG_REVISION"; \
-    task_args=(); if [[ -f /run/secrets/google_client ]]; then task_args+=(--google-client /run/secrets/google_client); fi; \
+    task_args=(); if [[ "$REQUIRE_GOOGLE_CLIENT" == 1 ]]; then task_args+=(--require-google-client); fi; \
+    if [[ -f /run/secrets/google_client ]]; then task_args+=(--google-client /run/secrets/google_client); fi; \
     if [[ -f /run/secrets/foresight_search_api_key ]]; then export FORESIGHT_SEARCH_API_KEY="$(cat /run/secrets/foresight_search_api_key)"; fi; \
     if [[ -f /run/secrets/foresight_web_content_api_key ]]; then export FORESIGHT_WEB_CONTENT_API_KEY="$(cat /run/secrets/foresight_web_content_api_key)"; fi; \
     /opt/dev-python/bin/python tools/package.py --output dist/open-foresight \
