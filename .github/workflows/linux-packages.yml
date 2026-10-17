@@ -30,7 +30,7 @@ jobs:
       - name: Find content-addressed SDK
         id: sdk
         env:
-          SDK_HASH: ${{ hashFiles('packaging/sdk.Dockerfile', 'packaging/minimal-grpc.cmake', 'requirements-dev.lock', 'requirements-litert.lock', 'tools/build_whisper_vulkan.py') }}
+          SDK_HASH: ${{ hashFiles('packaging/sdk.Dockerfile', 'packaging/minimal-grpc.cmake', 'requirements-dev.lock', 'requirements-litert.lock', 'tools/build_whisper_vulkan.py', 'tools/build_litert_extensions.py', 'third_party/litert_lm/stop-token-sequences.patch') }}
         run: |
           image="ghcr.io/${GITHUB_REPOSITORY,,}/linux-sdk:$SDK_HASH"
           echo "image=$image" >> "$GITHUB_OUTPUT"

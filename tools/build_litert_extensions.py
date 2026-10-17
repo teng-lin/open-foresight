@@ -17,6 +17,15 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = 'b2f686e2ed4718fb84ec398a61dd59ca0f0aff27'
 PATCH = ROOT / 'third_party/litert_lm/stop-token-sequences.patch'
+MACOS_ABI_PATCH = ROOT / 'third_party/litert_lm/macos-trivial-abi.patch'
+# Keep this standalone builder's closure aligned with the release verifier.
+VENDOR_BASENAMES = (
+    'libGemmaModelConstraintProvider', 'libLiteRt',
+    'libLiteRtWebGpuAccelerator', 'libLiteRtTopKWebGpuSampler', 'libwebgpu_dawn',
+)
+MACOS_VENDOR_BASENAMES = VENDOR_BASENAMES + (
+    'libLiteRtMetalAccelerator', 'libLiteRtTopKMetalSampler',
+)
 
 
 def run(source, *args, capture=False):
@@ -42,6 +51,28 @@ def require_materialized_prebuilts(source, directory, suffix):
                     'in the source checkout before building.')
 
 
+def wheel_vendor_hashes(archive, system):
+    """Reject incomplete wheels before publishing their provenance manifest."""
+    basenames = MACOS_VENDOR_BASENAMES if system == 'Darwin' else VENDOR_BASENAMES
+    suffix = '.dylib' if system == 'Darwin' else '.so'
+    result = {}
+    for base in basenames:
+        name = base + suffix
+        entry = 'litert_lm/' + name
+        if entry not in archive.namelist() or archive.getinfo(entry).file_size == 0:
+            raise RuntimeError('Built wheel lacks required GPU runtime dependency: ' + name)
+        digest = hashlib.sha256()
+        with archive.open(entry) as stream:
+            first = stream.read(128)
+            if first.startswith(b'version https://git-lfs.github.com/spec/v1\n'):
+                raise RuntimeError('Built wheel contains a Git LFS pointer: ' + name)
+            digest.update(first)
+            for block in iter(lambda: stream.read(1024 * 1024), b''):
+                digest.update(block)
+        result[name] = digest.hexdigest()
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, help='Checkout of google-ai-edge/LiteRT-LM')
@@ -57,11 +88,27 @@ def main():
         parser.error(f'Source must be exactly {COMMIT}')
     diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
     patch = PATCH.read_bytes()
-    if diff != patch:
+    patch_digest = hashlib.sha256(patch).hexdigest()
+    macos_patch = MACOS_ABI_PATCH.read_bytes() if platform.system() == 'Darwin' else b''
+    expected_patch = patch + macos_patch
+    if diff == patch and macos_patch:
+        run(source, 'git', 'apply', '--check', str(MACOS_ABI_PATCH))
+        run(source, 'git', 'apply', str(MACOS_ABI_PATCH))
+    elif diff != expected_patch:
         if diff:
             parser.error('Source has unrelated changes; use a clean checkout')
         run(source, 'git', 'apply', '--check', str(PATCH))
         run(source, 'git', 'apply', str(PATCH))
+        if macos_patch:
+            run(source, 'git', 'apply', '--check', str(MACOS_ABI_PATCH))
+            run(source, 'git', 'apply', str(MACOS_ABI_PATCH))
+    def verify_source_snapshot():
+        current_commit = run(source, 'git', 'rev-parse', 'HEAD', capture=True).decode().strip()
+        current_diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
+        if current_commit != COMMIT or current_diff != expected_patch:
+            raise RuntimeError('LiteRT source changed from the verified commit/patch snapshot')
+
+    verify_source_snapshot()
     if args.apply_only:
         return
     version = run(source, args.bazel, '--version', capture=True).decode().strip()
@@ -77,7 +124,9 @@ def main():
                   '--define=wheel_platform=macos_arm64']
     elif platform.system() == 'Linux' and platform.machine() == 'x86_64':
         require_materialized_prebuilts(source, 'linux_x86_64', '.so')
-        flags += ['--define=wheel_platform=linux_x86_64']
+        # Exercise the same PIC objects that the shipped shared C API uses,
+        # avoiding a second full runtime compilation after the native test.
+        flags += ['--force_pic', '--define=wheel_platform=linux_x86_64']
     else:
         parser.error('Supported build hosts are macOS arm64 and Linux x86_64')
     test = bazel + ['test', *flags, '//c:engine_test',
@@ -95,6 +144,7 @@ def main():
     # has no setter and must never be substituted for this source build.
     build = bazel + ['build', *flags, '//python/litert_lm:wheel']
     run(source, *build)
+    verify_source_snapshot()
     wheels = list((source / 'bazel-bin/python/litert_lm').glob('*.whl'))
     if len(wheels) != 1:
         raise RuntimeError('Expected exactly one built API wheel')
@@ -105,6 +155,7 @@ def main():
         package = BytesParser().parsebytes(archive.read(metadata[0]))
         if package['Name'] != 'litert-lm-api' or package['Version'] != '0.18.0':
             raise RuntimeError('Built wheel must be litert-lm-api==0.18.0')
+        vendor_libraries = wheel_vendor_hashes(archive, platform.system())
     args.output.mkdir(parents=True, exist_ok=True)
     retained_test_log = args.output / 'native-stop-config-test.log'
     shutil.copy2(test_log, retained_test_log)
@@ -120,14 +171,39 @@ def main():
         with archive.open(entries[0]) as source_stream, temporary.open('wb') as output_stream:
             shutil.copyfileobj(source_stream, output_stream)
         temporary.replace(library)
+    export_report = {}
+    if platform.system() == 'Darwin':
+        # The vendor accelerator expects trivial-ABI Status returns. Verify
+        # the actual patched headers selected by this build across a DSO call.
+        from test_litert_status_abi import verify_status_abi
+        output_base = Path(run(source, *bazel, 'info', 'output_base', capture=True).decode().strip())
+        abi_directory = args.output / 'native-status-abi'
+        verify_status_abi(output_base / 'external/com_google_absl', abi_directory)
+        abi_report = args.output / 'native-status-abi-report.json'
+        shutil.copy2(abi_directory / 'report.json', abi_report)
+        exported = subprocess.check_output(['/usr/bin/nm', '-gUj', str(library)], text=True)
+        symbols = set(exported.splitlines())
+        required = {'_litert_lm_engine_create', '_litert_lm_embedding_engine_create',
+                    '_litert_lm_session_config_add_stop_token_sequence'}
+        if not required <= symbols or any(not name.startswith('_litert_lm_') for name in symbols):
+            raise RuntimeError('macOS LiteRT library must export only the public C API')
+        export_log = args.output / 'native-exported-symbols.txt'
+        export_log.write_text(exported)
+        export_report = {'native_export_log': export_log.name,
+                         'native_export_log_sha256': sha256(export_log),
+                         'macos_abi_patch_sha256': hashlib.sha256(macos_patch).hexdigest(),
+                         'native_status_abi_report': abi_report.name,
+                         'native_status_abi_report_sha256': sha256(abi_report)}
     (args.output / 'build-manifest.json').write_text(json.dumps({
-        'upstream_commit': COMMIT, 'patch_sha256': sha256(PATCH),
+        'upstream_commit': COMMIT, 'patch_sha256': patch_digest,
         'distribution': package['Name'], 'version': package['Version'],
         'wheel': destination.name, 'wheel_sha256': sha256(destination),
         'library': library.name, 'library_sha256': sha256(library),
+        'vendor_libraries': vendor_libraries,
         'native_test_log': retained_test_log.name,
         'native_test_log_sha256': sha256(retained_test_log),
         'native_test_command': test, 'build_command': build,
+        **export_report,
     }, indent=2) + '\n')
     print(destination)
 

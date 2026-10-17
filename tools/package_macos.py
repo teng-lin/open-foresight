@@ -119,6 +119,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.litert_extensions_manifest and not args.python_runtime:
         parser.error('--litert-extensions-manifest requires --python-runtime')
+    if args.python_runtime and not args.litert_extensions_manifest:
+        parser.error('Bundled note enhancement requires --litert-extensions-manifest '
+                     'from tools/build_litert_extensions.py; the stock runtime lacks native stop sequences')
     extensions = (verify_extensions_manifest(args.litert_extensions_manifest, platform_name='darwin')
                   if args.litert_extensions_manifest else None)
     web_search_keys = release_web_search_keys()

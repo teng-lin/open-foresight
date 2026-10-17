@@ -6,6 +6,72 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'meeting invalidation preserves another complete cached meeting',
+    () async {
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (_) async => [1],
+        currentIsLive: (_) => false,
+        loadSavedTranscript: (id) async => 'Reloaded $id',
+      );
+      await cache.schedule(1, 'Old one', isLive: false);
+      await cache.schedule(2, 'Retained two', isLive: false);
+      final retained = cache.getCachedChunks(2);
+      cache.invalidate(1);
+      expect(cache.getCachedChunks(1), isEmpty);
+      expect(identical(cache.getCachedChunks(2), retained), isTrue);
+      expect((await cache.getEmbeddedChunks(1)).single.text, 'Reloaded 1');
+      expect((await cache.getEmbeddedChunks(2)).single.text, 'Retained two');
+    },
+  );
+
+  test(
+    'meeting invalidation prevents a blocked saved load from scheduling stale text',
+    () async {
+      final oldLoad = Completer<String>();
+      var loads = 0;
+      final embedded = <String>[];
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async {
+          embedded.add(text);
+          return [1];
+        },
+        currentIsLive: (_) => false,
+        loadSavedTranscript: (_) async =>
+            ++loads == 1 ? await oldLoad.future : 'New transcript',
+      );
+      final obsolete = cache.getEmbeddedChunks(1);
+      cache.invalidate(1);
+      oldLoad.complete('Old transcript');
+      expect(await obsolete, isEmpty);
+      expect(cache.getCachedChunks(1), isEmpty);
+      expect(embedded, isEmpty);
+      expect((await cache.getEmbeddedChunks(1)).single.text, 'New transcript');
+      expect(embedded, ['New transcript']);
+    },
+  );
+
+  test(
+    'meeting invalidation prevents old live reader from observing replacement entry',
+    () async {
+      final oldEmbedding = Completer<List<double>>();
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async =>
+            text == 'Old' ? await oldEmbedding.future : [2],
+        currentIsLive: (_) => true,
+        loadSavedTranscript: (_) async => '',
+      );
+      final work = cache.schedule(1, 'Old', isLive: true);
+      final obsolete = cache.getEmbeddedChunks(1);
+      cache.invalidate(1);
+      await cache.schedule(1, 'New', isLive: true);
+      oldEmbedding.complete([1]);
+      await work;
+      expect(await obsolete, isEmpty);
+      expect(cache.getCachedChunks(1).single.text, 'New');
+    },
+  );
+
+  test(
     'workspace clear discards saved loads before they can schedule old text',
     () async {
       final oldLoad = Completer<String>();
@@ -300,20 +366,62 @@ void main() {
   );
 
   test(
-    'propagates embedding errors and retains failed running future',
+    'propagates embedding failure and permits a later saved read to recover',
     () async {
       final error = StateError('embedding failed');
+      var attempts = 0;
       final cache = ReferenceNoteTranscriptCache(
-        computeEmbedding: (_) async => throw error,
+        computeEmbedding: (_) async {
+          if (++attempts == 1) throw error;
+          return [2];
+        },
+        currentIsLive: (_) => false,
+        loadSavedTranscript: (_) async => 'saved evidence',
+      );
+      await expectLater(cache.getEmbeddedChunks(1), throwsA(same(error)));
+      final recovered = await cache.getEmbeddedChunks(1);
+      expect(recovered.single.text, 'saved evidence');
+      expect(recovered.single.embedding, [2]);
+      expect(attempts, 2);
+    },
+  );
+
+  test(
+    'failure rejects shared pending callers without starting their work; '
+    'the next schedule replaces stale pending text and retains prior chunks',
+    () async {
+      final error = StateError('embedding failed');
+      final gate = Completer<List<double>>();
+      final texts = <String>[];
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async {
+          texts.add(text);
+          return text == 'blocked failure' ? await gate.future : [1];
+        },
         currentIsLive: (_) => true,
         loadSavedTranscript: (_) async => '',
       );
-      final work = cache.schedule(1, 'first', isLive: true);
-      await expectLater(work, throwsA(same(error)));
-      final next = cache.schedule(1, 'next', isLive: true);
-      expect(identical(next, work), isTrue);
-      await expectLater(next, throwsA(same(error)));
-      await expectLater(cache.getEmbeddedChunks(1), throwsA(same(error)));
+      await cache.schedule(1, 'previous accepted', isLive: true);
+      final work = cache.schedule(1, 'blocked failure', isLive: true);
+      final pending = cache.schedule(1, 'stale pending', isLive: true);
+      expect(identical(work, pending), isTrue);
+      final failedWork = expectLater(work, throwsA(same(error)));
+      final failedPending = expectLater(pending, throwsA(same(error)));
+      gate.completeError(error);
+      await Future.wait([failedWork, failedPending]);
+      expect(cache.getCachedChunks(1).single.text, 'previous accepted');
+      final next = cache.schedule(1, 'newest transcript', isLive: true);
+      expect(identical(next, work), isFalse);
+      await next;
+      expect(
+        (await cache.getEmbeddedChunks(1)).single.text,
+        'newest transcript',
+      );
+      expect(texts, [
+        'previous accepted',
+        'blocked failure',
+        'newest transcript',
+      ]);
     },
   );
 }

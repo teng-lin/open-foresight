@@ -5,12 +5,15 @@ are relative to the actual loading binary, including nested service/Python
 executables, so Finder and MCP hosts need no DYLD_* environment variables.
 """
 from pathlib import Path
+import ctypes
+from functools import lru_cache
 import os
 import re
 import shutil
 import subprocess
 import plistlib
 import tempfile
+import sys
 
 MACHO = {b'\xcf\xfa\xed\xfe', b'\xce\xfa\xed\xfe', b'\xfe\xed\xfa\xcf',
          b'\xfe\xed\xfa\xce', b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
@@ -45,7 +48,20 @@ def system_library(name):
     return os.path.normpath(name).startswith(('/System/Library/', '/usr/lib/'))
 
 
-def resolve_dependency(name, owner, app, executable=None, inherited_rpaths=()):
+@lru_cache(maxsize=None)
+def shared_cache_library(path):
+    """Validate cache-only system libraries without accepting invented paths."""
+    if sys.platform != 'darwin' or not system_library(str(path)):
+        return False
+    try:
+        contains = ctypes.CDLL('/usr/lib/libSystem.B.dylib')._dyld_shared_cache_contains_path
+        contains.argtypes, contains.restype = [ctypes.c_char_p], ctypes.c_bool
+        return bool(contains(os.fsencode(path)))
+    except (AttributeError, OSError):
+        return False
+
+
+def resolve_dependency(name, owner, app, executable=None, inherited_rpaths=(), *, allow_colocated=False):
     if name.startswith('@loader_path/'):
         candidates = [owner.parent / name.removeprefix('@loader_path/')]
     elif name.startswith('@executable_path/'):
@@ -63,15 +79,25 @@ def resolve_dependency(name, owner, app, executable=None, inherited_rpaths=()):
                     continue
                 root = root.replace('@executable_path', str(executable.parent))
             candidates.append(Path(root) / suffix)
-        candidates += [app / 'Contents/Frameworks' / suffix,
-                       app / 'Contents/Resources/lib' / suffix]
+        if allow_colocated and owner.is_relative_to(app):
+            # Relocation may turn a pinned, colocated plugin dependency into
+            # an explicit @loader_path load. Auditing never uses this fallback.
+            candidates.append(owner.parent / suffix)
+        if allow_colocated:
+            candidates += [app / 'Contents/Frameworks' / suffix,
+                           app / 'Contents/Resources/lib' / suffix]
     else:
         candidates = [Path(name)]
     for path in candidates:
-        if system_library(str(path)):
+        # Absolute system load commands may live only in dyld's shared cache.
+        # An @rpath expansion into /usr/lib is not evidence that an arbitrary
+        # private dependency exists there; keep searching the owned bundle.
+        if name.startswith('/') and system_library(str(path)):
             return path
         if path.is_file():
             return path.resolve()
+        if shared_cache_library(path):
+            return path
     raise ValueError(f'Unresolved dependency {name!r} loaded by {owner}')
 
 
@@ -112,7 +138,8 @@ def relocate_dependencies(app):
         for name in loads:
             if system_library(name) or name in identifier:
                 continue
-            resolved = resolve_dependency(name, source, app, executable, inherited)
+            resolved = resolve_dependency(name, source, app, executable, inherited,
+                                          allow_colocated=True)
             if system_library(str(resolved)):
                 continue
             if resolved.is_relative_to(app):
