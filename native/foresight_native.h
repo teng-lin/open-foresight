@@ -9,9 +9,11 @@ extern "C" {
  * string_free. Destroy cancels, joins workers and drains queues: no callbacks
  * after release. Poll may overlap destroy: destroy wakes and joins existing
  * polls, and a poll of a retired handle returns null. The lifecycle owner must
- * prevent new calls once destroy starts; all other calls on one handle are
- * serialized by the caller (except documented cancellation/polling). Handle
- * addresses must not be reused by a stale caller after release.
+ * prevent new calls once destroy starts and finish every non-poll call before
+ * destruction. Only polling may overlap destruction; cancellation can overlap
+ * worker execution, and must return before destroy starts. Other API calls on
+ * one handle are serialized by the caller. Handle addresses must not be reused
+ * by a stale caller after release.
  * All status codes: 0 success, -1 invalid/busy/unavailable. No
  * fake inference. */
 int fs_abi_version(void);
