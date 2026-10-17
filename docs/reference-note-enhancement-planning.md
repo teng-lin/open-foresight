@@ -28,11 +28,33 @@ parenthesis after terminal punctuation. When no match exists, keep the
 proposed end. The next start is `end - overlap` when that advances beyond the
 previous start, otherwise `end`. The final window ends at the final word.
 
-The port implements this preparation in `chunkNoteEnhancementTranscript`.
-It does not yet implement the full cache manager. Original embedding work
-reuses prior nonempty chunk vectors keyed by exact text, then handles missing
-vectors through RagOrchestrator; transport, persistence, cache invalidation and
-failure handling still need integration.
+The port implements this preparation in `chunkNoteEnhancementTranscript` and
+`ReferenceNoteTranscriptCache`. Application embedding transport and producer
+integration remain outstanding.
+
+The recovered cache holds five meeting entries in access order. Scheduling and
+successful cached reads promote the entry. Each meeting has one sequential
+embedding drain and one replaceable pending request; callers share the running
+future, and newer pending transcripts replace older pending transcripts. Results
+are accepted only when the request's live/saved mode still matches the current
+meeting mode after embedding completes.
+
+Previous nonempty vectors are reused by exact chunk text. Later duplicate chunks
+in the previous result win that lookup. Missing vectors are computed sequentially;
+newly computed vectors are not memoized within the same pass. Empty vectors are
+retried on a later saved read. Live reads await existing work without loading saved
+transcripts. Saved reads reload when the entry is missing, in flight, live-mode,
+empty, or contains an empty vector. Complete saved results are reused. Cached reads
+return the stored list itself. The visible original drain clears its running future
+on normal completion; an exception recovery policy is not established, and the port
+retains a failed running future rather than inventing recovery.
+
+Evidence: `ida/note-cache-schedule.json` (`0x1009060b8`),
+`note-cache-drain.json` (`0x100906178`), `note-cache-entry.json`
+(`0x100906d2c`), `note-cache-chunks-copy.json` (`0x100905c8c`, despite
+its historical filename this returns the same list),
+`note-cache-complete-predicate.json` (`0x1009074cc`), and
+`note-cache-nonempty-vector-predicate.json` (`0x1009075c4`).
 
 Evidence: `ida/note-enhance-transcript-chunker.json` (all 232 lines),
 `ida/note-enhance-transcript-chunk-and-embed.json` (all 294 lines),
@@ -139,3 +161,11 @@ launcher because REA process capture could not start. Their complete raw IDA
 results and exit-0 terminal logs are retained under
 `test-results/reference-functions/ida/`. Public pool probes are bounded;
 no configuration map or API credential was extracted.
+
+The transcript cache additionally passes 12 focused tests, including pending-request
+coalescing, post-await mode changes, exact vector reuse, sequential embedding,
+five-entry LRU behavior, live/saved reads, in-flight saved reloads and error propagation.
+The retained test log is `ida/note-transcript-cache-tests.log`. These tests do not
+establish the still-unconnected Application producer integration. Cache tracing used
+owned IDA batches 97 and 99, both with retained exit-0 terminal logs; these are direct
+IDA results, not new successful REA process captures.
