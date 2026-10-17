@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -77,13 +78,13 @@ void main() {
         store.saveNote(null, 'Review', 'User edits survive');
         final pid = helper.process!.pid;
         Process.killPid(pid, ProcessSignal.sigkill);
-        for (var n = 0; n < 120; n++) {
-          await Future<void>.delayed(const Duration(milliseconds: 250));
-          if (helper.process != null &&
+        await eventually(
+          () =>
+              helper.process != null &&
               helper.process!.pid != pid &&
-              helper.snapshot != null)
-            break;
-        }
+              helper.snapshot != null,
+          timeout: const Duration(seconds: 30),
+        );
         expect(helper.process?.pid, isNot(pid));
         final ping = await helper.client.ping(PingRequest());
         expect(ping.success, true);

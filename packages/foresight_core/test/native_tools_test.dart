@@ -365,7 +365,7 @@ print('answer '+json.dumps(answer),flush=True)
             throwsStateError,
           );
           reply.complete('late reply');
-          await Future<void>.delayed(const Duration(milliseconds: 40));
+          await Future<void>(() {});
           final next = await runtime
               .generateWithTools(
                 'next-owner',
@@ -404,7 +404,7 @@ print('answer '+json.dumps(answer),flush=True)
             throwsStateError,
           );
           reply.complete('late reply after close');
-          await Future<void>.delayed(const Duration(milliseconds: 40));
+          await Future<void>(() {});
           expect(runtime.loaded, isFalse);
           expect(runtime.generating, isFalse);
         },

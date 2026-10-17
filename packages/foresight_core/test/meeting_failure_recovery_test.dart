@@ -11,7 +11,7 @@ class RecoveryHelper extends Helper {
   @override
   Future<void> start() async {
     launches++;
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await Future<void>(() {});
   }
 }
 

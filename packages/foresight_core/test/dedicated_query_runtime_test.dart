@@ -71,7 +71,10 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
 
   Future<int> waitForPid() async {
     final file = File('${directory.path}/pid');
-    for (var i = 0; i < 500; i++) {
+    for (
+      final pollingClock = Stopwatch()..start();
+      pollingClock.elapsed < const Duration(seconds: 5);
+    ) {
       if (file.existsSync() && file.readAsStringSync().isNotEmpty) {
         return int.parse(file.readAsStringSync());
       }

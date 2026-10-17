@@ -4,7 +4,7 @@ import os
 import signal
 import time
 
-from test_service_process import running  # noqa: F401 - shared integration fixture
+from test_service_process import running, poll_delay  # noqa: F401 - shared integration fixture
 
 
 def _ready(peer, previous=None):
@@ -14,7 +14,7 @@ def _ready(peer, previous=None):
         identity = helper.get("instanceId")
         if identity and identity != previous and helper.get("pipeline") == "ready":
             return identity
-        time.sleep(0.05)
+        poll_delay(deadline)
     raise AssertionError("helper did not recover")
 
 
@@ -27,7 +27,7 @@ def test_explicit_resume_restarts_helper_after_automatic_budget_is_exhausted(run
             identity = _ready(peer, identity)
     deadline = time.monotonic() + 3
     while peer.call("status").get("helper") and time.monotonic() < deadline:
-        time.sleep(0.02)
+        poll_delay(deadline)
     assert not peer.call("status").get("helper")
     peer.call("application.resume")
     assert _ready(peer, identity) != identity
@@ -60,7 +60,7 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
                 for row in rows
             ):
                 break
-            time.sleep(0.02)
+            poll_delay(deadline)
         else:
             raise AssertionError(
                 "Native capture overflow was not persisted as an interruption"

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -256,11 +257,15 @@ void main() {
         0,
       );
       final peers = <Socket>[];
-      server.listen(peers.add);
+      final probed = Completer<void>();
+      server.listen((peer) {
+        peers.add(peer);
+        if (!probed.isCompleted) probed.complete();
+      });
       final helper = Helper(socketPath, '${scratch.path}/helper-data');
       try {
         final startup = helper.start();
-        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await probed.future.timeout(const Duration(seconds: 2));
         await Future.wait([helper.close(), helper.close()]);
         await startup;
         expect(marker.existsSync(), false);

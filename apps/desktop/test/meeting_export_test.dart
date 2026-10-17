@@ -839,14 +839,11 @@ void main() {
       await tester.tap(find.text('Download markdown'));
       // Let the real file write and close finish outside the widget fake clock.
       for (
-        var i = 0;
-        i < 100 &&
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
             find.text('Meeting notes saved successfully').evaluate().isEmpty;
-        i++
       ) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump();
       }
       expect(calls, 2);

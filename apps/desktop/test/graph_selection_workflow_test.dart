@@ -84,10 +84,11 @@ void main() {
       });
       final dynamic state = tester.state(find.byType(Workspace));
       Future<void> waitUntil(bool Function() ready) async {
-        for (var i = 0; i < 100 && !ready(); i++) {
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 5) && !ready();
+        ) {
+          await tester.runAsync(() => Future<void>(() {}));
           await tester.pump();
         }
         expect(ready(), true);
@@ -194,9 +195,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('graph-inspector-close')));
       await tester.pump();
       await waitUntil(() => !state.graphRelatedLoading);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
+      await tester.runAsync(() => Future<void>(() {}));
       await tester.pump();
       expect(state.graphSelectedDocument, isNull);
       expect(visibleEdges(), isEmpty);

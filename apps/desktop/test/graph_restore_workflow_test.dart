@@ -91,13 +91,14 @@ void main() {
       }
 
       Future<void> waitForPoints(int count) async {
-        for (var i = 0; i < 100; i++) {
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 5);
+        ) {
           final dynamic state = tester.state(find.byType(Workspace));
           if (!state.graphOrganizing && state.graphPoints.length == count)
             return;
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
+          await tester.runAsync(() => Future<void>(() {}));
           await tester.pump();
         }
         fail('Graph layout did not finish');

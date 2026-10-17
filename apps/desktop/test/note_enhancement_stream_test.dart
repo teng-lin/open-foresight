@@ -1,3 +1,4 @@
+import 'pump_until.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:fake_async/fake_async.dart';
@@ -41,17 +42,6 @@ class WidgetNoteGenerator extends NativeRuntime {
       }
     }
   }
-}
-
-Future<void> pumpUntil(WidgetTester tester, bool Function() ready) async {
-  final deadline = Stopwatch()..start();
-  while (!ready() && deadline.elapsed < const Duration(seconds: 5)) {
-    await tester.pump();
-    // Give real asynchronous producers a turn while advancing no wall-clock timer.
-    await tester.runAsync(() => Future<void>(() {}));
-  }
-  expect(ready(), isTrue, reason: 'Expected note-stream event before deadline');
-  await tester.pump();
 }
 
 void main() {

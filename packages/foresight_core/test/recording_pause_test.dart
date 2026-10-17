@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'package:clock/clock.dart';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:test/test.dart';
@@ -430,9 +431,11 @@ void main() {
     'service commands preserve active ownership while paused and reject stale meeting IDs',
     () async {
       final store = Store('${directory.path}/service.db');
+      var now = DateTime.utc(2026);
       final domain = Domain(
         store,
         Helper('${directory.path}/unused.sock', '${directory.path}/unused'),
+        clock: Clock(() => now),
       );
       final app = domain.application;
       final id = store.meeting('Pause fixture');
@@ -445,7 +448,7 @@ void main() {
         recording.start('/usr/bin/true', model);
         app.recording = recording;
         app.recordingMeeting = id;
-        app.recordingBegan = DateTime.now();
+        app.recordingBegan = now;
         await expectLater(
           domain.command('meetings.pause', {'id': id + 1}),
           throwsStateError,
@@ -455,7 +458,7 @@ void main() {
             await domain.command('meetings.pause', {'id': id}) as Map;
         expect(paused['active'], true);
         expect(paused['paused'], true);
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        now = now.add(const Duration(seconds: 20));
         expect(app.captureState['elapsed_ms'], paused['elapsed_ms']);
         expect(RemoteRecording(Map<String, dynamic>.from(paused)).paused, true);
         expect(

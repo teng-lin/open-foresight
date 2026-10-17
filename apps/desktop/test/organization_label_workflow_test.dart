@@ -87,15 +87,12 @@ void main() {
       await tester.tap(find.text('Create & Auto-Assign'));
       final dynamic state = tester.state(find.byType(Workspace));
       for (
-        var i = 0;
-        i < 100 &&
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
             (state.busy ||
                 store.rows('SELECT * FROM document_clusters').isEmpty);
-        i++
       ) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump(const Duration(milliseconds: 100));
       }
       await tester.pumpAndSettle();

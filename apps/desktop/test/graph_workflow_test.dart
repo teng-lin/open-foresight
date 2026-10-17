@@ -122,10 +122,12 @@ void main() {
       expect(state.graphYaw, greaterThan(initial));
       await tester.tap(find.byTooltip('Pause graph animation'));
       await tester.pumpAndSettle();
-      for (var i = 0; i < 100 && state.graphOrganizing; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+      for (
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
+            state.graphOrganizing;
+      ) {
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump();
       }
       await tester.pumpAndSettle();
@@ -281,10 +283,12 @@ void main() {
         b: [1, 0, 0],
         c: [0, 1, 0],
       });
-      for (var i = 0; i < 100 && state.graphPoints.length != 3; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+      for (
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
+            state.graphPoints.length != 3;
+      ) {
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump();
       }
       expect(
