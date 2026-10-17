@@ -2066,9 +2066,9 @@ extension _ScreenshotScreens on _WorkspaceState {
     graphCameraCurve = zoomButton
         ? const Cubic(.215, .61, .355, 1)
         : const Cubic(.645, .045, .355, 1);
-    // Exact Mac durations remain unresolved; these are explicit Linux timings.
+    // Original _animateCameraTo / _zoomByFactor: 350ms / 250ms.
     graphCameraController.duration = Duration(
-      milliseconds: zoomButton ? 200 : 300,
+      milliseconds: zoomButton ? 250 : 350,
     );
     graphCameraController.forward(from: 0);
   }
@@ -3166,7 +3166,7 @@ extension _ScreenshotScreens on _WorkspaceState {
         store: d.store,
         save: (markdown) async {
           final location = await getSaveLocation(
-            suggestedName: 'foresight-meeting-notes.md',
+            suggestedName: 'meeting_notes.md',
             acceptedTypeGroups: [
               const XTypeGroup(label: 'Markdown', extensions: ['md']),
             ],

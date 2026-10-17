@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 
 import 'model_acquisition.dart';
+import 'model_asset_lifecycle.dart';
 import 'model_setup.dart';
 import 'model_vault.dart';
 import 'platform_services.dart';
@@ -24,6 +25,7 @@ class DedicatedQueryAcquisition {
     required this.vault,
     Directory? stagingRoot,
     this.runtime,
+    this.catalog,
   }) : stagingRoot = stagingRoot ?? File(store.path).parent;
 
   factory DedicatedQueryAcquisition.distribution(Store store) {
@@ -47,9 +49,17 @@ class DedicatedQueryAcquisition {
         );
       }
     }
+    final config = ModelConfigService(apiKey: key);
     return DedicatedQueryAcquisition(
       store: store,
-      config: ModelConfigService(apiKey: key),
+      config: config,
+      catalog: ModelAssetLifecycle(
+        root: Directory('${File(store.path).parent.path}/distribution-assets'),
+        fetch: () =>
+            config.fetch(appVersion: referenceDetectorDistributionVersion),
+        protectedPaths: () =>
+            store.models.map((model) => model['path'] as String),
+      ),
       downloader: ModelBlobDownloader(apiKey: key),
       vault: MacModelVault(
         root: Directory(
@@ -59,6 +69,7 @@ class DedicatedQueryAcquisition {
     );
   }
 
+  final ModelAssetLifecycle? catalog;
   final Store store;
   final ModelConfigService config;
   final ModelBlobDownloader downloader;
@@ -95,9 +106,17 @@ class DedicatedQueryAcquisition {
     var accepted = false;
     try {
       check();
-      final metadata = await config.fetch(
-        appVersion: referenceDetectorDistributionVersion,
-      );
+      final ForesightSharedConfig metadata;
+      if (catalog case final assets?) {
+        await assets.refresh();
+        metadata = ForesightSharedConfig(
+          onDeviceModelMetadatas: assets.assets.map((asset) => asset.metadata),
+        );
+      } else {
+        metadata = await config.fetch(
+          appVersion: referenceDetectorDistributionVersion,
+        );
+      }
       check();
       final plan = referenceModelDownloadPlan(
         metadata.onDeviceModelMetadatas,
@@ -147,13 +166,18 @@ class DedicatedQueryAcquisition {
         current: valid,
       );
       check();
-      await configureEncryptedDedicatedQuery(
+      Future<void> adopt(File candidate) => configureEncryptedDedicatedQuery(
         store,
-        encrypted.path,
+        candidate.path,
         runtime: runtime,
         current: valid,
         vault: vault,
       );
+      if (catalog case final assets?) {
+        await assets.publish(plan.metadata, encrypted, adopt);
+      } else {
+        await adopt(encrypted);
+      }
       accepted = true;
     } finally {
       try {
@@ -162,7 +186,7 @@ class DedicatedQueryAcquisition {
         try {
           if (stage != null) await stage.delete(recursive: true);
         } finally {
-          if (!accepted && encrypted != null)
+          if ((!accepted || catalog != null) && encrypted != null)
             await encrypted.parent.delete(recursive: true);
         }
       }
@@ -174,5 +198,6 @@ class DedicatedQueryAcquisition {
     _closed = true;
     downloader.close();
     await Future.wait([config.close(), vault.close()]);
+    await catalog?.close();
   }
 }

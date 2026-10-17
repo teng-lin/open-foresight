@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 import 'store.dart';
+import 'model_asset_lifecycle.dart';
+import 'model_acquisition.dart' show ForesightSharedConfig;
 import 'native.dart';
 import 'platform_services.dart';
 import 'dedicated_query_runtime.dart';
@@ -17,6 +19,7 @@ Future<NativeRuntime> configureGeneration(
   String model,
   String runner, {
   String backend = 'llama_cpp',
+  int? modelType,
   bool Function()? current,
   void Function(NativeRuntime)? onCandidate,
   void Function()? onRegister,
@@ -27,6 +30,11 @@ Future<NativeRuntime> configureGeneration(
     onCandidate?.call(candidate);
     if (current != null && !current())
       throw StateError('Model setup cancelled');
+    final digest = backend == 'litert_lm'
+        ? (await sha256.bind(File(model).openRead()).first).toString()
+        : null;
+    candidate.modelType =
+        modelType ?? referenceGenerationModelType(digest ?? '');
     await candidate.load(runner, model, backend: backend);
     if (current != null && !current())
       throw StateError('Model setup cancelled');
@@ -36,12 +44,81 @@ Future<NativeRuntime> configureGeneration(
       model,
       runner,
       backend: backend,
+      expectedDigest: digest,
+      modelType: candidate.modelType,
       current: current,
     );
     return candidate;
   } catch (_) {
     candidate.close();
     rethrow;
+  }
+}
+
+/// Discover only this profile's previously downloaded distribution files.
+/// Explicit existing registrations always win. No metadata RPC or download is
+/// needed for the recovered directory fallback after a registry is lost.
+Future<NativeRuntime?> discoverGenerationRuntime(
+  Store store,
+  String library, {
+  String? runner,
+  bool Function()? current,
+}) async {
+  if (store.model('generation') != null) return null;
+  final catalog = ModelAssetLifecycle(
+    root: Directory('${File(store.path).parent.path}/distribution-assets'),
+    fetch: () async => ForesightSharedConfig(),
+  );
+  try {
+    for (final type in referenceInferenceModelOrder) {
+      final path = await catalog.localPath(type);
+      if (path == null) continue;
+      final runtime = runner ?? runtimeConfiguration['FORESIGHT_LITERT_RUNNER'];
+      if (runtime == null)
+        throw StateError('Bundled generation runtime is unavailable');
+      return configureGeneration(
+        store,
+        library,
+        path,
+        runtime,
+        backend: 'litert_lm',
+        modelType: type,
+        current: () =>
+            (current?.call() ?? true) && store.model('generation') == null,
+      );
+    }
+    return null;
+  } finally {
+    await catalog.close();
+  }
+}
+
+Future<bool> discoverDedicatedQueryModel(
+  Store store, {
+  bool Function()? current,
+  MacModelVault? vault,
+  String? runtime,
+}) async {
+  if (store.model(dedicatedQueryModelKind) != null) return false;
+  final catalog = ModelAssetLifecycle(
+    root: Directory('${File(store.path).parent.path}/distribution-assets'),
+    fetch: () async => ForesightSharedConfig(),
+  );
+  try {
+    final path = await catalog.localPath(4);
+    if (path == null) return false;
+    await configureEncryptedDedicatedQuery(
+      store,
+      path,
+      vault: vault,
+      runtime: runtime,
+      current: () =>
+          (current?.call() ?? true) &&
+          store.model(dedicatedQueryModelKind) == null,
+    );
+    return true;
+  } finally {
+    await catalog.close();
   }
 }
 
@@ -281,6 +358,7 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
       runtime,
       backend: entry['backend'] as String? ?? 'llama_cpp',
       expectedDigest: expectedDigest,
+      modelType: entry['model_type'] as int?,
     );
     registered++;
   }

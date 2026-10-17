@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
+import 'package:open_foresight/graph_labels.dart';
 import 'package:open_foresight/generated/helper_control.pb.dart' as control;
 import 'graph_workflow_test.dart' show GraphDomain;
 import 'meeting_setup_test.dart' show OfflineHelper;
@@ -23,7 +24,7 @@ class RestoringGraphDomain extends GraphDomain {
 
 void main() {
   testWidgets(
-    'restart restores saved coordinates and requests only missing document vectors',
+    'label removal and deletion survive restart with restored coordinates and only missing vectors requested',
     (tester) async {
       tester.view.physicalSize = const Size(1440, 1000);
       tester.view.devicePixelRatio = 1;
@@ -46,6 +47,18 @@ void main() {
       for (final id in [a, b]) {
         store.state(id, 'indexed');
       }
+      store.putDocumentLabel(
+        DocumentLabel(a, 'Planning', 'user_defined', '#0EBC5F'),
+      );
+      store.putDocumentLabel(
+        DocumentLabel(
+          b,
+          'Planning',
+          'propagated',
+          '#0EBC5F',
+          'Fixture rationale',
+        ),
+      );
       RestoringGraphDomain domain(String instance, String path) {
         final helper = OfflineHelper(
           '${temp.path}/socket',
@@ -98,6 +111,43 @@ void main() {
       final dynamic firstState = tester.state(find.byType(Workspace));
       expect(firstState.graphEdges.length, 1);
       expect(store.rows('SELECT * FROM graph_documents').length, 2);
+      final beforeLabelChanges = store.rows(
+        'SELECT document_id,proj_x,proj_y,proj_z FROM graph_documents ORDER BY document_id',
+      );
+      await tester.tap(find.byKey(ValueKey('graph-node-$a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('inspector-remove-Planning')));
+      await tester.pumpAndSettle();
+      expect(store.documentLabels.single.documentId, b);
+      expect(store.documentLabels.single.rationale, 'Fixture rationale');
+      expect(store.documentLabels.single.source, 'propagated');
+      expect(store.documentLabels.single.colorHex, '#0EBC5F');
+      expect(store.rows('SELECT * FROM document_clusters'), isNotEmpty);
+      // Per-document removal keeps the global cluster. Confirming the global
+      // deletion then removes it without reorganizing the saved coordinates.
+      final chip = find.widgetWithText(FilterChip, 'Planning');
+      await tester.tap(
+        find.descendant(of: chip, matching: find.byType(Icon)).last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(store.documentLabels.single.documentId, b);
+      await tester.tap(
+        find.descendant(of: chip, matching: find.byType(Icon)).last,
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Delete'));
+      await tester.pumpAndSettle();
+      expect(store.documentLabels, isEmpty);
+      expect(store.rows('SELECT * FROM document_clusters'), isEmpty);
+      expect(
+        store.rows(
+          'SELECT document_id,proj_x,proj_y,proj_z FROM graph_documents ORDER BY document_id',
+        ),
+        beforeLabelChanges,
+      );
+      expect(first.requests.length, 1);
       store.db.execute('UPDATE graph_documents SET proj_x=proj_x*0.75');
       final expected = {
         for (final row in store.rows(
@@ -111,6 +161,8 @@ void main() {
         'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?)',
         ['embedding', '/moved-model-location', 'fixture', '', 'fixture'],
       );
+      expect(store.documentLabels, isEmpty);
+      expect(store.rows('SELECT * FROM document_clusters'), isEmpty);
       // Process and file location changed, but the model's content identity did not.
       final second = domain('fresh-process', '/moved-model-location');
       final ready = second.helper.snapshot;

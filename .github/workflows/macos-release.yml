@@ -14,6 +14,9 @@ concurrency:
 jobs:
   build:
     uses: ./.github/workflows/macos.yml
+    secrets:
+      FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
+      FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
     with:
       package-release: true
 

@@ -76,6 +76,124 @@ class ModelStartupTest(unittest.TestCase):
         self.assertEqual(events, [('initialize', 0), ('clear', 0), ('mkdir', 0),
                                   ('close', 0), ('initialize', 1), ('close', 1)])
 
+    def test_vision_fallback_preserves_text_audio_and_cache_after_two_failures(self):
+        for backend in ('cpu', 'gpu'):
+            with self.subTest(backend=backend):
+                api, instances, events = self.api([RuntimeError('first'), RuntimeError('second'), None])
+                with runner.initialize_generation_engine(api, self.model, self.cache,
+                        clear_cache=lambda *args: events.append(('clear', 0)), warn=lambda _: None,
+                        backend=backend, audio_backend='cpu', vision_backend='gpu',
+                        visual_tokens=280, max_num_tokens=4096, cache_dir=str(self.cache)) as engine:
+                    self.assertIs(engine, instances[2])
+                    self.assertEqual([e.settings['vision_backend'] for e in instances], ['gpu', 'gpu', None])
+                    self.assertNotIn('visual_tokens', instances[2].settings)
+                    for e in instances:
+                        self.assertEqual(e.settings['backend'], backend)
+                        self.assertEqual(e.settings['audio_backend'], 'cpu')
+                        self.assertEqual(e.settings['max_num_tokens'], 4096)
+                        self.assertEqual(e.settings['cache_dir'], str(self.cache))
+                self.assertTrue(all(e.closed for e in instances))
+                self.assertEqual(events, [('initialize', 0), ('clear', 0), ('close', 0),
+                                         ('initialize', 1), ('close', 1), ('initialize', 2), ('close', 2)])
+
+    def test_third_vision_failure_propagates_after_final_shutdown(self):
+        final = RuntimeError('text-only fallback also failed')
+        api, instances, _ = self.api([RuntimeError('first'), RuntimeError('second'), final])
+        with self.assertRaises(RuntimeError) as raised:
+            with runner.initialize_generation_engine(api, self.model, self.cache,
+                    clear_cache=lambda *args: None, warn=lambda _: None,
+                    backend='gpu', audio_backend='cpu', vision_backend='gpu', visual_tokens=560):
+                self.fail('Failed fallback must not yield an engine')
+        self.assertIs(raised.exception, final)
+        self.assertTrue(all(e.closed for e in instances))
+
+    def test_public_model_aliases_select_backend_and_visual_budget(self):
+        for model_type in (14, 15, 8, 9, 10):
+            self.assertEqual(runner.generation_model_config(model_type),
+                             dict(vision_backend='gpu', audio_backend='cpu', visual_tokens=280))
+        for model_type in (16, 12):
+            self.assertEqual(runner.generation_model_config(model_type),
+                             dict(vision_backend='gpu', audio_backend='gpu', visual_tokens=560))
+        self.assertIsNone(runner.generation_model_config(0)['vision_backend'])
+        self.assertIsNone(runner.generation_model_config(4)['vision_backend'])
+
+    def test_owned_c_api_initializer_sets_budget_before_create_and_frees_settings(self):
+        events = []
+        class Call:
+            def __init__(self, name, result=None):
+                self.name, self.result, self.failures = name, result, 0
+            def __call__(self, *args):
+                events.append((self.name, args))
+                if self.failures:
+                    self.failures -= 1
+                    raise RuntimeError('injected native settings cleanup error')
+                return self.result
+        lib = types.SimpleNamespace()
+        for name, result in [('create', 42), ('set_max_num_tokens', None),
+                ('set_num_threads', None), ('set_audio_num_threads', None),
+                ('set_cache_dir', None), ('set_enable_speculative_decoding', None),
+                ('set_max_vision_tokens_per_image', None), ('delete', None)]:
+            setattr(lib, 'litert_lm_engine_settings_' + name, Call(name, result))
+        lib.litert_lm_engine_create = Call('engine_create', 101)
+        lib.litert_lm_engine_delete = Call('engine_delete')
+        class CPU:
+            thread_count = 4
+            def get_name(self): return 'cpu'
+        class GPU:
+            def get_name(self): return 'gpu'
+        class Abstract:
+            def __init__(self, **settings):
+                self.enable_speculative_decoding = None
+                self.__dict__.update(settings)
+        class Engine:
+            def close(self):
+                if self._engine_ptr:
+                    self._lib.litert_lm_engine_delete(self._engine_ptr)
+                    self._engine_ptr = None
+        api = types.ModuleType('litert_lm')
+        api.Engine = Engine
+        api.interfaces = types.SimpleNamespace(AbstractEngine=Abstract, CPU=CPU)
+        ffi = types.ModuleType('litert_lm._ffi')
+        ffi._get_lib = lambda: lib
+        with patch.dict('sys.modules', {'litert_lm': api, 'litert_lm._ffi': ffi}):
+            configured = runner.configured_engine_api(api)
+            with runner.initialize_generation_engine(configured, self.model, self.cache,
+                    clear_cache=lambda *args: None, backend=CPU(), audio_backend=CPU(),
+                    vision_backend=GPU(), max_num_tokens=4096, cache_dir=str(self.cache),
+                    visual_tokens=280) as engine:
+                self.assertEqual(engine._engine_ptr, 101)
+        names = [name for name, _ in events]
+        self.assertLess(names.index('set_max_vision_tokens_per_image'), names.index('engine_create'))
+        self.assertEqual(events[names.index('set_max_vision_tokens_per_image')][1], (42, 280))
+        self.assertEqual(names.count('delete'), 1)
+        self.assertEqual(names[-1], 'engine_delete')
+        self.assertEqual(names.count('engine_delete'), 1)
+        # A failure after native engine creation must retain that engine until
+        # the recovered shutdown boundary, including failure of settings delete.
+        for failures in (1, 3):
+            with self.subTest(settings_cleanup_failures=failures):
+                events.clear()
+                lib.litert_lm_engine_settings_delete.failures = failures
+                with patch.dict('sys.modules', {'litert_lm': api, 'litert_lm._ffi': ffi}):
+                    configured = runner.configured_engine_api(api)
+                    def attempt():
+                        with runner.initialize_generation_engine(configured, self.model, self.cache,
+                                clear_cache=lambda *args: events.append(('clear', ())),
+                                warn=lambda _: None, backend=CPU(), audio_backend=CPU(),
+                                vision_backend=GPU(), max_num_tokens=4096,
+                                cache_dir=str(self.cache), visual_tokens=280):
+                            pass
+                    if failures == 3:
+                        with self.assertRaisesRegex(RuntimeError, 'settings cleanup error'): attempt()
+                    else:
+                        attempt()
+                names = [name for name, _ in events]
+                self.assertEqual(names.count('engine_delete'), 3 if failures == 3 else 2)
+                self.assertEqual(names.count('engine_create'), names.count('engine_delete'))
+                self.assertLess(names.index('clear'), names.index('engine_delete'))
+                self.assertLess(names.index('engine_delete'), names.index('engine_create', names.index('engine_create') + 1))
+
+
     def test_second_failure_rethrows_without_cpu_or_third_attempt(self):
         second = RuntimeError('second')
         api, instances, events = self.api([RuntimeError('first'), second])

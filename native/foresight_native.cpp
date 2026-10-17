@@ -328,6 +328,7 @@ bool valid_asset(const char *runtime, const char *model) {
 struct PersistentGeneration;
 struct Engine {
   int backend = 0;
+  int model_type = 0;
   std::string runtime, model;
   std::mutex mu;
   int refs = 0;
@@ -502,6 +503,12 @@ void *fs_engine_create_backend(const char *runtime, const char *model, int backe
   e->backend = backend;
   return e;
 }
+void *fs_engine_create_model_type(const char *runtime, const char *model, int model_type) {
+  if (model_type < 0 || model_type > 17) return nullptr;
+  auto *engine = static_cast<Engine *>(fs_engine_create_backend(runtime, model, 1));
+  if (engine) engine->model_type = model_type;
+  return engine;
+}
 char *fs_engine_state(void *h) {
   if (!h)
     return nullptr;
@@ -539,6 +546,7 @@ int fs_engine_probe(void *h) {
   auto arguments = e.backend == 1
       ? std::vector<std::string>{e.runtime, "--model", e.model, "--probe"}
       : std::vector<std::string>{e.runtime, "-m", e.model, "-p", "probe", "-n", "0", "-c", "4096", "--no-warmup", "-no-cnv", "-t", "4"};
+  if (e.backend == 1 && e.model_type) { arguments.push_back("--model-type"); arguments.push_back(std::to_string(e.model_type)); }
   int status = run(probe, std::move(arguments), [&](const char *data, size_t size) {
     if (e.backend == 1 && diagnostics.size() < 4096) diagnostics.append(data, std::min(size, 4096-diagnostics.size()));
   });
@@ -656,6 +664,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     if (e.backend == 1)
       args = {e.runtime, "--model", e.model, "--prompt", text,
               "--max-output-tokens", std::to_string(max_output_tokens)};
+    if (e.backend == 1 && e.model_type) { args.push_back("--model-type"); args.push_back(std::to_string(e.model_type)); }
     if (!json_schema.empty()) {
       args.push_back(tools ? "--tools" : "--json-schema");
       args.push_back(json_schema);

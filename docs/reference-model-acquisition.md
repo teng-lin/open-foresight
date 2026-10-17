@@ -7,7 +7,10 @@ The inspected app's `CFBundleShortVersionString` is `1.0.0`.
 metadata RPC and blob transport. The existing Local models screen now connects
 these to dedicated model setup, authenticated encrypted storage and private
 plaintext runtime leases. Guided local import remains available.
-No live metadata or blob request was made during this reconstruction.
+The initial reconstruction made no live metadata or blob request. The subsequent
+[original distribution configuration check](reference-live-cloud-services.md#original-distribution-configuration-follow-up)
+successfully fetched both metadata and the fixed-digest detector blob using the
+two original app-bundled settings.
 
 ## Metadata and shared distribution credential
 
@@ -29,12 +32,15 @@ names. The detector model type is the recovered value 4,
 `MODEL_TYPE_QUERY_DETECTOR` (PP25030).
 
 The original metadata RPC, web summarization RPC, and HTTP blob downloader use
-the same credential pool entry PP9019. Only the static references and public
-header name `X-Goog-Api-Key` were inspected; the credential value was not read.
+the same credential pool entry PP9019. The initial protocol reconstruction
+inspected only static references and the
+public header name `X-Goog-Api-Key`. The later authorized distribution follow-up
+recovered the bundled setting from the verified executable.
 Release integration can reuse the existing internally supplied
 `FORESIGHT_WEB_CONTENT_API_KEY`. No end-user API project configuration is
-needed. No valid remote credential, detector blob ID, advertised model version,
-or live service availability has been established.
+needed. The distribution follow-up successfully authenticated metadata and fetched
+the
+advertised detector blob, verifying its fixed size and SHA-256.
 
 Evidence: `ida/model-config-{fetch,request-public-schema,rpc-route-initializer,
 response-public-schema,reference-app-version}.json`,
@@ -130,8 +136,9 @@ nonce/ciphertext/tag with empty AAD. It reads or creates only the port-owned
 com.openforesight.encryption / dataEncryptionKey entry, using a binary Tink keyset.
 MacModelVault publishes new private encrypted candidates and opens unique 0700
 plaintext leases. Lease cleanup waits for the owning worker to exit. The helper
-is built and bundled as FORESIGHT_MODEL_CRYPTO. The original application key
-and API credential are never read by this flow.
+is built and bundled as FORESIGHT_MODEL_CRYPTO. This vault flow never reads the
+original application encryption key or API
+credential; distribution configuration import is a separate explicit operation.
 
 The native self-test passes fixed independent AES/Tink vectors, tamper rejection,
 exclusive output and symlink checks without Keychain access. An explicit opt-in
@@ -148,12 +155,19 @@ All four actual-detector tests passed with local transport and framing-only
 vault fixtures, including acquisition/registration/reopen and forced plaintext
 cleanup failure preserving the previous registration. Their retained log is
 query-runtime/acquisition-cleanup-review-test-v2.log. These fixtures avoid
-Keychain and are not cryptographic or live service oracles. No live remote API
-call or credential extraction occurred. Live distribution service access, full
-signed release acceptance, original refresh/obsolete-model cleanup policy and
-broader GPU numerical parity remain unverified.
+Keychain and are not cryptographic or live service oracles. Those initial fixture
+runs made no live API call and extracted no credentials. Subsequent distribution
+acceptance established live metadata/blob access. Full signed release acceptance
+and broader GPU numerical parity remain unverified.
+
+The ordered refresh catalog, first-existing path lookup, owned recursive fallback
+and obsolete-model cleanup are now implemented and connected to distribution
+acquisition and missing-registry recovery. Explicit download still uses its
+distinct last-duplicate plan. See [model lifecycle](reference-model-lifecycle.md)
+for exact policies, port ownership constraints, tests and remaining platform gates.
 
 The [cloud acceptance command](reference-live-cloud-services.md) can now check
 live shared metadata and optionally authenticate the downloaded detector blob
-without modifying a profile. This host's run is blocked by absent port-owned
-distribution credentials; it does not establish live acquisition success.
+without modifying a profile. The initial host run was blocked by absent
+distribution settings; the subsequent authorized run passed metadata and
+fixed-digest detector download checks, as recorded in the linked follow-up.

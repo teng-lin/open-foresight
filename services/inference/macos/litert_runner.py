@@ -536,6 +536,63 @@ def clear_model_cache(model, cache, *, delete=None, warn=None):
         warn(f'Cannot clear model cache for {model}: {error}')
 
 
+def generation_model_config(model_type):
+    canonical = {8: 15, 10: 15, 9: 14, 12: 16}.get(model_type, model_type)
+    if canonical in (14, 15):
+        return dict(vision_backend='gpu', audio_backend='cpu', visual_tokens=280)
+    if canonical == 16:
+        return dict(vision_backend='gpu', audio_backend='gpu', visual_tokens=560)
+    return dict(vision_backend=None, audio_backend='cpu', visual_tokens=0)
+
+
+def configured_engine_api(api):
+    """Bind the pinned public C settings omitted by the 0.18 Python wrapper.
+
+    Reuse its conversation/tokenizer/close implementation. Engine creation owns
+    every settings handle and retains a partial native engine for recovery.
+    No SDK globals or loaded-library functions are replaced.
+    """
+    import types
+    from litert_lm import interfaces
+    from litert_lm._ffi import _get_lib
+
+    class ConfiguredEngine(api.Engine):
+        def __init__(self, model_path, *, visual_tokens=None, **settings):
+            interfaces.AbstractEngine.__init__(self, model_path=model_path, **settings)
+            self._lib = _get_lib()
+            self._engine_ptr = None
+            lib = self._lib
+            native = lib.litert_lm_engine_settings_create(
+                model_path, self.backend.get_name(),
+                self.vision_backend.get_name() if self.vision_backend else None,
+                self.audio_backend.get_name() if self.audio_backend else None)
+            if not native:
+                raise RuntimeError('Cannot create generation settings')
+            try:
+                if self.max_num_tokens is not None:
+                    lib.litert_lm_engine_settings_set_max_num_tokens(native, self.max_num_tokens)
+                if isinstance(self.backend, interfaces.CPU) and self.backend.thread_count is not None:
+                    lib.litert_lm_engine_settings_set_num_threads(native, self.backend.thread_count)
+                if isinstance(self.audio_backend, interfaces.CPU) and self.audio_backend.thread_count is not None:
+                    lib.litert_lm_engine_settings_set_audio_num_threads(native, self.audio_backend.thread_count)
+                if self.cache_dir is not None:
+                    lib.litert_lm_engine_settings_set_cache_dir(native, self.cache_dir)
+                if self.enable_speculative_decoding is not None:
+                    lib.litert_lm_engine_settings_set_enable_speculative_decoding(native, self.enable_speculative_decoding)
+                if visual_tokens is not None:
+                    setter = lib.litert_lm_engine_settings_set_max_vision_tokens_per_image
+                    setter.argtypes = [ctypes.c_void_p, ctypes.c_int]
+                    setter.restype = None
+                    setter(native, visual_tokens)
+                self._engine_ptr = lib.litert_lm_engine_create(native)
+                if not self._engine_ptr:
+                    raise RuntimeError('Cannot initialize generation model')
+            finally:
+                lib.litert_lm_engine_settings_delete(native)
+
+    return types.SimpleNamespace(Engine=ConfiguredEngine)
+
+
 def _engine_startup_attempt(api, model, settings):
     # Keep the partial instance owned if __init__ raises. Calling the normal
     # constructor would lose that reference before the recovered shutdown step.
@@ -549,7 +606,7 @@ def _engine_startup_attempt(api, model, settings):
 
 @contextmanager
 def initialize_generation_engine(api, model, cache, *, clear_cache=None, warn=None, **settings):
-    """Retry text-only initialization once with exactly the same settings."""
+    """Retry identical initialization, then disable vision on its second error."""
     clear_cache = clear_cache or clear_model_cache
     warn = warn or _startup_warning
     engine, error = _engine_startup_attempt(api, model, settings)
@@ -563,7 +620,15 @@ def initialize_generation_engine(api, model, cache, *, clear_cache=None, warn=No
         engine, error = _engine_startup_attempt(api, model, settings)
         if error is not None:
             engine.close()
-            raise error
+            if settings.get('vision_backend') is None:
+                raise error
+            warn('Vision initialization failed twice; retrying with vision disabled')
+            settings = dict(settings, vision_backend=None)
+            settings.pop('visual_tokens', None)
+            engine, error = _engine_startup_attempt(api, model, settings)
+            if error is not None:
+                engine.close()
+                raise error
     try:
         yield engine
     finally:
@@ -587,8 +652,17 @@ def run(args):
     settings = dict(backend=backend,
                     audio_backend=litert_lm.Backend.CPU(thread_count=4),
                     max_num_tokens=512 if args.query_detector else 4096, cache_dir=str(cache))
+    config = generation_model_config(0 if args.query_detector else getattr(args, 'model_type', 0))
+    engine_api = litert_lm
+    if config['vision_backend'] is not None:
+        settings.update(vision_backend=litert_lm.Backend.GPU(),
+                        enable_speculative_decoding=True,
+                        visual_tokens=config['visual_tokens'],
+                        audio_backend=(litert_lm.Backend.GPU() if config['audio_backend'] == 'gpu'
+                                       else litert_lm.Backend.CPU(thread_count=4)))
+        engine_api = configured_engine_api(litert_lm)
     startup = (litert_lm.Engine(str(model), **settings) if args.query_detector else
-               initialize_generation_engine(litert_lm, model, cache, **settings))
+               initialize_generation_engine(engine_api, model, cache, **settings))
     with startup as engine:
         if args.probe:
             print(json.dumps({"worker_protocol": 1, "native_stop_token_sequences": native_stop_tokens_supported(engine)}), flush=True)
@@ -661,6 +735,8 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--model')
+    parser.add_argument('--model-type', type=int, choices=range(18), default=0,
+                        help='Internal distribution model type; preserves model-specific startup defaults')
     parser.add_argument('--backend', choices=('cpu', 'gpu'),
                         default=os.environ.get('FORESIGHT_LITERT_BACKEND', 'cpu'))
     parser.add_argument('--check', action='store_true')

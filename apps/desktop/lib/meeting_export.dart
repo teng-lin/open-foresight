@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'store.dart';
+import 'generated_content.dart';
 
 enum MeetingExportPeriod {
   anytime('Anytime'),
@@ -306,12 +307,15 @@ class _MeetingExportDialogState extends State<MeetingExportDialog> {
             const SizedBox(height: 8),
             Expanded(
               child: SingleChildScrollView(
-                child: SelectableText(
-                  content.count == 0
-                      ? 'No meeting notes found for the selected date range.'
-                      : content.markdown,
-                  key: const ValueKey('meeting-export-preview'),
-                ),
+                child: content.count == 0
+                    ? const SelectableText(
+                        'No meeting notes found for the selected date range.',
+                        key: ValueKey('meeting-export-preview'),
+                      )
+                    : GeneratedContent(
+                        content.markdown,
+                        key: const ValueKey('meeting-export-preview'),
+                      ),
               ),
             ),
             const SizedBox(height: 8),

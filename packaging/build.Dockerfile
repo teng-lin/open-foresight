@@ -24,8 +24,16 @@ RUN test -n "$SOURCE_REVISION" && \
 # Application OAuth configuration is optional. BuildKit secrets never become
 # build arguments/layers; the intentionally distributed application config is
 # copied into the final bundle. Account tokens must never be supplied here.
+# Secret contents do not invalidate BuildKit caches; refresh this final packaging
+# layer for each release attempt so rotating distribution settings takes effect.
+ARG DISTRIBUTION_CONFIG_REVISION=local
 RUN --mount=type=secret,id=google_client \
+    --mount=type=secret,id=foresight_search_api_key \
+    --mount=type=secret,id=foresight_web_content_api_key \
+    test -n "$DISTRIBUTION_CONFIG_REVISION"; \
     task_args=(); if [[ -f /run/secrets/google_client ]]; then task_args+=(--google-client /run/secrets/google_client); fi; \
+    if [[ -f /run/secrets/foresight_search_api_key ]]; then export FORESIGHT_SEARCH_API_KEY="$(cat /run/secrets/foresight_search_api_key)"; fi; \
+    if [[ -f /run/secrets/foresight_web_content_api_key ]]; then export FORESIGHT_WEB_CONTENT_API_KEY="$(cat /run/secrets/foresight_web_content_api_key)"; fi; \
     /opt/dev-python/bin/python tools/package.py --output dist/open-foresight \
       --revision "$SOURCE_REVISION" \
       --litert-library /opt/litert-extensions/liblitert-lm.so \
