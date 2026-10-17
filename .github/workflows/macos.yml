@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    secrets:
+      FORESIGHT_SEARCH_API_KEY:
+        required: false
+      FORESIGHT_WEB_CONTENT_API_KEY:
+        required: false
     inputs:
       package-release:
         description: Archive the tested application for the release DMG workflow
@@ -128,6 +133,9 @@ jobs:
           path: build/macos-runtimes
           key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py', 'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch') }}
       - name: Assemble complete ad hoc application
+        env:
+          FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
+          FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
         run: |
           .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
             --python-runtime build/macos-runtimes/python \
@@ -139,6 +147,22 @@ jobs:
         run: |
           .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
             --output test-results/macos-release-runtime.json
+      - name: Live release distribution acceptance
+        if: inputs.package-release
+        env:
+          FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
+          FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
+        run: |
+          if [[ -n "$FORESIGHT_SEARCH_API_KEY" && -n "$FORESIGHT_WEB_CONTENT_API_KEY" ]]; then
+            task_report="$PWD/test-results/cloud-distribution.json"
+            task_resources="$PWD/dist/Open Foresight.app/Contents/Resources"
+            # Prove the shipped configuration works without secret overrides.
+            (cd packages/foresight_core && env -u FORESIGHT_SEARCH_API_KEY -u FORESIGHT_WEB_CONTENT_API_KEY \
+              FORESIGHT_RESOURCES="$task_resources" \
+              dart run tool/verify_cloud_services.dart --download-query) > "$task_report"
+          else
+            echo 'Cloud distribution acceptance skipped: no distribution settings supplied.'
+          fi
       - name: Real release-model CPU acceptance
         if: inputs.package-release
         run: |
