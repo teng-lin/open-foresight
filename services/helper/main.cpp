@@ -48,7 +48,10 @@ class Service:public rpc::RagService::Service,public ctl::HelperControl::Service
  uint64_t revision(const std::string& id){Statement q(db,"SELECT revision FROM linux.source_revisions WHERE id=?");q.text(1,id);return q.row()?q.integer(0)+1:1;}
  void journal(const std::string& op,const std::string& id,uint64_t rev){Statement q(db,"INSERT INTO linux.journal(operation,document_id,revision,generation,status) VALUES(?,?,?,?, 'committed')");q.text(1,op);q.text(2,id);q.num(3,rev);q.num(4,state.active_generation());q.row();}
  std::vector<PreparedChunk> prepare_chunks(Model& m,const std::string& content,int size,int overlap,const std::string& mime,grpc::ServerContext* context){
-  if(mime.starts_with("image/"))throw std::runtime_error("Image embedding unavailable in text-only model");auto texts=m.chunks(content,size,overlap);std::vector<PreparedChunk> prepared;prepared.reserve(texts.size());
+  if (mime.starts_with("image/")) {
+    throw std::runtime_error("Image embedding unavailable in text-only model");
+  }
+  auto texts=m.chunks(content,size,overlap);std::vector<PreparedChunk> prepared;prepared.reserve(texts.size());
   for(size_t i=0;i<texts.size();++i){if(context && context->IsCancelled())throw std::runtime_error("Index operation cancelled");prepared.push_back({texts[i], m.embed(texts[i])});}
   return prepared;
  }
@@ -91,7 +94,10 @@ class Service:public rpc::RagService::Service,public ctl::HelperControl::Service
  }
 public:
  Service(const std::string& root,bool allow):allow_test(allow),storage_root(root){
-  if(sqlite3_open((root+"/agent_metadata.db").c_str(),&db)!=SQLITE_OK)throw std::runtime_error("Cannot open metadata");sqlite3_busy_timeout(db,5000);
+  if (sqlite3_open((root+"/agent_metadata.db").c_str(),&db)!=SQLITE_OK) {
+    throw std::runtime_error("Cannot open metadata");
+  }
+  sqlite3_busy_timeout(db,5000);
   sql("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
   sql("CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,content TEXT,userId TEXT,maxTokensPerChunk INTEGER,chunkOverlap INTEGER,mimeType TEXT,imageBytes BLOB); CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT)");
   {Statement a(db,"ATTACH DATABASE ? AS linux");a.text(1,root+"/linux_state.db");a.row();}
