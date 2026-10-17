@@ -1,0 +1,123 @@
+"""Supply-chain gates must reject tampering even with optimized Python."""
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import unittest
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class OptimizedVerificationTests(unittest.TestCase):
+    def test_package_rejects_each_corrupt_runtime_under_optimization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build, flutter = root / 'build', root / 'flutter'
+            flutter.mkdir()
+            for name in ('services/helper/ForesightHelper', 'native/libforesight_native.so',
+                         'application/foresight-service', 'application/foresight-mcp',
+                         'services/inference/foresight-model', 'lib/liblitert-lm.so',
+                         'lib/libonnxruntime.so'):
+                path = build / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'tampered')
+            fixture_hash = hashlib.sha256(b'tampered').hexdigest()
+            for runtime, diagnostic in [('litert', 'Native LiteRT-LM'), ('onnx', 'ONNX Runtime')]:
+                code = f'''import sys
+sys.path.insert(0, {str(ROOT / 'tools')!r})
+import package
+package.LIBRARY_SHA256 = {'0' * 64 if runtime == 'litert' else fixture_hash!r}
+package.main()
+'''
+                result = subprocess.run([sys.executable, '-O', '-c', code,
+                    '--build', str(build), '--flutter-bundle', str(flutter), '--output', str(root / 'dist'),
+                    '--litert-library', str(build / 'lib/liblitert-lm.so'),
+                    '--onnx-library', str(build / 'lib/libonnxruntime.so'), '--revision', 'a' * 40],
+                    capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn(diagnostic + ' library checksum mismatch' if runtime == 'litert'
+                              else diagnostic + ' checksum mismatch', result.stderr)
+                self.assertFalse((root / 'dist').exists())
+
+    def test_descriptor_rejects_altered_identity_under_optimization(self):
+        code = f'''import sys
+sys.path.insert(0, {str(ROOT / 'tools')!r})
+import verify_descriptor
+verify_descriptor.PACKAGE = 'tampered.package'
+verify_descriptor.verify('must-not-execute-protoc')
+'''
+        result = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Validation failed: recovered.package == PACKAGE', result.stderr)
+        self.assertNotIn('FileNotFoundError', result.stderr)
+
+
+class BuildPolicyTests(unittest.TestCase):
+    def test_every_python_lock_requirement_has_hashes(self):
+        for path in ROOT.glob('requirements-*.lock'):
+            text = re.sub(r'\\\n\s*', ' ', path.read_text())
+            requirements = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith('#')]
+            self.assertTrue(requirements, path)
+            for requirement in requirements:
+                self.assertRegex(requirement, r'^\S+==\S+ .*--hash=sha256:[0-9a-f]{64}', str(path))
+
+    def test_publication_jobs_are_unreachable_from_pull_requests(self):
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            workflow = yaml.safe_load(path.read_text())
+            jobs = workflow.get('jobs', {})
+            for name, job in jobs.items():
+                if job.get('permissions', {}).get('packages') == 'write':
+                    self.assertTrue("github.event_name != 'pull_request'" in job.get('if', '')
+                                    or "github.ref == 'refs/heads/main'" in job.get('if', ''),
+                                    f'{path.name}: {name} can publish PR packages')
+        workflow = yaml.safe_load((ROOT / '.github/workflows/ci-dependencies.yml').read_text())
+        validation = workflow['jobs']['linux-pr']
+        self.assertEqual(validation['permissions'], {'contents': 'read'})
+        self.assertEqual(validation['if'], "github.event_name == 'pull_request'")
+        commands = '\n'.join(step.get('run', '') for step in validation['steps'])
+        self.assertNotIn('--push', commands)
+        self.assertIn('tools/build_linux_sdk_local.sh', commands)
+        local_build = (ROOT / 'tools/build_linux_sdk_local.sh').read_text()
+        self.assertNotIn('--push', local_build)
+        for component in ('sdk-core', 'sdk-litert', 'sdk-whisper', 'sdk'):
+            self.assertIn(f'packaging/{component}.Dockerfile', local_build)
+
+    def test_monthly_builds_bypass_descriptor_and_layer_caches(self):
+        text = (ROOT / '.github/workflows/ci-dependencies.yml').read_text()
+        workflow = yaml.safe_load(text)
+        for name in ('core', 'litert', 'whisper', 'sdk'):
+            job = workflow['jobs'][name]
+            reuse = next(step for step in job['steps'] if step.get('id') == 'shared')
+            self.assertEqual(reuse['if'], "github.event_name != 'schedule'")
+            build = next(step for step in job['steps'] if step.get('with', {}).get('push'))
+            self.assertEqual(build['with']['no-cache'], "${{ github.event_name == 'schedule' }}")
+            tag = next(step for step in job['steps'] if step.get('id') == 'tag')['run']
+            self.assertIn('refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT', tag)
+
+    def test_pr_acceptance_can_use_unpublished_dependency_changes(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/integration-acceptance.yml').read_text())
+        steps = workflow['jobs']['linux']['steps']
+        resolve = next(step for step in steps if step.get('id') == 'sdk')['run']
+        self.assertIn('tools/build_linux_sdk_local.sh', resolve)
+        self.assertIn('image=foresight-sdk:pr', resolve)
+        self.assertIn('--optional', resolve)
+        driver = next(step for step in steps if 'docker/setup-buildx-action@' in step.get('uses', ''))
+        self.assertEqual(driver['with']['driver'], 'docker')
+
+    def test_dart_auth_and_model_revisions_are_pinned(self):
+        auth = [yaml.safe_load((ROOT / name / 'pubspec.lock').read_text())['packages']['googleapis_auth']
+                for name in ('apps/desktop', 'packages/foresight_core')]
+        self.assertEqual(auth[0], auth[1])
+        registry = json.loads((ROOT / 'native/model_registry.json').read_text())
+        for kind in ('generation', 'speech'):
+            self.assertRegex(registry[kind]['download'], r'/resolve/[a-f0-9]{40}/')
+            self.assertRegex(registry[kind]['runtime_revision'], r'^[a-f0-9]{40}$')
+
+
+if __name__ == '__main__':
+    unittest.main()
