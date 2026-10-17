@@ -152,6 +152,9 @@ class LinuxPackagesTest(unittest.TestCase):
         self.assertNotIn('poppler-utils', metadata['arch_dependencies'])
         for family in ('deb_dependencies', 'rpm_dependencies', 'arch_dependencies'):
             self.assertIn('unrtf', metadata[family])
+        self.assertIn('perl', metadata['rpm_dependencies'])
+        self.assertIn('perl', metadata['arch_dependencies'])
+        self.assertNotIn('perl', metadata['deb_dependencies'])
         packages.stage(self.bundle, self.root / 'stage')
         doc = self.root / 'stage/usr/share/doc/open-foresight'
         self.assertEqual((doc / 'LICENSE').read_text(), (ROOT / 'LICENSE').read_text())
@@ -184,6 +187,8 @@ class LinuxPackagesTest(unittest.TestCase):
             self.assertIn(path, spec)
         for script in (prerm, preinst, spec, install):
             self.assertIn('upgrade_lock_decision', script)
+            self.assertIn('F_SETLK', script)
+            self.assertNotIn('flock -n', script)
             self.assertIn('refuse_upgrade_if_recording /opt/open-foresight', script)
         self.assertIn('upgrade|remove', prerm)
         self.assertIn('upgrade|install', preinst)
@@ -420,11 +425,11 @@ class UpgradeLockDecisionTest(unittest.TestCase):
         self.assertEqual(decision(link)[:2], (1, 'refuse'))
         held = os.open(lock, os.O_RDWR)
         self.addCleanup(os.close, held)
-        fcntl.flock(held, fcntl.LOCK_SH)
+        fcntl.lockf(held, fcntl.LOCK_SH)
         code, output, error = decision(lock)
         self.assertEqual((code, output), (1, 'refuse'), error)
-        print('upgrade_lock_decision held shared lock => refuse', flush=True)
-        fcntl.flock(held, fcntl.LOCK_UN)
+        print('upgrade_lock_decision held shared record lock => refuse', flush=True)
+        fcntl.lockf(held, fcntl.LOCK_UN)
         self.assertEqual(decision(lock), (0, 'allow', ''))
         print('upgrade_lock_decision released lock => allow', flush=True)
         identity = subprocess.run(

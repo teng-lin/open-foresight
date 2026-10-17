@@ -48,6 +48,7 @@
     "xdg-utils",
     "poppler-utils",
     "unrtf",
+    "perl",
     "vulkan-loader",
     "libgomp",
     "ca-certificates",
@@ -73,6 +74,7 @@
     "xdg-utils",
     "poppler",
     "unrtf",
+    "perl",
     "vulkan-icd-loader",
     "ca-certificates",
     "libglvnd"

@@ -17,7 +17,17 @@ upgrade_lock_decision() {
     printf '%s\n' allow
     return 0
   fi
-  if flock -n -x "$lock" true; then
+  # Non-blocking exclusive POSIX record lock (F_SETLK / lockf), same family as
+  # Dart FileLock.shared. Debian preinst uses Essential perl-base. The packed
+  # buffer is the 32-byte Linux LP64 record-lock structure.
+  if perl -e '
+use Fcntl qw(F_SETLK F_WRLCK O_RDWR O_NOFOLLOW);
+sysopen(my $fh, $ARGV[0], O_RDWR | O_NOFOLLOW) or exit 2;
+my $buf = pack("ssx4qqix4", F_WRLCK, 0, 0, 0, 0);
+length($buf) == 32 or exit 2;
+fcntl($fh, F_SETLK, $buf) or exit 1;
+exit 0;
+' -- "$lock"; then
     printf '%s\n' allow
     return 0
   fi
