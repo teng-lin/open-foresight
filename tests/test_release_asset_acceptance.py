@@ -10,7 +10,8 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'tools'))
-from release_asset_acceptance import select_asset, verify_checksum, main as download_main
+from release_asset_acceptance import (select_asset, verify_checksum, source_revision,
+                                      provenance_name, main as download_main)
 from installed_runtime import clean_environment, layout, service_command
 from test_release_dmg import run as run_dmg
 from argparse import Namespace
@@ -21,14 +22,63 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
         """An incomplete or ambiguous release must never choose arbitrary bytes."""
         for kind, suffix in [('deb', '.deb'), ('rpm', '.rpm'), ('arch', '.pkg.tar.zst'), ('dmg', '.dmg')]:
             name = 'Open-Foresight-0.1.0' + suffix
-            release = {'assets': [{'name': name, 'id': 1}, {'name': name + '.sha256'}]}
+            metadata_name = provenance_name({'name': name}, kind)
+            release = {'assets': [{'name': name, 'id': 1}, {'name': name + '.sha256'},
+                                  {'name': metadata_name}]}
             self.assertEqual(select_asset(release, kind)['id'], 1)
+            with self.assertRaises(ValueError):
+                select_asset({'assets': release['assets'][:-1]}, kind)
+            with self.assertRaises(ValueError):
+                select_asset({'assets': release['assets'] + [{'name': metadata_name}]}, kind)
             with self.assertRaises(ValueError):
                 select_asset({'assets': release['assets'][:1]}, kind)
             with self.assertRaises(ValueError):
                 select_asset({'assets': release['assets'] + [{'name': 'duplicate' + suffix}]}, kind)
         with self.assertRaises(ValueError):
             select_asset({'assets': [{'name': '../escape.deb'}, {'name': '../escape.deb.sha256'}]}, 'deb')
+
+    def test_linux_provenance_binds_revision_to_installer_version_format_and_bytes(self):
+        metadata = {'revision': 'b' * 40, 'sha256': 'c' * 64, 'format': 'deb', 'version': '0.1.0'}
+        self.assertEqual(source_revision(metadata, 'deb', 'v0.1.0', 'c' * 64), 'b' * 40)
+        for change in ({'revision': 'main'}, {'revision': 'b' * 39}, {'revision': None},
+                       {'sha256': 'd' * 64}, {'format': 'rpm'}, {'version': '0.2.0'}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                source_revision({**metadata, **change}, 'deb', 'v0.1.0', 'c' * 64)
+        with self.assertRaises(ValueError):
+            source_revision([], 'deb', 'v0.1.0', 'c' * 64)
+        self.assertEqual(source_revision({'revision': 'a' * 40, 'architecture': 'arm64'},
+                                        'dmg', 'v0.1.0', 'c' * 64), 'a' * 40)
+        with self.assertRaises(ValueError):
+            source_revision({'revision': 'a' * 40, 'architecture': 'x86_64'},
+                            'dmg', 'v0.1.0', 'c' * 64)
+
+    def test_recovered_installer_download_uses_its_build_commit_and_preserves_tag_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = 'open-foresight_0.1.0-1_amd64.deb'
+            digest = hashlib.sha256(b'installer bytes').hexdigest()
+            metadata = json.dumps({'revision': 'b' * 40, 'sha256': digest,
+                                   'version': '0.1.0', 'format': 'deb'}).encode()
+            payloads = {name: b'installer bytes', name + '.sha256': f'{digest}  {name}\n'.encode(),
+                        name + '.build.json': metadata}
+            release = {'draft': False, 'tag_name': 'v0.1.0', 'id': 1, 'html_url': 'https://example/release',
+                       'assets': [{'name': key, 'size': len(value), 'id': index + 1}
+                                  for index, (key, value) in enumerate(payloads.items())]}
+            def download(arguments, **kwargs):
+                selected = arguments[arguments.index('--pattern') + 1]
+                (root / selected).write_bytes(payloads[selected])
+            with patch.object(sys, 'argv', ['download', '--tag', 'v0.1.0', '--format', 'deb',
+                                            '--directory', directory]), \
+                    patch('release_asset_acceptance.subprocess.run', side_effect=download), \
+                    patch('release_asset_acceptance.subprocess.check_output', side_effect=[
+                        json.dumps(release), json.dumps({'sha': 'a' * 40}), json.dumps({'sha': 'b' * 40})]):
+                download_main()
+            report = json.loads((root / 'installer.json').read_text())
+            self.assertEqual(report['source_commit'], 'b' * 40)
+            self.assertEqual(report['release_tag_commit'], 'a' * 40)
+            self.assertEqual(report['status'], 'verified_download')
+            self.assertEqual(report['provenance_asset'], name + '.build.json')
+            self.assertEqual(report['provenance_sha256'], hashlib.sha256(metadata).hexdigest())
 
     def test_failed_download_cannot_leave_a_previous_success_report(self):
         """A reused download directory must not retain misleading passed evidence."""
