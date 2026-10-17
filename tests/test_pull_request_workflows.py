@@ -364,8 +364,8 @@ jobs:
         workflow = self.workflow('integration-acceptance.yml')
         paths = workflow['on']['pull_request']['paths']
         for required in (
-            'apps/desktop/lib/**',
-            'packages/foresight_core/lib/**',
+            'apps/desktop/**',
+            'packages/foresight_core/**',
             'packages/foresight_core/lib/src/answer_contract.dart',
             'packages/foresight_core/lib/src/store.dart',
             'packages/foresight_core/lib/src/application.dart',
@@ -377,11 +377,13 @@ jobs:
         runs = [step.get('run') for step in workflow['jobs']['linux']['steps']
                 if isinstance(step.get('run'), str)]
         combined = '\n'.join(runs)
-        self.assertIn('tools/test_meeting_workflow.py', combined)
-        self.assertIn('integration_test/meeting_workflow_test.dart',
-                      (ROOT / 'tools/test_meeting_workflow.py').read_text())
+        self.assertNotIn('tools/test_meeting_workflow.py', combined)
         self.assertIn('--suite virtual-audio', combined)
         self.assertIn('--suite models', combined)
+        source = (ROOT / 'tools/integration_gates.py').read_text()
+        audio = source[source.index('def audio_gate'):source.index('\ndef ', source.index('def audio_gate') + 1)]
+        self.assertIn('integration_test/meeting_workflow_test.dart', audio)
+        self.assertIn("FORESIGHT_PRIVATE_PIPEWIRE='1'", audio)
 
     def test_linux_pull_request_runs_offline_pytest(self):
         workflow = self.workflow('macos.yml')

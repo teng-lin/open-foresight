@@ -22,7 +22,7 @@ or physical microphone.
 ## Model and virtual-audio acceptance
 
 `integration-acceptance.yml` runs on relevant main changes, on pull requests
-that change `apps/desktop/lib/**`, `packages/foresight_core/lib/**` (including
+that change `apps/desktop/**`, `packages/foresight_core/**` (including
 `answer_contract.dart`, `store.dart`, and `application.dart`), `packaging/**`,
 or the existing model/runtime paths, on manual dispatch, and on a weekly
 schedule. It reuses the verified,
@@ -43,13 +43,15 @@ separate from the read-only model fixture mount.
 | --- | --- | --- |
 | Linux fast | 2 desktop | Generation failure; terminal capture failure persists through stop. |
 | Models | 5 desktop + 1 core | Native load/late adoption, helper grounding/restart/deletion, meeting citation, local Google OAuth/API fixture into real retrieval, Gemma cancellation/reuse, controlled web-tool generation/memory. |
-| Virtual audio | 2 desktop + 1 core | Whisper partial/final text while capturing, virtual microphone disappearance/return, overlap/pause exclusion and pinned-route recovery. |
+| Virtual audio | 3 desktop + 1 core | Whisper partial/final text while capturing, virtual microphone disappearance/return, overlap/pause exclusion and pinned-route recovery, and the meeting workflow (record, transcribe, summarize, cite, restart). |
 
-The same acceptance job then runs `tools/test_meeting_workflow.py`, which
-launches `apps/desktop/integration_test/meeting_workflow_test.dart` on the
-bundle built for that job. Path filters that skip the job also skip this
-meeting workflow; changes under the desktop library, core library, or packaging
-do not.
+That meeting workflow is `apps/desktop/integration_test/meeting_workflow_test.dart`,
+run by the virtual-audio gate inside the private PipeWire session. `captureWindow`
+returns immediately when `FORESIGHT_PRIVATE_PIPEWIRE=1`, so those assertions do not
+use grim or an Agent Desktop display. `tools/test_meeting_workflow.py` remains the
+local driver for an owned private display. Path filters that skip the job also skip
+this meeting workflow; changes under the desktop app, the application service, or
+packaging do not.
 
 The three older generation tests explicitly select LiteRT by default; an
 explicit `FORESIGHT_GENERATION_BACKEND` can select a legacy runtime. The load

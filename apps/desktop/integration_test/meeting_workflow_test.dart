@@ -35,6 +35,8 @@ Future<void> captureWindow(
   List<int> expectedGutter = const [234, 238, 247],
   bool expectGraphSelection = false,
 }) async {
+  // The private PipeWire acceptance session has no Agent Desktop display.
+  if (Platform.environment['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') return;
   final target = File(path);
   target.parent.createSync(recursive: true);
   final session = Platform.environment['FORESIGHT_AGENT_DESKTOP_SESSION'] ?? '';
