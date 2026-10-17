@@ -18,16 +18,23 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    compiler_version = subprocess.check_output([args.compiler, '--version'], text=True)
+    shared = ['-shared-libasan'] if 'clang' in compiler_version.lower() else []
     for name, (code, diagnostic) in CASES.items():
         with tempfile.TemporaryDirectory() as directory:
             source, executable = Path(directory) / 'fault.cpp', Path(directory) / 'fault'
             source.write_text(code)
             subprocess.run([args.compiler, '-g', '-O0', '-fsanitize=address,undefined',
-                            '-fno-omit-frame-pointer', '-fno-sanitize-recover=all',
+                            '-fno-omit-frame-pointer', '-fno-sanitize-recover=all', *shared,
                             str(source), '-o', str(executable)], check=True)
             environment = dict(os.environ, ASAN_OPTIONS='detect_leaks=0:halt_on_error=1',
                                UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
             environment.pop('LD_PRELOAD', None)
+            if shared:
+                runtime = Path(subprocess.check_output([args.compiler,
+                    '-print-file-name=libclang_rt.asan-x86_64.so'], text=True).strip()).parent
+                environment['LD_LIBRARY_PATH'] = os.pathsep.join(filter(None,
+                    (str(runtime), environment.get('LD_LIBRARY_PATH'))))
             result = subprocess.run([str(executable)], capture_output=True, text=True,
                                     env=environment, timeout=20)
             (args.output / (name + '.log')).write_text(result.stdout + result.stderr)
