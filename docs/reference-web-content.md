@@ -105,3 +105,8 @@ Raw responses and the exported bundle are under ignored
 - `ev_dd954f0cb01ffcedeff033ce8568daaaf03af950cd6883bb1cf7bfccb6b33c90`: model, RPC path, parameter and field names.
 - `ev_5d071106843d4d291345197a00dcb637cf360419ed73862baf114434f4d4f1ee`: title fallback and ranking branch.
 - `ev_93377985b17b36bbd4b665851b071ae474aeae855bac74c209cca572124dd6bf`: endpoint, header name, MIME and boolean/null offsets.
+
+The subsequent [cloud acceptance follow-up](reference-live-cloud-services.md)
+cancels service-owned in-flight summary calls on close and adds an explicit,
+redacted production endpoint check. Current host credentials are absent, so its
+production result is blocked; controlled transport checks are recorded separately.

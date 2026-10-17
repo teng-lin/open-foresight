@@ -152,3 +152,8 @@ Keychain and are not cryptographic or live service oracles. No live remote API
 call or credential extraction occurred. Live distribution service access, full
 signed release acceptance, original refresh/obsolete-model cleanup policy and
 broader GPU numerical parity remain unverified.
+
+The [cloud acceptance command](reference-live-cloud-services.md) can now check
+live shared metadata and optionally authenticate the downloaded detector blob
+without modifying a profile. This host's run is blocked by absent port-owned
+distribution credentials; it does not establish live acquisition success.

@@ -249,6 +249,51 @@ void main() {
       );
     });
 
+    test('close cancels only owned calls on a shared channel', () async {
+      final started = Completer<void>();
+      final blocked = <Completer<FetchExternalWebsiteResponse>>[];
+      fixture.respond = (request) {
+        if (request.url == 'independent') {
+          return Future.value(FetchExternalWebsiteResponse(summary: 'shared'));
+        }
+        final reply = Completer<FetchExternalWebsiteResponse>();
+        blocked.add(reply);
+        if (blocked.length == 2) started.complete();
+        return reply.future;
+      };
+      final cancelled = [
+        for (var i = 0; i < 2; i++)
+          expectLater(
+            service.fetchWebContent('blocked-$i'),
+            throwsA(
+              isA<GrpcError>().having(
+                (error) => error.code,
+                'code',
+                StatusCode.cancelled,
+              ),
+            ),
+          ),
+      ];
+      await started.future;
+      final other = WebContentService(
+        apiKey: 'other-fixture',
+        channel: channel,
+      );
+      try {
+        final independent = other.fetchWebContent('independent');
+        await service.close();
+        await Future.wait(cancelled);
+        expect((await independent)?.summary, 'shared');
+        expect((await other.fetchWebContent('independent'))?.summary, 'shared');
+        await expectLater(service.fetchWebContent('new'), throwsStateError);
+      } finally {
+        await other.close();
+        for (final reply in blocked) {
+          reply.complete(FetchExternalWebsiteResponse(summary: 'late'));
+        }
+      }
+    });
+
     test(
       'close rejects new operations without closing injected channel',
       () async {
