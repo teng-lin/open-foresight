@@ -10,6 +10,8 @@ import 'package:open_foresight/generated_content.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class WidgetNoteGenerator extends NativeRuntime {
+  @override
+  bool get loaded => true;
   WidgetNoteGenerator()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   final events = StreamController<Map<String, dynamic>>();

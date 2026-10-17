@@ -22,6 +22,8 @@ import 'reference_note_enhancement.dart';
 import 'reference_note_enhancer.dart';
 import 'reference_note_edit_mapping.dart';
 import 'reference_note_live_plan.dart';
+import 'reference_note_service_recovery.dart';
+import 'native.dart';
 import 'reference_note_transcript_cache.dart';
 import 'reference_note_enhancement_chunking.dart';
 import 'native_note_enhancement.dart';
@@ -1330,7 +1332,7 @@ class Application {
         (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String)))
       return;
     final transcript = _noteTranscriptText(id);
-    if (domain.generator == null || transcript.isEmpty) return;
+    if (transcript.isEmpty) return;
     final revision = _meeting(id)['revision'] as int;
     final previousState = _noteEnhancements[id];
     previousState?.saveTimer?.cancel();
@@ -1349,7 +1351,7 @@ class Application {
     _scheduleEnhancedDraft(id, enhancement);
     changed();
     try {
-      final generator = domain.generator!;
+      late NativeRuntime generator;
       var batch = 0;
       final prior = forceRegenerate
           ? null
@@ -1358,6 +1360,21 @@ class Application {
       final producer = ReferenceNoteEnhancer(
         ensureReady: () async {
           if (modelBusy) throw StateError('Model configuration is busy');
+          generator = await acquireNoteEnhancementService<NativeRuntime>(
+            getService: domain.noteEnhancementService,
+            isReady: (service) => service.loaded,
+            abortAndReset: () async {
+              stderr.writeln(
+                'NotesEnhancer: LiteRT-LM service not ready, attempting reset and re-initialization...',
+              );
+              await domain.resetNoteEnhancementService();
+            },
+            unavailableError: () async => Exception(
+              store.model('generation') != null
+                  ? 'LiteRT-LM service is not ready. Please try again in a moment.'
+                  : 'LiteRT-LM service is not ready: on-device inference model is not downloaded. Please check Settings -> Model Management.',
+            ),
+          );
           if (generator.effectiveState['tools'] == false) {
             throw StateError(
               'Note enhancement requires a native conversation runtime',

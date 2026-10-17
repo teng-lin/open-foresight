@@ -9,6 +9,8 @@ import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class NotesRuntime extends NativeRuntime {
+  @override
+  bool get loaded => true;
   String prompt = '';
   NotesRuntime()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');

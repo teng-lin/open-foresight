@@ -14,6 +14,8 @@ class TestDomain extends Domain {
 }
 
 class DelayedGenerator extends NativeRuntime {
+  @override
+  bool get loaded => true;
   final entered = Completer<void>(), release = Completer<void>();
   final String output;
   DelayedGenerator({this.output = '- Grounded enhancement'})

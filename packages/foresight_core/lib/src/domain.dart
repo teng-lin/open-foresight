@@ -207,6 +207,69 @@ class Domain {
     }
   }
 
+  Future<void>? _noteServiceInitialization;
+
+  /// The note producer's lazy service getter shares an initialization future.
+  /// Readiness policy and the single reset/reacquisition live in its caller.
+  Future<NativeRuntime?> noteEnhancementService() async {
+    _checkOpen();
+    if (generator?.loaded == true) return generator;
+    final pending = _noteServiceInitialization;
+    if (pending != null) {
+      await pending;
+      _checkOpen();
+      if (generator?.loaded == true) return generator;
+      if (identical(_noteServiceInitialization, pending)) {
+        _noteServiceInitialization = null;
+      }
+    }
+    final work = _initializeNoteEnhancementService();
+    _noteServiceInitialization = work;
+    try {
+      await work;
+      _checkOpen();
+      return generator;
+    } finally {
+      if (generator?.loaded != true &&
+          identical(_noteServiceInitialization, work)) {
+        _noteServiceInitialization = null;
+      }
+    }
+  }
+
+  /// Separate construction allows fixture runtimes to exercise real ownership.
+  NativeRuntime createNoteEnhancementRuntime() =>
+      NativeRuntime(runtimeConfiguration.nativeLibrary);
+
+  Future<void> _initializeNoteEnhancementService() async {
+    final model = store.model('generation');
+    if (model == null) return;
+    final candidate = createNoteEnhancementRuntime();
+    generator?.close();
+    generator = candidate;
+    try {
+      await candidate.load(
+        model['runtime'] as String,
+        model['path'] as String,
+        backend: model['backend'] as String? ?? 'llama_cpp',
+      );
+      if (_closed || !identical(generator, candidate)) {
+        candidate.close();
+        _checkOpen();
+      }
+    } catch (_) {
+      if (_closed || !identical(generator, candidate)) candidate.close();
+      rethrow;
+    }
+  }
+
+  Future<void> resetNoteEnhancementService() async {
+    _checkOpen();
+    generator?.close();
+    generator = null;
+    _noteServiceInitialization = null;
+  }
+
   Future<void>? _resuming;
   Future<void>? _initialization;
   void initialize(Future<void> task) {

@@ -16,6 +16,7 @@ import json
 import os
 import queue
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 import sys
@@ -487,6 +488,88 @@ def run_query_detector(engine, prompt):
         sys.stdout.flush()
 
 
+def _startup_warning(message):
+    print(message, file=sys.stderr, flush=True)
+
+
+def delete_model_cache_file(path, *, sleep=None, warn=None):
+    """Retry a single cache-file unlink; never remove a directory tree."""
+    sleep = sleep or time.sleep
+    warn = warn or _startup_warning
+    path = Path(path)
+    for attempt in range(1, 6):
+        try:
+            if not path.exists():
+                return True
+            path.unlink()
+            return True
+        except Exception as error:
+            if attempt == 5:
+                warn(f'Cannot delete model cache file {path}: {error}')
+                return False
+            sleep(attempt / 10)
+
+
+def clear_model_cache(model, cache, *, delete=None, warn=None):
+    """Map the recovered support-cache scope to this runner's owned cache.
+
+    The adjacent scan uses substring tests, not suffix tests. A symlink to a
+    regular file is unlinked at its own path, without deleting its target.
+    """
+    model, cache = Path(model), Path(cache)
+    delete = delete or delete_model_cache_file
+    warn = warn or _startup_warning
+
+    def matches(path):
+        return path.name.startswith(model.name) or path.name.startswith(model.stem)
+
+    try:
+        if cache.exists():
+            for path in cache.iterdir():
+                if path != model and path.is_file() and matches(path):
+                    delete(path)
+        for path in model.parent.iterdir():
+            if (path != model and path.is_file() and matches(path) and
+                    ('_mldrift_' in path.name or '.xnnpack_cache' in path.name)):
+                delete(path)
+    except OSError as error:
+        warn(f'Cannot clear model cache for {model}: {error}')
+
+
+def _engine_startup_attempt(api, model, settings):
+    # Keep the partial instance owned if __init__ raises. Calling the normal
+    # constructor would lose that reference before the recovered shutdown step.
+    engine = api.Engine.__new__(api.Engine)
+    try:
+        api.Engine.__init__(engine, str(model), **settings)
+    except Exception as error:
+        return engine, error
+    return engine, None
+
+
+@contextmanager
+def initialize_generation_engine(api, model, cache, *, clear_cache=None, warn=None, **settings):
+    """Retry text-only initialization once with exactly the same settings."""
+    clear_cache = clear_cache or clear_model_cache
+    warn = warn or _startup_warning
+    engine, error = _engine_startup_attempt(api, model, settings)
+    if error is not None:
+        warn(f'Model initialization failed; clearing its cache before retry: {error}')
+        try:
+            clear_cache(model, cache)
+            Path(cache).mkdir(mode=0o700, parents=True, exist_ok=True)
+        finally:
+            engine.close()
+        engine, error = _engine_startup_attempt(api, model, settings)
+        if error is not None:
+            engine.close()
+            raise error
+    try:
+        yield engine
+    finally:
+        engine.close()
+
+
 def run(args):
     if importlib.metadata.version('litert-lm') != '0.18.0':
         raise RuntimeError('This runner requires litert-lm==0.18.0')
@@ -501,9 +584,12 @@ def run(args):
     cache = Path(os.environ.get('FORESIGHT_LITERT_CACHE', str(model.parent / '.litert-cache'))) / args.backend
     cache.mkdir(mode=0o700, parents=True, exist_ok=True)
     backend = litert_lm.Backend.GPU() if args.backend == 'gpu' else litert_lm.Backend.CPU(thread_count=4)
-    with litert_lm.Engine(str(model), backend=backend,
-                         audio_backend=litert_lm.Backend.CPU(thread_count=4),
-                         max_num_tokens=512 if args.query_detector else 4096, cache_dir=str(cache)) as engine:
+    settings = dict(backend=backend,
+                    audio_backend=litert_lm.Backend.CPU(thread_count=4),
+                    max_num_tokens=512 if args.query_detector else 4096, cache_dir=str(cache))
+    startup = (litert_lm.Engine(str(model), **settings) if args.query_detector else
+               initialize_generation_engine(litert_lm, model, cache, **settings))
+    with startup as engine:
         if args.probe:
             print(json.dumps({"worker_protocol": 1, "native_stop_token_sequences": native_stop_tokens_supported(engine)}), flush=True)
             return

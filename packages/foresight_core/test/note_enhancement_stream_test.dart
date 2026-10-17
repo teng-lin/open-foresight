@@ -4,6 +4,8 @@ import 'package:foresight_core/foresight_core.dart';
 import 'package:test/test.dart';
 
 class ControlledNoteGenerator extends NativeRuntime {
+  @override
+  bool get loaded => true;
   ControlledNoteGenerator()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   final entered = Completer<void>();
