@@ -25,6 +25,7 @@
 #include <mutex>
 #include <poll.h>
 #include <set>
+#include <shared_mutex>
 #include <signal.h>
 #include <spawn.h>
 #include <string>
@@ -33,6 +34,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 extern char **environ;
 namespace {
@@ -40,17 +42,49 @@ using foresight::quote;
 char *owned(const std::string &s) {
   return strdup(s.c_str());
 }
+struct PollLifetime {
+  std::shared_mutex gate;
+  std::atomic<bool> closed{false};
+};
+std::mutex poll_registry_mutex;
+std::unordered_map<void *, std::shared_ptr<PollLifetime>> poll_registry;
 struct Events {
   std::mutex mu;
   std::condition_variable cv;
   std::deque<std::string> events;
-  virtual ~Events() = default;
+  Events() {
+    std::lock_guard lock(poll_registry_mutex);
+    poll_registry[this] = std::make_shared<PollLifetime>();
+  }
+  virtual ~Events() {
+    std::lock_guard lock(poll_registry_mutex);
+    poll_registry.erase(this);
+  }
   void emit(std::string s) {
     std::lock_guard lock(mu);
     events.push_back(std::move(s));
     cv.notify_all();
   }
 };
+// Remove the handle before waiting, so late polls never dereference it. Wake
+// existing blocking polls, then join them before any derived fields are freed.
+void retire_events(Events *events) {
+  std::shared_ptr<PollLifetime> lifetime;
+  {
+    std::lock_guard lock(poll_registry_mutex);
+    auto found = poll_registry.find(events);
+    if (found == poll_registry.end())
+      return;
+    lifetime = found->second;
+    poll_registry.erase(found);
+  }
+  {
+    std::lock_guard lock(events->mu);
+    lifetime->closed = true;
+    events->cv.notify_all();
+  }
+  std::unique_lock join(lifetime->gate);
+}
 struct Worker : Events {
   std::thread thread;
   std::atomic<bool> cancel{false}, active{false};
@@ -524,11 +558,24 @@ char *fs_event_poll(void *h, int timeout) {
   try {
     if (!h)
       return nullptr;
+    std::shared_ptr<PollLifetime> lifetime;
+    {
+      std::lock_guard registry(poll_registry_mutex);
+      const auto found = poll_registry.find(h);
+      if (found == poll_registry.end())
+        return nullptr;
+      lifetime = found->second;
+    }
+    std::shared_lock poll(lifetime->gate);
+    if (lifetime->closed)
+      return nullptr;
     auto &e = *static_cast<Events *>(h);
     std::unique_lock lock(e.mu);
     e.cv.wait_for(lock,
                   std::chrono::milliseconds(std::clamp(timeout, 0, 60000)),
-                  [&] { return !e.events.empty(); });
+                  [&] { return lifetime->closed || !e.events.empty(); });
+    if (lifetime->closed)
+      return nullptr;
     if (e.events.empty()) {
       if (auto *capture = dynamic_cast<Capture *>(&e);
           capture && capture->pending_dropped_bytes)
@@ -566,6 +613,7 @@ void *fs_engine_create_backend(const char *runtime, const char *model,
       return nullptr;
     if (!valid_asset(runtime, model))
       return nullptr;
+    foresight::seal_runtime_environment();
     auto *e = new Engine;
     e->runtime = runtime;
     e->model = model;
@@ -650,6 +698,17 @@ int fs_engine_probe(void *h) {
       e.busy = true;
       e.state = "loading";
     }
+    struct ProbeLease {
+      Engine &engine;
+      ~ProbeLease() {
+        std::lock_guard lock(engine.mu);
+        if (engine.busy) {
+          engine.busy = false;
+          engine.state = "failed";
+          engine.error = "Model initialization probe aborted";
+        }
+      }
+    } probe_lease{e};
     shutdown_persistent(e);
     Worker probe;
     std::string diagnostics;
@@ -708,7 +767,7 @@ int fs_engine_destroy(void *h) {
     auto *e = static_cast<Engine *>(h);
     {
       std::lock_guard lock(e->mu);
-      if (e->refs)
+      if (e->refs || e->busy)
         return -1;
     }
     delete e;
@@ -1058,7 +1117,7 @@ int fs_generate_options(void *h, const char *id, const char *prompt,
 int fs_generate_tools(void *h, const char *id, const char *prompt,
                       const char *tools, int max_output_tokens) {
   try {
-    if (!tools || !*tools)
+    if (!tools || !*tools || std::strpbrk(tools, "\r\n"))
       return -1;
     return generate_with_schema(h, id, prompt, tools, max_output_tokens, true);
 
@@ -1072,7 +1131,7 @@ int fs_generate_tools(void *h, const char *id, const char *prompt,
 }
 int fs_generation_tool_reply(void *h, const char *id, const char *message) {
   try {
-    if (!h || !id || !message)
+    if (!h || !id || !message || std::strpbrk(message, "\r\n"))
       return -1;
     auto &c = *static_cast<Conversation *>(h);
     std::lock_guard life(c.life);
@@ -1125,6 +1184,7 @@ int fs_conversation_destroy(void *h, int drain) {
       std::lock_guard lock(c->engine->mu);
       --c->engine->refs;
     }
+    retire_events(c);
     delete c;
     return 0;
 
@@ -1138,6 +1198,7 @@ int fs_conversation_destroy(void *h, int drain) {
 }
 void *fs_speech_create(const char *runtime, const char *model) {
   try {
+    foresight::seal_runtime_environment();
     const char *override_runtime = std::getenv("FORESIGHT_WHISPER_RUNTIME");
     if (override_runtime && *override_runtime)
       runtime = override_runtime;
@@ -1326,6 +1387,7 @@ void fs_speech_destroy(void *h) {
       s->stop();
       s->join();
     }
+    retire_events(s);
     delete s;
 
   } catch (const std::exception &barrier_error) {
@@ -1374,6 +1436,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
   try {
     if (rate < 8000 || rate > 192000)
       return nullptr;
+    foresight::seal_runtime_environment();
     auto *c = new Capture;
     c->target = target && *target ? target : "auto";
     if (const char *runtime = getenv("FORESIGHT_CAPTURE_RUNTIME");
@@ -1452,7 +1515,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                       attempt = 0;
                     }
                     residual.insert(residual.end(), data, data + n);
-                    size_t frame = c->playback ? size_t(c->rate * 2 * 40 / 1000)
+                    size_t frame = c->playback ? size_t(c->rate * 40 / 1000) * 2
                                                : residual.size() & ~size_t(1);
                     while (frame && residual.size() >= frame) {
                       std::vector<unsigned char> bytes(
@@ -1528,6 +1591,7 @@ void fs_capture_stop(void *h) {
     auto *c = static_cast<Capture *>(h);
     c->stop();
     c->join();
+    retire_events(c);
     delete c;
 
   } catch (const std::exception &barrier_error) {
@@ -1700,6 +1764,8 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
     if (!allowed.count(key))
       return -1;
     std::lock_guard lock(foresight::launch_mutex);
+    if (foresight::runtime_environment_sealed)
+      return -1;
     return setenv(key, value, 1) == 0 ? 0 : -1;
 
   } catch (const std::exception &barrier_error) {

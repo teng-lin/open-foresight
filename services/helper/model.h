@@ -165,6 +165,9 @@ struct Model {
       close(in[1]);
       throw std::runtime_error("Adapter output pipe failed");
     }
+    // ChildProcess serializes the spawn on its creator thread. Release the
+    // pipe-creation lock before waiting for that thread to report startup.
+    launch.unlock();
     try {
       process = std::make_unique<ChildProcess>(
           worker, "--embedding", path, in[0], out[1], gpu ? "--gpu" : "");
@@ -177,7 +180,6 @@ struct Model {
     }
     close(in[0]);
     close(out[1]);
-    launch.unlock();
     input = fdopen(in[1], "w");
     output_fd = out[0];
     if (!input) {

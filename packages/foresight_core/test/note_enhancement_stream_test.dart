@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:fake_async/fake_async.dart';

@@ -131,6 +131,7 @@ void main() {
         id,
       ]);
       final before = store.sources.single;
+      store.db.execute('PRAGMA user_version=1');
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);
@@ -192,6 +193,7 @@ void main() {
       ]);
       store.db.execute('DROP TABLE document_labels');
       final before = store.sources.single;
+      store.db.execute('PRAGMA user_version=1');
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);
@@ -200,7 +202,7 @@ void main() {
         '#0EBC5F',
         '#60D5F3',
       ]);
-      expect(store.rows('PRAGMA user_version').single.values.single, 1);
+      expect(store.rows('PRAGMA user_version').single.values.single, 2);
       store.close();
     },
   );

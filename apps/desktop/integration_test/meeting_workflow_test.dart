@@ -144,7 +144,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('New meeting'));
       await tester.pumpAndSettle();
-      final meeting = workspace.meetingId as int;
+      final meeting = workspace.meetingFeature.meetingId as int;
       final title =
           workspace.d.store.rows('SELECT title FROM meetings WHERE id=?', [
                 meeting,
@@ -156,8 +156,10 @@ void main() {
       await waitUntil(
         tester,
         () =>
-            workspace.recording?.sampleCounts.length == 2 &&
-            workspace.recording.sampleCounts.every((int n) => n > 0),
+            workspace.meetingFeature.recording?.sampleCounts.length == 2 &&
+            workspace.meetingFeature.recording.sampleCounts.every(
+              (int n) => n > 0,
+            ),
       );
       expect(
         workspace.d.store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -172,13 +174,16 @@ void main() {
       ]);
       player.stdout.drain<void>();
       player.stderr.drain<void>();
-      await waitUntil(tester, () => workspace.recording.peakVolumes[1] > 0);
+      await waitUntil(
+        tester,
+        () => workspace.meetingFeature.recording.peakVolumes[1] > 0,
+      );
       expect(await player.exitCode, 0);
       await waitUntil(
         tester,
         () =>
-            workspace.recording != null &&
-            (workspace.provisionalTranscript.values.any(
+            workspace.meetingFeature.recording != null &&
+            (workspace.meetingFeature.provisionalTranscript.values.any(
                   (text) => (text as String).toLowerCase().contains('country'),
                 ) ||
                 workspace.d.store
@@ -193,17 +198,21 @@ void main() {
                     )),
       );
       final liveBeforeStop = Map<String, String>.from(
-        workspace.provisionalTranscript,
+        workspace.meetingFeature.provisionalTranscript,
       );
       final finalizedBeforeStop = workspace.d.store.rows(
         'SELECT text,source,start_ms,end_ms FROM transcript WHERE meeting_id=? AND final=1',
         [meeting],
       );
-      expect(workspace.recording, isNotNull);
+      expect(workspace.meetingFeature.recording, isNotNull);
       await tester.pumpAndSettle();
       await captureWindow('$screenshotDirectory/09-live-transcription.png');
-      final counts = List<int>.from(workspace.recording.sampleCounts);
-      final peaks = List<double>.from(workspace.recording.peakVolumes);
+      final counts = List<int>.from(
+        workspace.meetingFeature.recording.sampleCounts,
+      );
+      final peaks = List<double>.from(
+        workspace.meetingFeature.recording.peakVolumes,
+      );
       expect(counts[0], greaterThan(0));
       expect(counts[1], greaterThan(48000));
       expect(peaks[1], greaterThan(0.01));
@@ -216,7 +225,9 @@ void main() {
       await tester.tap(find.byTooltip('Stop transcribing'));
       await waitUntil(
         tester,
-        () => workspace.recording == null && workspace.busy == false,
+        () =>
+            workspace.meetingFeature.recording == null &&
+            workspace.busy == false,
       );
       expect(workspace.error, isEmpty);
       expect(workspace.d.sourcesPaused, true);
@@ -307,12 +318,12 @@ void main() {
       await waitUntil(
         tester,
         () =>
-            workspace.meetingEnhancing == false &&
+            workspace.meetingFeature.meetingEnhancing == false &&
             workspace.d.store
                 .rows("SELECT * FROM artifacts WHERE kind='enhanced_notes'")
                 .isNotEmpty,
       );
-      expect(workspace.meetingEnhanceStatus, isEmpty);
+      expect(workspace.meetingFeature.meetingEnhanceStatus, isEmpty);
       final enhanced =
           workspace.d.store
                   .rows(
@@ -430,8 +441,10 @@ void main() {
       await waitUntil(
         tester,
         () =>
-            reopened.recording?.sampleCounts.length == 2 &&
-            reopened.recording.sampleCounts.every((int n) => n > 0),
+            reopened.meetingFeature.recording?.sampleCounts.length == 2 &&
+            reopened.meetingFeature.recording.sampleCounts.every(
+              (int n) => n > 0,
+            ),
       );
       final secondPlayer = await Process.start('pw-play', [
         '--target',
@@ -443,7 +456,10 @@ void main() {
       expect(await secondPlayer.exitCode, 0);
       await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.byTooltip('Stop transcribing'));
-      await waitUntil(tester, () => reopened.recording?.finishing == true);
+      await waitUntil(
+        tester,
+        () => reopened.meetingFeature.recording?.finishing == true,
+      );
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
@@ -454,7 +470,10 @@ void main() {
         tester,
         () => afterCancellation.d.generator?.effectiveState['state'] == 'ready',
       );
-      await waitUntil(tester, () => afterCancellation.recording == null);
+      await waitUntil(
+        tester,
+        () => afterCancellation.meetingFeature.recording == null,
+      );
       expect(
         afterCancellation.d.store.rows(
           'SELECT state FROM meetings WHERE id=?',
@@ -478,32 +497,35 @@ void main() {
       await tester.pump();
       await waitUntil(
         tester,
-        () => afterCancellation.recording?.sampleCounts.length == 2,
+        () =>
+            afterCancellation.meetingFeature.recording?.sampleCounts.length ==
+            2,
       );
-      final silentMeeting = afterCancellation.meetingId as int;
+      final silentMeeting = afterCancellation.meetingFeature.meetingId as int;
       final activityAtStart =
-          afterCancellation.recording.lastAudioActivity as DateTime;
+          afterCancellation.meetingFeature.recording.lastAudioActivity
+              as DateTime;
       var nextCheckpoint = 60;
       await waitUntil(tester, () {
         final elapsed = DateTime.now().difference(activityAtStart).inSeconds;
         if (realInactivity &&
             elapsed >= nextCheckpoint &&
             elapsed < 300 &&
-            afterCancellation.recording != null) {
+            afterCancellation.meetingFeature.recording != null) {
           expect(
-            afterCancellation.recording.lastAudioActivity,
+            afterCancellation.meetingFeature.recording.lastAudioActivity,
             activityAtStart,
           );
-          expect(afterCancellation.recording.finishing, false);
+          expect(afterCancellation.meetingFeature.recording.finishing, false);
           inactivityObservations.add({
             'elapsed_seconds': elapsed,
             'recording_active': true,
             'activity_timestamp_unchanged': true,
             'sample_counts': List<int>.from(
-              afterCancellation.recording.sampleCounts as List,
+              afterCancellation.meetingFeature.recording.sampleCounts as List,
             ),
             'peak_volumes': List<double>.from(
-              afterCancellation.recording.peakVolumes as List,
+              afterCancellation.meetingFeature.recording.peakVolumes as List,
             ),
           });
           debugPrint(
@@ -511,7 +533,7 @@ void main() {
           );
           nextCheckpoint += 60;
         }
-        return afterCancellation.recording == null &&
+        return afterCancellation.meetingFeature.recording == null &&
             afterCancellation.busy == false;
       }, seconds: realInactivity ? 330 : 30);
       final inactivityElapsed = DateTime.now().difference(activityAtStart);
@@ -552,7 +574,7 @@ void main() {
       expect(afterCancellation.d.sourcesPaused, true);
       final beforePauseImports = afterCancellation.d.store.sources.length;
       final pausedImport = afterCancellation.run(() async {
-        await afterCancellation.importFolderPath(fixtures.path);
+        await afterCancellation.sourceFeature.importFolderPath(fixtures.path);
       });
       await tester.pump();
       expect(afterCancellation.busy, true);
@@ -570,7 +592,9 @@ void main() {
       File(
         '${fixtures.path}/Apollo planning.md',
       ).writeAsStringSync('Updated acceptance fixture: the review is Monday.');
-      await afterCancellation.run(afterCancellation.refreshSources);
+      await afterCancellation.run(
+        afterCancellation.sourceFeature.refreshSources,
+      );
       final revised = afterCancellation.d.store.sources
           .where((s) => s['id'] == firstImported['id'])
           .single;
@@ -588,11 +612,13 @@ void main() {
       final address = 'http://127.0.0.1:${server.port}/notes';
       try {
         await afterCancellation.run(() async {
-          await afterCancellation.importSourceUrl(address);
+          await afterCancellation.sourceFeature.importSourceUrl(address);
         });
         expect(afterCancellation.error, isEmpty);
         page = 'URL acceptance fixture: the review is Wednesday.';
-        await afterCancellation.run(afterCancellation.refreshSources);
+        await afterCancellation.run(
+          afterCancellation.sourceFeature.refreshSources,
+        );
         final imported = afterCancellation.d.store.sources
             .where((s) => s['provenance'] == 'url:$address')
             .single;
@@ -618,7 +644,9 @@ void main() {
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
       final finding = afterCancellation.run(() async {
-        await afterCancellation.findLocalFiles(roots: [fixtures.path]);
+        await afterCancellation.sourceFeature.findLocalFiles(
+          roots: [fixtures.path],
+        );
       });
       await tester.pump();
       await waitUntil(
@@ -649,7 +677,7 @@ void main() {
         isEmpty,
       );
       expect(
-        afterCancellation.exportMeetingMarkdown(),
+        afterCancellation.meetingFeature.exportMeetingMarkdown(),
         contains('My meeting review: preserve this edit.'),
       );
       for (final name in ['Stats', 'Sources']) {
@@ -660,12 +688,13 @@ void main() {
           '$screenshotDirectory/${name == 'Stats' ? '01-stats' : '02-sources-list'}.png',
         );
       }
-      final unindexedGraphSource = await afterCancellation.importText(
-        'Missing vector fixture',
-        'Missing-vector text participates in the graph.',
-        'text/plain',
-        'fixture:missing-vector',
-      );
+      final unindexedGraphSource = await afterCancellation.meetingFeature
+          .importText(
+            'Missing vector fixture',
+            'Missing-vector text participates in the graph.',
+            'text/plain',
+            'fixture:missing-vector',
+          );
       final labelledSources = afterCancellation.d.store.sources;
       await afterCancellation.d.command('labels.set', {
         'id': labelledSources[0]['id'],
@@ -684,24 +713,29 @@ void main() {
       await waitUntil(
         tester,
         () =>
-            !afterCancellation.graphOrganizing &&
-            afterCancellation.graphPoints.length >= 2,
+            !afterCancellation.sourceFeature.graphOrganizing &&
+            afterCancellation.sourceFeature.graphPoints.length >= 2,
       );
-      expect(afterCancellation.graphLayoutError, isEmpty);
+      expect(afterCancellation.sourceFeature.graphLayoutError, isEmpty);
       expect(
-        afterCancellation.graphPoints.containsKey(unindexedGraphSource),
+        afterCancellation.sourceFeature.graphPoints.containsKey(
+          unindexedGraphSource,
+        ),
         true,
       );
       expect(
-        afterCancellation.graphSceneVectors.containsKey(unindexedGraphSource),
+        afterCancellation.sourceFeature.graphSceneVectors.containsKey(
+          unindexedGraphSource,
+        ),
         false,
       );
       final semanticGraphPointCount =
-          afterCancellation.graphPoints.length as int;
-      final semanticGraphEdgeCount = afterCancellation.graphEdges.length as int;
+          afterCancellation.sourceFeature.graphPoints.length as int;
+      final semanticGraphEdgeCount =
+          afterCancellation.sourceFeature.graphEdges.length as int;
       expect(semanticGraphEdgeCount, greaterThan(0));
       final expectedGraphEdges = <String, double>{};
-      for (final edge in afterCancellation.graphEdges) {
+      for (final edge in afterCancellation.sourceFeature.graphEdges) {
         expect(edge.source.compareTo(edge.target), lessThan(0));
         expect(edge.similarity, greaterThanOrEqualTo(.2));
         expect(edge.similarity.isFinite, true);
@@ -788,14 +822,18 @@ void main() {
       for (var i = 0; i < graphNodes.evaluate().length; i++) {
         await tester.tapAt(tester.getCenter(graphNodes.at(i)));
         await tester.pump();
-        await waitUntil(tester, () => !afterCancellation.graphRelatedLoading);
-        final id = afterCancellation.graphSelectedDocument;
+        await waitUntil(
+          tester,
+          () => !afterCancellation.sourceFeature.graphRelatedLoading,
+        );
+        final id = afterCancellation.sourceFeature.graphSelectedDocument;
         if (id == null) continue;
         final rows = afterCancellation.d.store.sources as List;
         selectedUri =
             rows.singleWhere((row) => row['id'] == id)['source_uri'] as String;
         if (selectedUri.isNotEmpty &&
-            (afterCancellation.graphSelectionEdges as List).isNotEmpty)
+            (afterCancellation.sourceFeature.graphSelectionEdges as List)
+                .isNotEmpty)
           break;
       }
       expect(
@@ -803,10 +841,10 @@ void main() {
         isNotEmpty,
         reason: 'A real imported source must expose its original URI',
       );
-      expect(afterCancellation.graphSelectedDocument, isNotNull);
+      expect(afterCancellation.sourceFeature.graphSelectedDocument, isNotNull);
       expect(find.byKey(const ValueKey('graph-inspector')), findsOneWidget);
       final selectedDocument =
-          afterCancellation.graphSelectedDocument as String;
+          afterCancellation.sourceFeature.graphSelectedDocument as String;
       final selectedNode =
           tester
                   .widget<CustomPaint>(
@@ -850,7 +888,8 @@ void main() {
         expectGraphSelection: true,
       );
       final beforeInlineOrganization = {
-        for (final entry in (afterCancellation.graphPoints as Map).entries)
+        for (final entry
+            in (afterCancellation.sourceFeature.graphPoints as Map).entries)
           entry.key: [entry.value.x, entry.value.y, entry.value.z],
       };
       await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
@@ -879,9 +918,9 @@ void main() {
       );
       await tester.pumpAndSettle();
       expect(afterCancellation.error, isEmpty);
-      expect(afterCancellation.graphLabelInput.text, isEmpty);
+      expect(afterCancellation.sourceFeature.graphLabelInput.text, isEmpty);
       expect(
-        (afterCancellation.graphPoints as Map).entries.any(
+        (afterCancellation.sourceFeature.graphPoints as Map).entries.any(
           (entry) =>
               (entry.value.x - beforeInlineOrganization[entry.key]![0]).abs() >
                   1e-6 ||
@@ -928,7 +967,7 @@ void main() {
       );
       await tester.tap(find.byKey(const ValueKey('graph-inspector-close')));
       await tester.pumpAndSettle();
-      expect(afterCancellation.graphSelectedDocument, isNull);
+      expect(afterCancellation.sourceFeature.graphSelectedDocument, isNull);
       expect(find.byKey(const ValueKey('graph-inspector')), findsNothing);
       await waitUntil(tester, () => !afterCancellation.busy);
       final organizationButton = find.widgetWithText(ActionChip, 'Add label');
@@ -1050,10 +1089,11 @@ void main() {
       await waitUntil(
         tester,
         () =>
-            !afterCancellation.graphOrganizing &&
-            afterCancellation.graphPoints.length == expectedGraph.length,
+            !afterCancellation.sourceFeature.graphOrganizing &&
+            afterCancellation.sourceFeature.graphPoints.length ==
+                expectedGraph.length,
       );
-      expect(afterCancellation.graphLayoutError, isEmpty);
+      expect(afterCancellation.sourceFeature.graphLayoutError, isEmpty);
       expect(
         afterCancellation.d.store.rows('SELECT * FROM document_labels'),
         expectedLabels,
@@ -1063,19 +1103,24 @@ void main() {
         expectedClusters,
       );
       for (final entry in expectedGraph.entries) {
-        final point = afterCancellation.graphPoints[entry.key];
+        final point = afterCancellation.sourceFeature.graphPoints[entry.key];
         expect([point.x, point.y, point.z], entry.value);
       }
       expect(
-        afterCancellation.graphVectorCache.length,
+        afterCancellation.sourceFeature.graphVectorCache.length,
         savedGraphRows.where((row) => (row['bytes'] as int) > 0).length,
       );
       expect(
-        afterCancellation.graphSceneVectors.containsKey(unindexedGraphSource),
+        afterCancellation.sourceFeature.graphSceneVectors.containsKey(
+          unindexedGraphSource,
+        ),
         false,
       );
-      expect(afterCancellation.graphEdges.length, semanticGraphEdgeCount);
-      for (final edge in afterCancellation.graphEdges) {
+      expect(
+        afterCancellation.sourceFeature.graphEdges.length,
+        semanticGraphEdgeCount,
+      );
+      for (final edge in afterCancellation.sourceFeature.graphEdges) {
         final key = jsonEncode([edge.source, edge.target]);
         expect(expectedGraphEdges.containsKey(key), true);
         expect(edge.similarity, closeTo(expectedGraphEdges[key]!, 1e-6));
@@ -1100,8 +1145,9 @@ void main() {
                   )
                   .painter
               as GraphClusterPainter;
-      final fittedViewport = afterCancellation.graphViewportSize!;
-      final fittedTransform = afterCancellation.graphTransform.value;
+      final fittedViewport = afterCancellation.sourceFeature.graphViewportSize!;
+      final fittedTransform =
+          afterCancellation.sourceFeature.graphTransform.value;
       for (final rect in fittedPainter.paintedBounds()) {
         final topLeft = MatrixUtils.transformPoint(
           fittedTransform,
@@ -1140,7 +1186,7 @@ void main() {
 
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      if (afterCancellation.meetingId != null) {
+      if (afterCancellation.meetingFeature.meetingId != null) {
         await tester.tap(find.byTooltip('All meetings'));
         await tester.pumpAndSettle();
       }

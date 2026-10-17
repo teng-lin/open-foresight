@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';

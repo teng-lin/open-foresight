@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -56,17 +57,19 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            Domain(
-              store,
-              OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              ),
             ),
             deviceLoader: () async => [],
           ),
         );
         final dynamic state = tester.state(find.byType(Workspace));
         state.update(() {
-          state.meetingId = meeting;
-          state.meetingPanel = 'Transcript';
+          state.meetingFeature.meetingId = meeting;
+          state.meetingFeature.meetingPanel = 'Transcript';
         });
         await tester.pumpAndSettle();
         await tester.tap(find.byTooltip('Copy full transcript'));

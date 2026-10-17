@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'pump_until.dart';
 import 'dart:async';
 import 'dart:io';
@@ -72,9 +74,11 @@ void main() {
             time.run((_) => Timer(duration, callback)),
       );
       final generator = WidgetNoteGenerator();
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
       late Future<void> work;

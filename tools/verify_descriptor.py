@@ -95,7 +95,11 @@ def verify(protoc="protoc"):
         transcribed = descriptor_pb2.FileDescriptorSet.FromString(
             output.read_bytes()
         ).file[0]
-    if not (shape(recovered) == shape(transcribed)):
+    expected = json.loads(json.dumps(shape(recovered)))
+    actual = json.loads(
+        json.dumps(shape(transcribed)).replace("foresight.helper.v1", PACKAGE)
+    )
+    if expected != actual:
         raise RuntimeError("Wire shape differs from recovered descriptor")
     pool = descriptor_pool.DescriptorPool()
     pool.Add(recovered)
@@ -125,7 +129,7 @@ def verify(protoc="protoc"):
         "message_count": 22,
         "wire_shape": "verified",
         "edition": "2024",
-        "production_cpp": "generate from exact descriptor with explicit presence and UTF8 NONE",
+        "production_cpp": "version package/name while preserving recovered explicit presence and UTF8 NONE",
         "proto3_deviations": [
             "Implicit scalar presence loses explicitly supplied default values",
             "UTF-8 validation differs from recovered NONE",

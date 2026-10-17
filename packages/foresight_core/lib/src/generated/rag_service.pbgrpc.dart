@@ -20,8 +20,7 @@ import 'rag_service.pb.dart' as $0;
 
 export 'rag_service.pb.dart';
 
-@$pb.GrpcServiceName(
-    'research.xeno.labs.foresight.launch_agent.proto.RagService')
+@$pb.GrpcServiceName('foresight.helper.v1.RagService')
 class RagServiceClient extends $grpc.Client {
   /// The hostname for this service.
   static const $core.String defaultHost = '';
@@ -112,67 +111,65 @@ class RagServiceClient extends $grpc.Client {
 
   // method descriptors
 
-  static final _$indexDocument = $grpc.ClientMethod<$0.IndexRequest,
-          $0.IndexResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/IndexDocument',
-      ($0.IndexRequest value) => value.writeToBuffer(),
-      $0.IndexResponse.fromBuffer);
-  static final _$retrieveContext = $grpc.ClientMethod<$0.RetrieveRequest,
-          $0.RetrieveResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/RetrieveContext',
-      ($0.RetrieveRequest value) => value.writeToBuffer(),
-      $0.RetrieveResponse.fromBuffer);
+  static final _$indexDocument =
+      $grpc.ClientMethod<$0.IndexRequest, $0.IndexResponse>(
+          '/foresight.helper.v1.RagService/IndexDocument',
+          ($0.IndexRequest value) => value.writeToBuffer(),
+          $0.IndexResponse.fromBuffer);
+  static final _$retrieveContext =
+      $grpc.ClientMethod<$0.RetrieveRequest, $0.RetrieveResponse>(
+          '/foresight.helper.v1.RagService/RetrieveContext',
+          ($0.RetrieveRequest value) => value.writeToBuffer(),
+          $0.RetrieveResponse.fromBuffer);
   static final _$updateModelPaths = $grpc.ClientMethod<
           $0.UpdateModelPathsRequest, $0.UpdateModelPathsResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/UpdateModelPaths',
+      '/foresight.helper.v1.RagService/UpdateModelPaths',
       ($0.UpdateModelPathsRequest value) => value.writeToBuffer(),
       $0.UpdateModelPathsResponse.fromBuffer);
-  static final _$deleteDocument = $grpc.ClientMethod<$0.DeleteRequest,
-          $0.DeleteResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/DeleteDocument',
-      ($0.DeleteRequest value) => value.writeToBuffer(),
-      $0.DeleteResponse.fromBuffer);
+  static final _$deleteDocument =
+      $grpc.ClientMethod<$0.DeleteRequest, $0.DeleteResponse>(
+          '/foresight.helper.v1.RagService/DeleteDocument',
+          ($0.DeleteRequest value) => value.writeToBuffer(),
+          $0.DeleteResponse.fromBuffer);
   static final _$encode =
       $grpc.ClientMethod<$0.EncodeRequest, $0.EncodeResponse>(
-          '/research.xeno.labs.foresight.launch_agent.proto.RagService/Encode',
+          '/foresight.helper.v1.RagService/Encode',
           ($0.EncodeRequest value) => value.writeToBuffer(),
           $0.EncodeResponse.fromBuffer);
-  static final _$chunkText = $grpc.ClientMethod<$0.ChunkTextRequest,
-          $0.ChunkTextResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/ChunkText',
-      ($0.ChunkTextRequest value) => value.writeToBuffer(),
-      $0.ChunkTextResponse.fromBuffer);
-  static final _$truncateText = $grpc.ClientMethod<$0.TruncateTextRequest,
-          $0.TruncateTextResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/TruncateText',
-      ($0.TruncateTextRequest value) => value.writeToBuffer(),
-      $0.TruncateTextResponse.fromBuffer);
+  static final _$chunkText =
+      $grpc.ClientMethod<$0.ChunkTextRequest, $0.ChunkTextResponse>(
+          '/foresight.helper.v1.RagService/ChunkText',
+          ($0.ChunkTextRequest value) => value.writeToBuffer(),
+          $0.ChunkTextResponse.fromBuffer);
+  static final _$truncateText =
+      $grpc.ClientMethod<$0.TruncateTextRequest, $0.TruncateTextResponse>(
+          '/foresight.helper.v1.RagService/TruncateText',
+          ($0.TruncateTextRequest value) => value.writeToBuffer(),
+          $0.TruncateTextResponse.fromBuffer);
   static final _$computeEmbedding = $grpc.ClientMethod<
           $0.ComputeEmbeddingRequest, $0.ComputeEmbeddingResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/ComputeEmbedding',
+      '/foresight.helper.v1.RagService/ComputeEmbedding',
       ($0.ComputeEmbeddingRequest value) => value.writeToBuffer(),
       $0.ComputeEmbeddingResponse.fromBuffer);
   static final _$computeImageEmbedding = $grpc.ClientMethod<
           $0.ComputeImageEmbeddingRequest, $0.ComputeEmbeddingResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/ComputeImageEmbedding',
+      '/foresight.helper.v1.RagService/ComputeImageEmbedding',
       ($0.ComputeImageEmbeddingRequest value) => value.writeToBuffer(),
       $0.ComputeEmbeddingResponse.fromBuffer);
   static final _$computeAudioEmbedding = $grpc.ClientMethod<
           $0.ComputeAudioEmbeddingRequest, $0.ComputeEmbeddingResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/ComputeAudioEmbedding',
+      '/foresight.helper.v1.RagService/ComputeAudioEmbedding',
       ($0.ComputeAudioEmbeddingRequest value) => value.writeToBuffer(),
       $0.ComputeEmbeddingResponse.fromBuffer);
   static final _$ping = $grpc.ClientMethod<$0.PingRequest, $0.PingResponse>(
-      '/research.xeno.labs.foresight.launch_agent.proto.RagService/Ping',
+      '/foresight.helper.v1.RagService/Ping',
       ($0.PingRequest value) => value.writeToBuffer(),
       $0.PingResponse.fromBuffer);
 }
 
-@$pb.GrpcServiceName(
-    'research.xeno.labs.foresight.launch_agent.proto.RagService')
+@$pb.GrpcServiceName('foresight.helper.v1.RagService')
 abstract class RagServiceBase extends $grpc.Service {
-  $core.String get $name =>
-      'research.xeno.labs.foresight.launch_agent.proto.RagService';
+  $core.String get $name => 'foresight.helper.v1.RagService';
 
   RagServiceBase() {
     $addMethod($grpc.ServiceMethod<$0.IndexRequest, $0.IndexResponse>(

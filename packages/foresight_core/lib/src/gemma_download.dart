@@ -2,6 +2,7 @@ import 'model_pins.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 class GemmaModel {
@@ -22,22 +23,56 @@ class GemmaModel {
       '${filename.replaceAll('.litertlm', '')}-${digest.substring(0, 12)}';
 }
 
-/// Find a completed asset independently of whether its runner is ready.
-/// Size is sufficient for UI availability; download() verifies the hash before use.
-File? localModelFile(
+typedef LocalModelFinder =
+    Future<File?> Function(
+      GemmaModel model,
+      Directory root, {
+      Map<String, Object?>? registration,
+    });
+
+/// Every availability decision authenticates bytes, including equal-size files.
+Future<bool> verifyModelFile(File file, String digest, int bytes) async {
+  try {
+    if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
+            FileSystemEntityType.file ||
+        file.lengthSync() != bytes)
+      return false;
+    return (await sha256.bind(file.openRead()).first).toString() == digest;
+  } on FileSystemException {
+    return false;
+  }
+}
+
+Future<File?> localModelFile(
   GemmaModel model,
   Directory root, {
   Map<String, Object?>? registration,
-}) {
+}) async {
   final candidates = [
     if (registration?['digest'] == model.digest)
       File(registration!['path'] as String),
     File('${root.path}/${model.directory}/${model.filename}'),
   ];
   for (final file in candidates) {
-    if (file.existsSync() && file.lengthSync() == model.bytes) return file;
+    if (await verifyModelFile(file, model.digest, model.bytes)) return file;
   }
   return null;
+}
+
+/// Available bytes on the filesystem that owns the model cache. Unknown space
+/// is an error so an unbounded multi-GB download cannot start accidentally.
+Future<int> availableModelDiskBytes(Directory directory) async {
+  final result = await Process.run(
+    Platform.isMacOS ? '/bin/df' : '/usr/bin/df',
+    ['-Pk', directory.path],
+  );
+  final rows = (result.stdout as String).trim().split('\n');
+  final columns = rows.last.trim().split(RegExp(r'\s+'));
+  final blocks = columns.length >= 6 ? int.tryParse(columns[3]) : null;
+  if (result.exitCode != 0 || blocks == null || blocks < 0) {
+    throw StateError('Unable to check free disk space for model download.');
+  }
+  return blocks * 1024;
 }
 
 // Pinned public artifact metadata, independently verified 2026-10-13. These
@@ -76,21 +111,25 @@ class ModelDownloadCancelled implements Exception {
   String toString() => 'Model download cancelled';
 }
 
-/// One owned download. Never mutates the application registry. Only a fully
-/// verified file becomes visible at the final path; cancellation removes its
-/// own temporary file and preserves previously completed assets.
+/// Persistent range parts survive connection errors and cancellation. Only
+/// authenticated bytes replace a managed-cache file; registered external files
+/// remain untouched. A cache lock prevents concurrent writers sharing staging.
 class GemmaDownload {
+  static final _activePaths = <String>{};
   final HttpClient Function() createClient;
+  final Future<int> Function(Directory) availableBytes;
   final Duration timeout;
   final int parallelism, rangeThreshold;
   HttpClient? _client;
   bool _cancelled = false, _active = false;
   GemmaDownload({
     HttpClient Function()? createClient,
+    Future<int> Function(Directory)? availableBytes,
     this.timeout = const Duration(seconds: 30),
     this.parallelism = 4,
     this.rangeThreshold = 64 * 1024 * 1024,
-  }) : createClient = createClient ?? (() => HttpClient());
+  }) : createClient = createClient ?? (() => HttpClient()),
+       availableBytes = availableBytes ?? availableModelDiskBytes;
   void cancel() {
     _cancelled = true;
     _client?.close(force: true);
@@ -111,8 +150,10 @@ class GemmaDownload {
     if (_active || _cancelled)
       throw StateError('Download is active or cancelled');
     _active = true;
-    File? partial;
-    IOSink? sink;
+    RandomAccessFile? lock;
+    String? ownedPath;
+    bool locked = false;
+    File? assembly;
     try {
       if (parallelism < 1 || parallelism > 8 || rangeThreshold < 0)
         throw ArgumentError('Invalid download parallelism');
@@ -121,152 +162,261 @@ class GemmaDownload {
           model.filename.contains('/') ||
           model.filename.contains('\\') ||
           !(model.filename.endsWith('.litertlm') ||
-              model.filename.endsWith('.bin')))
+              model.filename.endsWith('.bin'))) {
         throw ArgumentError('Invalid model metadata');
+      }
       phase?.call(ModelDownloadPhase.checkingCache);
       final directory = Directory('${root.path}/${model.directory}');
-      final destination =
-          existingFile ?? File('${directory.path}/${model.filename}');
-      final type = await FileSystemEntity.type(
+      final destination = File('${directory.path}/${model.filename}');
+      for (final candidate in [
+        if (existingFile != null) existingFile,
+        destination,
+      ]) {
+        if (FileSystemEntity.typeSync(candidate.path, followLinks: false) ==
+            FileSystemEntityType.file) {
+          phase?.call(ModelDownloadPhase.verifyingCache);
+          if (await verifyModelFile(candidate, model.digest, model.bytes)) {
+            _check();
+            progress?.call(model.bytes, model.bytes);
+            return candidate;
+          }
+        }
+      }
+      _check();
+      final destinationType = FileSystemEntity.typeSync(
         destination.path,
         followLinks: false,
       );
-      if (type != FileSystemEntityType.notFound) {
-        phase?.call(ModelDownloadPhase.verifyingCache);
-        if (type != FileSystemEntityType.file ||
-            await destination.length() != model.bytes ||
-            (await sha256.bind(destination.openRead()).first).toString() !=
-                model.digest)
-          throw StateError(
-            'Existing model file failed verification; it was preserved',
-          );
-        _check();
-        progress?.call(model.bytes, model.bytes);
-        return destination;
+      if (destinationType != FileSystemEntityType.notFound &&
+          destinationType != FileSystemEntityType.file) {
+        throw StateError('The model cache destination must be a regular file.');
       }
-      _check();
-      if (existingFile != null)
-        throw StateError(
-          'The selected local model is missing; choose a model again.',
-        );
       await directory.create(recursive: true);
-      final temporary = await directory.createTemp('.download-');
-      partial = File('${temporary.path}/model.part');
-      sink = partial.openWrite();
+      final canonical = await directory.resolveSymbolicLinks();
+      if (!_activePaths.add(canonical))
+        throw StateError('A download of this model is already active.');
+      ownedPath = canonical;
+      lock = await File(
+        '${directory.path}/.download.lock',
+      ).open(mode: FileMode.append);
+      await lock.lock(FileLock.exclusive);
+      locked = true;
+      _check();
+      // A writer may have finished while this request waited for its lock.
+      if (await verifyModelFile(destination, model.digest, model.bytes))
+        return destination;
+      final temporary = Directory('${directory.path}/.download');
+      await temporary.create();
+      final metadata = File('${temporary.path}/identity.json');
+      final identity = jsonEncode({
+        'digest': model.digest,
+        'bytes': model.bytes,
+        'parallelism': parallelism,
+        'rangeThreshold': rangeThreshold,
+      });
+      if (await metadata.exists() &&
+          await metadata.readAsString() != identity) {
+        await temporary.delete(recursive: true);
+        await temporary.create();
+      }
+      await metadata.writeAsString(identity, flush: true);
+      final staleAssembly = File('${temporary.path}/assembled.part');
+      if (await staleAssembly.exists()) await staleAssembly.delete();
+      final whole = File('${temporary.path}/model.part');
+      final count = whole.existsSync() || model.bytes < rangeThreshold
+          ? 1
+          : parallelism;
+      final block = (model.bytes + count - 1) ~/ count;
+      final parts = <File>[];
+      final ranges = <(int, int)>[];
+      var retained = 0;
+      for (
+        var index = 0;
+        index < count && index * block < model.bytes;
+        index++
+      ) {
+        final start = index * block;
+        final end = start + block - 1 < model.bytes
+            ? start + block - 1
+            : model.bytes - 1;
+        final part = count == 1
+            ? whole
+            : File('${temporary.path}/range-$index.part');
+        final type = FileSystemEntity.typeSync(part.path, followLinks: false);
+        if (type != FileSystemEntityType.file &&
+            type != FileSystemEntityType.notFound) {
+          throw StateError('Invalid download staging file.');
+        }
+        if (part.existsSync() && part.lengthSync() > end - start + 1)
+          await part.delete();
+        retained += part.existsSync() ? part.lengthSync() : 0;
+        parts.add(part);
+        ranges.add((start, end));
+      }
+      // Parallel range assembly needs a second copy until verification finishes.
+      // Include existing partials and leave headroom for filesystem metadata.
+      final required =
+          model.bytes -
+          retained +
+          (count > 1 ? model.bytes : 0) +
+          16 * 1024 * 1024;
+      final available = await availableBytes(directory);
+      if (available < required)
+        throw StateError(
+          'Not enough free disk space. Model setup needs ${(required / 1e9).toStringAsFixed(2)} GB more free space.',
+        );
+      _check();
       phase?.call(ModelDownloadPhase.downloading);
       final client = _client = createClient();
       client.autoUncompress = false;
       client.connectionTimeout = timeout;
       final uri = sourceForTesting ?? model.url;
-      var received = 0;
-      void report(int count) {
-        received += count;
+      var received = retained;
+      progress?.call(received, model.bytes);
+      void report(int bytes) {
+        received += bytes;
         progress?.call(received, model.bytes);
       }
 
-      final count = model.bytes >= rangeThreshold ? parallelism : 1;
-      final block = (model.bytes + count - 1) ~/ count;
-      final firstEnd = block - 1 < model.bytes ? block - 1 : model.bytes - 1;
-      final first = await _response(
-        client,
-        uri,
-        range: count > 1 ? 'bytes=0-$firstEnd' : null,
-      );
-      if (count > 1 && first.statusCode == 206) {
-        final parts = <File>[];
-        final jobs = <Future<void>>[];
-        for (
-          var index = 0;
-          index < count && index * block < model.bytes;
-          index++
-        ) {
-          final start = index * block;
-          final end = start + block - 1 < model.bytes
-              ? start + block - 1
-              : model.bytes - 1;
-          final file = File('${temporary.path}/range-$index.part');
-          parts.add(file);
-          jobs.add(() async {
-            IOSink? output;
-            try {
-              final response = index == 0
-                  ? first
-                  : await _response(client, uri, range: 'bytes=$start-$end');
-              if (response.statusCode != 206 ||
-                  response.headers.value(HttpHeaders.contentRangeHeader) !=
-                      'bytes $start-$end/${model.bytes}')
-                throw StateError('Model server returned an invalid byte range');
-              output = file.openWrite();
-              await _body(response, output, end - start + 1, report);
-              await output.close();
-              output = null;
-            } catch (_) {
-              client.close(force: true);
-              rethrow;
-            } finally {
-              try {
-                await output?.close();
-              } catch (_) {}
+      Future<void> transfer(
+        File part,
+        int start,
+        int end, {
+        HttpClientResponse? initial,
+      }) async {
+        var offset = part.existsSync() ? part.lengthSync() : 0;
+        if (offset == end - start + 1) return;
+        final response =
+            initial ??
+            await _response(
+              client,
+              uri,
+              range: offset > 0 || count > 1
+                  ? 'bytes=${start + offset}-$end'
+                  : null,
+            );
+        if (response.statusCode == 206) {
+          if (response.headers.value(HttpHeaders.contentRangeHeader) !=
+              'bytes ${start + offset}-$end/${model.bytes}') {
+            throw StateError('Model server returned an invalid byte range');
+          }
+        } else if (response.statusCode == 200 &&
+            start == 0 &&
+            end == model.bytes - 1) {
+          // A server without Range support restarts the owned partial safely.
+          if (offset > 0) {
+            if (await availableBytes(directory) <
+                model.bytes + 16 * 1024 * 1024) {
+              throw StateError(
+                'Not enough free disk space to restart this download.',
+              );
             }
-          }());
+            received -= offset;
+            offset = 0;
+          }
+        } else {
+          throw StateError(
+            'Model download server returned an invalid response',
+          );
         }
-        await Future.wait(jobs);
-        for (final file in parts) {
-          _check();
-          await sink.addStream(file.openRead());
-          await file.delete();
+        final sink = part.openWrite(
+          mode: offset > 0 ? FileMode.append : FileMode.write,
+        );
+        try {
+          await _body(response, sink, end - start + 1 - offset, report);
+        } finally {
+          await sink.close();
+        }
+      }
+
+      if (count > 1) {
+        final firstLength = parts.first.existsSync()
+            ? parts.first.lengthSync()
+            : 0;
+        HttpClientResponse? first;
+        if (firstLength < ranges.first.$2 + 1) {
+          first = await _response(
+            client,
+            uri,
+            range: 'bytes=$firstLength-${ranges.first.$2}',
+          );
+        }
+        if (first?.statusCode == 200) {
+          // The server ignored Range: retain a resumable sequential partial.
+          received = 0;
+          final sink = whole.openWrite();
+          try {
+            await _body(first!, sink, model.bytes, report);
+          } finally {
+            await sink.close();
+          }
+          assembly = whole;
+        } else {
+          await Future.wait([
+            for (var index = 0; index < parts.length; index++)
+              transfer(
+                parts[index],
+                ranges[index].$1,
+                ranges[index].$2,
+                initial: index == 0 ? first : null,
+              ),
+          ]);
+          assembly = File('${temporary.path}/assembled.part');
+          final sink = assembly.openWrite();
+          try {
+            for (final part in parts) {
+              _check();
+              await sink.addStream(part.openRead());
+            }
+          } finally {
+            await sink.close();
+          }
         }
       } else {
-        // Servers that ignore Range can still provide a verified whole file.
-        if (first.statusCode != 200)
-          throw StateError('Model download server returned an error');
-        await _body(first, sink, model.bytes, report);
+        await transfer(whole, 0, model.bytes - 1);
+        assembly = whole;
       }
-      await sink.close();
-      sink = null;
       _check();
       phase?.call(ModelDownloadPhase.verifyingDownload);
-      if (received != model.bytes ||
-          (await sha256.bind(partial.openRead()).first).toString() !=
-              model.digest)
+      if (!await verifyModelFile(assembly, model.digest, model.bytes)) {
+        // A complete corrupt transfer cannot be resumed into a valid file.
+        await temporary.delete(recursive: true);
+        assembly = null;
         throw StateError('Model download failed size or hash verification');
+      }
       _check();
-      // A hard link atomically publishes the verified inode and refuses to
-      // overwrite any destination, including a concurrent downloader's file.
-      final published = await Process.run(
-        Platform.isMacOS ? '/bin/ln' : '/usr/bin/ln',
-        ['--', partial.path, destination.path],
-      );
-      if (published.exitCode != 0)
-        throw StateError(
-          'Model could not be published; existing files were preserved',
-        );
-      await partial.delete();
-      partial = null;
-      await temporary.delete();
+      // POSIX rename atomically replaces only after complete authentication.
+      await assembly.rename(destination.path);
+      assembly = null;
+      await temporary.delete(recursive: true);
       return destination;
     } catch (failure) {
       if (_cancelled) throw const ModelDownloadCancelled();
       if (failure is HttpException ||
           failure is SocketException ||
           failure is HandshakeException ||
-          failure is TimeoutException)
+          failure is TimeoutException) {
         throw StateError(
-          'Model transfer failed. Check the connection and retry.',
+          'Model transfer interrupted. Retry to resume the saved download.',
         );
+      }
       rethrow;
     } finally {
       _client?.close(force: true);
       _client = null;
+      // Assembled output is disposable; range parts remain available to retry.
+      if (assembly?.path.endsWith('/assembled.part') == true &&
+          assembly!.existsSync())
+        await assembly.delete();
       try {
-        await sink?.close();
-      } catch (_) {}
-      if (partial != null) {
-        final directory = partial.parent;
-        if (await partial.exists()) await partial.delete();
-        if (await directory.exists()) await directory.delete(recursive: true);
+        if (lock != null) {
+          if (locked) await lock.unlock();
+          await lock.close();
+        }
+      } finally {
+        if (ownedPath != null) _activePaths.remove(ownedPath);
+        _active = false;
       }
-      _active = false;
     }
   }
 
@@ -317,7 +467,8 @@ class GemmaDownload {
       }
       progress(chunk.length);
     }
-    if (received != expected) throw StateError('Model download was incomplete');
+    if (received != expected)
+      throw const HttpException('Model download was incomplete');
   }
 }
 

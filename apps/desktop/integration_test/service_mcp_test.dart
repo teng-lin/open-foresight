@@ -84,7 +84,7 @@ class Mcp {
 
 Future<void> closeDesktop(WidgetTester tester, dynamic workspace) async {
   final client = (workspace.d as RemoteDomain).client;
-  final commands = workspace.commands;
+  final commands = workspace.integrationFeature.commands;
   await tester.pumpWidget(const SizedBox.shrink());
   await waitFor(
     tester,
@@ -164,12 +164,14 @@ void main() {
       await waitFor(
         tester,
         () =>
-            workspace.recording != null &&
-            workspace.recording.sampleCounts.length == 2,
+            workspace.meetingFeature.recording != null &&
+            workspace.meetingFeature.recording.sampleCounts.length == 2,
       );
       await waitFor(
         tester,
-        () => workspace.recording.sampleCounts.every((int n) => n > 0),
+        () => workspace.meetingFeature.recording.sampleCounts.every(
+          (int n) => n > 0,
+        ),
       );
       await mcp.close();
       observed.expect(
@@ -185,7 +187,7 @@ void main() {
         () => find.byType(app.Workspace).evaluate().isNotEmpty,
       );
       workspace = tester.state(find.byType(app.Workspace));
-      await waitFor(tester, () => workspace.recording == null);
+      await waitFor(tester, () => workspace.meetingFeature.recording == null);
       // Final transcription persists independently of desktop startup. Wait for this
       // client's restore/reconciliation to finish before requesting generation.
       await workspace.d.resume();
@@ -199,8 +201,8 @@ void main() {
         (await workspace.d.command('status') as Map)['pid'],
         initial['pid'],
       );
-      await workspace.stopRecording();
-      await waitFor(tester, () => workspace.recording == null);
+      await workspace.meetingFeature.stopRecording();
+      await waitFor(tester, () => workspace.meetingFeature.recording == null);
       final meeting =
           await workspace.d.command('meetings.get', {'id': id}) as Map;
       observed.expect(

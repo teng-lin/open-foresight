@@ -65,6 +65,10 @@ void main() {
       final embedding = File('${root.path}/embedding.litertlm')
         ..writeAsStringSync('download fixture');
       final download = LocalDownload(embedding);
+      store.setPreference(
+        'modelTerms.${embeddingGemmaModel.repository}.${embeddingGemmaModel.revision}',
+        'accepted',
+      );
       var loaded = false;
       await tester.runAsync(
         () => store.register('generation', generation.path, '/usr/bin/true'),

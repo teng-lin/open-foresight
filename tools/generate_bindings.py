@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Generate from the authoritative descriptor, without rewriting edition features."""
+"""Generate the versioned helper API, preserving recovered field/edition features."""
 
 import argparse
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,16 +11,40 @@ from google.protobuf import descriptor_pb2
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def production_descriptor():
+    """Version the owned API without changing recovered scalar presence/features."""
+    descriptor = descriptor_pb2.FileDescriptorProto.FromString(
+        (ROOT / "proto/rag/rag_service.descriptor.pb").read_bytes()
+    )
+    original = descriptor.package
+    descriptor.name = "rag_service.proto"
+    match = re.search(
+        r"package\s+([\w.]+)\s*;", (ROOT / "proto/rag/rag_service.proto").read_text()
+    )
+    if match is None:
+        raise ValueError("Helper proto must declare its versioned package")
+    descriptor.package = match.group(1)
+    for message in descriptor.message_type:
+        for field in message.field:
+            if field.type_name:
+                field.type_name = field.type_name.replace(original, descriptor.package)
+    for service in descriptor.service:
+        for method in service.method:
+            method.input_type = method.input_type.replace(original, descriptor.package)
+            method.output_type = method.output_type.replace(
+                original, descriptor.package
+            )
+    return descriptor
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--language", choices=["cpp", "python"], required=True)
+    parser.add_argument("--language", choices=["cpp", "python", "dart"], required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--protoc", default="protoc")
     parser.add_argument("--grpc-plugin")
     args = parser.parse_args()
-    descriptor = descriptor_pb2.FileDescriptorProto.FromString(
-        (ROOT / "proto/rag/rag_service.descriptor.pb").read_bytes()
-    )
+    descriptor = production_descriptor()
     args.output.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temp:
         source = Path(temp) / "descriptor-set.pb"
@@ -29,7 +54,7 @@ def main():
         command = [
             args.protoc,
             f"--descriptor_set_in={source}",
-            f"--{args.language}_out={args.output}",
+            f"--{args.language}_out={'grpc:' if args.language == 'dart' else ''}{args.output}",
         ]
         if args.grpc_plugin:
             command.extend(

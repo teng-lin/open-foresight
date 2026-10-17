@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -54,7 +55,10 @@ void main() {
     final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
     try {
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();

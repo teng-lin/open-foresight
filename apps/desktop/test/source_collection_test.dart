@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -37,7 +38,10 @@ void main() {
         }
 
         await tester.pumpWidget(
-          Foresight(Domain(store, helper), deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(Domain(store, helper)),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.tap(find.text('Sources'));
         await tester.pumpAndSettle();

@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -492,6 +493,10 @@ void main() {
         await domain.command('meetings.pause');
         final stopped = await domain.command('meetings.stop') as Map;
         expect(stopped['active'], false);
+        expect(stopped['meeting_id'], isNull);
+        expect(stopped['began'], isNull);
+        expect(stopped['elapsed_ms'], 0);
+        expect(app.captureState['elapsed_ms'], 0);
         expect(stopped['paused'], false);
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [

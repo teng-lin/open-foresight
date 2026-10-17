@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'dart:convert';

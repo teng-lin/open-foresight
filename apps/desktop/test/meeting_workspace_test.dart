@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/application.dart';
+import 'desktop_connection_fixture.dart';
 import 'pump_until.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -76,9 +78,11 @@ void main() {
       );
       final generator = NotesRuntime();
       final domain = Domain(store, helper);
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
       expect(find.text('Live enhanced notes'), findsOneWidget);
@@ -192,11 +196,14 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
-          child: Foresight(Domain(store, helper), deviceLoader: () async => []),
+          child: Foresight(
+            TestDesktopConnection(Domain(store, helper)),
+            deviceLoader: () async => [],
+          ),
         ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       for (final size in [
         const Size(1952, 1226),
         const Size(1280, 720),

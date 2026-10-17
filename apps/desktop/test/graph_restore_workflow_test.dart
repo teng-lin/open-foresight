@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -83,7 +84,9 @@ void main() {
       }
 
       Future<void> showGraph(RestoringGraphDomain d) async {
-        await tester.pumpWidget(Foresight(d, deviceLoader: () async => []));
+        await tester.pumpWidget(
+          Foresight(TestDesktopConnection(d), deviceLoader: () async => []),
+        );
         await tester.tap(find.text('Sources'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Graph view'));
@@ -96,7 +99,8 @@ void main() {
           pollingClock.elapsed < const Duration(seconds: 5);
         ) {
           final dynamic state = tester.state(find.byType(Workspace));
-          if (!state.graphOrganizing && state.graphPoints.length == count)
+          if (!state.sourceFeature.graphOrganizing &&
+              state.sourceFeature.graphPoints.length == count)
             return;
           await tester.runAsync(() => Future<void>(() {}));
           await tester.pump();
@@ -113,7 +117,7 @@ void main() {
       });
       await waitForPoints(2);
       final dynamic firstState = tester.state(find.byType(Workspace));
-      expect(firstState.graphEdges.length, 1);
+      expect(firstState.sourceFeature.graphEdges.length, 1);
       expect(store.rows('SELECT * FROM graph_documents').length, 2);
       final beforeLabelChanges = store.rows(
         'SELECT document_id,proj_x,proj_y,proj_z FROM graph_documents ORDER BY document_id',
@@ -174,13 +178,16 @@ void main() {
       await showGraph(second);
       await waitForPoints(2);
       final dynamic state = tester.state(find.byType(Workspace));
-      expect(state.graphOrganizing, false);
+      expect(state.sourceFeature.graphOrganizing, false);
       expect(second.requests, isEmpty);
-      expect(state.graphPoints.length, 2);
-      expect(state.graphEdges.length, 1);
-      expect(state.graphEdges.single.similarity, closeTo(.8, 1e-6));
+      expect(state.sourceFeature.graphPoints.length, 2);
+      expect(state.sourceFeature.graphEdges.length, 1);
+      expect(
+        state.sourceFeature.graphEdges.single.similarity,
+        closeTo(.8, 1e-6),
+      );
       for (final entry in expected.entries) {
-        expect(state.graphPoints[entry.key].x, entry.value);
+        expect(state.sourceFeature.graphPoints[entry.key].x, entry.value);
       }
       // Cached rendering works without a live engine; readiness still validates
       // the backend/preprocessing identity before any new organization.
@@ -199,12 +206,12 @@ void main() {
       state.update(() {});
       await tester.pumpAndSettle();
       expect(second.requestedIds.single, [c]);
-      expect(state.graphPoints[a].x, expected[a]);
+      expect(state.sourceFeature.graphPoints[a].x, expected[a]);
       second.requests.single.complete({
         c: [0, 0, 1],
       });
       await waitForPoints(3);
-      expect(state.graphEdges.length, 1);
+      expect(state.sourceFeature.graphEdges.length, 1);
       expect(store.rows('SELECT * FROM graph_documents').length, 3);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());

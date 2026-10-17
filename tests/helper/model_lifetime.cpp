@@ -32,12 +32,10 @@ static bool dead(pid_t pid) {
 
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
-#ifdef __APPLE__
   int supervised = foresight::supervise_worker(argc, argv);
   if (supervised >= 0)
     return supervised;
   setenv("FORESIGHT_HELPER", foresight::executable_path().c_str(), 1);
-#endif
   std::string directory =
       (fs::temp_directory_path().string() + "/foresight-model-lifetime-") +
       std::to_string(getpid());

@@ -77,7 +77,7 @@ void main() {
       expect(row['labels'], '["Team"]');
     }
     expect(rows[file]!['content'], 'Local edit');
-    expect(store.rows('PRAGMA user_version').single.values.single, 1);
+    expect(store.rows('PRAGMA user_version').single.values.single, 2);
     store.db.dispose();
     temp.deleteSync(recursive: true);
   });
