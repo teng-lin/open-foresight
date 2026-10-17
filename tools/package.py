@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -65,7 +66,7 @@ def main():
         assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
     assert hashlib.sha256(args.onnx_library.read_bytes()).hexdigest() == ONNX_LIBRARY_SHA256, 'ONNX Runtime checksum mismatch'
     # Refuse a Python extension or an incompatible/missing public C runtime.
-    environment = dict(__import__('os').environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve()))
+    environment = dict(os.environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve()))
     if extensions is None:
         subprocess.run([str(worker), '--check'], env=environment, check=True)
     shutil.copytree(args.flutter_bundle, args.output / 'app')
@@ -86,10 +87,14 @@ def main():
     shutil.copy2(args.litert_library, args.output / 'lib/liblitert-lm.so')
     if extensions is not None:
         extension_libraries = copy_linux_extension_dependencies(extensions, args.output / 'lib')
-        environment = validate_linux_extension_dependencies(extension_libraries, args.output / 'lib')
-        environment['FORESIGHT_LITERT_LIBRARY'] = str((args.output / 'lib/liblitert-lm.so').resolve())
+        extension_environment = validate_linux_extension_dependencies(extension_libraries, args.output / 'lib')
+        extension_environment['FORESIGHT_LITERT_LIBRARY'] = str((args.output / 'lib/liblitert-lm.so').resolve())
         probe_native_extensions(args.output / 'lib/liblitert-lm.so')
-        subprocess.run([str(worker), '--check'], env=environment, check=True)
+        subprocess.run([str(worker), '--check'], env=extension_environment, check=True)
+        # The isolated vendor check must not discard SDK search paths needed by
+        # the helper's transitive gRPC/Protobuf dependencies during collection.
+        environment['LD_LIBRARY_PATH'] = os.pathsep.join(filter(None, (
+            str((args.output / 'lib').resolve()), environment.get('LD_LIBRARY_PATH'))))
     shutil.copy2(args.onnx_library, args.output / 'lib/libonnxruntime.so')
     for license_file in ('LICENSE', 'ThirdPartyNotices.txt'):
         shutil.copy2(ROOT / 'third_party/onnxruntime' / license_file, args.output / 'share/open-foresight' / ('onnxruntime-' + license_file))
