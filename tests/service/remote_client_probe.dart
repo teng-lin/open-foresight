@@ -59,6 +59,13 @@ Future<void> main() async {
     domain.helper.changed = () {
       if (!update.isCompleted) update.complete();
     };
+    // Unchanged service heartbeats no longer rebuild the desktop. Observe an
+    // actual committed mutation after subscribing to the change callback.
+    await domain.command('notes.save', {
+      'id': note['id'],
+      'title': 'Desktop facade',
+      'body': 'service-owned',
+    });
     await update.future.timeout(const Duration(seconds: 5));
     Process.killPid(firstPid, ProcessSignal.sigterm);
     final deadline = DateTime.now().add(const Duration(seconds: 20));
