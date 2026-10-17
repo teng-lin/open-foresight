@@ -64,10 +64,24 @@ the checks succeed. Reruns replace assets with matching names. Actions copies
 are retained for 14 days. The regular PR workflow continues to run its existing
 build and regression checks.
 
-This CI DMG currently contains the existing ad-hoc development bundle. It is not
-Developer ID signed or notarized and does not bundle Python/LiteRT or Whisper
-runtimes. Signed distribution still requires the runtimes, credentials, and
-release validation described below.
+CI assembles the complete ad-hoc bundle with standalone Python 3.13.16, the
+source-pinned LiteRT extension (including native stop sequences, macOS ABI fix
+and accelerator dependencies), and static Whisper with embedded Metal shaders.
+`tools/build_macos_runtimes.py` prepares and verifies the cached payload; its
+cache key includes the dependency lock, builders and source patches. Python and
+Bazel downloads are checksum pinned and Whisper uses a full source commit.
+
+Every PR runs packaged generation/embedding capability checks, both native and
+SentencePiece initialization orders, and Whisper help with a minimal environment.
+Release builds additionally download checksum-pinned public E2B, EmbeddingGemma
+and Whisper Tiny weights outside the application, then run real CPU inference
+and the JFK transcription fixture. Models are not embedded in the DMG. The DMG
+job repeats the runtime completeness checks on the restored application before
+publication. Evidence is retained alongside the packaging manifest.
+
+The CI artifact remains ad-hoc signed, without Developer ID or notarization.
+Physical capture, GPU execution on supported hardware, credentials and the
+remaining release validation below are separate gates.
 
 ### Local assembly and signed distribution
 

@@ -154,3 +154,10 @@ signed release acceptance, broader GPU numerical parity remain unverified.
 Original refresh/obsolete-model cleanup policy is now implemented as described below.
 
 The ordered refresh catalog, first-existing path lookup, owned recursive fallback and obsolete-model cleanup are now implemented and connected to distribution acquisition and missing-registry recovery. Explicit download still uses its distinct last-duplicate plan. See [model lifecycle](reference-model-lifecycle.md) for exact policies, port ownership constraints, tests and remaining live-service/platform gates.
+signed release acceptance, original refresh/obsolete-model cleanup policy and
+broader GPU numerical parity remain unverified.
+
+The [cloud acceptance command](reference-live-cloud-services.md) can now check
+live shared metadata and optionally authenticate the downloaded detector blob
+without modifying a profile. This host's run is blocked by absent port-owned
+distribution credentials; it does not establish live acquisition success.

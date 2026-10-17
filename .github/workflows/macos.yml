@@ -25,7 +25,7 @@ jobs:
     # macos-15-intel label. Fail early if runner allocation ever changes.
     # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
     runs-on: macos-15
-    timeout-minutes: 120
+    timeout-minutes: 180
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       FORESIGHT_BUILD_JOBS: '3'
@@ -55,7 +55,7 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install build tools
-        run: brew install cmake ninja cocoapods protobuf
+        run: brew install cmake ninja cocoapods protobuf git-lfs
       - name: Install Python development dependencies
         run: |
           python -m venv .venv
@@ -109,10 +109,40 @@ jobs:
         run: |
           .venv/bin/python tests/integration/test_native_process.py \
             build/native/libforesight_native.dylib build/services/helper/ForesightHelper
-      - name: Assemble ad hoc development application
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        id: inference-cache
+        with:
+          path: build/macos-runtimes
+          key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py', 'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch') }}
+      - name: Build and verify complete inference runtimes
         run: |
-          .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk
+          .venv/bin/python tools/build_macos_runtimes.py --jobs 3
+          # The verified wheel, native regression logs and ABI report live in
+          # macos-runtimes. Release compiler scratch space before app copies.
+          rm -rf -- build/macos-runtime-sources
+      - name: Cache verified inference runtimes
+        if: steps.inference-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: build/macos-runtimes
+          key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py', 'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch') }}
+      - name: Assemble complete ad hoc application
+        run: |
+          .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
+            --python-runtime build/macos-runtimes/python \
+            --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
+            --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
+            --whisper-license build/macos-runtimes/whisper/LICENSE
           codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
+      - name: Verify bundled inference without developer environment
+        run: |
+          .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
+            --output test-results/macos-release-runtime.json
+      - name: Real release-model CPU acceptance
+        if: inputs.package-release
+        run: |
+          .venv/bin/python tools/test_macos_release_models.py 'dist/Open Foresight.app' \
+            --models build/release-acceptance-models --output test-results/release-models
       - name: Installed application tooling tests
         run: .venv/bin/python -m unittest discover -s tests -p test_macos_tools.py -v
       - name: Relocated application MCP smoke with minimal environment
@@ -126,6 +156,7 @@ jobs:
           name: macos-development-evidence
           path: |
             dist/*.manifest.json
+            build/macos-runtimes/runtime-manifest.json
             build/Testing/Temporary/LastTest.log
             test-results/
           if-no-files-found: ignore
