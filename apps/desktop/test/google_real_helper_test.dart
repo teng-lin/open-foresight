@@ -22,6 +22,7 @@ void main() {
       await fixture.start();
       final auth = GoogleAuth(
         Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
       );
       final store = Store('${directory.path}/app.db'),

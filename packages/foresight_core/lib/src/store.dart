@@ -1,3 +1,4 @@
+import 'model_integrity.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
@@ -406,6 +407,20 @@ class Store {
   List<Map<String, Object?>> get models =>
       rows('SELECT * FROM models').map(resolveModelRuntime).toList();
 
+  /// Re-read stored bytes before any model worker is created. A cache that was
+  /// modified after registration must never acquire trust from its saved digest.
+  Future<void> verifyRegisteredModels() async {
+    for (final model in rows('SELECT kind,path,digest FROM models')) {
+      final actual = await modelAssetDigest(model['path'] as String);
+      if (actual != model['digest']) {
+        throw StateError(
+          'The ${model['kind']} model no longer matches its stored digest. '
+          'Restore or replace the model before starting the service.',
+        );
+      }
+    }
+  }
+
   Future<void> register(
     String kind,
     String path,
@@ -432,25 +447,7 @@ class Store {
       ],
     ];
     if (!backends.contains(backend)) throw ArgumentError.value(backend);
-    String digest;
-    if (Directory(path).existsSync()) {
-      final files =
-          Directory(path)
-              .listSync(recursive: true, followLinks: false)
-              .whereType<File>()
-              .toList()
-            ..sort((a, b) => a.path.compareTo(b.path));
-      if (files.isEmpty) throw StateError('Empty model directory');
-      final manifest = StringBuffer();
-      for (final file in files) {
-        manifest.writeln(
-          '${file.path.substring(Directory(path).path.length)}:${await sha256.bind(file.openRead()).first}',
-        );
-      }
-      digest = sha256.convert(utf8.encode(manifest.toString())).toString();
-    } else {
-      digest = (await sha256.bind(File(path).openRead()).first).toString();
-    }
+    final digest = await modelAssetDigest(path);
     if (current != null && !current())
       throw StateError('Model setup cancelled');
     if (expectedDigest != null && digest != expectedDigest)
