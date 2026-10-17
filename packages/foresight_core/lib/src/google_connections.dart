@@ -26,11 +26,6 @@ class GoogleConnections {
   }
 
   GoogleConnections(this.domain, this.auth) {
-    store.db.execute(
-      '''CREATE TABLE IF NOT EXISTS google_sources(source_id TEXT PRIMARY KEY REFERENCES sources(id),account TEXT NOT NULL,file_id TEXT NOT NULL,modified TEXT NOT NULL,mime TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS calendar_events(event_key TEXT PRIMARY KEY,account TEXT NOT NULL,calendar_id TEXT NOT NULL,google_id TEXT NOT NULL,meeting_id INTEGER NOT NULL REFERENCES meetings(id),source_id TEXT NOT NULL,starts INTEGER NOT NULL,ends INTEGER NOT NULL,status TEXT NOT NULL,metadata TEXT NOT NULL,synced INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS google_folders(account TEXT NOT NULL,folder_id TEXT NOT NULL,PRIMARY KEY(account,folder_id));''',
-    );
     _restoreModificationTimes();
     for (final row in store.rows(
       "SELECT calendar_events.source_id,calendar_events.metadata FROM calendar_events JOIN source_details ON source_details.source_id=calendar_events.source_id WHERE source_details.source_uri=''",
