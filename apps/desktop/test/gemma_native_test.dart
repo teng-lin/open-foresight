@@ -18,6 +18,7 @@ void main() {
       final store = Store('${dir.path}/app.db');
       final helper = Helper('${dir.path}/helper.sock', '${dir.path}/helper');
       final domain = Domain(store, helper);
+      var passed = false;
       try {
         domain.generator = await configureGeneration(
           store,
@@ -73,6 +74,7 @@ void main() {
         expect(
           store.rows('SELECT model FROM answers').single['model'],
           isNot('source-fallback'),
+          reason: answer,
         );
         final guide = store.importText(
           'Target Product Profile writing guide',
@@ -219,7 +221,20 @@ void main() {
               'limitations': ['Public weights are not proven byte-identical to Mac encrypted service assets', 'E4B/12B not tested on this host; chooser exposes memory requirements'],
             })}\n',
           );
+        passed = true;
       } finally {
+        final report = env['FORESIGHT_GEMMA_REPORT'];
+        if (!passed && report != null) {
+          File(report).writeAsStringSync(
+            const JsonEncoder.withIndent('  ').convert({
+              'status': 'failed',
+              'runtime': domain.generator?.effectiveState,
+              'answers': store.rows(
+                'SELECT question,body,status,model FROM answers',
+              ),
+            }),
+          );
+        }
         domain.close();
         domain.generator?.close();
         await helper.close();

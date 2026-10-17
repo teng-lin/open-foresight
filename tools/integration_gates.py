@@ -181,7 +181,10 @@ def audio_gate(args, env):
     with private_pipewire(env, args.output) as private:
         desktop = run_tests('desktop', ['test/live_recording_test.dart', 'test/live_gap_recording_test.dart'],
                             2, private, args.output, 'audio-desktop', args.flutter, args.dart)
-        core = run_tests('core', ['test/recording_pipewire_test.dart'], 1, private, args.output, 'audio-core', args.flutter, args.dart)
+        inspector_env = dict(private)
+        # The PCM inspector supplies its own runner and a dummy model, not Whisper.
+        inspector_env.pop('FORESIGHT_WHISPER_RUNTIME', None)
+        core = run_tests('core', ['test/recording_pipewire_test.dart'], 1, inspector_env, args.output, 'audio-core', args.flutter, args.dart)
     return {'desktop': desktop, 'core': core, 'physical_audio': 'not_run'}
 
 

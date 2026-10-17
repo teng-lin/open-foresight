@@ -1,8 +1,10 @@
 """Contract tests for acceptance evidence, isolation and skip-inventory drift."""
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -73,3 +75,19 @@ def test_inventory_catches_added_removed_or_changed_skips(tmp_path):
 
 def test_repository_skip_inventory_is_current():
     assert inventory.verify(ROOT) > 0
+
+
+def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
+    runner = tmp_path / 'bin/whisper-cli-vulkan'
+    runner.parent.mkdir(); runner.touch()
+    args = SimpleNamespace(bundle=tmp_path, models=tmp_path, output=tmp_path, flutter='flutter', dart='dart')
+    observed = []
+    def run(package, files, expected, env, *rest):
+        observed.append((package, dict(env)))
+        return {'passed': expected, 'skipped': 0}
+    with patch.object(gates, 'model_file', return_value='/fixture/model'), \
+            patch.object(gates, 'private_pipewire', side_effect=lambda env, output: nullcontext(env)), \
+            patch.object(gates, 'run_tests', side_effect=run):
+        gates.audio_gate(args, {'PATH': '/bin'})
+    assert observed[0][0] == 'desktop' and observed[0][1]['FORESIGHT_WHISPER_RUNTIME'] == str(runner)
+    assert observed[1][0] == 'core' and 'FORESIGHT_WHISPER_RUNTIME' not in observed[1][1]
