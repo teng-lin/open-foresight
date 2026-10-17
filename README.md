@@ -260,13 +260,13 @@ To cut a release:
 ```sh
 python3 tools/app_version.py --set 0.2.0   # updates the pubspec and its derived copies, bumps the build number
 git commit -am "chore: release v0.2.0"
-git tag v0.2.0 && git push origin main v0.2.0
-gh release create v0.2.0 --generate-notes  # builds the Linux packages and the macOS DMG
+git push origin main
+gh workflow run release.yml --ref main -f tag=v0.2.0
 ```
 
 `python3 tools/app_version.py` prints the current version, and `--check` fails if a derived copy is out of date. Release CI refuses a tag that does not match `v` plus the pubspec version.
 
-Record notable changes in [CHANGELOG.md](CHANGELOG.md). Before tagging, move the `Unreleased` notes under the new version heading.
+Record notable changes in [CHANGELOG.md](CHANGELOG.md). Before preparing a release, move the `Unreleased` notes under the new version heading.
 
 ## Documentation
 

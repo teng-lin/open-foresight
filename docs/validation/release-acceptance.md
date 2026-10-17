@@ -1,4 +1,28 @@
-# Published installer acceptance
+# Release preparation and installer acceptance
+
+Run `gh workflow run release.yml --ref main -f tag=vX.Y.Z` after merging the
+version update. This is the supported publication path. The coordinator requires
+successful exact-main Linux and macOS candidates before creating a tag. If
+candidates are missing, expired, or absent after a documentation-only commit, it
+forces the platform workflow and waits. A failed candidate build leaves no tag.
+
+The release remains a draft while reusable Linux and macOS workflows check out
+`refs/tags/vX.Y.Z`, package the exact tested candidate, and upload installers.
+Acceptance requires all four installers plus checksum and provenance sidecars.
+Missing assets, failed tests, and skipped gates fail publication. Only a completely
+successful installed-package matrix publishes the draft as the latest release.
+Public releases cannot be rebuilt or overwritten; increment the app version.
+
+To retry a failed draft, rerun **all jobs** in the coordinator. Preparation removes
+only that draft's old assets, and assigns a higher Linux package release using
+`run_number * 1000 + run_attempt`. This supports real package upgrades and prevents
+mixed installer generations. Draft assets are never uploaded with `--clobber`.
+
+The downloader rejects any installer source revision different from the tag.
+`--allow-recovery-revision` is an explicit historical audit escape hatch recorded
+in `installer.json`; the publication workflow never supplies it. `--allow-draft`
+lets the acceptance jobs test unpublished bytes before publication.
+
 
 The `Published installer acceptance` workflow tests the exact assets downloaded
 from a GitHub release. It never rebuilds a package to substitute for the release
@@ -10,18 +34,10 @@ and release version. DMGs use their published `.manifest.json`. Metadata identit
 and its checksum are recorded alongside the installer identity; missing or
 ambiguous provenance fails acceptance.
 
-The workflow runs when either release-packaging workflow completes successfully.
-If the other workflow has not yet published its installers, it explicitly reports
-**acceptance NOT RUN**, skips the test jobs, and waits for the other completion
-event. Successful manual Linux recovery builds explicitly dispatch acceptance
-with their target release tag after publishing; the build branch name is never
-used as the release tag. A manual run with missing assets fails instead of
-silently skipping.
-After this workflow lands on main, run it against an existing release with:
-
-```sh
-gh workflow run release-acceptance.yml --repo teng-lin/open-foresight -f tag=v0.1.0
-```
+Acceptance is called by the coordinator after both platform builders succeed.
+It can also be dispatched manually to audit an existing release. Historical
+v0.1.0 Linux assets deliberately fail strict revision verification; the replacement
+v0.1.1 must pass with one shared source commit.
 
 ## Automated matrix
 

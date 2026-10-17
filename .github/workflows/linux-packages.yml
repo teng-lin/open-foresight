@@ -3,7 +3,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: linux-packages-${{ inputs.tag || github.event.release.tag_name }}
+  group: linux-packages-${{ inputs.tag }}
   cancel-in-progress: false
 jobs:
   bundle:
@@ -17,14 +17,15 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
+        ref: refs/tags/${{ inputs.tag }}
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
-    - name: Require an existing published release
+    - name: Require an unpublished draft release
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
-      run: test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
+      run: test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
     - name: Require the tag version and fetch the tested commit candidate
       id: version
       env:
@@ -37,9 +38,9 @@ jobs:
         version,_=read_version()
         if os.environ['RELEASE_TAG']!='v'+version: raise SystemExit('Release tag/version mismatch')
         epoch=subprocess.check_output(['git','show','-s','--format=%ct','HEAD'],text=True).strip()
-        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print(f'version={version}', 'release=1', f'epoch={epoch}', sep=chr(10), file=output)
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print(f'version={version}', f'release={os.environ["PACKAGE_RELEASE"]}', f'epoch={epoch}', sep=chr(10), file=output)
         PY
-        python tools/ci_artifacts.py pull --component linux-app --identity "$GITHUB_SHA" --prefix dist/packages --wait 3600
+        python tools/ci_artifacts.py pull --component linux-app --identity "$(git rev-parse HEAD)" --prefix dist/packages --wait 3600
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: portable-bundle
@@ -68,13 +69,7 @@ jobs:
           artifacts/portable-bundle/* \
           artifacts/open-foresight-deb-x86-64/*.deb* \
           artifacts/open-foresight-rpm-x86-64/*.rpm* \
-          artifacts/open-foresight-arch-x86-64/*.pkg.tar.zst* --clobber
-    - name: Validate published installers after a manual recovery
-      if: github.event_name == 'workflow_dispatch'
-      env:
-        GH_TOKEN: ${{ github.token }}
-        GH_REPO: ${{ github.repository }}
-      run: gh workflow run release-acceptance.yml -f tag="$RELEASE_TAG"
+          artifacts/open-foresight-arch-x86-64/*.pkg.tar.zst*
 
   packages:
     needs: bundle
@@ -91,7 +86,10 @@ jobs:
         - format: arch
           image: archlinux:base-devel
     steps:
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: refs/tags/${{ inputs.tag }}
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: portable-bundle
@@ -120,15 +118,15 @@ jobs:
         path: dist/packages/
         if-no-files-found: error
         retention-days: 14
-'on':
-  release:
-    types:
-    - published
-  workflow_dispatch:
+on:
+  workflow_call:
     inputs:
       tag:
-        description: Existing published release to receive Linux packages (for example v0.1.0)
+        required: true
+        type: string
+      package_release:
         required: true
         type: string
 env:
-  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+  RELEASE_TAG: ${{ inputs.tag }}
+  PACKAGE_RELEASE: ${{ inputs.package_release }}
