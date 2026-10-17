@@ -173,13 +173,25 @@ class RemoteDomain extends Domain {
   @override
   void pauseSources() {
     _paused = true;
-    unawaited(command('sources.pause'));
+    _sourceControl('sources.pause');
   }
 
   @override
   void resumeSources() {
     _paused = false;
-    unawaited(command('sources.resume'));
+    _sourceControl('sources.resume');
+  }
+
+  void _sourceControl(String method) {
+    unawaited(
+      command(method).catchError((Object error) {
+        if (!_disposed) {
+          helper.state = 'Source control failed: $error';
+          helper.changed?.call();
+        }
+        return null;
+      }),
+    );
   }
 
   @override

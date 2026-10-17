@@ -33,9 +33,12 @@ fi
 "$task_python" "$task_root/tools/verify_descriptor.py"
 cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" "${task_cmake_platform[@]}" "$@"
 cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
+task_build=$(cd -- "$task_build" && pwd)
 ctest --test-dir "$task_build" --output-on-failure
 if command -v dart >/dev/null; then
   (
+    export FORESIGHT_NATIVE_LIBRARY="$task_build/native/${task_native##*/}"
+    export FORESIGHT_HELPER="$task_build/services/helper/ForesightHelper"
     cd "$task_root/packages/foresight_core"
     dart pub get
     dart analyze

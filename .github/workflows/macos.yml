@@ -30,6 +30,7 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       FORESIGHT_BUILD_JOBS: '3'
       FORESIGHT_COVERAGE: '1'
+      FORESIGHT_CORE_COVERAGE_MIN: '90'
       FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -11,12 +11,19 @@ class AudioDevice {
   AudioDevice(this.name, this.label, this.playback);
 }
 
-Future<List<AudioDevice>> audioDevices() async {
-  if (Platform.isMacOS) {
+Future<List<AudioDevice>> audioDevices({
+  bool? macOS,
+  Future<ProcessResult> Function(String executable, List<String> arguments)?
+  runProcess,
+}) async {
+  final run =
+      runProcess ??
+      ((executable, arguments) => Process.run(executable, arguments));
+  if (macOS ?? Platform.isMacOS) {
     final helper = runtimeConfiguration['FORESIGHT_AUDIO_DEVICES'];
     if (helper == null)
       throw StateError('The bundled Mac audio device adapter is unavailable.');
-    final result = await Process.run(helper, [
+    final result = await run(helper, [
       '--list-devices',
     ]).timeout(const Duration(seconds: 10));
     if (result.exitCode != 0)
@@ -33,10 +40,7 @@ Future<List<AudioDevice>> audioDevices() async {
     return devices;
   }
 
-  final result = await Process.run(
-    'pw-dump',
-    [],
-  ).timeout(const Duration(seconds: 10));
+  final result = await run('pw-dump', []).timeout(const Duration(seconds: 10));
   if (result.exitCode != 0)
     throw StateError('PipeWire audio devices are unavailable.');
   final devices = <AudioDevice>[];
