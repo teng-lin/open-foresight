@@ -40,6 +40,9 @@ import 'google_auth.dart';
 import 'google_connections.dart';
 import 'google_picker.dart';
 import 'google_sign_in_dialog.dart';
+import 'recoverable_dialog.dart';
+import 'import_batch_dialog.dart';
+import 'chat_history_viewport.dart';
 import 'audio_devices.dart';
 import 'gemma_setup_view.dart';
 import 'speech_setup_view.dart';
@@ -1163,19 +1166,80 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       builder: (_) => GoogleDrivePicker(google, folder: folder),
     );
     if (selection == null) return;
-    final failures = <String>[];
-    for (final id in selection) {
-      try {
-        if (folder) {
-          await google.importDriveFolder(id);
-        } else {
-          await google.importDriveFile(id);
-        }
-      } catch (error) {
-        failures.add(error.toString());
-      }
-    }
-    if (failures.isNotEmpty) throw StateError(failures.join('\n'));
+    await importBatch([
+      for (final id in selection)
+        ImportTask(
+          folder ? 'Drive folder $id' : 'Drive file $id',
+          () => folder
+              ? google.importDriveFolder(id)
+              : google.importDriveFile(id),
+        ),
+    ]);
+  }
+
+  Future<void> ensureSourceWorkActive() async {
+    if (!d.sourcesPaused) return;
+    final resume = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        scrollable: true,
+        title: const Text('Source imports are paused'),
+        content: const Text(
+          'Resume imports and indexing to continue. Your draft or failed imports stay here if you keep them paused.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep paused'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Resume and continue'),
+          ),
+        ],
+      ),
+    );
+    if (resume != true)
+      throw StateError(
+        'Imports and indexing are paused. Resume them to try again.',
+      );
+    await d.command('sources.resume');
+  }
+
+  Future<void> importBatch(List<ImportTask> tasks) async {
+    final failures = await attemptImports(tasks);
+    if (!mounted) return;
+    update(() {});
+    if (failures.isEmpty) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => ImportBatchDialog(
+        failures: failures,
+        total: tasks.length,
+        beforeRetry: ensureSourceWorkActive,
+      ),
+    );
+    if (mounted) update(() {});
+  }
+
+  Future<void> importFiles(List<String> paths) => importBatch([
+    for (final path in paths)
+      ImportTask(File(path).uri.pathSegments.last, () => importPath(path)),
+  ]);
+
+  Future<void> importRecentDriveFiles() async {
+    final files = await google.driveFiles(
+      modifiedAfter: DateTime.now().subtract(const Duration(days: 365)),
+    );
+    await importBatch([
+      for (final file in files)
+        if (GoogleConnections.supported(file['mimeType'] as String))
+          ImportTask(
+            file['name'] as String,
+            () => google.importDriveFile(file['id'] as String, metadata: file),
+          ),
+    ]);
   }
 
   Future<void> importFolderPath(String path) => importDirectory(path);
@@ -1247,39 +1311,50 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   void editSource(Map<String, Object?> s) async {
     final text = TextEditingController(text: s['content'] as String);
-    final saved = await showInputDialog<bool>(
-      builder: (context) => AlertDialog(
-        title: Text('Edit ${s['title']}'),
-        content: SizedBox(
-          width: 650,
-          height: 400,
-          child: TextField(controller: text, maxLines: null, expands: true),
+    await showInputDialog<bool>(
+      builder: (context) => RecoverableDialog(
+        title: 'Edit ${s['title']}',
+        saveLabel: 'Save and index',
+        editor: (saving, submit) => SizedBox(
+          height: math.min(400, MediaQuery.sizeOf(context).height * .45),
+          child: TextField(
+            controller: text,
+            enabled: !saving,
+            maxLines: null,
+            expands: true,
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save and index'),
-          ),
-        ],
+        save: () async {
+          await ensureSourceWorkActive();
+          await importText(
+            s['title'] as String,
+            text.text,
+            s['mime'] as String,
+            'user edit; ${s['provenance']}',
+            id: s['id'] as String,
+          );
+          await d.index(s['id'] as String);
+          if (mounted) update(() {});
+        },
       ),
     );
-    if (saved == true && mounted) {
-      await run(() async {
-        await importText(
-          s['title'] as String,
-          text.text,
-          s['mime'] as String,
-          'user edit; ${s['provenance']}',
-          id: s['id'] as String,
-        );
-        await d.index(s['id'] as String);
-      });
-    }
     text.dispose();
+  }
+
+  Future<void> deleteSource(Map<String, Object?> source) async {
+    await showInputDialog<bool>(
+      builder: (_) => RecoverableDialog(
+        title: 'Delete source?',
+        saveLabel: 'Delete',
+        editor: (_, _) => Text(
+          'Remove "${source['title']}" from your knowledge sources? The original file is kept. You can import it again.',
+        ),
+        save: () async {
+          await d.delete(source['id'] as String);
+          if (mounted) update(() {});
+        },
+      ),
+    );
   }
 
   void citation(Map c) {
@@ -1653,14 +1728,16 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     );
     final original = controller.text;
     int? lastManualEdit;
-    await showInputDialog<void>(
-      builder: (context) => AlertDialog(
-        title: const Text('Edit generated artifact'),
-        content: SizedBox(
-          width: 650,
-          height: 300,
+    await showInputDialog<bool>(
+      builder: (context) => RecoverableDialog(
+        title: 'Edit generated artifact',
+        saveLabel: 'Save edit',
+        textAction: true,
+        editor: (saving, submit) => SizedBox(
+          height: math.min(300, MediaQuery.sizeOf(context).height * .45),
           child: TextField(
             controller: controller,
+            enabled: !saving,
             onChanged: (text) {
               if (a['kind'] == 'enhanced_notes' &&
                   (text != original ||
@@ -1674,21 +1751,14 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             expands: true,
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await d.command('artifacts.edit', {
-                'id': a['id'],
-                'text': controller.text,
-                if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
-              });
-              if (!context.mounted) return;
-              Navigator.pop(context);
-              setState(() {});
-            },
-            child: const Text('Save edit'),
-          ),
-        ],
+        save: () async {
+          await d.command('artifacts.edit', {
+            'id': a['id'],
+            'text': controller.text,
+            if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+          });
+          if (mounted) update(() {});
+        },
       ),
     );
     controller.dispose();
