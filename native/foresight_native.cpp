@@ -70,9 +70,7 @@ struct Worker : Events {
   std::thread thread;
   std::atomic<bool> cancel{false}, active{false};
   std::atomic<pid_t> pid{-1};
-#ifdef __APPLE__
   foresight::OwnedSpawn *owned_process = nullptr;
-#endif
   std::mutex life;
   std::mutex process_mutex;
   std::mutex input_mutex;
@@ -80,12 +78,7 @@ struct Worker : Events {
   void stop() {
     cancel = true;
     std::lock_guard lock(process_mutex);
-#ifdef __APPLE__
     if (owned_process) owned_process->stop();
-#else
-    pid_t p = pid.load();
-    if (p > 0) kill(-p, SIGKILL);
-#endif
   }
   void join() {
     if (thread.joinable())
@@ -191,17 +184,9 @@ int run(Worker &w, std::vector<std::string> args,
 #endif
   posix_spawnattr_setflags(&attr, flags);
   posix_spawnattr_setpgroup(&attr, 0);
-  std::vector<char *> argv;
-  for (auto &a : args)
-    argv.push_back(a.data());
-  argv.push_back(nullptr);
   pid_t p = -1;
-#ifdef __APPLE__
   foresight::OwnedSpawn owned;
   int err = owned.spawn(&p, &actions, &attr, args);
-#else
-  int err = posix_spawnp(&p, argv[0], &actions, &attr, argv.data(), environ);
-#endif
   posix_spawn_file_actions_destroy(&actions);
   posix_spawnattr_destroy(&attr);
   close(pipes[1]);
@@ -214,20 +199,12 @@ int run(Worker &w, std::vector<std::string> args,
   launch.unlock();
   {
     std::lock_guard lock(w.process_mutex);
-#ifdef __APPLE__
     w.pid = owned.worker;
     w.owned_process = &owned;
-#else
-    w.pid = p;
-#endif
   }
   if (w.cancel) {
-#ifdef __APPLE__
     std::lock_guard lock(w.process_mutex);
     owned.stop();
-#else
-    kill(-p, SIGKILL);
-#endif
   }
   const int read_fd = raw_capture ? capture_pipe.fd : pipes[0];
   char buffer[4096];
@@ -274,6 +251,12 @@ int run(Worker &w, std::vector<std::string> args,
     } else if (r < 0 && errno != EINTR)
       break;
     if (raw_capture) {
+#ifdef __linux__
+      if (owned.finished()) {
+        drain_pcm();
+        break;
+      }
+#else
       siginfo_t exited{};
       int result;
       {
@@ -289,24 +272,25 @@ int run(Worker &w, std::vector<std::string> args,
         drain_pcm();
         break;
       }
+#endif
     }
   }
   if (w.cancel && !capture_child_reaped) {
-#ifdef __APPLE__
     std::lock_guard lock(w.process_mutex);
     owned.stop();
-#else
-    kill(-p, SIGKILL);
-#endif
   }
   if (duplex) close(input[1]);
   int status = 0;
+#ifdef __linux__
+  const int worker_status = owned.result();
+#else
   // Do not hold life while waiting: cancellation must still be able to signal
   // a worker that closed stdout early. Keep its PID reserved until disarmed.
   siginfo_t info{};
   int observed;
   do { observed = waitid(P_PID, p, &info, WEXITED | WNOWAIT); }
   while (observed < 0 && errno == EINTR);
+#endif
   // The producer is now terminal. Retain every queued pre-pause PCM byte before
   // the FIFO closes, including a final partial frame; no later audio can arrive.
   if (raw_capture) drain_pcm();
@@ -317,11 +301,16 @@ int run(Worker &w, std::vector<std::string> args,
   std::lock_guard lock(w.process_mutex);
   pid_t reaped;
   do { reaped = waitpid(p, &status, 0); } while (reaped < 0 && errno == EINTR);
-  const int reap_error = reaped < 0 ? errno : 0;
-  w.pid = -1;
 #ifdef __APPLE__
-  w.owned_process = nullptr;
+  const int reap_error = reaped < 0 ? errno : 0;
 #endif
+  w.pid = -1;
+  w.owned_process = nullptr;
+#ifdef __linux__
+  // Dart may already have reaped the supervisor; its private report carries
+  // the actual worker result independently of the host's SIGCHLD policy.
+  return worker_status;
+#else
   if (capture_child_reaped) return -ECHILD;
   if (reap_error) {
     // A runtime SIGCHLD handler may reap the child between waitid and waitpid.
@@ -333,6 +322,7 @@ int run(Worker &w, std::vector<std::string> args,
     return -reap_error;
   }
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+#endif
 }
 bool valid_asset(const char *runtime, const char *model) {
   return runtime && *runtime && model && *model && access(model, R_OK) == 0;

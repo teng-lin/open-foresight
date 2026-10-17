@@ -10,12 +10,12 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#endif
 #include <dlfcn.h>
 #include <poll.h>
 #include <spawn.h>
 #include <vector>
 extern char **environ;
-#endif
 #include <filesystem>
 
 namespace foresight {
@@ -49,12 +49,17 @@ inline std::filesystem::path executable_path() {
   return std::filesystem::read_symlink("/proc/self/exe");
 #endif
 }
-#ifdef __APPLE__
 // This entrypoint runs only in a fresh helper process, before any runtime
 // threads exist. The service's liveness descriptor is inherited explicitly;
 // a crash at any point during launch therefore cannot leave an unowned model.
 inline int supervise_worker(int argc, char **argv) {
   if (argc < 3 || std::string(argv[1]) != "--foresight-supervise-worker") return -1;
+#ifdef __linux__
+  // A host may ignore SIGCHLD. This fresh, single-threaded supervisor owns
+  // its child, and reports the result over a pipe the host cannot reap.
+  signal(SIGCHLD, SIG_DFL);
+  if (fcntl(3, F_SETFD, FD_CLOEXEC) || fcntl(4, F_SETFD, FD_CLOEXEC)) return 127;
+#endif
   pollfd owner{3, POLLIN, 0};
   if (poll(&owner, 1, 0) != 0) return 127; // owner already gone
   posix_spawn_file_actions_t actions;
@@ -62,7 +67,11 @@ inline int supervise_worker(int argc, char **argv) {
   for (int fd = 0; fd < 3; ++fd) posix_spawn_file_actions_adddup2(&actions, fd, fd);
   posix_spawnattr_t attr;
   posix_spawnattr_init(&attr);
-  posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT);
+  short flags = POSIX_SPAWN_SETPGROUP;
+#ifdef __APPLE__
+  flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
+#endif
+  posix_spawnattr_setflags(&attr, flags);
   posix_spawnattr_setpgroup(&attr, 0);
   pid_t worker = -1;
   int error = posix_spawnp(&worker, argv[2], &actions, &attr, argv + 2, environ);
@@ -72,7 +81,17 @@ inline int supervise_worker(int argc, char **argv) {
   // SIGPIPE is ignored in this internal executable, so failed reporting still
   // reaches the cleanup below.
   bool reported = write(4, &worker, sizeof(worker)) == sizeof(worker);
+#ifdef __APPLE__
   close(4);
+#endif
+  auto finish = [](int result) {
+#ifdef __linux__
+    // One small atomic message, separate from model-controlled stdout.
+    (void)!write(4, &result, sizeof(result));
+    close(4);
+#endif
+    return result;
+  };
   int status = 0;
   for (;;) {
     if (!reported) break;
@@ -81,8 +100,10 @@ inline int supervise_worker(int argc, char **argv) {
     if (observed == 0 && info.si_pid == worker) {
       // Reserve the leader PID until all final group signals are sent.
       kill(-worker, SIGKILL);
-      while (waitpid(worker, &status, 0) < 0 && errno == EINTR) {}
-      return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+      pid_t reaped;
+      do { reaped = waitpid(worker, &status, 0); } while (reaped < 0 && errno == EINTR);
+      if (reaped < 0) return finish(-errno);
+      return finish(WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status));
     }
     if (observed < 0 && errno != EINTR) break;
     int ready = poll(&owner, 1, 50);
@@ -90,7 +111,7 @@ inline int supervise_worker(int argc, char **argv) {
   }
   kill(-worker, SIGKILL);
   while (waitpid(worker, &status, 0) < 0 && errno == EINTR) {}
-  return 128 + SIGKILL;
+  return finish(128 + SIGKILL);
 }
 inline std::string supervisor_path() {
   if (const char *configured = getenv("FORESIGHT_HELPER")) return configured;
@@ -107,6 +128,9 @@ inline std::string supervisor_path() {
 }
 class OwnedSpawn {
   int control_ = -1;
+#ifdef __linux__
+  int report_ = -1;
+#endif
 public:
   pid_t worker = -1;
   int spawn(pid_t *supervisor, posix_spawn_file_actions_t *actions,
@@ -147,7 +171,12 @@ public:
       }
       if (received != sizeof(worker)) error = ECHILD;
     }
+#ifdef __linux__
+    if (!error) report_ = fds[2];
+    else close(fds[2]);
+#else
     close(fds[2]);
+#endif
     if (error) {
       close(fds[1]);
       if (*supervisor > 0) while (waitpid(*supervisor, nullptr, 0) < 0 && errno == EINTR) {}
@@ -158,7 +187,28 @@ public:
     return 0;
   }
   void stop() { if (control_ >= 0) { close(control_); control_ = -1; } }
-  ~OwnedSpawn() { stop(); }
-};
+#ifdef __linux__
+  bool finished() const {
+    pollfd report{report_, POLLIN, 0};
+    return poll(&report, 1, 0) > 0;
+  }
+  int result() {
+    int status;
+    size_t received = 0;
+    while (received < sizeof(status)) {
+      auto n = read(report_, reinterpret_cast<char *>(&status) + received, sizeof(status) - received);
+      if (n < 0 && errno == EINTR) continue;
+      if (n <= 0) return -ECHILD;
+      received += n;
+    }
+    return status;
+  }
 #endif
+  ~OwnedSpawn() {
+    stop();
+#ifdef __linux__
+    if (report_ >= 0) close(report_);
+#endif
+  }
+};
 }

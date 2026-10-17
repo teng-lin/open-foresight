@@ -224,6 +224,39 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
                     signal.signal(signal.SIGCHLD, previous)
                     self.lib.fs_engine_destroy(engine)
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux host reaper regression')
+    def test_probe_retains_actual_status_with_host_child_reaper(self):
+        import threading
+        stop = threading.Event()
+        def reap():
+            while not stop.is_set():
+                try: os.waitpid(-1, os.WNOHANG)
+                except ChildProcessError: pass
+                stop.wait(.0005)
+        for ignored in (False, True):
+            previous = signal.getsignal(signal.SIGCHLD)
+            if ignored: signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+            reaper = threading.Thread(target=reap)
+            reaper.start()
+            try:
+                for status in (0, 7, 0, 7, 0, 7):
+                    with self.subTest(sigchld_ignored=ignored, status=status):
+                        runner = self.runner("import json,sys\nprint(json.dumps({'worker_protocol':1,'native_stop_token_sequences':True}),flush=True)\nsys.exit(%d)\n" % status)
+                        engine = self.lib.fs_engine_create_backend(runner, str(self.model).encode(), 1)
+                        try:
+                            self.assertEqual(self.lib.fs_engine_probe(engine), 0 if status == 0 else -1)
+                            state = owned_json(self.lib, self.lib.fs_engine_state(engine))
+                            self.assertEqual(state['state'], 'ready' if status == 0 else 'failed')
+                            self.assertEqual(state['native_stop_token_sequences'], status == 0)
+                            if status: self.assertIn('status 7', state['error'])
+                        finally:
+                            self.lib.fs_engine_destroy(engine)
+            finally:
+                stop.set()
+                reaper.join()
+                stop.clear()
+                signal.signal(signal.SIGCHLD, previous)
+
     def test_failed_start_error_before_single_terminal(self):
         e=self.lib.fs_engine_create(b'/missing/foresight-runtime',str(self.model).encode())
         self.assertEqual(owned_json(self.lib,self.lib.fs_engine_state(e))['state'],'configured')
@@ -301,7 +334,7 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
 
     @unittest.skipUnless(sys.platform.startswith('linux'), 'production PipeWire adapter')
     def test_capture_raw_fifo_child_exit_without_open_is_observed(self):
-        import errno, signal
+        import signal
         previous = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
         runner = self.path / 'pw-record'
         runner.write_text('#!/usr/bin/env python3\nprint("stream node 42 error: target not found",flush=True)\n')
@@ -319,7 +352,7 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
                     if event['type'] == 'gap': break
             self.assertTrue(any(e['type'] == 'gap' for e in events), events)
             self.assertFalse(any(e['type'] == 'pcm' or e.get('state') == 'capturing' for e in events), events)
-            self.assertEqual(events[-1]['exit_status'], -errno.ECHILD)
+            self.assertEqual(events[-1]['exit_status'], 0)
         finally:
             self.lib.fs_capture_stop(handle)
             environment.stop()
