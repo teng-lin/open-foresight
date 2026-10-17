@@ -99,3 +99,20 @@ def test_deleting_a_ui_expectation_fails_external_validation(removed):
         verify_service_ui_report(mutated)
     with pytest.raises(ValueError):
         verify_service_ui_report({name: True for name in REQUIRED_EXPECTATIONS})
+
+
+def test_repeated_ui_protocol_observations_preserve_unique_semantic_checks():
+    observations = [
+        {"name": name, "actual": True, "expected": True, "passed": True}
+        for name in sorted(REQUIRED_EXPECTATIONS)
+    ]
+    protocol = next(item for item in observations if item["name"] == "mcp-envelope")
+    observations.append(dict(protocol))
+    report = {"schema": 1, "expectations": observations}
+    verify_service_ui_report(report)
+    semantic = next(
+        item for item in observations if item["name"] == "transcript_persisted"
+    )
+    observations.append(dict(semantic))
+    with pytest.raises(ValueError, match="transcript_persisted"):
+        verify_service_ui_report(report)

@@ -2,7 +2,7 @@
 
 from collections import Counter
 
-REQUIRED_EXPECTATIONS = frozenset(
+UNIQUE_EXPECTATIONS = frozenset(
     {
         "desktop_and_mcp_same_owner",
         "mcp_changes_visible",
@@ -14,6 +14,16 @@ REQUIRED_EXPECTATIONS = frozenset(
         "desktop_database_read_only",
     }
 )
+REPEATED_EXPECTATIONS = frozenset(
+    {
+        "wait-ready",
+        "framework-exception",
+        "mcp-envelope",
+        "mcp-tool-success",
+        "mcp-clean-exit",
+    }
+)
+REQUIRED_EXPECTATIONS = UNIQUE_EXPECTATIONS | REPEATED_EXPECTATIONS
 
 
 def verify_service_ui_report(report):
@@ -31,7 +41,11 @@ def verify_service_ui_report(report):
         ):
             raise ValueError("Invalid or failed native UI expectation")
         names[observation["name"]] += 1
-    missing = sorted(name for name in REQUIRED_EXPECTATIONS if names[name] != 1)
+    missing = sorted(
+        name
+        for name in REQUIRED_EXPECTATIONS
+        if names[name] == 0 or (name in UNIQUE_EXPECTATIONS and names[name] != 1)
+    )
     if missing:
         raise ValueError(
             "Missing or duplicated native UI expectations: " + ", ".join(missing)
