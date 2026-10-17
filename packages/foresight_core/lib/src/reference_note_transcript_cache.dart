@@ -8,8 +8,8 @@ typedef EmbeddedNoteTranscriptChunk = ({String text, List<double> embedding});
 /// Reconstructs the original five-meeting transcript embedding cache.
 ///
 /// Requests coalesce to the latest pending transcript while a sequential drain
-/// is running. Failed drains intentionally retain their failed running future;
-/// an original recovery policy has not been established.
+/// is running. Every drain clears its running future in a finally block, while
+/// an embedding failure still propagates to all callers sharing that future.
 class ReferenceNoteTranscriptCache {
   ReferenceNoteTranscriptCache({
     required this.computeEmbedding,
@@ -61,20 +61,23 @@ class ReferenceNoteTranscriptCache {
   }
 
   Future<void> _drain(int meetingId, _TranscriptEntry entry) async {
-    while (entry.pending != null) {
-      final request = entry.pending!;
-      entry.pending = null;
-      final chunks = await _chunkAndEmbed(
-        request.text,
-        request.isLive,
-        entry.chunks,
-      );
-      if (request.isLive == currentIsLive(meetingId)) {
-        entry.isLive = request.isLive;
-        entry.chunks = chunks;
+    try {
+      while (entry.pending != null) {
+        final request = entry.pending!;
+        entry.pending = null;
+        final chunks = await _chunkAndEmbed(
+          request.text,
+          request.isLive,
+          entry.chunks,
+        );
+        if (request.isLive == currentIsLive(meetingId)) {
+          entry.isLive = request.isLive;
+          entry.chunks = chunks;
+        }
       }
+    } finally {
+      entry.running = null;
     }
-    entry.running = null;
   }
 
   Future<List<EmbeddedNoteTranscriptChunk>> _chunkAndEmbed(

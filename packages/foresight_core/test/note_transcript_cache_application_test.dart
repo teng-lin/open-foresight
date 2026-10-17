@@ -18,6 +18,7 @@ class EmbeddingService extends RagServiceBase {
   bool modelUpdateSucceeds = true;
   int modelUpdates = 0;
   int vectorSpace = 1;
+  int embeddingFailuresRemaining = 0;
 
   @override
   Future<ComputeEmbeddingResponse> computeEmbedding(
@@ -26,6 +27,10 @@ class EmbeddingService extends RagServiceBase {
   ) async {
     texts.add(request.text);
     if (!embeddingEntered.isCompleted) embeddingEntered.complete();
+    if (embeddingFailuresRemaining > 0) {
+      embeddingFailuresRemaining--;
+      throw const GrpcError.unavailable('Fixture temporary embedding failure');
+    }
     final vector = vectorSpace.toDouble();
     await embeddingGate?.future;
     return ComputeEmbeddingResponse(embedding: [vector]);
@@ -126,6 +131,38 @@ Future<void> withTranscriptFixture(
 }
 
 void main() {
+  test(
+    'a temporary embedding error does not permanently poison note enhancement',
+    () async {
+      await withTranscriptFixture((
+        directory,
+        embeddings,
+        domain,
+        runtime,
+      ) async {
+        final store = domain.store;
+        final id = store.meeting('Retry embedding');
+        store.saveMeetingNotes(id, 'Raw note');
+        store.transcript(id, 'Saved evidence', true, 0, 20, 'imported');
+        embeddings.embeddingFailuresRemaining = 1;
+        await expectLater(
+          domain.application.enhanceNotes(id),
+          throwsA(isA<GrpcError>()),
+        );
+        expect(runtime.prompts, isEmpty);
+        expect(store.rows('SELECT * FROM artifacts'), isEmpty);
+        await domain.application.enhanceNotes(id);
+        expect(runtime.prompts, hasLength(1));
+        expect(embeddings.texts, [
+          'Saved evidence',
+          'Saved evidence',
+          'Raw note',
+        ]);
+        expect(store.meetingEnhancedNotes(id), '- Enhanced plan');
+      });
+    },
+  );
+
   for (final registrySucceeds in [true, false]) {
     test(
       'successful helper model change invalidates vectors even when '

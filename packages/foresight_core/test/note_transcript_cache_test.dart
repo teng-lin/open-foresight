@@ -366,20 +366,62 @@ void main() {
   );
 
   test(
-    'propagates embedding errors and retains failed running future',
+    'propagates embedding failure and permits a later saved read to recover',
     () async {
       final error = StateError('embedding failed');
+      var attempts = 0;
       final cache = ReferenceNoteTranscriptCache(
-        computeEmbedding: (_) async => throw error,
+        computeEmbedding: (_) async {
+          if (++attempts == 1) throw error;
+          return [2];
+        },
+        currentIsLive: (_) => false,
+        loadSavedTranscript: (_) async => 'saved evidence',
+      );
+      await expectLater(cache.getEmbeddedChunks(1), throwsA(same(error)));
+      final recovered = await cache.getEmbeddedChunks(1);
+      expect(recovered.single.text, 'saved evidence');
+      expect(recovered.single.embedding, [2]);
+      expect(attempts, 2);
+    },
+  );
+
+  test(
+    'failure rejects shared pending callers without starting their work; '
+    'the next schedule replaces stale pending text and retains prior chunks',
+    () async {
+      final error = StateError('embedding failed');
+      final gate = Completer<List<double>>();
+      final texts = <String>[];
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async {
+          texts.add(text);
+          return text == 'blocked failure' ? await gate.future : [1];
+        },
         currentIsLive: (_) => true,
         loadSavedTranscript: (_) async => '',
       );
-      final work = cache.schedule(1, 'first', isLive: true);
-      await expectLater(work, throwsA(same(error)));
-      final next = cache.schedule(1, 'next', isLive: true);
-      expect(identical(next, work), isTrue);
-      await expectLater(next, throwsA(same(error)));
-      await expectLater(cache.getEmbeddedChunks(1), throwsA(same(error)));
+      await cache.schedule(1, 'previous accepted', isLive: true);
+      final work = cache.schedule(1, 'blocked failure', isLive: true);
+      final pending = cache.schedule(1, 'stale pending', isLive: true);
+      expect(identical(work, pending), isTrue);
+      final failedWork = expectLater(work, throwsA(same(error)));
+      final failedPending = expectLater(pending, throwsA(same(error)));
+      gate.completeError(error);
+      await Future.wait([failedWork, failedPending]);
+      expect(cache.getCachedChunks(1).single.text, 'previous accepted');
+      final next = cache.schedule(1, 'newest transcript', isLive: true);
+      expect(identical(next, work), isFalse);
+      await next;
+      expect(
+        (await cache.getEmbeddedChunks(1)).single.text,
+        'newest transcript',
+      );
+      expect(texts, [
+        'previous accepted',
+        'blocked failure',
+        'newest transcript',
+      ]);
     },
   );
 }

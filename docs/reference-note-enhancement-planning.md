@@ -74,9 +74,12 @@ newly computed vectors are not memoized within the same pass. Empty vectors are
 retried on a later saved read. Live reads await existing work without loading saved
 transcripts. Saved reads reload when the entry is missing, in flight, live-mode,
 empty, or contains an empty vector. Complete saved results are reused. Cached reads
-return the stored list itself. The visible original drain clears its running future
-on normal completion; an exception recovery policy is not established, and the port
-retains a failed running future rather than inventing recovery.
+return the stored list itself. Bounded original disassembly now proves that the
+drain clears its running future both on normal completion and in its exception
+handler before rethrowing. The port matches this with `try/finally`, allowing a
+later schedule or saved read to recover while propagating the current failure.
+The complete 87-instruction trace is `note-cache-drain-exception-boundary.json`
+with its exit-0 terminal log; see [lifecycle](reference-note-lifecycle.md).
 
 Evidence: `ida/note-cache-schedule.json` (`0x1009060b8`),
 `note-cache-drain.json` (`0x100906178`), `note-cache-entry.json`
