@@ -36,7 +36,7 @@ def main():
         if json.loads(stamp.read_text()) != manifest:
             parser.error('Sanitizer SDK identity differs; choose a fresh prefix')
         if all((prefix / file).exists() for file in ('bin/protoc', 'bin/grpc_cpp_plugin',
-            'lib/cmake/grpc/gRPCConfig.cmake', 'lib/libprotobuf.so')):
+            'lib/cmake/grpc/gRPCConfig.cmake', 'lib/libprotobufd.so', 'lib/libgrpc++.so')):
             print('Verified instrumented SDK already installed:', prefix)
             return
     grpc = sources / 'grpc'
