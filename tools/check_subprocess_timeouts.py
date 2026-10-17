@@ -12,7 +12,7 @@ BLOCKING_CALLS = {"run", "call", "check_call", "check_output"}
 def missing_timeouts(source: str) -> list[int]:
     tree = ast.parse(source)
     modules = {"subprocess"}
-    functions: set[str] = set()
+    functions: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.update(
@@ -22,21 +22,49 @@ def missing_timeouts(source: str) -> list[int]:
             )
         elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
             functions.update(
-                alias.asname or alias.name
-                for alias in node.names
-                if alias.name in BLOCKING_CALLS
+                {
+                    alias.asname or alias.name: alias.name
+                    for alias in node.names
+                    if alias.name in BLOCKING_CALLS | {"Popen"}
+                }
             )
+
+    def subprocess_function(node: ast.expr, names: set[str]) -> bool:
+        return (isinstance(node, ast.Name) and functions.get(node.id) in names) or (
+            isinstance(node, ast.Attribute)
+            and node.attr in names
+            and isinstance(node.value, ast.Name)
+            and node.value.id in modules
+        )
+
+    # Track Popen assignment targets (including self.process) separately from
+    # unrelated Event/Future.wait methods. Matchers span methods for owned peers.
+    processes: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
+            node.value, ast.Call
+        ):
+            if subprocess_function(node.value.func, {"Popen"}):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                processes.update(
+                    ast.dump(target, include_attributes=False).replace(
+                        "ctx=Store()", "ctx=Load()"
+                    )
+                    for target in targets
+                )
     missing = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         function = node.func
-        blocking = (isinstance(function, ast.Name) and function.id in functions) or (
+        waiting = (
             isinstance(function, ast.Attribute)
-            and function.attr in BLOCKING_CALLS
-            and isinstance(function.value, ast.Name)
-            and function.value.id in modules
+            and function.attr in {"wait", "communicate"}
+            and ast.dump(function.value, include_attributes=False) in processes
         )
+        blocking = subprocess_function(function, BLOCKING_CALLS) or waiting
         if blocking:
             timeout = next(
                 (
@@ -46,6 +74,11 @@ def missing_timeouts(source: str) -> list[int]:
                 ),
                 None,
             )
+            if timeout is None and waiting and isinstance(function, ast.Attribute):
+                # Popen.wait(timeout), Popen.communicate(input, timeout).
+                position = 0 if function.attr == "wait" else 1
+                if len(node.args) > position:
+                    timeout = node.args[position]
             if timeout is None or (
                 isinstance(timeout, ast.Constant)
                 and (not isinstance(timeout.value, (int, float)) or timeout.value <= 0)

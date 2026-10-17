@@ -95,3 +95,18 @@ module.main()
 def test_stalled_build_command_expires_before_the_job_deadline():
     with pytest.raises(subprocess.TimeoutExpired):
         build_command(sys.executable, "-c", "import time; time.sleep(30)", timeout=0.05)
+
+
+def test_timeout_gate_checks_owned_popen_waits_and_communicate():
+    assert missing_timeouts(
+        'from subprocess import Popen as start\nprocess = start(["git"])\nprocess.wait()'
+    ) == [3]
+    assert missing_timeouts(
+        'import subprocess\nself.process = subprocess.Popen(["git"])\nself.process.communicate(timeout=None)'
+    ) == [3]
+    assert not missing_timeouts(
+        'import subprocess\nprocess = subprocess.Popen(["git"])\nprocess.wait(30)\nprocess.communicate(None, 30)'
+    )
+    assert not missing_timeouts(
+        "import threading\nevent = threading.Event()\nevent.wait()"
+    )
