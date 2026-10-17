@@ -124,7 +124,9 @@ def main():
                   '--define=wheel_platform=macos_arm64']
     elif platform.system() == 'Linux' and platform.machine() == 'x86_64':
         require_materialized_prebuilts(source, 'linux_x86_64', '.so')
-        flags += ['--define=wheel_platform=linux_x86_64']
+        # Exercise the same PIC objects that the shipped shared C API uses,
+        # avoiding a second full runtime compilation after the native test.
+        flags += ['--force_pic', '--define=wheel_platform=linux_x86_64']
     else:
         parser.error('Supported build hosts are macOS arm64 and Linux x86_64')
     test = bazel + ['test', *flags, '//c:engine_test',
