@@ -250,8 +250,9 @@ void main() {
         root: root,
         fetch: () async => ForesightSharedConfig(),
         renameFile: (file, destination) {
-          if (file.path.endsWith('/previous'))
+          if (file.path.endsWith('/previous')) {
             throw FileSystemException('restore denied');
+          }
           return file.rename(destination);
         },
       );

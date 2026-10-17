@@ -37,8 +37,9 @@ class Domain {
               .isNotEmpty);
 
   SearchCallbacks _searchCallbacks() {
-    if (!webSearchAvailable)
+    if (!webSearchAvailable) {
       throw StateError('Web search is unavailable in this build.');
+    }
     return _webSearch ??= SearchCallbacks(
       search: SearchService(
         apiKey: runtimeConfiguration['FORESIGHT_SEARCH_API_KEY']!,
@@ -65,8 +66,9 @@ class Domain {
 
   void checkWorkspace(int generation) {
     _checkOpen();
-    if (generation != _workspaceGeneration)
+    if (generation != _workspaceGeneration) {
       throw StateError('Workspace was cleared; retry the operation');
+    }
   }
 
   /// Invalidate work before deleting local data.
@@ -624,8 +626,9 @@ class Domain {
       if (live.isEmpty ||
           live.first['deleted'] != 0 ||
           live.first['revision'] != revisions[documentId] ||
-          live.first['state'] != 'indexed')
+          live.first['state'] != 'indexed') {
         continue;
+      }
       if (!useWeb && budget <= 0) break;
       final text = useWeb
           ? passage['excerpt'] as String
@@ -704,10 +707,11 @@ class Domain {
       yield answer.rendered;
       return;
     }
-    if (generator == null)
+    if (generator == null) {
       throw StateError(
         'Generation model unavailable. Retrieved ${citations.length} excerpts; configure a local generator.',
       );
+    }
     final memoryRows = useWeb
         ? store.rows(
             'SELECT through_answer_id,messages,token_counts FROM conversation_memory WHERE conversation=?',
@@ -807,16 +811,20 @@ class Domain {
             summaryPrompt,
           )) {
             ensureCurrent();
-            if (event['type'] == 'delta')
+            if (event['type'] == 'delta') {
               summary += event['text'] as String? ?? '';
-            if (event['type'] == 'error')
+            }
+            if (event['type'] == 'error') {
               throw StateError('Memory compression failed');
-            if (event['type'] == 'done')
+            }
+            if (event['type'] == 'done') {
               summaryStatus = event['status'] as String;
+            }
           }
           ensureCurrent();
-          if (summaryStatus != 'completed')
+          if (summaryStatus != 'completed') {
             throw StateError('Memory compression failed');
+          }
           return summary;
         },
       );
@@ -1005,7 +1013,7 @@ class Domain {
     } catch (e) {
       if (!_closed &&
           generation == workspaceGeneration &&
-          (current == null || current()))
+          (current == null || current())) {
         saveAnswer(
           question,
           'Answer generation failed. Please retry.',
@@ -1014,6 +1022,7 @@ class Domain {
           model,
           conversation: conversation,
         );
+      }
       rethrow;
     }
   }

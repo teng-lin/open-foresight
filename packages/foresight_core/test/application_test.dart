@@ -39,7 +39,7 @@ class DelayedGenerator extends NativeRuntime {
 class BrowserAuth extends GoogleAuth {
   final done = Completer<void>();
   int cancelled = 0;
-  BrowserAuth(Directory directory) : super(directory);
+  BrowserAuth(super.directory);
   @override
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
     await openBrowser(Uri.parse('https://example.invalid/authorize'));

@@ -16,8 +16,9 @@ class GoogleConnections {
   /// A different account must refresh immediately and cannot inherit a status.
   int get lastCompletedRefreshMs {
     if (!auth.connected ||
-        store.preference('googleLastSyncAccount') != auth.account)
+        store.preference('googleLastSyncAccount') != auth.account) {
       return 0;
+    }
     final timestamp =
         int.tryParse(store.preference('googleLastSync', '0')) ?? 0;
     return timestamp > 0 && timestamp <= DateTime.now().millisecondsSinceEpoch
@@ -37,8 +38,9 @@ class GoogleConnections {
     )) {
       try {
         final metadata = jsonDecode(row['metadata'] as String);
-        if (metadata is Map)
+        if (metadata is Map) {
           _setSourceUri(row['source_id'] as String, metadata['htmlLink']);
+        }
       } on FormatException {
         // Invalid cached metadata cannot recover an original link.
       }
@@ -87,8 +89,9 @@ class GoogleConnections {
   }
 
   void _check(String account) {
-    if (_closed || !auth.connected || auth.account != account)
+    if (_closed || !auth.connected || auth.account != account) {
       throw StateError('Google connection changed. Retry after signing in.');
+    }
   }
 
   Future<void> _checkpoint(String account) async {
@@ -139,10 +142,11 @@ class GoogleConnections {
         (response['files'] as List? ?? []).cast<Map<String, dynamic>>(),
       );
       page = response['nextPageToken'] as String? ?? '';
-      if (files.length > 10000)
+      if (files.length > 10000) {
         throw StateError(
           'More than 10,000 files match. Choose a smaller folder or search.',
         );
+      }
     } while (page.isNotEmpty);
     return files;
   }
@@ -173,8 +177,9 @@ class GoogleConnections {
     ]).firstOrNull;
     if (preserveDeleted &&
         (old?['deleted'] == 1 ||
-            (old?['provenance'] as String? ?? '').startsWith('user edit; ')))
+            (old?['provenance'] as String? ?? '').startsWith('user edit; '))) {
       return;
+    }
     final contentChanged =
         old == null ||
         old['deleted'] == 1 ||
@@ -183,7 +188,7 @@ class GoogleConnections {
     final locallyEdited = (old?['provenance'] as String? ?? '').startsWith(
       'user edit; ',
     );
-    if (contentChanged)
+    if (contentChanged) {
       store.importText(
         title,
         text,
@@ -193,12 +198,14 @@ class GoogleConnections {
         modifiedAtMs: modifiedAtMs,
         sourceUri: sourceUri,
       );
+    }
     _setSourceUri(id, sourceUri);
-    if (contentChanged || !locallyEdited)
+    if (contentChanged || !locallyEdited) {
       store.db.execute(
         'UPDATE source_details SET changed=? WHERE source_id=?',
         [modifiedAtMs, id],
       );
+    }
     if (contentChanged || old['state'] != 'indexed') await domain.index(id);
   }
 
@@ -218,11 +225,13 @@ class GoogleConnections {
           }),
         );
     _check(account);
-    if (file['trashed'] == true)
+    if (file['trashed'] == true) {
       throw StateError('${file['name'] ?? 'File'} is in the Drive trash.');
+    }
     final mime = file['mimeType'] as String, name = file['name'] as String;
-    if (!supported(mime))
+    if (!supported(mime)) {
       throw StateError('$name uses an unsupported file type ($mime).');
+    }
     final native = mime.startsWith('application/vnd.google-apps.');
     final export = mime == 'application/vnd.google-apps.spreadsheet'
         ? 'text/csv'
@@ -288,31 +297,35 @@ class GoogleConnections {
       final files = await driveFiles(parent: folder);
       _check(account);
       // Keep the selected root subscribed even if an individual export fails.
-      if (folder == folderId)
+      if (folder == folderId) {
         store.db.execute('INSERT OR IGNORE INTO google_folders VALUES(?,?)', [
           account,
           folderId,
         ]);
+      }
       for (final file in files) {
         if (file['mimeType'] == 'application/vnd.google-apps.folder') {
           queue.add(file['id'] as String);
         } else if (supported(file['mimeType'] as String)) {
           if (!examined.add(file['id'] as String)) continue;
-          if (examined.length > 10000)
+          if (examined.length > 10000) {
             throw StateError('Choose a smaller Drive folder.');
+          }
           final existing = store.rows(
             'SELECT sources.*,google_sources.modified FROM sources JOIN google_sources ON google_sources.source_id=sources.id WHERE google_sources.account=? AND google_sources.file_id=?',
             [account, file['id']],
           ).firstOrNull;
           // A user deletion stays deleted during automatic folder refresh.
           if (refreshing && existing?['deleted'] == 1) continue;
-          if (existing != null)
+          if (existing != null) {
             _setSourceUri(existing['id'] as String, file['webViewLink']);
+          }
           if (existing?['state'] == 'indexed' &&
               existing?['deleted'] == 0 &&
               existing?['modified'] == file['modifiedTime'] &&
-              existing?['title'] == file['name'])
+              existing?['title'] == file['name']) {
             continue;
+          }
           try {
             await importDriveFile(
               file['id'] as String,
@@ -325,11 +338,13 @@ class GoogleConnections {
           }
         }
       }
-      if (seen.length > 1000 || count > 10000)
+      if (seen.length > 1000 || count > 10000) {
         throw StateError('Choose a smaller Drive folder.');
+      }
     }
-    if (failures.isNotEmpty)
+    if (failures.isNotEmpty) {
       throw StateError('Imported $count files; ${failures.join('\n')}');
+    }
   }
 
   Future<void> importLastYear() async {
@@ -399,8 +414,9 @@ class GoogleConnections {
             );
             if (store.rows('SELECT id FROM sources WHERE id=? AND deleted=0', [
               key,
-            ]).isNotEmpty)
+            ]).isNotEmpty) {
               await domain.delete(key);
+            }
           }
           continue;
         }
@@ -408,11 +424,12 @@ class GoogleConnections {
         if (start == null || end == null) continue;
         final title = event['summary'] as String? ?? '[Untitled meeting]';
         final meeting = old?['meeting_id'] as int? ?? store.meeting(title);
-        if (old != null && old['starts'] != start.millisecondsSinceEpoch)
+        if (old != null && old['starts'] != start.millisecondsSinceEpoch) {
           store.db.execute(
             'UPDATE meeting_details SET reminder=0 WHERE meeting_id=?',
             [meeting],
           );
+        }
         store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
           title,
           meeting,
@@ -485,8 +502,9 @@ class GoogleConnections {
         await _checkpoint(account);
         if (store.rows('SELECT id FROM sources WHERE id=? AND deleted=0', [
           source['source_id'],
-        ]).isEmpty)
+        ]).isEmpty) {
           continue;
+        }
         final file = await auth.apiJson(
           _drive('files/${Uri.encodeComponent(source['file_id'] as String)}', {
             'fields': 'id,name,mimeType,modifiedTime,trashed,webViewLink',
@@ -497,8 +515,9 @@ class GoogleConnections {
         if (store.rows(
           "SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0 AND provenance NOT LIKE 'user edit; %'",
           [source['source_id'], source['source_revision']],
-        ).isEmpty)
+        ).isEmpty) {
           continue;
+        }
         _setSourceUri(source['source_id'] as String, file['webViewLink']);
         if (file['trashed'] == true) {
           await domain.delete(source['source_id'] as String);
@@ -573,8 +592,9 @@ class GoogleConnections {
     DateTime now,
     Future<void> Function(String) deliver,
   ) async {
-    if (!auth.connected || store.preference('googleReminders') != 'true')
+    if (!auth.connected || store.preference('googleReminders') != 'true') {
       return;
+    }
     final account = auth.account;
     _check(account);
     final events = store.rows(

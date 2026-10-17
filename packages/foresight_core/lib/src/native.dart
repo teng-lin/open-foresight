@@ -57,8 +57,9 @@ int _createAndProbe(
     } else {
       throw ArgumentError.value(backend, 'backend');
     }
-    if (engine == nullptr)
+    if (engine == nullptr) {
       throw StateError('Native model initialization failed');
+    }
     final rc = lib
         .lookupFunction<
           Int32 Function(Pointer<Void>),
@@ -89,11 +90,12 @@ int _createAndProbe(
     }
     return engine.address;
   } catch (_) {
-    if (engine != nullptr)
+    if (engine != nullptr) {
       lib.lookupFunction<
         Int32 Function(Pointer<Void>),
         int Function(Pointer<Void>)
       >('fs_engine_destroy')(engine);
+    }
     rethrow;
   } finally {
     calloc.free(a);
@@ -148,8 +150,9 @@ class NativeRuntime {
     String backend = 'llama_cpp',
   }) async {
     if (backend == 'litert_lm') runtime = liteRtRunner(runtime);
-    if (!['llama_cpp', 'litert_lm'].contains(backend))
+    if (!['llama_cpp', 'litert_lm'].contains(backend)) {
       throw ArgumentError.value(backend);
+    }
     close();
     final epoch = _epoch;
     _phase = 'loading';
@@ -450,8 +453,9 @@ class NativeRuntime {
         }
         if (event['type'] == 'tool_request' ||
             event['type'] == 'model_response') {
-          if (toolDispatcher == null)
+          if (toolDispatcher == null) {
             throw StateError('Unexpected tool request');
+          }
           final delegated = event['type'] == 'model_response';
           final payload = jsonDecode(event['text'] as String);
           final calls = delegated
@@ -498,8 +502,9 @@ class NativeRuntime {
           if (owner.released || owner.epoch != _epoch || owner.cancelled) {
             throw StateError('Tool request is no longer current');
           }
-          if (clock.elapsed >= timeout)
+          if (clock.elapsed >= timeout) {
             throw TimeoutException('Native generation timed out', timeout);
+          }
           final request = id.toNativeUtf8();
           final reply = jsonEncode(message).toNativeUtf8();
           try {
@@ -508,10 +513,11 @@ class NativeRuntime {
                   Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
                   int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
                 >('fs_generation_tool_reply')(handle, request, reply);
-            if (result != 0)
+            if (result != 0) {
               throw StateError(
                 'Tool request was cancelled or already answered',
               );
+            }
           } finally {
             calloc.free(request);
             calloc.free(reply);
@@ -521,8 +527,9 @@ class NativeRuntime {
         if (event['type'] == 'tool_answer') {
           final response =
               jsonDecode(event['text'] as String) as Map<String, dynamic>;
-          if (response['error'] != null)
+          if (response['error'] != null) {
             throw StateError(response['error'].toString());
+          }
           final content = response['content'];
           final String text;
           if (content is String) {
@@ -561,8 +568,9 @@ class NativeRuntime {
     final owner = _active;
     if (owner == null ||
         owner.released ||
-        (requestId != null && owner.id != requestId))
+        (requestId != null && owner.id != requestId)) {
       return false;
+    }
     owner.cancelled = true;
     lib.lookupFunction<
       Int32 Function(Pointer<Void>),

@@ -174,7 +174,7 @@ class Application {
     if (replacement != null) {
       _noteEnhancements[id]?.saveTimer?.cancel();
       final draft = _NoteEnhancement(
-        'note-edit-' + (++_noteEnhancementSerial).toString(),
+        'note-edit-${++_noteEnhancementSerial}',
         replacement,
       )..active = false;
       _noteEnhancements[id] = draft;
@@ -203,8 +203,9 @@ class Application {
     changed: changed,
     cancel: (request) {
       final preparation = _proactivePreparation[request];
-      if (preparation != null && !preparation.isCompleted)
+      if (preparation != null && !preparation.isCompleted) {
         preparation.complete();
+      }
       _queryRuntime?.cancel(request);
       domain.generator?.cancel(requestId: request);
     },
@@ -221,8 +222,9 @@ class Application {
             (_) => throw StateError('Automatic answer cancelled'),
           ),
         ]);
-        if (cancelled.isCompleted)
+        if (cancelled.isCompleted) {
           throw StateError('Automatic answer cancelled');
+        }
         await Future.any<void>([
           domain
               .askInConversation(
@@ -237,8 +239,9 @@ class Application {
             (_) => throw StateError('Automatic answer cancelled'),
           ),
         ]);
-        if (cancelled.isCompleted)
+        if (cancelled.isCompleted) {
           throw StateError('Automatic answer cancelled');
+        }
         final saved = store.rows(
           'SELECT id FROM answers WHERE request_id=? ORDER BY id DESC LIMIT 1',
           [request],
@@ -354,8 +357,9 @@ class Application {
       if (!domain.sourcesPaused &&
           DateTime.now().millisecondsSinceEpoch -
                   google.lastCompletedRefreshMs >=
-              hours * 3600000)
+              hours * 3600000) {
         await google.refresh();
+      }
       changed();
     } catch (e) {
       stderr.writeln('Google maintenance: $e');
@@ -523,8 +527,9 @@ class Application {
           };
           if (allowed.isEmpty) return <Object>[];
           final limit = a['limit'] as int? ?? 10;
-          if (limit < 1 || limit > 100)
+          if (limit < 1 || limit > 100) {
             throw ArgumentError('limit must be 1–100');
+          }
           final result = await domain.helper.client.retrieveContext(
             RetrieveRequest(
               query: Query(textQuery: a['query'] as String),
@@ -613,10 +618,11 @@ class Application {
         case 'preferences.set':
           if (a['key'] == 'echoCancellation') {
             final enabled = a['value'] == 'true';
-            if (enabled && !Platform.isMacOS)
+            if (enabled && !Platform.isMacOS) {
               throw StateError(
                 'Native echo cancellation is available on macOS',
               );
+            }
             recording?.setEchoCancellation(enabled);
           }
           store.setPreference(a['key'] as String, a['value'] as String);
@@ -678,8 +684,9 @@ class Application {
           return null;
         case 'workspace.clear':
           google;
-          if (recording != null)
+          if (recording != null) {
             throw StateError('Stop recording before clearing the workspace');
+          }
           for (final timer in _enhance.values) {
             timer.cancel();
           }
@@ -811,8 +818,9 @@ class Application {
           final enhancement = _noteEnhancements[a['id'] as int];
           if (enhancement == null ||
               !enhancement.active ||
-              enhancement.requestId != a['request_id'])
+              enhancement.requestId != a['request_id']) {
             return false;
+          }
           enhancement.cancelRequested = true;
           changed();
           return true;
@@ -903,8 +911,9 @@ class Application {
           return null;
         case 'models.register':
           if (a['kind'] == dedicatedQueryModelKind) {
-            if (a['backend'] != null && a['backend'] != dedicatedQueryBackend)
+            if (a['backend'] != null && a['backend'] != dedicatedQueryBackend) {
               throw StateError('Unsupported dedicated question model backend');
+            }
             await configureDedicatedQuery(
               store,
               a['path'] as String,
@@ -1047,14 +1056,16 @@ class Application {
         'google.status',
         'google.drive_files',
         'graph.embeddings',
-      }.contains(method))
+      }.contains(method)) {
         changed();
+      }
     }
   }
 
   Stream<Object?> signIn(String owner) async* {
-    if (_signInOwner != null)
+    if (_signInOwner != null) {
       throw StateError('Google sign-in is already open');
+    }
     _signInOwner = owner;
     final invitation = Completer<Uri>();
     final signedIn = googleAuth.signIn((uri) async {
@@ -1109,8 +1120,9 @@ class Application {
     final (text, provenance) = await Parser().extract(file.path);
     final modified = (await file.stat()).modified.millisecondsSinceEpoch;
     domain.checkWorkspace(generation);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw StateError('Import cancelled or source changed');
+    }
 
     final uri = Uri.file(file.path).toString();
     final existing = store.sources
@@ -1177,18 +1189,20 @@ class Application {
     final failures = <String>[];
     for (final file in files) {
       domain.checkWorkspace(generation);
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw StateError('Operation cancelled');
+      }
       try {
         await importFile(file.path, current: current);
       } catch (e) {
         failures.add('${file.path.split('/').last}: $e');
       }
     }
-    if (failures.isNotEmpty)
+    if (failures.isNotEmpty) {
       throw StateError(
         'Imported ${files.length - failures.length} files. ${failures.join('\n')}',
       );
+    }
   }
 
   Future<void> reimport({
@@ -1199,8 +1213,9 @@ class Application {
     final failures = <String>[];
     for (final s in store.sources) {
       domain.checkWorkspace(generation);
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw StateError('Operation cancelled');
+      }
       if ((s['provenance'] as String).startsWith('user edit; ')) continue;
       bool sourceCurrent() =>
           (current?.call() ?? true) &&
@@ -1293,8 +1308,9 @@ class Application {
       'action_items',
       'questions',
       'enhanced_notes',
-    ].contains(kind))
+    ].contains(kind)) {
       throw ArgumentError('Unsupported artifact kind');
+    }
     if (kind == 'enhanced_notes') {
       await enhanceNotes(id, requestId: requestId, current: current);
       return;
@@ -1356,8 +1372,9 @@ class Application {
       maxOutputTokens: maxTokens,
     )) {
       domain.checkWorkspace(generation);
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw StateError('Generation cancelled');
+      }
       if (event['type'] == 'delta') {
         result += event['text'] as String;
         onText?.call(result);
@@ -1450,8 +1467,9 @@ class Application {
     ).firstOrNull;
     if (notes == null ||
         (notes['body'] as String).trim().isEmpty ||
-        (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String)))
+        (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String))) {
       return;
+    }
     final transcript = isLive
         ? _liveNoteTranscriptSegments(id)
               .map(
@@ -1572,8 +1590,9 @@ class Application {
       if (_closed ||
           enhancement.cancelRequested ||
           !(current?.call() ?? true) ||
-          !identical(_noteEnhancements[id], enhancement))
+          !identical(_noteEnhancements[id], enhancement)) {
         throw StateError('Generation cancelled');
+      }
       enhancement.saveTimer?.cancel();
       store.artifact(
         id,
@@ -1657,12 +1676,14 @@ class Application {
       enhancement.saveTimer = null;
       if (_closed ||
           !(enhancement.current?.call() ?? true) ||
-          !identical(_noteEnhancements[id], enhancement))
+          !identical(_noteEnhancements[id], enhancement)) {
         return;
+      }
       try {
         store.saveMeetingEnhancedDraft(id, enhancement.body);
-        if (!enhancement.active && enhancement.status.isEmpty)
+        if (!enhancement.active && enhancement.status.isEmpty) {
           _noteEnhancements.remove(id);
+        }
       } catch (error) {
         enhancement.status = 'Unable to save enhanced notes: $error';
       }
@@ -1698,8 +1719,9 @@ class Application {
     _meeting(id);
     if (recording != null) throw StateError('A meeting is already recording');
     final speech = store.model('speech');
-    if (speech == null)
+    if (speech == null) {
       throw StateError('Register speech model and whisper.cpp runner first');
+    }
     provisionalTranscript.clear();
     final active = Recording(
       runtimeConfiguration.nativeLibrary,

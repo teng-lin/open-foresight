@@ -156,8 +156,9 @@ class ModelBlobDownloader {
        _ownsClient = client == null,
        _origin = origin ?? Uri.https(referenceWebContentHost),
        _sleep = sleep ?? Future<void>.delayed {
-    if (parallelCount != null && parallelCount! <= 0)
+    if (parallelCount != null && parallelCount! <= 0) {
       throw ArgumentError.value(parallelCount, 'parallelCount');
+    }
     if (this.retryPolicy.maxAttempts <= 0) {
       throw ArgumentError.value(this.retryPolicy.maxAttempts, 'maxAttempts');
     }
@@ -287,8 +288,9 @@ class ModelBlobDownloader {
             error is HttpException ||
             error is SocketException ||
             error is TimeoutException;
-        if (!retryable || attempt >= retryPolicy.maxAttempts || _closed)
+        if (!retryable || attempt >= retryPolicy.maxAttempts || _closed) {
           rethrow;
+        }
         await Future.any([
           _sleep(retryPolicy.delay(attempt)),
           _closedSignal.future,

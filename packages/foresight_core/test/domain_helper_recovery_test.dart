@@ -175,8 +175,9 @@ void main() {
       };
       helper.changed = () {
         if (helper.state.startsWith('state stream unavailable') &&
-            !changed.isCompleted)
+            !changed.isCompleted) {
           changed.complete();
+        }
       };
       controlService.failWatch = true;
       await helper.start();

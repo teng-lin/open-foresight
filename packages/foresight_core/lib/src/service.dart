@@ -51,8 +51,9 @@ class ServiceClient {
     socket
         .map((chunk) {
           bytes += chunk.length;
-          if (bytes > _maxMessageBytes)
+          if (bytes > _maxMessageBytes) {
             throw StateError('Service message too large');
+          }
           return chunk;
         })
         .cast<List<int>>()
@@ -93,8 +94,9 @@ class ServiceClient {
     String path, {
     int maxMessageBytes = maxServiceMessage,
   }) async {
-    if (maxMessageBytes < 1)
+    if (maxMessageBytes < 1) {
       throw ArgumentError.value(maxMessageBytes, 'maxMessageBytes');
+    }
     return ServiceClient._(
       await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
@@ -129,8 +131,9 @@ class ServiceClient {
       onCancel: () {
         _methods.remove(id);
         _requestIds.remove(id);
-        if (_pending.remove(id) != null && !_closed)
+        if (_pending.remove(id) != null && !_closed) {
           socket.writeln(jsonEncode({'cancel': id}));
+        }
       },
     );
     if (_closed) {
@@ -139,8 +142,9 @@ class ServiceClient {
     } else {
       _pending[id] = controller;
       _methods[id] = method;
-      if (args['requestId'] is String)
+      if (args['requestId'] is String) {
         _requestIds[id] = args['requestId'] as String;
+      }
       socket.writeln(jsonEncode({'id': id, 'method': method, 'args': args}));
     }
     return controller.stream
@@ -309,8 +313,9 @@ class ApplicationService {
     privateDirectory(profile.data);
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
-    if (runtimeConfiguration['FORESIGHT_NATIVE'] != null)
+    if (runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
       configureProfileRuntime(profile.data);
+    }
     privateDirectory(profile.runtime);
     var path = '${profile.runtime}/application.sock';
     final lock = File(
@@ -321,8 +326,9 @@ class ApplicationService {
             '600',
             '${profile.data}/.application.lock',
           ]).exitCode !=
-          0)
+          0) {
         throw StateError('Cannot protect profile ownership lock');
+      }
       lock.lockSync(FileLock.exclusive);
     } catch (_) {
       lock.closeSync();
@@ -337,8 +343,9 @@ class ApplicationService {
       path = serviceEndpoint(profile);
       profile = ProfilePaths(profile.data, File(path).parent.path);
       final stale = File(path);
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         stale.deleteSync();
+      }
       store = Store('${profile.data}/application.db');
       store.db.execute(
         "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing','paused')",
@@ -357,8 +364,9 @@ class ApplicationService {
         InternetAddress(path, type: InternetAddressType.unix),
         0,
       );
-      if ((await Process.run('chmod', ['600', path])).exitCode != 0)
+      if ((await Process.run('chmod', ['600', path])).exitCode != 0) {
         throw StateError('Cannot protect application socket');
+      }
       final endpoint = File('${profile.data}/.application-endpoint.json');
       final temporary = File('${endpoint.path}.$pid');
       temporary.writeAsStringSync(
@@ -453,8 +461,9 @@ class ApplicationService {
               final id = request['id'];
               if (id is! int ||
                   request['method'] is! String ||
-                  request['args'] is! Map)
+                  request['args'] is! Map) {
                 throw FormatException('Invalid request');
+              }
               if (_closing) {
                 _send(client, {
                   'id': id,
@@ -473,8 +482,9 @@ class ApplicationService {
                   if (method == 'security.attach_desktop') {
                     access.attach(client, securityArgs['token'] as String);
                   } else if (method == 'security.detach_desktop') {
-                    if (!access.isHost(client))
+                    if (!access.isHost(client)) {
                       throw StateError('Not the desktop approval connection');
+                    }
                     access.detach(client);
                     unawaited(domain.application.stopRecording());
                   } else if (method == 'security.decide') {
@@ -484,10 +494,11 @@ class ApplicationService {
                       securityArgs['allow'] == true,
                     );
                   } else if (method == 'security.allow_import_root') {
-                    if (!access.isHost(client))
+                    if (!access.isHost(client)) {
                       throw StateError(
                         'Only the desktop can select import folders',
                       );
+                    }
                     final root = Directory(
                       securityArgs['path'] as String,
                     ).resolveSymbolicLinksSync();
@@ -617,8 +628,9 @@ class ApplicationService {
             ),
       );
     }
-    if (lease.method == 'google.sign_in')
+    if (lease.method == 'google.sign_in') {
       return domain.application.signIn(lease.id);
+    }
     return Stream.fromFuture(_execute(lease.method, args, lease));
   }
 
@@ -655,10 +667,11 @@ class ApplicationService {
         );
       }
       await close(acknowledgementClient: client);
-      if (!domain.helper.shutdownVerified)
+      if (!domain.helper.shutdownVerified) {
         throw StateError(
           'Helper shutdown could not be verified. The application was not cleared for upgrade.',
         );
+      }
       _send(client, {
         'id': id,
         'result': {'stopped': true, 'shutdown_verified': true},
@@ -700,8 +713,9 @@ class ApplicationService {
       'artifacts.edit',
       'google.status',
       'google.configure',
-    }.contains(method))
+    }.contains(method)) {
       await _ready;
+    }
     if (_closing) throw StateError('Application service is shutting down');
     if ((method == 'meetings.start' || method == 'meetings.resume') &&
         !access.hasHost) {
@@ -718,8 +732,9 @@ class ApplicationService {
     final lease = _leases[client]?.remove(id);
     if (lease != null) {
       lease.cancelled = true;
-      if (lease.method == 'google.sign_in')
+      if (lease.method == 'google.sign_in') {
         domain.application.cancelSignIn(lease.id);
+      }
       domain.generator?.cancel(requestId: lease.id);
     }
     final subscription = _subscriptions[client]?.remove(id);
@@ -770,20 +785,23 @@ class ApplicationService {
     await attempt(listener.close);
     await attempt(domain.store.close);
     await attempt(() {
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         File(path).deleteSync();
+      }
       final endpoint = File(
         '${File(domain.store.path).parent.path}/.application-endpoint.json',
       );
       if (domain.helper.shutdownVerified &&
           failure == null &&
-          endpoint.existsSync())
+          endpoint.existsSync()) {
         endpoint.deleteSync();
+      }
     });
     await attempt(lock.closeSync);
     await attempt(() => installationLock?.closeSync());
-    if (failure != null)
+    if (failure != null) {
       throw StateError('Application shutdown failed: $failure');
+    }
   }
 }
 
@@ -852,10 +870,11 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
   privateDirectory(profile.data);
   privateDirectory(profile.runtime);
   final executable = runtimeConfiguration['FORESIGHT_SERVICE'];
-  if (executable == null || !File(executable).existsSync())
+  if (executable == null || !File(executable).existsSync()) {
     throw StateError(
       'Set FORESIGHT_SERVICE to the application-service executable',
     );
+  }
   final environment = {
     ...runtimeConfiguration.environment,
     'FORESIGHT_DATA': profile.data,

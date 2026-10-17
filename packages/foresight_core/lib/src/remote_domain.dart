@@ -44,12 +44,12 @@ class RemoteDomain extends Domain {
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
   RemoteDomain._(
-    Store store,
-    Helper helper,
+    super.store,
+    super.helper,
     this.client,
     this.runtime,
     this.profile,
-  ) : super(store, helper) {
+  ) {
     _listen();
   }
   void _apply(Map<String, dynamic> event) {
@@ -339,8 +339,8 @@ class RemoteDomain extends Domain {
 /// Service events are authoritative; the desktop never starts a second watcher
 /// against the runtime directory from its own launch environment.
 class RemoteHelper extends Helper {
-  RemoteHelper(String socket, String storage)
-    : super(socket, storage, manageProcess: false);
+  RemoteHelper(super.socket, super.storage)
+    : super(manageProcess: false);
   @override
   Future<void> start() async {
     changed?.call();

@@ -28,16 +28,18 @@ Future<NativeRuntime> configureGeneration(
   final candidate = NativeRuntime(library);
   try {
     onCandidate?.call(candidate);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw StateError('Model setup cancelled');
+    }
     final digest = backend == 'litert_lm'
         ? (await sha256.bind(File(model).openRead()).first).toString()
         : null;
     candidate.modelType =
         modelType ?? referenceGenerationModelType(digest ?? '');
     await candidate.load(runner, model, backend: backend);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw StateError('Model setup cancelled');
+    }
     onRegister?.call();
     await store.register(
       'generation',
@@ -74,8 +76,9 @@ Future<NativeRuntime?> discoverGenerationRuntime(
       final path = await catalog.localPath(type);
       if (path == null) continue;
       final runtime = runner ?? runtimeConfiguration['FORESIGHT_LITERT_RUNNER'];
-      if (runtime == null)
+      if (runtime == null) {
         throw StateError('Bundled generation runtime is unavailable');
+      }
       return configureGeneration(
         store,
         library,
@@ -209,8 +212,9 @@ Future<String> _prepareDedicatedQuery(
   bool Function()? current,
 }) async {
   void checkCurrent() {
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw StateError('Model setup cancelled');
+    }
   }
 
   checkCurrent();
@@ -258,10 +262,11 @@ Future<String> _prepareDedicatedQuery(
       ' <ctrl1>The meeting starts at three.',
       'query-model-setup',
     );
-    if (response.trim().isNotEmpty)
+    if (response.trim().isNotEmpty) {
       throw StateError(
         'The dedicated question runtime failed its readiness check',
       );
+    }
     checkCurrent();
     return python;
   } finally {
@@ -272,8 +277,9 @@ Future<String> _prepareDedicatedQuery(
 
 String? dedicatedQuerySetupProblem(Store store) {
   final model = store.model(dedicatedQueryModelKind);
-  if (model == null)
+  if (model == null) {
     return 'Import the supported dedicated question model to enable automatic questions.';
+  }
   final asset = File(model['path'] as String);
   final encrypted = model['backend'] == dedicatedEncryptedQueryBackend;
   if ((!encrypted && model['backend'] != dedicatedQueryBackend) ||
@@ -313,14 +319,16 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
     'embedding',
     dedicatedQueryModelKind,
   ]) {
-    if (store.rows('SELECT kind FROM models WHERE kind=?', [kind]).isNotEmpty)
+    if (store.rows('SELECT kind FROM models WHERE kind=?', [kind]).isNotEmpty) {
       continue;
+    }
     final entry = manifest[kind] as Map<String, dynamic>?;
     if (entry == null) continue;
     final model = entry['model'] as String;
     if (kind == dedicatedQueryModelKind) {
-      if (entry['backend'] != null && entry['backend'] != dedicatedQueryBackend)
+      if (entry['backend'] != null && entry['backend'] != dedicatedQueryBackend) {
         throw StateError('Unsupported dedicated question model backend');
+      }
       await configureDedicatedQuery(
         store,
         model,
@@ -339,17 +347,19 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
     if (kind == 'embedding' && Directory(model).existsSync()) {
       // Legacy SentenceTransformers installations are directory manifests.
     } else {
-      if (kind == 'embedding' && !model.endsWith('.litertlm'))
+      if (kind == 'embedding' && !model.endsWith('.litertlm')) {
         throw StateError(
           'Embedding model directory or .litertlm bundle is missing',
         );
+      }
       if (kind != 'embedding' &&
           (!File(runtime).existsSync() ||
               (File(runtime).statSync().mode & 0x49) == 0)) {
         throw StateError('The $kind runner is missing or not executable');
       }
-      if (entry['sha256'] is! String)
+      if (entry['sha256'] is! String) {
         throw StateError('The $kind installation digest is missing');
+      }
       expectedDigest = entry['sha256'] as String;
     }
     await store.register(
@@ -367,12 +377,14 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
 
 String? speechSetupProblem(Store store) {
   final model = store.model('speech');
-  if (model == null)
+  if (model == null) {
     return 'Set up a speech model and runner before recording.';
+  }
   final asset = File(model['path'] as String);
   final runner = File(model['runtime'] as String);
-  if (!asset.existsSync())
+  if (!asset.existsSync()) {
     return 'The registered speech model file is missing.';
+  }
   if (!runner.existsSync() || (runner.statSync().mode & 0x49) == 0) {
     return 'The registered speech runner is missing or not executable.';
   }
@@ -381,19 +393,22 @@ String? speechSetupProblem(Store store) {
 
 /// Registration alone is insufficient when a user has moved a model file.
 bool needsModel(Store store, String kind) {
-  if (kind == dedicatedQueryModelKind)
+  if (kind == dedicatedQueryModelKind) {
     return dedicatedQuerySetupProblem(store) != null;
+  }
   final model = store.model(kind);
   if (model == null) return true;
   final path = model['path'] as String;
   if (!Platform.isMacOS &&
       kind == 'embedding' &&
       Directory(path).existsSync() &&
-      !File('$path/onnx/model.onnx').existsSync())
+      !File('$path/onnx/model.onnx').existsSync()) {
     return true;
+  }
   if (!File(path).existsSync() &&
-      !(kind == 'embedding' && Directory(path).existsSync()))
+      !(kind == 'embedding' && Directory(path).existsSync())) {
     return true;
+  }
   if (kind == 'generation') {
     final registered = model['runtime'] as String;
     final runtime = File(

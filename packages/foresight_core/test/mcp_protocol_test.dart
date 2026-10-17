@@ -206,7 +206,7 @@ void main() {
     () async {
       final id = ++fixture.sequence;
       final bytes = utf8.encode(
-        jsonEncode({
+        '${jsonEncode({
               'jsonrpc': '2.0',
               'id': id,
               'method': 'tools/call',
@@ -214,8 +214,7 @@ void main() {
                 'name': 'search',
                 'arguments': {'query': 'café 日本語'},
               },
-            }) +
-            '\n',
+            })}\n',
       );
       final split = bytes.indexOf(0xc3) + 1;
       fixture.process.stdin.add(bytes.sublist(0, split));

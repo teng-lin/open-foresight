@@ -179,8 +179,9 @@ class MacModelVault {
   }
 
   static void _checkCurrent(bool Function()? current) {
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw StateError('Model setup cancelled');
+    }
   }
 }
 

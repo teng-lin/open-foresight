@@ -1,0 +1,73 @@
+name: Native address and undefined behavior sanitizers
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'native/**'
+      - 'services/**'
+      - 'tests/native/**'
+      - 'tests/helper/**'
+      - 'tests/inference/**'
+      - 'tests/integration/**'
+      - 'tools/generate_bindings.py'
+      - 'tools/run_native_sanitizers.sh'
+      - 'tools/verify_native_sanitizers.py'
+      - '.github/workflows/native-sanitizers.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'native/**'
+      - 'services/**'
+      - 'tests/native/**'
+      - 'tests/helper/**'
+      - 'tests/inference/**'
+      - 'tests/integration/**'
+      - 'tools/generate_bindings.py'
+      - 'tools/run_native_sanitizers.sh'
+      - 'tools/verify_native_sanitizers.py'
+      - '.github/workflows/native-sanitizers.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-sanitizers-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  native-sanitizers:
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
+    timeout-minutes: 45
+    steps:
+      - name: Install the native compiler and test dependencies
+        run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install hash-verified Python test tools
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+      - name: Configure and build instrumented native code and tests
+        run: |
+          cmake -S . -B build/sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON -DFORESIGHT_SANITIZERS=ON \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
+          cmake --build build/sanitizers --parallel 2
+      - name: Prove both sanitizer runtimes detect real faults
+        run: python tools/verify_native_sanitizers.py --output test-results/sanitizer-probes
+      - name: Run every native test with fatal ASan and UBSan reports
+        run: tools/run_native_sanitizers.sh build/sanitizers test-results/sanitizers
+      - name: Retain sanitizer diagnostics and native test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-sanitizer-evidence
+          path: |
+            test-results/sanitizers/
+            test-results/sanitizer-probes/
+            build/sanitizers/Testing/
+          if-no-files-found: warn

@@ -126,21 +126,24 @@ class GemmaDownload {
     Uri? sourceForTesting,
     File? existingFile,
   }) async {
-    if (_active || _cancelled)
+    if (_active || _cancelled) {
       throw StateError('Download is active or cancelled');
+    }
     _active = true;
     File? partial;
     IOSink? sink;
     try {
-      if (parallelism < 1 || parallelism > 8 || rangeThreshold < 0)
+      if (parallelism < 1 || parallelism > 8 || rangeThreshold < 0) {
         throw ArgumentError('Invalid download parallelism');
+      }
       if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(model.digest) ||
           model.bytes <= 0 ||
           model.filename.contains('/') ||
           model.filename.contains('\\') ||
           !(model.filename.endsWith('.litertlm') ||
-              model.filename.endsWith('.bin')))
+              model.filename.endsWith('.bin'))) {
         throw ArgumentError('Invalid model metadata');
+      }
       phase?.call(ModelDownloadPhase.checkingCache);
       final directory = Directory('${root.path}/${model.directory}');
       final destination =
@@ -154,19 +157,21 @@ class GemmaDownload {
         if (type != FileSystemEntityType.file ||
             await destination.length() != model.bytes ||
             (await sha256.bind(destination.openRead()).first).toString() !=
-                model.digest)
+                model.digest) {
           throw StateError(
             'Existing model file failed verification; it was preserved',
           );
+        }
         _check();
         progress?.call(model.bytes, model.bytes);
         return destination;
       }
       _check();
-      if (existingFile != null)
+      if (existingFile != null) {
         throw StateError(
           'The selected local model is missing; choose a model again.',
         );
+      }
       await directory.create(recursive: true);
       final temporary = await directory.createTemp('.download-');
       partial = File('${temporary.path}/model.part');
@@ -212,8 +217,9 @@ class GemmaDownload {
                   : await _response(client, uri, range: 'bytes=$start-$end');
               if (response.statusCode != 206 ||
                   response.headers.value(HttpHeaders.contentRangeHeader) !=
-                      'bytes $start-$end/${model.bytes}')
+                      'bytes $start-$end/${model.bytes}') {
                 throw StateError('Model server returned an invalid byte range');
+              }
               output = file.openWrite();
               await _body(response, output, end - start + 1, report);
               await output.close();
@@ -236,8 +242,9 @@ class GemmaDownload {
         }
       } else {
         // Servers that ignore Range can still provide a verified whole file.
-        if (first.statusCode != 200)
+        if (first.statusCode != 200) {
           throw StateError('Model download server returned an error');
+        }
         await _body(first, sink, model.bytes, report);
       }
       await sink.close();
@@ -246,8 +253,9 @@ class GemmaDownload {
       phase?.call(ModelDownloadPhase.verifyingDownload);
       if (received != model.bytes ||
           (await sha256.bind(partial.openRead()).first).toString() !=
-              model.digest)
+              model.digest) {
         throw StateError('Model download failed size or hash verification');
+      }
       _check();
       // A hard link atomically publishes the verified inode and refuses to
       // overwrite any destination, including a concurrent downloader's file.
@@ -255,10 +263,11 @@ class GemmaDownload {
         Platform.isMacOS ? '/bin/ln' : '/usr/bin/ln',
         ['--', partial.path, destination.path],
       );
-      if (published.exitCode != 0)
+      if (published.exitCode != 0) {
         throw StateError(
           'Model could not be published; existing files were preserved',
         );
+      }
       await partial.delete();
       partial = null;
       await temporary.delete();
@@ -268,10 +277,11 @@ class GemmaDownload {
       if (failure is HttpException ||
           failure is SocketException ||
           failure is HandshakeException ||
-          failure is TimeoutException)
+          failure is TimeoutException) {
         throw StateError(
           'Model transfer failed. Check the connection and retry.',
         );
+      }
       rethrow;
     } finally {
       _client?.close(force: true);
@@ -295,19 +305,22 @@ class GemmaDownload {
   }) async {
     var uri = source;
     for (var redirects = 0; redirects <= 5; redirects++) {
-      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty)
+      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty) {
         throw StateError('Model downloads require HTTPS');
+      }
       _check();
       final request = await client.getUrl(uri).timeout(timeout);
       request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
       if (range != null) request.headers.set(HttpHeaders.rangeHeader, range);
       request.followRedirects = false;
       final response = await request.close().timeout(timeout);
-      if (![301, 302, 303, 307, 308].contains(response.statusCode))
+      if (![301, 302, 303, 307, 308].contains(response.statusCode)) {
         return response;
+      }
       final location = response.headers.value(HttpHeaders.locationHeader);
-      if (location == null || redirects == 5)
+      if (location == null || redirects == 5) {
         throw StateError('Model download redirect failed');
+      }
       uri = uri.resolve(location);
       await response.listen((_) {}).cancel();
     }
@@ -320,8 +333,9 @@ class GemmaDownload {
     int expected,
     void Function(int) progress,
   ) async {
-    if (response.contentLength >= 0 && response.contentLength != expected)
+    if (response.contentLength >= 0 && response.contentLength != expected) {
       throw StateError('Model download size does not match');
+    }
     var received = 0, pending = 0;
     await for (final chunk in response.timeout(timeout)) {
       _check();

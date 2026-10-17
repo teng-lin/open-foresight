@@ -734,8 +734,9 @@ void main() {
   test(
     'checkpoint writes keep the exact meeting answer ID and roll back with failed linking',
     () async {
-      for (var i = 0; i < 3; i++)
+      for (var i = 0; i < 3; i++) {
         store.answer('Old $i', 'Body', 'completed', [], 'legacy');
+      }
       final meeting = store.meeting('Checkpoint fixture');
       runtime.answer = (_) async => 'Meeting answer';
       await domain
@@ -785,7 +786,7 @@ void main() {
         port: 0,
       );
       helper.snapshot = control.State(tokenizerReady: true);
-      for (var i = 0; i < 6; i++)
+      for (var i = 0; i < 6; i++) {
         store.answer(
           'Old question $i',
           '字' * 40,
@@ -794,6 +795,7 @@ void main() {
           'legacy',
           conversation: 'history',
         );
+      }
       runtime.contextLimit = 100;
       runtime.answer = (_) async => 'New answer';
       try {

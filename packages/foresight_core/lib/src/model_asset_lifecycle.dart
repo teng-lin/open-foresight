@@ -111,8 +111,9 @@ class ModelAssetLifecycle {
       }
     }
     final directory = Directory(p.join(root.absolute.path, 'models', '$type'));
-    if (!await _safeDirectory(directory.path) || !await directory.exists())
+    if (!await _safeDirectory(directory.path) || !await directory.exists()) {
       return null;
+    }
     await for (final item in directory.list(
       recursive: true,
       followLinks: false,
@@ -143,16 +144,18 @@ class ModelAssetLifecycle {
 
   Future<void> cleanupObsoleteModels() async {
     final directory = Directory(p.join(root.absolute.path, 'models'));
-    if (!await _safeDirectory(directory.path) || !await directory.exists())
+    if (!await _safeDirectory(directory.path) || !await directory.exists()) {
       return;
+    }
     final managed = _assets
         .where((a) => referenceManagedModelTypes.contains(a.metadata.modelType))
         .toList();
     final current = managed.map((a) => p.normalize(a.path)).toSet();
     final missing = <int>[];
     for (final asset in managed) {
-      if (!await _regularOwned(asset.path))
+      if (!await _regularOwned(asset.path)) {
         missing.add(asset.metadata.modelType);
+      }
     }
     final protected = {
       for (final path in protectedPaths?.call() ?? const <String>[])
@@ -163,16 +166,18 @@ class ModelAssetLifecycle {
             directory.list(recursive: true, followLinks: false))) {
       if (item is! File ||
           _temporary(item.path) ||
-          !await _regularOwned(item.path))
+          !await _regularOwned(item.path)) {
         continue;
+      }
       final path = p.normalize(item.absolute.path);
       // Original String.contains examines the entire path, including ancestor
       // names. Preserve that broad predicate, rather than interpreting a type
       // directory or comparing versions numerically.
       if (current.contains(path) ||
           protected.contains(path) ||
-          missing.any((type) => path.contains('$type')))
+          missing.any((type) => path.contains('$type'))) {
         continue;
+      }
       try {
         if (deleteFile case final remove?) {
           await remove(item);
@@ -193,8 +198,9 @@ class ModelAssetLifecycle {
     Future<void> Function(File) adopt,
   ) async {
     final target = File(pathFor(metadata));
-    if (!await _safeDirectory(target.parent.path))
+    if (!await _safeDirectory(target.parent.path)) {
       throw StateError('Unsafe model directory');
+    }
     await target.parent.create(recursive: true);
     final kind = await FileSystemEntity.type(target.path, followLinks: false);
     if (kind != FileSystemEntityType.notFound &&
@@ -209,8 +215,9 @@ class ModelAssetLifecycle {
     var accepted = false;
     Object? adoptionError;
     try {
-      if (kind == FileSystemEntityType.file)
+      if (kind == FileSystemEntityType.file) {
         await rename(target, previous.path);
+      }
       await rename(candidate, target.path);
       published = true;
       await adopt(target);
@@ -246,14 +253,16 @@ class ModelAssetLifecycle {
   Future<bool> _safeDirectory(String path) async {
     final absoluteRoot = p.normalize(root.absolute.path);
     final absolute = p.normalize(p.absolute(path));
-    if (absolute != absoluteRoot && !p.isWithin(absoluteRoot, absolute))
+    if (absolute != absoluteRoot && !p.isWithin(absoluteRoot, absolute)) {
       return false;
+    }
     var cursor = Directory(absolute);
     while (true) {
       final type = await FileSystemEntity.type(cursor.path, followLinks: false);
       if (type != FileSystemEntityType.directory &&
-          type != FileSystemEntityType.notFound)
+          type != FileSystemEntityType.notFound) {
         return false;
+      }
       if (cursor.path == absoluteRoot) return true;
       cursor = cursor.parent;
     }

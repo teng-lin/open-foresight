@@ -88,10 +88,11 @@ subjectAltName=DNS:web-import.test
     ],
   ]) {
     final generated = await Process.run('openssl', arguments);
-    if (generated.exitCode != 0)
+    if (generated.exitCode != 0) {
       throw StateError(
         'Unable to generate offline TLS fixture: ${generated.stderr}',
       );
+    }
   }
   return (ca: ca, cert: cert, key: key);
 }
@@ -347,8 +348,9 @@ void main() {
         ],
         connect: (address, port) async {
           attempted.add(address.address);
-          if (address.type == InternetAddressType.IPv6)
+          if (address.type == InternetAddressType.IPv6) {
             throw const SocketException('IPv6 unavailable');
+          }
           return Socket.startConnect(InternetAddress.loopbackIPv4, port);
         },
       );

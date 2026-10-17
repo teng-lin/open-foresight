@@ -50,8 +50,9 @@ void main() {
       )(hold ? 1 : 0);
   int emit(int channel, int marker, {int count = 2000}) {
     final bytes = ByteData(count * 2);
-    for (var i = 0; i < count; i++)
+    for (var i = 0; i < count; i++) {
       bytes.setInt16(i * 2, marker, Endian.little);
+    }
     return emitEvent(channel, {
       'type': 'pcm',
       'sampleRate': 1000,

@@ -65,8 +65,9 @@ Future<void> main() async {
           );
       final abort = extra.signal.onAbort.listen((_) {
         unawaited(subscription.cancel());
-        if (!done.isCompleted)
+        if (!done.isCompleted) {
           done.completeError(StateError('Operation cancelled'));
+        }
       });
       try {
         final value = await done.future;

@@ -66,10 +66,11 @@ class Store {
     }
     if (!db
         .select('PRAGMA table_info(models)')
-        .any((row) => row['name'] == 'backend'))
+        .any((row) => row['name'] == 'backend')) {
       db.execute(
         "ALTER TABLE models ADD COLUMN backend TEXT NOT NULL DEFAULT 'llama_cpp'",
       );
+    }
     if (!db
         .select('PRAGMA table_info(models)')
         .any((row) => row['name'] == 'model_type')) {
@@ -85,11 +86,12 @@ class Store {
       );
       for (final row in rows('SELECT id,provenance FROM sources')) {
         final uri = _legacySourceUri(row['provenance'] as String);
-        if (uri.isNotEmpty)
+        if (uri.isNotEmpty) {
           db.execute(
             'UPDATE source_details SET source_uri=? WHERE source_id=?',
             [uri, row['id']],
           );
+        }
       }
     }
     if (!db
@@ -210,8 +212,9 @@ class Store {
       if (rows(
         'SELECT 1 FROM document_labels WHERE document_id=? AND label_name=?',
         [id, name],
-      ).isNotEmpty)
+      ).isNotEmpty) {
         continue;
+      }
       final color = allocateGraphLabelColor(name, records);
       db.execute(
         'INSERT INTO document_labels(document_id,label_name,label_source,color_hex,rationale) VALUES(?,?,?,?,NULL)',
@@ -227,8 +230,9 @@ class Store {
     }
     if (provenance.startsWith('url:')) return provenance.substring(4);
     final marker = provenance.indexOf('; /');
-    if (marker >= 0)
+    if (marker >= 0) {
       return Uri.file(provenance.substring(marker + 2)).toString();
+    }
     return '';
   }
 
@@ -354,8 +358,9 @@ class Store {
       final file = File(path);
       final canonical = file.resolveSymbolicLinksSync();
       if (!canonical.startsWith('$canonicalRoot/') ||
-          (file.statSync().mode & 0x49) == 0)
+          (file.statSync().mode & 0x49) == 0) {
         return null;
+      }
       return canonical;
     } on FileSystemException {
       return null;
@@ -374,8 +379,9 @@ class Store {
           record['resource'] != resource ||
           record['runtime'] != model['runtime'] ||
           record['digest'] != model['digest'] ||
-          record['backend'] != model['backend'])
+          record['backend'] != model['backend']) {
         return model;
+      }
       final current = _ownedRuntime(resource);
       if (current == null) return model;
       return {...model, 'runtime': current};
@@ -451,20 +457,23 @@ class Store {
     } else {
       digest = (await sha256.bind(File(path).openRead()).first).toString();
     }
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw StateError('Model setup cancelled');
-    if (expectedDigest != null && digest != expectedDigest)
+    }
+    if (expectedDigest != null && digest != expectedDigest) {
       throw StateError(
         'The $kind model does not match its installation digest',
       );
+    }
     String? resource = _runtimeResources[kind];
     if (resource != null) {
       final owned = _ownedRuntime(resource);
       try {
-        if (owned == null || File(runtime).resolveSymbolicLinksSync() != owned)
+        if (owned == null || File(runtime).resolveSymbolicLinksSync() != owned) {
           resource = null;
-        else
+        } else {
           runtime = File(runtime).absolute.path;
+        }
       } on FileSystemException {
         resource = null;
       }
@@ -546,8 +555,9 @@ class Store {
   void _snapshotMeetingEvents(int meeting) {
     if (rows(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_events'",
-    ).isEmpty)
+    ).isEmpty) {
       return;
+    }
     for (final event in rows(
       'SELECT event_key,metadata FROM calendar_events WHERE meeting_id=? ORDER BY rowid',
       [meeting],
@@ -582,10 +592,11 @@ class Store {
       'INSERT INTO transcript(meeting_id,text,final,start_ms,end_ms,source) VALUES(?,?,?,?,?,?)',
       [meeting, text, finalText ? 1 : 0, start, end, source],
     );
-    if (finalText)
+    if (finalText) {
       db.execute('UPDATE meetings SET revision=revision+1 WHERE id=?', [
         meeting,
       ]);
+    }
   }
 
   void artifact(
@@ -659,8 +670,9 @@ class Store {
     try {
       if (rows('SELECT meeting_id FROM meeting_notes WHERE meeting_id=?', [
         meeting,
-      ]).isEmpty)
+      ]).isEmpty) {
         _snapshotMeetingEvents(meeting);
+      }
       final now = DateTime.now().millisecondsSinceEpoch;
       final column = manual ? 'last_manual_edit' : 'last_enhanced';
       final date = manual
@@ -762,11 +774,12 @@ class Store {
       for (final row in rows('SELECT source_id,labels FROM source_details')) {
         final names = (jsonDecode(row['labels'] as String) as List)
             .cast<String>();
-        if (names.remove(name))
+        if (names.remove(name)) {
           db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
             jsonEncode(names),
             row['source_id'],
           ]);
+        }
       }
       db.execute('DELETE FROM document_labels WHERE label_name=?', [name]);
       db.execute('DELETE FROM document_clusters WHERE label=?', [name]);
@@ -778,8 +791,9 @@ class Store {
   }
 
   void labels(String id, List<String> labels) {
-    if (rows('SELECT 1 FROM source_details WHERE source_id=?', [id]).isEmpty)
+    if (rows('SELECT 1 FROM source_details WHERE source_id=?', [id]).isEmpty) {
       return;
+    }
     db.execute('BEGIN IMMEDIATE');
     try {
       _writeLabelRecords(id, labels);
@@ -849,10 +863,11 @@ class Parser {
     if (_macOS && (lower.endsWith('.pdf') || lower.endsWith('.rtf'))) {
       final executable =
           _macParser ?? runtimeConfiguration['FORESIGHT_FILE_PARSER'];
-      if (executable == null || executable.isEmpty)
+      if (executable == null || executable.isEmpty) {
         throw StateError(
           'The bundled PDF/RTF extractor is unavailable. Reinstall Open Foresight.',
         );
+      }
       ProcessResult result;
       try {
         result = await _extractProcess(executable, [
@@ -864,13 +879,15 @@ class Parser {
           'Cannot launch the bundled file extractor. Reinstall Open Foresight: ${error.message}',
         );
       }
-      if (result.exitCode != 0)
+      if (result.exitCode != 0) {
         throw StateError(
           'File extraction failed: ${result.stderr.toString().trim()}',
         );
+      }
       final text = result.stdout as String;
-      if (text.trim().isEmpty)
+      if (text.trim().isEmpty) {
         throw StateError('The selected document contains no extractable text.');
+      }
       return (
         text,
         lower.endsWith('.pdf')
@@ -880,14 +897,16 @@ class Parser {
     }
     if (lower.endsWith('.pdf')) {
       final r = await _extractProcess('pdftotext', ['-layout', path, '-']);
-      if (r.exitCode != 0)
+      if (r.exitCode != 0) {
         throw StateError('PDF extraction failed: ${r.stderr}');
+      }
       return (r.stdout as String, 'pdftotext -layout (Linux adapter)');
     }
     if (lower.endsWith('.rtf')) {
       final r = await _extractProcess('unrtf', ['--text', path]);
-      if (r.exitCode != 0)
+      if (r.exitCode != 0) {
         throw StateError('RTF extraction failed: ${r.stderr}');
+      }
       return (r.stdout as String, 'unrtf --text (Linux adapter)');
     }
     final bytes = <int>[];

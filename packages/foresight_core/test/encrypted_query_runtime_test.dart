@@ -108,8 +108,9 @@ void main() {
   });
   tearDown(() async {
     for (final worker in workers) {
-      if (worker.closeGate != null && !worker.closeGate!.isCompleted)
+      if (worker.closeGate != null && !worker.closeGate!.isCompleted) {
         worker.closeGate!.complete();
+      }
     }
     await runtime.close();
     await fixture.delete(recursive: true);

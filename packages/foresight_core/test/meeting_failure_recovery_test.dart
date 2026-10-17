@@ -6,7 +6,7 @@ import 'package:test/test.dart';
 
 class RecoveryHelper extends Helper {
   int launches = 0;
-  RecoveryHelper(String socket, String storage) : super(socket, storage);
+  RecoveryHelper(super.socket, super.storage);
   @override
   Future<void> start() async {
     launches++;

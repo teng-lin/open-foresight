@@ -30,7 +30,7 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-pipewire-',
       );
-      final prefix = 'foresight-${pid}';
+      final prefix = 'foresight-$pid';
       final modules = <String>[];
       final players = <Process>[];
       final rows = <Map<String, Object>>[];
@@ -46,8 +46,9 @@ void main() {
       Recording? recording;
       Future<String> command(String name, List<String> arguments) async {
         final result = await Process.run(name, arguments);
-        if (result.exitCode != 0)
+        if (result.exitCode != 0) {
           throw StateError('$name failed: ${result.stderr}');
+        }
         return '${result.stdout}'.trim();
       }
 
@@ -286,10 +287,11 @@ print(' '.join(labels))
         report['final_defaults'] = await defaults();
         expect(report['final_defaults'], before);
         final output = Platform.environment['FORESIGHT_PIPEWIRE_REPORT'];
-        if (output != null)
+        if (output != null) {
           File(output).writeAsStringSync(
             '${const JsonEncoder.withIndent('  ').convert(report)}\n',
           );
+        }
         directory.deleteSync(recursive: true);
       }
     },

@@ -26,8 +26,9 @@ class MetadataFixture implements ModelConfigService {
   Future<void> close() async {
     closed = true;
     final active = pending;
-    if (active != null && !active.isCompleted)
+    if (active != null && !active.isCompleted) {
       active.completeError(StateError('Fixture cancelled'));
+    }
   }
 }
 

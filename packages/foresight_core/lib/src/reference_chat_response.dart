@@ -208,8 +208,9 @@ String alignReferenceResponseNumbers(String response, String context) {
       final number = match[numberFirst ? 1 : 2]!;
       final words = match[numberFirst ? 2 : 1]!.trim();
       if (words.length < 3 ||
-          _numberContextTerms.any(words.toLowerCase().startsWith))
+          _numberContextTerms.any(words.toLowerCase().startsWith)) {
         continue;
+      }
       final parts = words.split(RegExp(r'\s+'));
       for (var count = parts.length; count >= 1; count--) {
         final phrase =
@@ -229,8 +230,9 @@ String alignReferenceResponseNumbers(String response, String context) {
         if (source == null) continue;
         final actual = source[1]!;
         if (number == actual ||
-            (number.startsWith(actual) && number.length > actual.length + 2))
+            (number.startsWith(actual) && number.length > actual.length + 2)) {
           continue;
+        }
         final start = numberFirst
             ? match.start
             : match.start + match[0]!.lastIndexOf(number);

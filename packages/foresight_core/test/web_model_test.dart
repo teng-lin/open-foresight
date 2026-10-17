@@ -61,10 +61,11 @@ void main() {
         };
         final reportPath = env['FORESIGHT_WEB_MODEL_REPORT'];
         final reason = reportPath ?? 'Controlled web-model fixture';
-        if (reportPath != null)
+        if (reportPath != null) {
           File(reportPath).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert(report),
           );
+        }
         expect(queries, isNotEmpty, reason: reason);
         expect(rows, hasLength(1));
         expect(rows.single['status'], 'completed', reason: reason);
@@ -119,10 +120,11 @@ void main() {
             "SELECT question,status FROM answers WHERE conversation='controlled-compression-fixture'",
           ),
         };
-        if (reportPath != null)
+        if (reportPath != null) {
           File(reportPath).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert(report),
           );
+        }
         final checkpoint = store
             .rows(
               "SELECT * FROM conversation_memory WHERE conversation='controlled-compression-fixture'",

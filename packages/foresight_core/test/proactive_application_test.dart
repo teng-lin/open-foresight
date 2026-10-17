@@ -14,11 +14,12 @@ import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 class _Domain extends Domain {
   _Domain(super.store, super.helper, this.detector);
   final QueryCompletionRuntime detector;
-  @override
-  late final Application application = Application(
+  late final Application _application = Application(
     this,
     queryRuntime: detector,
   );
+  @override
+  Application get application => _application;
   Completer<void>? indexGate;
   @override
   Future<void> index(String id) async {

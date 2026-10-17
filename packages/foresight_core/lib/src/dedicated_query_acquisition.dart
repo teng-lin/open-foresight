@@ -30,8 +30,9 @@ class DedicatedQueryAcquisition {
 
   factory DedicatedQueryAcquisition.distribution(Store store) {
     final key = runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'];
-    if (!Platform.isMacOS)
+    if (!Platform.isMacOS) {
       throw StateError('Automatic question model acquisition requires macOS.');
+    }
     if (key == null || key.isEmpty) {
       throw StateError(
         'Automatic question model download is unavailable in this distribution.',
@@ -86,8 +87,9 @@ class DedicatedQueryAcquisition {
     bool Function()? current,
     void Function(int, int)? onProgress,
   }) {
-    if (_started || _closed)
+    if (_started || _closed) {
       throw StateError('Model acquisition is already used or closed.');
+    }
     _started = true;
     return _running = _run(current: current, onProgress: onProgress);
   }
@@ -157,8 +159,9 @@ class DedicatedQueryAcquisition {
         '600',
         plaintext.path,
       ]);
-      if (protected.exitCode != 0)
+      if (protected.exitCode != 0) {
         throw StateError('Cannot protect the downloaded question model.');
+      }
       check();
       // The reference encrypts type 4 before persistence. The port uses its own
       // Keychain entry and retains plaintext only in operation-owned leases.
@@ -188,8 +191,9 @@ class DedicatedQueryAcquisition {
         try {
           if (stage != null) await stage.delete(recursive: true);
         } finally {
-          if ((!accepted || catalog != null) && encrypted != null)
+          if ((!accepted || catalog != null) && encrypted != null) {
             await encrypted.parent.delete(recursive: true);
+          }
         }
       }
     }

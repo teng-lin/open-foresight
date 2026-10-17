@@ -37,8 +37,9 @@ String allocateGraphLabelColor(
   final existing = labels.toList();
   for (final label in existing) {
     if (label.name.toLowerCase() == name.toLowerCase() &&
-        label.colorHex != null)
+        label.colorHex != null) {
       return label.colorHex!;
+    }
   }
   final used = {
     for (final label in existing)

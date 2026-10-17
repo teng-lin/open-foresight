@@ -54,10 +54,11 @@ class Recording {
   void setEchoCancellation(bool enabled) {
     var pending = false;
     if (!lib.providesSymbol('fs_capture_set_echo_cancellation')) {
-      if (enabled)
+      if (enabled) {
         throw StateError(
           'Echo cancellation requires an updated native audio runtime',
         );
+      }
     } else if (captures.isNotEmpty) {
       final accepted = lib
           .lookupFunction<
@@ -67,10 +68,11 @@ class Recording {
             'fs_capture_set_echo_cancellation',
           )(captures.first, enabled ? 1 : 0);
       pending = accepted == 1;
-      if (accepted == 0 && enabled)
+      if (accepted == 0 && enabled) {
         throw StateError(
           'Echo cancellation is unavailable for this audio route',
         );
+      }
     }
     _echoCancellation = enabled;
     _echoState['pending'] = pending;
@@ -115,8 +117,9 @@ class Recording {
       final handle = lib.lookupFunction<CreateNative, CreateDart>(
         'fs_speech_create',
       )(runtime, model);
-      if (handle == nullptr)
+      if (handle == nullptr) {
         throw StateError('Speech runtime/model unavailable');
+      }
       speeches.add(handle);
       return handle;
     } finally {
@@ -145,13 +148,16 @@ class Recording {
         speeches.isNotEmpty ||
         paused ||
         finishing ||
-        _workers.isNotEmpty)
+        _workers.isNotEmpty) {
       throw StateError('A recording is already active');
-    if (!File(model).existsSync())
+    }
+    if (!File(model).existsSync()) {
       throw StateError('Speech model file is missing: $model');
+    }
     if (!File(runtime).existsSync() ||
-        File(runtime).statSync().mode & 0x49 == 0)
+        File(runtime).statSync().mode & 0x49 == 0) {
       throw StateError('Speech runner is missing or not executable: $runtime');
+    }
     _runtime = runtime;
     _model = model;
     _echoCancellation = echoCancellation;
@@ -205,10 +211,11 @@ class Recording {
     try {
       if (channel == 0 &&
           _echoCancellation &&
-          !lib.providesSymbol('fs_capture_start_with_options'))
+          !lib.providesSymbol('fs_capture_start_with_options')) {
         throw StateError(
           'Echo cancellation requires an updated native audio runtime',
         );
+      }
       final capture = channel == 0 && _echoCancellation
           ? lib.lookupFunction<
               Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Int32),
@@ -334,10 +341,11 @@ class Recording {
               ...event,
               'source': channel == 0 ? 'microphone' : 'playback',
             };
-            if (lastError.isEmpty)
+            if (lastError.isEmpty) {
               state(
                 'Capture gap: ${event['reason']}; resuming live transcription',
               );
+            }
             interruption?.call(gap);
             continue;
           }
@@ -434,10 +442,11 @@ class Recording {
 
   void _flush(int channel) {
     final pcm = _buffers[channel].takeBytes();
-    if (_voiced[channel] && pcm.isNotEmpty)
+    if (_voiced[channel] && pcm.isNotEmpty) {
       _enqueue(
         _AudioSegment(channel, _starts[channel], _rates[channel], pcm, false),
       );
+    }
     _starts[channel] = sampleCounts[channel];
     _voiced[channel] = false;
     _nextSnapshot[channel] = _rates[channel] * 5;
@@ -503,8 +512,9 @@ class Recording {
                 Int32 Function(Pointer<Void>, Pointer<Utf8>),
                 int Function(Pointer<Void>, Pointer<Utf8>)
               >('fs_speech_finish')(handle, request) !=
-              0)
+              0) {
             throw StateError('Speech request rejected');
+          }
         } finally {
           calloc.free(request);
         }
@@ -519,8 +529,9 @@ class Recording {
             await Future<void>.delayed(const Duration(milliseconds: 20));
             continue;
           }
-          if (event['type'] == 'state' && event['message'] is String)
+          if (event['type'] == 'state' && event['message'] is String) {
             state(event['message'] as String);
+          }
           if (event['type'] == 'error') failure = event['message'].toString();
           if (event['type'] == 'transcript') {
             final text = (event['text'] as String).trim();
@@ -543,10 +554,11 @@ class Recording {
             }
           }
           if (event['type'] == 'done') {
-            if (event['status'] != 'completed')
+            if (event['status'] != 'completed') {
               throw StateError(
                 'ASR ${event['status']}: ${failure ?? 'runner failed'}',
               );
+            }
             break;
           }
         }
@@ -554,13 +566,14 @@ class Recording {
         if (epoch == _epoch) {
           lastError = error.toString();
           state('Live transcription failed: $lastError');
-          if (!segment.provisional)
+          if (!segment.provisional) {
             interruption?.call({
               'reason': 'speech_recognition_error',
               'message': lastError,
               'discarded_bytes': segment.pcm.length,
               'source': channel == 0 ? 'microphone' : 'playback',
             });
+          }
         }
       } finally {
         if (handle != null) _releaseSpeech(handle);

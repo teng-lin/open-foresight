@@ -16,10 +16,11 @@ void validateHelperCompatibility(
   final config = configuration ?? runtimeConfiguration;
   if (!ping.success ||
       ping.version != '1.0.3' ||
-      value.referenceVersion != '1.0.3')
+      value.referenceVersion != '1.0.3') {
     throw StateError(
       'Incompatible helper protocol; stop the previous service before restarting',
     );
+  }
   final revision = config['FORESIGHT_RUNTIME_REVISION'];
   final prefix = 'open-foresight-$openForesightVersion-';
   final build = value.buildId;
@@ -29,10 +30,11 @@ void validateHelperCompatibility(
   if (!RegExp(r'^[0-9a-f]{7,40}$').hasMatch(builtRevision) ||
       (revision != null &&
           revision.isNotEmpty &&
-          !revision.startsWith(builtRevision)))
+          !revision.startsWith(builtRevision))) {
     throw StateError(
       'Helper build $build differs from this application; stop the previous service before restarting',
     );
+  }
 }
 
 class Helper {
@@ -109,10 +111,11 @@ class Helper {
       _recovering ??= _recover().whenComplete(() => _recovering = null);
   Future<void> _recover() async {
     if (stopping) throw StateError('Helper is closing');
-    if (incompatible)
+    if (incompatible) {
       throw StateError(
         'Restart the application service to replace the incompatible helper',
       );
+    }
     if (!manageProcess) return;
     restarts = 0;
     if (process == null || snapshot == null) await start();
@@ -122,10 +125,11 @@ class Helper {
   Future<void> start() =>
       _starting ??= _start().whenComplete(() => _starting = null);
   Future<void> _start() async {
-    if (incompatible)
+    if (incompatible) {
       throw StateError(
         'Restart the application service to replace the incompatible helper',
       );
+    }
     final executable = runtimeConfiguration['FORESIGHT_HELPER'];
     if (manageProcess && executable != null && process == null) {
       if (_launching != null) {
