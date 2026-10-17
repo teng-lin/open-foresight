@@ -12,7 +12,7 @@ import subprocess
 from build_macos_sdk import GRPC_COMMIT, PROTOBUF_COMMIT, MODULES, checkout, require_clean_sources, run
 
 ROOT = Path(__file__).resolve().parents[1]
-FLAGS = '-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all'
+FLAGS = '-O1 -g -shared-libasan -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all'
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
     if args.jobs < 1:
         parser.error('--jobs must be positive')
     prefix, sources = args.prefix.resolve(), args.sources.resolve()
-    compiler = subprocess.check_output(['g++', '-dumpfullversion'], text=True).strip()
+    compiler = subprocess.check_output(['clang++', '--version'], text=True).splitlines()[0]
     manifest = {'grpc_commit': GRPC_COMMIT, 'protobuf_commit': PROTOBUF_COMMIT,
                 'compiler': compiler, 'flags': FLAGS}
     stamp = prefix / 'sanitizer-sdk.json'
@@ -44,24 +44,25 @@ def main():
     if subprocess.check_output(['git', '-C', str(grpc / 'third_party/protobuf'),
                                 'rev-parse', 'HEAD'], text=True).strip() != PROTOBUF_COMMIT:
         raise ValueError('gRPC protobuf submodule differs from the release SDK')
-    build = sources / 'build'
+    build = sources / 'build-clang'
+    # Protoc/plugin run during the build; keep address/UB failures fatal while
+    # excluding process-shutdown leaks just as in the application test host.
+    runtime = Path(subprocess.check_output(['clang++', '-print-file-name=libclang_rt.asan-x86_64.so'], text=True).strip()).parent
+    environment = dict(os.environ, LD_LIBRARY_PATH=os.pathsep.join(filter(None, (str(runtime), os.environ.get('LD_LIBRARY_PATH')))), ASAN_OPTIONS='detect_leaks=0:halt_on_error=1',
+                       UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
     run('cmake', '-S', grpc, '-B', build, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Debug',
-        '-DCMAKE_C_COMPILER=gcc', '-DCMAKE_CXX_COMPILER=g++', '-DCMAKE_CXX_STANDARD=20',
+        '-DCMAKE_C_COMPILER=clang', '-DCMAKE_CXX_COMPILER=clang++', '-DCMAKE_CXX_STANDARD=20',
         f'-DCMAKE_INSTALL_PREFIX={prefix}', '-DCMAKE_INSTALL_LIBDIR=lib',
         f'-DCMAKE_C_FLAGS={FLAGS}', f'-DCMAKE_CXX_FLAGS={FLAGS}',
-        '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined',
-        '-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined',
+        '-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined -shared-libasan',
+        '-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined -shared-libasan',
         '-DBUILD_SHARED_LIBS=ON', '-DBUILD_TESTING=OFF', '-DgRPC_BUILD_TESTS=OFF',
         '-Dprotobuf_BUILD_TESTS=OFF', '-DRE2_BUILD_TESTING=OFF', '-DCARES_BUILD_TOOLS=OFF',
         '-DgRPC_SSL_PROVIDER=package', '-DgRPC_ZLIB_PROVIDER=package',
         *[f'-DgRPC_{name}_PROVIDER=module' for name in ('ABSL', 'CARES', 'PROTOBUF', 'RE2')],
         f'-DCMAKE_PROJECT_grpc_INCLUDE={ROOT / "packaging/minimal-grpc.cmake"}',
         *[f'-DgRPC_BUILD_GRPC_{language}_PLUGIN=OFF' for language in
-          ('CSHARP', 'NODE', 'OBJECTIVE_C', 'PHP', 'PYTHON', 'RUBY')])
-    # Protoc/plugin run during the build; keep address/UB failures fatal while
-    # excluding process-shutdown leaks just as in the application test host.
-    environment = dict(os.environ, ASAN_OPTIONS='detect_leaks=0:halt_on_error=1',
-                       UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
+          ('CSHARP', 'NODE', 'OBJECTIVE_C', 'PHP', 'PYTHON', 'RUBY')], env=environment)
     run('cmake', '--build', build, '--parallel', args.jobs, env=environment)
     run('cmake', '--install', build, env=environment)
     prefix.mkdir(parents=True, exist_ok=True)

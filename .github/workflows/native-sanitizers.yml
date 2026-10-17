@@ -54,7 +54,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Install the native compiler and test dependencies
-        run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip
+        run: pacman -Syu --noconfirm cmake ninja gcc clang compiler-rt git nlohmann-json sqlite icu openssl zlib python python-pip
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -64,23 +64,25 @@ jobs:
           .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
       - name: Identify the compiler for the instrumented SDK cache
         id: compiler
-        run: echo "version=$(g++ -dumpfullversion)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "version=$(clang++ -dumpversion)" >> "$GITHUB_OUTPUT"
+          echo "LD_LIBRARY_PATH=$(dirname "$(clang++ -print-file-name=libclang_rt.asan-x86_64.so)"):$PWD/build/sanitizer-sdk/lib" >> "$GITHUB_ENV"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: build/sanitizer-sdk
-          key: sanitizer-sdk-gcc-${{ steps.compiler.outputs.version }}-${{ hashFiles('tools/build_sanitizer_sdk.py', 'tools/build_macos_sdk.py', 'packaging/minimal-grpc.cmake') }}
+          key: sanitizer-sdk-clang-${{ steps.compiler.outputs.version }}-${{ hashFiles('tools/build_sanitizer_sdk.py', 'tools/build_macos_sdk.py', 'packaging/minimal-grpc.cmake') }}
       - name: Build the pinned instrumented gRPC and protobuf closure
         run: python tools/build_sanitizer_sdk.py --jobs 2
       - name: Configure and build instrumented native code and tests
         run: |
           cmake -S . -B build/sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DBUILD_TESTING=ON -DFORESIGHT_SANITIZERS=ON \
-            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
             -DCMAKE_PREFIX_PATH="$PWD/build/sanitizer-sdk" \
             -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
           cmake --build build/sanitizers --parallel 2
       - name: Prove both sanitizer runtimes detect real faults
-        run: python tools/verify_native_sanitizers.py --output test-results/sanitizer-probes
+        run: python tools/verify_native_sanitizers.py --compiler clang++ --output test-results/sanitizer-probes
       - name: Run every native test with fatal ASan and UBSan reports
         run: tools/run_native_sanitizers.sh build/sanitizers test-results/sanitizers
       - name: Retain sanitizer diagnostics and native test evidence
