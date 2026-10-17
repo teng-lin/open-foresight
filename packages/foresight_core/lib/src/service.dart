@@ -500,7 +500,7 @@ class ApplicationService {
             for (final s
                 in _subscriptions.remove(client)?.values ??
                     <StreamSubscription<Object?>>[]) {
-              unawaited(s.cancel());
+              unawaited(_cancelSubscription(s));
             }
             client.destroy();
           },
@@ -603,7 +603,20 @@ class ApplicationService {
         domain.application.cancelSignIn(lease.id);
       domain.generator?.cancel(requestId: lease.id);
     }
-    unawaited(_subscriptions[client]?.remove(id)?.cancel());
+    final subscription = _subscriptions[client]?.remove(id);
+    if (subscription != null) unawaited(_cancelSubscription(subscription));
+  }
+
+  Future<void> _cancelSubscription(
+    StreamSubscription<Object?> subscription,
+  ) async {
+    try {
+      await subscription.cancel();
+    } catch (error) {
+      // Async generators can fail during cancellation cleanup. Keep that failure
+      // scoped to the cancelled request rather than terminating the service.
+      stderr.writeln('Request cancellation cleanup: $error');
+    }
   }
 
   Future<void> close({Socket? acknowledgementClient}) => _shutdown ??=

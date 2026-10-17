@@ -22,6 +22,7 @@ class RemoteDomain extends Domain {
   Map<String, dynamic> capture = {};
   Map<String, dynamic> googleStatus = {};
   bool _paused = false;
+  int _sourceControlRevision = 0;
   bool _webSearchAvailable = false;
   @override
   bool get webSearchAvailable => _webSearchAvailable;
@@ -40,6 +41,7 @@ class RemoteDomain extends Domain {
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
     _paused = event['sources_paused'] == true;
+    _sourceControlRevision++;
     runtime.state = Map<String, dynamic>.from(
       event['generation'] as Map? ?? {},
     );
@@ -172,20 +174,22 @@ class RemoteDomain extends Domain {
   bool get sourcesPaused => _paused;
   @override
   void pauseSources() {
-    _paused = true;
-    _sourceControl('sources.pause');
+    _sourceControl('sources.pause', true);
   }
 
   @override
   void resumeSources() {
-    _paused = false;
-    _sourceControl('sources.resume');
+    _sourceControl('sources.resume', false);
   }
 
-  void _sourceControl(String method) {
+  void _sourceControl(String method, bool paused) {
+    final previous = _paused;
+    final revision = ++_sourceControlRevision;
+    _paused = paused;
     unawaited(
       command(method).catchError((Object error) {
         if (!_disposed) {
+          if (revision == _sourceControlRevision) _paused = previous;
           helper.state = 'Source control failed: $error';
           helper.changed?.call();
         }

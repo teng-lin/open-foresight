@@ -104,7 +104,7 @@ jobs:
         with:
           name: dart-core-coverage-macos
           path: coverage/core/lcov.info
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Verify native helper identity boundary
         run: |
           .venv/bin/python tests/integration/test_native_process.py \

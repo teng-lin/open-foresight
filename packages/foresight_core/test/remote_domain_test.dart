@@ -396,23 +396,70 @@ void main() {
     expect(empty.echoCancellationState['requested'], isFalse);
     expect(empty.lastAudioActivity.isAfter(DateTime(2020)), isTrue);
   });
-  test(
-    'failed source controls report their error without an unhandled future',
-    () async {
-      f.handler = (socket, request) => socket.writeln(
-        jsonEncode({
-          'id': request['id'],
-          'error': 'service rejected pause',
-          'done': true,
-        }),
-      );
-      f.remote.pauseSources();
-      await eventually(
-        () => f.remote.helper.state.contains('service rejected pause'),
-      );
-      expect(f.remote.sourcesPaused, isTrue);
-    },
-  );
+  for (final paused in [false, true]) {
+    test(
+      'rejected source control restores prior paused state $paused',
+      () async {
+        f.event({...f.status, 'sources_paused': paused});
+        await eventually(() => f.remote.sourcesPaused == paused);
+        var changes = 0;
+        f.remote.helper.changed = () => changes++;
+        f.handler = (socket, request) => socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': 'service rejected control',
+            'done': true,
+          }),
+        );
+        paused ? f.remote.resumeSources() : f.remote.pauseSources();
+        expect(f.remote.sourcesPaused, !paused);
+        await eventually(
+          () => f.remote.helper.state.contains('service rejected control'),
+        );
+        expect(f.remote.sourcesPaused, paused);
+        expect(changes, greaterThan(0));
+      },
+    );
+  }
+
+  test('late source control errors preserve newer service snapshots', () async {
+    f.remote.pauseSources();
+    await eventually(
+      () => f.requests.any((r) => r['method'] == 'sources.pause'),
+    );
+    f.event({
+      ...f.status,
+      'sources_paused': true,
+      'capture': {'state': 'fresh'},
+    });
+    await eventually(() => f.remote.capture['state'] == 'fresh');
+    final request = f.requests.singleWhere(
+      (r) => r['method'] == 'sources.pause',
+    );
+    f.sockets.last.writeln(
+      jsonEncode({'id': request['id'], 'error': 'late failure', 'done': true}),
+    );
+    await eventually(() => f.remote.helper.state.contains('late failure'));
+    expect(f.remote.sourcesPaused, isTrue);
+  });
+
+  test('late source control errors preserve a newer local command', () async {
+    f.remote.pauseSources();
+    f.remote.resumeSources();
+    await eventually(
+      () => f.requests.any((r) => r['method'] == 'sources.resume'),
+    );
+    final pause = f.requests.singleWhere((r) => r['method'] == 'sources.pause');
+    final resume = f.requests.singleWhere(
+      (r) => r['method'] == 'sources.resume',
+    );
+    f.reply(f.sockets.last, resume, null);
+    f.sockets.last.writeln(
+      jsonEncode({'id': pause['id'], 'error': 'late failure', 'done': true}),
+    );
+    await eventually(() => f.remote.helper.state.contains('late failure'));
+    expect(f.remote.sourcesPaused, isFalse);
+  });
 
   test(
     'disconnection remains observable when the service cannot reconnect',
