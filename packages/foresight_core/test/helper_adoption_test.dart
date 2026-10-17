@@ -20,12 +20,20 @@ class AdoptionRag extends RagServiceBase {
 
 class AdoptionControl extends control.HelperControlServiceBase {
   final control.State state;
+  bool unavailableOnce = false;
   AdoptionControl(this.state);
   @override
   Future<control.State> getState(
     ServiceCall call,
     control.Empty request,
-  ) async => state;
+  ) async {
+    if (unavailableOnce) {
+      unavailableOnce = false;
+      throw GrpcError.unavailable('Temporary adoption lookup failure');
+    }
+    return state;
+  }
+
   @override
   Stream<control.State> watchState(
     ServiceCall call,
@@ -84,6 +92,22 @@ void main() {
     expect(helper.process, isNull);
     expect(helper.snapshot?.buildId, status.state.buildId);
   });
+  test(
+    'transient adoption state lookup does not disable a healthy transport',
+    () async {
+      status.unavailableOnce = true;
+      await expectLater(helper.start(), throwsA(isA<GrpcError>()));
+      expect(helper.incompatible, isFalse);
+      expect((await helper.client.ping(PingRequest())).success, isTrue);
+      var ready = 0;
+      helper.onReady = () async {
+        ready++;
+      };
+      await helper.start();
+      expect(ready, 1);
+      expect(helper.snapshot?.buildId, status.state.buildId);
+    },
+  );
   for (final mismatch in [
     'protocol',
     'build',
