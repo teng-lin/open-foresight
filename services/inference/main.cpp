@@ -484,6 +484,7 @@ public:
                                                message.c_str(), nullptr,
                                                args.get(), callback, slot))
         throw std::runtime_error("Generation stream failed to start");
+      if (register_conversation) register_conversation(conversation.get());
       std::unique_lock lock(slot->state.mutex);
       slot->state.changed.wait(lock, [&] { return slot->state.done; });
       if (!slot->state.error.empty())
@@ -605,11 +606,16 @@ int main(int argc, char **argv) {
               generator.generate(request.at("prompt").get<std::string>(), budget,
                   false, schema, &frames, tools, &controls, registration);
             } else {
-              auto text = schema.contains("x-foresight-grounded-request")
-                  ? grounded_answer(generator, schema.at("x-foresight-grounded-request"), budget).dump()
-                  : generator.generate(request.at("prompt").get<std::string>(), budget, false, schema);
-              // Plain results are one JSON string frame, including embedded newlines.
-              frames << "text " << json(text).dump() << std::endl;
+              if (schema.contains("x-foresight-grounded-request")) {
+                // Verification must finish before exposing a grounded answer.
+                frames << "text " << json(grounded_answer(generator,
+                    schema.at("x-foresight-grounded-request"), budget).dump()).dump() << std::endl;
+              } else {
+                foresight::TextFrameBuffer chunks(frames);
+                std::ostream text_stream(&chunks);
+                generator.generate(request.at("prompt").get<std::string>(), budget,
+                    false, schema, &text_stream);
+              }
             }
           }, [&](void *pointer) { generator.cancel(pointer); });
       return 0;

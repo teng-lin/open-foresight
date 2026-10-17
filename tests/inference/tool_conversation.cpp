@@ -9,6 +9,13 @@ using json = nlohmann::json;
 void check(bool value) { if (!value) throw std::runtime_error("Tool protocol assertion failed"); }
 int main() {
   try {
+    std::ostringstream plain_frames;
+    foresight::TextFrameBuffer text_buffer(plain_frames);
+    std::ostream plain_text(&text_buffer);
+    plain_text << "first λ\n" << std::flush;
+    check(plain_frames.str() == "text " + json("first λ\n").dump() + "\n");
+    plain_text << "second" << std::flush;
+    check(plain_frames.str().ends_with("text " + json("second").dump() + "\n"));
     const json native_default = {{"tools", json::array()}, {"use_default_output_limit", true}};
     check(foresight::valid_output_budget(0, native_default));
     for (const auto &invalid : {json(true), json(false), json(-1), json(0.0), json(3073), json("0")})

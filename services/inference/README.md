@@ -129,7 +129,7 @@ cancel N
 shutdown
 ```
 
-Plain, schema-constrained and grounded requests use the same worker with a `schema` field (or `null`) instead of `tools`. Their result is `N text <JSON string>`; the JSON string preserves embedded newlines. Grounded evidence selection and verification reuse that worker’s loaded engine.
+Plain, schema-constrained and grounded requests use the same worker with a `schema` field (or `null`) instead of `tools`. Their streamed chunks use `N text <JSON string>`; JSON strings preserve embedded newlines. Grounded answers emit only their final verified result. Grounded evidence selection and verification reuse that worker’s loaded engine.
 
 Responses for tool conversations are `N delta|model|tool|answer <JSON>`, optionally
 `N error <JSON string>`, followed by `N done completed|cancelled|failed`.

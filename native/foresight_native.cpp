@@ -774,7 +774,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           ",\"max_output_tokens\":" + std::to_string(max_output_tokens) + "}";
       status = run_persistent(e, c, payload, [&](const std::string &line) {
         if (tools) { tool_line(line); return; }
-        if (line.starts_with("text ") && !plain_text_received && foresight::json_string_literal(line.substr(5))) {
+        if (line.starts_with("text ") && foresight::json_string_literal(line.substr(5))) {
           plain_text_received = true;
           // The worker frames text as a JSON string, preserving Unicode/newlines.
           c.emit(event("delta", c.request, seq++, ",\"text\":" + line.substr(5)));
