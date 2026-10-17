@@ -651,8 +651,8 @@ class Application implements ModelGate {
           return {
             'text':
                 await (a['web_search'] == true
-                        ? domain.askWithWebInConversation
-                        : domain.askInConversation)(
+                        ? askWithWebInConversation
+                        : askInConversation)(
                       a['question'] as String,
                       a['conversation'] as String? ?? 'desktop',
                       meetingId: a['meeting_id'] as int?,
@@ -2055,8 +2055,32 @@ final _applications = Expando<Application>();
 extension ApplicationDomain on Domain {
   Application get application => _applications[this] ?? Application(this);
   Stream<String> ask(String question) => application.ask(question);
-  Stream<String> askInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
-  Stream<String> askWithWebInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askWithWebInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
   Future<Object?> command(
     String method, [
     Map<String, dynamic> args = const {},

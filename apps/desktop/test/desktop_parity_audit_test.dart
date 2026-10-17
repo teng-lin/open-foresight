@@ -24,7 +24,10 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(Domain(store, helper)),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();

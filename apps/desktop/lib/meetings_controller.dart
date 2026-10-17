@@ -53,7 +53,9 @@ class _MeetingsController extends _FeatureController {
     },
     onError: (failure, stack) {
       if (mounted)
-        shell.update(() => shell.error = 'Unable to save meeting notes: $failure');
+        shell.update(
+          () => shell.error = 'Unable to save meeting notes: $failure',
+        );
       else
         FlutterError.reportError(
           FlutterErrorDetails(exception: failure, stack: stack),
@@ -585,7 +587,7 @@ class _MeetingsController extends _FeatureController {
 
   Future<void> exportMeetings() async {
     await saveMeetingNotes();
-    if (!mounted) return;
+    if (!mounted || !context.mounted) return;
     await showDialog<void>(
       context: context,
       builder: (_) => MeetingExportDialog(

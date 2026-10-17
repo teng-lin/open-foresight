@@ -314,7 +314,10 @@ class ConversationAnswer {
     if (authored && !useWeb) {
       // If a source changed during retrieval, never claim the requested count.
       if (citations.length != passages.length) {
-        throw StateError('Source changed during retrieval; please retry.');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Source changed during retrieval; please retry.',
+        );
       }
       final rendered = completeProcedure
           ? renderProcedureGuide(
@@ -340,7 +343,8 @@ class ConversationAnswer {
       return;
     }
     if (generator == null)
-      throw StateError(
+      throw RpcError(
+        RpcErrorCode.unavailable,
         'Generation model unavailable. Retrieved ${citations.length} excerpts; configure a local generator.',
       );
   }

@@ -47,7 +47,10 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.pumpAndSettle();
         expect(find.text('Calendar cancelled'), findsOneWidget);
@@ -83,7 +86,12 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            TestDesktopConnection(Domain(store, OfflineHelper('${root.path}/socket', '${root.path}/helper'))),
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              ),
+            ),
             deviceLoader: () async => [],
           ),
         );

@@ -731,11 +731,7 @@ class ApplicationService {
         'Recording requires an open desktop indicator',
       );
     }
-    return application.call(
-      method,
-      args,
-      current: () => !lease.cancelled,
-    );
+    return application.call(method, args, current: () => !lease.cancelled);
   }
 
   void _cancel(Socket client, int id) {

@@ -24,19 +24,28 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   ConnectedSources get google => application.google;
   @override
-  Map<String, dynamic> get capture => Map<String, dynamic>.from(application.captureState);
+  Map<String, dynamic> get capture =>
+      Map<String, dynamic>.from(application.captureState);
   @override
-  Map<String, dynamic> get googleStatus => Map<String, dynamic>.from(application.googleState);
+  Map<String, dynamic> get googleStatus =>
+      Map<String, dynamic>.from(application.googleState);
   @override
   bool get webSearchAvailable => domain.webSearchAvailable;
   @override
   bool get sourcesPaused => domain.sourcesPaused;
   @override
-  Future<Object?> command(String method, [Map<String, dynamic> args = const {}]) => domain is CommandFixtureDomain
+  Future<Object?> command(
+    String method, [
+    Map<String, dynamic> args = const {},
+  ]) => domain is CommandFixtureDomain
       ? (domain as CommandFixtureDomain).command(method, args)
       : application.call(method, args);
   @override
-  Future<Object?> commandCurrent(String method, Map<String, dynamic> args, bool Function() current) => application.call(method, args, current: current);
+  Future<Object?> commandCurrent(
+    String method,
+    Map<String, dynamic> args,
+    bool Function() current,
+  ) => application.call(method, args, current: current);
   @override
   Future<void> index(String id) => domain.index(id);
   @override
@@ -50,13 +59,57 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   Future<void> waitForSourceWork() => domain.waitForSourceWork();
   @override
-  Stream<String> askInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => domain is AnswerFixtureDomain ? (domain as AnswerFixtureDomain).askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current) : application.askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => domain is AnswerFixtureDomain
+      ? (domain as AnswerFixtureDomain).askInConversation(
+          question,
+          conversation,
+          requestId: requestId,
+          meetingId: meetingId,
+          current: current,
+        )
+      : application.askInConversation(
+          question,
+          conversation,
+          requestId: requestId,
+          meetingId: meetingId,
+          current: current,
+        );
   @override
-  Stream<String> askWithWebInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => domain is AnswerFixtureDomain ? (domain as AnswerFixtureDomain).askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current) : application.askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => domain is AnswerFixtureDomain
+      ? (domain as AnswerFixtureDomain).askWithWebInConversation(
+          question,
+          conversation,
+          requestId: requestId,
+          meetingId: meetingId,
+          current: current,
+        )
+      : application.askWithWebInConversation(
+          question,
+          conversation,
+          requestId: requestId,
+          meetingId: meetingId,
+          current: current,
+        );
   @override
-  Future<Map<String, List<double>>> graphEmbeddings(List<Map<String, Object?>> sources) => domain.graphEmbeddings(sources);
+  Future<Map<String, List<double>>> graphEmbeddings(
+    List<Map<String, Object?>> sources,
+  ) => domain.graphEmbeddings(sources);
   @override
-  Future<void> enableDesktopApprovals(void Function(Map<String, dynamic>) events) async {}
+  Future<void> enableDesktopApprovals(
+    void Function(Map<String, dynamic>) events,
+  ) async {}
   @override
   Future<void> disableDesktopApprovals() async {}
   @override
@@ -70,12 +123,38 @@ class TestDesktopConnection implements DesktopConnection {
 
 class CommandFixtureDomain extends Domain {
   CommandFixtureDomain(super.store, super.helper);
-  Future<Object?> command(String method, [Map<String, dynamic> args = const {}]) =>
-      application.call(method, args);
+  Future<Object?> command(
+    String method, [
+    Map<String, dynamic> args = const {},
+  ]) => application.call(method, args);
 }
 
 class AnswerFixtureDomain extends Domain {
   AnswerFixtureDomain(super.store, super.helper);
-  Stream<String> askInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
-  Stream<String> askWithWebInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askWithWebInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
 }

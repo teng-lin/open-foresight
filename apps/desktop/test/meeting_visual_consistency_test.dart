@@ -69,7 +69,10 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: captureKey,
-          child: Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+          child: Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         ),
       );
       await tester.pumpAndSettle();

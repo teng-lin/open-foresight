@@ -275,7 +275,8 @@ class _SourcesController extends _FeatureController {
                           'body': meetingFeature.noteBody.text,
                         })
                         as Map;
-                if (mounted) setState(() => meetingFeature.noteId = saved['id'] as int);
+                if (mounted)
+                  setState(() => meetingFeature.noteId = saved['id'] as int);
               }),
               child: const Text('Save note'),
             ),
@@ -1923,7 +1924,7 @@ class _SourcesController extends _FeatureController {
                       try {
                         await widget.sourceLinkOpener(uri);
                       } catch (_) {
-                        if (mounted)
+                        if (context.mounted)
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
                               content: Text('Could not open the source link.'),

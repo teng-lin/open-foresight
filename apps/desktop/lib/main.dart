@@ -299,7 +299,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-    sourceFeature.graphMotionTicker = createTicker(sourceFeature.tickGraphMotion);
+    sourceFeature.graphMotionTicker = createTicker(
+      sourceFeature.tickGraphMotion,
+    );
     sourceFeature.graphCameraController = AnimationController(vsync: this);
     sourceFeature.graphCameraController.addListener(() {
       final tween = sourceFeature.graphCameraTween;
@@ -338,7 +340,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     if (d.store.preference('globalShortcut') == 'true') {
       unawaited(
         integrationFeature.enableGlobalShortcuts().catchError((Object e) {
-          if (mounted) setState(() => integrationFeature.globalShortcutState = e.toString());
+          if (mounted)
+            setState(
+              () => integrationFeature.globalShortcutState = e.toString(),
+            );
         }),
       );
     }
@@ -351,7 +356,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       unawaited(integrationFeature.refreshLoginSetting());
     }
 
-    integrationFeature.notifications = d.store.preference('notifications') == 'true';
+    integrationFeature.notifications =
+        d.store.preference('notifications') == 'true';
     unawaited(integrationFeature.refreshNotifications());
     meetingFeature.syncCapture();
     d.helper.changed = () {

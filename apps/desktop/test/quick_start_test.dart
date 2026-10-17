@@ -74,7 +74,9 @@ void main() {
   }
 
   Future<void> show(WidgetTester tester) async {
-    await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+    await tester.pumpWidget(
+      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+    );
     await tester.pumpAndSettle();
   }
 
@@ -285,9 +287,18 @@ void main() {
       await tester.tap(find.text('Request access'));
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      expect(state.integrationFeature.captureCapabilities['microphone'], 'authorized');
-      expect(state.integrationFeature.captureCapabilities['system_audio_request'], 'completed');
-      expect(state.integrationFeature.captureCapabilities['permission_verified'], false);
+      expect(
+        state.integrationFeature.captureCapabilities['microphone'],
+        'authorized',
+      );
+      expect(
+        state.integrationFeature.captureCapabilities['system_audio_request'],
+        'completed',
+      );
+      expect(
+        state.integrationFeature.captureCapabilities['permission_verified'],
+        false,
+      );
       expect(find.text('Open System Settings'), findsOneWidget);
       expect(store.rows('SELECT * FROM meetings'), isEmpty);
       await tester.tap(find.text('Continue recording'));

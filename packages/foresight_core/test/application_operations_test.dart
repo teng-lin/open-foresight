@@ -130,6 +130,38 @@ class ArtifactGenerator extends NativeRuntime {
   }
 }
 
+class OperationsApplication extends Application {
+  OperationsApplication(super.domain, {super.auth});
+  @override
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => (domain as OperationsDomain).askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  @override
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => (domain as OperationsDomain).askWithWebInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+}
+
 void main() {
   late Directory root;
   late OperationsDomain domain;
@@ -158,7 +190,7 @@ void main() {
       Directory('${root.path}/google'),
       endpoints: google.endpoints,
     );
-    app = Application(domain, auth: auth);
+    app = OperationsApplication(domain, auth: auth);
   });
   tearDown(() async {
     await app.close();

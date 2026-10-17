@@ -150,7 +150,9 @@ void main() {
         channel,
         (call) async => call.method == 'login.get' ? false : null,
       );
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);

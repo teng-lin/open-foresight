@@ -396,8 +396,6 @@ class Domain {
         source.first['deleted'] == 0 &&
         source.first['revision'] == citation['revision'];
   }
-
-
 }
 
 /// UTF-8 byte limit is conservative for byte-level model tokenizers; no silent Unicode corruption.

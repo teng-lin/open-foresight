@@ -81,7 +81,9 @@ void main() {
       }
 
       Future<void> showGraph(RestoringGraphDomain d) async {
-        await tester.pumpWidget(Foresight(TestDesktopConnection(d), deviceLoader: () async => []));
+        await tester.pumpWidget(
+          Foresight(TestDesktopConnection(d), deviceLoader: () async => []),
+        );
         await tester.tap(find.text('Sources'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Graph view'));
@@ -91,7 +93,8 @@ void main() {
       Future<void> waitForPoints(int count) async {
         for (var i = 0; i < 100; i++) {
           final dynamic state = tester.state(find.byType(Workspace));
-          if (!state.sourceFeature.graphOrganizing && state.sourceFeature.graphPoints.length == count)
+          if (!state.sourceFeature.graphOrganizing &&
+              state.sourceFeature.graphPoints.length == count)
             return;
           await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 10)),
@@ -110,7 +113,7 @@ void main() {
       });
       await waitForPoints(2);
       final dynamic firstState = tester.state(find.byType(Workspace));
-      expect(firstState.graphEdges.length, 1);
+      expect(firstState.sourceFeature.graphEdges.length, 1);
       expect(store.rows('SELECT * FROM graph_documents').length, 2);
       final beforeLabelChanges = store.rows(
         'SELECT document_id,proj_x,proj_y,proj_z FROM graph_documents ORDER BY document_id',
@@ -175,7 +178,10 @@ void main() {
       expect(second.requests, isEmpty);
       expect(state.sourceFeature.graphPoints.length, 2);
       expect(state.sourceFeature.graphEdges.length, 1);
-      expect(state.sourceFeature.graphEdges.single.similarity, closeTo(.8, 1e-6));
+      expect(
+        state.sourceFeature.graphEdges.single.similarity,
+        closeTo(.8, 1e-6),
+      );
       for (final entry in expected.entries) {
         expect(state.sourceFeature.graphPoints[entry.key].x, entry.value);
       }

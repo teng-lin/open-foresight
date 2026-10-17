@@ -92,7 +92,9 @@ void main() {
       }
 
       await waitUntil(
-        () => !state.sourceFeature.graphOrganizing && state.sourceFeature.graphPoints.length == 9,
+        () =>
+            !state.sourceFeature.graphOrganizing &&
+            state.sourceFeature.graphPoints.length == 9,
       );
       state.update(() {
         state.sourceFeature.graphYaw = 0.0;

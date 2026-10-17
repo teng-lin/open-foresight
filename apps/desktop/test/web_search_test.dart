@@ -67,7 +67,9 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+    await tester.pumpWidget(
+      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+    );
     final dynamic state = tester.state(find.byType(Workspace));
     state.update(() => state.tab = 1);
     await tester.pumpAndSettle();

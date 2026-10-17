@@ -54,7 +54,12 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            TestDesktopConnection(Domain(store, OfflineHelper('${root.path}/socket', '${root.path}/helper'))),
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              ),
+            ),
             deviceLoader: () async => [],
           ),
         );

@@ -192,7 +192,7 @@ class _IntegrationsController extends _FeatureController {
   Future<bool> ensureRecordingAccess() async {
     if (!Platform.isMacOS) return true;
     final capabilities = await d.command('audio.capabilities') as Map;
-    if (!mounted) return false;
+    if (!mounted || !context.mounted) return false;
     if (capabilities['microphone_purpose_present'] == false ||
         capabilities['system_audio_purpose_present'] == false) {
       throw StateError(
@@ -226,7 +226,7 @@ class _IntegrationsController extends _FeatureController {
     );
     if (allow != true || !mounted) return false;
     await requestMicrophoneAccess();
-    if (!mounted) return false;
+    if (!mounted || !context.mounted) return false;
     if (captureCapabilities['microphone'] != 'authorized') {
       throw StateError(
         captureCapabilityError.isNotEmpty
@@ -403,7 +403,7 @@ class _IntegrationsController extends _FeatureController {
       );
       if (configure != true || !mounted) return;
       await importGoogleClient();
-      if (!mounted || googleAuth.client == null) return;
+      if (!mounted || !context.mounted || googleAuth.client == null) return;
     }
     final outcome = await showDialog<GoogleSignInOutcome>(
       context: context,
@@ -485,7 +485,7 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> chooseDrive({bool folder = false}) async {
     if (!googleAuth.connected) await connectGoogle();
-    if (!mounted || !googleAuth.connected) return;
+    if (!mounted || !context.mounted || !googleAuth.connected) return;
     final selection = await showDialog<List<String>>(
       context: context,
       builder: (_) => GoogleDrivePicker(google, folder: folder),

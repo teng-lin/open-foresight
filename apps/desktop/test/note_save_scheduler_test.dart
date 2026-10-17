@@ -44,11 +44,15 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
-      state.meetingFeature.editArtifact(store.rows('SELECT * FROM artifacts').single);
+      state.meetingFeature.editArtifact(
+        store.rows('SELECT * FROM artifacts').single,
+      );
       await tester.pumpAndSettle();
       final before = DateTime.now().millisecondsSinceEpoch;
       await tester.enterText(
@@ -69,7 +73,9 @@ void main() {
             .single,
         {'last_manual_edit': captured, 'last_enhanced': enhancedDate},
       );
-      state.meetingFeature.editArtifact(store.rows('SELECT * FROM artifacts').single);
+      state.meetingFeature.editArtifact(
+        store.rows('SELECT * FROM artifacts').single,
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save edit'));
       await tester.pumpAndSettle();
@@ -124,7 +130,9 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
@@ -168,7 +176,10 @@ void main() {
         store.rows('SELECT body,last_manual_edit FROM meeting_notes').single,
         {'body': 'Local draft', 'last_manual_edit': captured},
       );
-      expect(state.meetingFeature.loadedMeetingNoteSnapshot.body, 'Local draft');
+      expect(
+        state.meetingFeature.loadedMeetingNoteSnapshot.body,
+        'Local draft',
+      );
       expect(state.meetingFeature.meetingNoteSaves.isDirty(id), isFalse);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
@@ -189,7 +200,9 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
@@ -343,7 +356,9 @@ void main() {
       store,
       OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
     );
-    await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+    await tester.pumpWidget(
+      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+    );
     final dynamic state = tester.state(find.byType(Workspace));
     state.update(() => state.meetingFeature.meetingId = first);
     await tester.pumpAndSettle();

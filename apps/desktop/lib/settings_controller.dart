@@ -184,7 +184,8 @@ class _SettingsController extends _FeatureController {
                     try {
                       await d.command('models.cancel_query_acquisition', {});
                     } catch (failure) {
-                      if (mounted) setState(() => shell.error = failure.toString());
+                      if (mounted)
+                        setState(() => shell.error = failure.toString());
                     }
                   },
                   child: const Text('Cancel download'),

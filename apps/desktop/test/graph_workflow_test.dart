@@ -57,7 +57,10 @@ void main() {
     }
     final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
     await tester.pumpWidget(
-      Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
+      Foresight(
+        TestDesktopConnection(Domain(store, helper)),
+        deviceLoader: () async => [],
+      ),
     );
     await tester.tap(find.text('Sources'));
     await tester.pumpAndSettle();
@@ -104,7 +107,9 @@ void main() {
         '${temp.path}/helper',
       );
       final domain = Domain(store, helper);
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Graph view'));
@@ -249,7 +254,9 @@ void main() {
         model: control.ModelIdentity(modelDigest: 'fixture', dimensions: 3),
       );
       final domain = GraphDomain(store, helper);
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Graph view'));
@@ -273,7 +280,11 @@ void main() {
         b: [1, 0, 0],
         c: [0, 1, 0],
       });
-      for (var i = 0; i < 100 && state.sourceFeature.graphPoints.length != 3; i++) {
+      for (
+        var i = 0;
+        i < 100 && state.sourceFeature.graphPoints.length != 3;
+        i++
+      ) {
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 10)),
         );
@@ -287,7 +298,10 @@ void main() {
       expect(state.sourceFeature.graphPoints.length, 3);
       expect(state.sourceFeature.graphEdges.length, 1);
       expect(
-        {state.sourceFeature.graphEdges.single.source, state.sourceFeature.graphEdges.single.target},
+        {
+          state.sourceFeature.graphEdges.single.source,
+          state.sourceFeature.graphEdges.single.target,
+        },
         {a, b},
         reason: 'Unlabelled semantic peers connect; orthogonal Comet does not',
       );
@@ -317,8 +331,10 @@ void main() {
       });
       await tester.pumpAndSettle();
       final originalPosition = tester.getTopLeft(apollo);
-      final initialX = state.sourceFeature.graphTransform.value.storage[12] as double;
-      final initialY = state.sourceFeature.graphTransform.value.storage[13] as double;
+      final initialX =
+          state.sourceFeature.graphTransform.value.storage[12] as double;
+      final initialY =
+          state.sourceFeature.graphTransform.value.storage[13] as double;
       final canvas = find.byKey(const ValueKey('source-graph-canvas'));
       final emptyPoint = tester.getTopLeft(canvas) + const Offset(120, 80);
       final rotating = await tester.startGesture(
@@ -392,7 +408,10 @@ void main() {
       await tester.pump();
       await clamped.cancel();
       await tester.pumpAndSettle();
-      expect(state.sourceFeature.graphPitch, closeTo(1.5707963267948966, 1e-10));
+      expect(
+        state.sourceFeature.graphPitch,
+        closeTo(1.5707963267948966, 1e-10),
+      );
       expect(state.sourceFeature.graphMousePointer, isNull);
       expect(domain.requests.length, 2);
       state.update(() {

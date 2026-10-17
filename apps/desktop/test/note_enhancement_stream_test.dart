@@ -65,7 +65,9 @@ void main() {
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
       final generator = WidgetNoteGenerator();
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();

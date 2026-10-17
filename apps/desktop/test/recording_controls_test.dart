@@ -72,7 +72,10 @@ void main() {
         ..recordingBegan = DateTime.now();
       try {
         await tester.pumpWidget(
-          Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.pumpAndSettle();
         await tester.tap(find.byTooltip('Pause transcribing'));

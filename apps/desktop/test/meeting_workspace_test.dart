@@ -74,7 +74,9 @@ void main() {
       );
       final generator = NotesRuntime();
       final domain = Domain(store, helper);
-      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
@@ -183,7 +185,10 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
-          child: Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
+          child: Foresight(
+            TestDesktopConnection(Domain(store, helper)),
+            deviceLoader: () async => [],
+          ),
         ),
       );
       final dynamic state = tester.state(find.byType(Workspace));

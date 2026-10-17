@@ -66,7 +66,10 @@ void main() {
       );
       final helper = OfflineHelper('${dir.path}/socket', '${dir.path}/helper');
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();

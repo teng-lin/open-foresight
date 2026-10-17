@@ -56,7 +56,10 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         final dynamic state = tester.state(find.byType(Workspace));
         void navigate(int? id) => state.update(() {

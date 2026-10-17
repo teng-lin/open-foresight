@@ -819,7 +819,10 @@ void main() {
         '${directory.path}/helper',
       );
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Meetings').first);
       await tester.pump(const Duration(milliseconds: 400));

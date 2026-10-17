@@ -56,7 +56,10 @@ void main() {
     final helper = OfflineHelper(socket, '${temporary.path}/helper');
     try {
       await tester.pumpWidget(
-        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() {
