@@ -1343,34 +1343,35 @@ extension _MeetingWorkspace on _WorkspaceState {
             : DateTime.now().difference(recordingElapsedAt));
     final clock =
         '${elapsed.inMinutes.toString().padLeft(2, '0')}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
-    return Container(
-      key: const ValueKey('recording-pill'),
-      width: MediaQuery.sizeOf(context).width > 1100 ? 400 : 310,
-      padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
-      decoration: BoxDecoration(
-        color: _blue,
-        borderRadius: BorderRadius.circular(40),
-      ),
-      child: Row(
-        children: [
-          Text(
-            clock,
-            style: const TextStyle(
-              color: _ink,
-              fontSize: 15,
-              fontWeight: FontWeight.w700,
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onDoubleTap: () => update(() {
+        tab = 3;
+        meetingId = recordingMeeting;
+        meetingSidecarVisible = true;
+        meetingImmersive = !meetingImmersive;
+      }),
+      child: Container(
+        key: const ValueKey('recording-pill'),
+        width: MediaQuery.sizeOf(context).width > 1100 ? 400 : 310,
+        padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
+        decoration: BoxDecoration(
+          color: _blue,
+          borderRadius: BorderRadius.circular(40),
+        ),
+        child: Row(
+          children: [
+            Text(
+              clock,
+              key: const ValueKey('recording-clock'),
+              style: const TextStyle(
+                color: _ink,
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onDoubleTap: () => update(() {
-                tab = 3;
-                meetingId = recordingMeeting;
-                meetingSidecarVisible = true;
-                meetingImmersive = !meetingImmersive;
-              }),
+            const SizedBox(width: 12),
+            Expanded(
               child: SizedBox(
                 height: 30,
                 child: CustomPaint(
@@ -1378,47 +1379,53 @@ extension _MeetingWorkspace on _WorkspaceState {
                 ),
               ),
             ),
-          ),
-          IconButton(
-            tooltip: recording!.paused
-                ? 'Resume transcribing'
-                : 'Pause transcribing',
-            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-            padding: const EdgeInsets.all(6),
-            onPressed: busy || recording!.finishing
-                ? null
-                : () => run(() async {
-                    await d.command(
-                      recording!.paused ? 'meetings.resume' : 'meetings.pause',
-                      {'id': recordingMeeting},
-                    );
-                    if (mounted) update(syncCapture);
-                  }),
-            icon: Icon(
-              recording!.paused ? Icons.play_arrow : Icons.pause,
-              color: _ink,
-              size: 23,
+            IconButton(
+              tooltip: recording!.paused
+                  ? 'Resume transcribing'
+                  : 'Pause transcribing',
+              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+              padding: const EdgeInsets.all(6),
+              onPressed: busy || recording!.finishing
+                  ? null
+                  : () => run(() async {
+                      await d.command(
+                        recording!.paused
+                            ? 'meetings.resume'
+                            : 'meetings.pause',
+                        {'id': recordingMeeting},
+                      );
+                      if (mounted) update(syncCapture);
+                    }),
+              icon: Icon(
+                recording!.paused ? Icons.play_arrow : Icons.pause,
+                color: _ink,
+                size: 23,
+              ),
             ),
-          ),
-          IconButton(
-            tooltip: 'Stop transcribing',
-            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-            padding: const EdgeInsets.all(6),
-            onPressed: recording!.finishing ? null : () => run(stopRecording),
-            icon: const Icon(Icons.stop_circle_outlined, color: _ink, size: 23),
-          ),
-          IconButton(
-            tooltip: 'Open transcription workspace',
-            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
-            padding: const EdgeInsets.all(6),
-            onPressed: () => update(() {
-              tab = 3;
-              meetingId = recordingMeeting;
-              meetingSidecarVisible = true;
-            }),
-            icon: const Icon(Icons.fullscreen, color: _ink, size: 23),
-          ),
-        ],
+            IconButton(
+              tooltip: 'Stop transcribing',
+              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+              padding: const EdgeInsets.all(6),
+              onPressed: recording!.finishing ? null : () => run(stopRecording),
+              icon: const Icon(
+                Icons.stop_circle_outlined,
+                color: _ink,
+                size: 23,
+              ),
+            ),
+            IconButton(
+              tooltip: 'Open transcription workspace',
+              constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+              padding: const EdgeInsets.all(6),
+              onPressed: () => update(() {
+                tab = 3;
+                meetingId = recordingMeeting;
+                meetingSidecarVisible = true;
+              }),
+              icon: const Icon(Icons.fullscreen, color: _ink, size: 23),
+            ),
+          ],
+        ),
       ),
     );
   }
