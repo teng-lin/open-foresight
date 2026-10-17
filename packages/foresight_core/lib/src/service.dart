@@ -898,9 +898,13 @@ class IsolatedApplicationService {
       );
     } else if (value.first == 'closing') {
       unawaited(
-        _removePublicSocket(
-          workerOwnsLock: true,
-        ).then((_) => _control?.send('frontend_closed')),
+        _removePublicSocket(workerOwnsLock: true).then(
+          (_) => _control?.send('frontend_closed'),
+          onError: (Object error) {
+            _failure ??= error;
+            _control?.send('frontend_failed');
+          },
+        ),
       );
     } else if (value.first == 'failure') {
       _failure = StateError(value[1] as String);
@@ -1000,20 +1004,25 @@ class IsolatedApplicationService {
   Future<void> _finishOnce() async {
     if (_closed.isCompleted) return;
     _closing = true;
-    await _removePublicSocket();
-    // On a verified idle shutdown the worker flushes its acknowledgement
-    // before exiting, and the bridges drain those bytes to their clients.
     try {
+      await _removePublicSocket();
+      // The worker flushes an idle-stop acknowledgement before exiting.
       await Future.wait(_bridges.toList()).timeout(const Duration(seconds: 5));
     } on TimeoutException {
       for (final peer in _peers.toList()) {
         peer.destroy();
       }
+    } catch (error) {
+      _failure ??= error;
+      for (final peer in _peers.toList()) {
+        peer.destroy();
+      }
+    } finally {
+      _messages.close();
+      _errors.close();
+      _exits.close();
+      if (!_closed.isCompleted) _closed.complete();
     }
-    _messages.close();
-    _errors.close();
-    _exits.close();
-    if (!_closed.isCompleted) _closed.complete();
   }
 }
 
@@ -1030,6 +1039,11 @@ void _applicationServiceWorker(List<Object?> configuration) async {
   control.listen((message) {
     if (message == 'frontend_closed') {
       if (!frontendClosed.isCompleted) frontendClosed.complete();
+    } else if (message == 'frontend_failed') {
+      if (!frontendClosed.isCompleted)
+        frontendClosed.completeError(
+          StateError('Public service socket cleanup failed'),
+        );
     } else if (!stop.isCompleted)
       stop.complete();
   });
