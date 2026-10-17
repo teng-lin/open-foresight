@@ -2730,20 +2730,19 @@ extension _ScreenshotScreens on _WorkspaceState {
           Row(
             children: [
               IconButton(
-                tooltip: 'Knowledge sources',
-                onPressed: () => update(() => tab = 0),
+                key: const ValueKey('chat-web-search'),
+                tooltip: d.webSearchAvailable
+                    ? searchWeb
+                          ? 'Answer include web search result'
+                          : 'Answer does not use web search'
+                    : 'Web search is unavailable in this build',
+                isSelected: searchWeb,
                 style: IconButton.styleFrom(
                   backgroundColor: const Color(0xffeeeeee),
+                  foregroundColor: const Color(0xff757575),
                   minimumSize: const Size(36, 28),
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                 ),
-                icon: const Icon(Icons.manage_search, size: 18),
-              ),
-              IconButton(
-                tooltip: d.webSearchAvailable
-                    ? 'Search the web'
-                    : 'Web search is unavailable in this build',
-                isSelected: searchWeb,
                 onPressed: asking || (!d.webSearchAvailable && !searchWeb)
                     ? null
                     : () => update(() {
@@ -2753,8 +2752,12 @@ extension _ScreenshotScreens on _WorkspaceState {
                           webSearchScopes.add(scope);
                         }
                       }),
-                icon: const Icon(Icons.public_outlined, size: 18),
-                selectedIcon: const Icon(Icons.public, size: 18, color: _ink),
+                icon: const Icon(Icons.travel_explore, size: 18),
+                selectedIcon: const Icon(
+                  Icons.travel_explore,
+                  size: 18,
+                  color: _ink,
+                ),
               ),
               const Spacer(),
               if (history.isNotEmpty && !compact)
