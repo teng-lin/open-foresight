@@ -164,12 +164,12 @@ macOS-only Status ABI fix does not establish Linux GPU ABI compatibility, and
 no equivalent Linux defect is claimed from the macOS failure.
 
 The locally assembled macOS artifact includes the standalone Python prefix and
-verified source-built extension. The current `macos.yml` workflow instead
-assembles a native-only ad-hoc artifact without those Python runtime arguments;
-`macos-release.yml` archives that artifact into a DMG. The local full-runtime
-probe therefore does not establish inference acceptance for that release CI
-artifact. Wiring and validating a complete signed release remains a separate
-gate.
+verified source-built extension. At this acceptance checkpoint, CI archived a
+native-only app, so these historical local results did not validate that CI
+artifact. The subsequent complete-runtime CI path is described in
+[macOS support](macos-support.md): it supplies Python/LiteRT and Whisper, checks
+the packaged closure, and adds real CPU model acceptance before release archiving.
+Its run results remain separate from this retained local artifact evidence.
 
 The tested macOS artifact is an ad-hoc development package. A successful local model
 probe does not establish Developer ID signing, notarization, quarantine behavior,
