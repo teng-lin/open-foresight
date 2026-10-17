@@ -45,8 +45,10 @@ No distribution credentials or user configuration are added to dependency archiv
 
 Documentation-only changes run the change/whitespace classifier, workflow lint,
 version checks and stable `platform-checks` aggregate without allocating macOS
-or Linux build runners. Code changes run both platform gates; main also builds
-the complete Linux portable candidate. The aggregate rejects failures,
+or Linux build runners. Code changes run both platform gates. The Linux gate
+runs the offline pytest suite. Main also builds the complete Linux portable
+candidate. Pull requests that change the desktop, application service, or
+packaging additionally build and install the Ubuntu 24.04 package. The aggregate rejects failures,
 cancellations, and unexpectedly skipped selected jobs. If branch protection is
 introduced, require `platform-checks`; individual platform jobs intentionally
 skip on documentation changes. Classification errors fail that check.

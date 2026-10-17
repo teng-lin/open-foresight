@@ -10,17 +10,19 @@ import 'package:open_foresight/graph_layout.dart';
 import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
 import 'package:open_foresight/graph_persistence.dart';
+import 'package:foresight_core/src/model_setup.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,
   bool Function() ready, {
   int seconds = 60,
+  String reason = 'Workflow timed out',
 }) async {
   final deadline = DateTime.now().add(Duration(seconds: seconds));
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  expect(ready(), true, reason: 'Workflow timed out');
+  expect(ready(), true, reason: reason);
   final failure = tester.takeException();
   if (failure != null) {
     File(
@@ -30,11 +32,35 @@ Future<void> waitUntil(
   expect(failure, isNull);
 }
 
+/// Desktop startup connects the service before it mounts [app.Workspace].
+/// One frame is still the "Starting…" screen, so a state lookup there throws
+/// "Bad state: No element" and hides the real connection error.
+Future<dynamic> startedWorkspace(WidgetTester tester) async {
+  await app.main();
+  String? startupFailure;
+  await waitUntil(tester, () {
+    if (find.text('Open Foresight could not start').evaluate().isNotEmpty) {
+      final details = find.byType(SelectableText);
+      startupFailure = details.evaluate().isEmpty
+          ? 'unknown startup failure'
+          : tester.widget<SelectableText>(details).data;
+      return true;
+    }
+    return find.byType(app.Workspace).evaluate().isNotEmpty;
+  });
+  if (startupFailure != null) {
+    throw StateError('Desktop did not start: $startupFailure');
+  }
+  return tester.state(find.byType(app.Workspace));
+}
+
 Future<void> captureWindow(
   String path, {
   List<int> expectedGutter = const [234, 238, 247],
   bool expectGraphSelection = false,
 }) async {
+  // The private PipeWire acceptance session has no Agent Desktop display.
+  if (Platform.environment['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') return;
   final target = File(path);
   target.parent.createSync(recursive: true);
   final session = Platform.environment['FORESIGHT_AGENT_DESKTOP_SESSION'] ?? '';
@@ -109,9 +135,7 @@ void main() {
       final env = Platform.environment;
       final sink = env['FORESIGHT_PLAYBACK_TARGET']!;
       final fixture = env['FORESIGHT_AUDIO_FIXTURE']!;
-      await app.main();
-      await tester.pump();
-      final dynamic workspace = tester.state(find.byType(app.Workspace));
+      final dynamic workspace = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -150,6 +174,11 @@ void main() {
                 meeting,
               ]).single['title']
               as String;
+      await waitUntil(
+        tester,
+        () => speechSetupProblem(workspace.d.store) == null,
+        reason: 'Speech model and runner were not ready for recording',
+      );
       await tester.tap(find.byTooltip('Meeting options'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Record microphone + playback'));
@@ -324,9 +353,7 @@ void main() {
       // Release the actual widget/domain and launch a fresh one against the saved profile.
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
-      await app.main();
-      await tester.pump();
-      final dynamic reopened = tester.state(find.byType(app.Workspace));
+      final dynamic reopened = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -447,9 +474,7 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
-      await app.main();
-      await tester.pump();
-      dynamic afterCancellation = tester.state(find.byType(app.Workspace));
+      dynamic afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () => afterCancellation.d.generator?.effectiveState['state'] == 'ready',
@@ -1032,9 +1057,7 @@ void main() {
       };
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
-      await app.main();
-      await tester.pump();
-      afterCancellation = tester.state(find.byType(app.Workspace));
+      afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
