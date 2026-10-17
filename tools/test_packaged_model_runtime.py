@@ -106,6 +106,13 @@ class Peer:
             self.reader.join(timeout=2)
             self.process.stdout.close()
             self.log.close()
+            trailing = []
+            while not self.lines.empty():
+                value = self.lines.get_nowait()
+                if value is not None:
+                    trailing.append(value)
+            if self.process.returncode == 0 and trailing:
+                raise RuntimeError(f'Unexpected trailing worker stdout: {trailing!r}')
 
 
 def finish_peer(peer, output, name, primary_error, shutdown=None):
