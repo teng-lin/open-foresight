@@ -2,6 +2,7 @@ import 'model_setup.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
+import 'text_budget.dart';
 import 'application.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -558,12 +559,7 @@ class Domain {
               [conversation],
             ).firstOrNull?['question']
             as String?;
-    final followUp =
-        question.split(RegExp(r'\s+')).length <= 12 &&
-        RegExp(
-          r'\b(it|its|that|those|this|they|them|more|again)\b',
-          caseSensitive: false,
-        ).hasMatch(question);
+    final followUp = isContextualFollowUp(question);
     final retrievalQuestion = followUp && previousQuestion != null
         ? '$previousQuestion\nFollow-up question: $question'
         : question;
@@ -641,9 +637,9 @@ class Domain {
               ),
             );
       budget -= utf8.encode(text).length;
-      final sourceUri =
-          scope.firstWhere((s) => s['id'] == documentId)['uri'] as String? ??
-          documentId;
+      final sourceUri = sourceIdentity(
+        scope.firstWhere((s) => s['id'] == documentId),
+      );
       final pair = (passage['title'] as String, sourceUri);
       final id = useWeb
           ? 'Source:${chatSources.add(pair)}'
@@ -773,7 +769,7 @@ class Domain {
     final history = historyRows
         .map(
           (a) =>
-              'User: ${a['question']}\nAssistant: ${(a['body'] as String).substring(0, (a['body'] as String).length.clamp(0, 1500))}',
+              'User: ${a['question']}\nAssistant: ${runePrefix(a['body'] as String, 1500)}',
         )
         .join('\n');
     final boundedHistory = boundUtf8(history, 500);
