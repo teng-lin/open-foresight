@@ -11,12 +11,13 @@ from tools import prepare_release as release
 
 
 class PrepareReleaseTest(unittest.TestCase):
-    def test_package_release_increases_on_rebuild_and_new_run(self):
-        self.assertLess(int(release.package_release(10, 1)), int(release.package_release(10, 2)))
-        self.assertLess(int(release.package_release(10, 999)), int(release.package_release(11, 1)))
-        for values in ((0, 1), (1, 0), (1, 1000)):
-            with self.assertRaises(ValueError):
-                release.package_release(*values)
+    def test_package_release_increases_even_when_an_older_workflow_is_rerun(self):
+        body = 'Release notes'
+        for expected in (1, 2, 3):
+            # The reservation is release state, so workflow age cannot lower it.
+            generation = release.package_release(body)
+            self.assertEqual(generation, str(expected))
+            body += f'\n<!-- foresight-package-release: {generation} -->'
 
     def test_candidate_requires_successful_exact_main_and_both_platforms(self):
         commit = 'a' * 40
@@ -64,10 +65,11 @@ class PrepareReleaseTest(unittest.TestCase):
             command.assert_not_called()
 
     def test_draft_rebuild_removes_only_unpublished_assets(self):
-        draft = [{'tag_name': 'v0.1.1', 'draft': True, 'assets': [{'id': 123}]}]
+        draft = [{'tag_name': 'v0.1.1', 'id': 5, 'body': '<!-- foresight-package-release: 7 -->', 'draft': True, 'assets': [{'id': 123}]}]
         with patch.object(release, 'api', side_effect=[[{'ref': 'refs/tags/v0.1.1'}],
                                                      {'sha': 'a' * 40}, draft]), \
                 patch.object(release.subprocess, 'run') as command:
-            release.create_draft('owner/repo', 'v0.1.1', 'a' * 40)
-            self.assertEqual(command.call_count, 1)
+            self.assertEqual(release.create_draft('owner/repo', 'v0.1.1', 'a' * 40), '8')
+            self.assertEqual(command.call_count, 2)
+            self.assertIn('foresight-package-release: 8', command.call_args_list[0].args[0][-1])
             self.assertEqual(command.call_args.args[0][-1], 'repos/owner/repo/releases/assets/123')

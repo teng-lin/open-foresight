@@ -14,8 +14,9 @@ successful installed-package matrix publishes the draft as the latest release.
 Public releases cannot be rebuilt or overwritten; increment the app version.
 
 To retry a failed draft, rerun **all jobs** in the coordinator. Preparation removes
-only that draft's old assets, and assigns a higher Linux package release using
-`run_number * 1000 + run_attempt`. This supports real package upgrades and prevents
+only that draft's old assets, and reserves a higher Linux package release in a
+durable release-body counter before removing any asset. Re-running an older
+workflow also increments this counter. This supports real package upgrades and prevents
 mixed installer generations. Draft assets are never uploaded with `--clobber`.
 
 The downloader rejects any installer source revision different from the tag.

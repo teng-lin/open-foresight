@@ -43,11 +43,10 @@ def require_candidates(repository, commit, wait):
     raise TimeoutError('Candidates unavailable; no release tag was created. Inspect macos.yml and retry.')
 
 
-def package_release(run_number, attempt):
-    """Later runs and re-runs must sort after every previous package build."""
-    if run_number < 1 or not 1 <= attempt < 1000:
-        raise ValueError('Invalid workflow run number or attempt')
-    return str(run_number * 1000 + attempt)
+def package_release(body):
+    """Reserve the next draft generation independently of workflow run order."""
+    markers = re.findall(r'<!-- foresight-package-release: ([0-9]+) -->', body)
+    return str(max([0, *map(int, markers)]) + 1)
 
 
 def create_draft(repository, tag, commit):
@@ -62,17 +61,25 @@ def create_draft(repository, tag, commit):
                         '-f', f'ref=refs/tags/{tag}', '-f', f'sha={commit}'], check=True)
     releases = api(repository, 'releases?per_page=100')
     release = next((item for item in releases if item['tag_name'] == tag), None)
-    if release:
-        if not release['draft']:
-            raise ValueError('Public releases are immutable; cut a new version')
-        # A full rebuild replaces only unpublished assets and receives a higher
-        # package release. Never mix old installers with the new acceptance run.
-        for asset in release['assets']:
-            subprocess.run(['gh', 'api', '--method', 'DELETE',
-                            f'repos/{repository}/releases/assets/{asset["id"]}'], check=True)
-        return
-    subprocess.run(['gh', 'release', 'create', tag, '--repo', repository, '--verify-tag',
-                    '--draft', '--title', 'Open Foresight ' + tag, '--generate-notes'], check=True)
+    if release and not release['draft']:
+        raise ValueError('Public releases are immutable; cut a new version')
+    if release is None:
+        subprocess.run(['gh', 'release', 'create', tag, '--repo', repository, '--verify-tag',
+                        '--draft', '--title', 'Open Foresight ' + tag, '--generate-notes'], check=True)
+        release = api(repository, f'releases/tags/{tag}')
+    body = release.get('body') or ''
+    generation = package_release(body)
+    body = re.sub(r'\n?<!-- foresight-package-release: [0-9]+ -->', '', body)
+    body += f'\n<!-- foresight-package-release: {generation} -->'
+    # Persist the reservation before deleting anything. Retrying an old workflow
+    # still advances the draft generation, even after a partially failed rebuild.
+    subprocess.run(['gh', 'api', '--method', 'PATCH',
+                    f'repos/{repository}/releases/{release["id"]}',
+                    '-f', 'body=' + body], check=True)
+    for asset in release['assets']:
+        subprocess.run(['gh', 'api', '--method', 'DELETE',
+                        f'repos/{repository}/releases/assets/{asset["id"]}'], check=True)
+    return generation
 
 
 def main():
@@ -87,8 +94,7 @@ def main():
     if os.environ.get('GITHUB_REF') != 'refs/heads/main':
         raise ValueError('Release preparation requires reviewed main')
     require_candidates(args.repo, commit, args.wait)
-    create_draft(args.repo, args.tag, commit)
-    release = package_release(int(os.environ['GITHUB_RUN_NUMBER']), int(os.environ['GITHUB_RUN_ATTEMPT']))
+    release = create_draft(args.repo, args.tag, commit)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         stream.write(f'tag={args.tag}\npackage_release={release}\ncommit={commit}\n')
 
