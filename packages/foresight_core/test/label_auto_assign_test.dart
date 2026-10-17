@@ -1,7 +1,24 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
+
+class DeferredEmbeddingDomain extends Domain {
+  DeferredEmbeddingDomain(super.store, super.helper);
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  @override
+  Future<Map<String, List<double>>> graphEmbeddings(
+    List<Map<String, Object?>> sources,
+  ) async {
+    entered.complete();
+    await release.future;
+    return {
+      for (final row in sources) row['id'] as String: [1, 0],
+    };
+  }
+}
 
 void main() {
   late Directory root;
@@ -41,6 +58,48 @@ void main() {
       await domain.helper.close();
     }
   });
+
+  for (final cancel in [false, true]) {
+    test(
+      'deferred service assignment publishes only after commit, cancelled=$cancel',
+      () async {
+        for (final source in store.sources)
+          store.state(source['id'] as String, 'indexed');
+        final domain = DeferredEmbeddingDomain(
+          store,
+          Helper('${root.path}/socket', '${root.path}/helper'),
+        );
+        final app = Application(domain);
+        final observedCounts = <int>[];
+        final subscription = app.changes.stream.listen(
+          (_) => observedCounts.add(store.documentLabels.length),
+        );
+        var current = true;
+        try {
+          final pending = app.call('labels.auto_assign', {
+            'name': 'Apollo',
+          }, current: () => current);
+          final checked = cancel
+              ? expectLater(pending, throwsStateError)
+              : expectLater(pending, completion(2));
+          await domain.entered.future;
+          await Future<void>.delayed(Duration.zero);
+          expect(observedCounts, isEmpty);
+          if (cancel) current = false;
+          domain.release.complete();
+          await checked;
+          await Future<void>.delayed(Duration.zero);
+          expect(store.documentLabels.length, cancel ? 0 : 2);
+          expect(observedCounts, [cancel ? 0 : 2]);
+        } finally {
+          await subscription.cancel();
+          await app.close();
+          domain.close();
+          await domain.helper.close();
+        }
+      },
+    );
+  }
 
   test('a failed second document rolls back earlier labels and cluster', () {
     store.db.execute(

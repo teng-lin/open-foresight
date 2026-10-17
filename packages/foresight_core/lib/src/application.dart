@@ -324,7 +324,7 @@ class Application implements ModelGate {
     current: current,
     useWeb: useWeb,
   ).run();
-  Future<int> autoAssignLabel(String name) async {
+  Future<int> autoAssignLabel(String name, {bool Function()? current}) async {
     name = name.trim();
     if (name.isEmpty) throw ArgumentError.value(name, 'name');
     final generation = domain.workspaceGeneration;
@@ -352,6 +352,9 @@ class Application implements ModelGate {
     if (missing.isNotEmpty)
       vectors.addAll(await domain.graphEmbeddings(missing));
     domain.checkWorkspace(generation);
+    if (!(current?.call() ?? true)) {
+      throw RpcError(RpcErrorCode.cancelled, 'Label assignment cancelled');
+    }
     return store.autoAssignLabel(name, all, vectors);
   }
 
@@ -1074,7 +1077,7 @@ class Application implements ModelGate {
                 .toList(),
           );
         case Operation.labels_auto_assign:
-          return autoAssignLabel(a['name'] as String);
+          return await autoAssignLabel(a['name'] as String, current: current);
         case Operation.labels_put:
           store.putDocumentLabel(
             DocumentLabel(
@@ -1322,7 +1325,10 @@ class Application implements ModelGate {
         } else if (sourceUri != null && sourceUri.scheme == 'file') {
           final path = sourceUri.toFilePath();
           if (!File(path).existsSync()) {
-            throw RpcError(RpcErrorCode.notFound, 'Imported file is missing: $path');
+            throw RpcError(
+              RpcErrorCode.notFound,
+              'Imported file is missing: $path',
+            );
           }
           await importFile(path, current: sourceCurrent);
         } else {
