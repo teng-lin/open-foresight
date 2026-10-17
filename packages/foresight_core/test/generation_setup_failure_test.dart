@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -6,12 +5,15 @@ import 'package:foresight_core/src/model_setup.dart';
 import 'package:foresight_core/src/native.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/store.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
 
 void main() {
   late Directory root;
   late String library;
   late void Function(int) mode;
+  late void Function() releaseProbe;
+  late int Function() probeEntered;
   late int Function() engines, conversations, strings;
   late Store store;
   late File model;
@@ -20,11 +22,19 @@ void main() {
     root = Directory.systemTemp.createTempSync('generation-setup-failure-');
     final source = File('${root.path}/fixture.c')
       ..writeAsStringSync(r'''
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 static int mode, engines, conversations, strings;
-void set_mode(int value) { mode = value; }
+static atomic_int probe_entered, probe_released;
+void set_mode(int value) {
+  mode = value;
+  atomic_store(&probe_entered, 0);
+  atomic_store(&probe_released, 0);
+}
+int has_probe_entered(void) { return atomic_load(&probe_entered); }
+void release_probe(void) { atomic_store(&probe_released, 1); }
 int engine_count(void) { return engines; }
 int conversation_count(void) { return conversations; }
 int string_count(void) { return strings; }
@@ -36,7 +46,10 @@ void *fs_engine_create_backend(const char *runtime, const char *model, int backe
   return fs_engine_create(runtime, model);
 }
 int fs_engine_probe(void *engine) {
-  if (mode == 7) usleep(100000);
+  if (mode == 7) {
+    atomic_store(&probe_entered, 1);
+    while (!atomic_load(&probe_released)) usleep(1000);
+  }
   return mode == 2 || mode == 4 || mode == 5 || mode == 6 ? -7 : 0;
 }
 char *fs_engine_state(void *engine) {
@@ -65,6 +78,12 @@ void fs_string_free(char *value) { strings--; free(value); }
     mode = lib.lookupFunction<Void Function(Int32), void Function(int)>(
       'set_mode',
     );
+    probeEntered = lib.lookupFunction<Int32 Function(), int Function()>(
+      'has_probe_entered',
+    );
+    releaseProbe = lib.lookupFunction<Void Function(), void Function()>(
+      'release_probe',
+    );
     engines = lib.lookupFunction<Int32 Function(), int Function()>(
       'engine_count',
     );
@@ -87,11 +106,14 @@ void fs_string_free(char *value) { strings--; free(value); }
     runtimeConfiguration.environment
       ..clear()
       ..addAll(environment);
-    expect(engines(), 0);
-    expect(conversations(), 0);
-    expect(strings(), 0);
-    store.close();
-    File('${root.path}/app.db').deleteSync();
+    try {
+      expect(engines(), 0);
+      expect(conversations(), 0);
+      expect(strings(), 0);
+    } finally {
+      store.close();
+      File('${root.path}/app.db').deleteSync();
+    }
   });
 
   for (final failureMode in [1, 2, 3, 4, 5, 6]) {
@@ -167,8 +189,12 @@ void fs_string_free(char *value) { strings--; free(value); }
         onCandidate: (value) => candidate = value,
       );
       final failed = expectLater(pending, throwsStateError);
-      await Future<void>.delayed(Duration.zero);
-      candidate!.close();
+      try {
+        await eventually(() => probeEntered() == 1);
+        candidate!.close();
+      } finally {
+        releaseProbe();
+      }
       await failed;
       expect(store.model('generation')!['runtime'], '/previous/runtime');
     },
