@@ -5,6 +5,7 @@ Mixing instrumented generated protobuf code with an uninstrumented system
 protobuf library is unsupported: metadata layout and container annotations differ.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,7 +27,10 @@ def main():
     prefix, sources = args.prefix.resolve(), args.sources.resolve()
     compiler = subprocess.check_output(['clang++', '--version'], text=True).splitlines()[0]
     manifest = {'grpc_commit': GRPC_COMMIT, 'protobuf_commit': PROTOBUF_COMMIT,
-                'compiler': compiler, 'flags': FLAGS}
+                'compiler': compiler, 'flags': FLAGS,
+                'recipe_sha256': hashlib.sha256(b''.join(path.read_bytes() for path in
+                    (Path(__file__), ROOT / 'packaging/sanitizer-grpc.cmake',
+                     ROOT / 'packaging/minimal-grpc.cmake'))).hexdigest()}
     stamp = prefix / 'sanitizer-sdk.json'
     if stamp.exists():
         if json.loads(stamp.read_text()) != manifest:
@@ -60,7 +64,7 @@ def main():
         '-Dprotobuf_BUILD_TESTS=OFF', '-DRE2_BUILD_TESTING=OFF', '-DCARES_BUILD_TOOLS=OFF',
         '-DgRPC_SSL_PROVIDER=package', '-DgRPC_ZLIB_PROVIDER=package',
         *[f'-DgRPC_{name}_PROVIDER=module' for name in ('ABSL', 'CARES', 'PROTOBUF', 'RE2')],
-        f'-DCMAKE_PROJECT_grpc_INCLUDE={ROOT / "packaging/minimal-grpc.cmake"}',
+        f'-DCMAKE_PROJECT_grpc_INCLUDE={ROOT / "packaging/sanitizer-grpc.cmake"}',
         *[f'-DgRPC_BUILD_GRPC_{language}_PLUGIN=OFF' for language in
           ('CSHARP', 'NODE', 'OBJECTIVE_C', 'PHP', 'PYTHON', 'RUBY')], env=environment)
     run('cmake', '--build', build, '--parallel', args.jobs, env=environment)
