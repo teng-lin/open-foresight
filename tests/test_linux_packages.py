@@ -145,5 +145,81 @@ class LinuxPackagesTest(unittest.TestCase):
         self.assertFalse(abi.inspect(binary, '2.0', '3.0')['passed'])
 
 
+@unittest.skipUnless(sys.platform == 'linux' and shutil.which('cc') and shutil.which('ldd'),
+                     'Linux ELF loader and C compiler required')
+class LinuxDependencyCollectionTest(unittest.TestCase):
+    def test_extension_validation_preserves_sdk_lookup_and_bundle_relocates(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        sys.path.insert(0, str(ROOT / 'tools'))
+        import package
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build, sdk, flutter = root / 'build', root / 'sdk', root / 'flutter'
+            sdk.mkdir()
+            flutter.mkdir()
+            (flutter / 'open-foresight').write_text('fixture desktop')
+
+            def compile(source, destination, *arguments):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                subprocess.run(['cc', '-x', 'c', '-', '-o', str(destination), *map(str, arguments)],
+                               input=source, text=True, check=True, capture_output=True)
+
+            # RUNPATH finds a direct dependency but does not apply to its child.
+            # The SDK LD_LIBRARY_PATH is required to discover that transitive lib.
+            compile('int upb(void) { return 42; }', sdk / 'libupb_fixture.so',
+                    '-shared', '-fPIC', '-Wl,-soname,libupb_fixture.so')
+            compile('int upb(void); int grpc(void) { return upb(); }', sdk / 'libgrpc_fixture.so',
+                    '-shared', '-fPIC', '-Wl,-soname,libgrpc_fixture.so', '-L' + str(sdk), '-lupb_fixture')
+            helper = build / 'services/helper/ForesightHelper'
+            compile('int grpc(void); int main(void) { return grpc() != 42; }', helper,
+                    '-L' + str(sdk), '-lgrpc_fixture', '-Wl,--enable-new-dtags,-rpath,' + str(sdk),
+                    '-Wl,-rpath-link,' + str(sdk))
+            worker = build / 'services/inference/foresight-model'
+            compile('int main(void) { return 0; }', worker)
+            for name in ('application/foresight-service', 'application/foresight-mcp'):
+                target = build / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(worker, target)
+            library = build / 'lib/liblitert-lm.so'
+            compile('#include <stdio.h>\nvoid fixture(void) { puts("fixture"); }', library,
+                    '-shared', '-fPIC')
+            for name in ('native/libforesight_native.so', 'lib/libonnxruntime.so'):
+                target = build / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(library, target)
+            for name in ('sentencepiece', 'flatbuffers'):
+                target = build / f'_deps/{name}-src/LICENSE'
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('fixture license')
+            for name in ('protobuf-lite', 'esaxx', 'darts_clone', 'absl'):
+                target = build / f'_deps/sentencepiece-src/third_party/{name}/LICENSE'
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text('fixture license')
+            digest = hashlib.sha256(library.read_bytes()).hexdigest()
+            extensions = SimpleNamespace(manifest={'library_sha256': digest})
+            output = root / 'bundle'
+            arguments = ['package.py', '--build', str(build), '--flutter-bundle', str(flutter),
+                         '--output', str(output), '--litert-library', str(library),
+                         '--onnx-library', str(build / 'lib/libonnxruntime.so'),
+                         '--litert-extensions-manifest', str(root / 'fixture-manifest.json'),
+                         '--revision', 'a' * 40]
+            # Only artifact authentication/C-API probing is stubbed. Library
+            # resolution, dependency copying and relocated execution are real.
+            with patch.object(sys, 'argv', arguments), \
+                    patch.dict(os.environ, {'LD_LIBRARY_PATH': str(sdk)}), \
+                    patch.object(package, 'verify_extensions_manifest', return_value=extensions), \
+                    patch.object(package, 'copy_linux_extension_dependencies',
+                                 return_value=[output / 'lib/liblitert-lm.so']), \
+                    patch.object(package, 'probe_native_extensions'), \
+                    patch.object(package, 'ONNX_LIBRARY_SHA256', digest):
+                package.main()
+            manifest = json.loads((output / 'manifest.json').read_text())
+            self.assertTrue({'libgrpc_fixture.so', 'libupb_fixture.so'} <= set(manifest['bundled_libraries']))
+            shutil.rmtree(sdk)
+            subprocess.run([str(output / 'bin/ForesightHelper')], check=True,
+                           env={**os.environ, 'LD_LIBRARY_PATH': str(output / 'lib')})
+
+
 if __name__ == '__main__':
     unittest.main()
