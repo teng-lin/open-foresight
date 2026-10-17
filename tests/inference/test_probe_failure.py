@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""A failed native model probe must retain actionable protocol diagnostics."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+with tempfile.TemporaryDirectory(prefix='foresight-probe-error-') as temporary:
+    missing = str(Path(temporary) / 'missing-litert.so')
+    result = subprocess.run([sys.argv[1], '--model', str(Path(temporary) / 'unused'), '--probe'],
+                            env={**os.environ, 'FORESIGHT_LITERT_LIBRARY': missing},
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 1, result
+    error = json.loads(result.stdout)
+    assert missing in error['error'], error
+    assert 'Cannot load native LiteRT-LM' in error['error'], error
+    assert 'native_stop_token_sequences' not in error, error
+print('Failed native probe publishes its loader error on the protocol stream')
