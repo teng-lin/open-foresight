@@ -1,4 +1,3 @@
-import 'package:foresight_core/src/application.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';

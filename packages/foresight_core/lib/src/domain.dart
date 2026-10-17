@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'model_setup.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
@@ -35,7 +36,7 @@ class Domain {
 
   SearchCallbacks searchCallbacks() {
     if (!webSearchAvailable)
-      throw StateError('Web search is unavailable in this build.');
+      throw RpcError(RpcErrorCode.unavailable, 'Web search is unavailable in this build.');
     return _webSearch ??= SearchCallbacks(
       search: SearchService(
         apiKey: runtimeConfiguration['FORESIGHT_SEARCH_API_KEY']!,
@@ -54,7 +55,7 @@ class Domain {
   void checkWorkspace(int generation) {
     _checkOpen();
     if (generation != _workspaceGeneration)
-      throw StateError('Workspace was cleared; retry the operation');
+      throw RpcError(RpcErrorCode.cancelled, 'Workspace was cleared; retry the operation');
   }
 
   /// Invalidate work before deleting local data.
@@ -113,7 +114,7 @@ class Domain {
   }
 
   void _checkOpen() {
-    if (_closed) throw StateError('Workspace closed');
+    if (_closed) throw RpcError(RpcErrorCode.cancelled, 'Workspace closed');
   }
 
   Future<void> _mutationTail = Future<void>.value();

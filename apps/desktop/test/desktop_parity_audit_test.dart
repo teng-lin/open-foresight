@@ -240,7 +240,7 @@ void main() {
         await capture('08-stats-scaled');
         expect(
           find.semantics
-              .byLabel(RegExp(r'Week of .*: .* local output tokens'))
+              .byLabel(RegExp(r'Week of .*: .* local output words'))
               .evaluate(),
           hasLength(5),
         );

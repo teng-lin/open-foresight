@@ -3,7 +3,6 @@ import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
