@@ -6,6 +6,35 @@ These rules extend the [producer trace](reference-note-enhancement.md). They
 are implemented as components; Application still needs the full producer
 orchestration and runtime integration.
 
+## Note input planning
+
+`planNoteEnhancement` implements input classification at
+`0x100a2c118–0x100a2cb98`. Split raw notes by LF, trim every line and keep
+nonempty meaningful content. The shared PP34502 callback is a plain trim
+(`0x100655884`), and PP34503 checks nonempty text before calling
+`hasMeaningfulContent` (`0x1006ea5c0`). Original indices refer to this
+filtered list, rather than raw source line numbers.
+
+A line containing the case-sensitive topic heading starts topic stripping.
+The heading is omitted, and subsequent star/dash lines are omitted; subsequent
+prose and other bullet styles remain. If stripping leaves no notes, retain the
+original meaningful-line list. Copy the prior enhancement map. A nonempty prior
+map produces an initial formatted snapshot before classifying pending notes.
+
+Notes outside an optional target-index set are preserved. With
+`updateExistingWithTranscript` false (the default), prior-map entries and
+recognized already-enhanced lines are also preserved. Even an empty prior-map
+value counts as an existing entry. Preserved text uses the prior value when
+present, otherwise the original note, and is written into the accepted map.
+Remaining notes become pending records containing original index and text.
+The skipped list retains encounter order. No-pending and empty-input stream
+emissions remain the producer caller's responsibility.
+
+Evidence: complete producer pages in `ida/note-enhance-stream-coverage.json`,
+`ida/note-input-planning-callback-identities.txt`,
+`ida/note-input-trim-callback.json`, and
+`ida/note-input-meaningful-callback.json`.
+
 ## Transcript windows
 
 `TranscriptEmbeddingManager._chunkAndEmbed` (`0x1009062d4`) trims the source
@@ -93,14 +122,46 @@ reproduces that selection. These excerpts and the optional missed-topic prompt
 instructions are included only in the final non-live batch, and only when the
 selection is nonempty (`0x100a2e548–0x100a2e594`).
 
-The conversation input limit is 2,048 tokens: the producer writes tagged Smi
+The producer serializes a 2,048-token input setting: the producer writes tagged Smi
 4096 at slot 31 (`0x100a2eb7c`), and `ConversationConfig.toJson`
 (`0x100661978`) binds that slot to PP12760 `max_input_tokens`. This is not
-an output-token limit. It also encodes the literal `</output>` through the
-remote tokenizer before configuring the conversation; the exact runtime
-configuration path still needs integration.
+an output-token limit. Complete native bridge coverage (1,306 lines of
+`litert_lm_create_conversation_v2`, `0x1000cbe60`) shows that this bridge
+has no `max_input_tokens` handling. The Dart handle retains the value, but
+both send-entry and send-worker paths do not read that handle field. Thus the
+recovered enhancement stream path does not establish an enforced 2,048-token
+limit, and the port must not invent rejection or truncation from that setting.
+It also encodes the literal `</output>` through the
+remote tokenizer before configuring the conversation. The bridge explicitly
+parses `stop_token_ids` as arrays of integer sequences and appends nonempty
+sequences to `SessionConfig::GetMutableStopTokenIds`. This is native token
+stopping, not only text cleanup. The pinned public LiteRT-LM 0.18 C/Python
+configuration APIs do not expose a corresponding setter; runtime integration
+still needs that capability.
+
+Bridge evidence: `ida/note-runtime-create-conversation-v2.json` (0–599),
+`note-runtime-create-conversation-v2-600.json` (600–1099), and
+`note-runtime-create-conversation-v2-final.json` (1100–1305).
+Dart evidence: `note-runtime-dart-create-conversation-worker.json`,
+`note-runtime-conversation-handle-constructor.json`, and complete
+`note-runtime-conversation-{stream,send}-{entry,worker}.json` captures.
+Native batches 103, 108, 109, 114, 118 and 121 closed with retained exit-0 logs.
+These are direct IDA captures through the owned launcher, not new successful
+REA process captures.
 
 ## Preview versus accepted batch output
+
+Preview cleanup first trims the accumulated raw response, then applies
+`cleanNoteEnhancementModelOutput`. It strips one leading lowercase Markdown code fence (11 characters), otherwise
+one generic three-backtick
+fence, then strips one trailing three-backtick fence, trimming after each step.
+It does not repeat model-output cleanup afterward. Final acceptance applies
+only model-output cleanup and trimming to the raw response; it does not share
+the preview fence stripping. `cleanNoteEnhancementPreviewOutput` preserves
+this difference. PP34551 is bound to the exact lowercase Markdown fence by
+`ida/note-transcript-fallback-and-fence-public-pool.txt`; caller instructions
+are at `0x100a2f1e0–0x100a2f590` and `0x100a30104–0x100a3011c`.
+
 
 `NoteEnhancementMerge.previewCleaned` reconstructs the original interim
 merge. Each cumulative cleaned response is parsed with the batch note cap.
@@ -169,3 +230,11 @@ The retained test log is `ida/note-transcript-cache-tests.log`. These tests do n
 establish the still-unconnected Application producer integration. Cache tracing used
 owned IDA batches 97 and 99, both with retained exit-0 terminal logs; these are direct
 IDA results, not new successful REA process captures.
+
+Input planning additionally passes 10 tests, including meaningful-line filtering,
+topic fallback, prior snapshot ordering, empty prior values, target indices and
+reenhancement selection. A combined cache/input run passes 22 tests.
+
+Preview cleanup adds four regression tests (14 tests in its helper file), covering
+partial/case-sensitive fences, one-layer stripping, cleanup order and the distinct
+final-acceptance behavior. Full core analysis is clean after these additions.

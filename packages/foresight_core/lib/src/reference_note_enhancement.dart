@@ -73,6 +73,21 @@ String cleanNoteEnhancementModelOutput(String text) {
 
 final _keyNotesHeaderPattern = RegExp(r'^\s*#+\s*Key\s*Notes\s*$');
 
+/// Interim enhanceStream cleanup (0x100a2f1e0–0x100a2f590). Fence removal
+/// applies to previews only; final batch acceptance uses the model cleaner.
+String cleanNoteEnhancementPreviewOutput(String text) {
+  var cleaned = cleanNoteEnhancementModelOutput(text.trim());
+  if (cleaned.startsWith('```markdown')) {
+    cleaned = cleaned.substring(11).trim();
+  } else if (cleaned.startsWith('```')) {
+    cleaned = cleaned.substring(3).trim();
+  }
+  if (cleaned.endsWith('```')) {
+    cleaned = cleaned.substring(0, cleaned.length - 3).trim();
+  }
+  return cleaned;
+}
+
 /// Original _clusterScribblesIntoBatches (0x100a328bc), returning note indices.
 /// References are indexed by note. The initial seed is never budget-rejected.
 List<List<int>> clusterNoteEnhancementBatches(

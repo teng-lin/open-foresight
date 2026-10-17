@@ -2,6 +2,68 @@ import 'package:foresight_core/src/reference_note_enhancement.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('preview removes lowercase markdown or generic boundary fences', () {
+    expect(
+      cleanNoteEnhancementPreviewOutput('  ```markdown\n* Kept\n```  '),
+      '* Kept',
+    );
+    expect(cleanNoteEnhancementPreviewOutput('```\n* Kept\n```'), '* Kept');
+    expect(cleanNoteEnhancementPreviewOutput('```markdown* Kept'), '* Kept');
+    expect(cleanNoteEnhancementPreviewOutput('* Kept ```'), '* Kept');
+    expect(cleanNoteEnhancementPreviewOutput('```'), '');
+    expect(cleanNoteEnhancementPreviewOutput('```markdown'), '');
+  });
+
+  test(
+    'preview fence detection is literal and removes just one boundary layer',
+    () {
+      expect(
+        cleanNoteEnhancementPreviewOutput('```MARKDOWN\n* Kept\n```'),
+        'MARKDOWN\n* Kept',
+      );
+      expect(
+        cleanNoteEnhancementPreviewOutput('```json\n* Kept\n```'),
+        'json\n* Kept',
+      );
+      expect(cleanNoteEnhancementPreviewOutput('```markdownExtra'), 'Extra');
+      expect(
+        cleanNoteEnhancementPreviewOutput('``````* Kept``````'),
+        '```* Kept```',
+      );
+      expect(
+        cleanNoteEnhancementPreviewOutput('* Interior ``` stays'),
+        '* Interior ``` stays',
+      );
+      expect(cleanNoteEnhancementPreviewOutput('``partial'), '``partial');
+    },
+  );
+
+  test(
+    'preview cleans model output before removing fences without recleaning',
+    () {
+      expect(
+        cleanNoteEnhancementPreviewOutput(
+          '```markdown\n* Kept\n```</output>discard',
+        ),
+        '* Kept',
+      );
+      expect(
+        cleanNoteEnhancementPreviewOutput('```markdown\n## Key Notes\n```'),
+        '## Key Notes',
+      );
+      expect(cleanNoteEnhancementPreviewOutput('  ## Key Notes  '), '');
+    },
+  );
+
+  test('final model cleanup preserves fences', () {
+    expect(
+      cleanNoteEnhancementModelOutput(
+        '```markdown\n* Kept\n```</output>discard',
+      ),
+      '```markdown\n* Kept\n```',
+    );
+  });
+
   test('model output stops at earliest exact marker before trimming', () {
     expect(
       cleanNoteEnhancementModelOutput('  * Kept<eos>discard</output>'),
