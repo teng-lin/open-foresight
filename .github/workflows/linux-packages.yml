@@ -8,6 +8,9 @@ concurrency:
 jobs:
   bundle:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write # gh release view must see the unpublished draft.
+      actions: read
     timeout-minutes: 65
     outputs:
       version: ${{ steps.version.outputs.version }}

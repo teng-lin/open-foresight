@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Build exact-main candidates before creating an immutable tag and draft release."""
 import argparse
+import base64
 import json
 import os
 import re
 import subprocess
 import time
 
-from app_version import read_version, stale
+from app_version import PUBSPEC, SOURCE, read_version, stale
 from ci_artifacts import api, name, trusted_run
 
 
@@ -32,7 +33,7 @@ def require_candidates(repository, commit, wait):
     if candidates_ready(repository, commit):
         return
     if api(repository, 'commits/main')['sha'] != commit:
-        raise ValueError('Dispatch release preparation from the current main commit')
+        raise ValueError('Exact-commit candidates are unavailable; refusing to substitute a newer main build')
     subprocess.run(['gh', 'workflow', 'run', 'macos.yml', '--repo', repository, '--ref', 'main'], check=True)
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
@@ -47,6 +48,27 @@ def package_release(body):
     """Reserve the next draft generation independently of workflow run order."""
     markers = re.findall(r'<!-- foresight-package-release: ([0-9]+) -->', body)
     return str(max([0, *map(int, markers)]) + 1)
+
+
+def release_source(repository, tag, control_commit):
+    """Resume an immutable reviewed tag, or prepare the current main commit."""
+    refs = api(repository, f'git/matching-refs/tags/{tag}')
+    if not any(ref['ref'] == f'refs/tags/{tag}' for ref in refs):
+        return control_commit
+    commit = api(repository, f'commits/{tag}')['sha']
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Release tag must resolve to a full source commit')
+    comparison = api(repository, f'compare/{commit}...{control_commit}')
+    if comparison['status'] not in ('ahead', 'identical'):
+        raise ValueError('Release tag must be reachable from reviewed main')
+    pubspec = api(repository, f'contents/{PUBSPEC}?ref={commit}')
+    if pubspec.get('encoding') != 'base64':
+        raise ValueError('Cannot verify the tagged application version')
+    text = base64.b64decode(''.join(pubspec['content'].split()), validate=True).decode('utf-8')
+    version = SOURCE.search(text)
+    if not version or tag != 'v' + version[1]:
+        raise ValueError('Release tag must match its immutable application version')
+    return commit
 
 
 def create_draft(repository, tag, commit):
@@ -88,15 +110,21 @@ def main():
     parser.add_argument('--repo', default=os.environ.get('GITHUB_REPOSITORY', 'teng-lin/open-foresight'))
     parser.add_argument('--wait', type=int, default=10800)
     args = parser.parse_args()
-    if not re.fullmatch(r'v\d+\.\d+\.\d+', args.tag) or args.tag != 'v' + read_version()[0] or stale():
-        raise ValueError('Release tag must match the synchronized application version')
-    commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    if not re.fullmatch(r'v\d+\.\d+\.\d+', args.tag) or stale():
+        raise ValueError('Release requires a stable tag and synchronized application version')
     if os.environ.get('GITHUB_REF') != 'refs/heads/main':
         raise ValueError('Release preparation requires reviewed main')
+    control_commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+    commit = release_source(args.repo, args.tag, control_commit)
+    if commit == control_commit and args.tag != 'v' + read_version()[0]:
+        raise ValueError('A new release tag must match the synchronized application version')
     require_candidates(args.repo, commit, args.wait)
     release = create_draft(args.repo, args.tag, commit)
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
-        stream.write(f'tag={args.tag}\npackage_release={release}\ncommit={commit}\n')
+        stream.write(f'tag={args.tag}\npackage_release={release}\ncommit={commit}\ncontrol_commit={control_commit}\n')
+    if summary := os.environ.get('GITHUB_STEP_SUMMARY'):
+        with open(summary, 'a') as stream:
+            stream.write(f'Product tag: `{args.tag}`\n\nProduct commit: `{commit}`\n\nControl commit: `{control_commit}`\n')
 
 
 if __name__ == '__main__':
