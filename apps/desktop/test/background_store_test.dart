@@ -14,7 +14,7 @@ void main() {
       try {
         final match = store.importText(
           'Planning',
-          'Private needle in the body',
+          'Private needle in the body; ÉCOLE',
           'text/plain',
           'fixture',
         );
@@ -26,6 +26,7 @@ void main() {
         );
         expect(await searchSourceIds(store.path, 'needle'), {match});
         expect(await searchSourceIds(store.path, 'PLANNING'), {match});
+        expect(await searchSourceIds(store.path, 'école'), {match});
         expect(await searchSourceIds(store.path, 'missing'), isEmpty);
         expect(await localOutputWords(store.path), 0);
       } finally {
