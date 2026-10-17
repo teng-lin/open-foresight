@@ -1,5 +1,5 @@
 #include "model.h"
-#include "research/xeno/labs/foresight/launch_agent/proto/rag_service.grpc.pb.h"
+#include "rag_service.grpc.pb.h"
 #include "helper_control.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #ifdef __APPLE__
@@ -19,7 +19,7 @@
       throw std::runtime_error(#value);                                        \
   } while (0)
 
-namespace p = research::xeno::labs::foresight::launch_agent::proto;
+namespace p = foresight::helper::v1;
 namespace c = foresight::linux::control::v1;
 
 static bool dead(pid_t pid) {

@@ -82,7 +82,7 @@ const RetrieveRequest$json = {
       '3': 1,
       '4': 1,
       '5': 11,
-      '6': '.research.xeno.labs.foresight.launch_agent.proto.Query',
+      '6': '.foresight.helper.v1.Query',
       '10': 'query'
     },
     {'1': 'max_results', '3': 2, '4': 1, '5': 5, '10': 'maxResults'},
@@ -106,11 +106,11 @@ const RetrieveRequest$json = {
 
 /// Descriptor for `RetrieveRequest`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List retrieveRequestDescriptor = $convert.base64Decode(
-    'Cg9SZXRyaWV2ZVJlcXVlc3QSTAoFcXVlcnkYASABKAsyNi5yZXNlYXJjaC54ZW5vLmxhYnMuZm'
-    '9yZXNpZ2h0LmxhdW5jaF9hZ2VudC5wcm90by5RdWVyeVIFcXVlcnkSHwoLbWF4X3Jlc3VsdHMY'
-    'AiABKAVSCm1heFJlc3VsdHMSMAoUbWluX3NpbWlsYXJpdHlfc2NvcmUYAyABKAFSEm1pblNpbW'
-    'lsYXJpdHlTY29yZRIXCgd1c2VyX2lkGAQgASgJUgZ1c2VySWQSMAoUYWxsb3dlZF9kb2N1bWVu'
-    'dF9pZHMYBSADKAlSEmFsbG93ZWREb2N1bWVudElkcw==');
+    'Cg9SZXRyaWV2ZVJlcXVlc3QSMAoFcXVlcnkYASABKAsyGi5mb3Jlc2lnaHQuaGVscGVyLnYxLl'
+    'F1ZXJ5UgVxdWVyeRIfCgttYXhfcmVzdWx0cxgCIAEoBVIKbWF4UmVzdWx0cxIwChRtaW5fc2lt'
+    'aWxhcml0eV9zY29yZRgDIAEoAVISbWluU2ltaWxhcml0eVNjb3JlEhcKB3VzZXJfaWQYBCABKA'
+    'lSBnVzZXJJZBIwChRhbGxvd2VkX2RvY3VtZW50X2lkcxgFIAMoCVISYWxsb3dlZERvY3VtZW50'
+    'SWRz');
 
 @$core.Deprecated('Use retrieveResponseDescriptor instead')
 const RetrieveResponse$json = {
@@ -121,7 +121,7 @@ const RetrieveResponse$json = {
       '3': 1,
       '4': 3,
       '5': 11,
-      '6': '.research.xeno.labs.foresight.launch_agent.proto.RetrievedChunk',
+      '6': '.foresight.helper.v1.RetrievedChunk',
       '10': 'chunks'
     },
   ],
@@ -129,8 +129,8 @@ const RetrieveResponse$json = {
 
 /// Descriptor for `RetrieveResponse`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List retrieveResponseDescriptor = $convert.base64Decode(
-    'ChBSZXRyaWV2ZVJlc3BvbnNlElcKBmNodW5rcxgBIAMoCzI/LnJlc2VhcmNoLnhlbm8ubGFicy'
-    '5mb3Jlc2lnaHQubGF1bmNoX2FnZW50LnByb3RvLlJldHJpZXZlZENodW5rUgZjaHVua3M=');
+    'ChBSZXRyaWV2ZVJlc3BvbnNlEjsKBmNodW5rcxgBIAMoCzIjLmZvcmVzaWdodC5oZWxwZXIudj'
+    'EuUmV0cmlldmVkQ2h1bmtSBmNodW5rcw==');
 
 @$core.Deprecated('Use retrievedChunkDescriptor instead')
 const RetrievedChunk$json = {
