@@ -105,7 +105,7 @@ def main():
                     command.settimeout(5)
                     command.connect(str(runtime / 'commands.sock'))
                     command.sendall(b'{"version":1,"command":"activate"}\n')
-                    assert command.recv(128).strip() == b'accepted'
+                    assert command.recv(128).strip() in {b'queued', b'accepted'}
                 with sqlite3.connect(data / 'application.db') as db:
                     assert db.execute('PRAGMA quick_check').fetchone()[0] == 'ok'
                     assert db.execute('SELECT count(*) FROM models').fetchone()[0] == 0

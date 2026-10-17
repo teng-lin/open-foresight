@@ -284,6 +284,7 @@ struct Engine {
   int refs = 0;
   bool busy = false;
   std::string state = "configured", error;
+  bool cpu_fallback = false;
   bool persistent_protocol = false;
   bool native_stop_token_sequences = false;
   uint64_t generation = 0;
@@ -369,8 +370,13 @@ struct Capture : Worker {
   bool playback = false;
   std::atomic<bool> echoCancellation{false};
   int rate = 48000;
-  uint64_t dropped = 0;
+  uint64_t dropped = 0, pending_dropped_bytes = 0;
 };
+std::string capture_overflow(Capture &c) {
+  const auto bytes = c.pending_dropped_bytes;
+  c.pending_dropped_bytes = 0;
+  return "{\"type\":\"gap\",\"reason\":\"capture_buffer_overflow\",\"discarded_bytes\":" + std::to_string(bytes) + "}";
+}
 void audio_frame(Capture &c, const std::vector<unsigned char> &bytes) {
   std::vector<int16_t> pcm(bytes.size() / 2);
   for (size_t i = 0; i < pcm.size(); ++i)
@@ -394,10 +400,14 @@ void audio_frame(Capture &c, const std::vector<unsigned char> &bytes) {
   fields += ",\"timestamp_ms\":" + std::to_string(now) +
             ",\"dropped_frames\":" + std::to_string(c.dropped);
   std::lock_guard lock(c.mu);
-  if (c.events.size() >= 256) {
-    c.events.pop_front();
+  // Retain chronological PCM already queued. A gap belongs after that PCM
+  // and before the next accepted frame; never silently drop a control event.
+  if (c.events.size() >= 255) {
     ++c.dropped;
+    c.pending_dropped_bytes += bytes.size();
+    return;
   }
+  if (c.pending_dropped_bytes) c.events.push_back(capture_overflow(c));
   c.events.push_back("{" + fields + "}");
   c.cv.notify_all();
 }
@@ -434,8 +444,11 @@ char *fs_event_poll(void *h, int timeout) {
   std::unique_lock lock(e.mu);
   e.cv.wait_for(lock, std::chrono::milliseconds(std::clamp(timeout, 0, 60000)),
                 [&] { return !e.events.empty(); });
-  if (e.events.empty())
+  if (e.events.empty()) {
+    if (auto *capture = dynamic_cast<Capture *>(&e); capture && capture->pending_dropped_bytes)
+      return owned(capture_overflow(*capture));
     return nullptr;
+  }
   auto s = std::move(e.events.front());
   e.events.pop_front();
   return owned(s);
@@ -466,7 +479,7 @@ char *fs_engine_state(void *h) {
   std::lock_guard lock(e.mu);
   if (e.backend == 1)
     return owned("{\"state\":" + quote(e.state) +
-                 ",\"backend\":" + quote(std::getenv("FORESIGHT_LITERT_BACKEND") &&
+                 ",\"backend\":" + quote(!e.cpu_fallback && std::getenv("FORESIGHT_LITERT_BACKEND") &&
                      std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu"
                      ? "litert-lm-gpu-native" : "litert-lm-cpu-native") +
                  ",\"load_policy\":" + quote(e.persistent_protocol ? "persistent_worker" : "per_request") + ","
@@ -497,6 +510,7 @@ int fs_engine_probe(void *h) {
       ? std::vector<std::string>{e.runtime, "--model", e.model, "--probe"}
       : std::vector<std::string>{e.runtime, "-m", e.model, "-p", "probe", "-n", "0", "-c", "4096", "--no-warmup", "-no-cnv", "-t", "4"};
   if (e.backend == 1 && e.model_type) { arguments.push_back("--model-type"); arguments.push_back(std::to_string(e.model_type)); }
+  if (e.backend == 1 && e.cpu_fallback) { arguments.push_back("--backend"); arguments.push_back("cpu"); }
   int status = run(probe, std::move(arguments), [&](const char *data, size_t size) {
     if (e.backend == 1 && diagnostics.size() < 4096) diagnostics.append(data, std::min(size, 4096-diagnostics.size()));
   });
@@ -615,6 +629,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
       args = {e.runtime, "--model", e.model, "--prompt", text,
               "--max-output-tokens", std::to_string(max_output_tokens)};
     if (e.backend == 1 && e.model_type) { args.push_back("--model-type"); args.push_back(std::to_string(e.model_type)); }
+    if (e.backend == 1 && e.cpu_fallback) { args.push_back("--backend"); args.push_back("cpu"); }
     if (!json_schema.empty()) {
       args.push_back(tools ? "--tools" : "--json-schema");
       args.push_back(json_schema);
@@ -674,6 +689,26 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
                                          : "failed";
     if (tools && (!utf8.empty() || !tool_answer_received) && !c.cancel)
       terminal = "failed";
+    bool cpu_recovered = false;
+    if (terminal == "failed" && !c.cancel && !tool_protocol_failed && e.backend == 1 &&
+        !e.cpu_fallback && std::getenv("FORESIGHT_LITERT_BACKEND") &&
+        std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu") {
+      {
+        std::lock_guard lock(e.mu);
+        e.cpu_fallback = true;
+        e.state = "loading";
+      }
+      shutdown_persistent(e, false);
+      if (e.persistent_protocol) {
+        cpu_recovered = start_persistent(e, c);
+      } else {
+        std::vector<std::string> probe{e.runtime, "--model", e.model, "--probe", "--backend", "cpu"};
+        if (e.model_type) { probe.push_back("--model-type"); probe.push_back(std::to_string(e.model_type)); }
+        cpu_recovered = run(c, std::move(probe), [](const char *, size_t) {}) == 0;
+      }
+      if (cpu_recovered) c.emit(event("state", c.request, seq++,
+          ",\"state\":\"ready\",\"backend\":\"cpu\",\"message\":\"GPU generation failed; CPU runtime rebuilt. Retry the answer.\""));
+    }
     c.awaiting_tool = false;
     if (terminal == "failed" && !tool_protocol_failed && !worker_error_received)
       failure(c, c.request, seq, "runtime_failure",
@@ -683,8 +718,8 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     {
       std::lock_guard lock(e.mu);
       e.busy = false;
-      e.state = terminal == "failed" ? "failed" : "ready";
-      e.error = terminal == "failed" ? "runtime_failure" : "";
+      e.state = terminal == "failed" && !cpu_recovered ? "failed" : "ready";
+      e.error = terminal == "failed" ? (cpu_recovered ? "GPU generation failed; CPU runtime ready for retry" : "runtime_failure") : "";
     }
     c.active = false;
   });
@@ -806,17 +841,24 @@ int fs_speech_finish(void *h, const char *id) {
     if (fd >= 0) {
       close(fd);
       wav(tmp, samples);
-      std::vector<std::string> arguments{
-          s.runtime, "-m", s.model, "-f", tmp, "-l", "auto", "-nt", "-np", "-t", "4"};
       const char *speech_backend = std::getenv("FORESIGHT_WHISPER_BACKEND");
-      if (speech_backend && std::string(speech_backend) == "cpu")
-        arguments.push_back("-ng");
-      else if (const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE"); device && *device) {
-        arguments.push_back("-dev");
-        arguments.push_back(device);
+      const bool cpu = speech_backend && std::string(speech_backend) == "cpu";
+      auto arguments = [&](bool cpu_only) {
+        std::vector<std::string> result{s.runtime, "-m", s.model, "-f", tmp,
+            "-l", "auto", "-nt", "-np", "-t", "4"};
+        if (cpu_only) result.push_back("-ng");
+        else if (const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE"); device && *device) {
+          result.push_back("-dev"); result.push_back(device);
+        }
+        return result;
+      };
+      status = run(s, arguments(cpu), [&](const char *p, size_t n) { transcript.append(p, n); });
+      if (status != 0 && !cpu && !s.cancel) {
+        // The failed attempt must not contaminate the CPU transcript.
+        transcript.clear();
+        s.emit(event("state", request, seq++, ",\"message\":\"GPU speech recognition failed; retrying on CPU\""));
+        status = run(s, arguments(true), [&](const char *p, size_t n) { transcript.append(p, n); });
       }
-      status = run(s, std::move(arguments),
-                   [&](const char *p, size_t n) { transcript.append(p, n); });
       unlink(tmp);
     }
     std::string terminal = s.cancel      ? "cancelled"
