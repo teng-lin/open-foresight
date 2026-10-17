@@ -28,6 +28,7 @@ import 'label_propagation.dart';
 import 'recording.dart';
 import 'model_setup.dart';
 import 'app_theme.dart';
+import 'meeting_visuals.dart';
 import 'desktop_settings.dart';
 import 'commands.dart';
 import 'global_shortcuts.dart';
@@ -1540,8 +1541,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       ],
     ),
   );
-  Widget meetings() =>
-      meetingId == null ? meetingCollection() : meetingWorkspace();
+  Widget meetings() => MeetingStyleScope(
+    child: meetingId == null ? meetingCollection() : meetingWorkspace(),
+  );
   Future<String> importText(
     String title,
     String text,

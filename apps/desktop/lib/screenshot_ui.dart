@@ -2952,10 +2952,7 @@ extension _ScreenshotScreens on _WorkspaceState {
         entries.add(
           Padding(
             padding: const EdgeInsets.only(top: 12, bottom: 16),
-            child: Text(
-              day,
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-            ),
+            child: Text(day, style: MeetingVisuals.dateHeading),
           ),
         );
         previousDay = day;
@@ -3026,6 +3023,10 @@ extension _ScreenshotScreens on _WorkspaceState {
     final active = state == 'recording' || state == 'transcribing';
     void open() => update(() => meetingPreviewId = id);
     return Card(
+      margin: EdgeInsets.zero,
+      shape: const RoundedRectangleBorder(
+        borderRadius: MeetingVisuals.previewRadius,
+      ),
       color: meetingPreviewId == id ? const Color(0xffd2deee) : Colors.white,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -3037,7 +3038,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                 meeting['title'] as String,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 16),
+                style: MeetingVisuals.listTitle,
               ),
               if (narrow && start > 0)
                 Text(
@@ -3108,7 +3109,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                       width: 155,
                       child: Text(
                         '${meetingClock(start)} – ${meetingClock(end)}',
-                        style: const TextStyle(fontSize: 12),
+                        style: MeetingVisuals.metadata,
                       ),
                     ),
                   Expanded(child: details),
@@ -3125,7 +3126,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                         const Icon(Icons.attach_file, size: 14),
                         Text(
                           '$attachmentCount',
-                          style: const TextStyle(fontSize: 12),
+                          style: MeetingVisuals.metadata,
                         ),
                       ],
                     ),
