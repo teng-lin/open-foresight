@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'package:foresight_test_support/observed_expectations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -79,6 +80,16 @@ class Mcp {
     );
     await responses.cancel();
   }
+}
+
+Future<void> closeDesktop(WidgetTester tester, dynamic workspace) async {
+  final client = (workspace.d as RemoteDomain).client;
+  final commands = workspace.commands;
+  await tester.pumpWidget(const SizedBox.shrink());
+  await waitFor(
+    tester,
+    () => client.isClosed && (commands == null || commands.isClosed == true),
+  );
 }
 
 void main() {
@@ -167,8 +178,7 @@ void main() {
         true,
       );
       // Closing the desktop removes its visible indicator and must stop capture.
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeDesktop(tester, workspace);
       await app.main();
       await waitFor(
         tester,
@@ -220,8 +230,7 @@ void main() {
       final report = Platform.environment['FORESIGHT_SERVICE_UI_REPORT'];
       if (report != null)
         File(report).writeAsStringSync(jsonEncode(observed.toJson()));
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeDesktop(tester, workspace);
     },
   );
 }

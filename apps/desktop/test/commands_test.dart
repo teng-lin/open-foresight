@@ -63,7 +63,9 @@ void main() {
       expect(await AppCommands.forward(path, command: 'stop-meeting'), true);
       await stopped.timeout(const Duration(seconds: 2));
       expect(received.last, 'stop-meeting:null');
+      expect(owner.isClosed, false);
       await owner.close();
+      expect(owner.isClosed, true);
       expect(await AppCommands.forward(path), false);
       owner = await AppCommands.bind(path, (_, _) async {});
       expect(await AppCommands.forward(path), true);
