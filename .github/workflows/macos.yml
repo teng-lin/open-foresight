@@ -154,7 +154,11 @@ jobs:
         run: |
           if [[ -n "$FORESIGHT_SEARCH_API_KEY" && -n "$FORESIGHT_WEB_CONTENT_API_KEY" ]]; then
             task_report="$PWD/test-results/cloud-distribution.json"
-            (cd packages/foresight_core && dart run tool/verify_cloud_services.dart --download-query) > "$task_report"
+            task_resources="$PWD/dist/Open Foresight.app/Contents/Resources"
+            # Prove the shipped configuration works without secret overrides.
+            (cd packages/foresight_core && env -u FORESIGHT_SEARCH_API_KEY -u FORESIGHT_WEB_CONTENT_API_KEY \
+              FORESIGHT_RESOURCES="$task_resources" \
+              dart run tool/verify_cloud_services.dart --download-query) > "$task_report"
           else
             echo 'Cloud distribution acceptance skipped: no distribution settings supplied.'
           fi

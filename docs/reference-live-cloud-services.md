@@ -113,7 +113,9 @@ configuration, as the original does; they are not protected from extraction by
 users of the resulting desktop app. Ordinary fork CI has neither secret and
 keeps the existing no-cloud build behavior. No end-user project setup is added.
 Mac release builds with both settings repeat the four live checks before
-archiving; an endpoint failure fails that acceptance step.
+archiving; an endpoint failure fails that acceptance step. The check selects the
+assembled app’s `Contents/Resources/runtime.json` and unsets both credential
+environment overrides, so workflow secrets alone cannot make acceptance pass.
 
 These working app-bundled settings establish current access, not a guarantee of
 future service availability, quota, or broader distribution terms. Original

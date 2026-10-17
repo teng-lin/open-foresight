@@ -22,6 +22,7 @@ SETTINGS = {
 
 
 def read_configuration(app):
+    """Read the two bundled settings only after verifying the exact executable."""
     binary = app / 'Contents/MacOS/Foresight' if app.suffix == '.app' else app
     data = binary.read_bytes()
     if hashlib.sha256(data).hexdigest() != REFERENCE_SHA256:
@@ -36,6 +37,7 @@ def read_configuration(app):
 
 
 def write_private(path, values):
+    """Create an exclusive owner-only configuration file without printing values."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(descriptor, 'w') as stream:
@@ -44,6 +46,7 @@ def write_private(path, values):
 
 
 def store_github(values, repository, gh):
+    """Pipe each setting to GitHub without exposing values in arguments or errors."""
     environment = dict(os.environ)
     environment.pop('GH_DEBUG', None)
     for name, value in values.items():
@@ -54,6 +57,7 @@ def store_github(values, repository, gh):
 
 
 def main():
+    """Import verified distribution settings to the explicitly selected destination."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', type=Path, default=Path('/Applications/Foresight.app'))
     destination = parser.add_mutually_exclusive_group(required=True)
