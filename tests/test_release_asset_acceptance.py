@@ -87,7 +87,11 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
             root = Path(directory)
             dmg = root / 'fixture.dmg'
             dmg.write_bytes(b'fixture')
-            Path(str(dmg) + '.sha256').write_text(hashlib.sha256(b'fixture').hexdigest() + '  fixture.dmg\n')
+            digest = hashlib.sha256(b'fixture').hexdigest()
+            Path(str(dmg) + '.sha256').write_text(digest + '  fixture.dmg\n')
+            revision = 'a' * 40
+            (root / 'installer.json').write_text(json.dumps({
+                'asset': 'fixture.dmg', 'sha256': digest, 'source_commit': revision}))
             destination = root / 'Applications/Open Foresight.app'
             commands = []
             def command(arguments, **kwargs):
@@ -98,6 +102,7 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                     source.mkdir(parents=True)
                     (source / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'io.openforesight.App'}))
                 if 'test_installed_release.py' in ' '.join(map(str, arguments)):
+                    self.assertIn(revision, arguments)
                     raise subprocess.CalledProcessError(1, arguments)
                 return subprocess.CompletedProcess(arguments, 0, '', '')
             with patch('test_release_dmg.platform.system', return_value='Darwin'), \
@@ -110,6 +115,49 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
             report = json.loads((root / 'reports/installation.json').read_text())
             self.assertEqual(report['status'], 'failed')
             self.assertTrue(report['uninstall_owned_copy'])
+
+    def test_dmg_requires_installer_identity_report_and_handles_detach_failures(self):
+        """DMG acceptance must require installer.json and preserve primary errors on detach failure."""
+        import plistlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dmg = root / 'fixture.dmg'
+            dmg.write_bytes(b'fixture')
+            digest = hashlib.sha256(b'fixture').hexdigest()
+            Path(str(dmg) + '.sha256').write_text(digest + '  fixture.dmg\n')
+            destination = root / 'Applications/Open Foresight.app'
+            detach_codes = [1, 2]
+            def command(arguments, **kwargs):
+                if arguments[:2] == ['hdiutil', 'attach']:
+                    mount = Path(arguments[arguments.index('-mountpoint') + 1])
+                    source = mount / 'Open Foresight.app/Contents'
+                    source.mkdir(parents=True)
+                    (source / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier': 'io.openforesight.App'}))
+                if arguments[:2] == ['hdiutil', 'detach']:
+                    return subprocess.CompletedProcess(arguments, detach_codes.pop(0), '', '')
+                return subprocess.CompletedProcess(arguments, 0, '', '')
+            with patch('test_release_dmg.platform.system', return_value='Darwin'), \
+                    patch('test_release_dmg.subprocess.run', side_effect=command), \
+                    patch('test_release_dmg.verify_signature', return_value={'adhoc': True}):
+                with self.assertRaises(FileNotFoundError):
+                    run_dmg(Namespace(dmg=dmg, destination=destination, output=root / 'reports', models=root / 'models'))
+            report = json.loads((root / 'reports/installation.json').read_text())
+            self.assertEqual(report['error_type'], 'FileNotFoundError')
+            self.assertEqual(report['detach_error'], 2)
+            # If all checks pass, a persistent detach failure must still fail acceptance.
+            (root / 'installer.json').write_text(json.dumps({
+                'asset': 'fixture.dmg', 'sha256': digest, 'source_commit': 'b' * 40}))
+            detach_codes = [1, 3]
+            with patch('test_release_dmg.platform.system', return_value='Darwin'), \
+                    patch('test_release_dmg.subprocess.run', side_effect=command), \
+                    patch('test_release_dmg.verify_signature', return_value={'adhoc': True}), \
+                    patch('test_release_dmg.persistence_probe'), \
+                    patch('test_release_dmg.install'):
+                with self.assertRaisesRegex(RuntimeError, 'Failed to detach'):
+                    run_dmg(Namespace(dmg=dmg, destination=destination, output=root / 'reports', models=root / 'models'))
+            report = json.loads((root / 'reports/installation.json').read_text())
+            self.assertEqual(report['status'], 'failed')
+            self.assertEqual(report['detach_error'], 3)
 
     def test_dmg_acceptance_refuses_existing_installation_before_any_system_mutation(self):
         """An acceptance invocation cannot replace the user's app."""
@@ -127,3 +175,42 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                     run_dmg(Namespace(dmg=dmg, destination=existing, output=root / 'reports', models=root / 'models'))
                 process.assert_not_called()
             self.assertEqual(sentinel.read_text(), 'user installation')
+
+    def test_linux_package_launcher_exports_runtime_revision_and_uninstall_checks_desktop_entry(self):
+        """Linux package launcher must export FORESIGHT_RUNTIME_REVISION for exact revision acceptance."""
+        import package
+        revision = 'c' * 40
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build = root / 'build'
+            flutter = root / 'flutter'
+            flutter.mkdir()
+            (flutter / 'open-foresight').write_text('app')
+            for rel in ('services/helper/ForesightHelper', 'native/libforesight_native.so',
+                        'application/foresight-service', 'application/foresight-mcp',
+                        'services/inference/foresight-model', 'lib/liblitert-lm.so',
+                        'lib/libonnxruntime.so', '_deps/sentencepiece-src/LICENSE',
+                        '_deps/flatbuffers-src/LICENSE',
+                        '_deps/sentencepiece-src/third_party/protobuf-lite/LICENSE',
+                        '_deps/sentencepiece-src/third_party/esaxx/LICENSE',
+                        '_deps/sentencepiece-src/third_party/darts_clone/LICENSE',
+                        '_deps/sentencepiece-src/third_party/absl/LICENSE'):
+                target = build / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b'fixture')
+            output = root / 'dist'
+            litert_digest = hashlib.sha256(b'fixture').hexdigest()
+            with patch.object(sys, 'argv', ['package.py', '--build', str(build), '--flutter-bundle', str(flutter),
+                                            '--output', str(output), '--litert-library', str(build / 'lib/liblitert-lm.so'),
+                                            '--onnx-library', str(build / 'lib/libonnxruntime.so'), '--revision', revision]), \
+                    patch.object(package, 'LIBRARY_SHA256', litert_digest), \
+                    patch.object(package, 'ONNX_LIBRARY_SHA256', litert_digest), \
+                    patch('package.subprocess.run'), \
+                    patch('package.subprocess.check_output', return_value=''):
+                package.main()
+            launcher = (output / 'open-foresight').read_text()
+            self.assertIn(f'export FORESIGHT_RUNTIME_REVISION="{revision}"', launcher)
+        script = (Path(__file__).resolve().parents[1] / 'packaging/ci/test-release-package.sh').read_text()
+        self.assertIn('test ! -e /usr/share/applications/io.openforesight.App.desktop', script)
+
+

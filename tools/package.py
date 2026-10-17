@@ -42,6 +42,9 @@ def main():
                         help='Whisper Vulkan device index; override at launch with FORESIGHT_WHISPER_DEVICE')
     args = parser.parse_args()
     google_client = release_google_client(args.google_client, required=args.require_google_client)
+    commit = args.revision or subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Revision must be a full lowercase Git commit hash')
     web_search_keys = release_web_search_keys()
     assert args.whisper_gpu_device >= 0
     helper = args.build / 'services/helper/ForesightHelper'
@@ -135,6 +138,7 @@ set -euo pipefail
 task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LD_LIBRARY_PATH="$task_bundle/lib:$task_bundle/app/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export FORESIGHT_INSTALL_ROOT="$task_bundle"
+export FORESIGHT_RUNTIME_REVISION="@RUNTIME_REVISION@"
 export FORESIGHT_SERVICE="$task_bundle/bin/foresight-service"
 export FORESIGHT_HELPER="$task_bundle/bin/ForesightHelper"
 export FORESIGHT_NATIVE="$task_bundle/lib/libforesight_native.so"
@@ -173,6 +177,7 @@ case "${FORESIGHT_ENTRYPOINT:-desktop}" in
   *) echo "Unknown Open Foresight entrypoint" >&2; exit 2 ;;
 esac
 '''.replace('@WEB_SEARCH_RELEASE_ENV@', shell_web_search_keys(web_search_keys))
+   .replace('@RUNTIME_REVISION@', commit)
    .replace('@GENERATION_BACKEND@', args.generation_backend)
    .replace('@WHISPER_DEVICE@', str(args.whisper_gpu_device)))
     launcher.chmod(0o755)
@@ -180,9 +185,6 @@ esac
         command = args.output / ('open-foresight-' + entry)
         command.write_text('#!/usr/bin/env bash\nset -euo pipefail\ntask_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)\nexport FORESIGHT_ENTRYPOINT=' + entry + '\nexec "$task_bundle/open-foresight" "$@"\n')
         command.chmod(0o755)
-    commit = args.revision or subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
-    if not re.fullmatch(r'[0-9a-f]{40}', commit):
-        raise ValueError('Revision must be a full lowercase Git commit hash')
     files = [{'path': str(file.relative_to(args.output)),
               'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}
              for file in sorted(args.output.rglob('*')) if file.is_file()]
