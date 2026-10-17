@@ -81,4 +81,4 @@ jobs:
               raise SystemExit('Release remains unpublished: ' + str(results))
           PY
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
-          gh release edit "$TAG" --draft=false --latest
+          gh release edit "$TAG" --tag "$TAG" --verify-tag --draft=false --latest
