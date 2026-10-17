@@ -145,6 +145,13 @@ producer helper tests pass together, with clean core analysis.
 
 ## Remaining producer work
 
+Transcript word-window chunking, exact batch context, uncovered-topic gating,
+new-note batch priority, meaningful-content/fallback helpers, and the preview/
+accepted merge are now implemented and tested; see
+[planning and merge evidence](reference-note-enhancement-planning.md). The
+combined producer component suite has 69 passing tests and clean core analysis.
+
+
 These helpers are reconstructed but not yet wired into generation. Current
 Application generation still uses one bounded transcript prompt. Original
 `enhanceStream` additionally embeds transcript chunks and shorthand, ranks
@@ -153,11 +160,11 @@ references and previous enhancements, creates a conversation per batch, and
 parses/merges batch responses into complete output snapshots. The exact prompt
 fragments are retained as selected public PP34602–34609; the batch parser and
 prompt builder have complete retained decompilations. Prompt assembly and the two-list batch parser are now implemented as helpers.
-Excerpt ranking and its math are now implemented as helpers. Transcript
-chunking/cache integration, embedding transport, remaining token budgets, stream
-merge rules, and full integration remain incomplete.
+Excerpt ranking and its math are now implemented as helpers. Cache and embedding transport integration, stop-token/input-limit configuration,
+exception/lifecycle orchestration and full Application integration remain
+incomplete.
 
-The newest IDA batches (50, 51, 56, 58, 61, 69, 70 and 71) ran through the owned Node process
+The newest IDA batches (50, 51, 56, 58, 61, 69, 70, 71, 77, 81, 87 and 89) ran through the owned Node process
 launcher because REA process capture could not start. Their raw IDA JSON and
 terminal logs are retained; each dispatcher closed with exit 0. These results
 are static analysis, not a successful new REA process capture or a live app

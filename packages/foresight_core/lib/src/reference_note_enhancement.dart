@@ -151,3 +151,16 @@ parseNoteEnhancementBatchOutput(
 }
 
 final _noteMarkerOnlyPattern = RegExp(r'^[*\-]+$', caseSensitive: false);
+
+/// Original hasMeaningfulContent removes only the recovered leading markers.
+bool hasMeaningfulNoteEnhancementContent(String text) =>
+    text.replaceAll(_meaninglessNotePrefix, '').trim().isNotEmpty;
+
+final _meaninglessNotePrefix = RegExp(r'^[\s\*\-•\d\.\)\:]+');
+
+String toNoteEnhancementFallbackBullet(String text) {
+  final trimmed = text.trim();
+  return trimmed.startsWith('*') || trimmed.startsWith('-')
+      ? trimmed
+      : '* $trimmed';
+}
