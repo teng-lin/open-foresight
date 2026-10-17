@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
 import 'package:open_foresight/domain.dart';
@@ -74,12 +75,13 @@ void main() {
       final domain = Domain(store, helper)..generator = FailedAnswerRuntime();
       try {
         final answer = (await domain.ask('Who is Mira Shah?').toList()).last;
-        expect(answer, startsWith('Answer generation failed:'));
+        expect(answer, 'Answer generation failed. Please retry.');
         expect(answer, isNot(contains('Insufficient')));
-        expect(
-          store.rows('SELECT status FROM answers').single['status'],
-          'failed',
-        );
+        final saved = store.rows('SELECT * FROM answers').single;
+        expect(saved['status'], 'failed');
+        expect(saved['body'], answer);
+        expect(saved['body'], isNot(contains('Insufficient')));
+        expect(jsonDecode(saved['citations'] as String), isEmpty);
       } finally {
         domain.close();
         domain.generator?.close();

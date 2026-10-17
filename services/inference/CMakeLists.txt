@@ -1,3 +1,16 @@
+if(BUILD_TESTING)
+  find_package(ICU REQUIRED COMPONENTS uc i18n)
+  find_package(nlohmann_json REQUIRED)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_executable(native_grounding_test ${PROJECT_SOURCE_DIR}/tests/inference/grounded.cpp)
+  target_include_directories(native_grounding_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(native_grounding_test PRIVATE ICU::uc ICU::i18n nlohmann_json::nlohmann_json)
+  add_test(NAME native_grounding COMMAND native_grounding_test)
+  add_test(NAME grounding_python COMMAND ${Python3_EXECUTABLE}
+    ${PROJECT_SOURCE_DIR}/tests/models/test_grounded_generation.py)
+  add_test(NAME grounding_parity COMMAND ${Python3_EXECUTABLE}
+    ${PROJECT_SOURCE_DIR}/tests/inference/test_grounding_parity.py $<TARGET_FILE:native_grounding_test>)
+endif()
 if(APPLE)
   # The standalone native LiteRT/ONNX archives are currently Linux x86-64.
   # Keep Mac's validated runtime and expose the same helper worker protocol.
@@ -30,12 +43,6 @@ target_include_directories(foresight-model PRIVATE ${PROJECT_SOURCE_DIR}/third_p
 target_link_libraries(foresight-model PRIVATE sentencepiece-static OpenSSL::Crypto ICU::uc ICU::i18n nlohmann_json::nlohmann_json Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_options(foresight-model PRIVATE -Wall -Wextra -Wpedantic)
 install(TARGETS foresight-model RUNTIME DESTINATION bin)
-if(BUILD_TESTING)
-  add_executable(native_grounding_test ${PROJECT_SOURCE_DIR}/tests/inference/grounded.cpp)
-  target_include_directories(native_grounding_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-  target_link_libraries(native_grounding_test PRIVATE ICU::uc ICU::i18n nlohmann_json::nlohmann_json)
-  add_test(NAME native_grounding COMMAND native_grounding_test)
-endif()
 if(BUILD_TESTING)
   add_executable(native_protocol_test ${PROJECT_SOURCE_DIR}/tests/inference/fd_stream.cpp)
   target_include_directories(native_protocol_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

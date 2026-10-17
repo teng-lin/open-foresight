@@ -20,7 +20,17 @@ struct Fake {
     return replies.at(cursor++);
   }
 };
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--validate") {
+    std::string line;
+    while (std::getline(std::cin, line)) {
+      const auto input = json::parse(line);
+      auto errors = grounding::validate_draft(
+          input.at("text"), input.at("evidence").get<std::map<std::string, std::string>>());
+      std::cout << json(errors).dump() << std::endl;
+    }
+    return 0;
+  }
   using namespace grounding;
   try {
     std::map<std::string, std::string> evidence{
@@ -87,6 +97,12 @@ int main() {
                      {{{"citation", "S1"},
                        {"title", "Launch"},
                        {"excerpt", "The launch is in 2024."}}}}};
+    json multi_request = {{"version", 1}, {"question", "Who leads Atlas?"},
+      {"sources", {{{"citation", "S1"}, {"title", "Atlas"}, {"excerpt", "Mira leads Atlas."}},
+                   {{"citation", "S2"}, {"title", "Atlas"}, {"excerpt", "Mira leads Atlas."}},
+                   {{"citation", "S3"}, {"title", "Atlas"}, {"excerpt", "Mira leads Atlas."}}}}};
+    Fake multi{{"S1.1 S2.1 S3.1", "Mira leads Atlas. [S1-S3]", "SUPPORTED"}};
+    REQUIRE(grounded_answer(multi, multi_request, 512).at("citations") == json({"S1", "S2", "S3"}));
     Fake retry{{"S1.1", "The launch is in 204. [S1]",
                 "The launch is in 2024. [S1]", "SUPPORTED"}};
     auto result = grounded_answer(retry, request, 512);

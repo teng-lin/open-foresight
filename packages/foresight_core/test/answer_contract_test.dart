@@ -1,7 +1,80 @@
+import 'dart:convert';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/answer_contract.dart';
 
 void main() {
+  test('all IDs in comma, space and inclusive ranges must be selected', () {
+    for (final group in [
+      'S1, S2',
+      'S1 S2',
+      'S1-S3',
+      'S1–S3',
+      'S1—3',
+      'S1, S2-S3',
+    ]) {
+      final payload = jsonEncode({
+        'answer': 'A fact [$group]',
+        'citations': ['S1', 'S2', 'S3'],
+      });
+      final answer = GroundedAnswer.parse(payload, {'S1', 'S2', 'S3'});
+      expect(answer.rendered, startsWith('A fact [$group]'));
+      expect(answer.rendered, isNot(contains('[S2]')));
+      expect(
+        () => GroundedAnswer.parse(
+          jsonEncode({
+            'answer': 'A fact [$group]',
+            'citations': ['S1'],
+          }),
+          {'S1', 'S2', 'S3'},
+        ),
+        throwsFormatException,
+      );
+    }
+    for (final group in [
+      'S1, S9',
+      'S1 S9',
+      'S1-S4',
+      'S3-S1',
+      'S1; S2',
+      'S1.1',
+      'S1-S99999999999999999999999999',
+    ]) {
+      expect(
+        () => GroundedAnswer.parse(
+          jsonEncode({
+            'answer': 'A fact [$group]',
+            'citations': ['S1', 'S2', 'S3'],
+          }),
+          {'S1', 'S2', 'S3'},
+        ),
+        throwsFormatException,
+      );
+    }
+  });
+  test('malformed JSON shapes consistently raise FormatException', () {
+    for (final value in [
+      null,
+      1,
+      [],
+      {},
+      {'answer': 42, 'citations': []},
+      {'answer': 'x'},
+      {'answer': 'x', 'citations': 'S1'},
+      {
+        'answer': 'x',
+        'citations': [1],
+      },
+      {'answer': 'x', 'citations': null},
+      {'answer': 'x', 'citations': [], 'status': 1},
+      {'answer': 'x', 'citations': [], 'status': null},
+    ]) {
+      expect(
+        () => GroundedAnswer.parse(jsonEncode(value), {'S1'}),
+        throwsFormatException,
+      );
+    }
+  });
+
   test(
     'citation payload determines status without a generated branch selector',
     () {

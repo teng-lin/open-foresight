@@ -97,6 +97,32 @@ inline Strings captured(const std::string &s, const std::string &regex,
 inline bool subset(const Strings &a, const Strings &b) {
   return std::includes(b.begin(), b.end(), a.begin(), a.end());
 }
+
+inline const std::string citation_group = R"(\[[^\[\]]*\bS[0-9]+[^\[\]]*\])";
+inline const std::string citation_item = R"(S([1-9][0-9]*)(?:\s*[-–—]\s*S?([1-9][0-9]*))?)";
+inline Strings citation_ids(const std::string &text, size_t limit = 6) {
+  Strings ids;
+  for (auto &bracket : matches(text, citation_group)) {
+    auto content = trim(bracket[0].substr(1, bracket[0].size() - 2));
+    if (!has(content, "^" + citation_item + "(?:(?:\\s*,\\s*|\\s+)" + citation_item + ")*$"))
+      return {"INVALID_CITATION"};
+    for (auto &item : matches(content, citation_item)) {
+      try {
+        auto first = std::stoll(item[1]);
+        auto last = std::stoll(item[2].empty() ? item[1] : item[2]);
+        if (last < first || static_cast<unsigned long long>(last - first) >= limit)
+          return {"INVALID_CITATION"};
+        for (auto n = first; ; ++n) {
+          ids.insert("S" + std::to_string(n));
+          if (n == last) break;
+        }
+      } catch (const std::exception &) {
+        return {"INVALID_CITATION"};
+      }
+    }
+  }
+  return ids;
+}
 inline const Strings stop = [] {
   Strings r;
   std::istringstream in(
@@ -123,7 +149,7 @@ inline size_t overlap(const Strings &a, const Strings &b) {
   return n;
 }
 inline Strings numbers(std::string s) {
-  s = replace(s, "\\[S\\d+(?:\\.\\d+)?\\]", "");
+  s = replace(s, citation_group, "");
   s = replace(s, "(?m)^\\s*(?:#{1,6}\\s*)?(?:[1-9]|1\\d|20)[.)]\\s+", "");
   Strings r;
   for (auto &m : matches(s, "(?<!\\w)\\d+(?:[.,]\\d+)*"))
@@ -156,7 +182,7 @@ inline std::vector<std::string> claim_blocks(const std::string &text) {
     auto count = matches(paragraph, "\\S+").size();
     bool label =
         paragraph.find('\n') == std::string::npos &&
-        !has(paragraph, "\\[S\\d+\\]") &&
+        !has(paragraph, citation_group) &&
         (paragraph.starts_with('#') || has(paragraph, "^\\*\\*.+\\*\\*$") ||
          (paragraph.ends_with(':') && count <= 25));
     if (label) {
@@ -176,7 +202,7 @@ inline std::vector<std::string> claim_blocks(const std::string &text) {
         pending.clear();
         continue;
       }
-      if (part.find('\n') == std::string::npos && !has(part, "\\[S\\d+\\]") &&
+      if (part.find('\n') == std::string::npos && !has(part, citation_group) &&
           (part.starts_with('#') || has(part, "^\\*\\*.+\\*\\*$"))) {
         pending += part + "\n\n";
         continue;
@@ -206,8 +232,8 @@ validate_draft(const std::string &text,
       !has(text, "(?i)\\bhistorical\\b|not current prices"))
     errors.insert("Retain the historical-price caveat from the evidence");
   for (auto &block : claim_blocks(text)) {
-    auto ids = captured(block, "\\[(S\\d+)\\]", 1);
-    auto claim = trim(replace(block, "\\[S\\d+\\]", ""));
+    auto ids = citation_ids(block, evidence.size());
+    auto claim = trim(replace(block, citation_group, ""));
     if (!subset(ids, known)) {
       errors.insert("Missing or unknown citation");
       continue;
@@ -378,9 +404,11 @@ template <class G>
 bool verify_support(G &engine, const std::string &draft,
                     const std::map<std::string, std::string> &evidence,
                     const std::string &question) {
+  if (!validate_draft(draft, evidence).empty())
+    return false;
   std::vector<std::string> claims;
   for (auto &b : claim_blocks(draft))
-    if (has(b, "\\[S\\d+\\]"))
+    if (has(b, citation_group))
       claims.push_back(b);
   if (claims.empty())
     return false;
@@ -395,7 +423,7 @@ bool verify_support(G &engine, const std::string &draft,
   auto prompt_for = [&](const std::vector<std::string> &blocks) {
     auto answer = join(blocks, "\n\n");
     json support = json::object();
-    for (auto &id : captured(answer, "\\[(S\\d+)\\]", 1))
+    for (auto &id : citation_ids(answer, evidence.size()))
       support[id] = evidence.at(id);
     return prefix + json({{"question", question},
                           {"answer", answer},
@@ -573,7 +601,7 @@ json grounded_answer(G &engine, const json &request, int budget) {
                   {"method", "verified-synthesis"}};
         return {
             {"answer", draft},
-            {"citations", captured(draft, "\\[(S\\d+)\\]", 1)},
+            {"citations", citation_ids(draft, evidence.size())},
             {"method", "verified-synthesis"},
             {"grounding",
              {{"attempts", attempt + 1}, {"selected_units", selected.size()}}}};
