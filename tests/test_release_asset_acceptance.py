@@ -68,7 +68,7 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                 selected = arguments[arguments.index('--pattern') + 1]
                 (root / selected).write_bytes(payloads[selected])
             with patch.object(sys, 'argv', ['download', '--tag', 'v0.1.0', '--format', 'deb',
-                                            '--directory', directory]), \
+                                            '--directory', directory, '--allow-recovery-revision']), \
                     patch('release_asset_acceptance.subprocess.run', side_effect=download), \
                     patch('release_asset_acceptance.subprocess.check_output', side_effect=[
                         json.dumps(release), json.dumps({'sha': 'a' * 40}), json.dumps({'sha': 'b' * 40})]):
@@ -79,6 +79,30 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
             self.assertEqual(report['status'], 'verified_download')
             self.assertEqual(report['provenance_asset'], name + '.build.json')
             self.assertEqual(report['provenance_sha256'], hashlib.sha256(metadata).hexdigest())
+
+    def test_mismatched_installer_revision_is_rejected_without_explicit_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = 'open-foresight_0.1.0-1_amd64.deb'
+            digest = hashlib.sha256(b'installer bytes').hexdigest()
+            metadata = json.dumps({'revision': 'b' * 40, 'sha256': digest,
+                                   'version': '0.1.0', 'format': 'deb'}).encode()
+            payloads = {name: b'installer bytes', name + '.sha256': f'{digest}  {name}\n'.encode(),
+                        name + '.build.json': metadata}
+            release = {'draft': False, 'tag_name': 'v0.1.0', 'id': 1, 'html_url': 'https://example/release',
+                       'assets': [{'name': key, 'size': len(value), 'id': index + 1}
+                                  for index, (key, value) in enumerate(payloads.items())]}
+            def download(arguments, **kwargs):
+                selected = arguments[arguments.index('--pattern') + 1]
+                (root / selected).write_bytes(payloads[selected])
+            with patch.object(sys, 'argv', ['download', '--tag', 'v0.1.0', '--format', 'deb',
+                                            '--directory', directory]), \
+                    patch('release_asset_acceptance.subprocess.run', side_effect=download), \
+                    patch('release_asset_acceptance.subprocess.check_output', side_effect=[
+                        json.dumps(release), json.dumps({'sha': 'a' * 40}), json.dumps({'sha': 'b' * 40})]):
+                with self.assertRaisesRegex(ValueError, "differs from release tag"):
+                    download_main()
+            self.assertEqual(json.loads((root / 'installer.json').read_text())['status'], 'failed')
 
     def test_failed_download_cannot_leave_a_previous_success_report(self):
         """A reused download directory must not retain misleading passed evidence."""

@@ -123,6 +123,7 @@ def run(args):
         report['service_pid'] = owner
         application = ApplicationPeer(runtime / 'application.sock')
         application.socket.settimeout(args.timeout)
+        report['authenticated_synthetic_desktop'] = application.attach_test_desktop(data)
         for key in ('liveEnhance', 'proactiveAnswers'):
             application.call('preferences.set', {'key': key, 'value': 'false'})
         report['stage'] = 'model_configuration'
@@ -198,6 +199,7 @@ def run(args):
                 raise AssertionError('Restart did not create the requested installed service')
             application = ApplicationPeer(runtime / 'application.sock')
             application.socket.settimeout(args.timeout)
+            application.attach_test_desktop(data)
             restored = application.call('meetings.get', {'id': identifier})
             enhanced(restored, 'Friday')
             if not any(row['id'] == note['id'] and row['body'] == 'Persisted installed note'

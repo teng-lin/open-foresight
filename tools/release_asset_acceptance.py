@@ -69,6 +69,8 @@ def source_revision(metadata, kind, tag, installer_digest):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--tag', required=True)
+    parser.add_argument('--allow-draft', action='store_true', help='Validate unpublished release candidates')
+    parser.add_argument('--allow-recovery-revision', action='store_true', help='Explicitly audit a historical installer built from a different commit')
     parser.add_argument('--repo', default='teng-lin/open-foresight')
     parser.add_argument('--format', choices=SUFFIXES, required=True)
     parser.add_argument('--directory', type=Path, required=True)
@@ -81,7 +83,7 @@ def main():
         'stage': 'download_or_verification_not_completed'}, indent=2) + '\n')
     release = json.loads(subprocess.check_output(
         ['gh', 'api', f'repos/{args.repo}/releases/tags/{args.tag}']))
-    if release['draft'] or release['tag_name'] != args.tag:
+    if (release['draft'] and not args.allow_draft) or release['tag_name'] != args.tag:
         raise ValueError('Acceptance requires the requested published release')
     asset = select_asset(release, args.format)
     args.directory.mkdir(parents=True, exist_ok=True)
@@ -100,6 +102,8 @@ def main():
     commit = source_revision(json.loads(metadata_path.read_text()), args.format, args.tag, digest)
     tag_commit = json.loads(subprocess.check_output(
         ['gh', 'api', f'repos/{args.repo}/commits/{args.tag}']))['sha']
+    if commit != tag_commit and not args.allow_recovery_revision:
+        raise ValueError('Installer source revision differs from release tag commit')
     if commit != tag_commit:
         resolved = json.loads(subprocess.check_output(
             ['gh', 'api', f'repos/{args.repo}/commits/{commit}']))['sha']
@@ -107,7 +111,8 @@ def main():
             raise ValueError('Installer provenance source commit is not valid in this repository')
     report = {'tag': args.tag, 'release_id': release['id'], 'asset_id': asset['id'],
               'asset': asset['name'], 'sha256': digest, 'source_commit': commit,
-              'release_tag_commit': tag_commit, 'provenance_asset': metadata_name,
+              'release_tag_commit': tag_commit, 'recovery_revision': commit != tag_commit,
+              'provenance_asset': metadata_name,
               'provenance_asset_id': metadata_asset['id'],
               'provenance_sha256': hashlib.sha256(metadata_path.read_bytes()).hexdigest(),
               'release_url': release['html_url'], 'status': 'verified_download'}

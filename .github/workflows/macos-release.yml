@@ -3,7 +3,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: macos-release-${{ github.ref }}
+  group: macos-release-${{ inputs.tag }}
   cancel-in-progress: false
 jobs:
   build:
@@ -13,17 +13,18 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
+        ref: refs/tags/${{ inputs.tag }}
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
     - name: Require tag version and retrieve the exact tested app
       env:
         GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: ${{ github.event.release.tag_name }}
+        RELEASE_TAG: ${{ inputs.tag }}
       run: |-
         python tools/app_version.py --check
         test "$RELEASE_TAG" = "v$(python tools/app_version.py)"
-        python tools/ci_artifacts.py pull --component macos-app --identity "$GITHUB_SHA" --prefix artifacts --wait 3600
+        python tools/ci_artifacts.py pull --component macos-app --identity "$(git rev-parse HEAD)" --prefix artifacts --wait 3600
         mkdir -p staging test-results
         ditto -x -k artifacts/Open-Foresight-macos-arm64.zip staging
         codesign --verify --deep --strict 'staging/Open Foresight.app'
@@ -79,11 +80,12 @@ jobs:
     permissions:
       contents: write
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
+        ref: refs/tags/${{ inputs.tag }}
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: macos-release-application
@@ -114,8 +116,12 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
-      run: gh release upload "$RELEASE_TAG" dist/* --clobber
-'on':
-  release:
-    types:
-    - published
+      run: |
+        test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
+        gh release upload "$RELEASE_TAG" dist/*
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
