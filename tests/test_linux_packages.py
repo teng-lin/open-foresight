@@ -255,7 +255,8 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text('fixture license')
             digest = hashlib.sha256(library.read_bytes()).hexdigest()
-            extensions = SimpleNamespace(manifest={'library_sha256': digest})
+            extensions = SimpleNamespace(manifest={'library_sha256': digest,
+                'upstream_commit': 'b2f686e2ed4718fb84ec398a61dd59ca0f0aff27'})
             output = root / 'bundle'
             arguments = ['package.py', '--build', str(build), '--flutter-bundle', str(flutter),
                          '--output', str(output), '--litert-library', str(library),

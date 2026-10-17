@@ -20,9 +20,15 @@ static void require_prompt_absent(const foresight::OneShotLaunch &launch,
 
 int main() {
   try {
+    REQUIRE(foresight::quote("中文🧪") == "\"中文🧪\"");
+    REQUIRE(foresight::quote(std::string("\xff", 1)) == "\"\\ufffd\"");
+    REQUIRE(foresight::quote(std::string("\xed\xa0\x80", 3)) ==
+            "\"\\ufffd\\ufffd\\ufffd\"");
+    REQUIRE(foresight::quote(std::string("\xf0\x9f", 2)) ==
+            "\"\\ufffd\\ufffd\"");
     const std::string prompt = "unique-one-shot-prompt-52";
-    const auto llama = foresight::one_shot_launch(
-        0, "llama-cli", "model.gguf", prompt, 32, 0, "");
+    const auto llama = foresight::one_shot_launch(0, "llama-cli", "model.gguf",
+                                                  prompt, 32, 0, "");
     require_prompt_absent(llama, prompt);
     REQUIRE(llama.standard_input == prompt + "\n");
 
