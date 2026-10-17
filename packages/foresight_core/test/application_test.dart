@@ -14,21 +14,24 @@ class TestDomain extends Domain {
 }
 
 class DelayedGenerator extends NativeRuntime {
+  @override
+  bool get loaded => true;
   final entered = Completer<void>(), release = Completer<void>();
-  DelayedGenerator()
+  final String output;
+  DelayedGenerator({this.output = '- Grounded enhancement'})
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
-  Stream<Map<String, dynamic>> generate(
+  Stream<Map<String, dynamic>> generateConversation(
     String id,
     String prompt, {
-    String systemPrompt = '',
-    Map<String, dynamic>? responseSchema,
     Duration timeout = const Duration(minutes: 5),
-    int maxOutputTokens = 256,
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
   }) async* {
     entered.complete();
     await release.future;
-    yield {'type': 'delta', 'text': 'Grounded enhancement'};
+    yield {'type': 'delta', 'text': output};
     yield {'type': 'done', 'status': 'completed'};
   }
 }
@@ -175,7 +178,7 @@ void main() {
     },
   );
   test(
-    'editing original notes while enhancement runs discards stale output',
+    'enhancement completion preserves newer raw edits and accepts its output',
     () async {
       final id = domain.store.meeting('Planning');
       domain.store.transcript(
@@ -194,10 +197,58 @@ void main() {
       domain.store.saveMeetingNotes(id, 'Mira revised draft');
       generator.release.complete();
       await work;
-      expect(domain.store.rows('SELECT * FROM artifacts'), isEmpty);
+      expect(
+        domain.store
+            .rows('SELECT generated FROM artifacts')
+            .single['generated'],
+        '- Grounded enhancement',
+      );
+      expect(domain.store.meetingEnhancedNotes(id), '- Grounded enhancement');
       expect(
         domain.store.rows('SELECT body FROM meeting_notes').single['body'],
         'Mira revised draft',
+      );
+    },
+  );
+  test(
+    'accepted enhancement removes original line markers before persistence',
+    () async {
+      final id = domain.store.meeting('Planning');
+      domain.store.transcript(
+        id,
+        'Mira sends draft Tuesday.',
+        true,
+        0,
+        20,
+        'imported',
+      );
+      domain.store.saveMeetingNotes(id, 'Mira draft');
+      final generator = DelayedGenerator(
+        output:
+            '- <LINE id="2"><L:2>Mira sends the draft Tuesday.</L:2></LINE>\n',
+      );
+      domain.generator = generator;
+      final work = domain.application.enhanceNotes(id);
+      await generator.entered.future;
+      generator.release.complete();
+      await work;
+      expect(
+        domain.store
+            .rows('SELECT generated FROM artifacts')
+            .single['generated'],
+        '- Mira sends the draft Tuesday.',
+      );
+      expect(
+        domain.store
+            .rows('SELECT body,last_enhanced FROM meeting_notes')
+            .single,
+        containsPair('body', 'Mira draft'),
+      );
+      expect(
+        domain.store
+            .rows('SELECT last_enhanced FROM meeting_notes')
+            .single['last_enhanced'],
+        isNotNull,
       );
     },
   );

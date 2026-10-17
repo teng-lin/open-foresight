@@ -22,6 +22,9 @@ class RemoteDomain extends Domain {
   Map<String, dynamic> capture = {};
   Map<String, dynamic> googleStatus = {};
   bool _paused = false;
+  bool _webSearchAvailable = false;
+  @override
+  bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
   RemoteDomain._(
     Store store,
@@ -33,6 +36,7 @@ class RemoteDomain extends Domain {
     _listen();
   }
   void _apply(Map<String, dynamic> event) {
+    _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
     _paused = event['sources_paused'] == true;
@@ -107,6 +111,7 @@ class RemoteDomain extends Domain {
     );
     domain.generator = runtime.state.isEmpty ? null : runtime;
     domain._paused = status['sources_paused'] == true;
+    domain._webSearchAvailable = status['web_search_available'] == true;
     return domain;
   }
 
@@ -186,12 +191,44 @@ class RemoteDomain extends Domain {
   }
 
   @override
-  Stream<String> ask(String question) => client
-      .stream('answer.stream', {
-        'question': question,
-        'conversation': 'desktop',
-      })
-      .map((value) => value as String);
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) async* {
+    if (current != null && !current()) throw StateError('Answer cancelled');
+    await for (final value in client.stream('answer.stream', {
+      'question': question,
+      'conversation': conversation,
+      if (meetingId != null) 'meeting_id': meetingId,
+    })) {
+      if (current != null && !current()) throw StateError('Answer cancelled');
+      yield value as String;
+    }
+  }
+
+  @override
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) async* {
+    if (current != null && !current()) throw StateError('Answer cancelled');
+    await for (final value in client.stream('answer.stream', {
+      'question': question,
+      'conversation': conversation,
+      'web_search': true,
+      if (meetingId != null) 'meeting_id': meetingId,
+    })) {
+      if (current != null && !current()) throw StateError('Answer cancelled');
+      yield value as String;
+    }
+  }
+
   @override
   Future<Map<String, List<double>>> graphEmbeddings(
     List<Map<String, Object?>> sources,
@@ -236,6 +273,13 @@ class RemoteRecording implements Recording {
   RemoteRecording(this.snapshot);
   @override
   bool get finishing => snapshot['finishing'] == true;
+  @override
+  bool get paused => snapshot['paused'] == true;
+  @override
+  Map<String, dynamic> get echoCancellationState => Map<String, dynamic>.from(
+    snapshot['echo_cancellation'] as Map? ??
+        {'requested': false, 'active': false},
+  );
   @override
   List<int> get sampleCounts =>
       (snapshot['samples'] as List? ?? []).cast<int>();

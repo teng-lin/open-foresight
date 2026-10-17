@@ -16,13 +16,14 @@ class Store {
     if (version > 1) throw StateError('Unsupported newer application database');
     db.execute(
       '''CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,mime TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',deleted INTEGER NOT NULL DEFAULT 0,provenance TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,timestamp INTEGER);
     CREATE TABLE IF NOT EXISTS answers(id INTEGER PRIMARY KEY,question TEXT NOT NULL,body TEXT NOT NULL,status TEXT NOT NULL,citations TEXT NOT NULL,model TEXT NOT NULL,created INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS models(kind TEXT PRIMARY KEY,path TEXT NOT NULL,digest TEXT NOT NULL,runtime TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meetings(id INTEGER PRIMARY KEY,title TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS transcript(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id),text TEXT NOT NULL,final INTEGER NOT NULL,start_ms INTEGER NOT NULL,end_ms INTEGER NOT NULL,source TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS artifacts(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id),kind TEXT NOT NULL,generated TEXT NOT NULL,edited TEXT,input_revision INTEGER NOT NULL,model TEXT NOT NULL,prompt_version TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS preferences(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS conversation_memory(conversation TEXT PRIMARY KEY,through_answer_id INTEGER NOT NULL,messages TEXT NOT NULL,token_counts TEXT);
     CREATE TABLE IF NOT EXISTS source_details(source_id TEXT PRIMARY KEY REFERENCES sources(id),imported INTEGER NOT NULL,changed INTEGER NOT NULL,labels TEXT NOT NULL DEFAULT '[]');
     CREATE TABLE IF NOT EXISTS document_labels(document_id TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,label_name TEXT NOT NULL,label_source TEXT NOT NULL,color_hex TEXT,rationale TEXT,PRIMARY KEY(document_id,label_name));
     CREATE TABLE IF NOT EXISTS document_clusters(cluster_id INTEGER PRIMARY KEY AUTOINCREMENT,label TEXT UNIQUE NOT NULL,summary TEXT,centroid_embedding BLOB,center_proj_x REAL NOT NULL DEFAULT 0,center_proj_y REAL NOT NULL DEFAULT 0,radius REAL NOT NULL DEFAULT 100);
@@ -31,11 +32,35 @@ class Store {
     CREATE TABLE IF NOT EXISTS graph_force_state(model_identity TEXT PRIMARY KEY REFERENCES graph_layouts(model_identity) ON DELETE CASCADE,label_set TEXT NOT NULL);
     INSERT OR IGNORE INTO source_details(source_id,imported,changed) SELECT id,0,0 FROM sources;
     CREATE TABLE IF NOT EXISTS meeting_details(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id),created INTEGER NOT NULL,reminder INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE IF NOT EXISTS meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS meeting_notes(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,body TEXT NOT NULL DEFAULT '',revision INTEGER NOT NULL DEFAULT 0,timestamp INTEGER);
+    CREATE TABLE IF NOT EXISTS meeting_note_events(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meeting_notes(meeting_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED,event_key TEXT NOT NULL,title TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_answers(meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,answer_id INTEGER NOT NULL REFERENCES answers(id) ON DELETE CASCADE,PRIMARY KEY(meeting_id,answer_id));
+    CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
     PRAGMA user_version=1;''',
     );
+    // Legacy profiles did not record when a note was saved. Preserve unknown
+    // timestamps instead of manufacturing them from meeting creation times.
+    for (final table in ['notes', 'meeting_notes']) {
+      if (!db
+          .select('PRAGMA table_info($table)')
+          .any((row) => row['name'] == 'timestamp')) {
+        db.execute('ALTER TABLE $table ADD COLUMN timestamp INTEGER');
+      }
+    }
+    for (final column in ['last_enhanced', 'last_manual_edit']) {
+      if (!db
+          .select('PRAGMA table_info(meeting_notes)')
+          .any((row) => row['name'] == column)) {
+        db.execute('ALTER TABLE meeting_notes ADD COLUMN $column INTEGER');
+      }
+    }
+    if (!db
+        .select('PRAGMA table_info(meeting_notes)')
+        .any((row) => row['name'] == 'enhanced_body')) {
+      db.execute('ALTER TABLE meeting_notes ADD COLUMN enhanced_body TEXT');
+    }
     if (!db
         .select('PRAGMA table_info(models)')
         .any((row) => row['name'] == 'backend'))
@@ -64,7 +89,76 @@ class Store {
         "ALTER TABLE answers ADD COLUMN conversation TEXT NOT NULL DEFAULT 'desktop'",
       );
     }
+    if (!db
+        .select('PRAGMA table_info(answers)')
+        .any((r) => r['name'] == 'request_id')) {
+      db.execute('ALTER TABLE answers ADD COLUMN request_id TEXT');
+    }
+    if (!db
+        .select('PRAGMA table_info(answers)')
+        .any((r) => r['name'] == 'model_response')) {
+      db.execute('ALTER TABLE answers ADD COLUMN model_response TEXT');
+    }
+    if (!db
+        .select('PRAGMA table_info(conversation_memory)')
+        .any((r) => r['name'] == 'token_counts')) {
+      db.execute(
+        'ALTER TABLE conversation_memory ADD COLUMN token_counts TEXT',
+      );
+    }
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS answer_request_id ON answers(request_id)',
+    );
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS answer_conversation_id ON answers(conversation,id)',
+    );
+    _migrateMeetingQuestions();
     _reconcileLabelRecords();
+  }
+
+  // Keep durable history while allowing interim origins and repeated questions
+  // after rolling filter expiry. Rebuild legacy schemas without changing IDs.
+  void _migrateMeetingQuestions() {
+    final requiredOrigin = db
+        .select('PRAGMA table_info(meeting_questions)')
+        .any((row) => row['name'] == 'transcript_id' && row['notnull'] == 1);
+    final lifetimeUnique = db
+        .select('PRAGMA index_list(meeting_questions)')
+        .any(
+          (row) =>
+              row['unique'] == 1 &&
+              db
+                      .select(
+                        'SELECT name FROM pragma_index_info(?) ORDER BY seqno',
+                        [row['name']],
+                      )
+                      .map((column) => column['name'])
+                      .join(',') ==
+                  'meeting_id,normalized',
+        );
+    if (!requiredOrigin && !lifetimeUnique) return;
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      db.execute("""
+        CREATE TABLE meeting_questions_interim(
+          id INTEGER PRIMARY KEY,
+          meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
+          transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,
+          question TEXT NOT NULL,normalized TEXT NOT NULL,
+          state TEXT NOT NULL DEFAULT 'queued',
+          answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,
+          error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
+        INSERT INTO meeting_questions_interim
+          SELECT id,meeting_id,transcript_id,question,normalized,state,answer_id,error,created
+          FROM meeting_questions;
+        DROP TABLE meeting_questions;
+        ALTER TABLE meeting_questions_interim RENAME TO meeting_questions;
+      """);
+      db.execute('COMMIT');
+    } catch (_) {
+      db.execute('ROLLBACK');
+      rethrow;
+    }
   }
 
   // Reconcile the legacy JSON projection on opening so labels edited by an
@@ -203,8 +297,10 @@ class Store {
     List<Map<String, Object?>> citations,
     String model, {
     String conversation = 'desktop',
+    String? requestId,
+    Map<String, dynamic>? modelResponse,
   }) => db.execute(
-    'INSERT INTO answers(question,body,status,citations,model,created,conversation) VALUES(?,?,?,?,?,?,?)',
+    'INSERT INTO answers(question,body,status,citations,model,created,conversation,request_id,model_response) VALUES(?,?,?,?,?,?,?,?,?)',
     [
       question,
       body,
@@ -213,21 +309,29 @@ class Store {
       model,
       DateTime.now().millisecondsSinceEpoch,
       conversation,
+      requestId,
+      modelResponse == null ? null : jsonEncode(modelResponse),
     ],
   );
   void saveNote(int? id, String title, String body) {
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
     if (id == null) {
-      db.execute('INSERT INTO notes(title,body) VALUES(?,?)', [title, body]);
+      db.execute('INSERT INTO notes(title,body,timestamp) VALUES(?,?,?)', [
+        title,
+        body,
+        timestamp,
+      ]);
     } else {
       db.execute(
-        'UPDATE notes SET title=?,body=?,revision=revision+1 WHERE id=?',
-        [title, body, id],
+        'UPDATE notes SET title=?,body=?,revision=revision+1,timestamp=? WHERE id=?',
+        [title, body, timestamp, id],
       );
     }
   }
 
   static const _runtimeResources = {
     'generation': 'FORESIGHT_LITERT_RUNNER',
+    'query-detection': 'FORESIGHT_LITERT_PYTHON',
     'speech': 'FORESIGHT_WHISPER_RUNTIME',
   };
 
@@ -291,6 +395,10 @@ class Store {
     final backends = [
       'llama_cpp',
       'litert_lm',
+      if (kind == 'query-detection') ...[
+        'legacy_query_cpu',
+        'legacy_query_cpu_encrypted',
+      ],
       if (kind == 'embedding') ...[
         'sentence_transformers_cpu',
         'litert_lm_embedding_cpu',
@@ -373,11 +481,58 @@ class Store {
     return id;
   }
 
-  void saveMeetingNotes(int meetingId, String body) => db.execute(
-    'INSERT INTO meeting_notes(meeting_id,body,revision) VALUES(?,?,1) '
-    'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1',
-    [meetingId, body],
-  );
+  void saveMeetingNotes(int meetingId, String body, {int? lastManualEdit}) {
+    final previous = rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+      meetingId,
+    ]).firstOrNull;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final manual =
+        lastManualEdit ?? (body != (previous?['body'] ?? '') ? now : null);
+    db.execute('SAVEPOINT save_meeting_notes');
+    try {
+      if (previous == null) _snapshotMeetingEvents(meetingId);
+      db.execute(
+        'INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,last_manual_edit) VALUES(?,?,1,?,?) '
+        'ON CONFLICT(meeting_id) DO UPDATE SET body=excluded.body,revision=meeting_notes.revision+1,timestamp=excluded.timestamp,'
+        'last_manual_edit=COALESCE(excluded.last_manual_edit,meeting_notes.last_manual_edit)',
+        [meetingId, body, now, manual],
+      );
+      db.execute('RELEASE save_meeting_notes');
+    } catch (_) {
+      db.execute('ROLLBACK TO save_meeting_notes');
+      db.execute('RELEASE save_meeting_notes');
+      rethrow;
+    }
+  }
+
+  // Original event/document associations capture a name when the note is
+  // inserted. Later calendar refreshes do not supply that historical name.
+  void _snapshotMeetingEvents(int meeting) {
+    if (rows(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_events'",
+    ).isEmpty)
+      return;
+    for (final event in rows(
+      'SELECT event_key,metadata FROM calendar_events WHERE meeting_id=? ORDER BY rowid',
+      [meeting],
+    )) {
+      final key = event['event_key'] as String;
+      if (key.isEmpty) continue;
+      var title = '';
+      try {
+        final metadata = jsonDecode(event['metadata'] as String);
+        if (metadata is Map && metadata['summary'] is String) {
+          title = metadata['summary'] as String;
+        }
+      } on FormatException {
+        // Malformed legacy metadata cannot establish a captured event name.
+      }
+      db.execute(
+        'INSERT INTO meeting_note_events(meeting_id,event_key,title) VALUES(?,?,?)',
+        [meeting, key, title],
+      );
+    }
+  }
 
   void transcript(
     int meeting,
@@ -409,14 +564,89 @@ class Store {
         rows('SELECT revision FROM meetings WHERE id=?', [
           meeting,
         ]).first['revision'];
-    db.execute(
+    void insert() => db.execute(
       'INSERT INTO artifacts(meeting_id,kind,generated,input_revision,model,prompt_version) VALUES(?,?,?,?,?,?)',
       [meeting, kind, generated, revision, model, 'meeting-v1'],
     );
+    if (kind == 'enhanced_notes') {
+      _writeEnhancedNote(meeting, insert, body: generated);
+    } else {
+      insert();
+    }
   }
 
-  void editArtifact(int id, String text) =>
-      db.execute('UPDATE artifacts SET edited=? WHERE id=?', [text, id]);
+  void editArtifact(int id, String text, {int? lastManualEdit}) {
+    final enhanced = rows(
+      "SELECT selected.meeting_id,COALESCE((SELECT enhanced_body FROM meeting_notes WHERE meeting_id=selected.meeting_id),selected.edited,selected.generated) AS body FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' "
+      'AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id '
+      'AND newer.kind=selected.kind AND newer.id>selected.id)',
+      [id],
+    ).firstOrNull;
+    void update() =>
+        db.execute('UPDATE artifacts SET edited=? WHERE id=?', [text, id]);
+    if (enhanced == null) {
+      update();
+    } else {
+      _writeEnhancedNote(
+        enhanced['meeting_id'] as int,
+        update,
+        body: text,
+        manual: true,
+        editTimestamp: lastManualEdit,
+        changed: enhanced['body'] != text,
+      );
+    }
+  }
+
+  String meetingEnhancedNotes(int meeting) =>
+      rows(
+            "SELECT COALESCE((SELECT enhanced_body FROM meeting_notes WHERE meeting_id=?),(SELECT COALESCE(edited,generated) FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1),'') AS body",
+            [meeting, meeting],
+          ).first['body']
+          as String;
+
+  void saveMeetingEnhancedDraft(int meeting, String body) =>
+      _writeEnhancedNote(meeting, () {}, body: body, completed: false);
+
+  // The original saves the current raw/enhanced fields and save timestamp as
+  // one Note replacement. Historical artifacts do not replace that current Note.
+  void _writeEnhancedNote(
+    int meeting,
+    void Function() write, {
+    required String body,
+    bool manual = false,
+    bool completed = true,
+    int? editTimestamp,
+    bool changed = true,
+  }) {
+    db.execute('SAVEPOINT save_enhanced_note');
+    try {
+      if (rows('SELECT meeting_id FROM meeting_notes WHERE meeting_id=?', [
+        meeting,
+      ]).isEmpty)
+        _snapshotMeetingEvents(meeting);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final column = manual ? 'last_manual_edit' : 'last_enhanced';
+      final date = manual
+          ? editTimestamp ?? (changed ? now : null)
+          : completed
+          ? now
+          : null;
+      db.execute(
+        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,$column,enhanced_body) VALUES(?,'',0,?,?,?) "
+        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp,enhanced_body=excluded.enhanced_body,'
+        '$column=COALESCE(excluded.$column,meeting_notes.$column)',
+        [meeting, now, date, body],
+      );
+      write();
+      db.execute('RELEASE save_enhanced_note');
+    } catch (_) {
+      db.execute('ROLLBACK TO save_enhanced_note');
+      db.execute('RELEASE save_enhanced_note');
+      rethrow;
+    }
+  }
+
   String preference(String key, [String fallback = '']) =>
       rows('SELECT value FROM preferences WHERE key=?', [
             key,

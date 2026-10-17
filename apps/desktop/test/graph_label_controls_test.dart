@@ -8,6 +8,51 @@ import 'package:open_foresight/graph_label_controls.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {
+  testWidgets('focus loss closes the label editor and retains its draft', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    final added = <String>[];
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Column(
+            children: [
+              GraphLabelControls(
+                labels: const [],
+                controller: controller,
+                onAdd: (value) async => added.add(value),
+                onRemove: (_) {},
+              ),
+              const TextField(key: ValueKey('outside-label-editor')),
+            ],
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('inspector-label-input')),
+      'Planning draft',
+    );
+    await tester.tap(find.byKey(const ValueKey('outside-label-editor')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('inspector-label-input')), findsNothing);
+    expect(controller.text, 'Planning draft');
+    expect(added, isEmpty);
+    await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
+    await tester.pumpAndSettle();
+    expect(find.text('Planning draft'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('inspector-cancel-label')));
+    await tester.pumpAndSettle();
+    expect(controller.text, isEmpty);
+    expect(added, isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+    controller.dispose();
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets(
     'inspector editor cancels without writing and submits only to the selected document before propagation',
     (tester) async {

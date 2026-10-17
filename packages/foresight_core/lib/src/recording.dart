@@ -10,13 +10,15 @@ class _AudioSegment {
   final int channel, startSamples, sampleRate;
   final Uint8List pcm;
   final bool provisional;
+  final int? provisionalEpoch;
   _AudioSegment(
     this.channel,
     this.startSamples,
     this.sampleRate,
     this.pcm,
-    this.provisional,
-  );
+    this.provisional, [
+    this.provisionalEpoch,
+  ]);
 }
 
 /// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
@@ -34,10 +36,47 @@ class Recording {
   final sampleCounts = <int>[], peakVolumes = <double>[];
   final _buffers = <BytesBuilder>[], _starts = <int>[], _rates = <int>[];
   final _lastVoice = <int>[], _voiced = <bool>[], _nextSnapshot = <int>[];
+  final _provisionalEpochs = <int>[];
   final _queues = <List<_AudioSegment>>[];
   final _workers = <int, Future<void>>{};
   Timer? timer;
   bool polling = false, finishing = false;
+  bool paused = false;
+  bool _echoCancellation = false;
+  final _echoState = <String, dynamic>{};
+  Map<String, dynamic> get echoCancellationState => {
+    ..._echoState,
+    'requested': _echoCancellation,
+    'active': !paused && captures.isNotEmpty && _echoState['active'] == true,
+  };
+
+  void setEchoCancellation(bool enabled) {
+    var pending = false;
+    if (!lib.providesSymbol('fs_capture_set_echo_cancellation')) {
+      if (enabled)
+        throw StateError(
+          'Echo cancellation requires an updated native audio runtime',
+        );
+    } else if (captures.isNotEmpty) {
+      final accepted = lib
+          .lookupFunction<
+            Int32 Function(Pointer<Void>, Int32),
+            int Function(Pointer<Void>, int)
+          >(
+            'fs_capture_set_echo_cancellation',
+          )(captures.first, enabled ? 1 : 0);
+      pending = accepted == 1;
+      if (accepted == 0 && enabled)
+        throw StateError(
+          'Echo cancellation is unavailable for this audio route',
+        );
+    }
+    _echoCancellation = enabled;
+    _echoState['pending'] = pending;
+    levels?.call();
+  }
+
+  final _targets = <String>[];
   String lastError = '', _runtime = '', _model = '';
   DateTime lastAudioActivity = DateTime.now();
   int _epoch = 0, _transcriptCount = 0;
@@ -97,9 +136,11 @@ class Recording {
     bool playback = true,
     String microphoneTarget = 'auto',
     String playbackTarget = 'auto',
+    bool echoCancellation = false,
   }) {
     if (captures.isNotEmpty ||
         speeches.isNotEmpty ||
+        paused ||
         finishing ||
         _workers.isNotEmpty)
       throw StateError('A recording is already active');
@@ -110,6 +151,8 @@ class Recording {
       throw StateError('Speech runner is missing or not executable: $runtime');
     _runtime = runtime;
     _model = model;
+    _echoCancellation = echoCancellation;
+    _echoState.clear();
     _epoch++;
     _transcriptCount = 0;
     lastError = '';
@@ -123,27 +166,16 @@ class Recording {
     _lastVoice.clear();
     _voiced.clear();
     _nextSnapshot.clear();
+    _provisionalEpochs.clear();
     _queues.clear();
+    _targets
+      ..clear()
+      ..addAll([microphoneTarget, if (playback) playbackTarget]);
     try {
       final probe = _speech();
       _releaseSpeech(probe);
       for (var channel = 0; channel < (playback ? 2 : 1); channel++) {
-        final target = (channel == 0 ? microphoneTarget : playbackTarget)
-            .toNativeUtf8();
-        Pointer<Void> capture;
-        try {
-          capture = lib
-              .lookupFunction<
-                Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
-                Pointer<Void> Function(Pointer<Utf8>, int, int)
-              >('fs_capture_start')(target, channel, 48000);
-        } finally {
-          calloc.free(target);
-        }
-        if (capture == nullptr)
-          throw StateError(
-            'Audio capture unavailable; check device and microphone/system-audio permissions.',
-          );
+        final capture = _startCapture(channel);
         captures.add(capture);
         sampleCounts.add(0);
         peakVolumes.add(0);
@@ -154,6 +186,7 @@ class Recording {
         _lastVoice.add(0);
         _voiced.add(false);
         _nextSnapshot.add(48000 * 5);
+        _provisionalEpochs.add(0);
         _queues.add([]);
       }
       state('Listening · live transcription');
@@ -162,6 +195,99 @@ class Recording {
       dispose();
       rethrow;
     }
+  }
+
+  Pointer<Void> _startCapture(int channel) {
+    final target = _targets[channel].toNativeUtf8();
+    try {
+      if (channel == 0 &&
+          _echoCancellation &&
+          !lib.providesSymbol('fs_capture_start_with_options'))
+        throw StateError(
+          'Echo cancellation requires an updated native audio runtime',
+        );
+      final capture = channel == 0 && _echoCancellation
+          ? lib.lookupFunction<
+              Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Int32),
+              Pointer<Void> Function(Pointer<Utf8>, int, int, int)
+            >('fs_capture_start_with_options')(target, channel, 48000, 1)
+          : lib.lookupFunction<
+              Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
+              Pointer<Void> Function(Pointer<Utf8>, int, int)
+            >('fs_capture_start')(target, channel, 48000);
+      if (capture == nullptr) {
+        throw StateError(
+          'Audio capture unavailable; check device and microphone/system-audio permissions.',
+        );
+      }
+      return capture;
+    } finally {
+      calloc.free(target);
+    }
+  }
+
+  /// Stop acquisition, retain and finalize pre-pause PCM, and release devices.
+  /// Speech workers may finish their existing segments while capture is paused.
+  void pause() {
+    if (finishing) throw StateError('Transcription is finalizing');
+    if (paused) return;
+    if (captures.isEmpty) throw StateError('No active recording');
+    timer?.cancel();
+    _finishCapture();
+    for (var channel = 0; channel < _buffers.length; channel++) {
+      _flush(channel);
+      currentVolumes[channel] = 0;
+      _provisionalEpochs[channel]++;
+      provisional?.call('', 0, 0, channel == 0 ? 'microphone' : 'playback');
+    }
+    paused = true;
+    state('Transcription paused');
+    levels?.call();
+  }
+
+  void resume() {
+    if (finishing) throw StateError('Transcription is finalizing');
+    if (!paused) throw StateError('Recording is not paused');
+    _echoState
+      ..clear()
+      ..['active'] = false
+      ..['pending'] = _echoCancellation;
+    try {
+      for (var channel = 0; channel < _targets.length; channel++) {
+        captures.add(_startCapture(channel));
+      }
+    } catch (_) {
+      for (final capture in captures) {
+        lib.lookupFunction<
+          Void Function(Pointer<Void>),
+          void Function(Pointer<Void>)
+        >('fs_capture_stop')(capture);
+      }
+      captures.clear();
+      state('Resume failed; transcription remains paused');
+      rethrow;
+    }
+    paused = false;
+    lastAudioActivity = DateTime.now();
+    state('Listening · live transcription');
+    timer = Timer.periodic(const Duration(milliseconds: 20), (_) => drain());
+  }
+
+  void _finishCapture() {
+    for (final capture in captures) {
+      lib.lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_finish')(capture);
+    }
+    drain(flushAll: true);
+    for (final capture in captures) {
+      lib.lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_stop')(capture);
+    }
+    captures.clear();
   }
 
   void drain({bool flushAll = false}) {
@@ -176,8 +302,31 @@ class Recording {
         ) {
           final event = poll(captures[channel]);
           if (event == null) break;
+          if (event['type'] == 'echo_cancellation' && channel == 0) {
+            _echoState
+              ..clear()
+              ..addAll(event)
+              ..['pending'] = false;
+            if ((event['fallback_status'] != null &&
+                    event['fallback_status'] != 0) ||
+                (event['fallback_reason'] as String?)?.isNotEmpty == true) {
+              state(
+                'Echo cancellation unavailable; continuing with standard microphone capture.',
+              );
+            } else if (event['restart_required'] == true) {
+              state('Restart recording to enable echo cancellation.');
+            }
+            levels?.call();
+            continue;
+          }
           if (event['type'] == 'gap') {
             _flush(channel);
+            _captureInterrupted(
+              channel,
+              reconnecting: true,
+              processingInterrupted:
+                  event['reason'] != 'capture_buffer_overflow',
+            );
             final gap = {
               ...event,
               'source': channel == 0 ? 'microphone' : 'playback',
@@ -190,6 +339,12 @@ class Recording {
             continue;
           }
           if (event['type'] == 'error' || event['type'] == 'state') {
+            if (event['type'] == 'error' ||
+                event['state'] == 'failed' ||
+                event['state'] == 'stopped') {
+              _flush(channel);
+              _captureInterrupted(channel, reconnecting: false);
+            }
             if (event['type'] == 'error' || event['state'] == 'failed') {
               final source = channel == 0 ? 'Microphone' : 'Playback';
               lastError =
@@ -240,6 +395,7 @@ class Recording {
                   rate,
                   _buffers[channel].toBytes(),
                   true,
+                  _provisionalEpochs[channel],
                 ),
               );
             }
@@ -254,6 +410,23 @@ class Recording {
     } finally {
       polling = false;
     }
+  }
+
+  void _captureInterrupted(
+    int channel, {
+    required bool reconnecting,
+    bool processingInterrupted = true,
+  }) {
+    currentVolumes[channel] = 0;
+    _provisionalEpochs[channel]++;
+    provisional?.call('', 0, 0, channel == 0 ? 'microphone' : 'playback');
+    if (channel == 0 && processingInterrupted) {
+      // A live handle can outlast its audio engine during recovery or failure.
+      // Only a fresh native processing event can establish active AEC again.
+      _echoState['active'] = false;
+      _echoState['pending'] = reconnecting && _echoCancellation;
+    }
+    levels?.call();
   }
 
   void _flush(int channel) {
@@ -349,7 +522,10 @@ class Recording {
                   (segment.pcm.length ~/ 2) * 1000 ~/ segment.sampleRate;
               final source = channel == 0 ? 'microphone' : 'playback';
               if (segment.provisional) {
-                provisional?.call(text, start, end, source);
+                if (!paused &&
+                    segment.provisionalEpoch == _provisionalEpochs[channel]) {
+                  provisional?.call(text, start, end, source);
+                }
               } else {
                 _transcriptCount++;
                 transcript(text, start, end, source);
@@ -383,20 +559,7 @@ class Recording {
     timer?.cancel();
     // Stop callbacks first while retaining queued PCM, then consume the tail.
     // Destroying handles before this drain loses the last captured audio.
-    for (final capture in captures) {
-      lib.lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_finish')(capture);
-    }
-    drain(flushAll: true);
-    for (final capture in captures) {
-      lib.lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_stop')(capture);
-    }
-    captures.clear();
+    _finishCapture();
     for (var channel = 0; channel < _buffers.length; channel++) {
       _flush(channel);
     }
@@ -421,6 +584,7 @@ class Recording {
 
   void dispose() {
     _epoch++;
+    paused = false;
     timer?.cancel();
     for (final capture in captures) {
       lib.lookupFunction<

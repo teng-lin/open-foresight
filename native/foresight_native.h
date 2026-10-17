@@ -33,6 +33,18 @@ int fs_generate_json(void *conversation, const char *request_id,
 int fs_generate_options(void *conversation, const char *request_id,
                         const char *prompt, const char *json_schema, int max_output_tokens);
 int fs_generation_cancel(void *conversation);
+// Tool-enabled LiteRT conversation. Tool request/answer frames are polled as
+// events. Replies are scoped to the active request and accepted once per batch.
+// tools_json is {"tools":[...],"system_message":"..."}; a legacy array uses
+// the runner's default system message. prompt is always user content.
+// delegate_tool_detection=true emits model_response events. Reply with
+// {"message":<user message>} to continue or {"finish":true} to accept the answer.
+// An object with an empty tools array supports a plain local conversation.
+int fs_generate_tools(void *conversation, const char *request_id,
+                      const char *prompt, const char *tools_json,
+                      int max_output_tokens);
+int fs_generation_tool_reply(void *conversation, const char *request_id,
+                             const char *message_json);
 int fs_conversation_destroy(void *conversation, int cancel_and_drain);
 void *fs_speech_create(const char *runtime_executable, const char *model_path);
 int fs_speech_push(void *speech, const int16_t *samples, size_t count,
@@ -46,6 +58,11 @@ void fs_speech_destroy(void *speech);
  * sizes/even samples. Legacy channel map fields stay distinct; state/error
  * events use linux channel. */
 void *fs_capture_start(const char *target, int playback, int sample_rate);
+void *fs_capture_start_with_options(const char *target, int playback, int sample_rate, int echo_cancellation);
+// Returns 1 if the native microphone route can accept the setting. Enabling on
+// an existing standard engine takes effect on its next start; a processed engine
+// changes bypass in place. Unsupported routes return 0 without changing capture.
+int fs_capture_set_echo_cancellation(void *capture, int enabled);
 /* Stops callbacks and flushes final PCM events, retaining handle for polling.
  * Call fs_capture_stop after draining to release the handle. */
 void fs_capture_finish(void *capture);

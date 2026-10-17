@@ -1,3 +1,5 @@
-# Optional explicit Gemma 4 CPU/GPU runner. Install in a dedicated environment.
+# Explicit Gemma 4 runner and reconstructed dedicated query worker.
+# Install in a dedicated Python >=3.12 environment.
 litert-lm==0.18.0
 sentencepiece==0.2.1
+numpy==2.5.1

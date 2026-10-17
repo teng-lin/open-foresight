@@ -1,8 +1,9 @@
 # Native inference
 
 `foresight-model` is a C++ worker shared by the retrieval helper and native
-generation adapter. Distributed applications contain no Python interpreter,
-Python scripts, or Python inference packages. Python remains a build/test tool.
+generation adapter. Linux distributions contain no Python interpreter, scripts,
+or inference packages. macOS currently uses the pinned
+[compatibility runtime](macos/README.md).
 
 - LiteRT-LM 0.18.0 uses Google's public C API for Gemma generation and
   EmbeddingGemma 2. Engine configuration, streaming, structured JSON, bounded
@@ -96,3 +97,68 @@ library paths into native subprocess launches. macOS helper launch continues to
 use the owned supervisor and close-on-exec safeguards from the application core.
 The preparation and packaging scripts remain Linux x86_64 tools; this does not
 establish a packaged or real-model macOS release.
+
+## Conversation context admission
+
+Chat/tool conversations reject input estimated above 4096 generation-model
+tokens without reserving the full output allowance plus 256 tokens in advance.
+The native engine context and output cap still apply. The helper tokenizer and
+generation tokenizer serve different models. The separate grounded-generation
+path retains its input/output reserve check. Exact original native accounting
+remains unverified. See [tokenizer evidence](../../docs/reference-tokenizer.md).
+
+Experimental `--query-detector` mode uses a raw session with no chat template,
+system instruction, tools or schema. Its fixed 512-token setting and single
+candidate sampling follow the recovered detector options. CPU is currently a
+port testing choice; dedicated-asset compatibility and production integration
+remain unverified. See [runtime evidence](../../docs/reference-query-runtime.md).
+
+## Persistent tool worker
+
+Both generation runners advertise `{"worker_protocol":1}` from `--probe` and
+accept `--serve --model MODEL`. They retain one engine until `shutdown` or input
+EOF. The first protocol line is `ready 1`. Request IDs are positive monotonically
+increasing integers, with one request active at a time:
+
+```text
+generate N {"prompt":"...","tools":{"tools":[],"system_message":"","delegate_tool_detection":true},"max_output_tokens":256}
+reply N {"finish":true}
+cancel N
+shutdown
+```
+
+Responses are `N delta|model|tool|answer <JSON>`, optionally
+`N error <JSON string>`, followed by `N done completed|cancelled|failed`.
+`model` remains the complete authoritative response used for delegated tool
+parsing; `delta` carries unparsed structured partial model text. `reply` keeps
+its existing delegated control or user-message payload. The sole input reader
+routes replies by ID and cancels native generation while the request thread
+waits for a stream or a tool result. Stale controls cannot reach another request.
+Terminal `done` is emitted after closing the request conversation. EOF and
+shutdown cancel the active request and release the retained base and engine.
+
+The retained base follows the original empty-history clone path recovered at
+`0x10091ee60` and `0x10091f3c4`; send closes its working clone at `0x10090b59c`.
+A matching tool/system/output configuration reuses one untouched base by calling
+`litert_lm_conversation_clone`. Requests with replayed history create a fresh
+conversation. Plain empty-tool summaries also create a fresh conversation and
+preserve the existing chat base. Generated turns and retrieved prompt context
+are never promoted into that base.
+
+LiteRT-LM 0.18 creates this configured base lazily: real probes observed zero
+prefilled tokens until a message is sent. Retaining the engine and reproducing
+base cloning therefore does not establish an initial-prefix KV speedup. A
+separate already-prefilled fixture confirmed that the native clone API copies
+KV state and isolates canceled/generated clones. No synthetic warmup message is
+sent. The Mac runner explicitly binds the clone function's pointer return type,
+which the pinned Python FFI omits.
+
+Validation includes routed-reply/cancellation/disconnect fixtures in
+`tests/inference/tool_conversation.cpp`, base replacement/history/summary and
+native cancellation fixtures in `tests/inference/test_tool_runner.py`, and an
+ignored real GPU report at
+`test-results/reference-functions/streaming/persistent-worker-report.json`.
+The real report used one worker for two isolated requests, canceled a third
+request during streaming, and successfully generated a fourth before shutdown.
+The C++ translation unit and protocol fixtures are checked on the Mac host;
+full Linux model execution requires its own platform acceptance run.

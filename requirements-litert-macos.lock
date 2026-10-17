@@ -5,6 +5,7 @@ flatbuffers==25.12.19
 litert-lm==0.18.0
 litert-lm-api==0.18.0
 litert-lm-builder==0.18.0
+numpy==2.5.1
 prompt-toolkit==3.0.53
 protobuf==7.36.2
 questionary==2.1.1

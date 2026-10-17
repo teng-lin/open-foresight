@@ -8,8 +8,13 @@ import re
 import shutil
 import subprocess
 from prepare_litert import LIBRARY_SHA256
+from litert_extensions import (verify_extensions_manifest, file_sha256,
+    probe_native_extensions, write_extension_provenance,
+    copy_linux_extension_dependencies, validate_linux_extension_dependencies)
 from prepare_onnx import LIBRARY_SHA256 as ONNX_LIBRARY_SHA256
 from app_version import read_version
+from query_worker_packaging import copy_worker as copy_query_worker, copy_runtime as copy_query_runtime
+from web_search_release import release_web_search_keys, shell_web_search_keys
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,13 +27,18 @@ def main():
     parser.add_argument('--google-client', type=Path, help='Optional application OAuth configuration; never account tokens')
     parser.add_argument('--revision', help='Source commit for exported trees without .git')
     parser.add_argument('--litert-library', type=Path, default=ROOT / 'build/lib/liblitert-lm.so', help='Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py')
+    parser.add_argument('--litert-extensions-manifest', type=Path,
+                        help='Explicit source-built runtime manifest; --litert-library must select its verified library')
     parser.add_argument('--onnx-library', type=Path, default=ROOT / 'build/lib/libonnxruntime.so', help='Pinned ONNX Runtime from tools/prepare_onnx.py')
+    parser.add_argument('--query-python-runtime', type=Path,
+                        help='Optional standalone Python >=3.12 prefix with NumPy2.5.1/SentencePiece0.2.1 for the dedicated CPU detector')
     parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
     parser.add_argument('--whisper-gpu-runtime', type=Path,
                         help='Statically linked Vulkan whisper-cli to bundle (host Vulkan loader required)')
     parser.add_argument('--whisper-gpu-device', type=int, default=0,
                         help='Whisper Vulkan device index; override at launch with FORESIGHT_WHISPER_DEVICE')
     args = parser.parse_args()
+    web_search_keys = release_web_search_keys()
     assert args.whisper_gpu_device >= 0
     helper = args.build / 'services/helper/ForesightHelper'
     native = args.build / 'native/libforesight_native.so'
@@ -39,11 +49,18 @@ def main():
     assert not args.output.exists(), 'Choose an empty output directory to avoid stale packaged libraries'
     worker = args.build / 'services/inference/foresight-model'
     assert worker.is_file() and args.litert_library.is_file() and args.onnx_library.is_file(), 'Build native inference and prepare LiteRT-LM/ONNX Runtime first'
-    assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
+    extensions = None
+    if args.litert_extensions_manifest:
+        extensions = verify_extensions_manifest(args.litert_extensions_manifest, platform_name='linux')
+        if file_sha256(args.litert_library) != extensions.manifest['library_sha256']:
+            raise ValueError('--litert-library does not match the verified extension artifact')
+    else:
+        assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
     assert hashlib.sha256(args.onnx_library.read_bytes()).hexdigest() == ONNX_LIBRARY_SHA256, 'ONNX Runtime checksum mismatch'
     # Refuse a Python extension or an incompatible/missing public C runtime.
     environment = dict(__import__('os').environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve()))
-    subprocess.run([str(worker), '--check'], env=environment, check=True)
+    if extensions is None:
+        subprocess.run([str(worker), '--check'], env=environment, check=True)
     shutil.copytree(args.flutter_bundle, args.output / 'app')
     (args.output / 'bin').mkdir()
     (args.output / 'lib').mkdir()
@@ -60,16 +77,33 @@ def main():
                          args.output / 'share/open-foresight' / ('whisper-' + name))
     shutil.copy2(worker, args.output / 'bin/foresight-model')
     shutil.copy2(args.litert_library, args.output / 'lib/liblitert-lm.so')
+    if extensions is not None:
+        extension_libraries = copy_linux_extension_dependencies(extensions, args.output / 'lib')
+        environment = validate_linux_extension_dependencies(extension_libraries, args.output / 'lib')
+        environment['FORESIGHT_LITERT_LIBRARY'] = str((args.output / 'lib/liblitert-lm.so').resolve())
+        probe_native_extensions(args.output / 'lib/liblitert-lm.so')
+        subprocess.run([str(worker), '--check'], env=environment, check=True)
     shutil.copy2(args.onnx_library, args.output / 'lib/libonnxruntime.so')
     for license_file in ('LICENSE', 'ThirdPartyNotices.txt'):
         shutil.copy2(ROOT / 'third_party/onnxruntime' / license_file, args.output / 'share/open-foresight' / ('onnxruntime-' + license_file))
     shutil.copy2(ROOT / 'third_party/litert_lm/LICENSE', args.output / 'share/open-foresight/LiteRT-LM-LICENSE')
+    if extensions is not None:
+        write_extension_provenance(extensions, args.output / 'share/open-foresight/LiteRT-LM-extension.json')
     for dependency in ('sentencepiece', 'flatbuffers'):
         shutil.copy2(args.build / '_deps' / (dependency + '-src') / 'LICENSE',
                      args.output / 'share/open-foresight' / (dependency + '-LICENSE'))
     for component in ('protobuf-lite', 'esaxx', 'darts_clone', 'absl'):
         shutil.copy2(args.build / '_deps/sentencepiece-src/third_party' / component / 'LICENSE',
                      args.output / 'share/open-foresight' / ('sentencepiece-' + component + '-LICENSE'))
+    copy_query_worker(args.output / 'share/open-foresight/adapters')
+    if args.query_python_runtime:
+        copy_query_runtime(args.query_python_runtime, args.output / 'lib/query-python',
+                           args.output / 'share/open-foresight/licenses')
+        query_python = args.output / 'bin/query-python'
+        query_python.write_text('#!/bin/bash\nset -euo pipefail\n'
+            'task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)\n'
+            'exec "$task_bundle/lib/query-python/bin/python3" -I -B "$@"\n')
+        query_python.chmod(0o755)
     litert_runtime = {'kind': 'native', 'version': '0.18.0', 'runner': 'bin/foresight-model',
                       'library': 'lib/liblitert-lm.so', 'sha256': hashlib.sha256(args.litert_library.read_bytes()).hexdigest()}
     client = args.google_client
@@ -83,7 +117,7 @@ def main():
         (args.output / 'share/open-foresight/google-client.json').chmod(0o600)
     # Bundle helper inference/protocol dependencies, keep the Linux C ABI and desktop
     # GTK stack as explicit host prerequisites. ldd is run only on our built binaries.
-    dependencies = subprocess.check_output(['ldd', str(helper), str(native), str(worker), str(args.litert_library), str(args.onnx_library)], text=True)
+    dependencies = subprocess.check_output(['ldd', str(helper), str(native), str(worker), str(args.litert_library), str(args.onnx_library)], text=True, env=environment)
     assert 'not found' not in dependencies, dependencies
     bundled = []
     for name, path in re.findall(r'\s*(\S+) => (/\S+)', dependencies):
@@ -100,8 +134,10 @@ def main():
     launcher = args.output / 'open-foresight'
     launcher.write_text('''#!/usr/bin/env bash
 set -euo pipefail
+@WEB_SEARCH_RELEASE_ENV@
 task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export LD_LIBRARY_PATH="$task_bundle/lib:$task_bundle/app/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export FORESIGHT_INSTALL_ROOT="$task_bundle"
 export FORESIGHT_SERVICE="$task_bundle/bin/foresight-service"
 export FORESIGHT_HELPER="$task_bundle/bin/ForesightHelper"
 export FORESIGHT_NATIVE="$task_bundle/lib/libforesight_native.so"
@@ -110,6 +146,10 @@ export FORESIGHT_LITERT_LIBRARY="$task_bundle/lib/liblitert-lm.so"
 export FORESIGHT_ONNX_LIBRARY="$task_bundle/lib/libonnxruntime.so"
 export FORESIGHT_LITERT_RUNNER="$task_bundle/bin/foresight-model"
 export FORESIGHT_LITERT_BACKEND="${FORESIGHT_LITERT_BACKEND:-@GENERATION_BACKEND@}"
+export FORESIGHT_QUERY_WORKER="$task_bundle/share/open-foresight/adapters/legacy_query_worker.py"
+if [[ -x "$task_bundle/bin/query-python" ]]; then
+  export FORESIGHT_LITERT_PYTHON="$task_bundle/bin/query-python"
+fi
 if [[ -x "$task_bundle/bin/whisper-cli-vulkan" ]]; then
   export FORESIGHT_WHISPER_RUNTIME="${FORESIGHT_WHISPER_RUNTIME:-$task_bundle/bin/whisper-cli-vulkan}"
   export FORESIGHT_WHISPER_BACKEND="${FORESIGHT_WHISPER_BACKEND:-gpu}"
@@ -135,7 +175,8 @@ case "${FORESIGHT_ENTRYPOINT:-desktop}" in
   service) exec "$task_bundle/bin/foresight-service" "$@" ;;
   *) echo "Unknown Open Foresight entrypoint" >&2; exit 2 ;;
 esac
-'''.replace('@GENERATION_BACKEND@', args.generation_backend)
+'''.replace('@WEB_SEARCH_RELEASE_ENV@', shell_web_search_keys(web_search_keys))
+   .replace('@GENERATION_BACKEND@', args.generation_backend)
    .replace('@WHISPER_DEVICE@', str(args.whisper_gpu_device)))
     launcher.chmod(0o755)
     for entry in ('mcp', 'service'):
@@ -152,6 +193,10 @@ esac
     manifest = {'build_id': f'open-foresight-{version}+{commit[:12]}', 'revision': commit,
                 'version': version, 'build_number': build_number,
                 'gemma_runtime': litert_runtime,
+                'query_detector_runtime': {'backend': 'legacy_query_cpu',
+                    'bundled': bool(args.query_python_runtime),
+                    'worker': 'share/open-foresight/adapters/legacy_query_worker.py',
+                    'python': 'bin/query-python' if args.query_python_runtime else None},
                 'embedding_compatibility_runtime': {'kind': 'native-onnx', 'version': '1.31.0', 'sha256': ONNX_LIBRARY_SHA256},
                 'generation_backend_default': args.generation_backend,
                 'whisper_runtime': 'vulkan' if args.whisper_gpu_runtime else 'registered',

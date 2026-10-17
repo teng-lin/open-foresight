@@ -4,6 +4,8 @@ import 'dart:ffi';
 import 'platform_services.dart';
 import 'dart:isolate';
 import 'package:ffi/ffi.dart';
+import 'reference_tools.dart';
+import 'reference_tool_parser.dart';
 
 /// Packaged installations always use their bundled native worker, including
 /// profiles that still contain the former Python runner path.
@@ -87,6 +89,7 @@ class _GenerationRequest {
   final Pointer<Void> handle;
   final int epoch;
   bool released = false;
+  bool cancelled = false;
   _GenerationRequest(this.id, this.handle, this.epoch);
 }
 
@@ -179,17 +182,92 @@ class NativeRuntime {
     Map<String, dynamic>? responseSchema,
     Duration timeout = const Duration(minutes: 5),
     int maxOutputTokens = 256,
+  }) => _generate(
+    id,
+    prompt,
+    systemPrompt: systemPrompt,
+    responseSchema: responseSchema,
+    timeout: timeout,
+    maxOutputTokens: maxOutputTokens,
+  );
+
+  Stream<Map<String, dynamic>> generateWithTools(
+    String id,
+    String prompt, {
+    required List<Map<String, dynamic>> tools,
+    required ReferenceToolDispatcher dispatcher,
+    List<Map<String, dynamic>> messages = const [],
+    String systemPrompt =
+        'Follow the requested task faithfully. Do not invent facts.',
+    Duration timeout = const Duration(minutes: 5),
+    int maxOutputTokens = 256,
+  }) => _generate(
+    id,
+    prompt,
+    tools: tools,
+    toolDispatcher: dispatcher,
+    initialMessages: messages,
+    systemPrompt: systemPrompt,
+    timeout: timeout,
+    maxOutputTokens: maxOutputTokens,
+  );
+
+  /// A fresh local conversation without tools or an implicit system preface.
+  /// A null output limit preserves the native default. The original serialized
+  /// input setting is passed through without inventing a local token limit.
+  Stream<Map<String, dynamic>> generateConversation(
+    String id,
+    String prompt, {
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
+    Duration timeout = const Duration(minutes: 5),
+  }) => _generate(
+    id,
+    prompt,
+    tools: const [],
+    toolDispatcher: ReferenceToolDispatcher({}),
+    plainConversation: true,
+    stopTokenIds: stopTokenIds,
+    maxInputTokens: maxInputTokens,
+    systemPrompt: '',
+    maxOutputTokens: maxOutputTokens,
+    timeout: timeout,
+  );
+
+  Stream<Map<String, dynamic>> _generate(
+    String id,
+    String prompt, {
+    String systemPrompt =
+        'Follow the requested task faithfully. Do not invent facts.',
+    Map<String, dynamic>? responseSchema,
+    List<Map<String, dynamic>>? tools,
+    ReferenceToolDispatcher? toolDispatcher,
+    List<Map<String, dynamic>> initialMessages = const [],
+    bool plainConversation = false,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
+    Duration timeout = const Duration(minutes: 5),
+    int? maxOutputTokens = 256,
   }) async* {
     if (engine == nullptr || conversation == nullptr) {
       throw StateError('Generation model unavailable');
     }
     if (_active != null) throw StateError('Generation already in progress');
+    if ((tools == null) != (toolDispatcher == null) ||
+        (tools != null &&
+            ((!plainConversation && tools.isEmpty) ||
+                responseSchema != null))) {
+      throw ArgumentError('Tools require a dispatcher and no response schema');
+    }
     if (id.isEmpty ||
         timeout <= Duration.zero ||
-        maxOutputTokens < 1 ||
-        maxOutputTokens > 3072) {
+        (maxOutputTokens == null
+            ? !plainConversation
+            : maxOutputTokens < 1 || maxOutputTokens > 3072)) {
       throw ArgumentError('A request ID and positive timeout are required');
     }
+    final outputBudget = maxOutputTokens ?? 0;
     // Each request owns a conversation. Destroy joins the native worker, so
     // the done-event/active-flag race cannot leak into the next generation.
     final handle = lib
@@ -202,20 +280,33 @@ class NativeRuntime {
     _active = owner;
     final clock = Stopwatch()..start();
     try {
-      if (template == 'chatml') {
-        prompt =
-            '<|im_start|>system\n$systemPrompt<|im_end|>\n'
-            '<|im_start|>user\n$prompt<|im_end|>\n<|im_start|>assistant\n';
-      } else {
-        prompt = '$systemPrompt\n\n$prompt';
+      // Tool conversations carry a distinct native system message below.
+      if (tools == null) {
+        if (template == 'chatml') {
+          prompt =
+              '<|im_start|>system\n$systemPrompt<|im_end|>\n'
+              '<|im_start|>user\n$prompt<|im_end|>\n<|im_start|>assistant\n';
+        } else {
+          prompt = '$systemPrompt\n\n$prompt';
+        }
       }
       final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
-      final schema = responseSchema == null
+      final schema = tools != null
+          ? jsonEncode({
+              'tools': tools,
+              'system_message': systemPrompt,
+              'delegate_tool_detection': true,
+              'messages': initialMessages,
+              if (stopTokenIds.isNotEmpty) 'stop_token_ids': stopTokenIds,
+              if (maxOutputTokens == null) 'use_default_output_limit': true,
+              if (maxInputTokens != null) 'max_input_tokens': maxInputTokens,
+            }).toNativeUtf8()
+          : responseSchema == null
           ? nullptr.cast<Utf8>()
           : jsonEncode(responseSchema).toNativeUtf8();
       late int rc;
       try {
-        if (maxOutputTokens != 256) {
+        if (tools != null) {
           rc = lib
               .lookupFunction<
                 Int32 Function(
@@ -232,7 +323,25 @@ class NativeRuntime {
                   Pointer<Utf8>,
                   int,
                 )
-              >('fs_generate_options')(handle, a, b, schema, maxOutputTokens);
+              >('fs_generate_tools')(handle, a, b, schema, outputBudget);
+        } else if (maxOutputTokens != 256) {
+          rc = lib
+              .lookupFunction<
+                Int32 Function(
+                  Pointer<Void>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  Int32,
+                ),
+                int Function(
+                  Pointer<Void>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  Pointer<Utf8>,
+                  int,
+                )
+              >('fs_generate_options')(handle, a, b, schema, outputBudget);
         } else if (responseSchema != null) {
           rc = lib
               .lookupFunction<
@@ -272,6 +381,8 @@ class NativeRuntime {
             Void Function(Pointer<Utf8>),
             void Function(Pointer<Utf8>)
           >('fs_string_free');
+      var modelTurns = 0;
+      var streamedText = '';
       while (true) {
         // close/load may have destroyed this handle while awaiting the timer
         // or while a consumer was processing a yielded event.
@@ -294,6 +405,119 @@ class NativeRuntime {
         }
         if (event['request_id'] != id) {
           throw StateError('Native generation returned a different request ID');
+        }
+        if (event['type'] == 'model_delta') {
+          final chunk = jsonDecode(event['text'] as String);
+          if (chunk is! Map<String, dynamic>) {
+            throw FormatException('Invalid streamed model response');
+          }
+          final content = chunk['content'];
+          final String text;
+          if (content is String) {
+            text = content;
+          } else if (content is List) {
+            text = content
+                .where((part) => part is Map && part['type'] == 'text')
+                .map((part) => part['text'] as String)
+                .join();
+          } else {
+            text = '';
+          }
+          if (text.isNotEmpty) {
+            streamedText += text;
+            yield {...event, 'type': 'preview', 'text': streamedText};
+          }
+          continue;
+        }
+        if (event['type'] == 'tool_request' ||
+            event['type'] == 'model_response') {
+          if (toolDispatcher == null)
+            throw StateError('Unexpected tool request');
+          final delegated = event['type'] == 'model_response';
+          final payload = jsonDecode(event['text'] as String);
+          final calls = delegated
+              ? plainConversation
+                    ? null
+                    : extractReferenceToolCalls(payload as Map<String, dynamic>)
+              : payload as List<dynamic>;
+          streamedText = '';
+          if (delegated) modelTurns++;
+          late Map<String, dynamic> message;
+          if (delegated && (calls == null || calls.isEmpty)) {
+            message = {'finish': true};
+          } else if (delegated && modelTurns >= 20) {
+            message = {
+              'finish': true,
+              'error': 'Max turns reached after tool call detection',
+            };
+          } else {
+            final interrupted = Completer<Map<String, dynamic>>();
+            final monitor = Timer.periodic(const Duration(milliseconds: 20), (
+              _,
+            ) {
+              if (interrupted.isCompleted) return;
+              if (owner.released || owner.epoch != _epoch || owner.cancelled) {
+                interrupted.completeError(
+                  StateError('Tool request is no longer current'),
+                );
+              } else if (clock.elapsed >= timeout) {
+                interrupted.completeError(
+                  TimeoutException('Native generation timed out', timeout),
+                );
+              }
+            });
+            try {
+              final reply = await Future.any([
+                toolDispatcher.handle(calls!, maxTokens: 4096),
+                interrupted.future,
+              ]);
+              message = delegated ? {'message': reply} : reply;
+            } finally {
+              monitor.cancel();
+            }
+          }
+          if (owner.released || owner.epoch != _epoch || owner.cancelled) {
+            throw StateError('Tool request is no longer current');
+          }
+          if (clock.elapsed >= timeout)
+            throw TimeoutException('Native generation timed out', timeout);
+          final request = id.toNativeUtf8();
+          final reply = jsonEncode(message).toNativeUtf8();
+          try {
+            final result = lib
+                .lookupFunction<
+                  Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
+                  int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+                >('fs_generation_tool_reply')(handle, request, reply);
+            if (result != 0)
+              throw StateError(
+                'Tool request was cancelled or already answered',
+              );
+          } finally {
+            calloc.free(request);
+            calloc.free(reply);
+          }
+          continue;
+        }
+        if (event['type'] == 'tool_answer') {
+          final response =
+              jsonDecode(event['text'] as String) as Map<String, dynamic>;
+          if (response['error'] != null)
+            throw StateError(response['error'].toString());
+          final content = response['content'];
+          final String text;
+          if (content is String) {
+            text = content;
+          } else if (content is List) {
+            text = content
+                .where((part) => part is Map && part['type'] == 'text')
+                .map((part) => part['text'] as String)
+                .join();
+          } else {
+            throw FormatException('Invalid tool answer content');
+          }
+          yield {...event, 'type': 'delta', 'text': text, 'response': response};
+          continue;
         }
         yield event;
         if (event['type'] == 'done') break;
@@ -320,6 +544,7 @@ class NativeRuntime {
         owner.released ||
         (requestId != null && owner.id != requestId))
       return false;
+    owner.cancelled = true;
     lib.lookupFunction<
       Int32 Function(Pointer<Void>),
       int Function(Pointer<Void>)

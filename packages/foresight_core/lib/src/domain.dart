@@ -10,13 +10,43 @@ import 'native.dart';
 import 'answer_contract.dart';
 import 'answer_retrieval.dart';
 import 'answer_prompt.dart';
+import 'web_search.dart';
+import 'web_content.dart';
+import 'reference_tools.dart';
+import 'chat_sources.dart';
+import 'reference_chat_prompt.dart';
+import 'reference_chat_history.dart';
+import 'reference_chat_response.dart';
+import 'reference_tokenizer.dart';
 import 'generated/rag_service.pbgrpc.dart';
 
 class Domain {
   final Store store;
   final Helper helper;
   NativeRuntime? generator;
-  Domain(this.store, this.helper);
+  Domain(this.store, this.helper, {SearchCallbacks? webSearch})
+    : _webSearch = webSearch;
+  SearchCallbacks? _webSearch;
+  WebContentService? _ownedWebContent;
+  bool get webSearchAvailable =>
+      _webSearch != null ||
+      ((runtimeConfiguration['FORESIGHT_SEARCH_API_KEY'] ?? '').isNotEmpty &&
+          (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ?? '')
+              .isNotEmpty);
+
+  SearchCallbacks _searchCallbacks() {
+    if (!webSearchAvailable)
+      throw StateError('Web search is unavailable in this build.');
+    return _webSearch ??= SearchCallbacks(
+      search: SearchService(
+        apiKey: runtimeConfiguration['FORESIGHT_SEARCH_API_KEY']!,
+      ).search,
+      summarize: (_ownedWebContent ??= WebContentService(
+        apiKey: runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY']!,
+      )).summarizeSearchPage,
+    );
+  }
+
   late final Application application = Application(this);
   Future<Object?> command(
     String method, [
@@ -58,6 +88,7 @@ class Domain {
 
   void close() {
     _closed = true;
+    if (_ownedWebContent != null) unawaited(_ownedWebContent!.close());
     _wakeSourceWork();
   }
 
@@ -176,6 +207,69 @@ class Domain {
     }
   }
 
+  Future<void>? _noteServiceInitialization;
+
+  /// The note producer's lazy service getter shares an initialization future.
+  /// Readiness policy and the single reset/reacquisition live in its caller.
+  Future<NativeRuntime?> noteEnhancementService() async {
+    _checkOpen();
+    if (generator?.loaded == true) return generator;
+    final pending = _noteServiceInitialization;
+    if (pending != null) {
+      await pending;
+      _checkOpen();
+      if (generator?.loaded == true) return generator;
+      if (identical(_noteServiceInitialization, pending)) {
+        _noteServiceInitialization = null;
+      }
+    }
+    final work = _initializeNoteEnhancementService();
+    _noteServiceInitialization = work;
+    try {
+      await work;
+      _checkOpen();
+      return generator;
+    } finally {
+      if (generator?.loaded != true &&
+          identical(_noteServiceInitialization, work)) {
+        _noteServiceInitialization = null;
+      }
+    }
+  }
+
+  /// Separate construction allows fixture runtimes to exercise real ownership.
+  NativeRuntime createNoteEnhancementRuntime() =>
+      NativeRuntime(runtimeConfiguration.nativeLibrary);
+
+  Future<void> _initializeNoteEnhancementService() async {
+    final model = store.model('generation');
+    if (model == null) return;
+    final candidate = createNoteEnhancementRuntime();
+    generator?.close();
+    generator = candidate;
+    try {
+      await candidate.load(
+        model['runtime'] as String,
+        model['path'] as String,
+        backend: model['backend'] as String? ?? 'llama_cpp',
+      );
+      if (_closed || !identical(generator, candidate)) {
+        candidate.close();
+        _checkOpen();
+      }
+    } catch (_) {
+      if (_closed || !identical(generator, candidate)) candidate.close();
+      rethrow;
+    }
+  }
+
+  Future<void> resetNoteEnhancementService() async {
+    _checkOpen();
+    generator?.close();
+    generator = null;
+    _noteServiceInitialization = null;
+  }
+
   Future<void>? _resuming;
   Future<void>? _initialization;
   void initialize(Future<void> task) {
@@ -258,14 +352,133 @@ class Domain {
     String question,
     String conversation, {
     String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    useWeb: true,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> _askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+    bool useWeb = false,
   }) async* {
+    void ensureCurrent() {
+      _checkOpen();
+      if (current != null && !current()) throw StateError('Answer cancelled');
+    }
+
+    ensureCurrent();
+    if (useWeb && !webSearchAvailable) {
+      throw StateError('Web search is unavailable in this build.');
+    }
+    if (meetingId != null) {
+      if (store.rows('SELECT id FROM meetings WHERE id=?', [
+        meetingId,
+      ]).isEmpty) {
+        throw StateError('Meeting not found: $meetingId');
+      }
+      conversation = 'meeting:$meetingId';
+    }
+    void saveAnswer(
+      String question,
+      String body,
+      String status,
+      List<Map<String, Object?>> citations,
+      String model, {
+      required String conversation,
+      Map<String, dynamic>? modelResponse,
+      List<Map<String, dynamic>>? memoryMessages,
+      List<int>? memoryTokenCounts,
+      int? historyThroughAnswerId,
+    }) {
+      ensureCurrent();
+      store.db.execute('SAVEPOINT persist_conversation_answer');
+      try {
+        store.answer(
+          question,
+          body,
+          status,
+          citations,
+          model,
+          conversation: conversation,
+          requestId: requestId,
+          modelResponse: modelResponse,
+        );
+        // Capture before checkpoint writes can change lastInsertRowId.
+        final answerId = store.db.lastInsertRowId;
+        if (memoryMessages != null) {
+          // A completed turn may have arrived while this request was generating.
+          // Keep it between the replayed snapshot and this request's own pair.
+          final intervening = referenceChatHistory(
+            store.rows(
+              "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? AND id<? ORDER BY id",
+              [conversation, historyThroughAnswerId!, answerId],
+            ),
+          );
+          final committedMessages = [
+            ...memoryMessages.take(memoryMessages.length - 2),
+            ...intervening,
+            ...memoryMessages.skip(memoryMessages.length - 2),
+          ];
+          store.db.execute(
+            'INSERT INTO conversation_memory(conversation,through_answer_id,messages,token_counts) VALUES(?,?,?,?) '
+            'ON CONFLICT(conversation) DO UPDATE SET through_answer_id=excluded.through_answer_id,messages=excluded.messages,token_counts=excluded.token_counts',
+            [
+              conversation,
+              answerId,
+              jsonEncode(committedMessages),
+              jsonEncode([
+                ...memoryTokenCounts!.take(memoryTokenCounts.length - 2),
+                ...List<int?>.filled(intervening.length, null),
+                ...memoryTokenCounts.skip(memoryTokenCounts.length - 2),
+              ]),
+            ],
+          );
+        }
+        if (meetingId != null) {
+          store.db.execute(
+            'INSERT INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
+            [meetingId, answerId],
+          );
+        }
+        store.db.execute('RELEASE persist_conversation_answer');
+      } catch (_) {
+        store.db.execute('ROLLBACK TO persist_conversation_answer');
+        store.db.execute('RELEASE persist_conversation_answer');
+        rethrow;
+      }
+    }
+
     if (application.modelBusy) throw StateError('Model configuration is busy');
     final scope = store.sourceSummaries
         .where((s) => s['state'] == 'indexed')
         .toList();
-    if (scope.isEmpty) {
+    if (scope.isEmpty && !useWeb) {
       const text = 'Insufficient context: import and index a source first.';
-      store.answer(
+      saveAnswer(
         question,
         text,
         'insufficient_context',
@@ -292,16 +505,21 @@ class Domain {
         ? '$previousQuestion\nFollow-up question: $question'
         : question;
     final revisions = {for (final s in scope) s['id']: s['revision']};
-    final r = await helper.client.retrieveContext(
-      RetrieveRequest(
-        query: Query(textQuery: retrievalQuestion),
-        maxResults: 24,
-        minSimilarityScore: 0.0,
-        userId: 'local_user',
-        allowedDocumentIds: scope.map((s) => s['id'] as String),
-      ),
-    );
+    final r = scope.isEmpty
+        ? RetrieveResponse()
+        : await helper.client.retrieveContext(
+            RetrieveRequest(
+              query: Query(textQuery: retrievalQuestion),
+              maxResults: 24,
+              minSimilarityScore: 0.0,
+              userId: 'local_user',
+              allowedDocumentIds: scope.map((s) => s['id'] as String),
+            ),
+          );
     final citations = <Map<String, Object?>>[];
+    final chatSources = ReferenceChatSources();
+    final chatMetadata = <(String, String), Map<String, Object?>>{};
+    ensureCurrent();
     final context = StringBuffer();
     final passages = await retrieveAnswerPassages(
       store.path,
@@ -317,7 +535,7 @@ class Domain {
           )
           .toList(),
     );
-    _checkOpen();
+    ensureCurrent();
     final completeProcedure =
         passages.length == 1 && passages.single['complete_procedure'] == true;
     final completeExamples =
@@ -329,7 +547,11 @@ class Domain {
         (generator!.effectiveState['backend'] as String? ?? '').startsWith(
           'litert-lm-',
         );
-    var budget = authored || localGrounding ? 16000 : 6000;
+    var budget = useWeb
+        ? 6000
+        : authored || localGrounding
+        ? 16000
+        : 6000;
     for (final passage in passages) {
       final documentId = passage['document_id'] as String;
       final live = store.rows(
@@ -341,21 +563,29 @@ class Domain {
           live.first['revision'] != revisions[documentId] ||
           live.first['state'] != 'indexed')
         continue;
-      if (budget <= 0) break;
-      final text = boundUtf8(
-        passage['excerpt'] as String,
-        budget.clamp(
-          0,
-          authored
-              ? 16000
-              : localGrounding
-              ? 4000
-              : 1000,
-        ),
-      );
+      if (!useWeb && budget <= 0) break;
+      final text = useWeb
+          ? passage['excerpt'] as String
+          : boundUtf8(
+              passage['excerpt'] as String,
+              budget.clamp(
+                0,
+                !useWeb && authored
+                    ? 16000
+                    : !useWeb && localGrounding
+                    ? 4000
+                    : 1000,
+              ),
+            );
       budget -= utf8.encode(text).length;
-      final id = 'S${citations.length + 1}';
-      citations.add({
+      final sourceUri =
+          scope.firstWhere((s) => s['id'] == documentId)['uri'] as String? ??
+          documentId;
+      final pair = (passage['title'] as String, sourceUri);
+      final id = useWeb
+          ? 'Source:${chatSources.add(pair)}'
+          : 'S${citations.length + 1}';
+      final citation = <String, Object?>{
         'citation': id,
         'title': passage['title'],
         'document_id': documentId,
@@ -363,15 +593,17 @@ class Domain {
         'excerpt': text,
         'score': passage['score'],
         'rank_score': passage['rank_score'],
-      });
+      };
+      citations.add(citation);
+      if (useWeb) chatMetadata.putIfAbsent(pair, () => citation);
       context.writeln(
         '[$id] ${boundUtf8(passage['title'] as String, 160)}\n$text',
       );
     }
-    if (citations.isEmpty) {
+    if (citations.isEmpty && !useWeb) {
       const text =
           'Insufficient context: no current source excerpts were retrieved.';
-      store.answer(
+      saveAnswer(
         question,
         text,
         'insufficient_context',
@@ -382,7 +614,7 @@ class Domain {
       yield text;
       return;
     }
-    if (authored) {
+    if (authored && !useWeb) {
       // If a source changed during retrieval, never claim the requested count.
       if (citations.length != passages.length) {
         throw StateError('Source changed during retrieval; please retry.');
@@ -398,7 +630,7 @@ class Domain {
         jsonEncode({'answer': rendered, 'citations': ids}),
         ids.toSet(),
       );
-      store.answer(
+      saveAnswer(
         question,
         answer.rendered,
         'completed',
@@ -413,12 +645,69 @@ class Domain {
       throw StateError(
         'Generation model unavailable. Retrieved ${citations.length} excerpts; configure a local generator.',
       );
-    final history = store
-        .rows(
-          'SELECT question,body FROM answers WHERE conversation=? AND status=\'completed\' ORDER BY id DESC LIMIT 4',
-          [conversation],
-        )
-        .reversed
+    final memoryRows = useWeb
+        ? store.rows(
+            'SELECT through_answer_id,messages,token_counts FROM conversation_memory WHERE conversation=?',
+            [conversation],
+          )
+        : <Map<String, Object?>>[];
+    final through = memoryRows.isEmpty
+        ? 0
+        : memoryRows.single['through_answer_id'] as int;
+    final historyRows = useWeb
+        ? store.rows(
+            "SELECT id,question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? ORDER BY id",
+            [conversation, through],
+          )
+        : store
+              .rows(
+                "SELECT question,body,model_response FROM answers WHERE conversation=? AND status='completed' ORDER BY id DESC LIMIT 4",
+                [conversation],
+              )
+              .reversed
+              .toList();
+    final tokenizer = helper.snapshot?.tokenizerReady == true
+        ? ReferenceRemoteTokenizer(helper.client)
+        : null;
+    final ReferenceTokenCounter? tokenize = tokenizer == null
+        ? null
+        : (text) => tokenizer.count(text, checkCurrent: ensureCurrent);
+    Future<int> estimateMessage(Map<String, dynamic> message) async {
+      ensureCurrent();
+      final count = await estimateReferenceHistoryTokens(
+        message,
+        tokenize: tokenize,
+      );
+      ensureCurrent();
+      return count;
+    }
+
+    final checkpointMessages = memoryRows.isEmpty
+        ? <Map<String, dynamic>>[]
+        : List<Map<String, dynamic>>.from(
+            jsonDecode(memoryRows.single['messages'] as String) as List,
+          );
+    final checkpointCounts =
+        memoryRows.isEmpty || memoryRows.single['token_counts'] == null
+        ? List<int?>.filled(checkpointMessages.length, null)
+        : List<int?>.from(
+            jsonDecode(memoryRows.single['token_counts'] as String) as List,
+          );
+    final tailMessages = useWeb
+        ? referenceChatHistory(historyRows)
+        : <Map<String, dynamic>>[];
+    final memory = useWeb
+        ? await ReferenceChatMemory.load(
+            [...checkpointMessages, ...tailMessages],
+            estimate: estimateMessage,
+            tokenCounts: [
+              ...checkpointCounts,
+              ...List<int?>.filled(tailMessages.length, null),
+            ],
+          )
+        : null;
+    ensureCurrent();
+    final history = historyRows
         .map(
           (a) =>
               'User: ${a['question']}\nAssistant: ${(a['body'] as String).substring(0, (a['body'] as String).length.clamp(0, 1500))}',
@@ -426,15 +715,55 @@ class Domain {
         .join('\n');
     final boundedHistory = boundUtf8(history, 500);
     final boundedQuestion = boundUtf8(question, 400);
-    final prompt = groundedAnswerPrompt(
-      boundedHistory,
-      context.toString(),
-      boundedQuestion,
-    );
+    final requestDate = useWeb ? DateTime.now() : null;
+    final prompt = useWeb
+        ? referenceChatPrompt(
+            question,
+            context: context.toString(),
+            now: requestDate,
+          )
+        : groundedAnswerPrompt(
+            boundedHistory,
+            context.toString(),
+            boundedQuestion,
+          );
+    final generationId =
+        requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}';
+    if (memory != null) {
+      await memory.prune(
+        incomingTokens: await estimateMessage(
+          referenceTextMessage('user', prompt),
+        ),
+        tokenLimit: generator!.effectiveState['context_length'] as int? ?? 4096,
+        checkCurrent: ensureCurrent,
+        summarize: (summaryPrompt) async {
+          ensureCurrent();
+          var summary = '', summaryStatus = 'failed';
+          await for (final event in generator!.generateConversation(
+            generationId,
+            summaryPrompt,
+          )) {
+            ensureCurrent();
+            if (event['type'] == 'delta')
+              summary += event['text'] as String? ?? '';
+            if (event['type'] == 'error')
+              throw StateError('Memory compression failed');
+            if (event['type'] == 'done')
+              summaryStatus = event['status'] as String;
+          }
+          ensureCurrent();
+          if (summaryStatus != 'completed')
+            throw StateError('Memory compression failed');
+          return summary;
+        },
+      );
+      ensureCurrent();
+    }
     var body = '', raw = '', status = 'failed';
+    Map<String, dynamic>? modelResponse;
     final allowed = citations.map((c) => c['citation'] as String).toSet();
-    final schema = groundedAnswerSchema(allowed);
-    if (localGrounding) {
+    final schema = useWeb ? <String, dynamic>{} : groundedAnswerSchema(allowed);
+    if (localGrounding && !useWeb) {
       schema['x-foresight-grounded-request'] = {
         'version': 1,
         'question': question,
@@ -459,16 +788,67 @@ class Domain {
             as String? ??
         'unknown';
     try {
-      await for (final event in generator!.generate(
-        requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}',
-        prompt,
-        systemPrompt: groundedAnswerInstructions,
-        responseSchema: schema,
-        maxOutputTokens: localGrounding ? 1536 : 1024,
-      )) {
+      final events = useWeb
+          ? generator!.generateWithTools(
+              generationId,
+              prompt,
+              tools: [referenceGoogleSearchTool()],
+              messages: memory!.messages,
+              systemPrompt: referenceChatInstructions,
+              dispatcher: ReferenceToolDispatcher({
+                'google_search': (args) async {
+                  ensureCurrent();
+                  final result = await _searchCallbacks().handleGoogleSearch(
+                    args,
+                  );
+                  ensureCurrent();
+                  for (var i = 0; i < result.sources.length; i++) {
+                    final pair = result.sources[i];
+                    chatMetadata.putIfAbsent(
+                      pair,
+                      () => {
+                        'kind': 'web',
+                        'title': pair.$1,
+                        'url': pair.$2,
+                        'excerpt': result.results[i],
+                        'query': args['query'],
+                        'retrieved_at': DateTime.now()
+                            .toUtc()
+                            .toIso8601String(),
+                      },
+                    );
+                  }
+                  return chatSources.formatSearch(result);
+                },
+              }),
+              maxOutputTokens: 1024,
+            )
+          : generator!.generate(
+              generationId,
+              prompt,
+              systemPrompt: groundedAnswerInstructions,
+              responseSchema: schema,
+              maxOutputTokens: localGrounding ? 1536 : 1024,
+            );
+      await for (final event in events) {
+        ensureCurrent();
+        if (useWeb && event['type'] == 'preview') {
+          final preview = provisionalReferenceChatResponse(
+            event['text'] as String? ?? '',
+          );
+          if (preview != null) {
+            body = preview;
+            yield body;
+          }
+        }
         if (event['type'] == 'delta') {
+          if (useWeb && event['response'] is Map<String, dynamic>) {
+            modelResponse = event['response'] as Map<String, dynamic>;
+          }
           raw += event['text'] as String? ?? '';
-          body = provisionalAnswer(raw) ?? body;
+          body = useWeb
+              ? sanitizeReferenceChatResponse(raw)
+              : provisionalAnswer(raw) ?? body;
           yield body;
         }
         if (event['type'] == 'error') {
@@ -477,7 +857,8 @@ class Domain {
         }
         if (event['type'] == 'done') status = event['status'] as String;
       }
-      if (status == 'completed') {
+      ensureCurrent();
+      if (status == 'completed' && !useWeb) {
         final answer = GroundedAnswer.parse(raw, allowed);
         body = answer.rendered;
         if (!answer.sufficient) status = 'insufficient_context';
@@ -485,27 +866,81 @@ class Domain {
         citations.removeWhere((c) => !selected.contains(c['citation']));
         yield body;
       }
+      if (status == 'completed' && useWeb) {
+        final decodedRaw = raw;
+        final payload = parseReferenceChatResponse(decodedRaw);
+        raw = alignReferenceResponseNumbers(
+          payload['text'] as String,
+          truncateChatToolResult(context.toString(), 3000),
+        );
+        modelResponse = referenceResponseWithText(
+          modelResponse ?? referenceTextMessage('assistant', raw),
+          jsonEncode({...payload, 'text': raw}),
+        );
+        final resolved = resolveChatCitations(
+          completeReferenceChatResponse(
+            raw,
+            raw: decodedRaw,
+            question: question,
+            now: requestDate!,
+          ),
+          chatSources.values.length,
+        );
+        body = resolved.text;
+        citations
+          ..clear()
+          ..addAll([
+            for (var i = 0; i < resolved.sourceIndices.length; i++)
+              {
+                ...chatMetadata[chatSources.values[resolved.sourceIndices[i] -
+                    1]]!,
+                'citation': 'Source:${i + 1}',
+              },
+          ]);
+        yield body;
+      }
       // Preserve pinned excerpts even if their source changes; live navigation checks revision.
-      final result = status == 'completed'
+      final result = status == 'completed' && !useWeb
           ? jsonDecode(raw) as Map<String, dynamic>
           : null;
-      store.answer(
+      final newMemoryPair = useWeb && status == 'completed'
+          ? [
+              referenceTextMessage('user', question),
+              modelResponse ?? referenceTextMessage('assistant', raw),
+            ]
+          : <Map<String, dynamic>>[];
+      final newMemoryCounts = [
+        for (final message in newMemoryPair) await estimateMessage(message),
+      ];
+      ensureCurrent();
+      saveAnswer(
         question,
         body,
         status,
         citations,
         result?['method'] == 'source-fallback' ? 'source-fallback' : model,
         conversation: conversation,
+        modelResponse: useWeb && status == 'completed' ? modelResponse : null,
+        memoryMessages: useWeb && status == 'completed'
+            ? [...memory!.messages, ...newMemoryPair]
+            : null,
+        memoryTokenCounts: useWeb && status == 'completed'
+            ? [...memory!.tokenCounts, ...newMemoryCounts]
+            : null,
+        historyThroughAnswerId: useWeb && historyRows.isNotEmpty
+            ? historyRows.last['id'] as int
+            : through,
       );
     } catch (e) {
-      store.answer(
-        question,
-        body,
-        'failed',
-        citations,
-        model,
-        conversation: conversation,
-      );
+      if (!_closed && (current == null || current()))
+        saveAnswer(
+          question,
+          body,
+          'failed',
+          citations,
+          model,
+          conversation: conversation,
+        );
       rethrow;
     }
   }

@@ -4,6 +4,25 @@ const _blue = Color(0xffbfe8ff);
 const _ink = Color(0xff07577b);
 
 extension _ScreenshotScreens on _WorkspaceState {
+  String get echoCancellationDescription {
+    final capture = d is RemoteDomain
+        ? (d as RemoteDomain).capture
+        : d.application.captureState;
+    final echo = capture['echo_cancellation'] as Map? ?? {};
+    if (capture['active'] != true)
+      return 'Reduce system playback picked up by your microphone.';
+    if (capture['paused'] == true)
+      return 'The selected setting will apply when recording resumes.';
+    if (echo['pending'] == true) return 'Applying echo cancellation…';
+    if ((echo['fallback_status'] as num? ?? 0) != 0)
+      return 'Echo cancellation is unavailable; microphone recording continues.';
+    if (echo['restart_required'] == true)
+      return 'Restart recording to enable echo cancellation.';
+    return echo['active'] == true
+        ? 'Echo cancellation is active for this microphone.'
+        : 'Echo cancellation is off.';
+  }
+
   bool get helperEmbeddingHealthy {
     final snapshot = d.helper.snapshot;
     return snapshot != null &&
@@ -2597,26 +2616,24 @@ extension _ScreenshotScreens on _WorkspaceState {
       asking = true;
     });
     try {
-      await for (final text in d.ask(question.text)) {
+      final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
+      final ask = webSearchScopes.contains(scope)
+          ? d.askWithWebInConversation
+          : d.askInConversation;
+      await for (final text in ask(
+        question.text,
+        meetingScope == null ? 'desktop' : 'meeting:$meetingScope',
+        meetingId: meetingScope,
+      )) {
         if (mounted) update(() => answer = text);
-      }
-      if (meetingScope != null) {
-        final saved = d.store
-            .rows(
-              "SELECT id FROM answers WHERE conversation='desktop' ORDER BY id DESC LIMIT 1",
-            )
-            .firstOrNull;
-        if (saved != null)
-          await d.command('meetings.link_answer', {
-            'id': meetingScope,
-            'answer': saved['id'],
-          });
       }
     } finally {
       if (mounted) update(() => asking = false);
     }
   });
   Widget chat({int? meetingScope, bool compact = false}) {
+    final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
+    final searchWeb = webSearchScopes.contains(scope);
     final history = d.store
         .rows(
           meetingScope == null
@@ -2671,37 +2688,38 @@ extension _ScreenshotScreens on _WorkspaceState {
                                   ),
                                 ],
                               ),
-                              SelectableText(
+                              GeneratedContent(
                                 a['body'] as String,
-                                style: TextStyle(
-                                  fontSize: answerFontSize,
-                                  height: 1.6,
-                                ),
+                                fontSize: answerFontSize,
                               ),
                               if (a['status'] != 'completed')
                                 Text('Status: ${a['status']}'),
                               Wrap(
-                                children:
-                                    (jsonDecode(a['citations'] as String)
-                                            as List)
-                                        .map(
-                                          (c) => TextButton(
-                                            onPressed: () => citation(c as Map),
-                                            child: Text(
-                                              '[${c['citation']}] source revision ${c['revision']}',
-                                            ),
-                                          ),
-                                        )
-                                        .toList(),
+                                children: (jsonDecode(a['citations'] as String) as List)
+                                    .map(
+                                      (c) => TextButton(
+                                        onPressed: () => citation(c as Map),
+                                        child: Text(
+                                          c['kind'] == 'web'
+                                              ? '[${c['citation']}] ${c['title'] == '' ? c['url'] : c['title']}'
+                                              : '[${c['citation']}] source revision ${c['revision']}',
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
                               ),
                               const Divider(),
                             ],
                           ),
                         ),
                       if (asking)
-                        SelectableText(
-                          answer.isEmpty ? 'Searching your knowledge…' : answer,
-                          style: TextStyle(fontSize: answerFontSize),
+                        GeneratedContent(
+                          answer.isEmpty
+                              ? searchWeb
+                                    ? 'Preparing your answer…'
+                                    : 'Searching your knowledge…'
+                              : answer,
+                          fontSize: answerFontSize,
                         ),
                     ],
                   ),
@@ -2717,6 +2735,23 @@ extension _ScreenshotScreens on _WorkspaceState {
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                 ),
                 icon: const Icon(Icons.manage_search, size: 18),
+              ),
+              IconButton(
+                tooltip: d.webSearchAvailable
+                    ? 'Search the web'
+                    : 'Web search is unavailable in this build',
+                isSelected: searchWeb,
+                onPressed: asking || (!d.webSearchAvailable && !searchWeb)
+                    ? null
+                    : () => update(() {
+                        if (searchWeb) {
+                          webSearchScopes.remove(scope);
+                        } else {
+                          webSearchScopes.add(scope);
+                        }
+                      }),
+                icon: const Icon(Icons.public_outlined, size: 18),
+                selectedIcon: const Icon(Icons.public, size: 18, color: _ink),
               ),
               const Spacer(),
               if (history.isNotEmpty && !compact)
@@ -3123,45 +3158,28 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Future<void> exportMeetings() async {
-    final location = await getSaveLocation(
-      suggestedName: 'foresight-meeting-notes.md',
-      acceptedTypeGroups: [
-        const XTypeGroup(label: 'Markdown', extensions: ['md']),
-      ],
+    await saveMeetingNotes();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => MeetingExportDialog(
+        store: d.store,
+        save: (markdown) async {
+          final location = await getSaveLocation(
+            suggestedName: 'foresight-meeting-notes.md',
+            acceptedTypeGroups: [
+              const XTypeGroup(label: 'Markdown', extensions: ['md']),
+            ],
+          );
+          if (location == null) return false;
+          await File(location.path).writeAsString(markdown);
+          return true;
+        },
+      ),
     );
-    if (location == null) return;
-    await File(location.path).writeAsString(meetingMarkdown());
   }
 
-  String meetingMarkdown() {
-    final output = StringBuffer('# Meeting notes\n\n');
-    for (final m in d.store.rows('SELECT * FROM meetings ORDER BY id')) {
-      output.writeln('## ${m['title']}\n');
-      final notes = d.store.rows(
-        'SELECT body FROM meeting_notes WHERE meeting_id=?',
-        [m['id']],
-      ).firstOrNull;
-      if (notes != null && (notes['body'] as String).isNotEmpty) {
-        output.writeln('### Notes\n\n${notes['body']}\n');
-      }
-      for (final a in d.store.rows(
-        'SELECT * FROM artifacts WHERE meeting_id=? ORDER BY id',
-        [m['id']],
-      )) {
-        output.writeln(
-          '### ${a['kind']}\n\n${a['edited'] ?? a['generated']}\n',
-        );
-      }
-      output.writeln('### Transcript\n');
-      for (final t in d.store.rows(
-        'SELECT * FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-        [m['id']],
-      )) {
-        output.writeln('${t['text']}\n');
-      }
-    }
-    return output.toString();
-  }
+  String meetingMarkdown() => composeMeetingExport(d.store).markdown;
 
   Widget stats() {
     final meetings = d.store
@@ -3719,6 +3737,20 @@ extension _ScreenshotScreens on _WorkspaceState {
                   onChanged: (v) => preference('inactivity', v!),
                 ),
               ),
+              if (Platform.isMacOS) ...[
+                const Divider(height: 1),
+                settingRow(
+                  'Echo cancellation',
+                  echoCancellationDescription,
+                  Switch(
+                    value:
+                        d.store.preference('echoCancellation', 'false') ==
+                        'true',
+                    onChanged: (value) =>
+                        preference('echoCancellation', '$value'),
+                  ),
+                ),
+              ],
               const Divider(height: 1),
               settingRow(
                 'Launch Agent Monitor',

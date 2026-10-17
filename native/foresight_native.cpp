@@ -18,12 +18,14 @@
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <poll.h>
 #include <set>
 #include <signal.h>
 #include <spawn.h>
 #include <string>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -73,6 +75,8 @@ struct Worker : Events {
 #endif
   std::mutex life;
   std::mutex process_mutex;
+  std::mutex input_mutex;
+  std::deque<std::string> input;
   void stop() {
     cancel = true;
     std::lock_guard lock(process_mutex);
@@ -95,18 +99,59 @@ struct Worker : Events {
 // posix_spawn avoids unsafe post-fork work inside a multi-threaded Flutter
 // host.
 int run(Worker &w, std::vector<std::string> args,
-        const std::function<void(const char *, size_t)> &output) {
+        const std::function<void(const char *, size_t)> &output,
+        bool duplex = false) {
   std::unique_lock launch(foresight::launch_mutex);
   int pipes[2];
   if (foresight::cloexec_pipe(pipes) < 0)
     return -1;
+  int input[2] = {-1, -1};
+  if (duplex) {
+#ifdef __APPLE__
+    constexpr int input_type = SOCK_STREAM;
+#else
+    constexpr int input_type = SOCK_STREAM | SOCK_CLOEXEC;
+#endif
+    if (socketpair(AF_UNIX, input_type, 0, input) < 0) {
+      close(pipes[0]); close(pipes[1]); return -1;
+    }
+    // Keep descriptors away from stdio, including a host with closed stdin.
+    for (auto slot : {&pipes[0], &pipes[1], &input[0], &input[1]}) {
+      int moved = fcntl(*slot, F_DUPFD_CLOEXEC, 10);
+      if (moved < 0) {
+        int error = errno;
+        close(pipes[0]); close(pipes[1]); close(input[0]); close(input[1]);
+        return -error;
+      }
+      close(*slot); *slot = moved;
+    }
+#ifdef __APPLE__
+    int enabled = 1;
+    if (setsockopt(input[1], SOL_SOCKET, SO_NOSIGPIPE, &enabled, sizeof(enabled))) {
+      int error = errno;
+      close(pipes[0]); close(pipes[1]); close(input[0]); close(input[1]);
+      return -error;
+    }
+#endif
+    if (fcntl(input[1], F_SETFL, O_NONBLOCK) < 0) {
+      int error = errno;
+      close(pipes[0]); close(pipes[1]); close(input[0]); close(input[1]);
+      return -error;
+    }
+  }
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
   posix_spawn_file_actions_adddup2(&actions, pipes[1], STDOUT_FILENO);
   posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
                                    O_WRONLY, 0);
-  posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null",
-                                   O_RDONLY, 0);
+  if (duplex) {
+    posix_spawn_file_actions_adddup2(&actions, input[0], STDIN_FILENO);
+    posix_spawn_file_actions_addclose(&actions, input[0]);
+    posix_spawn_file_actions_addclose(&actions, input[1]);
+  } else {
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null",
+                                     O_RDONLY, 0);
+  }
   posix_spawn_file_actions_addclose(&actions, pipes[0]);
   posix_spawn_file_actions_addclose(&actions, pipes[1]);
   posix_spawnattr_t attr;
@@ -131,8 +176,10 @@ int run(Worker &w, std::vector<std::string> args,
   posix_spawn_file_actions_destroy(&actions);
   posix_spawnattr_destroy(&attr);
   close(pipes[1]);
+  if (duplex) close(input[0]);
   if (err) {
     close(pipes[0]);
+    if (duplex) close(input[1]);
     return -err;
   }
   launch.unlock();
@@ -154,14 +201,40 @@ int run(Worker &w, std::vector<std::string> args,
 #endif
   }
   char buffer[4096];
+  std::string pending_input;
+  size_t sent = 0;
   while (!w.cancel) {
-    pollfd fd{pipes[0], POLLIN, 0};
-    int r = poll(&fd, 1, 100);
+    if (duplex && pending_input.empty()) {
+      std::lock_guard lock(w.input_mutex);
+      if (!w.input.empty()) {
+        pending_input = std::move(w.input.front());
+        w.input.pop_front(); sent = 0;
+      }
+    }
+    pollfd fds[2]{{pipes[0], POLLIN, 0},
+                  {input[1], short(pending_input.empty() ? 0 : POLLOUT), 0}};
+    int r = poll(fds, duplex ? 2 : 1, 100);
     if (r > 0) {
-      ssize_t n = read(pipes[0], buffer, sizeof(buffer));
-      if (n <= 0)
-        break;
-      output(buffer, size_t(n));
+      if (duplex && (fds[1].revents & POLLOUT)) {
+#ifdef __APPLE__
+        constexpr int send_flags = 0;
+#else
+        constexpr int send_flags = MSG_NOSIGNAL;
+#endif
+        auto n = send(input[1], pending_input.data() + sent,
+                      pending_input.size() - sent, send_flags);
+        if (n > 0) {
+          sent += size_t(n);
+          if (sent == pending_input.size()) pending_input.clear();
+        } else if (n < 0 && errno != EAGAIN && errno != EINTR) {
+          w.stop(); break;
+        }
+      }
+      if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
+        ssize_t n = read(pipes[0], buffer, sizeof(buffer));
+        if (n <= 0) break;
+        output(buffer, size_t(n));
+      }
     } else if (r < 0 && errno != EINTR)
       break;
   }
@@ -174,6 +247,7 @@ int run(Worker &w, std::vector<std::string> args,
 #endif
   }
   close(pipes[0]);
+  if (duplex) close(input[1]);
   int status = 0;
   // Do not hold life while waiting: cancellation must still be able to signal
   // a worker that closed stdout early. Keep its PID reserved until disarmed.
@@ -194,6 +268,7 @@ int run(Worker &w, std::vector<std::string> args,
 bool valid_asset(const char *runtime, const char *model) {
   return runtime && *runtime && model && *model && access(model, R_OK) == 0;
 }
+struct PersistentGeneration;
 struct Engine {
   int backend = 0;
   std::string runtime, model;
@@ -201,12 +276,18 @@ struct Engine {
   int refs = 0;
   bool busy = false;
   std::string state = "configured", error;
+  bool persistent_protocol = false;
+  bool native_stop_token_sequences = false;
+  uint64_t generation = 0;
+  std::unique_ptr<PersistentGeneration> persistent;
+  ~Engine();
 };
 struct Conversation : Worker {
   Engine *engine;
   std::set<std::string> requests;
   std::string request;
   uint64_t sequence = 0;
+  std::atomic<bool> awaiting_tool{false};
 };
 std::string event(const std::string &type, const std::string &id,
                   uint64_t sequence, const std::string &extra) {
@@ -219,6 +300,8 @@ void failure(Worker &w, const std::string &id, uint64_t &seq,
                ",\"code\":" + quote(code) + ",\"message\":" + quote(message) +
                    ",\"retryable\":false"));
 }
+#include "persistent_generation.h"
+Engine::~Engine() { shutdown_persistent(*this); }
 struct Speech : Worker {
   std::string runtime, model;
   std::vector<int16_t> samples, pending;
@@ -276,6 +359,7 @@ std::string base64(const std::vector<unsigned char> &in) {
 struct Capture : Worker {
   std::string target, runtime;
   bool playback = false;
+  std::atomic<bool> echoCancellation{false};
   int rate = 48000;
   uint64_t dropped = 0;
 };
@@ -371,9 +455,10 @@ char *fs_engine_state(void *h) {
                  ",\"backend\":" + quote(std::getenv("FORESIGHT_LITERT_BACKEND") &&
                      std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu"
                      ? "litert-lm-gpu-native" : "litert-lm-cpu-native") +
-                 ",\"load_policy\":\"per_request\","
+                 ",\"load_policy\":" + quote(e.persistent_protocol ? "persistent_worker" : "per_request") + ","
+                 "\"native_stop_token_sequences\":" + std::string(e.native_stop_token_sequences ? "true" : "false") + ","
                  "\"context_length\":4096,\"temperature\":0.4,\"top_k\":40,\"top_p\":0.9,"
-                 "\"thinking\":false,\"json\":\"ll_guidance_and_application_validation\",\"text\":true,\"tools\":false,\"error\":" + quote(e.error) + "}");
+                 "\"thinking\":false,\"json\":\"ll_guidance_and_application_validation\",\"text\":true,\"tools\":true,\"error\":" + quote(e.error) + "}");
   return owned("{\"state\":" + quote(e.state) +
                ",\"backend\":\"llama.cpp-cpu-cli\",\"load_policy\":\"per_"
                "request\",\"context_length\":4096,\"max_output_tokens\":256,"
@@ -391,6 +476,7 @@ int fs_engine_probe(void *h) {
     e.busy = true;
     e.state = "loading";
   }
+  shutdown_persistent(e);
   Worker probe;
   std::string diagnostics;
   auto arguments = e.backend == 1
@@ -402,6 +488,12 @@ int fs_engine_probe(void *h) {
   {
     std::lock_guard lock(e.mu);
     e.busy = false;
+    e.persistent_protocol = status == 0 && e.backend == 1 &&
+        (diagnostics.find("\"worker_protocol\":1") != std::string::npos ||
+         diagnostics.find("\"worker_protocol\": 1") != std::string::npos);
+    e.native_stop_token_sequences = status == 0 && e.backend == 1 &&
+        (diagnostics.find("\"native_stop_token_sequences\":true") != std::string::npos ||
+         diagnostics.find("\"native_stop_token_sequences\": true") != std::string::npos);
     e.state = status == 0 ? "ready" : "failed";
     e.error = status == 0 ? ""
                           : "Model initialization probe failed with status " +
@@ -432,8 +524,11 @@ void *fs_conversation_create(void *h) {
   return c;
 }
 static int generate_with_schema(void *h, const char *id, const char *prompt,
-                                const char *schema, int max_output_tokens = 256) {
-  if (max_output_tokens < 1 || max_output_tokens > 3072) return -1;
+                                const char *schema, int max_output_tokens = 256,
+                                bool tools = false) {
+  // Zero is the plain-conversation request to preserve the runtime default.
+  if (max_output_tokens < 0 || max_output_tokens > 3072 ||
+      (max_output_tokens == 0 && !tools)) return -1;
   if (!h || !id || !*id || !prompt)
     return -1;
   auto &c = *static_cast<Conversation *>(h);
@@ -442,6 +537,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     return -1;
   c.join();
   auto &e = *c.engine;
+  if (tools && e.backend != 1) return -1;
   {
     std::lock_guard lock(e.mu);
     if (e.busy)
@@ -453,15 +549,44 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
   c.request = id;
   c.sequence = 0;
   c.cancel = false;
+  c.awaiting_tool = false;
+  {
+    std::lock_guard lock(c.input_mutex);
+    c.input.clear();
+  }
   c.active = true;
   std::string text = prompt;
   std::string json_schema = schema ? schema : "";
-  c.thread = std::thread([&c, text, json_schema, max_output_tokens] {
+  c.thread = std::thread([&c, text, json_schema, max_output_tokens, tools] {
     auto &e = *c.engine;
     uint64_t seq = 0;
     // Completion mode avoids runner UI/chat banners; app assembles structured
     // prompt.
     std::string utf8;
+    bool tool_answer_received = false;
+    bool tool_protocol_failed = false;
+    bool worker_error_received = false;
+    auto tool_line = [&](const std::string &line) {
+      bool request = line.starts_with("tool ");
+      bool model = line.starts_with("model ");
+      bool answer = line.starts_with("answer ");
+      bool delta = line.starts_with("delta ");
+      if (line.starts_with("error ") && !tool_answer_received) {
+        worker_error_received = true;
+        failure(c, c.request, seq, "runtime_failure", line.substr(6));
+        return;
+      }
+      if ((!request && !model && !answer && !delta) || tool_answer_received ||
+          (delta && c.awaiting_tool)) {
+        tool_protocol_failed = true;
+        failure(c, c.request, seq, "tool_protocol", "Invalid tool worker frame");
+        c.stop(); return;
+      }
+      if (answer) tool_answer_received = true;
+      if (request || model) c.awaiting_tool = true;
+      c.emit(event(delta ? "model_delta" : model ? "model_response" : request ? "tool_request" : "tool_answer", c.request,
+                   seq++, ",\"text\":" + quote(line.substr(model || delta ? 6 : request ? 5 : 7))));
+    };
     std::vector<std::string> args{e.runtime,     "-m",
                                   e.model,       "-p",
                                   text,          "-n",
@@ -475,44 +600,69 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
       args = {e.runtime, "--model", e.model, "--prompt", text,
               "--max-output-tokens", std::to_string(max_output_tokens)};
     if (!json_schema.empty()) {
-      args.push_back("--json-schema");
+      args.push_back(tools ? "--tools" : "--json-schema");
       args.push_back(json_schema);
     }
-    int status = run(c, std::move(args), [&](const char *data, size_t n) {
-      utf8.append(data, n);
-      size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
-      if (complete) {
-        size_t lead = complete - 1;
-        while (lead > 0 &&
-               (static_cast<unsigned char>(utf8[lead]) & 0xc0) == 0x80)
-          --lead;
-        unsigned char byte = utf8[lead];
-        size_t width = byte < 128              ? 1
-                       : (byte & 0xe0) == 0xc0 ? 2
-                       : (byte & 0xf0) == 0xe0 ? 3
-                                               : 4;
-        if (complete - lead < width)
-          complete = lead;
-      }
-      if (complete && !c.cancel) {
-        c.emit(event("delta", c.request, seq++,
-                     ",\"text\":" + quote(utf8.substr(0, complete))));
-        utf8.erase(0, complete);
-      }
-    });
-    if (!c.cancel) {
+    int status;
+    if (tools && e.persistent_protocol) {
+      const auto payload = "{\"prompt\":" + quote(text) + ",\"tools\":" +
+          json_schema + ",\"max_output_tokens\":" + std::to_string(max_output_tokens) + "}";
+      status = run_persistent(e, c, payload, tool_line);
+      if (tool_protocol_failed) shutdown_persistent(e, false);
+    } else {
+      // A one-shot mode must not load another model alongside the retained worker.
+      shutdown_persistent(e);
+      status = run(c, std::move(args), [&](const char *data, size_t n) {
+        utf8.append(data, n);
+        if (tools) {
+          size_t newline;
+          while ((newline = utf8.find('\n')) != std::string::npos) {
+            auto line = utf8.substr(0, newline);
+            utf8.erase(0, newline + 1);
+            tool_line(line);
+            if (tool_protocol_failed) return;
+          }
+          return;
+        }
+        size_t complete = utf8.size() > 32 ? utf8.size() - 32 : 0;
+        if (complete) {
+          size_t lead = complete - 1;
+          while (lead > 0 &&
+                 (static_cast<unsigned char>(utf8[lead]) & 0xc0) == 0x80)
+            --lead;
+          unsigned char byte = utf8[lead];
+          size_t width = byte < 128              ? 1
+                         : (byte & 0xe0) == 0xc0 ? 2
+                         : (byte & 0xf0) == 0xe0 ? 3
+                                                 : 4;
+          if (complete - lead < width)
+            complete = lead;
+        }
+        if (complete && !c.cancel) {
+          c.emit(event("delta", c.request, seq++,
+                       ",\"text\":" + quote(utf8.substr(0, complete))));
+          utf8.erase(0, complete);
+        }
+      }, tools);
+    }
+    if (!c.cancel && !tools) {
       size_t marker = utf8.find(" [end of text]");
       if (marker != std::string::npos)
         utf8.erase(marker);
       if (!utf8.empty())
         c.emit(event("delta", c.request, seq++, ",\"text\":" + quote(utf8)));
     }
-    std::string terminal = c.cancel      ? "cancelled"
+    std::string terminal = tool_protocol_failed ? "failed"
+                           : c.cancel      ? "cancelled"
                            : status == 0 ? "completed"
                                          : "failed";
-    if (terminal == "failed")
+    if (tools && (!utf8.empty() || !tool_answer_received) && !c.cancel)
+      terminal = "failed";
+    c.awaiting_tool = false;
+    if (terminal == "failed" && !tool_protocol_failed && !worker_error_received)
       failure(c, c.request, seq, "runtime_failure",
-              "Generation runner exited with status " + std::to_string(status));
+              tools && status == 0 ? "Tool worker exited without a complete answer"
+              : "Generation runner exited with status " + std::to_string(status));
     c.emit(event("done", c.request, seq++, ",\"status\":" + quote(terminal)));
     {
       std::lock_guard lock(e.mu);
@@ -536,6 +686,21 @@ int fs_generate_json(void *h, const char *id, const char *prompt,
 int fs_generate_options(void *h, const char *id, const char *prompt,
                         const char *schema, int max_output_tokens) {
   return generate_with_schema(h, id, prompt, schema, max_output_tokens);
+}
+int fs_generate_tools(void *h, const char *id, const char *prompt,
+                      const char *tools, int max_output_tokens) {
+  if (!tools || !*tools) return -1;
+  return generate_with_schema(h, id, prompt, tools, max_output_tokens, true);
+}
+int fs_generation_tool_reply(void *h, const char *id, const char *message) {
+  if (!h || !id || !message) return -1;
+  auto &c = *static_cast<Conversation *>(h);
+  std::lock_guard life(c.life);
+  if (!c.active || c.cancel || c.request != id || !c.awaiting_tool.exchange(false))
+    return -1;
+  std::lock_guard lock(c.input_mutex);
+  c.input.push_back(std::string(message) + "\n");
+  return 0;
 }
 int fs_generation_cancel(void *h) {
   if (!h)
@@ -675,6 +840,22 @@ void fs_speech_destroy(void *h) {
   delete s;
 }
 void *fs_capture_start(const char *target, int playback, int rate) {
+  return fs_capture_start_with_options(target, playback, rate, 0);
+}
+int fs_capture_set_echo_cancellation(void *handle, int enabled) {
+  if (!handle) return 0;
+#ifdef __APPLE__
+  auto *capture = static_cast<Capture *>(handle);
+  if (!capture->playback && capture->runtime.empty()) {
+    capture->echoCancellation = enabled != 0;
+    return 1;
+  }
+#else
+  (void)enabled;
+#endif
+  return 0;
+}
+void *fs_capture_start_with_options(const char *target, int playback, int rate, int echo) {
   if (rate < 8000 || rate > 192000)
     return nullptr;
   auto *c = new Capture;
@@ -684,6 +865,7 @@ void *fs_capture_start(const char *target, int playback, int rate) {
     c->runtime = runtime;
   }
   c->playback = playback != 0;
+  if (echo && !fs_capture_set_echo_cancellation(c, echo)) { delete c; return nullptr; }
   c->rate = rate;
   c->active = true;
   c->thread = std::thread([c] {
@@ -691,7 +873,7 @@ void *fs_capture_start(const char *target, int playback, int rate) {
     if (c->runtime.empty()) {
     fs_macos_capture(c->target, c->playback, c->rate, c->cancel,
                      [c](const auto &bytes) { audio_frame(*c, bytes); },
-                     [c](const auto &event) { c->emit(event); });
+                     [c](const auto &event) { c->emit(event); }, &c->echoCancellation);
     c->active = false;
     c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/audio_state_v1\",\"state\":\"stopped\"}");
     return;

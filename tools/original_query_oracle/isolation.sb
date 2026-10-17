@@ -1,0 +1,25 @@
+;; Experimental oracle containment. Applied by sandbox-exec before the harness
+;; starts, including before any original image initializer can execute.
+(version 1)
+(deny default)
+(deny network*)
+(allow process-exec (literal (param "HARNESS")))
+(allow file-read* file-map-executable (subpath (param "ROOT")))
+(allow file-write* (subpath (param "ROOT")))
+(allow file-read* file-map-executable
+  (subpath "/System")
+  (subpath "/usr/lib")
+  (subpath "/usr/share")
+  (subpath "/Library/Apple/System/Library")
+  (subpath "/private/var/db/dyld"))
+(allow file-read* (literal "/"))
+(allow file-read-metadata
+  (literal "/") (literal "/private") (literal "/private/var")
+  (literal "/usr") (literal "/Library") (literal "/dev"))
+(allow file-read-data (literal "/dev/random") (literal "/dev/urandom"))
+(allow file-read-data file-write-data (literal "/dev/null"))
+(allow sysctl-read)
+;; Metal user clients and its compiler only. No general Mach service lookup;
+;; securityd, preferences, application state and network helpers stay denied.
+(allow iokit-open)
+(allow mach-lookup (global-name "com.apple.MTLCompilerService"))

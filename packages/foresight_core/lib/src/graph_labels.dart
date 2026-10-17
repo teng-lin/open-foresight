@@ -1,6 +1,5 @@
-// Recovered Mac palette and association fields. Case normalizers and the exact
-// palette-exhaustion dispatch are still pending binding; native Dart hashCode
-// is the explicit Linux fallback, rather than an invented hash algorithm.
+// Recovered palette and allocation contract: case-insensitive name reuse,
+// uppercase colour occupancy, then abs(Dart String.hashCode) modulo seven.
 const graphLabelPalette = [
   '#0EBC5F',
   '#60D5F3',
@@ -50,5 +49,5 @@ String allocateGraphLabelColor(
   for (final color in graphLabelPalette) {
     if (!used.contains(color.toUpperCase())) return color;
   }
-  return graphLabelPalette[name.hashCode % graphLabelPalette.length];
+  return graphLabelPalette[name.hashCode.abs() % graphLabelPalette.length];
 }

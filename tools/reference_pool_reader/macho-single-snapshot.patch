@@ -1,0 +1,18 @@
+diff --git a/blutter/src/MachOHelper.cpp b/blutter/src/MachOHelper.cpp
+index d7aa5af..b18e77b 100644
+--- a/blutter/src/MachOHelper.cpp
++++ b/blutter/src/MachOHelper.cpp
+@@ -283,0 +284,7 @@ LibAppInfo MachOHelper::MapLibApp(const char* path)
++#if defined(BLUTTER_DART_SINGLE_SNAPSHOT)
++        if (strcmp(name, kSnapshotDataAsmSymbol) == 0) {
++            isolate_snapshot_data = addr;
++        } else if (strcmp(name, kSnapshotTextAsmSymbol) == 0) {
++            isolate_snapshot_instructions = addr;
++        }
++#else
+@@ -295,0 +303 @@ LibAppInfo MachOHelper::MapLibApp(const char* path)
++#endif
+@@ -297,0 +306 @@ LibAppInfo MachOHelper::MapLibApp(const char* path)
++#if !defined(BLUTTER_DART_SINGLE_SNAPSHOT)
+@@ -301,0 +311 @@ LibAppInfo MachOHelper::MapLibApp(const char* path)
++#endif

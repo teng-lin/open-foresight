@@ -1,0 +1,235 @@
+import importlib.util
+import json
+from pathlib import Path
+import shutil
+import sys
+import tempfile
+import unittest
+from unittest.mock import MagicMock, patch
+import zipfile
+
+TOOLS = Path(__file__).resolve().parents[1] / 'tools'
+sys.path.insert(0, str(TOOLS))
+import litert_extensions as extensions
+
+
+class ExtensionArtifactsTest(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name).resolve()
+
+    def fixture(self, *, platform='darwin', extra=None, embedded=None, native=b'new native',
+                version='0.18.0', tag=None):
+        library = self.root / ('liblitert-lm.dylib' if platform == 'darwin' else 'liblitert-lm.so')
+        library.write_bytes(native)
+        wheel = self.root / 'api.whl'
+        metadata = 'litert_lm_api-0.18.0.dist-info/'
+        tag = tag or ('py3-none-macosx_12_0_arm64' if platform == 'darwin' else
+                      'py3-none-manylinux_2_27_x86_64')
+        with zipfile.ZipFile(wheel, 'w') as archive:
+            archive.writestr(metadata + 'METADATA', f'Name: litert-lm-api\nVersion: {version}\n')
+            archive.writestr(metadata + 'WHEEL', 'Wheel-Version: 1.0\nTag: ' + tag + '\n')
+            archive.writestr('litert_lm/' + library.name, native if embedded is None else embedded)
+            archive.writestr('litert_lm/engine.py', 'source-built API')
+            if extra:
+                for entry in extra if isinstance(extra, list) else [extra]:
+                    archive.writestr(*entry)
+        log = self.root / 'native-test.log'
+        log.write_text('[ RUN      ] ' + extensions.NATIVE_TEST + '\n[       OK ] ' + extensions.NATIVE_TEST)
+        self.manifest = {
+            'upstream_commit': extensions.UPSTREAM_COMMIT,
+            'patch_sha256': extensions.file_sha256(extensions.PATCH),
+            'distribution': 'litert-lm-api', 'version': '0.18.0',
+            'wheel': wheel.name, 'wheel_sha256': extensions.file_sha256(wheel),
+            'library': library.name, 'library_sha256': extensions.file_sha256(library),
+            'native_test_log': log.name, 'native_test_log_sha256': extensions.file_sha256(log),
+        }
+        self.path = self.root / 'manifest.json'
+        self.save()
+        return self.path
+
+    def save(self):
+        self.path.write_text(json.dumps(self.manifest))
+
+    def test_exact_artifacts_are_accepted_for_each_release_platform(self):
+        for platform in ('darwin', 'linux'):
+            with self.subTest(platform=platform):
+                bundle = extensions.verify_extensions_manifest(self.fixture(platform=platform),
+                                                                platform_name=platform)
+                self.assertEqual(bundle.library.parent, self.root)
+
+    def test_source_patch_version_and_distribution_cannot_be_overridden(self):
+        for name, value in (('upstream_commit', 'different'), ('patch_sha256', 'different'),
+                            ('version', '0.19.0'), ('distribution', 'arbitrary-package')):
+            with self.subTest(name=name):
+                self.fixture()
+                self.manifest[name] = value
+                self.save()
+                with self.assertRaisesRegex(ValueError, 'not pinned'):
+                    extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+
+    def test_modified_wheel_library_and_test_log_are_rejected(self):
+        for name in ('wheel', 'library', 'native_test_log'):
+            with self.subTest(name=name):
+                self.fixture()
+                with (self.root / self.manifest[name]).open('ab') as stream:
+                    stream.write(b'changed')
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+                    extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+
+    def test_manifest_paths_cannot_escape_or_follow_external_symlinks(self):
+        self.fixture()
+        self.manifest['wheel'] = '../outside.whl'
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'filename'):
+            extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+        self.fixture()
+        with tempfile.TemporaryDirectory() as outside:
+            external = Path(outside) / 'wheel.whl'
+            shutil.copy2(self.root / self.manifest['wheel'], external)
+            alias = self.root / 'alias.whl'
+            alias.symlink_to(external)
+            self.manifest['wheel'] = alias.name
+            self.save()
+            with self.assertRaisesRegex(ValueError, 'escapes'):
+                extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+
+    def test_wheel_metadata_platform_and_embedded_native_hash_must_match(self):
+        for arguments in ({'version': '0.17.0'}, {'tag': 'py3-none-any'},
+                          {'embedded': b'unrelated native'}):
+            with self.subTest(arguments=arguments):
+                with self.assertRaises(ValueError):
+                    extensions.verify_extensions_manifest(self.fixture(**arguments), platform_name='darwin')
+        with self.assertRaisesRegex(ValueError, 'platform'):
+            extensions.verify_extensions_manifest(self.fixture(), platform_name='linux')
+
+    def test_wheel_rejects_path_traversal_and_unrelated_packages(self):
+        for name in ('../escape.py', '/escape.py', 'another_package/code.py', 'litert_lm/./engine.py'):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                extensions.verify_extensions_manifest(self.fixture(extra=(name, 'payload')),
+                                                       platform_name='darwin')
+
+    def test_selected_native_regression_must_have_run_and_passed(self):
+        self.fixture()
+        log = self.root / self.manifest['native_test_log']
+        log.write_text('[  PASSED  ] 0 tests.')
+        self.manifest['native_test_log_sha256'] = extensions.file_sha256(log)
+        self.save()
+        with self.assertRaisesRegex(ValueError, 'regression'):
+            extensions.verify_extensions_manifest(self.path, platform_name='darwin')
+
+    def copied_prefix(self):
+        source = self.root / 'original-python'
+        source_site = source / 'lib/python3.13/site-packages'
+        package = source_site / 'litert_lm'
+        package.mkdir(parents=True)
+        (package / 'engine.py').write_text('original API')
+        (package / 'liblitert-lm.dylib').write_bytes(b'original native')
+        (package / 'libLiteRtMetalAccelerator.dylib').write_bytes(b'preserve backend')
+        destination = self.root / 'copied-python'
+        shutil.copytree(source, destination)
+        target = destination / source_site.relative_to(source)
+        return source, source_site, destination, target
+
+    def test_overlay_changes_only_copy_and_preserves_existing_backend_libraries(self):
+        bundle = extensions.verify_extensions_manifest(self.fixture(), platform_name='darwin')
+        source, source_site, destination, target = self.copied_prefix()
+        extensions.install_extension_wheel(bundle, site_packages=target,
+                                           source_prefix=source, destination_prefix=destination)
+        self.assertEqual((source_site / 'litert_lm/engine.py').read_text(), 'original API')
+        self.assertEqual((source_site / 'litert_lm/liblitert-lm.dylib').read_bytes(), b'original native')
+        self.assertEqual((target / 'litert_lm/engine.py').read_text(), 'source-built API')
+        self.assertEqual((target / 'litert_lm/liblitert-lm.dylib').read_bytes(), b'new native')
+        self.assertEqual((target / 'litert_lm/libLiteRtMetalAccelerator.dylib').read_bytes(), b'preserve backend')
+
+    def test_overlay_rejects_source_prefix_and_external_symlink_destinations(self):
+        bundle = extensions.verify_extensions_manifest(self.fixture(), platform_name='darwin')
+        source, source_site, destination, target = self.copied_prefix()
+        with self.assertRaisesRegex(ValueError, 'isolated'):
+            extensions.install_extension_wheel(bundle, site_packages=source_site,
+                                               source_prefix=source, destination_prefix=source)
+        engine = target / 'litert_lm/engine.py'
+        engine.unlink()
+        engine.symlink_to(source_site / 'litert_lm/engine.py')
+        with self.assertRaisesRegex(ValueError, 'escapes'):
+            extensions.install_extension_wheel(bundle, site_packages=target,
+                                               source_prefix=source, destination_prefix=destination)
+        self.assertEqual((source_site / 'litert_lm/engine.py').read_text(), 'original API')
+
+    def test_wheel_cannot_change_after_verification(self):
+        bundle = extensions.verify_extensions_manifest(self.fixture(), platform_name='darwin')
+        source, _, destination, target = self.copied_prefix()
+        with bundle.wheel.open('ab') as stream:
+            stream.write(b'modified')
+        with self.assertRaisesRegex(ValueError, 'changed after verification'):
+            extensions.install_extension_wheel(bundle, site_packages=target,
+                                               source_prefix=source, destination_prefix=destination)
+
+    def test_python_probe_requires_positive_native_capability(self):
+        run = MagicMock(return_value='{"native_stop_token_sequences":true}')
+        extensions.probe_python_extensions(Path('/copy/bin/python3'), run)
+        self.assertEqual(run.call_args.args[:3], (Path('/copy/bin/python3'), '-I', '-c'))
+        run.return_value = '{"native_stop_token_sequences":false}'
+        with self.assertRaises(ValueError):
+            extensions.probe_python_extensions(Path('/copy/bin/python3'), run)
+
+    def test_native_probe_calls_the_actual_c_api_and_releases_config(self):
+        library = MagicMock()
+        library.litert_lm_session_config_create.return_value = 12
+        library.litert_lm_session_config_add_stop_token_sequence.return_value = 0
+        with patch.object(extensions.ctypes, 'CDLL', return_value=library):
+            extensions.probe_native_extensions(self.fixture().parent / self.manifest['library'])
+        library.litert_lm_session_config_delete.assert_called_once_with(12)
+
+    @staticmethod
+    def elf(payload=b''):
+        return b'\x7fELF\x02\x01' + bytes(12) + b'\x3e\x00' + payload
+
+    def test_linux_vendor_dependencies_are_copied_from_verified_wheel(self):
+        native = self.elf(b'native')
+        payloads = [('litert_lm/' + name, self.elf(name.encode()))
+                    for name in extensions.LINUX_VENDOR_LIBRARIES]
+        bundle = extensions.verify_extensions_manifest(
+            self.fixture(platform='linux', native=native, extra=payloads), platform_name='linux')
+        destination = self.root / 'bundle-lib'
+        destination.mkdir()
+        shutil.copy2(bundle.library, destination / bundle.library.name)
+        copied = extensions.copy_linux_extension_dependencies(bundle, destination)
+        self.assertEqual({path.name for path in copied},
+                         {'liblitert-lm.so', *extensions.LINUX_VENDOR_LIBRARIES})
+        for name, content in payloads:
+            self.assertEqual((destination / Path(name).name).read_bytes(), content)
+
+    def test_linux_wheel_requires_complete_vendor_payloads_and_x86_64_elf(self):
+        for payload in (b'not ELF', self.elf(b'valid')):
+            with self.subTest(payload=payload):
+                bundle = extensions.verify_extensions_manifest(
+                    self.fixture(platform='linux', native=payload), platform_name='linux')
+                destination = self.root / ('lib-' + str(len(payload)))
+                destination.mkdir()
+                shutil.copy2(bundle.library, destination / bundle.library.name)
+                with self.assertRaises(ValueError):
+                    extensions.copy_linux_extension_dependencies(bundle, destination)
+
+    def test_linux_dependency_validation_rejects_missing_and_external_vendor_libraries(self):
+        destination = self.root / 'lib'
+        destination.mkdir()
+        provider = 'libGemmaModelConstraintProvider.so'
+        for output in (provider + ' => not found\n',
+                       provider + ' => /outside/' + provider + ' (0x0)\n',
+                       'libarbitrary.so => /outside/libarbitrary.so (0x0)\n'):
+            with self.subTest(output=output), patch.object(
+                    extensions.subprocess, 'check_output', return_value=output):
+                with self.assertRaises(ValueError):
+                    extensions.validate_linux_extension_dependencies([], destination)
+        with patch.object(extensions.subprocess, 'check_output', return_value=(
+                provider + ' => ' + str(destination / provider) + ' (0x0)\n'
+                'libc.so.6 => /usr/lib/libc.so.6 (0x0)\n')) as check:
+            environment = extensions.validate_linux_extension_dependencies([], destination)
+        self.assertEqual(environment['LD_LIBRARY_PATH'], str(destination))
+        self.assertEqual(check.call_args.kwargs['env']['LD_LIBRARY_PATH'], str(destination))
+
+
+if __name__ == '__main__':
+    unittest.main()

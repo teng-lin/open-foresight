@@ -25,7 +25,20 @@ class _GraphLabelControlsState extends State<GraphLabelControls> {
   bool editing = false;
   final focus = FocusNode();
   @override
+  void initState() {
+    super.initState();
+    focus.addListener(_onFocusChange);
+  }
+
+  void _onFocusChange() {
+    if (!focus.hasFocus && editing && mounted) {
+      setState(() => editing = false);
+    }
+  }
+
+  @override
   void dispose() {
+    focus.removeListener(_onFocusChange);
     focus.dispose();
     super.dispose();
   }

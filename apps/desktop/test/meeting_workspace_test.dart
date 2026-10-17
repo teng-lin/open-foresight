@@ -9,20 +9,22 @@ import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 class NotesRuntime extends NativeRuntime {
+  @override
+  bool get loaded => true;
   String prompt = '';
   NotesRuntime()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
-  Stream<Map<String, dynamic>> generate(
+  Stream<Map<String, dynamic>> generateConversation(
     String id,
     String prompt, {
-    String systemPrompt = '',
-    Map<String, dynamic>? responseSchema,
     Duration timeout = const Duration(minutes: 5),
-    int maxOutputTokens = 256,
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
   }) async* {
     this.prompt = prompt;
-    yield {'type': 'delta', 'text': 'Mira will send the draft on Tuesday.'};
+    yield {'type': 'delta', 'text': '- Mira will send the draft on Tuesday.'};
     yield {'type': 'done', 'status': 'completed'};
   }
 }
@@ -46,18 +48,35 @@ void main() {
         true,
         0,
         1000,
-        'microphone',
+        'microphone; captured-sample timeline (gaps excluded)',
+      );
+      store.transcript(
+        id,
+        'The remote channel confirms the date.',
+        true,
+        1100,
+        2000,
+        'playback; captured-sample timeline (gaps excluded)',
+      );
+      store.transcript(
+        id,
+        'Imported background context.',
+        true,
+        2000,
+        3000,
+        'imported',
       );
       final helper = OfflineHelper(
         '${directory.path}/helper.sock',
         '${directory.path}/helper',
       );
       final generator = NotesRuntime();
-      final domain = Domain(store, helper)..generator = generator;
+      final domain = Domain(store, helper);
       await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();
+      domain.generator = generator;
       expect(find.text('Live enhanced notes'), findsOneWidget);
       expect(find.text('Chat'), findsOneWidget);
       expect(find.text('Live Q&A'), findsOneWidget);
@@ -66,7 +85,10 @@ void main() {
         find.byKey(const ValueKey('meeting-notes-editor')),
         'Mira draft Tuesday',
       );
-      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(seconds: 31));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
       await tester.pumpAndSettle();
       expect(
         store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
@@ -75,6 +97,8 @@ void main() {
         'Mira draft Tuesday',
       );
       expect(generator.prompt, contains('Mira draft Tuesday'));
+      expect(generator.prompt, contains('<shorthand_notes>'));
+      expect(generator.prompt, contains('<relevant_excerpts>'));
       expect(
         generator.prompt,
         contains('Mira will send the draft on Tuesday.'),
@@ -91,6 +115,27 @@ void main() {
         find.textContaining('Microphone', findRichText: true),
         findsOneWidget,
       );
+      expect(
+        find.textContaining('Remote\n', findRichText: true),
+        findsOneWidget,
+      );
+      expect(
+        find.textContaining('Unknown\n', findRichText: true),
+        findsOneWidget,
+      );
+      final snapshot = await domain.command('meetings.get', {'id': id}) as Map;
+      final transcript = snapshot['transcript'] as List;
+      expect(transcript.map((t) => t['speaker_id']), [0, 1, null]);
+      expect(transcript.map((t) => t['speaker_label']), [
+        'Microphone',
+        'Remote',
+        'Unknown',
+      ]);
+      expect(transcript.map((t) => t['source']), [
+        'microphone; captured-sample timeline (gaps excluded)',
+        'playback; captured-sample timeline (gaps excluded)',
+        'imported',
+      ]);
       await tester.tap(find.byTooltip('Close assistant'));
       await tester.pumpAndSettle();
       expect(find.byTooltip('Open assistant'), findsOneWidget);

@@ -1,0 +1,56 @@
+// Reconstructed from the matching Foresight Dart BuilderInfo and RPC method.
+// Only the inspected web-content and model-acquisition messages/methods are included.
+syntax = "proto2";
+package ai_edge.foresight.service;
+
+message FetchExternalWebsiteRequest {
+  optional string url = 1;
+  optional bool use_trawler = 2;
+  reserved 3;
+  optional bool summarize_content = 4;
+  optional int32 max_summarization_words = 5 [default = 100];
+  optional string model_id = 6;
+  reserved 7;
+  optional int32 summary_timeout_millis = 8;
+  optional int32 max_input_tokens = 9;
+}
+
+message FetchExternalWebsiteResponse {
+  reserved 1;
+  optional string title = 2;
+  optional string content = 3;
+  reserved 4;
+  optional string mime_type = 5;
+  reserved 6;
+  optional string summary = 7;
+  optional double summary_confidence_score = 8;
+}
+
+message GetSharedConfigRequest {
+  optional string app_version = 1;
+  optional string platform = 2;
+  // Enum wire value 1 is FALLBACK_CLOSEST_LOWER. Other names are not recovered.
+  optional int32 fallback_mode = 3;
+}
+
+message OnDeviceModelMetadata {
+  // Enum wire value 4 is MODEL_TYPE_QUERY_DETECTOR. Preserve unknown variants.
+  optional int32 model_type = 1;
+  optional string name = 2;
+  optional string version = 3;
+  reserved 4, 5;
+  optional string blob_id = 6;
+  reserved 7;
+  optional int64 size = 8;
+  reserved 9 to 13;
+}
+
+message ForesightSharedConfig {
+  repeated OnDeviceModelMetadata on_device_model_metadatas = 1;
+  reserved 2 to 5;
+}
+
+service ForesightService {
+  rpc FetchExternalWebsite(FetchExternalWebsiteRequest) returns (FetchExternalWebsiteResponse);
+  rpc GetSharedConfig(GetSharedConfigRequest) returns (ForesightSharedConfig);
+}

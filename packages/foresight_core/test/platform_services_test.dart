@@ -75,6 +75,8 @@ void main() {
               '../Library/Services/Open Foresight Service.app/Contents/MacOS/foresight-service',
           'FORESIGHT_NATIVE': 'lib/libforesight_native.dylib',
           'FORESIGHT_LITERT_BACKEND': 'gpu',
+          'FORESIGHT_SEARCH_API_KEY': 'dummy-search-key',
+          'FORESIGHT_WEB_CONTENT_API_KEY': 'dummy-summary-key',
         }),
       );
       final settings = RuntimeConfiguration.resolve(
@@ -90,6 +92,8 @@ void main() {
         contains('Open Foresight Service.app'),
       );
       expect(settings['FORESIGHT_LITERT_BACKEND'], 'gpu');
+      expect(settings['FORESIGHT_SEARCH_API_KEY'], 'dummy-search-key');
+      expect(settings['FORESIGHT_WEB_CONTENT_API_KEY'], 'dummy-summary-key');
       final nested = Directory(
         '$app/Contents/Library/Services/Open Foresight Service.app/Contents/Resources',
       )..createSync(recursive: true);

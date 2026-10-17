@@ -51,7 +51,7 @@ Use the connected REA MCP tools and their active schemas. An absent `rea` shell 
 
 1. Call `binary_session` with `{}` to inspect any existing target and provider. Reuse matching state and inspect the returned operation availability before choosing a provider-specific operation.
 2. Inventory the copied `.app` with `open_binary` and `inspect_artifact` when bundle structure is relevant. Inspect the listed plists and resources to identify the main executable, helpers, frameworks, model configuration, and service boundaries.
-3. Open the exact executable needed for the question. A Linux IDA provider has successfully analyzed the reference arm64 Mach-O. Ghidra is another route only when installed and supported by the current REA configuration. Hopper-specific workflows require their supported host.
+3. Open the exact executable needed for the question using REA's IDA provider. A Linux IDA provider has successfully analyzed the reference arm64 Mach-O. Further native investigation for this project uses IDA Pro, as requested by the user.
 
 These are MCP argument examples, sent to the named tools in sequence:
 

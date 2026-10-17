@@ -3,6 +3,7 @@
 #include "c/conversation.h"
 #include "c/embedding_engine.h"
 #include "c/engine.h"
+#include "c/foresight_extensions.h"
 #include <dlfcn.h>
 #include <filesystem>
 #include <memory>
@@ -34,6 +35,9 @@ public:
     if (!library_)
       throw std::runtime_error("Cannot load native LiteRT-LM 0.18.0: " +
                                std::string(dlerror()));
+  }
+  bool supports_native_stop_tokens() const {
+    return dlsym(library_, "litert_lm_session_config_add_stop_token_sequence") != nullptr;
   }
   template <class T> T symbol(const char *name) const {
     auto ptr = dlsym(library_, name);

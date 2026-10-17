@@ -6,6 +6,7 @@ import 'package:foresight_core/foresight_core.dart'
         openPlatformUri,
         openForesightBuildNumber,
         openForesightVersion,
+        MeetingSpeaker,
         platformNotification;
 import 'dart:async';
 import 'dart:convert';
@@ -46,6 +47,10 @@ import 'file_discovery_sheet.dart';
 import 'graph_layout.dart';
 import 'graph_rendering.dart';
 import 'graph_persistence.dart';
+import 'meeting_export.dart';
+import 'note_save_scheduler.dart';
+import 'meeting_note_state.dart';
+import 'generated_content.dart';
 
 part 'screenshot_ui.dart';
 part 'meeting_workspace.dart';
@@ -359,7 +364,12 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     '${File(Platform.resolvedExecutable).parent.parent.path}/open-foresight',
   );
   bool busy = false, asking = false;
+  bool queryModelDownloading = false;
+  final webSearchScopes = <String>{};
   bool quickStarting = false;
+  bool meetingImmersive = false;
+  Duration recordingElapsed = Duration.zero;
+  DateTime recordingElapsedAt = DateTime.now();
   bool systemAudioSetupReviewed = false;
   int _operations = 0;
   double answerFontSize = 16;
@@ -374,7 +384,37 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   int? noteId, meetingId, recordingMeeting, meetingPreviewId;
   String meetingPreviewTab = 'Notes';
   final meetingNotesController = TextEditingController();
+  late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
+    (id, body, lastManualEdit) async {
+      await d.command('meetings.notes', {
+        'id': id,
+        'body': body,
+        if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+      });
+    },
+    onSaved: (id) {
+      if (mounted) {
+        if (loadedMeetingNotes == id && !meetingNoteSaves.isDirty(id)) {
+          loadMeetingNotes(id, acceptedSave: true);
+        }
+        update(() {});
+      }
+    },
+    onError: (failure, stack) {
+      if (mounted)
+        update(() => error = 'Unable to save meeting notes: $failure');
+      else
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: failure, stack: stack),
+        );
+    },
+  );
   int? loadedMeetingNotes;
+  Map<String, dynamic> meetingEnhancements = {};
+  StreamSubscription<void>? noteEnhancementChanges;
+  bool meetingEnhancementStarting = false;
+  MeetingNoteSnapshot? loadedMeetingNoteSnapshot;
+  int? meetingNoteManualEdit;
   bool meetingSidecarVisible = true,
       meetingEnhancedVisible = true,
       meetingEnhancing = false,
@@ -470,6 +510,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     notifications = d.store.preference('notifications') == 'true';
     unawaited(refreshNotifications());
     syncCapture();
+    if (d is! RemoteDomain) {
+      noteEnhancementChanges = d.application.changes.stream.listen((_) {
+        if (mounted) setState(syncCapture);
+      });
+    }
     d.helper.changed = () {
       if (mounted) setState(syncCapture);
     };
@@ -502,8 +547,38 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    unawaited(noteEnhancementChanges?.cancel());
     if (d is! RemoteDomain) google.close();
-    d.close();
+    void releaseDomain() {
+      d.close();
+      d.generator?.close();
+      unawaited(d.helper.close());
+      d.store.close();
+    }
+
+    void closeDomain() {
+      if (d is RemoteDomain)
+        releaseDomain();
+      else
+        unawaited(d.application.close().whenComplete(releaseDomain));
+    }
+
+    final hasPendingNoteSave = meetingNoteSaves.hasWork;
+    final pendingNoteSave = meetingNoteSaves.close();
+    if (!hasPendingNoteSave)
+      closeDomain();
+    else
+      unawaited(
+        pendingNoteSave.then(
+          (_) => closeDomain(),
+          onError: (Object failure, StackTrace stack) {
+            FlutterError.reportError(
+              FlutterErrorDetails(exception: failure, stack: stack),
+            );
+            closeDomain();
+          },
+        ),
+      );
     unawaited(googleAuth.close());
     unawaited(commands?.close() ?? Future<void>.value());
     unawaited(globalShortcuts?.close() ?? Future<void>.value());
@@ -512,9 +587,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     graphMotionFrames.dispose();
     graphTransform.dispose();
     recording?.dispose();
-    d.generator?.close();
-    unawaited(d.helper.close());
-    d.store.close();
     for (final c in [
       question,
       sourceSearchController,
@@ -1191,6 +1263,20 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   void citation(Map c) {
+    if (c['kind'] == 'web') {
+      unawaited(
+        run(() async {
+          final uri = Uri.tryParse(c['url'] as String? ?? '');
+          if (uri == null ||
+              !['http', 'https'].contains(uri.scheme) ||
+              uri.host.isEmpty) {
+            throw StateError('This citation has no valid web address.');
+          }
+          await openPlatformUri(uri);
+        }),
+      );
+      return;
+    }
     final s = d.store.rows('SELECT * FROM sources WHERE id=?', [
       c['document_id'],
     ]);
@@ -1300,18 +1386,76 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         const Text('Choose a local model and load it on this computer.'),
         DropdownButton<String>(
           value: modelKind,
-          items: [
-            'embedding',
-            'generation',
-            'speech',
-          ].map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
+          items: ['embedding', 'generation', 'speech', 'query-detection']
+              .map(
+                (s) => DropdownMenuItem(
+                  value: s,
+                  child: Text(
+                    s == 'query-detection' ? 'Automatic questions' : s,
+                  ),
+                ),
+              )
+              .toList(),
           onChanged: (s) => setState(() => modelKind = s!),
         ),
         TextField(
           controller: modelPath,
           decoration: const InputDecoration(labelText: 'Model file'),
         ),
-        if (modelKind != 'embedding')
+        if (modelKind == 'query-detection')
+          const Text(
+            'Download the dedicated question model using this distribution, or import an already-decrypted copy. Its identity and bundled runtime are verified before replacing the current model.',
+          ),
+        if (modelKind == 'query-detection')
+          Row(
+            children: [
+              OutlinedButton(
+                onPressed:
+                    busy ||
+                        !Platform.isMacOS ||
+                        (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ??
+                                '')
+                            .isEmpty
+                    ? null
+                    : () async {
+                        setState(() => queryModelDownloading = true);
+                        try {
+                          await run(() async {
+                            await d.command('models.acquire_query', {});
+                            modelState = 'Automatic question model ready';
+                          });
+                        } finally {
+                          if (mounted)
+                            setState(() => queryModelDownloading = false);
+                        }
+                      },
+                child: Text(
+                  queryModelDownloading
+                      ? 'Downloading and verifying…'
+                      : 'Download question model',
+                ),
+              ),
+              if (queryModelDownloading)
+                TextButton(
+                  onPressed: () async {
+                    try {
+                      await d.command('models.cancel_query_acquisition', {});
+                    } catch (failure) {
+                      if (mounted) setState(() => error = failure.toString());
+                    }
+                  },
+                  child: const Text('Cancel download'),
+                ),
+            ],
+          ),
+        if (modelKind == 'query-detection' &&
+            (!Platform.isMacOS ||
+                (runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'] ?? '')
+                    .isEmpty))
+          const Text(
+            'Automatic download is unavailable in this distribution. You can import a supported local copy.',
+          ),
+        if (modelKind != 'embedding' && modelKind != 'query-detection')
           TextField(
             controller: runtimePath,
             decoration: const InputDecoration(
@@ -1340,13 +1484,23 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                     {
                       'kind': modelKind,
                       'path': modelPath.text,
-                      'runtime': runtimePath.text,
+                      'runtime': modelKind == 'query-detection'
+                          ? ''
+                          : runtimePath.text,
+                      if (modelKind == 'query-detection')
+                        'backend': 'legacy_query_cpu',
                       'gpu': embeddingGpu,
                     },
                   );
-                  modelState = '$modelKind ready';
+                  modelState = modelKind == 'query-detection'
+                      ? 'Automatic question model ready'
+                      : '$modelKind ready';
                 }),
-          child: const Text('Register and load'),
+          child: Text(
+            modelKind == 'query-detection'
+                ? 'Verify and import'
+                : 'Register and load',
+          ),
         ),
         if (modelState.isNotEmpty) Text('Last setup: $modelState'),
         Text(
@@ -1416,6 +1570,14 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     final state = d is RemoteDomain
         ? (d as RemoteDomain).capture
         : d.application.captureState;
+    meetingEnhancements = Map<String, dynamic>.from(
+      state['note_enhancements'] as Map? ?? {},
+    );
+    meetingEnhancing =
+        meetingEnhancementStarting ||
+        meetingEnhancements.values.any(
+          (value) => (value as Map)['active'] == true,
+        );
     recording = state['active'] == true
         ? RemoteRecording(Map<String, dynamic>.from(state))
         : null;
@@ -1425,6 +1587,14 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     recordingBegan = began == null
         ? null
         : DateTime.fromMillisecondsSinceEpoch(began);
+    recordingElapsedAt = DateTime.now();
+    recordingElapsed = Duration(
+      milliseconds:
+          state['elapsed_ms'] as int? ??
+          (recordingBegan == null
+              ? 0
+              : recordingElapsedAt.difference(recordingBegan!).inMilliseconds),
+    );
     provisionalTranscript
       ..clear()
       ..addAll(Map<String, String>.from(state['provisional'] as Map? ?? {}));
@@ -1460,6 +1630,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     final controller = TextEditingController(
       text: (a['edited'] ?? a['generated']) as String,
     );
+    final original = controller.text;
+    int? lastManualEdit;
     await showInputDialog<void>(
       builder: (context) => AlertDialog(
         title: const Text('Edit generated artifact'),
@@ -1468,6 +1640,15 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           height: 300,
           child: TextField(
             controller: controller,
+            onChanged: (text) {
+              if (a['kind'] == 'enhanced_notes' &&
+                  (text != original ||
+                      (loadedMeetingNotes == a['meeting_id'] &&
+                          meetingNotesController.text !=
+                              loadedMeetingNoteSnapshot?.body))) {
+                lastManualEdit = DateTime.now().millisecondsSinceEpoch;
+              }
+            },
             maxLines: null,
             expands: true,
           ),
@@ -1478,6 +1659,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
               await d.command('artifacts.edit', {
                 'id': a['id'],
                 'text': controller.text,
+                if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
               });
               if (!context.mounted) return;
               Navigator.pop(context);
@@ -1494,6 +1676,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     syncGraphMotion();
-    return screenshotWorkspace(context);
+    return meetingImmersive && meetingId != null
+        ? immersiveMeetingWorkspace()
+        : screenshotWorkspace(context);
   }
 }

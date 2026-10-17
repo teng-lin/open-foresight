@@ -9,7 +9,7 @@ void main() {
   late Directory scratch;
   late Store store;
   late Map<String, String> previous;
-  late String root, generation, speech;
+  late String root, generation, speech, query;
   late File asset;
   File runner(String path) {
     final file = File(path)..createSync(recursive: true);
@@ -24,12 +24,15 @@ void main() {
     root = '${scratch.path}/Old App.app';
     generation = '$root/Contents/Resources/bin/litert-runner';
     speech = '$root/Contents/Resources/bin/whisper-cli';
+    query = '$root/Contents/Resources/adapters/litert-python';
     runner(generation);
     runner(speech);
+    runner(query);
     runtimeConfiguration.environment.addAll({
       'FORESIGHT_INSTALL_ROOT': root,
       'FORESIGHT_LITERT_RUNNER': generation,
       'FORESIGHT_WHISPER_RUNTIME': speech,
+      'FORESIGHT_LITERT_PYTHON': query,
     });
     asset = File('${scratch.path}/model.bin')..writeAsStringSync('model');
     store = Store('${scratch.path}/application.db');
@@ -48,11 +51,12 @@ void main() {
       'FORESIGHT_INSTALL_ROOT': moved,
       'FORESIGHT_LITERT_RUNNER': generation.replaceFirst(root, moved),
       'FORESIGHT_WHISPER_RUNTIME': speech.replaceFirst(root, moved),
+      'FORESIGHT_LITERT_PYTHON': query.replaceFirst(root, moved),
     });
   }
 
   test(
-    'configured speech and generation follow moved app with original snapshots retained',
+    'configured speech generation and dedicated query runtimes follow moved app',
     () async {
       await store.register(
         'generation',
@@ -61,10 +65,16 @@ void main() {
         backend: 'litert_lm',
       );
       await store.register('speech', asset.path, speech);
+      await store.register(
+        'query-detection',
+        asset.path,
+        query,
+        backend: 'legacy_query_cpu',
+      );
       move();
       store.close();
       store = Store('${scratch.path}/application.db');
-      for (final kind in ['generation', 'speech']) {
+      for (final kind in ['generation', 'speech', 'query-detection']) {
         final resolved = store.model(kind)!;
         expect(resolved['runtime'], contains('Moved App With Spaces.app'));
         expect(
@@ -113,6 +123,12 @@ void main() {
     'legacy rows and stale digest runtime backend resource metadata are ignored',
     () async {
       await store.register('speech', asset.path, speech);
+      await store.register(
+        'query-detection',
+        asset.path,
+        query,
+        backend: 'legacy_query_cpu',
+      );
       final key = 'modelRuntimeResource.speech';
       final original = jsonDecode(store.preference(key)) as Map;
       move();
@@ -138,6 +154,12 @@ void main() {
       Link(speech).createSync(external.path);
       runtimeConfiguration.environment['FORESIGHT_WHISPER_RUNTIME'] = speech;
       await store.register('speech', asset.path, speech);
+      await store.register(
+        'query-detection',
+        asset.path,
+        query,
+        backend: 'legacy_query_cpu',
+      );
       expect(store.preference('modelRuntimeResource.speech'), isEmpty);
       await store.register(
         'generation',

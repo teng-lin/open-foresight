@@ -19,11 +19,14 @@ def load(path=LIBRARY):
     lib=C.CDLL(path)
     for name,args,ret in [
         ('fs_engine_create',[C.c_char_p,C.c_char_p],C.c_void_p),
+        ('fs_engine_create_backend',[C.c_char_p,C.c_char_p,C.c_int],C.c_void_p),
         ('fs_engine_state',[C.c_void_p],C.c_void_p),
         ('fs_engine_probe',[C.c_void_p],C.c_int),
         ('fs_engine_destroy',[C.c_void_p],C.c_int),
         ('fs_conversation_create',[C.c_void_p],C.c_void_p),
         ('fs_generate',[C.c_void_p,C.c_char_p,C.c_char_p],C.c_int),
+        ('fs_generate_tools',[C.c_void_p,C.c_char_p,C.c_char_p,C.c_char_p,C.c_int],C.c_int),
+        ('fs_generation_tool_reply',[C.c_void_p,C.c_char_p,C.c_char_p],C.c_int),
         ('fs_generation_cancel',[C.c_void_p],C.c_int),
         ('fs_conversation_destroy',[C.c_void_p,C.c_int],C.c_int),
         ('fs_speech_create',[C.c_char_p,C.c_char_p],C.c_void_p),
@@ -101,6 +104,61 @@ class NativeTest(unittest.TestCase):
     def runner(self,body):
         runner=self.path/'runner';runner.write_text('#!/usr/bin/env python3\n'+body);runner.chmod(0o755);return str(runner).encode()
     def engine(self,body):return self.lib.fs_engine_create(self.runner(body),str(self.model).encode())
+    def test_tool_round_trip_large_unicode_and_scoped_single_reply(self):
+        body = '''import json,sys
+assert '--tools' in sys.argv
+print('tool '+json.dumps([{'function': {'name':'google_search','arguments':{'query':'q'}}}]), flush=True)
+reply=json.loads(sys.stdin.readline())
+assert reply['role']=='user'
+assert reply['content'][0]['text']=='🧪'*25000
+print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':'Answer [Source:1]'}]}), flush=True)
+'''
+        engine = self.lib.fs_engine_create_backend(self.runner(body), str(self.model).encode(), 1)
+        handle = self.lib.fs_conversation_create(engine)
+        try:
+            self.assertEqual(self.lib.fs_generate_tools(handle,b'tool-owner',b'q',b'[{"name":"google_search"}]',256),0)
+            request = owned_json(self.lib,self.lib.fs_event_poll(handle,5000))
+            self.assertEqual(request['type'],'tool_request',request)
+            self.assertEqual(json.loads(request['text'])[0]['function']['name'],'google_search')
+            reply = json.dumps({'role':'user','content':[{'type':'text','text':'🧪'*25000}]},ensure_ascii=False).encode()
+            self.assertNotEqual(self.lib.fs_generation_tool_reply(handle,b'other-owner',reply),0)
+            self.assertEqual(self.lib.fs_generation_tool_reply(handle,b'tool-owner',reply),0)
+            self.assertNotEqual(self.lib.fs_generation_tool_reply(handle,b'tool-owner',reply),0)
+            events = [request] + drain(self.lib,handle)
+            self.assertEqual(events[-1]['status'],'completed',events)
+            self.assertEqual([e['sequence'] for e in events],list(range(len(events))))
+            answer = next(e for e in events if e['type']=='tool_answer')
+            self.assertEqual(json.loads(answer['text'])['content'][0]['text'],'Answer [Source:1]')
+            self.assertNotEqual(self.lib.fs_generation_tool_reply(handle,b'tool-owner',reply),0)
+        finally:
+            self.lib.fs_conversation_destroy(handle,1);self.lib.fs_engine_destroy(engine)
+
+    def test_tool_wait_cancellation_rejects_late_reply(self):
+        runner = self.runner("import sys\nprint('tool []',flush=True)\nsys.stdin.readline()\n")
+        engine = self.lib.fs_engine_create_backend(runner,str(self.model).encode(),1)
+        handle = self.lib.fs_conversation_create(engine)
+        try:
+            self.assertEqual(self.lib.fs_generate_tools(handle,b'cancel-tool',b'q',b'[{}]',256),0)
+            request = owned_json(self.lib,self.lib.fs_event_poll(handle,5000))
+            self.assertEqual(request['type'],'tool_request',request)
+            self.assertEqual(self.lib.fs_generation_cancel(handle),0)
+            self.assertNotEqual(self.lib.fs_generation_tool_reply(handle,b'cancel-tool',b'{}'),0)
+            events=drain(self.lib,handle)
+            self.assertEqual(events[-1]['status'],'cancelled',events)
+        finally:
+            self.lib.fs_conversation_destroy(handle,1);self.lib.fs_engine_destroy(engine)
+
+    def test_tool_worker_cannot_publish_success_without_a_complete_answer(self):
+        for body in ["pass\n", "print('invalid protocol',flush=True)\n", "print('answer {',end='',flush=True)\n"]:
+            engine = self.lib.fs_engine_create_backend(self.runner(body),str(self.model).encode(),1)
+            handle = self.lib.fs_conversation_create(engine)
+            try:
+                self.assertEqual(self.lib.fs_generate_tools(handle,b'bad-worker',b'q',b'[{}]',256),0)
+                events = drain(self.lib,handle)
+                self.assertEqual(events[-1]['status'],'failed',events)
+                self.assertTrue(any(e['type']=='error' for e in events),events)
+            finally:
+                self.lib.fs_conversation_destroy(handle,1);self.lib.fs_engine_destroy(engine)
     def test_speech_runtime_override_and_explicit_cpu(self):
         runner = self.runner('import sys\nassert "-ng" in sys.argv\nprint("GPU runtime CPU override")\n').decode()
         with patch.dict(os.environ, {'FORESIGHT_WHISPER_RUNTIME': runner,

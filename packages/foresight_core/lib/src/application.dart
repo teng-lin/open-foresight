@@ -5,6 +5,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'domain.dart';
 import 'recording.dart';
+import 'meeting_speakers.dart';
+import 'proactive_questions.dart';
+import 'reference_query_detector.dart';
+import 'dedicated_query_runtime.dart';
+import 'encrypted_query_runtime.dart';
+import 'dedicated_query_acquisition.dart';
 import 'store.dart';
 import 'graph_labels.dart';
 import 'graph_layout.dart';
@@ -12,6 +18,15 @@ import 'graph_clusters.dart';
 import 'graph_persistence.dart';
 import 'model_setup.dart';
 import 'speech_models.dart';
+import 'reference_note_enhancement.dart';
+import 'reference_note_enhancer.dart';
+import 'reference_note_edit_mapping.dart';
+import 'reference_note_live_plan.dart';
+import 'reference_note_service_recovery.dart';
+import 'native.dart';
+import 'reference_note_transcript_cache.dart';
+import 'reference_note_enhancement_chunking.dart';
+import 'native_note_enhancement.dart';
 import 'google_auth.dart';
 import 'google_connections.dart';
 import 'generated/rag_service.pb.dart';
@@ -26,16 +41,241 @@ class Application {
   Recording? recording;
   int? recordingMeeting;
   DateTime? recordingBegan;
+  DateTime? _recordingPausedAt;
+  int _recordingPausedMs = 0;
   String recordingState = '';
   final provisionalTranscript = <String, String>{};
   Timer? _liveIndex, _inactivity;
   final _enhance = <int, Timer>{};
+  final _noteEnhancements = <int, _NoteEnhancement>{};
+  final _noteEditMappings = <int, ReferenceNoteEditMapping>{};
+  final _pendingNoteTargets = <int, Set<int>>{};
+  late final ReferenceNoteTranscriptCache _noteTranscriptCache =
+      ReferenceNoteTranscriptCache(
+        computeEmbedding: _computeNoteEmbedding,
+        currentIsLive: (id) => recordingMeeting == id && recording != null,
+        loadSavedTranscript: (id) async => _noteTranscriptText(id),
+      );
+
+  Future<List<double>> _computeNoteEmbedding(String text) async {
+    if (domain.helper.snapshot?.pipeline != 'ready') return [];
+    final response = await domain.helper.client.computeEmbedding(
+      ComputeEmbeddingRequest(text: text),
+    );
+    return response.embedding.toList();
+  }
+
+  String _noteTranscriptText(int id) => store
+      .rows(
+        'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
+        [id],
+      )
+      .map((row) => (row['text'] as String).trim())
+      .where((text) => text.isNotEmpty)
+      .join('\n\n');
+
+  Future<List<EmbeddedNoteTranscriptChunk>> _embeddedNoteTranscript(
+    int id,
+    String transcript, {
+    required bool isLive,
+  }) async {
+    if (isLive) {
+      await _noteTranscriptCache.schedule(id, transcript, isLive: true);
+    }
+    final cached = await _noteTranscriptCache.getEmbeddedChunks(id);
+    if (cached.isNotEmpty) return cached;
+    final chunks = <EmbeddedNoteTranscriptChunk>[];
+    for (final text in chunkNoteEnhancementTranscript(
+      transcript,
+      isLive: isLive,
+    )) {
+      chunks.add((text: text, embedding: await _computeNoteEmbedding(text)));
+    }
+    return chunks;
+  }
+
+  String _currentEnhancedNotes(int id) {
+    final pending = _noteEnhancements[id];
+    return pending != null && !pending.active && pending.status.isEmpty
+        ? pending.body
+        : store.meetingEnhancedNotes(id);
+  }
+
+  ReferenceNoteEditMapping _noteEditMapping(int id) =>
+      _noteEditMappings.putIfAbsent(
+        id,
+        () => ReferenceNoteEditMapping.fromNotes(
+          notes:
+              store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+                    id,
+                  ]).firstOrNull?['body']
+                  as String? ??
+              '',
+          enhancedNotes: _currentEnhancedNotes(id),
+        ),
+      );
+
+  void _restoreNoteMapping(int id, String notes, String enhancedNotes) {
+    final mapping = _noteEditMapping(id);
+    final restored = ReferenceNoteEditMapping.fromNotes(
+      notes: notes,
+      enhancedNotes: enhancedNotes,
+    );
+    mapping.accepted
+      ..clear()
+      ..addAll(restored.accepted);
+    mapping.pairs
+      ..clear()
+      ..addAll(restored.pairs);
+  }
+
+  void _shorthandEdited(int id, String notes, String previousEnhanced) {
+    if (_noteEnhancements[id]?.active == true) return;
+    final mapping = _noteEditMapping(id);
+    final replacement = mapping.syncShorthand(
+      notes: notes,
+      enhancedNotes: previousEnhanced,
+    );
+    if (replacement != null) {
+      _noteEnhancements[id]?.saveTimer?.cancel();
+      final draft = _NoteEnhancement(
+        'note-edit-' + (++_noteEnhancementSerial).toString(),
+        replacement,
+      )..active = false;
+      _noteEnhancements[id] = draft;
+      _scheduleEnhancedDraft(id, draft);
+    }
+    mapping.updateStaleBullets(
+      notes: notes,
+      enhancedNotes: replacement ?? previousEnhanced,
+    );
+  }
+
+  int _noteEnhancementSerial = 0;
   Future<void>? _stopping;
   bool _closed = false;
   bool _modelBusy = false;
+  final _proactivePreparation = <String, Completer<void>>{};
   bool get modelBusy => _modelBusy || domain.restoring;
+  late final ProactiveQuestions proactive = ProactiveQuestions(
+    store: store,
+    busy: () =>
+        modelBusy ||
+        domain.generator == null ||
+        domain.generator!.generating ||
+        domain.sourcesPaused,
+    changed: changed,
+    cancel: (request) {
+      final preparation = _proactivePreparation[request];
+      if (preparation != null && !preparation.isCompleted)
+        preparation.complete();
+      _queryRuntime?.cancel(request);
+      domain.generator?.cancel(requestId: request);
+    },
+    detect: _detectQuestions,
+    answer: (id, question, request) async {
+      // Cancelling automatic work must not wait behind another client's index
+      // request, or cancel that shared work. Only stop this answer's preparation.
+      final cancelled = Completer<void>();
+      _proactivePreparation[request] = cancelled;
+      try {
+        await Future.any<void>([
+          indexMeeting(id),
+          cancelled.future.then(
+            (_) => throw StateError('Automatic answer cancelled'),
+          ),
+        ]);
+        if (cancelled.isCompleted)
+          throw StateError('Automatic answer cancelled');
+        await Future.any<void>([
+          domain
+              .askInConversation(
+                question,
+                'meeting:$id',
+                meetingId: id,
+                requestId: request,
+                current: () => !cancelled.isCompleted,
+              )
+              .drain<void>(),
+          cancelled.future.then(
+            (_) => throw StateError('Automatic answer cancelled'),
+          ),
+        ]);
+        if (cancelled.isCompleted)
+          throw StateError('Automatic answer cancelled');
+        final saved = store.rows(
+          'SELECT id FROM answers WHERE request_id=? ORDER BY id DESC LIMIT 1',
+          [request],
+        ).firstOrNull;
+        if (saved == null) throw StateError('No answer was saved');
+        return saved['id'] as int;
+      } finally {
+        _proactivePreparation.remove(request);
+      }
+    },
+  );
   final GoogleAuth? _auth;
-  Application(this.domain, {GoogleAuth? auth}) : _auth = auth;
+  QueryCompletionRuntime? _queryRuntime;
+  DedicatedQueryAcquisition? _queryAcquisition;
+  int _queryDownloadReceived = 0, _queryDownloadTotal = 0;
+  String? _queryRegistration;
+  final bool _providedQueryRuntime;
+
+  Application(
+    this.domain, {
+    GoogleAuth? auth,
+    QueryCompletionRuntime? queryRuntime,
+  }) : _auth = auth,
+       _queryRuntime = queryRuntime,
+       _providedQueryRuntime = queryRuntime != null;
+
+  Future<List<String>> _detectQuestions(String text, String request) async {
+    if (!_providedQueryRuntime) {
+      final model = store.model(dedicatedQueryModelKind);
+      final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
+      if (model == null ||
+          worker == null ||
+          (model['backend'] != dedicatedQueryBackend &&
+              model['backend'] != dedicatedEncryptedQueryBackend)) {
+        await _queryRuntime?.close();
+        _queryRuntime = null;
+        _queryRegistration = null;
+        throw StateError(
+          'Dedicated question detector is not ready: register its model and runtime',
+        );
+      }
+      final registration = jsonEncode([
+        model['path'],
+        model['digest'],
+        model['runtime'],
+        model['backend'],
+        worker,
+      ]);
+      if (_queryRegistration != registration) {
+        await _queryRuntime?.close();
+        _queryRuntime = model['backend'] == dedicatedEncryptedQueryBackend
+            ? EncryptedDedicatedQueryRuntime(
+                python: model['runtime'] as String,
+                worker: worker,
+                encryptedModel: model['path'] as String,
+                vaultRoot: File(model['path'] as String).parent,
+              )
+            : DedicatedQueryRuntime(
+                python: model['runtime'] as String,
+                worker: worker,
+                model: model['path'] as String,
+              );
+        _queryRegistration = registration;
+      }
+    }
+    if (!proactive.ownsRequest(request)) {
+      throw StateError('Dedicated query detection cancelled');
+    }
+    return ReferenceQueryDetector(
+      _queryRuntime!.complete,
+    ).detect(text, request);
+  }
+
   String? _signInOwner;
   late final GoogleAuth googleAuth =
       _auth ?? GoogleAuth(Directory('${File(store.path).parent.path}/google'));
@@ -54,6 +294,7 @@ class Application {
   };
   void startBackground() {
     google;
+    proactive.restore();
     _googleTimer = Timer.periodic(
       const Duration(minutes: 1),
       (_) => unawaited(maintainGoogle()),
@@ -93,16 +334,34 @@ class Application {
           'generating': domain.generator!.generating,
         };
   Map<String, Object?> get captureState => {
+    'note_enhancements': {
+      for (final entry in _noteEnhancements.entries)
+        '${entry.key}': entry.value.state,
+    },
     'meeting_id': recordingMeeting,
     'active': recording != null,
     'finishing': recording?.finishing ?? false,
+    'paused': recording?.paused ?? false,
     'began': recordingBegan?.millisecondsSinceEpoch,
+    'elapsed_ms': recordingBegan == null
+        ? 0
+        : (_recordingPausedAt ?? DateTime.now())
+                  .difference(recordingBegan!)
+                  .inMilliseconds -
+              _recordingPausedMs,
     'state': recordingState,
     'samples': recording?.sampleCounts ?? <int>[],
     'peaks': recording?.peakVolumes ?? <double>[],
     'last_audio': recording?.lastAudioActivity.millisecondsSinceEpoch,
     'provisional': Map.of(provisionalTranscript),
     'volumes': recording?.currentVolumes ?? <double>[],
+    'proactive': proactive.state,
+    'echo_cancellation':
+        recording?.echoCancellationState ??
+        {
+          'requested': store.preference('echoCancellation', 'false') == 'true',
+          'active': false,
+        },
   };
 
   Future<Object?> call(
@@ -113,6 +372,7 @@ class Application {
     if (_closed) throw StateError('Application closed');
     if (current != null && !current()) throw StateError('Operation cancelled');
     if (method.startsWith('models.') &&
+        method != 'models.cancel_query_acquisition' &&
         (modelBusy ||
             domain.generator?.generating == true ||
             recording != null)) {
@@ -120,7 +380,9 @@ class Application {
         'Model configuration is busy while generation or recording is active',
       );
     }
-    final modelOperation = method.startsWith('models.');
+    final modelOperation =
+        method.startsWith('models.') &&
+        method != 'models.cancel_query_acquisition';
     if (modelOperation) _modelBusy = true;
     try {
       switch (method) {
@@ -142,10 +404,16 @@ class Application {
             'runtime_revision':
                 runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'],
             'models_busy': modelBusy,
+            'query_model_download': {
+              'active': _queryAcquisition != null,
+              'received': _queryDownloadReceived,
+              'total': _queryDownloadTotal,
+            },
             'capture': captureState,
             'sources_paused': domain.sourcesPaused,
             'helper': domain.helper.snapshot?.toProto3Json(),
             'generation': generationState,
+            'web_search_available': domain.webSearchAvailable,
             'revision': store.dataRevision,
             'google': googleState,
           };
@@ -217,12 +485,17 @@ class Application {
           }).toList();
         case 'answer':
           return {
-            'text': await domain
-                .askInConversation(
-                  a['question'] as String,
-                  a['conversation'] as String? ?? 'desktop',
-                )
-                .last,
+            'text':
+                await (a['web_search'] == true
+                        ? domain.askWithWebInConversation
+                        : domain.askInConversation)(
+                      a['question'] as String,
+                      a['conversation'] as String? ?? 'desktop',
+                      meetingId: a['meeting_id'] as int?,
+                      requestId: a['requestId'] as String?,
+                      current: current,
+                    )
+                    .last,
           };
         case 'google.status':
           return googleState;
@@ -271,7 +544,16 @@ class Application {
           );
           return {'id': a['id'] ?? store.db.lastInsertRowId};
         case 'preferences.set':
+          if (a['key'] == 'echoCancellation') {
+            final enabled = a['value'] == 'true';
+            if (enabled && !Platform.isMacOS)
+              throw StateError(
+                'Native echo cancellation is available on macOS',
+              );
+            recording?.setEchoCancellation(enabled);
+          }
           store.setPreference(a['key'] as String, a['value'] as String);
+          if (a['key'] == 'proactiveAnswers') proactive.wake();
           return null;
         case 'meetings.list':
           return store.rows(
@@ -287,15 +569,40 @@ class Application {
               'SELECT * FROM meeting_notes WHERE meeting_id=?',
               [id],
             ),
-            'transcript': store.rows(
-              'SELECT * FROM transcript WHERE meeting_id=? ORDER BY id',
-              [id],
-            ),
+            'transcript': store
+                .rows(
+                  'SELECT * FROM transcript WHERE meeting_id=? ORDER BY id',
+                  [id],
+                )
+                .map(
+                  (t) => {
+                    ...t,
+                    'speaker_id': MeetingSpeaker.fromSource(
+                      t['source'] as String,
+                    ).id,
+                    'speaker_label': MeetingSpeaker.fromSource(
+                      t['source'] as String,
+                    ).label,
+                  },
+                )
+                .toList(),
             'artifacts': store.rows(
               'SELECT * FROM artifacts WHERE meeting_id=? ORDER BY id',
               [id],
             ),
+            'questions': store.rows(
+              'SELECT * FROM meeting_questions WHERE meeting_id=? ORDER BY id',
+              [id],
+            ),
           };
+        case 'meetings.retry_question':
+          proactive.retry(a['id'] as int);
+          return null;
+        case 'meetings.retry_detection':
+          final id = a['id'] as int;
+          _meeting(id);
+          proactive.notify(id);
+          return null;
         case 'meetings.link_answer':
           store.db.execute(
             'INSERT OR IGNORE INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
@@ -306,6 +613,19 @@ class Application {
           google;
           if (recording != null)
             throw StateError('Stop recording before clearing the workspace');
+          for (final timer in _enhance.values) {
+            timer.cancel();
+          }
+          _enhance.clear();
+          for (final state in _noteEnhancements.values) {
+            state.cancelRequested = true;
+            state.saveTimer?.cancel();
+          }
+          _noteEnhancements.clear();
+          _noteEditMappings.clear();
+          _pendingNoteTargets.clear();
+          _noteTranscriptCache.clear();
+          await proactive.reset();
           await googleAuth.disconnect();
           for (final source in store.sources) {
             await domain.delete(source['id'] as String);
@@ -316,6 +636,8 @@ class Application {
               'google_sources',
               'google_folders',
               'calendar_events',
+              'meeting_questions',
+              'meeting_question_cursors',
               'meeting_answers',
               'meeting_notes',
               'artifacts',
@@ -341,9 +663,29 @@ class Application {
           }
           return null;
         case 'meetings.notes':
-          _meeting(a['id'] as int);
-          store.saveMeetingNotes(a['id'] as int, a['body'] as String);
-          _scheduleEnhance(a['id'] as int);
+          final noteId = a['id'] as int;
+          _meeting(noteId);
+          final oldNotes = store.rows(
+            'SELECT body FROM meeting_notes WHERE meeting_id=?',
+            [noteId],
+          ).firstOrNull?['body'];
+          final previousEnhanced = _currentEnhancedNotes(noteId);
+          _noteEditMapping(noteId);
+          store.saveMeetingNotes(
+            a['id'] as int,
+            a['body'] as String,
+            lastManualEdit: a['last_manual_edit'] as int?,
+          );
+          if (oldNotes != a['body']) {
+            _shorthandEdited(noteId, a['body'] as String, previousEnhanced);
+          }
+          if (oldNotes != a['body']) {
+            _scheduleNoteEditEnhancement(
+              noteId,
+              oldNotes as String? ?? '',
+              a['body'] as String,
+            );
+          }
           return null;
         case 'meetings.transcript':
           final id = a['id'] as int;
@@ -365,16 +707,95 @@ class Application {
           await generateMeeting(a['id'] as int, a['kind'] as String);
           return null;
         case 'meetings.enhance':
-          await enhanceNotes(a['id'] as int);
+          await enhanceNotes(
+            a['id'] as int,
+            forceRegenerate: a['force_regenerate'] == true,
+          );
           return null;
+        case 'meetings.cancel_enhance':
+          final enhancement = _noteEnhancements[a['id'] as int];
+          if (enhancement == null ||
+              !enhancement.active ||
+              enhancement.requestId != a['request_id'])
+            return false;
+          enhancement.cancelRequested = true;
+          changed();
+          return true;
         case 'meetings.start':
           await startRecording(a['id'] as int);
           return captureState;
         case 'meetings.stop':
           await stopRecording();
           return captureState;
+        case 'meetings.pause':
+          pauseRecording(a['id'] as int?);
+          return captureState;
+        case 'meetings.resume':
+          resumeRecording(a['id'] as int?);
+          return captureState;
         case 'artifacts.edit':
-          store.editArtifact(a['id'] as int, a['text'] as String);
+          final selectedBeforeEdit = store.rows(
+            "SELECT selected.meeting_id,selected.edited,selected.generated FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id AND newer.kind=selected.kind AND newer.id>selected.id)",
+            [a['id']],
+          ).firstOrNull;
+          if (selectedBeforeEdit != null) {
+            _noteEditMapping(selectedBeforeEdit['meeting_id'] as int);
+          }
+          store.editArtifact(
+            a['id'] as int,
+            a['text'] as String,
+            lastManualEdit: a['last_manual_edit'] as int?,
+          );
+          final editedEnhancement = store.rows(
+            "SELECT selected.meeting_id FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id AND newer.kind=selected.kind AND newer.id>selected.id)",
+            [a['id']],
+          ).firstOrNull;
+          if (editedEnhancement != null) {
+            final meeting = editedEnhancement['meeting_id'] as int;
+            final enhancement = _noteEnhancements[meeting];
+            if (enhancement?.active != true &&
+                (selectedBeforeEdit?['edited'] ??
+                        selectedBeforeEdit?['generated']) !=
+                    a['text']) {
+              _noteEditMapping(meeting).updateStaleBullets(
+                notes:
+                    store.rows(
+                          'SELECT body FROM meeting_notes WHERE meeting_id=?',
+                          [meeting],
+                        ).firstOrNull?['body']
+                        as String? ??
+                    '',
+                enhancedNotes: a['text'] as String,
+              );
+            }
+            if (enhancement != null) {
+              enhancement.saveTimer?.cancel();
+              enhancement.body = a['text'] as String;
+              if (!enhancement.active) _noteEnhancements.remove(meeting);
+            }
+          }
+          return null;
+        case 'models.cancel_query_acquisition':
+          await _queryAcquisition?.close();
+          return null;
+        case 'models.acquire_query':
+          final acquisition = DedicatedQueryAcquisition.distribution(store);
+          _queryAcquisition = acquisition;
+          _queryDownloadReceived = _queryDownloadTotal = 0;
+          changed();
+          try {
+            await acquisition.run(
+              current: () => !_closed && (current == null || current()),
+              onProgress: (received, total) {
+                _queryDownloadReceived = received;
+                _queryDownloadTotal = total;
+                changed();
+              },
+            );
+          } finally {
+            _queryAcquisition = null;
+            changed();
+          }
           return null;
         case 'models.speech':
           await configureSpeech(
@@ -386,6 +807,18 @@ class Application {
           );
           return null;
         case 'models.register':
+          if (a['kind'] == dedicatedQueryModelKind) {
+            if (a['backend'] != null && a['backend'] != dedicatedQueryBackend)
+              throw StateError('Unsupported dedicated question model backend');
+            await configureDedicatedQuery(
+              store,
+              a['path'] as String,
+              runtime: a['runtime'] as String?,
+              expectedDigest: a['digest'] as String?,
+              current: () => !_closed && (current?.call() ?? true),
+            );
+            return null;
+          }
           await store.register(
             a['kind'] as String,
             a['path'] as String,
@@ -714,17 +1147,25 @@ class Application {
         )
         .map(
           (t) =>
-              '[${t['source']} ${t['start_ms']}–${t['end_ms']} ms] ${t['text']}',
+              '[${MeetingSpeaker.fromSource(t['source'] as String).label} ${t['start_ms']}–${t['end_ms']} ms] ${t['text']}',
         )
         .join('\n');
     if (text.trim().isEmpty) return;
-    final source = store.importText(
-      'Meeting $id transcript',
-      text,
-      'text/plain',
-      'meeting:$id',
-      id: 'meeting-$id',
-    );
+    final existing = store.rows(
+      'SELECT content,state,deleted FROM sources WHERE id=?',
+      ['meeting-$id'],
+    ).firstOrNull;
+    final unchanged = existing?['content'] == text && existing?['deleted'] == 0;
+    if (unchanged && existing?['state'] == 'indexed') return;
+    final source = unchanged
+        ? 'meeting-$id'
+        : store.importText(
+            'Meeting $id transcript',
+            text,
+            'text/plain',
+            'meeting:$id',
+            id: 'meeting-$id',
+          );
     final indexing = domain.index(source);
     if (domain.sourcesPaused) {
       unawaited(
@@ -747,6 +1188,10 @@ class Application {
       'enhanced_notes',
     ].contains(kind))
       throw ArgumentError('Unsupported artifact kind');
+    if (kind == 'enhanced_notes') {
+      await enhanceNotes(id);
+      return;
+    }
     final meeting = _meeting(id);
     final text = store
         .rows(
@@ -758,7 +1203,7 @@ class Application {
     if (text.isEmpty) throw StateError('No final transcript');
     final result = await _generate(
       'meeting',
-      'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details.\n${boundUtf8(text, 2800)}',
+      'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n${boundUtf8(text, 2800)}',
     );
     store.artifact(
       id,
@@ -779,17 +1224,29 @@ class Application {
     String prefix,
     String prompt, {
     int maxTokens = 1024,
+    String? requestId,
+    Map<String, dynamic>? responseSchema,
+    bool Function()? current,
+    void Function(String text)? onText,
   }) async {
+    await Future<void>.value();
+    if (current != null && !current()) throw StateError('Generation cancelled');
     if (modelBusy) throw StateError('Model configuration is busy');
     final generator = domain.generator;
     if (generator == null) throw StateError('Generation model unavailable');
     var result = '', status = 'failed', failure = '';
     await for (final event in generator.generate(
-      '$prefix-${DateTime.now().microsecondsSinceEpoch}',
+      requestId ?? '$prefix-${DateTime.now().microsecondsSinceEpoch}',
       prompt,
+      responseSchema: responseSchema,
       maxOutputTokens: maxTokens,
     )) {
-      if (event['type'] == 'delta') result += event['text'] as String;
+      if (current != null && !current())
+        throw StateError('Generation cancelled');
+      if (event['type'] == 'delta') {
+        result += event['text'] as String;
+        onText?.call(result);
+      }
       if (event['type'] == 'done') status = event['status'] as String;
       if (event['type'] == 'error') failure = event['message'].toString();
     }
@@ -797,24 +1254,71 @@ class Application {
     return result;
   }
 
-  void _scheduleEnhance(int id) {
-    _enhance.remove(id)?.cancel();
-    if (store.preference('liveEnhance', 'true') != 'true') return;
-    _enhance[id] = Timer(
-      const Duration(seconds: 2),
-      () => unawaited(
-        enhanceNotes(id, deferWhenBusy: true).catchError((Object e) {
-          recordingState = 'Note enhancement: $e';
-          changed();
-        }),
-      ),
+  void _requestAutomaticNoteEnhancement(int id, {Set<int>? targets}) {
+    unawaited(
+      enhanceNotes(
+        id,
+        deferWhenBusy: true,
+        isLive: true,
+        targetBulletIndices: targets,
+      ).catchError((Object error) {
+        recordingState = 'Note enhancement: $error';
+        changed();
+      }),
     );
   }
 
-  Future<void> enhanceNotes(int id, {bool deferWhenBusy = false}) async {
-    if (domain.generator?.generating == true) {
+  void _scheduleNoteEditEnhancement(int id, String previous, String notes) {
+    if (_closed || store.preference('liveEnhance', 'true') != 'true') return;
+    final mapping = _noteEditMapping(id);
+    final targets = planNoteLiveEnhancementTargets(
+      previousNotes: previous,
+      notes: notes,
+      hasEnhanceableScribbles: hasEnhanceableNoteScribbles(notes),
+      lastSuccessfulShorthand: mapping.lastSuccessfulShorthand,
+      staleIndices: mapping.staleIndices,
+    );
+    if (targets == null) {
+      _scheduleEnhance(id);
+    } else if (targets.isNotEmpty) {
+      _enhance.remove(id)?.cancel();
+      _requestAutomaticNoteEnhancement(id, targets: targets);
+    }
+  }
+
+  void _scheduleEnhance(int id) {
+    if (_closed) return;
+    _enhance.remove(id)?.cancel();
+    if (store.preference('liveEnhance', 'true') != 'true') return;
+    _enhance[id] = Timer(const Duration(seconds: 30), () {
+      _enhance.remove(id);
+      if (_noteEnhancements.values.any((state) => state.active)) return;
+      _requestAutomaticNoteEnhancement(id);
+    });
+  }
+
+  Future<void> enhanceNotes(
+    int id, {
+    bool deferWhenBusy = false,
+    bool isLive = false,
+    bool forceRegenerate = false,
+    Set<int>? targetBulletIndices,
+  }) async {
+    if (_closed) throw StateError('Application closed');
+    if (domain.generator?.generating == true ||
+        _noteEnhancements.values.any((state) => state.active)) {
       if (deferWhenBusy) {
-        _scheduleEnhaseRetry(id);
+        if (_noteEnhancements.values.any((state) => state.active)) {
+          if (targetBulletIndices != null) {
+            _pendingNoteTargets[id] = Set.of(targetBulletIndices);
+          }
+        } else {
+          _scheduleEnhaseRetry(
+            id,
+            targetBulletIndices: targetBulletIndices,
+            isLive: isLive,
+          );
+        }
         return;
       }
       throw StateError('Generation already in progress');
@@ -823,41 +1327,231 @@ class Application {
       'SELECT body,revision FROM meeting_notes WHERE meeting_id=?',
       [id],
     ).firstOrNull;
-    if (notes == null || (notes['body'] as String).trim().isEmpty) return;
-    final transcript = store
-        .rows(
-          'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-          [id],
-        )
-        .map((t) => t['text'])
-        .join('\n');
-    if (domain.generator == null || transcript.isEmpty) return;
+    if (notes == null ||
+        (notes['body'] as String).trim().isEmpty ||
+        (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String)))
+      return;
+    final transcript = _noteTranscriptText(id);
+    if (transcript.isEmpty) return;
     final revision = _meeting(id)['revision'] as int;
-    final result = await _generate(
-      'notes',
-      'Enrich each shorthand note using only the transcript below. Preserve the user names and spelling. Do not add unsupported details. Write ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}, one bullet per note. Notes:\n${boundUtf8(notes['body'] as String, 1500)}\nTranscript:\n${boundUtf8(transcript, 2800)}',
-      maxTokens: 512,
+    final previousState = _noteEnhancements[id];
+    previousState?.saveTimer?.cancel();
+    final enhancement = _NoteEnhancement(
+      'notes-${DateTime.now().microsecondsSinceEpoch}-${++_noteEnhancementSerial}',
+      notes['body'] as String,
     );
-    final current = store.rows(
-      'SELECT revision FROM meeting_notes WHERE meeting_id=?',
-      [id],
-    ).firstOrNull;
-    if (current?['revision'] != notes['revision']) return;
-    store.artifact(
-      id,
-      'enhanced_notes',
-      result,
-      _digest,
-      inputRevision: revision,
-    );
+    final previous =
+        previousState != null &&
+            !previousState.active &&
+            (previousState.cancelRequested || previousState.status.isEmpty)
+        ? previousState.body
+        : store.meetingEnhancedNotes(id);
+    final mapping = _noteEditMapping(id);
+    _noteEnhancements[id] = enhancement;
+    _scheduleEnhancedDraft(id, enhancement);
     changed();
+    try {
+      late NativeRuntime generator;
+      var batch = 0;
+      final prior = forceRegenerate
+          ? null
+          : Map<int, String>.of(mapping.accepted);
+      if (forceRegenerate) mapping.accepted.clear();
+      final producer = ReferenceNoteEnhancer(
+        ensureReady: () async {
+          if (modelBusy) throw StateError('Model configuration is busy');
+          generator = await acquireNoteEnhancementService<NativeRuntime>(
+            getService: domain.noteEnhancementService,
+            isReady: (service) => service.loaded,
+            abortAndReset: () async {
+              stderr.writeln(
+                'NotesEnhancer: LiteRT-LM service not ready, attempting reset and re-initialization...',
+              );
+              await domain.resetNoteEnhancementService();
+            },
+            unavailableError: () async => Exception(
+              store.model('generation') != null
+                  ? 'LiteRT-LM service is not ready. Please try again in a moment.'
+                  : 'LiteRT-LM service is not ready: on-device inference model is not downloaded. Please check Settings -> Model Management.',
+            ),
+          );
+          if (generator.effectiveState['tools'] == false) {
+            throw StateError(
+              'Note enhancement requires a native conversation runtime',
+            );
+          }
+          if (_closed ||
+              enhancement.cancelRequested ||
+              !identical(_noteEnhancements[id], enhancement)) {
+            throw StateError('Generation cancelled');
+          }
+        },
+        loadEmbeddedTranscript: () =>
+            _embeddedNoteTranscript(id, transcript, isLive: isLive),
+        computeEmbedding: domain.helper.snapshot?.pipeline == 'ready'
+            ? _computeNoteEmbedding
+            : null,
+        encodeStopTokens: domain.helper.snapshot?.tokenizerReady == true
+            ? (text) async {
+                final response = await domain.helper.client.encode(
+                  EncodeRequest(text: text),
+                );
+                return response.tokens.toList();
+              }
+            : null,
+        createConversation: (settings) async =>
+            NativeNoteEnhancementConversation.create(
+              runtime: generator,
+              requestId: '${enhancement.requestId}-batch-${++batch}',
+              settings: settings,
+            ),
+        logBatchError: (error, stack) {
+          stderr.writeln('Note enhancement batch: $error');
+        },
+      );
+      await for (final text in producer.enhance(
+        notes: notes['body'] as String,
+        existingEnhancedBullets: prior,
+        targetBulletIndices: targetBulletIndices,
+        isLive: isLive,
+        updateExistingWithTranscript: !isLive && !forceRegenerate,
+        concise: store.preference('noteStyle', 'Standard') == 'Concise',
+        onActiveIndexChanged: (index) {
+          enhancement.activeIndex = index;
+          changed();
+        },
+      )) {
+        if (_closed ||
+            enhancement.cancelRequested ||
+            !identical(_noteEnhancements[id], enhancement)) {
+          throw StateError('Generation cancelled');
+        }
+        if (isNoteEnhancementStatus(text)) {
+          enhancement.status = text;
+        } else {
+          enhancement.body = cleanNoteEnhancementTags(text);
+          enhancement.status = '';
+          _scheduleEnhancedDraft(id, enhancement);
+        }
+        changed();
+      }
+      if (_closed ||
+          enhancement.cancelRequested ||
+          !identical(_noteEnhancements[id], enhancement))
+        throw StateError('Generation cancelled');
+      enhancement.saveTimer?.cancel();
+      store.artifact(
+        id,
+        'enhanced_notes',
+        enhancement.body,
+        _digest,
+        inputRevision: revision,
+      );
+      mapping.captureSuccess(
+        notes:
+            store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+                  id,
+                ]).firstOrNull?['body']
+                as String? ??
+            '',
+        enhancedNotes: enhancement.body,
+      );
+      _noteEnhancements.remove(id);
+      changed();
+    } catch (error) {
+      enhancement.active = false;
+      if (!identical(_noteEnhancements[id], enhancement)) {
+        enhancement.saveTimer?.cancel();
+        return;
+      }
+      if (_closed) {
+        enhancement.saveTimer?.cancel();
+        _noteEnhancements.remove(id);
+        return;
+      }
+      if (enhancement.cancelRequested) {
+        enhancement.body = formatEnhancedNotesWithSpacing(
+          extractEnhancedNoteBullets(previous),
+        );
+        enhancement.status = '';
+        _restoreNoteMapping(
+          id,
+          store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+                    id,
+                  ]).firstOrNull?['body']
+                  as String? ??
+              '',
+          enhancement.body,
+        );
+        _scheduleEnhancedDraft(id, enhancement);
+        changed();
+        return;
+      }
+      enhancement.status = error.toString();
+      changed();
+      rethrow;
+    } finally {
+      if (isLive &&
+          !_closed &&
+          identical(_noteEditMappings[id], mapping) &&
+          store.preference('liveEnhance', 'true') == 'true') {
+        if (_pendingNoteTargets.isNotEmpty) {
+          final next = _pendingNoteTargets.entries.first;
+          _pendingNoteTargets.remove(next.key);
+          _requestAutomaticNoteEnhancement(next.key, targets: next.value);
+        } else if (isLive) {
+          final currentNotes =
+              store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+                    id,
+                  ]).firstOrNull?['body']
+                  as String? ??
+              '';
+          if (currentNotes != notes['body'] &&
+              hasEnhanceableNoteScribbles(currentNotes)) {
+            _scheduleEnhance(id);
+          }
+        }
+      }
+    }
   }
 
-  void _scheduleEnhaseRetry(int id) {
+  void _scheduleEnhancedDraft(int id, _NoteEnhancement enhancement) {
+    if (_closed) return;
+    enhancement.saveTimer?.cancel();
+    enhancement.saveTimer = Timer(const Duration(seconds: 1), () {
+      enhancement.saveTimer = null;
+      if (_closed || !identical(_noteEnhancements[id], enhancement)) return;
+      try {
+        store.saveMeetingEnhancedDraft(id, enhancement.body);
+        if (!enhancement.active && enhancement.status.isEmpty)
+          _noteEnhancements.remove(id);
+      } catch (error) {
+        enhancement.status = 'Unable to save enhanced notes: $error';
+      }
+      changed();
+    });
+  }
+
+  void _scheduleEnhaseRetry(
+    int id, {
+    Set<int>? targetBulletIndices,
+    bool isLive = false,
+  }) {
+    if (_closed) return;
     _enhance.remove(id)?.cancel();
     _enhance[id] = Timer(
       const Duration(seconds: 3),
-      () => _scheduleEnhance(id),
+      () => unawaited(
+        enhanceNotes(
+          id,
+          deferWhenBusy: true,
+          isLive: isLive,
+          targetBulletIndices: targetBulletIndices,
+        ).catchError((Object error) {
+          recordingState = 'Note enhancement: $error';
+          changed();
+        }),
+      ),
     );
   }
 
@@ -884,6 +1578,9 @@ class Application {
           end,
           '$source; captured-sample timeline (gaps excluded)',
         );
+        provisionalTranscript.remove(source);
+        proactive.clearInterim(id, source);
+        proactive.notify(id);
         _scheduleEnhance(id);
         _liveIndex?.cancel();
         _liveIndex = Timer(
@@ -900,6 +1597,7 @@ class Application {
       levels: changed,
       provisional: (text, start, end, source) {
         provisionalTranscript[source] = text;
+        proactive.updateInterim(id, source, text);
         changed();
       },
       interruption: (event) {
@@ -927,19 +1625,26 @@ class Application {
         playbackTarget:
             runtimeConfiguration['FORESIGHT_PLAYBACK_TARGET'] ??
             store.preference('playbackTarget', 'auto'),
+        echoCancellation:
+            Platform.isMacOS &&
+            store.preference('echoCancellation', 'false') == 'true',
       );
     } catch (_) {
       active.dispose();
       rethrow;
     }
     recording = active;
+    proactive.begin(id);
     recordingMeeting = id;
     recordingBegan = DateTime.now();
+    _recordingPausedAt = null;
+    _recordingPausedMs = 0;
     store.db.execute("UPDATE meetings SET state='recording' WHERE id=?", [id]);
     _inactivity = Timer.periodic(const Duration(seconds: 5), (_) {
       final minutes =
           double.tryParse(store.preference('inactivity', '15')) ?? 15;
       if (minutes > 0 &&
+          !active.paused &&
           !active.finishing &&
           DateTime.now().difference(active.lastAudioActivity).inSeconds >=
               minutes * 60) {
@@ -956,6 +1661,43 @@ class Application {
 
   Future<void> stopRecording() =>
       _stopping ??= _stopRecording().whenComplete(() => _stopping = null);
+
+  Recording _activeRecording(int? id) {
+    final active = recording;
+    if (active == null || (id != null && id != recordingMeeting)) {
+      throw StateError('No matching active recording');
+    }
+    if (active.finishing || _stopping != null) {
+      throw StateError('Transcription is finalizing');
+    }
+    return active;
+  }
+
+  void pauseRecording([int? id]) {
+    _activeRecording(id).pause();
+    _recordingPausedAt ??= DateTime.now();
+    provisionalTranscript.clear();
+    proactive.clearInterim(recordingMeeting!);
+    store.db.execute("UPDATE meetings SET state='paused' WHERE id=?", [
+      recordingMeeting,
+    ]);
+    changed();
+  }
+
+  void resumeRecording([int? id]) {
+    _activeRecording(id).resume();
+    if (_recordingPausedAt != null) {
+      _recordingPausedMs += DateTime.now()
+          .difference(_recordingPausedAt!)
+          .inMilliseconds;
+      _recordingPausedAt = null;
+    }
+    store.db.execute("UPDATE meetings SET state='recording' WHERE id=?", [
+      recordingMeeting,
+    ]);
+    changed();
+  }
+
   Future<void> _stopRecording() async {
     final active = recording;
     final id = recordingMeeting;
@@ -974,6 +1716,8 @@ class Application {
       status = recordingState.startsWith('No speech') ? 'empty' : 'completed';
     } finally {
       recording = null;
+      provisionalTranscript.clear();
+      proactive.clearInterim(id);
       store.db.execute('UPDATE meetings SET state=? WHERE id=?', [status, id]);
       changed();
     }
@@ -990,6 +1734,21 @@ class Application {
       timer.cancel();
     }
     _enhance.clear();
+    for (final enhancement in _noteEnhancements.values) {
+      enhancement.saveTimer?.cancel();
+      enhancement.cancelRequested = true;
+    }
+    final acquisition = _queryAcquisition;
+    await acquisition?.close();
+    if (acquisition != null) {
+      try {
+        await acquisition.done;
+      } catch (_) {
+        /* Owned setup was cancelled. */
+      }
+    }
+    await proactive.close();
+    await _queryRuntime?.close();
     try {
       await googleAuth.close();
       if (recording != null) await stopRecording();
@@ -997,4 +1756,21 @@ class Application {
       await changes.close();
     }
   }
+}
+
+class _NoteEnhancement {
+  _NoteEnhancement(this.requestId, this.body);
+  final String requestId;
+  String body, status = '';
+  bool active = true, cancelRequested = false;
+  int? activeIndex;
+  Timer? saveTimer;
+  Map<String, Object?> get state => {
+    'request_id': requestId,
+    'body': body,
+    'status': status,
+    'active': active,
+    'cancel_requested': cancelRequested,
+    'active_index': activeIndex,
+  };
 }

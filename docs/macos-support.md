@@ -73,7 +73,12 @@ release validation described below.
 
 Prepare a relocatable standalone arm64 Python 3.13 prefix, not a virtual
 environment or Homebrew Python. Install `requirements-litert-macos.lock` into
-that prefix. Build the pinned Whisper runtime described in
+that prefix. The lock includes NumPy2.5.1 and SentencePiece0.2.1 for the
+reconstructed dedicated CPU query detector. Its three worker/executor/weights
+modules are copied beside the existing adapters, and runtime configuration
+points to those installed modules and the bundled interpreter. The dedicated
+model remains separately registered; original oracle binaries and model weights
+are never copied. Build the pinned Whisper runtime described in
 [speech-models.md](speech-models.md) for arm64 with deployment target 15.0; retain
 its source license. Models themselves belong in the user profile and are not
 sealed into the application.
@@ -205,3 +210,12 @@ the desktop, which attaches to the existing owner. Notifications use a separate
 stable helper bundle and explicit authorization. Scheduling remains in the
 application service. Google sign-in is explicit; install application OAuth
 configuration with `--google-client`, never account credentials or tokens.
+
+The packager copies the full NumPy distribution license hierarchy and the
+SentencePiece upstream notice. NumPy extension linkage participates in the same
+Mach-O relocation, architecture, minimum-OS and signing checks as other nested
+binaries. `tools/test_packaged_query_worker.py --python-runtime PREFIX --model
+REGISTERED_MODEL` copies and relocates the actual prefix, runs from a moved path
+containing spaces with poisoned working-directory imports, and checks both a
+positive and empty detector result. Its output report belongs under ignored
+`test-results`; it does not copy the registered model into the test bundle.

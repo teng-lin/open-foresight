@@ -1,14 +1,78 @@
 part of 'main.dart';
 
 extension _MeetingWorkspace on _WorkspaceState {
+  Widget immersiveMeetingWorkspace() => CallbackShortcuts(
+    bindings: {
+      const SingleActivator(LogicalKeyboardKey.escape): () =>
+          update(() => meetingImmersive = false),
+    },
+    child: Focus(
+      autofocus: true,
+      child: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              children: [
+                SizedBox(
+                  width: double.infinity,
+                  child: Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 12,
+                    runSpacing: 8,
+                    children: [
+                      TextButton.icon(
+                        onPressed: () => update(() => meetingImmersive = false),
+                        icon: const Icon(Icons.fullscreen_exit),
+                        label: const Text('Exit Immersive View'),
+                      ),
+                      if (recording != null) recordingHeader(),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Expanded(child: meetingWorkspace()),
+              ],
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+
   Future<void> saveMeetingNotes() async {
     final id = loadedMeetingNotes;
     if (id == null) return;
-    await d.command('meetings.notes', {
-      'id': id,
-      'body': meetingNotesController.text,
-    });
-    if (mounted) update(() {});
+    meetingNoteSaves.schedule(
+      id,
+      meetingNotesController.text,
+      lastManualEdit: meetingNoteManualEdit,
+    );
+    await flushMeetingNotesDraft();
+  }
+
+  Future<void> flushMeetingNotesDraft() async {
+    try {
+      await meetingNoteSaves.flush();
+    } catch (failure) {
+      if (mounted)
+        update(() => error = 'Unable to save meeting notes: $failure');
+      rethrow;
+    }
+  }
+
+  void scheduleMeetingNotesSave() {
+    final id = loadedMeetingNotes;
+    if (id == null) return;
+    if (meetingNotesController.text != loadedMeetingNoteSnapshot?.body) {
+      meetingNoteManualEdit = DateTime.now().millisecondsSinceEpoch;
+    }
+    meetingNoteSaves.schedule(
+      id,
+      meetingNotesController.text,
+      lastManualEdit: meetingNoteManualEdit,
+    );
   }
 
   void formatMeetingNotes(String before, [String after = '']) {
@@ -23,33 +87,63 @@ extension _MeetingWorkspace on _WorkspaceState {
         offset: start + replacement.length - after.length,
       ),
     );
-    saveMeetingNotes();
+    scheduleMeetingNotesSave();
   }
 
   Future<void> enhanceMeetingNotes(int id) async {
     if (meetingEnhancing) return;
     update(() {
+      meetingEnhancementStarting = true;
       meetingEnhancing = true;
       meetingEnhanceStatus = '';
     });
     try {
+      await flushMeetingNotesDraft();
       await d.command('meetings.enhance', {'id': id});
     } catch (e) {
       if (mounted) update(() => meetingEnhanceStatus = e.toString());
     } finally {
-      if (mounted) update(() => meetingEnhancing = false);
+      if (mounted)
+        update(() {
+          meetingEnhancementStarting = false;
+          syncCapture();
+        });
     }
   }
 
-  void loadMeetingNotes(int id) {
-    if (loadedMeetingNotes != id) {
-      loadedMeetingNotes = id;
-      meetingNotesController.text =
-          d.store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
-                id,
-              ]).firstOrNull?['body']
-              as String? ??
-          '';
+  void loadMeetingNotes(int id, {bool acceptedSave = false}) {
+    final row = d.store.rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [
+      id,
+    ]).firstOrNull;
+    final enhanced = d.store.meetingEnhancedNotes(id);
+    final stored = MeetingNoteSnapshot(
+      body: row?['body'] as String? ?? '',
+      enhanced: enhanced,
+      timestamp: row?['timestamp'] as int?,
+      lastEnhanced: row?['last_enhanced'] as int?,
+      lastManualEdit: row?['last_manual_edit'] as int?,
+    );
+    final changedId = loadedMeetingNotes != id;
+    if (changedId ||
+        acceptedSave ||
+        (row != null &&
+            !stored.sameRecord(loadedMeetingNoteSnapshot) &&
+            stored.shouldReload(
+              currentBody: meetingNotesController.text,
+              currentEnhanced: loadedMeetingNoteSnapshot?.enhanced ?? '',
+              localManualEdit: meetingNoteManualEdit,
+              localEnhanced: loadedMeetingNoteSnapshot?.lastEnhanced,
+              dirty: meetingNoteSaves.isDirty(id),
+              programmaticWrite: meetingEnhancing,
+            ))) {
+      if (changedId) {
+        unawaited(flushMeetingNotesDraft().catchError((Object _) {}));
+        loadedMeetingNotes = id;
+      }
+      if (meetingNotesController.text != stored.body)
+        meetingNotesController.text = stored.body;
+      loadedMeetingNoteSnapshot = stored;
+      meetingNoteManualEdit = stored.lastManualEdit;
       meetingEnhanceStatus = '';
     }
   }
@@ -124,7 +218,14 @@ extension _MeetingWorkspace on _WorkspaceState {
                     ),
                     IconButton(
                       tooltip: 'Close meeting preview',
-                      onPressed: () => update(() => meetingPreviewId = null),
+                      onPressed: () async {
+                        try {
+                          await flushMeetingNotesDraft();
+                        } catch (_) {
+                          return;
+                        }
+                        if (mounted) update(() => meetingPreviewId = null);
+                      },
                       icon: const Icon(Icons.close, size: 18),
                     ),
                   ],
@@ -192,7 +293,18 @@ extension _MeetingWorkspace on _WorkspaceState {
           children: [
             IconButton.filledTonal(
               tooltip: 'All meetings',
-              onPressed: () => update(() => meetingId = null),
+              onPressed: () async {
+                try {
+                  await flushMeetingNotesDraft();
+                } catch (_) {
+                  return;
+                }
+                if (mounted)
+                  update(() {
+                    meetingId = null;
+                    meetingImmersive = false;
+                  });
+              },
               style: IconButton.styleFrom(backgroundColor: Colors.white),
               icon: const Icon(Icons.arrow_back),
             ),
@@ -234,6 +346,14 @@ extension _MeetingWorkspace on _WorkspaceState {
                 onPressed: () => update(() => meetingSidecarVisible = true),
                 icon: const Icon(Icons.chat_bubble_outline),
               ),
+            IconButton(
+              tooltip: meetingImmersive ? 'Exit Immersive View' : 'Full screen',
+              onPressed: () =>
+                  update(() => meetingImmersive = !meetingImmersive),
+              icon: Icon(
+                meetingImmersive ? Icons.fullscreen_exit : Icons.fullscreen,
+              ),
+            ),
             PopupMenuButton<String>(
               tooltip: 'Meeting options',
               onSelected: (action) {
@@ -389,6 +509,9 @@ extension _MeetingWorkspace on _WorkspaceState {
       "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
       [id],
     ).firstOrNull;
+    final progress = meetingEnhancements['$id'] as Map?;
+    final enhancedText =
+        progress?['body'] as String? ?? d.store.meetingEnhancedNotes(id);
     final live = d.store.preference('liveEnhance', 'true') == 'true';
     final editor = TextField(
       key: const ValueKey('meeting-notes-editor'),
@@ -398,7 +521,7 @@ extension _MeetingWorkspace on _WorkspaceState {
       minLines: null,
       textAlignVertical: TextAlignVertical.top,
       style: const TextStyle(fontSize: 16, height: 1.7),
-      onChanged: (_) => saveMeetingNotes(),
+      onChanged: (_) => scheduleMeetingNotesSave(),
       decoration: const InputDecoration(
         filled: false,
         border: InputBorder.none,
@@ -446,22 +569,23 @@ extension _MeetingWorkspace on _WorkspaceState {
                       ),
                       IconButton(
                         tooltip: 'Copy enhanced notes',
-                        onPressed: enhanced == null
+                        onPressed:
+                            enhanced == null &&
+                                progress == null &&
+                                enhancedText.isEmpty
                             ? null
                             : () => Clipboard.setData(
-                                ClipboardData(
-                                  text:
-                                      (enhanced['edited'] ??
-                                              enhanced['generated'])
-                                          as String,
-                                ),
+                                ClipboardData(text: enhancedText),
                               ),
                         icon: const Icon(Icons.copy_outlined, size: 19),
                       ),
                       if (enhanced != null)
                         IconButton(
                           tooltip: 'Edit enhanced notes',
-                          onPressed: () => editArtifact(enhanced),
+                          onPressed: () => editArtifact({
+                            ...enhanced,
+                            'edited': enhancedText,
+                          }),
                           icon: const Icon(Icons.edit_outlined, size: 18),
                         ),
                       IconButton(
@@ -473,9 +597,32 @@ extension _MeetingWorkspace on _WorkspaceState {
                     ],
                   ),
                 ),
-                if (meetingEnhancing) const LinearProgressIndicator(),
+                if (progress?['active'] == true) ...[
+                  const LinearProgressIndicator(),
+                  TextButton(
+                    key: const ValueKey('cancel-note-enhancement'),
+                    onPressed: progress?['cancel_requested'] == true
+                        ? null
+                        : () async {
+                            await d.command('meetings.cancel_enhance', {
+                              'id': id,
+                              'request_id': progress?['request_id'],
+                            });
+                          },
+                    child: Text(
+                      progress?['cancel_requested'] == true
+                          ? 'Cancelling…'
+                          : 'Cancel enhancement',
+                    ),
+                  ),
+                ],
+                if ((progress?['status'] as String? ?? '').isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(progress!['status'] as String),
+                  ),
                 Expanded(
-                  child: enhanced == null
+                  child: enhancedText.isEmpty && progress == null
                       ? Center(
                           child: SingleChildScrollView(
                             padding: const EdgeInsets.all(24),
@@ -507,11 +654,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                         )
                       : SingleChildScrollView(
                           padding: const EdgeInsets.all(20),
-                          child: SelectableText(
-                            (enhanced['edited'] ?? enhanced['generated'])
-                                as String,
-                            style: const TextStyle(fontSize: 15, height: 1.6),
-                          ),
+                          child: GeneratedContent(enhancedText),
                         ),
                 ),
                 if (meetingNotesController.text.isNotEmpty)
@@ -794,7 +937,7 @@ extension _MeetingWorkspace on _WorkspaceState {
             ].indexOf(meetingPanel),
             children: [
               chat(meetingScope: id, compact: true),
-              meetingTranscriptPanel(id, questions: true),
+              meetingQuestionsPanel(id),
               meetingSummaryPanel(id),
               meetingTranscriptPanel(id),
               meetingSummaryPanel(id, actions: true),
@@ -804,6 +947,169 @@ extension _MeetingWorkspace on _WorkspaceState {
       ],
     ),
   );
+
+  Widget meetingQuestionsPanel(int id) {
+    final automatic = d.store.preference('proactiveAnswers', 'true') == 'true';
+    final detected = d.store.rows(
+      'SELECT q.*,a.body,a.citations FROM meeting_questions q '
+      'LEFT JOIN answers a ON a.id=q.answer_id WHERE q.meeting_id=? ORDER BY q.id',
+      [id],
+    );
+    final manual = d.store
+        .rows(
+          'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
+          [id],
+        )
+        .where(
+          (row) =>
+              (row['text'] as String).contains(RegExp('[?？]')) &&
+              !detected.any((question) => question['question'] == row['text']),
+        )
+        .toList();
+    final pipeline = d is RemoteDomain
+        ? (d as RemoteDomain).capture['proactive'] as Map? ?? const {}
+        : d.application.proactive.state;
+    final detectionError = (pipeline['errors'] as Map?)?['$id'] as String?;
+    return Column(
+      children: [
+        SwitchListTile(
+          dense: true,
+          title: const Text('Automatic answers'),
+          subtitle: const Text(
+            'Detect questions and answer with your local model.',
+          ),
+          value: automatic,
+          onChanged: (enabled) => preference('proactiveAnswers', '$enabled'),
+        ),
+        if ((pipeline['running'] == true && pipeline['active_meeting'] == id) ||
+            (pipeline['pending_meetings'] as List? ?? []).contains(id))
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              automatic
+                  ? 'Waiting for the local model or processing transcript…'
+                  : 'Automatic answering is off. Queued questions are saved.',
+            ),
+          ),
+        if (detectionError != null)
+          ListTile(
+            title: Text(detectionError),
+            trailing: TextButton(
+              onPressed: () => run(() async {
+                await d.command('meetings.retry_detection', {'id': id});
+              }),
+              child: const Text('Retry detection'),
+            ),
+          ),
+        Expanded(
+          child: detected.isEmpty && manual.isEmpty
+              ? const Center(
+                  child: Padding(
+                    padding: EdgeInsets.all(24),
+                    child: Text(
+                      'Questions detected during the conversation will be answered here.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(16),
+                  children: [
+                    for (final item in detected)
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item['question'] as String,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              Text(switch (item['state']) {
+                                'queued' => 'Automatic · Waiting',
+                                'answering' => 'Automatic · Answering…',
+                                'completed' => 'Automatic · Answered',
+                                'insufficient_context' =>
+                                  'Automatic · No supporting sources found',
+                                'failed' => 'Automatic · Could not answer',
+                                'cancelled' => 'Automatic · Cancelled',
+                                'superseded' =>
+                                  'Automatic · Replaced by an updated question',
+                                _ => 'Automatic · Saved question',
+                              }),
+                              if ((item['error'] as String).isNotEmpty)
+                                Text(item['error'] as String),
+                              if (item['body'] != null)
+                                GeneratedContent(
+                                  item['body'] as String,
+                                  fontSize: answerFontSize,
+                                ),
+                              if (item['body'] != null)
+                                IconButton(
+                                  tooltip: 'Copy automatic answer',
+                                  onPressed: () => Clipboard.setData(
+                                    ClipboardData(text: item['body'] as String),
+                                  ),
+                                  icon: const Icon(Icons.copy_outlined),
+                                ),
+                              if (item['citations'] != null)
+                                Wrap(
+                                  children: [
+                                    for (final source
+                                        in jsonDecode(
+                                              item['citations'] as String,
+                                            )
+                                            as List)
+                                      TextButton(
+                                        onPressed: () =>
+                                            citation(source as Map),
+                                        child: Text(
+                                          '[${source['citation']}] source revision ${source['revision']}',
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              if ([
+                                'failed',
+                                'insufficient_context',
+                                'cancelled',
+                              ].contains(item['state']))
+                                TextButton(
+                                  onPressed: () => run(() async {
+                                    await d.command('meetings.retry_question', {
+                                      'id': item['id'],
+                                    });
+                                  }),
+                                  child: const Text('Try again'),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    for (final row in manual)
+                      ListTile(
+                        title: SelectableText(row['text'] as String),
+                        trailing: IconButton(
+                          tooltip: 'Answer this question',
+                          onPressed: busy || asking || meetingEnhancing
+                              ? null
+                              : () {
+                                  question.text = row['text'] as String;
+                                  update(() => meetingPanel = 'Chat');
+                                  unawaited(askQuestion(meetingScope: id));
+                                },
+                          icon: const Icon(Icons.arrow_upward),
+                        ),
+                      ),
+                  ],
+                ),
+        ),
+      ],
+    );
+  }
 
   Widget meetingTranscriptPanel(int id, {bool questions = false}) {
     final rows = d.store.rows(
@@ -873,11 +1179,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                             ) ...[
                               TextSpan(
                                 text:
-                                    '${(rows[index]['source'] as String).startsWith('microphone')
-                                        ? 'Microphone'
-                                        : (rows[index]['source'] as String).startsWith('playback')
-                                        ? 'System audio'
-                                        : 'Transcript'}\n',
+                                    '${MeetingSpeaker.fromSource(rows[index]['source'] as String).label}\n',
                                 style: Theme.of(context).textTheme.bodySmall,
                               ),
                               TextSpan(text: rows[index]['text'] as String),
@@ -894,11 +1196,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                           contentPadding: EdgeInsets.zero,
                           title: SelectableText(t['text'] as String),
                           subtitle: Text(
-                            (t['source'] as String).startsWith('microphone')
-                                ? 'Microphone'
-                                : (t['source'] as String).startsWith('playback')
-                                ? 'System audio'
-                                : 'Transcript',
+                            MeetingSpeaker.fromSource(
+                              t['source'] as String,
+                            ).label,
                           ),
                           trailing: questions
                               ? IconButton(
@@ -926,7 +1226,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                             entry.value,
                             style: const TextStyle(color: Color(0xff818995)),
                           ),
-                          subtitle: const Text('Live'),
+                          subtitle: Text(
+                            '${MeetingSpeaker.fromSource(entry.key).label} · Live',
+                          ),
                         ),
                   ],
                 ),
@@ -964,6 +1266,18 @@ extension _MeetingWorkspace on _WorkspaceState {
               ),
               if (artifact != null)
                 IconButton(
+                  tooltip: 'Copy $title',
+                  onPressed: () => Clipboard.setData(
+                    ClipboardData(
+                      text:
+                          (artifact['edited'] ?? artifact['generated'])
+                              as String,
+                    ),
+                  ),
+                  icon: const Icon(Icons.copy_outlined),
+                ),
+              if (artifact != null)
+                IconButton(
                   tooltip: 'Edit $title',
                   onPressed: () => editArtifact(artifact),
                   icon: const Icon(Icons.edit_outlined),
@@ -991,9 +1305,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      SelectableText(
+                      GeneratedContent(
                         (artifact['edited'] ?? artifact['generated']) as String,
-                        style: TextStyle(fontSize: answerFontSize, height: 1.6),
+                        fontSize: answerFontSize,
                       ),
                       if (versions.length > 1)
                         ExpansionTile(
@@ -1001,7 +1315,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                           children: [
                             for (final previous in versions.skip(1))
                               ListTile(
-                                title: SelectableText(
+                                title: GeneratedContent(
                                   (previous['edited'] ?? previous['generated'])
                                       as String,
                                 ),
@@ -1022,12 +1336,15 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   Widget recordingHeader() {
-    final elapsed = recordingBegan == null
-        ? Duration.zero
-        : DateTime.now().difference(recordingBegan!);
+    final elapsed =
+        recordingElapsed +
+        (recording!.paused
+            ? Duration.zero
+            : DateTime.now().difference(recordingElapsedAt));
     final clock =
         '${elapsed.inMinutes.toString().padLeft(2, '0')}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
     return Container(
+      key: const ValueKey('recording-pill'),
       width: MediaQuery.sizeOf(context).width > 1100 ? 400 : 310,
       padding: const EdgeInsets.fromLTRB(16, 4, 4, 4),
       decoration: BoxDecoration(
@@ -1046,11 +1363,41 @@ extension _MeetingWorkspace on _WorkspaceState {
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: SizedBox(
-              height: 30,
-              child: CustomPaint(
-                painter: _CaptureWaveform(recording!.currentVolumes),
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onDoubleTap: () => update(() {
+                tab = 3;
+                meetingId = recordingMeeting;
+                meetingSidecarVisible = true;
+                meetingImmersive = !meetingImmersive;
+              }),
+              child: SizedBox(
+                height: 30,
+                child: CustomPaint(
+                  painter: _CaptureWaveform(recording!.currentVolumes),
+                ),
               ),
+            ),
+          ),
+          IconButton(
+            tooltip: recording!.paused
+                ? 'Resume transcribing'
+                : 'Pause transcribing',
+            constraints: const BoxConstraints.tightFor(width: 36, height: 36),
+            padding: const EdgeInsets.all(6),
+            onPressed: busy || recording!.finishing
+                ? null
+                : () => run(() async {
+                    await d.command(
+                      recording!.paused ? 'meetings.resume' : 'meetings.pause',
+                      {'id': recordingMeeting},
+                    );
+                    if (mounted) update(syncCapture);
+                  }),
+            icon: Icon(
+              recording!.paused ? Icons.play_arrow : Icons.pause,
+              color: _ink,
+              size: 23,
             ),
           ),
           IconButton(

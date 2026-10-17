@@ -56,7 +56,9 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
   - Markdown notes, which can be enhanced live in a Standard or Concise style
   - a sidecar with meeting-scoped Chat, Live Q&A, Summary, Transcript, and Action items
 
-  Recording stops itself after a period of inactivity that you choose. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
+  Live Q&A can detect questions in finalized speech and queue grounded answers automatically using the local model. Its Automatic answers switch pauses processing while retaining queued questions; failed answers can be retried.
+
+  Recording can be paused and resumed, and stops itself after a period of inactivity that you choose. Double-click its waveform or use Full screen to open the immersive meeting workspace. Generated notes, summaries, action items and answers render as formatted, selectable Markdown, with original Markdown retained for editing and copying. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
 - **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
 - **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
 - **MCP server.** Agents can import, search, ask, take notes, and record through the same application service the desktop uses.
@@ -79,17 +81,22 @@ Open Foresight reproduces the original's main workflows, and adds features the o
 - **Local and open.** Models are public LiteRT and whisper.cpp files, pinned by SHA-256 hash, and generation never calls a cloud model. The source code is MIT-licensed.
 - **Isolated profiles.** You can run separate profiles side by side, and migrate an existing profile with a tool that keeps a verified backup.
 
-### Not yet reproduced
+### Original-app parity
 
-These features of the original are not in Open Foresight yet:
+Web-search fallback and the original remote Gemini summary RPC are implemented
+for optional web-enabled Ask and meeting Chat. Distribution credentials and live
+service verification remain pending; no separate user project setup is required.
+Ordinary answer generation remains local.
 
-- **Speaker labels.** The original labels speakers in the transcript. Open Foresight has no speaker identification or echo cancellation.
-- **Proactive answers in meetings.** The original detects questions in the live transcript and answers them unprompted. Open Foresight's Live Q&A answers only when you ask.
-- **Web search fallback.** The original's meeting assistant can fall back to a Google web-search tool.
-- **Recording controls and rich previews.** The original's recording pill has pause and fullscreen gestures, and generated content is shown as a rich preview. Open Foresight uses an explicit Stop button and shows generated content as selectable Markdown text.
-- **Cloud Gemini models.** The original's binary references cloud Gemini models. Open Foresight leaves these out on purpose and runs every model locally.
+The original's single-note Markdown export format has now been observed live and reproduced, with date filters, preview, copy and download. Additional export scenarios and label editing still need reference verification; see the [feature parity progress ledger](docs/feature-parity-progress.md).
 
-Some of the original's behavior, such as its export format and label editing, was never observed live, so parity in those areas has not been confirmed.
+Pause/resume and an immersive workspace are implemented. Exact original gestures and physical-audio behavior remain under [investigation and validation](docs/missing-functions-investigation.md).
+
+Automatic meeting answers now use a reconstructed dedicated detector when its authenticated asset is registered. Nine controlled parsed outputs match the original GPU runtime. Model setup now includes authenticated acquisition and encrypted storage when the distribution supplies its shared credential; live service/release validation and broader numerical comparison remain pending. Search configuration is also [under investigation](docs/ida-search-investigation.md); a separate user project has not been established as a requirement.
+
+Transcripts label microphone and remote audio channels as Microphone and Remote, with Unknown for other sources. These are capture routes, not individual-speaker identification. Meeting generation is instructed to attribute statements only to clearly established real names.
+
+On macOS, Settings offers optional echo cancellation using system voice processing. The setting defaults to off, reports active processing or standard-recording fallback, and can bypass processing during a recording. Enabling it on a standard recording requires restarting that recording. Physical echo-cancellation quality and comparison with the original remain unverified; see the [implementation ledger](docs/missing-functions-investigation.md).
 
 ## Platform status
 

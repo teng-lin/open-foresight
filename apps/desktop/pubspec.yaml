@@ -17,6 +17,8 @@ dependencies:
   fixnum: 1.1.1
   file_selector: 1.0.3
   dbus: 0.7.11
+  flutter_markdown_plus: 1.0.12
+  intl: 0.20.2
 dev_dependencies:
   integration_test:
     sdk: flutter
