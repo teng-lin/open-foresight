@@ -198,7 +198,12 @@ jobs:
       env:
         BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
         FORCE: ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
-      run: python tools/ci_changes.py --base "$BASE" $FORCE
+      run: |-
+        task_args=(--base "$BASE")
+        if [[ "$FORCE" == --force ]]; then
+          task_args+=(--force)
+        fi
+        python tools/ci_changes.py "${task_args[@]}"
     - name: Lint every Actions workflow
       run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
     - name: Validate release version copies
