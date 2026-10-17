@@ -35,7 +35,7 @@ void main() {
               'ALL',
               '--clearenv',
               '--ro-bind',
-              source.path,
+              source.resolveSymbolicLinksSync(),
               '/input/document.pdf',
               '/usr/bin/pdftotext',
             ]),
