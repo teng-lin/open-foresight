@@ -1,4 +1,5 @@
 #include "output_budget.h"
+#include "model_startup.h"
 #include "tool_conversation.h"
 #include "conversation_stream.h"
 #include "persistent_worker.h"
@@ -253,9 +254,16 @@ public:
     if (!gpu) LM(engine_settings_set_num_threads)(settings.get(), 4);
     LM(engine_settings_set_audio_num_threads)(settings.get(), 4);
     LM(engine_settings_set_cache_dir)(settings.get(), cache.c_str());
-    engine.reset(LM(engine_create)(settings.get()));
-    if (!engine)
-      throw std::runtime_error("Cannot initialize generation model");
+    foresight::initialize_generation_engine(
+        query_detector,
+        [&] {
+          engine.reset(LM(engine_create)(settings.get()));
+          if (!engine)
+            throw std::runtime_error("Cannot initialize generation model");
+        },
+        [&] { foresight::clear_model_cache(path, cache); },
+        [&] { fs::create_directories(cache); },
+        [&] { engine.reset(); });
   }
   void cancel(void *pointer) {
     LM(conversation_cancel_process)(static_cast<LiteRtLmConversation *>(pointer));
