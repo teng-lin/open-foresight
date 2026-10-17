@@ -25,6 +25,7 @@ class _AudioSegment {
 /// ephemeral; completed speech segments are committed while capture continues.
 class Recording {
   final DynamicLibrary lib;
+  final Duration speechTimeout, stopTimeout;
   final void Function(String) state;
   final void Function(String, int, int, String) transcript;
   final void Function(String, int, int, String)? provisional;
@@ -87,6 +88,8 @@ class Recording {
     this.provisional,
     this.interruption,
     this.levels,
+    this.speechTimeout = const Duration(seconds: 60),
+    this.stopTimeout = const Duration(seconds: 90),
   }) : lib = DynamicLibrary.open(path);
 
   Map<String, dynamic>? poll(Pointer<Void> handle) {
@@ -506,12 +509,18 @@ class Recording {
           calloc.free(request);
         }
         String? failure;
+        final deadline = DateTime.now().add(speechTimeout);
         while (epoch == _epoch) {
+          if (DateTime.now().isAfter(deadline)) {
+            throw TimeoutException('Speech worker timed out', speechTimeout);
+          }
           final event = poll(handle);
           if (event == null) {
             await Future<void>.delayed(const Duration(milliseconds: 20));
             continue;
           }
+          if (event['type'] == 'state' && event['message'] is String)
+            state(event['message'] as String);
           if (event['type'] == 'error') failure = event['message'].toString();
           if (event['type'] == 'transcript') {
             final text = (event['text'] as String).trim();
@@ -545,6 +554,13 @@ class Recording {
         if (epoch == _epoch) {
           lastError = error.toString();
           state('Live transcription failed: $lastError');
+          if (!segment.provisional)
+            interruption?.call({
+              'reason': 'speech_recognition_error',
+              'message': lastError,
+              'discarded_bytes': segment.pcm.length,
+              'source': channel == 0 ? 'microphone' : 'playback',
+            });
         }
       } finally {
         if (handle != null) _releaseSpeech(handle);
@@ -565,8 +581,24 @@ class Recording {
     }
     state('Finalizing live transcript');
     try {
+      final deadline = DateTime.now().add(stopTimeout);
       while (_workers.isNotEmpty && epoch == _epoch) {
-        await Future.wait(_workers.values.toList());
+        final remaining = deadline.difference(DateTime.now());
+        if (remaining <= Duration.zero)
+          throw TimeoutException('Speech finalization timed out', stopTimeout);
+        try {
+          await Future.wait(_workers.values.toList()).timeout(remaining);
+        } on TimeoutException {
+          lastError =
+              'Speech finalization timed out; committed transcript retained';
+          interruption?.call({
+            'reason': 'speech_stop_timeout',
+            'discarded_bytes': 0,
+            'source': 'speech',
+          });
+          state(lastError);
+          break;
+        }
         await Future<void>.delayed(Duration.zero);
       }
       if (epoch != _epoch) throw StateError('Recording cancelled');

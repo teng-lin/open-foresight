@@ -255,3 +255,11 @@ python3 tests/integration/test_file_parser.py /tmp/foresight-file-parser
 These developer tests generate real Unicode PDF/RTF, password-protected, empty,
 malformed, and unreadable fixtures. The installed extractor itself requires no
 SDK, Python interpreter, or external document-processing tools.
+
+## Meeting and worker recovery
+
+Committed transcript segments remain indexed when a later speech segment fails or finalization times out. The meeting becomes `interrupted` and retains its transcript instead of becoming a failed, unindexed meeting. Speech segments have a 60-second deadline and Stop allows at most 90 seconds for queued speech work before terminating it; already committed rows remain available. Startup marks meetings left recording, transcribing, or paused as interrupted.
+
+Whisper retries a failed GPU invocation once with `-ng` on CPU, preserving the original audio and discarding the failed attempt's output. A LiteRT GPU failure rebuilds the generation worker on CPU for the next answer. The current answer fails visibly; tool calls are not replayed automatically. Native capture queue overflow emits an interruption with discarded-byte accounting, which is stored alongside the meeting transcript.
+
+`application.resume` explicitly resets an exhausted helper restart budget and starts the helper again. It preserves a healthy helper. An incompatible helper transport requires an application-service restart instead of retrying a terminated connection. Shortcut IPC acknowledges that a command was queued; failures appear in the desktop workspace and shortcut status.

@@ -490,6 +490,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             .firstOrNull?['backend'] ==
         'litert_lm_embedding_gpu';
     commands = widget.commands;
+    commands?.onError = reportShortcutFailure;
     commands?.setHandler(
       (command, token) => command == 'quick-meeting'
           ? activateQuickMeeting(token)
@@ -639,6 +640,15 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     }
   }
 
+  void reportShortcutFailure(Object failure) {
+    if (!mounted) return;
+    setState(() {
+      error = 'Global shortcut failed: $failure';
+      globalShortcutState = error;
+    });
+    unawaited(notify(error));
+  }
+
   Future<void> activateQuickMeeting(String? token) async {
     await activateWindow(token);
     if (mounted && !busy && recording == null) await quickStart();
@@ -655,7 +665,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       await desktopSettings.ensureApplicationEntry();
       globalShortcuts ??= GlobalShortcuts(
         (id, token) {
-          if (id == 'quick-meeting') unawaited(activateQuickMeeting(token));
+          if (id == 'quick-meeting') {
+            unawaited(
+              activateQuickMeeting(token).catchError(reportShortcutFailure),
+            );
+          }
         },
         changed: () {
           if (mounted)

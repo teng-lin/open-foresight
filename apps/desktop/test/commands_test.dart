@@ -1,8 +1,36 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
 
 void main() {
+  test(
+    'shortcut failures reach the owning UI error handler after queued acknowledgement',
+    () async {
+      final directory = Directory.systemTemp.createTempSync(
+        'foresight-command-error-',
+      );
+      final failed = Completer<Object>();
+      final commands = await AppCommands.bind(
+        '${directory.path}/commands.sock',
+        (_, _) async {
+          throw StateError('Microphone unavailable');
+        },
+      );
+      commands.onError = failed.complete;
+      try {
+        expect(await AppCommands.forward(commands.path), true);
+        expect(
+          (await failed.future.timeout(const Duration(seconds: 2))).toString(),
+          contains('Microphone unavailable'),
+        );
+      } finally {
+        await commands.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+  );
+
   test(
     'activation forwards to the existing owner and socket can reopen after close',
     () async {

@@ -16,6 +16,7 @@ class Helper {
   Future<PingResponse>? _startupProbe;
   Future<void>? _closing;
   bool stopping = false;
+  bool incompatible = false;
   bool shutdownVerified = true;
   bool _adopted = false;
   int restarts = 0;
@@ -72,9 +73,39 @@ class Helper {
     return false;
   }
 
-  Future<void> start() async {
+  Future<void>? _recovering;
+
+  /// Explicit recovery starts a new bounded restart cycle after a degraded
+  /// helper exhausted automatic retries. Healthy processes are kept in place.
+  Future<void> recover() =>
+      _recovering ??= _recover().whenComplete(() => _recovering = null);
+  Future<void> _recover() async {
+    if (stopping) throw StateError('Helper is closing');
+    if (incompatible)
+      throw StateError(
+        'Restart the application service to replace the incompatible helper',
+      );
+    if (!manageProcess) return;
+    restarts = 0;
+    if (process == null || snapshot == null) await start();
+  }
+
+  Future<void>? _starting;
+  Future<void> start() =>
+      _starting ??= _start().whenComplete(() => _starting = null);
+  Future<void> _start() async {
+    if (incompatible)
+      throw StateError(
+        'Restart the application service to replace the incompatible helper',
+      );
     final executable = runtimeConfiguration['FORESIGHT_HELPER'];
     if (manageProcess && executable != null && process == null) {
+      if (_launching != null) {
+        try {
+          await _launching;
+        } catch (_) {}
+        if (process != null || stopping) return;
+      }
       bool live = false;
       try {
         await (_startupProbe = client.ping(
@@ -112,7 +143,9 @@ class Helper {
           if (!stopping && restarts++ < 3) {
             await Future<void>.delayed(Duration(seconds: restarts));
             try {
-              await start();
+              final starting = _starting;
+              if (starting != null) await starting;
+              if (!stopping && process == null) await start();
             } catch (e) {
               state = 'app restore failed: $e';
               changed?.call();
