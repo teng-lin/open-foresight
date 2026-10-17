@@ -604,13 +604,15 @@ extension _ScreenshotScreens on _WorkspaceState {
     if (localOutputRevision != revision) {
       localOutputRevision = revision;
       unawaited(
-        localOutputWords(d.store.path).then((count) {
-          if (mounted &&
-              localOutputRevision == revision &&
-              localOutputCount != count) {
-            localOutputCount = count;
-            serviceChanged();
+        localOutputStats(d.store.path).then((stats) {
+          if (!mounted || localOutputRevision != revision) return;
+          var changed = localOutputCount != stats.words;
+          for (var i = 0; i < 5; i++) {
+            changed |= localOutputWeekly[i] != stats.weekly[i];
           }
+          localOutputCount = stats.words;
+          localOutputWeekly = stats.weekly;
+          if (changed) serviceChanged();
         }, onError: (Object _) {}),
       );
     }
@@ -3279,20 +3281,8 @@ extension _ScreenshotScreens on _WorkspaceState {
                 )
                 .single['n']
             as int;
-    final weekly = List<int>.filled(5, 0);
-    for (final a in d.store.rows(
-      "SELECT body,created FROM answers WHERE status='completed'",
-    )) {
-      final week =
-          DateTime.now()
-              .difference(
-                DateTime.fromMillisecondsSinceEpoch(a['created'] as int),
-              )
-              .inDays ~/
-          7;
-      if (week >= 0 && week < 5)
-        weekly[4 - week] += (a['body'] as String).split(RegExp(r'\s+')).length;
-    }
+    localTokens(); // Schedule the same cached background aggregate used by the header.
+    final weekly = localOutputWeekly;
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -282,6 +282,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   void update(VoidCallback action) => setState(action);
   String? localOutputRevision;
   int localOutputCount = 0;
+  List<int> localOutputWeekly = List<int>.filled(5, 0);
   final serviceUiRevision = ValueNotifier<int>(0);
   Timer? serviceUiTimer;
   void serviceChanged() {
@@ -1372,7 +1373,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             Expanded(
               child: ListView(
                 children: d.store
-                    .rows('SELECT * FROM notes ORDER BY id DESC')
+                    .rows(
+                      'SELECT id,title,revision FROM notes ORDER BY id DESC',
+                    )
                     .map(
                       (n) => ListTile(
                         title: Text(n['title'] as String),
@@ -1380,7 +1383,12 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                         onTap: () => setState(() {
                           noteId = n['id'] as int;
                           noteTitle.text = n['title'] as String;
-                          noteBody.text = n['body'] as String;
+                          noteBody.text =
+                              d.store.rows(
+                                    'SELECT body FROM notes WHERE id=?',
+                                    [n['id']],
+                                  ).single['body']
+                                  as String;
                         }),
                       ),
                     )

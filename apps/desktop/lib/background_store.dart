@@ -25,20 +25,36 @@ Future<Set<String>> searchSourceIds(String path, String query) => Isolate.run(
   },
 );
 
-Future<int> localOutputWords(String path) => Isolate.run(() {
-  final reader = Store.readOnly(path);
-  try {
-    return [
-      ...reader.rows(
-        "SELECT body AS text FROM answers WHERE status='completed'",
-      ),
-      ...reader.rows('SELECT generated AS text FROM artifacts'),
-    ].fold<int>(
-      0,
-      (count, row) =>
-          count + (row['text'] as String).split(RegExp(r'\s+')).length,
-    );
-  } finally {
-    reader.close();
-  }
-});
+class LocalOutputStats {
+  final int words;
+  final List<int> weekly;
+  LocalOutputStats(this.words, this.weekly);
+}
+
+Future<LocalOutputStats> localOutputStats(String path, {int? nowMs}) =>
+    Isolate.run(() {
+      final reader = Store.readOnly(path);
+      try {
+        final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+        final weekly = List<int>.filled(5, 0);
+        var words = 0;
+        for (final row in reader.rows(
+          "SELECT body,created FROM answers WHERE status='completed'",
+        )) {
+          final count = (row['body'] as String).split(RegExp(r'\s+')).length;
+          words += count;
+          final week =
+              Duration(milliseconds: now - (row['created'] as int)).inDays ~/ 7;
+          if (week >= 0 && week < 5) weekly[4 - week] += count;
+        }
+        for (final row in reader.rows('SELECT generated FROM artifacts')) {
+          words += (row['generated'] as String).split(RegExp(r'\s+')).length;
+        }
+        return LocalOutputStats(words, weekly);
+      } finally {
+        reader.close();
+      }
+    });
+
+Future<int> localOutputWords(String path) async =>
+    (await localOutputStats(path)).words;
