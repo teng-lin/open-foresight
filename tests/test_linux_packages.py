@@ -400,6 +400,8 @@ class SpeechCpuBlockTest(unittest.TestCase):
 
 
 class UpgradeLockDecisionTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux',
+                         'upgrade_lock_decision packs the 32-byte Linux LP64 flock structure')
     def test_held_lock_refuses_and_free_lock_allows(self):
         import fcntl
         script = ROOT / 'packaging/upgrade_lock.sh'
