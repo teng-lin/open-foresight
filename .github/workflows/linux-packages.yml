@@ -65,6 +65,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
       run: |
+        test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
         gh release upload "$RELEASE_TAG" \
           artifacts/portable-bundle/* \
           artifacts/open-foresight-deb-x86-64/*.deb* \
