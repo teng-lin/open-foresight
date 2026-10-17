@@ -62,6 +62,36 @@ void main() {
     }
   });
 
+  test(
+    'export uses canonical partial notes and respects an explicit empty override',
+    () {
+      final id = meeting('Draft', today, notes: 'Raw fallback');
+      store.artifact(
+        id,
+        'enhanced_notes',
+        'Old generated enhancement',
+        'fixture',
+      );
+      store.saveMeetingEnhancedDraft(id, '- Current partial');
+      expect(
+        composeMeetingExport(store).markdown,
+        contains('- Current partial'),
+      );
+      expect(
+        composeMeetingExport(store).markdown,
+        isNot(contains('Old generated enhancement')),
+      );
+      store.saveMeetingEnhancedDraft(id, '');
+      final cleared = composeMeetingExport(store).markdown;
+      expect(cleared, contains('Raw fallback'));
+      expect(cleared, isNot(contains('Old generated enhancement')));
+      expect(
+        store.rows('SELECT generated FROM artifacts').single['generated'],
+        'Old generated enhancement',
+      );
+    },
+  );
+
   test('export retains association title before current calendar title', () {
     final id = meeting('  ', today);
     store.db

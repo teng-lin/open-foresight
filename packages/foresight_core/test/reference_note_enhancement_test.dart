@@ -2,6 +2,99 @@ import 'package:foresight_core/src/reference_note_enhancement.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('status messages match whole snapshots exactly', () {
+    expect(isNoteEnhancementStatus('Evaluating notes...'), isTrue);
+    expect(isNoteEnhancementStatus('Scanning the transcripts...'), isTrue);
+    expect(isNoteEnhancementStatus('Structuring notes...'), isTrue);
+    expect(isNoteEnhancementStatus(' Evaluating notes...'), isFalse);
+    expect(
+      isNoteEnhancementStatus('Evaluating notes... additional text'),
+      isFalse,
+    );
+  });
+
+  test('extraction stops at literal topics marker before heading filtering', () {
+    expect(
+      extractEnhancedNoteBullets(
+        '  - First\r\n\n# Potential Important Topics Not In Notes\n- Excluded',
+      ),
+      ['- First'],
+    );
+    expect(
+      extractEnhancedNoteBullets(
+        '- First\n- Potential Important Topics Not In Notes\n- Excluded',
+      ),
+      ['- First'],
+    );
+    expect(
+      extractEnhancedNoteBullets(
+        '- First\n- potential important topics not in notes\n- Last',
+      ),
+      ['- First', '- potential important topics not in notes', '- Last'],
+    );
+  });
+  test('formats trimmed nonempty notes with exactly two newlines', () {
+    expect(
+      formatEnhancedNotesWithSpacing(['  - One  ', '', '\t', ' 💡 Two\n']),
+      '- One\n\n💡 Two',
+    );
+    expect(formatEnhancedNotesWithSpacing([]), '');
+  });
+
+  test('recognizes original enhancement prefixes and bold bullet pattern', () {
+    for (final line in [
+      ' ### 💡 Heading ',
+      '💡 Detail',
+      '## Heading',
+      '# Heading',
+      '* **Owner**: Mira',
+      '-\t**Owner** Mira',
+    ]) {
+      expect(isAlreadyEnhancedNoteLine(line), isTrue, reason: line);
+    }
+    for (final line in [
+      'Plain prose',
+      '- Simple bullet',
+      '### Plain heading',
+      '**Owner**: Mira',
+      'idea',
+    ]) {
+      expect(isAlreadyEnhancedNoteLine(line), isFalse, reason: line);
+    }
+  });
+
+  test(
+    'extracts original bullet prefixes and recognized enhancement lines',
+    () {
+      expect(
+        extractEnhancedNoteBulletsFromLines([
+          '  # Heading',
+          '## Heading',
+          '### 💡 Heading',
+          ' Plain prose ',
+          '',
+          ' * One ',
+          '- Two',
+          '+ Three',
+          ' • Four ',
+          ' 💡 Five ',
+          '-\t**Owner**: Mira',
+          'Another plain line',
+          '* Last',
+        ]),
+        [
+          '* One',
+          '- Two',
+          '+ Three',
+          '• Four',
+          '💡 Five',
+          '-\t**Owner**: Mira',
+          '* Last',
+        ],
+      );
+    },
+  );
+
   test('removes complete indexed markers and case-insensitive line tags', () {
     expect(
       cleanNoteEnhancementTags(

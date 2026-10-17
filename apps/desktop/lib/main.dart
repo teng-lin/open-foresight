@@ -410,6 +410,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     },
   );
   int? loadedMeetingNotes;
+  Map<String, dynamic> meetingEnhancements = {};
+  StreamSubscription<void>? noteEnhancementChanges;
+  bool meetingEnhancementStarting = false;
   MeetingNoteSnapshot? loadedMeetingNoteSnapshot;
   int? meetingNoteManualEdit;
   bool meetingSidecarVisible = true,
@@ -507,6 +510,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     notifications = d.store.preference('notifications') == 'true';
     unawaited(refreshNotifications());
     syncCapture();
+    if (d is! RemoteDomain) {
+      noteEnhancementChanges = d.application.changes.stream.listen((_) {
+        if (mounted) setState(syncCapture);
+      });
+    }
     d.helper.changed = () {
       if (mounted) setState(syncCapture);
     };
@@ -539,6 +547,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    unawaited(noteEnhancementChanges?.cancel());
     if (d is! RemoteDomain) google.close();
     void releaseDomain() {
       d.close();
@@ -1561,6 +1570,14 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     final state = d is RemoteDomain
         ? (d as RemoteDomain).capture
         : d.application.captureState;
+    meetingEnhancements = Map<String, dynamic>.from(
+      state['note_enhancements'] as Map? ?? {},
+    );
+    meetingEnhancing =
+        meetingEnhancementStarting ||
+        meetingEnhancements.values.any(
+          (value) => (value as Map)['active'] == true,
+        );
     recording = state['active'] == true
         ? RemoteRecording(Map<String, dynamic>.from(state))
         : null;

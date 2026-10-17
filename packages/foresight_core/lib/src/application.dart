@@ -39,6 +39,8 @@ class Application {
   final provisionalTranscript = <String, String>{};
   Timer? _liveIndex, _inactivity;
   final _enhance = <int, Timer>{};
+  final _noteEnhancements = <int, _NoteEnhancement>{};
+  int _noteEnhancementSerial = 0;
   Future<void>? _stopping;
   bool _closed = false;
   bool _modelBusy = false;
@@ -221,6 +223,10 @@ class Application {
           'generating': domain.generator!.generating,
         };
   Map<String, Object?> get captureState => {
+    'note_enhancements': {
+      for (final entry in _noteEnhancements.entries)
+        '${entry.key}': entry.value.state,
+    },
     'meeting_id': recordingMeeting,
     'active': recording != null,
     'finishing': recording?.finishing ?? false,
@@ -564,6 +570,15 @@ class Application {
         case 'meetings.enhance':
           await enhanceNotes(a['id'] as int);
           return null;
+        case 'meetings.cancel_enhance':
+          final enhancement = _noteEnhancements[a['id'] as int];
+          if (enhancement == null ||
+              !enhancement.active ||
+              enhancement.requestId != a['request_id'])
+            return false;
+          enhancement.cancelRequested = true;
+          changed();
+          return true;
         case 'meetings.start':
           await startRecording(a['id'] as int);
           return captureState;
@@ -582,6 +597,19 @@ class Application {
             a['text'] as String,
             lastManualEdit: a['last_manual_edit'] as int?,
           );
+          final editedEnhancement = store.rows(
+            "SELECT selected.meeting_id FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id AND newer.kind=selected.kind AND newer.id>selected.id)",
+            [a['id']],
+          ).firstOrNull;
+          if (editedEnhancement != null) {
+            final meeting = editedEnhancement['meeting_id'] as int;
+            final enhancement = _noteEnhancements[meeting];
+            if (enhancement != null) {
+              enhancement.saveTimer?.cancel();
+              enhancement.body = a['text'] as String;
+              if (!enhancement.active) _noteEnhancements.remove(meeting);
+            }
+          }
           return null;
         case 'models.cancel_query_acquisition':
           await _queryAcquisition?.close();
@@ -1031,6 +1059,7 @@ class Application {
     String? requestId,
     Map<String, dynamic>? responseSchema,
     bool Function()? current,
+    void Function(String text)? onText,
   }) async {
     await Future<void>.value();
     if (current != null && !current()) throw StateError('Generation cancelled');
@@ -1046,7 +1075,10 @@ class Application {
     )) {
       if (current != null && !current())
         throw StateError('Generation cancelled');
-      if (event['type'] == 'delta') result += event['text'] as String;
+      if (event['type'] == 'delta') {
+        result += event['text'] as String;
+        onText?.call(result);
+      }
       if (event['type'] == 'done') status = event['status'] as String;
       if (event['type'] == 'error') failure = event['message'].toString();
     }
@@ -1055,6 +1087,7 @@ class Application {
   }
 
   void _scheduleEnhance(int id) {
+    if (_closed) return;
     _enhance.remove(id)?.cancel();
     if (store.preference('liveEnhance', 'true') != 'true') return;
     _enhance[id] = Timer(
@@ -1069,7 +1102,9 @@ class Application {
   }
 
   Future<void> enhanceNotes(int id, {bool deferWhenBusy = false}) async {
-    if (domain.generator?.generating == true) {
+    if (_closed) throw StateError('Application closed');
+    if (domain.generator?.generating == true ||
+        _noteEnhancements.values.any((state) => state.active)) {
       if (deferWhenBusy) {
         _scheduleEnhaseRetry(id);
         return;
@@ -1090,27 +1125,92 @@ class Application {
         .join('\n');
     if (domain.generator == null || transcript.isEmpty) return;
     final revision = _meeting(id)['revision'] as int;
-    final result = await _generate(
-      'notes',
-      'Enrich each shorthand note using only the transcript below. Preserve the user names and spelling. Do not add unsupported details. $meetingSpeakerInstructions Write ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}, one bullet per note. Notes:\n${boundUtf8(notes['body'] as String, 1500)}\nTranscript:\n${boundUtf8(transcript, 2800)}',
-      maxTokens: 512,
+    final previousState = _noteEnhancements[id];
+    previousState?.saveTimer?.cancel();
+    final enhancement = _NoteEnhancement(
+      'notes-${DateTime.now().microsecondsSinceEpoch}-${++_noteEnhancementSerial}',
+      notes['body'] as String,
     );
-    final current = store.rows(
-      'SELECT revision FROM meeting_notes WHERE meeting_id=?',
-      [id],
-    ).firstOrNull;
-    if (current?['revision'] != notes['revision']) return;
-    store.artifact(
-      id,
-      'enhanced_notes',
-      cleanNoteEnhancementTags(result),
-      _digest,
-      inputRevision: revision,
-    );
+    final previous =
+        previousState != null &&
+            previousState.cancelRequested &&
+            !previousState.active
+        ? previousState.body
+        : store.meetingEnhancedNotes(id);
+    _noteEnhancements[id] = enhancement;
+    _scheduleEnhancedDraft(id, enhancement);
     changed();
+    try {
+      await _generate(
+        'notes',
+        'Enrich each shorthand note using only the transcript below. Preserve the user names and spelling. Do not add unsupported details. $meetingSpeakerInstructions Write ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}, one bullet per note. Notes:\n${boundUtf8(notes['body'] as String, 1500)}\nTranscript:\n${boundUtf8(transcript, 2800)}',
+        maxTokens: 512,
+        requestId: enhancement.requestId,
+        current: () => !_closed && !enhancement.cancelRequested,
+        onText: (text) {
+          if (isNoteEnhancementStatus(text)) {
+            enhancement.status = text;
+          } else {
+            enhancement.body = cleanNoteEnhancementTags(text);
+            enhancement.status = '';
+            _scheduleEnhancedDraft(id, enhancement);
+          }
+          changed();
+        },
+      );
+      if (_closed || enhancement.cancelRequested)
+        throw StateError('Generation cancelled');
+      enhancement.saveTimer?.cancel();
+      store.artifact(
+        id,
+        'enhanced_notes',
+        enhancement.body,
+        _digest,
+        inputRevision: revision,
+      );
+      _noteEnhancements.remove(id);
+      changed();
+    } catch (error) {
+      enhancement.active = false;
+      if (_closed) {
+        enhancement.saveTimer?.cancel();
+        _noteEnhancements.remove(id);
+        return;
+      }
+      if (enhancement.cancelRequested) {
+        enhancement.body = formatEnhancedNotesWithSpacing(
+          extractEnhancedNoteBullets(previous),
+        );
+        enhancement.status = '';
+        _scheduleEnhancedDraft(id, enhancement);
+        changed();
+        return;
+      }
+      enhancement.status = error.toString();
+      changed();
+      rethrow;
+    }
+  }
+
+  void _scheduleEnhancedDraft(int id, _NoteEnhancement enhancement) {
+    if (_closed) return;
+    enhancement.saveTimer?.cancel();
+    enhancement.saveTimer = Timer(const Duration(seconds: 1), () {
+      enhancement.saveTimer = null;
+      if (_closed || !identical(_noteEnhancements[id], enhancement)) return;
+      try {
+        store.saveMeetingEnhancedDraft(id, enhancement.body);
+        if (!enhancement.active && enhancement.status.isEmpty)
+          _noteEnhancements.remove(id);
+      } catch (error) {
+        enhancement.status = 'Unable to save enhanced notes: $error';
+      }
+      changed();
+    });
   }
 
   void _scheduleEnhaseRetry(int id) {
+    if (_closed) return;
     _enhance.remove(id)?.cancel();
     _enhance[id] = Timer(
       const Duration(seconds: 3),
@@ -1297,6 +1397,10 @@ class Application {
       timer.cancel();
     }
     _enhance.clear();
+    for (final enhancement in _noteEnhancements.values) {
+      enhancement.saveTimer?.cancel();
+      enhancement.cancelRequested = true;
+    }
     final acquisition = _queryAcquisition;
     await acquisition?.close();
     if (acquisition != null) {
@@ -1315,4 +1419,19 @@ class Application {
       await changes.close();
     }
   }
+}
+
+class _NoteEnhancement {
+  _NoteEnhancement(this.requestId, this.body);
+  final String requestId;
+  String body, status = '';
+  bool active = true, cancelRequested = false;
+  Timer? saveTimer;
+  Map<String, Object?> get state => {
+    'request_id': requestId,
+    'body': body,
+    'status': status,
+    'active': active,
+    'cancel_requested': cancelRequested,
+  };
 }

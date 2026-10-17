@@ -93,6 +93,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   Future<void> enhanceMeetingNotes(int id) async {
     if (meetingEnhancing) return;
     update(() {
+      meetingEnhancementStarting = true;
       meetingEnhancing = true;
       meetingEnhanceStatus = '';
     });
@@ -102,7 +103,11 @@ extension _MeetingWorkspace on _WorkspaceState {
     } catch (e) {
       if (mounted) update(() => meetingEnhanceStatus = e.toString());
     } finally {
-      if (mounted) update(() => meetingEnhancing = false);
+      if (mounted)
+        update(() {
+          meetingEnhancementStarting = false;
+          syncCapture();
+        });
     }
   }
 
@@ -110,13 +115,7 @@ extension _MeetingWorkspace on _WorkspaceState {
     final row = d.store.rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [
       id,
     ]).firstOrNull;
-    final enhanced =
-        d.store.rows(
-              "SELECT COALESCE(edited,generated) AS body FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
-              [id],
-            ).firstOrNull?['body']
-            as String? ??
-        '';
+    final enhanced = d.store.meetingEnhancedNotes(id);
     final stored = MeetingNoteSnapshot(
       body: row?['body'] as String? ?? '',
       enhanced: enhanced,
@@ -510,6 +509,9 @@ extension _MeetingWorkspace on _WorkspaceState {
       "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
       [id],
     ).firstOrNull;
+    final progress = meetingEnhancements['$id'] as Map?;
+    final enhancedText =
+        progress?['body'] as String? ?? d.store.meetingEnhancedNotes(id);
     final live = d.store.preference('liveEnhance', 'true') == 'true';
     final editor = TextField(
       key: const ValueKey('meeting-notes-editor'),
@@ -567,22 +569,23 @@ extension _MeetingWorkspace on _WorkspaceState {
                       ),
                       IconButton(
                         tooltip: 'Copy enhanced notes',
-                        onPressed: enhanced == null
+                        onPressed:
+                            enhanced == null &&
+                                progress == null &&
+                                enhancedText.isEmpty
                             ? null
                             : () => Clipboard.setData(
-                                ClipboardData(
-                                  text:
-                                      (enhanced['edited'] ??
-                                              enhanced['generated'])
-                                          as String,
-                                ),
+                                ClipboardData(text: enhancedText),
                               ),
                         icon: const Icon(Icons.copy_outlined, size: 19),
                       ),
                       if (enhanced != null)
                         IconButton(
                           tooltip: 'Edit enhanced notes',
-                          onPressed: () => editArtifact(enhanced),
+                          onPressed: () => editArtifact({
+                            ...enhanced,
+                            'edited': enhancedText,
+                          }),
                           icon: const Icon(Icons.edit_outlined, size: 18),
                         ),
                       IconButton(
@@ -594,9 +597,32 @@ extension _MeetingWorkspace on _WorkspaceState {
                     ],
                   ),
                 ),
-                if (meetingEnhancing) const LinearProgressIndicator(),
+                if (progress?['active'] == true) ...[
+                  const LinearProgressIndicator(),
+                  TextButton(
+                    key: const ValueKey('cancel-note-enhancement'),
+                    onPressed: progress?['cancel_requested'] == true
+                        ? null
+                        : () async {
+                            await d.command('meetings.cancel_enhance', {
+                              'id': id,
+                              'request_id': progress?['request_id'],
+                            });
+                          },
+                    child: Text(
+                      progress?['cancel_requested'] == true
+                          ? 'Cancelling…'
+                          : 'Cancel enhancement',
+                    ),
+                  ),
+                ],
+                if ((progress?['status'] as String? ?? '').isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(progress!['status'] as String),
+                  ),
                 Expanded(
-                  child: enhanced == null
+                  child: enhancedText.isEmpty && progress == null
                       ? Center(
                           child: SingleChildScrollView(
                             padding: const EdgeInsets.all(24),
@@ -628,10 +654,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                         )
                       : SingleChildScrollView(
                           padding: const EdgeInsets.all(20),
-                          child: GeneratedContent(
-                            (enhanced['edited'] ?? enhanced['generated'])
-                                as String,
-                          ),
+                          child: GeneratedContent(enhancedText),
                         ),
                 ),
                 if (meetingNotesController.text.isNotEmpty)

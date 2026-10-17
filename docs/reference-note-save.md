@@ -91,9 +91,10 @@ The failed `py_eval` batch is not evidence for these statements.
 
 Raw commands remain independent of enhancement artifacts, so the original
 combined-note empty-enhancement overwrite guard is not inserted into those
-commands. Streaming partial-note merges and cancellation restoration remain
-separate parity work. No unsaved-draft generation invalidation policy was
-inferred from these traces.
+commands. No unsaved-draft generation invalidation policy was inferred from
+these traces. The former port-only revision-discard check on enhancement
+completion has been removed: completion preserves current raw notes and accepts
+the generated enhancement, as the captured parent does.
 
 Completed enhancement output now uses the original `NotesEnhancer.cleanTags`
 (`0x1006ec7e4`) before the accepted artifact write. It removes PP19671, PP19672,
@@ -107,13 +108,55 @@ flags, including `caseSensitive`; this is bound by
 indexed markers, incomplete tags, preserved markup/whitespace, and accepted
 generation persistence without changing raw notes.
 
-The recovered streaming path additionally distinguishes the three status
+The recovered streaming consumer additionally distinguishes the three status
 strings `Evaluating notes...`, `Scanning the transcripts...`, and
 `Structuring notes...` before writing cleaned content snapshots. The cancel
 button only sets state slot 103 (`ida/note-enhance-cancel-state.json`); the
 stream consumer then cancels its iterator and restores the prior extracted
-bullets through `formatNotesWithSpacing`. These UI/partial-save behaviors are
-still unimplemented; final-output cleanup does not establish their parity.
+bullets through `formatNotesWithSpacing`.
+
+The port now carries meeting/request-specific progress over the existing
+application change channel. Local workspaces subscribe directly; remote clients
+receive the same capture state. The editor displays the initial raw copy,
+cleaned accumulated output, and exact status snapshots. The initial raw copy is
+bound by `note-enhance-start-state-6.json` at `0x100a4b4d8`; it is not a guessed
+fallback. The cancel action identifies its request, so an old button cannot
+cancel a later generation. It sets the cancellation flag and stops on the next
+event through iterator cleanup, without introducing a separate native-cancel
+policy.
+
+`meeting_notes.enhanced_body` is the current enhanced field. Legacy NULL reads
+the latest artifact; a stored empty string remains empty. Programmatic updates
+restart a one-second save timer and update this field plus the accepted-save
+timestamp, preserving raw text/revision and manual/enhancement dates. They do
+not create artifacts. Completion cancels the timer and synchronizes a final
+artifact/current field atomically, stamping `last_enhanced`. Current manual
+artifact edits synchronize the same field and stamp only `last_manual_edit`;
+historical edits leave it alone. Export and editor loading both prefer the
+current field. Closing cancels programmatic timers before teardown and performs
+no additional programmatic autosave.
+
+Cancellation restores the prior extracted bullets, rather than copying the
+prior document verbatim. Extraction splits on literal LF, trims and discards
+empty lines, and stops at the first line containing the case-sensitive phrase
+`Potential Important Topics Not In Notes`, before heading/prefix filtering.
+Lines starting `#` are omitted. The recognized bullet prefixes or
+`isAlreadyEnhancedLine` predicate retain the remaining eligible lines. Spacing
+trims nonempty entries and joins them with exactly two newlines; its final
+dynamic call is a shared identity closure. Proofs include
+`note-extract-stop-pattern-arguments.json`,
+`note-extract-stop-pattern-pool.txt`, `note-enhancer-extract-bullets.json`,
+`note-enhancer-already-enhanced-line.json`, and
+`note-format-spacing-string-dispatch.json`. In particular, the extraction
+dispatch at `0x100d20a34` is `String.contains`, not `isEmpty`. The restored field
+is visible immediately and saved after one second without stamping completion.
+
+This implements the stream consumer, persistence, and cancellation behavior.
+The original `NotesEnhancer.enhanceStream` producer remains separate parity
+work: it embeds/ranks transcript material, clusters shorthand into batches,
+budgets tokens, builds per-batch conversations/prompts, and parses model output.
+The port still uses its existing generation prompt; these consumer changes do
+not reproduce the original content pipeline.
 
 Six new tests cover deadline reset, captured cross-note drafts, ordered
 in-flight disposal, retry of failed drafts, supersession of failed snapshots,
@@ -125,3 +168,11 @@ legacy migration, exact date priority, clean external refresh, dirty protection,
 keypress-time transport, retry preservation, and manual enhancement editing.
 The complete suites passed with 227 core tests (five skipped) and 189 desktop
 tests (ten skipped); the changed core and desktop files also pass analysis.
+
+Latest streaming-consumer validation: 34 focused core tests and the local
+streaming/cancellation widget test pass. The full current suites pass with
+277 core tests (seven skipped) and 192 desktop tests (ten skipped); both
+analyzers report no issues. This includes canonical empty-field migration,
+partial-draft deadlines, current versus historical manual edits, cancellation
+restoration, initial raw display/save, shutdown, and export preference. Logs
+are retained under `test-results/reference-functions/note-consumer/`.

@@ -94,9 +94,10 @@ trimmed raw `content`. A note with empty raw content can therefore still export
 its enhancement. An empty current enhancement falls back to raw text instead of
 resurrecting an older enhancement.
 
-The port now applies this preference to its current enhanced-notes artifact
-(the latest artifact, with its edited value when present), matching the enhanced
-notes pane's existing storage representation. Export does not modify raw notes,
+The port now applies this preference to `meeting_notes.enhanced_body`, including
+programmatic partial saves. A legacy NULL falls back to the latest enhanced-note
+artifact, with its edited value when present; an explicit empty current field
+does not revive that artifact. Export does not modify raw notes,
 generated text, edits, or historical artifacts. Two additional regression cases
 cover edited/latest preference, cleared enhancement fallback, enhanced-only
 notes, and preservation of stored evidence. These are static-contract checks;
@@ -184,8 +185,10 @@ recovered original save times. Equal save timestamps likewise have no traced
 secondary acquisition order.
 The editor implements the original one-second debounce, snapshot flush, manual
 and enhancement timestamps, and clean same-note reload using the recovered date
-priority; see [note save evidence](reference-note-save.md). Streaming partial
-enhancement merging and cancellation restoration remain separate parity work.
+priority; see [note save evidence](reference-note-save.md). Streamed enhancement
+drafts now persist through that debounce, and cancellation restores the recovered
+bullet selection. The original enhancement producer’s embedding, ranking, and
+batching pipeline remains separate parity work.
 
 Verification for the corrections: sixteen desktop export tests pass with
 `TZ=America/New_York`,

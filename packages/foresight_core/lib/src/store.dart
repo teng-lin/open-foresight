@@ -57,6 +57,11 @@ class Store {
       }
     }
     if (!db
+        .select('PRAGMA table_info(meeting_notes)')
+        .any((row) => row['name'] == 'enhanced_body')) {
+      db.execute('ALTER TABLE meeting_notes ADD COLUMN enhanced_body TEXT');
+    }
+    if (!db
         .select('PRAGMA table_info(models)')
         .any((row) => row['name'] == 'backend'))
       db.execute(
@@ -564,7 +569,7 @@ class Store {
       [meeting, kind, generated, revision, model, 'meeting-v1'],
     );
     if (kind == 'enhanced_notes') {
-      _writeEnhancedNote(meeting, insert);
+      _writeEnhancedNote(meeting, insert, body: generated);
     } else {
       insert();
     }
@@ -572,7 +577,7 @@ class Store {
 
   void editArtifact(int id, String text, {int? lastManualEdit}) {
     final enhanced = rows(
-      "SELECT selected.meeting_id,COALESCE(selected.edited,selected.generated) AS body FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' "
+      "SELECT selected.meeting_id,COALESCE((SELECT enhanced_body FROM meeting_notes WHERE meeting_id=selected.meeting_id),selected.edited,selected.generated) AS body FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' "
       'AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id '
       'AND newer.kind=selected.kind AND newer.id>selected.id)',
       [id],
@@ -585,6 +590,7 @@ class Store {
       _writeEnhancedNote(
         enhanced['meeting_id'] as int,
         update,
+        body: text,
         manual: true,
         editTimestamp: lastManualEdit,
         changed: enhanced['body'] != text,
@@ -592,12 +598,24 @@ class Store {
     }
   }
 
+  String meetingEnhancedNotes(int meeting) =>
+      rows(
+            "SELECT COALESCE((SELECT enhanced_body FROM meeting_notes WHERE meeting_id=?),(SELECT COALESCE(edited,generated) FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1),'') AS body",
+            [meeting, meeting],
+          ).first['body']
+          as String;
+
+  void saveMeetingEnhancedDraft(int meeting, String body) =>
+      _writeEnhancedNote(meeting, () {}, body: body, completed: false);
+
   // The original saves the current raw/enhanced fields and save timestamp as
   // one Note replacement. Historical artifacts do not replace that current Note.
   void _writeEnhancedNote(
     int meeting,
     void Function() write, {
+    required String body,
     bool manual = false,
+    bool completed = true,
     int? editTimestamp,
     bool changed = true,
   }) {
@@ -609,12 +627,16 @@ class Store {
         _snapshotMeetingEvents(meeting);
       final now = DateTime.now().millisecondsSinceEpoch;
       final column = manual ? 'last_manual_edit' : 'last_enhanced';
-      final date = manual ? editTimestamp ?? (changed ? now : null) : now;
+      final date = manual
+          ? editTimestamp ?? (changed ? now : null)
+          : completed
+          ? now
+          : null;
       db.execute(
-        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,$column) VALUES(?,'',0,?,?) "
-        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp,'
+        "INSERT INTO meeting_notes(meeting_id,body,revision,timestamp,$column,enhanced_body) VALUES(?,'',0,?,?,?) "
+        'ON CONFLICT(meeting_id) DO UPDATE SET timestamp=excluded.timestamp,enhanced_body=excluded.enhanced_body,'
         '$column=COALESCE(excluded.$column,meeting_notes.$column)',
-        [meeting, now, date],
+        [meeting, now, date, body],
       );
       write();
       db.execute('RELEASE save_enhanced_note');

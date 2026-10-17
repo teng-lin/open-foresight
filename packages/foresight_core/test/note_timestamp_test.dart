@@ -54,6 +54,7 @@ void main() {
         'timestamp': null,
         'last_enhanced': null,
         'last_manual_edit': null,
+        'enhanced_body': null,
       });
       store.close();
       store = Store(path);

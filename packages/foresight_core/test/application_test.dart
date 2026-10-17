@@ -176,7 +176,7 @@ void main() {
     },
   );
   test(
-    'editing original notes while enhancement runs discards stale output',
+    'enhancement completion preserves newer raw edits and accepts its output',
     () async {
       final id = domain.store.meeting('Planning');
       domain.store.transcript(
@@ -195,7 +195,13 @@ void main() {
       domain.store.saveMeetingNotes(id, 'Mira revised draft');
       generator.release.complete();
       await work;
-      expect(domain.store.rows('SELECT * FROM artifacts'), isEmpty);
+      expect(
+        domain.store
+            .rows('SELECT generated FROM artifacts')
+            .single['generated'],
+        'Grounded enhancement',
+      );
+      expect(domain.store.meetingEnhancedNotes(id), 'Grounded enhancement');
       expect(
         domain.store.rows('SELECT body FROM meeting_notes').single['body'],
         'Mira revised draft',

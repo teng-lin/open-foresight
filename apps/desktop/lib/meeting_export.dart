@@ -72,9 +72,9 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
     'acquired AS (SELECT * FROM candidates ORDER BY timestamp DESC LIMIT 1000) '
     'SELECT * FROM ('
     'SELECT meetings.id,meetings.title,meeting_notes.body,'
-    '(SELECT COALESCE(edited,generated) FROM artifacts '
+    'COALESCE(meeting_notes.enhanced_body,(SELECT COALESCE(edited,generated) FROM artifacts '
     "WHERE artifacts.meeting_id=meetings.id AND kind='enhanced_notes' "
-    'ORDER BY id DESC LIMIT 1) AS enhanced_body,'
+    'ORDER BY id DESC LIMIT 1)) AS enhanced_body,'
     'COALESCE(calendar_events.starts,meeting_notes.timestamp,meeting_details.created,0) AS export_date,'
     'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata,'
     '(SELECT title FROM meeting_note_events WHERE meeting_id=meetings.id '

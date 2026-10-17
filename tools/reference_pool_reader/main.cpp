@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     }
     // Selected public download URL fragments/schema labels only. Never inspect
     // credential PP9019 or any entire application configuration map.
-    for (intptr_t pp : {19671,19672,19673,34477,34478,34479,1112,19652,19654,8985,13036,13106,57,483,5327,1553,4523,13124,13125,13126,5320,1229,4714,4687,17024,17025,16982,17026,17027,13087,13090,13176,17017,17018,17019,10483,17021,2349}) {
+    for (intptr_t pp : {34590,34591,34592,34593,34602,34603,34604,34605,34606,34607,34608,34609,10614,9196,19651,1109,19655,19656,19658,19659,19671,19672,19673,34477,34478,34479,1112,19652,19654,8985,13036,13106,57,483,5327,1553,4523,13124,13125,13126,5320,1229,4714,4687,17024,17025,16982,17026,17027,13087,13090,13176,17017,17018,17019,10483,17021,2349}) {
       const auto index = dart::ObjectPool::IndexFromOffset(pp * 8 - dart::kHeapObjectTag);
       if (index < 0 || index >= pool.Length()) continue;
       if (pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) {
@@ -214,7 +214,7 @@ int main(int argc, char** argv) {
       }
     }
     // Public export/label callback identities only; never print object contents.
-    for (intptr_t pp : {24541,14905,14906,40651,40646,40647}) {
+    for (intptr_t pp : {34610,19647,19648,24541,14905,14906,40651,40646,40647}) {
       const auto index = dart::ObjectPool::IndexFromOffset(pp * 8 - dart::kHeapObjectTag);
       const auto& callback = dart::Object::Handle(zone, pool.ObjectAt(index));
       if (callback.IsFunction()) {
@@ -302,7 +302,7 @@ int main(int argc, char** argv) {
           (long)offset,(unsigned long)(entry - reinterpret_cast<dart::uword>(image.lib)));
       }
     }
-    for (intptr_t offset : {-4092,-4090,-4096,-4086,23776}) {
+    for (intptr_t offset : {0,-4094,-4092,-4090,-4096,-4086,23776}) {
       auto entry = origin[95 + offset];
       std::printf("STRING_DISPATCH[%ld] CODE_OFFSET[0x%lx]\n",
         (long)offset,(unsigned long)(entry - reinterpret_cast<dart::uword>(image.lib)));

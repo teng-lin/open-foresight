@@ -114,10 +114,41 @@ request fields, concurrent partition assembly, status classification,
 interrupted-body resume, the short-EOF behavior, and cancellation without
 closing an injected shared HTTP client. No external service is contacted.
 
-Automatic acquisition remains incomplete: finish metadata selection/update
-policy, connect the distribution
-credential and bundled runtime to existing model setup, authenticate the
-supported plaintext before atomic registration, and verify actual service
-access separately. Original local encryption and temporary decryption have
-been recovered elsewhere; this component does not claim to reproduce that
-persistence lifecycle.
+The existing Local models screen now connects acquisition to dedicated setup.
+The service operation models.acquire_query uses the inspected compatibility
+version 1.0.0, last advertised type-4 metadata and its blob basename. It rejects
+incompatible advertised sizes before allocation, verifies the fixed plaintext
+size/SHA-256, encrypts an owned candidate, reopens a private plaintext lease and
+completes the real worker readiness fixture. Registration is the final step,
+after worker shutdown and lease cleanup succeed. Failures preserve the prior
+registration. Cancellation stops only owned RPCs, transfers, helpers and workers.
+The download action is available when the distribution provides the existing
+shared web-content credential; no additional user project or key setting exists.
+
+native/model_crypto.swift reproduces the five-byte Tink prefix plus AES-256-GCM
+nonce/ciphertext/tag with empty AAD. It reads or creates only the port-owned
+com.openforesight.encryption / dataEncryptionKey entry, using a binary Tink keyset.
+MacModelVault publishes new private encrypted candidates and opens unique 0700
+plaintext leases. Lease cleanup waits for the owning worker to exit. The helper
+is built and bundled as FORESIGHT_MODEL_CRYPTO. The original application key
+and API credential are never read by this flow.
+
+The native self-test passes fixed independent AES/Tink vectors, tamper rejection,
+exclusive output and symlink checks without Keychain access. An explicit opt-in
+integration test compiles the same source with only its service literal replaced
+by a unique fixture service and signs the helper ad hoc. Separate real processes
+proved Keychain persistence, key-ID reuse, distinct nonces, round trips, private
+outputs, tamper rejection and destination preservation. The test deleted only its
+unique fixture entry and passed under REA
+ev_2b6f466912872bd7b54132dd85640c5f517b44e522afd19f4e0d81facda30457.
+See tests/integration/test_model_crypto_keychain.py. This is not a Developer ID
+or complete application-bundle Keychain acceptance test.
+
+All four actual-detector tests passed with local transport and framing-only
+vault fixtures, including acquisition/registration/reopen and forced plaintext
+cleanup failure preserving the previous registration. Their retained log is
+query-runtime/acquisition-cleanup-review-test-v2.log. These fixtures avoid
+Keychain and are not cryptographic or live service oracles. No live remote API
+call or credential extraction occurred. Live distribution service access, full
+signed release acceptance, original refresh/obsolete-model cleanup policy and
+broader GPU numerical parity remain unverified.
