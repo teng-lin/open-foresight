@@ -71,9 +71,10 @@ while the source-built `liblitert-lm.so` previously defaulted to GNU `libstdc++`
 
 Linux x86_64 source builds now apply `linux-trivial-abi.patch`, compile with
 Clang against `libc++` headers, and statically link PIC `libc++.a` and
-`libc++abi.a` with `--exclude-libs,libc++.a:libc++abi.a`. Both the builder and
-release verifier reject dynamic `libstdc++.so` or `libc++.so` linkage and require
-`linux_abi_patch_sha256` plus a passing `native_status_abi_report`.
+`libc++abi.a` with `--exclude-libs,libc++.a:libc++abi.a:libunwind.a`. Both the
+builder and release verifier reject dynamic `libstdc++.so`, `libc++.so`,
+`libc++abi.so`, or `libunwind` linkage and require `linux_abi_patch_sha256` plus
+a passing `native_status_abi_report` and `native_export_log` with checksums.
 
 `test_litert_status_abi.py` compiles an actual-header callee DSO and an independent
 vendor-convention caller checking both `SubgraphLayout` (`std::string`,
@@ -82,3 +83,19 @@ returns. It reproduces `SIGSEGV` (-11) when the callee uses `libstdc++` or
 unpatched Abseil headers, and passes (`vendor_register_return_callback_ok`) when
 compiled with `libc++` and the platform trivial-ABI patch. Packaged provenance
 retains the vendor hashes and the platform ABI patch/report hashes.
+
+### Linux GPU acceptance (NVIDIA GeForce RTX 5070 Laptop, Vulkan)
+
+A/B test using the released 0.1.0 Linux bundle's `foresight-model`, swapping only
+`liblitert-lm.so` (the five vendor libraries are byte-identical):
+
+| `liblitert-lm.so` | `--backend gpu --probe` | Generation |
+| --- | --- | --- |
+| 0.1.0 bundle (`69d1a3f2…`, libstdc++) | `SIGSEGV` (exit 139) | — |
+| Source build (`5f4dd92f…`, libc++ + trivial ABI) | `{"native_stop_token_sequences":true}` (exit 0) | passes |
+
+With the source build, WebGPU selected the discrete NVIDIA adapter. Prompting
+"Count from 1 to 12" produced `1, 2, …, 12` without stop sequences,
+`1, 2, 3, 4, 5, 6, ` with native stop sequence `[[236832]]` (`7`), and
+`1, 2, 3, 4, 5, 6` with the multi-token sequence `[[236764, 236743, 236832]]`
+(`, 7`).
