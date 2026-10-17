@@ -21,12 +21,16 @@ class HelperBuildIdentityTest(unittest.TestCase):
             'foresight_build_revision(revision "${SOURCE_ROOT}")\n'
             'file(WRITE "${OUTPUT_FILE}" "${revision}")\n')
         self.output = self.root / 'revision.txt'
+        # Hosted runners may globally trust every checkout. The fixture must
+        # exercise Git ownership checks independently of that machine policy.
+        self.environment = {**os.environ, 'GIT_CONFIG_NOSYSTEM': '1',
+                            'GIT_CONFIG_GLOBAL': os.devnull}
 
     def configure(self, source, revision=None, ownership=False):
         args = ['cmake', f'-DSOURCE_ROOT={source}', f'-DOUTPUT_FILE={self.output}']
         if revision is not None:
             args.append(f'-DFORESIGHT_BUILD_REVISION={revision}')
-        env = os.environ.copy()
+        env = self.environment.copy()
         if ownership:
             env['GIT_TEST_ASSUME_DIFFERENT_OWNER'] = 'true'
         return subprocess.run([*args, '-P', str(self.script)], env=env,
@@ -34,13 +38,13 @@ class HelperBuildIdentityTest(unittest.TestCase):
 
     def test_container_checkout_ownership_uses_scoped_trust_and_twelve_digits(self):
         source = self.root / 'repository'
-        subprocess.run(['git', 'init', str(source)], check=True, capture_output=True)
+        subprocess.run(['git', 'init', str(source)], env=self.environment, check=True, capture_output=True)
         subprocess.run(['git', '-C', str(source), '-c', 'user.name=Fixture',
                         '-c', 'user.email=fixture@example.test', 'commit', '--allow-empty',
-                        '-m', 'Identity fixture'], check=True, capture_output=True)
-        expected = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()[:12]
-        rejected = subprocess.run(['git', '-C', str(source), 'rev-parse', 'HEAD'],
-                                 env={**os.environ, 'GIT_TEST_ASSUME_DIFFERENT_OWNER': 'true'},
+                        '-m', 'Identity fixture'], env=self.environment, check=True, capture_output=True)
+        expected = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], env=self.environment, text=True).strip()[:12]
+        rejected = subprocess.run(['git', '-c', 'safe.directory=', '-C', str(source), 'rev-parse', 'HEAD'],
+                                 env={**self.environment, 'GIT_TEST_ASSUME_DIFFERENT_OWNER': 'true'},
                                  text=True, capture_output=True)
         self.assertNotEqual(rejected.returncode, 0, rejected.stdout)
         result = self.configure(source, ownership=True)
