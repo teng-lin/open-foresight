@@ -526,6 +526,8 @@ int main(int argc, char **argv) {
     return 1;
   FdStreamBuffer protocol_buffer(protocol_fd);
   std::ostream protocol(&protocol_buffer);
+  bool probing = false;
+  for (int i = 1; i < argc; ++i) probing |= std::string(argv[i]) == "--probe";
   bool embedding = argc > 1 && std::string(argv[1]) == "--embedding";
   try {
     std::map<std::string, std::string> args;
@@ -620,7 +622,7 @@ int main(int argc, char **argv) {
       generator.generate(args.at("--prompt"), budget, false, schema, &protocol);
     return 0;
   } catch (const std::exception &e) {
-    if (embedding)
+    if (embedding || probing)
       protocol << json({{"error", e.what()}}).dump() << std::endl;
     else
       std::cerr << "Native LiteRT-LM failed: " << e.what() << std::endl;

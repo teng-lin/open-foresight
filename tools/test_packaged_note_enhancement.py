@@ -48,6 +48,16 @@ def enhanced(meeting, deadline):
     return result
 
 
+def generation_environment(environment, backend):
+    """Select the requested test backend explicitly; never silently fall back."""
+    result = dict(environment)
+    if backend is not None:
+        if backend not in ('cpu', 'gpu'):
+            raise ValueError('Generation backend must be cpu or gpu')
+        result['FORESIGHT_LITERT_BACKEND'] = backend
+    return result
+
+
 def run(args):
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -65,7 +75,10 @@ def run(args):
         runner, _, _ = packaged_paths(bundle)
         configuration = (json.loads((bundle / 'Contents/Resources/runtime.json').read_text())
                          if bundle.suffix == '.app' else {})
-        report['generation_backend'] = configuration.get('FORESIGHT_LITERT_BACKEND', 'cpu')
+        selected_backend = getattr(args, 'generation_backend', None)
+        report['generation_backend'] = selected_backend or configuration.get('FORESIGHT_LITERT_BACKEND',
+            'cpu' if bundle.suffix == '.app' else 'package_default')
+        report['generation_backend_override'] = selected_backend is not None
         for name, path, expected in (
             ('generation', args.generation, GENERATION_SHA256),
             ('embedding', args.embedding, EMBEDDING_SHA256)):
@@ -81,7 +94,7 @@ def run(args):
         home, data, runtime = (profile / name for name in ('home', 'data', 'run'))
         for path in (home, data, runtime):
             path.mkdir(mode=0o700)
-        env = minimal_environment(home, data)
+        env = generation_environment(minimal_environment(home, data), selected_backend)
         env['FORESIGHT_RUNTIME'] = str(runtime)
         report['synthetic_profile'] = str(profile)
         report['stage'] = 'application_startup'
@@ -101,6 +114,12 @@ def run(args):
             'runtime': '', 'gpu': args.backend == 'gpu', 'digest': EMBEDDING_SHA256})
         application.call('models.generation', {'path': str(args.generation.resolve()),
             'runtime': str(runner), 'backend': 'litert_lm'})
+        generation = application.call('status')['generation']
+        report['generation_runtime'] = generation
+        if generation.get('backend') in ('litert-lm-cpu-native', 'litert-lm-gpu-native'):
+            report['generation_backend'] = generation['backend'].split('-')[-2]
+        if selected_backend and generation.get('backend') != 'litert-lm-' + selected_backend + '-native':
+            raise AssertionError('Generation runtime did not adopt the explicitly requested backend')
         deadline = time.monotonic() + args.timeout
         while True:
             state = application.call('status')
@@ -224,6 +243,8 @@ if __name__ == '__main__':
     parser.add_argument('--generation', type=Path, required=True)
     parser.add_argument('--embedding', type=Path, required=True)
     parser.add_argument('--backend', choices=('cpu', 'gpu'), required=True)
+    parser.add_argument('--generation-backend', choices=('cpu', 'gpu'),
+                        help='Explicit generation backend; omitted uses the installed package default')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--timeout', type=float, default=600)
     print(json.dumps(run(parser.parse_args()), indent=2))

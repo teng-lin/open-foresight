@@ -121,12 +121,14 @@ def main():
         for name, source in fixtures.items():
             models[name] = Path(private_models.name) / source.name
             shutil.copyfile(source, models[name])
+        report['functional_generation_backend'] = 'cpu'
         report['gui_startup'] = desktop_probe(bundle, args.output)
         if args.expected_revision and report['gui_startup']['runtime_revision'] != args.expected_revision:
             raise RuntimeError('Installed application revision differs from the release tag')
         subprocess.run([sys.executable, str(Path(__file__).with_name('test_packaged_note_enhancement.py')),
                         '--acceptance', '--bundle', str(bundle), '--generation', str(models['generation']),
                         '--embedding', str(models['embedding']), '--backend', 'cpu',
+                        '--generation-backend', 'cpu',
                         '--output', str(args.output / 'application')], check=True, timeout=1800)
         runtime = (bundle / 'Contents/Resources/bin/whisper-cli' if bundle.suffix == '.app'
                    else bundle / 'bin/whisper-cli-vulkan')

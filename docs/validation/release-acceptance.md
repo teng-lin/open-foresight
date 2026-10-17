@@ -49,6 +49,12 @@ the test is replaced/uninstalled. Gatekeeper results are recorded; rejection of
 the current ad-hoc signature is expected and is not presented as notarization.
 The harness never strips quarantine attributes to produce an artificial pass.
 
+GUI startup uses the installed launcher's default configuration. The subsequent
+model-functional tests explicitly select CPU generation and CPU embeddings for
+hosted CI, recording that selection and verifying the runtime adopted it. This is
+an explicit test setting, not an automatic GPU fallback; GPU behavior remains a
+separate hardware gate.
+
 Every target runs functional checks beyond installation:
 
 - Actual GUI startup and MCP attachment to the same installed service, using

@@ -41,3 +41,9 @@ if(BUILD_TESTING)
   target_include_directories(native_protocol_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME native_protocol COMMAND native_protocol_test)
 endif()
+
+if(BUILD_TESTING)
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME native_probe_failure COMMAND ${Python3_EXECUTABLE}
+    ${PROJECT_SOURCE_DIR}/tests/inference/test_probe_failure.py $<TARGET_FILE:foresight-model>)
+endif()

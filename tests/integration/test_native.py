@@ -6,6 +6,7 @@ import ctypes as C
 import json
 import math
 import os
+import signal
 from pathlib import Path
 import tempfile
 import time
@@ -205,6 +206,24 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
         self.assertEqual(drain(self.lib,a)[-1]['status'],'cancelled')
         before=time.monotonic();self.lib.fs_conversation_destroy(a,1);self.assertLess(time.monotonic()-before,1)
         self.lib.fs_conversation_destroy(b,1);self.lib.fs_engine_destroy(e)
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux unmanaged-child reaping regression')
+    def test_probe_never_reports_success_when_child_exit_status_is_lost(self):
+        runner = self.runner("import json,sys\nprint(json.dumps({'worker_protocol':1,'native_stop_token_sequences':True}),flush=True)\nsys.exit(7)\n")
+        for ignored in (False, True):
+            with self.subTest(sigchld_ignored=ignored):
+                engine = self.lib.fs_engine_create_backend(runner, str(self.model).encode(), 1)
+                previous = signal.getsignal(signal.SIGCHLD)
+                try:
+                    if ignored: signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+                    self.assertEqual(self.lib.fs_engine_probe(engine), -1)
+                    state = owned_json(self.lib, self.lib.fs_engine_state(engine))
+                    self.assertEqual(state['state'], 'failed')
+                    self.assertFalse(state['native_stop_token_sequences'])
+                    self.assertIn('Model initialization probe failed', state['error'])
+                finally:
+                    signal.signal(signal.SIGCHLD, previous)
+                    self.lib.fs_engine_destroy(engine)
+
     def test_failed_start_error_before_single_terminal(self):
         e=self.lib.fs_engine_create(b'/missing/foresight-runtime',str(self.model).encode())
         self.assertEqual(owned_json(self.lib,self.lib.fs_engine_state(e))['state'],'configured')

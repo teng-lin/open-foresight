@@ -304,7 +304,9 @@ int run(Worker &w, std::vector<std::string> args,
   // Do not hold life while waiting: cancellation must still be able to signal
   // a worker that closed stdout early. Keep its PID reserved until disarmed.
   siginfo_t info{};
-  while (waitid(P_PID, p, &info, WEXITED | WNOWAIT) < 0 && errno == EINTR) {}
+  int observed;
+  do { observed = waitid(P_PID, p, &info, WEXITED | WNOWAIT); }
+  while (observed < 0 && errno == EINTR);
   // The producer is now terminal. Retain every queued pre-pause PCM byte before
   // the FIFO closes, including a final partial frame; no later audio can arrive.
   if (raw_capture) drain_pcm();
@@ -313,13 +315,23 @@ int run(Worker &w, std::vector<std::string> args,
   // Supervisor has already completed worker cleanup.
 #endif
   std::lock_guard lock(w.process_mutex);
-  while (waitpid(p, &status, 0) < 0 && errno == EINTR) {
-  }
+  pid_t reaped;
+  do { reaped = waitpid(p, &status, 0); } while (reaped < 0 && errno == EINTR);
+  const int reap_error = reaped < 0 ? errno : 0;
   w.pid = -1;
 #ifdef __APPLE__
   w.owned_process = nullptr;
 #endif
   if (capture_child_reaped) return -ECHILD;
+  if (reap_error) {
+    // A runtime SIGCHLD handler may reap the child between waitid and waitpid.
+    // Use an exit status only when waitid actually observed this same child.
+    if (reap_error == ECHILD && observed == 0 && info.si_pid == p && info.si_code == CLD_EXITED) return info.si_status;
+    if (reap_error == ECHILD && observed == 0 && info.si_pid == p &&
+        (info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED))
+      return 128 + info.si_status;
+    return -reap_error;
+  }
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 bool valid_asset(const char *runtime, const char *model) {
