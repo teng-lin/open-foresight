@@ -16,6 +16,12 @@ on:
   pull_request:
     paths:
       - '.github/workflows/integration-acceptance.yml'
+      - 'apps/desktop/lib/**'
+      - 'packages/foresight_core/lib/**'
+      - 'packages/foresight_core/lib/src/answer_contract.dart'
+      - 'packages/foresight_core/lib/src/store.dart'
+      - 'packages/foresight_core/lib/src/application.dart'
+      - 'packaging/**'
       - 'tools/integration_gates.py'
       - 'packaging/build.Dockerfile'
       - 'apps/desktop/test/*native*'
@@ -115,6 +121,16 @@ jobs:
             -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/test-results/virtual-audio:/reports" \
             foresight-integration:local dbus-run-session -- python3 tools/integration_gates.py --suite virtual-audio \
             --bundle dist/open-foresight --models /models --output /reports
+      - name: Meeting workflow
+        if: ${{ !cancelled() && steps.image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
+        run: |
+          mkdir -p test-results/meeting-workflow
+          chmod 0777 test-results/meeting-workflow
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/test-results/meeting-workflow:/reports" \
+            foresight-integration:local dbus-run-session -- python3 tools/test_meeting_workflow.py \
+            --helper-bundle /src/dist/open-foresight \
+            --report /reports/meeting-workflow.json
       - name: Retain explicit integration evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
