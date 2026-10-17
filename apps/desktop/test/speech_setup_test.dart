@@ -1,3 +1,4 @@
+import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,7 @@ void main() {
               onPressed: () => showDialog<void>(
                 context: context,
                 builder: (_) => SpeechSetupDialog(
+                  findLocalModel: verifiedFixtureModelFile,
                   store: store,
                   directory: directory,
                   runner: runner.path,

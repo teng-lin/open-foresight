@@ -219,8 +219,12 @@ public:
       throw;
     }
   }
-  ~MiniLm() { release(); }
-  int dimension() const { return dimensions; }
+  ~MiniLm() {
+    release();
+  }
+  int dimension() const {
+    return dimensions;
+  }
   std::string preprocessing() const {
     return "sentence-transformers/window-mean-normalized-v1/max-tokens-" +
            std::to_string(max_tokens);

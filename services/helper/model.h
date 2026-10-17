@@ -51,7 +51,9 @@ struct Model {
   bool available() const {
     return test || (healthy.load() && process && process->alive());
   }
-  pid_t worker_pid() const { return process ? process->pid() : -1; }
+  pid_t worker_pid() const {
+    return process ? process->pid() : -1;
+  }
   // Serialized by call() except the constructor's banner read, which happens
   // before the model is shared. A stalled adapter is killed at the deadline.
   json receive() {
@@ -62,8 +64,9 @@ struct Model {
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(adapter_deadline_ms());
     while (output_pending.find('\n') == std::string::npos) {
-      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-          deadline - std::chrono::steady_clock::now());
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              deadline - std::chrono::steady_clock::now());
       if (remaining.count() <= 0) {
         healthy.store(false);
         if (process)

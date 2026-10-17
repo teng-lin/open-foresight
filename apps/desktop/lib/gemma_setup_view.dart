@@ -1,5 +1,7 @@
 import 'package:foresight_core/remote.dart' show GenerationStatus;
 import 'dart:io';
+import 'dart:async';
+import 'model_terms_dialog.dart';
 import 'package:flutter/material.dart';
 import 'gemma_download.dart';
 import 'model_setup.dart';
@@ -9,6 +11,7 @@ import 'store.dart';
 class GemmaSetupDialog extends StatefulWidget {
   final Store store;
   final GemmaDownload Function()? createDownload;
+  final LocalModelFinder findLocalModel;
   final bool firstRun, needsEmbedding, needsGeneration;
   final Future<void> Function(File, bool Function())? installEmbedding;
   final Directory directory;
@@ -22,6 +25,7 @@ class GemmaSetupDialog extends StatefulWidget {
     super.key,
     required this.store,
     this.createDownload,
+    this.findLocalModel = localModelFile,
     this.installGeneration,
     this.firstRun = false,
     this.needsEmbedding = false,
@@ -43,6 +47,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   late bool embeddingReady;
   Map<String, Object?>? registeredGeneration;
   final downloaded = <GemmaModel, bool>{};
+  final verifiedFiles = <GemmaModel, File>{};
+  bool checkingCache = true;
 
   bool isCurrent(GemmaModel model) {
     final registration = registeredGeneration;
@@ -52,7 +58,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       return false;
     final file = File(registration['path'] as String);
     final runner = File(registration['runtime'] as String);
-    return file.existsSync() &&
+    return verifiedFiles[model]?.path == file.path &&
+        file.existsSync() &&
         file.lengthSync() == model.bytes &&
         runner.existsSync() &&
         (runner.statSync().mode & 0x49) != 0;
@@ -63,17 +70,44 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
 
   Directory get embeddingDirectory =>
       Directory('${widget.directory.parent.path}/embeddinggemma2');
-  File? get localEmbedding => localModelFile(
-    embeddingGemmaModel,
-    embeddingDirectory,
-    registration: widget.store.model('embedding'),
-  );
+  File? get localEmbedding => verifiedFiles[embeddingGemmaModel];
   bool get embeddingCached => localEmbedding != null;
-  File? localGeneration(GemmaModel model) => localModelFile(
-    model,
-    widget.directory,
-    registration: registeredGeneration,
-  );
+  File? localGeneration(GemmaModel model) => verifiedFiles[model];
+  bool enoughMemory(GemmaModel model) =>
+      widget.memoryGb > 0 && widget.memoryGb >= model.minimumMemoryGb;
+
+  Future<void> checkLocalModels() async {
+    for (final model in [
+      ...gemmaModels,
+      if (!embeddingReady) embeddingGemmaModel,
+    ]) {
+      final file = await widget.findLocalModel(
+        model,
+        model == embeddingGemmaModel ? embeddingDirectory : widget.directory,
+        registration: model == embeddingGemmaModel
+            ? widget.store.model('embedding')
+            : registeredGeneration,
+      );
+      if (!mounted) return;
+      if (file != null) verifiedFiles[model] = file;
+    }
+    if (!mounted) return;
+    setState(() {
+      for (final model in gemmaModels)
+        downloaded[model] = verifiedFiles.containsKey(model);
+      selected =
+          gemmaModels
+              .where((model) => model.digest == registeredGeneration?['digest'])
+              .firstOrNull ??
+          gemmaModels
+              .where(
+                (model) => downloaded[model] == true && enoughMemory(model),
+              )
+              .firstOrNull ??
+          selected;
+      checkingCache = false;
+    });
+  }
 
   GemmaDownload? download;
   NativeRuntime? candidate;
@@ -90,17 +124,13 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
     registeredGeneration = widget.store.model('generation');
     final digest = registeredGeneration?['digest'];
     for (final model in gemmaModels) {
-      downloaded[model] = localGeneration(model) != null;
+      downloaded[model] = false;
     }
+    unawaited(checkLocalModels());
     selected =
         gemmaModels.where((model) => model.digest == digest).firstOrNull ??
         gemmaModels
-            .where(
-              (model) =>
-                  downloaded[model] == true &&
-                  (widget.memoryGb == 0 ||
-                      widget.memoryGb >= model.minimumMemoryGb),
-            )
+            .where((model) => downloaded[model] == true && enoughMemory(model))
             .firstOrNull ??
         (widget.memoryGb == 0
             ? gemmaModels.last
@@ -126,13 +156,14 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   }
 
   Future<void> install() async {
-    if (working) return;
+    if (working || checkingCache) return;
     if (done) {
       Navigator.pop(context);
       return;
     }
     final installGeneration = widget.needsGeneration && !isCurrent(selected);
     final model = selected;
+    if (installGeneration && !enoughMemory(model)) return;
     setState(() {
       working = true;
       cancelled = false;
@@ -145,8 +176,15 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       ..reset()
       ..start();
     lastUpdate = 0;
-    download = widget.createDownload?.call() ?? GemmaDownload();
     try {
+      for (final termsModel in [
+        if (!embeddingReady && !embeddingCached) embeddingGemmaModel,
+        if (installGeneration && localGeneration(model) == null) model,
+      ]) {
+        if (!await confirmModelTerms(context, widget.store, termsModel)) return;
+        if (!mounted || cancelled) return;
+      }
+      download = widget.createDownload?.call() ?? GemmaDownload();
       final process = preflight = await Process.start(widget.runner, [
         '--check',
       ]);
@@ -206,6 +244,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
       if (!mounted || cancelled) return;
       setState(() {
         downloaded[model] = true;
+        verifiedFiles[model] = asset;
         status = 'Loading ${model.name} and preparing GPU cache...';
       });
       final ready = widget.installGeneration != null
@@ -348,9 +387,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                               : TextButton(
                                   onPressed:
                                       working ||
-                                          (widget.memoryGb != 0 &&
-                                              widget.memoryGb <
-                                                  model.minimumMemoryGb)
+                                          checkingCache ||
+                                          !enoughMemory(model)
                                       ? null
                                       : () {
                                           setState(() => selected = model);
@@ -364,13 +402,16 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                                 ),
                           value: model,
                           enabled:
-                              !working &&
-                              (widget.memoryGb == 0 ||
-                                  widget.memoryGb >= model.minimumMemoryGb),
+                              !working && !checkingCache && enoughMemory(model),
                         ),
                     ],
                   ),
                 ),
+              if (widget.needsGeneration && widget.memoryGb <= 0)
+                const Text(
+                  'Device memory could not be determined. Automatic generation model setup is unavailable.',
+                ),
+              if (checkingCache) const Text('Verifying saved models…'),
               if (widget.memoryGb > 0)
                 Text('Device memory: ${widget.memoryGb} GB'),
               const SizedBox(height: 16),
@@ -440,12 +481,12 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         FilledButton(
           onPressed:
               working ||
+                  checkingCache ||
                   (!done &&
                       (widget.runner.isEmpty ||
                           (widget.needsGeneration &&
                               !isCurrent(selected) &&
-                              widget.memoryGb != 0 &&
-                              widget.memoryGb < selected.minimumMemoryGb)))
+                              !enoughMemory(selected))))
               ? null
               : install,
           child: Text(

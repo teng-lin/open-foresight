@@ -205,10 +205,10 @@ tokens/profile file, verifies the bundle manifest, and refuses escaping symlinks
 CI does not currently inject application configuration; browser sign-in requires
 configuration through the app or a separately configured release build.
 
-Package metadata currently uses `LicenseRef-Unspecified`, reflecting the absence
-of a declared project license. Set the intended license in metadata when one is
-adopted; packaging does not choose a license for the project. Bundled dependency
-notices remain part of their payloads.
+The project uses the [MIT license](../../LICENSE), and
+`packaging/metadata.json` records the SPDX identifier `MIT`. Packages include the
+project license and the notices for bundled third-party dependencies. Model terms
+are separate from the application license.
 
 References: [GitHub Actions artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts),
 [Debian shared-library policy](https://www.debian.org/doc/debian-policy/ch-sharedlibs.html),

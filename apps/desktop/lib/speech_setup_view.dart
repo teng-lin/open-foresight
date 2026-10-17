@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:async';
+import 'model_terms_dialog.dart';
 import 'package:flutter/material.dart';
 import 'gemma_download.dart';
 import 'speech_models.dart';
@@ -6,6 +8,7 @@ import 'store.dart';
 
 class SpeechSetupDialog extends StatefulWidget {
   final Store store;
+  final LocalModelFinder findLocalModel;
   final Future<void> Function(File, String, String, bool Function())?
   installSpeech;
   final Directory directory;
@@ -14,6 +17,7 @@ class SpeechSetupDialog extends StatefulWidget {
   const SpeechSetupDialog({
     super.key,
     required this.store,
+    this.findLocalModel = localModelFile,
     this.installSpeech,
     required this.directory,
     required this.runner,
@@ -31,6 +35,8 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   String status = '', error = '';
   double? progress;
   GemmaDownload? download;
+  final verifiedFiles = <GemmaModel, File>{};
+  bool checkingCache = true;
   Process? probe;
   @override
   void initState() {
@@ -44,9 +50,11 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
         speechModels.where((m) => m.digest == currentDigest).firstOrNull ??
         speechModels.where(cached).firstOrNull ??
         speechModels[2];
+    unawaited(checkLocalModels());
   }
 
   bool isCurrent(GemmaModel model) =>
+      verifiedFiles[model]?.path == currentPath &&
       model.digest == currentDigest &&
       currentPath != null &&
       File(currentPath!).existsSync() &&
@@ -54,8 +62,20 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
       currentRunner != null &&
       File(currentRunner!).existsSync() &&
       (File(currentRunner!).statSync().mode & 0x49) != 0;
-  File? localFile(GemmaModel model) =>
-      localModelFile(model, widget.directory, registration: registration);
+  File? localFile(GemmaModel model) => verifiedFiles[model];
+  Future<void> checkLocalModels() async {
+    for (final model in speechModels) {
+      final file = await widget.findLocalModel(
+        model,
+        widget.directory,
+        registration: registration,
+      );
+      if (!mounted) return;
+      if (file != null) verifiedFiles[model] = file;
+    }
+    if (mounted) setState(() => checkingCache = false);
+  }
+
   bool cached(GemmaModel model) => localFile(model) != null;
 
   void cancel() {
@@ -71,7 +91,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   }
 
   Future<void> install() async {
-    if (working) return;
+    if (working || checkingCache) return;
     if (isCurrent(selected)) {
       Navigator.pop(context);
       return;
@@ -85,6 +105,10 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
     download = GemmaDownload();
     try {
       final model = selected;
+      if (!cached(model) &&
+          !await confirmModelTerms(context, widget.store, model))
+        return;
+      if (!mounted || cancelled) return;
       final asset = await download!.download(
         model,
         widget.directory,
@@ -169,7 +193,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
                   for (final model in speechModels)
                     RadioListTile<GemmaModel>(
                       value: model,
-                      enabled: !working,
+                      enabled: !working && !checkingCache,
                       title: Text(model.name),
                       subtitle: Text(
                         '${(model.bytes / 1000000).round()} MB · ${isCurrent(model)
@@ -181,7 +205,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
                       secondary: cached(model)
                           ? null
                           : TextButton(
-                              onPressed: working
+                              onPressed: working || checkingCache
                                   ? null
                                   : () {
                                       setState(() => selected = model);
@@ -193,6 +217,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
                 ],
               ),
             ),
+            if (checkingCache) const Text('Verifying saved models…'),
             if (working) ...[
               const SizedBox(height: 12),
               Text(status),
@@ -218,7 +243,9 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
         child: const Text('Cancel'),
       ),
       FilledButton(
-        onPressed: working || widget.runner.isEmpty ? null : install,
+        onPressed: working || checkingCache || widget.runner.isEmpty
+            ? null
+            : install,
         child: Text(
           isCurrent(selected)
               ? 'Done'
