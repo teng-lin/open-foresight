@@ -1,0 +1,592 @@
+name: Reusable CI dependencies
+'on':
+  push:
+    branches:
+    - main
+    paths:
+    - .github/workflows/ci-dependencies.yml
+    - tools/ci_artifacts.py
+    - tools/ci_registry.py
+    - tools/ci_verify_dependency.py
+    - tools/build_macos_sdk.py
+    - tools/build_macos_runtimes.py
+    - tools/build_litert_extensions.py
+    - tools/litert_extensions.py
+    - tools/test_litert_status_abi.py
+    - tools/build_whisper_vulkan.py
+    - packaging/sdk*.Dockerfile
+    - packaging/minimal-grpc.cmake
+    - requirements-dev.lock
+    - requirements-litert.lock
+    - requirements-litert-macos.lock
+    - third_party/litert_lm/**
+  workflow_dispatch: {}
+  schedule:
+  - cron: 19 3 1 * *
+  pull_request:
+    paths:
+    - .github/workflows/ci-dependencies.yml
+    - tools/ci_artifacts.py
+    - tools/ci_registry.py
+    - tools/ci_verify_dependency.py
+    - tools/build_macos_sdk.py
+    - tools/build_macos_runtimes.py
+    - tools/build_litert_extensions.py
+    - tools/litert_extensions.py
+    - tools/test_litert_status_abi.py
+    - tools/build_whisper_vulkan.py
+    - packaging/sdk*.Dockerfile
+    - packaging/minimal-grpc.cmake
+    - requirements-dev.lock
+    - requirements-litert.lock
+    - requirements-litert-macos.lock
+    - third_party/litert_lm/**
+permissions:
+  contents: read
+  actions: read
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      macos-sdk: ${{ steps.keys.outputs['macos-sdk'] }}
+      macos-runtime: ${{ steps.keys.outputs['macos-runtime'] }}
+      linux-core: ${{ steps.keys.outputs['linux-core'] }}
+      linux-litert: ${{ steps.keys.outputs['linux-litert'] }}
+      linux-whisper: ${{ steps.keys.outputs['linux-whisper'] }}
+      linux-sdk: ${{ steps.keys.outputs['linux-sdk'] }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Compute component identities
+      id: keys
+      run: python tools/ci_artifacts.py keys
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+  macos:
+    name: Build macOS ${{ matrix.component }}
+    needs: plan
+    runs-on: macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+        - sdk
+        - runtime
+    concurrency:
+      group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)]
+        }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted'
+        }}
+      cancel-in-progress: false
+    env:
+      COMPONENT: ${{ matrix.component }}
+      IDENTITY: ${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}
+      PREFIX: ${{ matrix.component == 'sdk' && 'build/sdk' || 'build/macos-runtimes' }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Install compiler tools
+      run: brew install cmake ninja git-lfs
+    - name: Install verifier dependencies
+      run: |-
+        python -m venv .venv
+        .venv/bin/python -m pip install -r requirements-dev.txt
+    - name: Restore an already verified shared prefix
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "macos-${COMPONENT}" --prefix "$PREFIX" --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Bootstrap from existing sdk cache
+      if: matrix.component == 'sdk' && steps.shared.outputs.hit != 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: build/sdk
+        key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
+    - name: Bootstrap from existing runtime cache
+      if: matrix.component == 'runtime' && steps.shared.outputs.hit != 'true'
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: build/macos-runtimes
+        key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py',
+          'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch')
+          }}
+    - name: Build or verify SDK
+      if: matrix.component == 'sdk'
+      run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
+    - name: Build or verify inference runtimes
+      if: matrix.component == 'runtime'
+      run: .venv/bin/python tools/build_macos_runtimes.py --jobs 3
+    - name: Verify and archive the qualified prefix
+      run: |-
+        python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
+        python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-macos-${{ matrix.component }}-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+  core:
+    name: Build Linux core
+    needs:
+    - plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    concurrency:
+      group: dependency-linux-core-${{ needs.plan.outputs['linux-core'] }}-${{ github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    outputs:
+      image: ${{ steps.resolved.outputs.image }}
+    env:
+      COMPONENT: core
+      IDENTITY: ${{ needs.plan.outputs['linux-core'] }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Authenticate SDK registry
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Reuse a qualified component from reviewed sources
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "linux-$COMPONENT" --prefix build/shared-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Resolve component image namespace
+      id: tag
+      run: |-
+        task_repository=${GITHUB_REPOSITORY,,}
+        task_namespace="ghcr.io/$task_repository"
+        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+          task_namespace="$task_namespace/preview-$OWN_PR"
+        fi
+        echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
+        echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
+        if [[ -f build/shared-descriptor/image.json ]]; then
+          python - <<'PY'
+        import json,os,re
+        image=json.load(open('build/shared-descriptor/image.json'))['image']
+        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
+        PY
+        fi
+      env:
+        OWN_PR: ${{ github.event.pull_request.number || github.sha }}
+    - name: Verify publication permission before compiling
+      run: |-
+        docker buildx build --push --tag "${{ steps.tag.outputs.image }}-publish-check"   --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" - <<'DOCKERFILE'
+        FROM scratch
+        LABEL org.opencontainers.image.description="Dependency publication permission check"
+        DOCKERFILE
+      if: steps.shared.outputs.hit != 'true'
+    - name: Inspect immutable dependency image
+      id: lookup
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Build and publish core
+      if: steps.lookup.outputs.build == 'true'
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: .
+        file: packaging/sdk-core.Dockerfile
+        push: true
+        tags: ${{ steps.tag.outputs.image }}
+        labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+        build-args: ''
+        cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
+        cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    - name: Resolve immutable component digest
+      id: resolved
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish qualified SDK descriptor
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        mkdir -p build/sdk-descriptor
+        python - <<'PY'
+        import json,os
+        from pathlib import Path
+        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
+        PY
+        python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-linux-core-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+  litert:
+    name: Build Linux litert
+    needs:
+    - plan
+    - core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    concurrency:
+      group: dependency-linux-litert-${{ needs.plan.outputs['linux-litert'] }}-${{ github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    outputs:
+      image: ${{ steps.resolved.outputs.image }}
+    env:
+      COMPONENT: litert
+      IDENTITY: ${{ needs.plan.outputs['linux-litert'] }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Authenticate SDK registry
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Reuse a qualified component from reviewed sources
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "linux-$COMPONENT" --prefix build/shared-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Resolve component image namespace
+      id: tag
+      run: |-
+        task_repository=${GITHUB_REPOSITORY,,}
+        task_namespace="ghcr.io/$task_repository"
+        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+          task_namespace="$task_namespace/preview-$OWN_PR"
+        fi
+        echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
+        echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
+        if [[ -f build/shared-descriptor/image.json ]]; then
+          python - <<'PY'
+        import json,os,re
+        image=json.load(open('build/shared-descriptor/image.json'))['image']
+        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
+        PY
+        fi
+      env:
+        OWN_PR: ${{ github.event.pull_request.number || github.sha }}
+    - name: Verify publication permission before compiling
+      run: |-
+        docker buildx build --push --tag "${{ steps.tag.outputs.image }}-publish-check"   --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" - <<'DOCKERFILE'
+        FROM scratch
+        LABEL org.opencontainers.image.description="Dependency publication permission check"
+        DOCKERFILE
+      if: steps.shared.outputs.hit != 'true'
+    - name: Inspect immutable dependency image
+      id: lookup
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Build and publish litert
+      if: steps.lookup.outputs.build == 'true'
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: .
+        file: packaging/sdk-litert.Dockerfile
+        push: true
+        tags: ${{ steps.tag.outputs.image }}
+        labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+        build-args: CORE_IMAGE=${{ needs.core.outputs.image }}
+        cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
+        cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    - name: Resolve immutable component digest
+      id: resolved
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish qualified SDK descriptor
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        mkdir -p build/sdk-descriptor
+        python - <<'PY'
+        import json,os
+        from pathlib import Path
+        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
+        PY
+        python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-linux-litert-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+  whisper:
+    name: Build Linux whisper
+    needs:
+    - plan
+    - core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    concurrency:
+      group: dependency-linux-whisper-${{ needs.plan.outputs['linux-whisper'] }}-${{ github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    outputs:
+      image: ${{ steps.resolved.outputs.image }}
+    env:
+      COMPONENT: whisper
+      IDENTITY: ${{ needs.plan.outputs['linux-whisper'] }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Authenticate SDK registry
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Reuse a qualified component from reviewed sources
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "linux-$COMPONENT" --prefix build/shared-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Resolve component image namespace
+      id: tag
+      run: |-
+        task_repository=${GITHUB_REPOSITORY,,}
+        task_namespace="ghcr.io/$task_repository"
+        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+          task_namespace="$task_namespace/preview-$OWN_PR"
+        fi
+        echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
+        echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
+        if [[ -f build/shared-descriptor/image.json ]]; then
+          python - <<'PY'
+        import json,os,re
+        image=json.load(open('build/shared-descriptor/image.json'))['image']
+        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
+        PY
+        fi
+      env:
+        OWN_PR: ${{ github.event.pull_request.number || github.sha }}
+    - name: Verify publication permission before compiling
+      run: |-
+        docker buildx build --push --tag "${{ steps.tag.outputs.image }}-publish-check"   --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" - <<'DOCKERFILE'
+        FROM scratch
+        LABEL org.opencontainers.image.description="Dependency publication permission check"
+        DOCKERFILE
+      if: steps.shared.outputs.hit != 'true'
+    - name: Inspect immutable dependency image
+      id: lookup
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Build and publish whisper
+      if: steps.lookup.outputs.build == 'true'
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: .
+        file: packaging/sdk-whisper.Dockerfile
+        push: true
+        tags: ${{ steps.tag.outputs.image }}
+        labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+        build-args: CORE_IMAGE=${{ needs.core.outputs.image }}
+        cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
+        cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    - name: Resolve immutable component digest
+      id: resolved
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish qualified SDK descriptor
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        mkdir -p build/sdk-descriptor
+        python - <<'PY'
+        import json,os
+        from pathlib import Path
+        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
+        PY
+        python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-linux-whisper-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+  sdk:
+    name: Assemble Linux SDK
+    needs:
+    - plan
+    - core
+    - litert
+    - whisper
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    concurrency:
+      group: dependency-linux-sdk-${{ needs.plan.outputs['linux-sdk'] }}-${{ github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    outputs:
+      image: ${{ steps.resolved.outputs.image }}
+    env:
+      COMPONENT: sdk
+      IDENTITY: ${{ needs.plan.outputs['linux-sdk'] }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Authenticate SDK registry
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Reuse a qualified component from reviewed sources
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "linux-$COMPONENT" --prefix build/shared-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Resolve component image namespace
+      id: tag
+      run: |-
+        task_repository=${GITHUB_REPOSITORY,,}
+        task_namespace="ghcr.io/$task_repository"
+        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+          task_namespace="$task_namespace/preview-$OWN_PR"
+        fi
+        echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
+        echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
+        if [[ -f build/shared-descriptor/image.json ]]; then
+          python - <<'PY'
+        import json,os,re
+        image=json.load(open('build/shared-descriptor/image.json'))['image']
+        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
+        PY
+        fi
+      env:
+        OWN_PR: ${{ github.event.pull_request.number || github.sha }}
+    - name: Verify publication permission before compiling
+      run: |-
+        docker buildx build --push --tag "${{ steps.tag.outputs.image }}-publish-check"   --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" - <<'DOCKERFILE'
+        FROM scratch
+        LABEL org.opencontainers.image.description="Dependency publication permission check"
+        DOCKERFILE
+      if: steps.shared.outputs.hit != 'true'
+    - name: Inspect immutable dependency image
+      id: lookup
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Build and publish sdk
+      if: steps.lookup.outputs.build == 'true'
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: .
+        file: packaging/sdk.Dockerfile
+        push: true
+        tags: ${{ steps.tag.outputs.image }}
+        labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+        build-args: |-
+          CORE_IMAGE=${{ needs.core.outputs.image }}
+          LITERT_IMAGE=${{ needs.litert.outputs.image }}
+          WHISPER_IMAGE=${{ needs.whisper.outputs.image }}
+        cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
+        cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    - name: Resolve immutable component digest
+      id: resolved
+      run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish qualified SDK descriptor
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        mkdir -p build/sdk-descriptor
+        python - <<'PY'
+        import json,os
+        from pathlib import Path
+        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
+        PY
+        python tools/ci_artifacts.py pack --component linux-sdk --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-linux-sdk-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0

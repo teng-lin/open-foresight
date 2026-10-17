@@ -1,34 +1,12 @@
 name: Mac support and Linux native regression
-
-on:
-  push:
-    branches: [main]
-  pull_request:
-  workflow_dispatch:
-  workflow_call:
-    secrets:
-      FORESIGHT_SEARCH_API_KEY:
-        required: false
-      FORESIGHT_WEB_CONTENT_API_KEY:
-        required: false
-    inputs:
-      package-release:
-        description: Archive the tested application for the release DMG workflow
-        type: boolean
-        default: false
-
 permissions:
   contents: read
-
+  actions: read
 concurrency:
   group: platform-checks-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   macos:
-    # GitHub's standard macos-15 label is Apple Silicon; Intel has its own
-    # macos-15-intel label. Fail early if runner allocation ever changes.
-    # https://docs.github.com/en/actions/reference/runners/github-hosted-runners
     runs-on: macos-15
     timeout-minutes: 180
     env:
@@ -39,186 +17,302 @@ jobs:
       FORESIGHT_CORE_COVERAGE_MIN: '90'
       FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Verify release version
-        if: inputs.package-release
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: |
-          python3 tools/app_version.py --check
-          version=$(python3 tools/app_version.py)
-          if [ "$RELEASE_TAG" != "v$version" ]; then
-            echo "Release tag must match pubspec version (v$version)" >&2
-            exit 1
-          fi
-      - name: Verify Apple Silicon host
-        run: |
-          test "$RUNNER_ARCH" = ARM64
-          test "$(uname -m)" = arm64
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.13'
-      - name: Install build tools
-        run: brew install cmake ninja cocoapods protobuf git-lfs
-      - name: Install Python development dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install -r requirements-dev.txt
-      - name: Offline Python tests and branch coverage
-        run: tools/coverage.sh
-      - name: Retain Python coverage
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: python-coverage-macos
-          path: coverage/python/
-          if-no-files-found: warn
-      - name: Install pinned Flutter
-        run: |
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - name: Verify Apple Silicon host
+      run: |
+        test "$RUNNER_ARCH" = ARM64
+        test "$(uname -m)" = arm64
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Install build tools
+      run: brew install cmake ninja cocoapods protobuf git-lfs
+    - name: Install Python development dependencies
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install -r requirements-dev.txt
+    - name: Offline Python tests and branch coverage
+      run: tools/coverage.sh
+    - name: Retain Python coverage
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: python-coverage-macos
+        path: coverage/python/
+        if-no-files-found: warn
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: flutter-cache
+      with:
+        path: ${{ runner.temp }}/flutter
+        key: flutter-macos-arm64-3.35.7-v1
+    - name: Install pinned Flutter
+      run: |
+        if [[ ! -x "$RUNNER_TEMP/flutter/bin/flutter" ]]; then
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
-          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
-          "$RUNNER_TEMP/flutter/bin/flutter" --version
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        id: sdk-cache
-        with:
-          path: build/sdk
-          key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
-      - name: Verify SDK checkout guards
-        run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
-      - name: Build macOS 15 compatible dependency SDK
-        run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
-      - name: Expose SDK code generators
-        run: echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
-      - name: Save completed dependency SDK
-        if: steps.sdk-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/sdk
-          key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
-      - name: Native, core, service, MCP, and Flutter gates
-        run: |
-          tools/build.sh --platform macos \
-            -DCMAKE_PREFIX_PATH="$PWD/build/sdk" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-            -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local'
-      - name: Retain Dart core coverage
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dart-core-coverage-macos
-          path: coverage/core/lcov.info
-          if-no-files-found: error
-      - name: Verify native helper identity boundary
-        run: |
-          .venv/bin/python tests/integration/test_native_process.py \
-            build/native/libforesight_native.dylib build/services/helper/ForesightHelper
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        id: inference-cache
-        with:
-          path: build/macos-runtimes
-          key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py', 'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch') }}
-      - name: Build and verify complete inference runtimes
-        run: .venv/bin/python tools/build_macos_runtimes.py --jobs 3
-      - name: Cache verified inference runtimes
-        if: steps.inference-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/macos-runtimes
-          key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py', 'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch') }}
-      - name: Remove completed runtime compiler scratch
-        # Cache the verified payload first, even if scratch cleanup later fails.
-        run: .venv/bin/python tools/clean_macos_runtime_sources.py
-      - name: Assemble complete ad hoc application
-        env:
-          FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
-          FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
-        run: |
-          .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
-            --python-runtime build/macos-runtimes/python \
-            --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
-            --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
-            --whisper-license build/macos-runtimes/whisper/LICENSE
-          codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
-      - name: Verify bundled inference without developer environment
-        run: |
-          .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
-            --output test-results/macos-release-runtime.json
-      - name: Live release distribution acceptance
-        if: inputs.package-release
-        env:
-          FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
-          FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
-        run: |
-          if [[ -n "$FORESIGHT_SEARCH_API_KEY" && -n "$FORESIGHT_WEB_CONTENT_API_KEY" ]]; then
-            task_report="$PWD/test-results/cloud-distribution.json"
-            task_resources="$PWD/dist/Open Foresight.app/Contents/Resources"
-            # Prove the shipped configuration works without secret overrides.
-            (cd packages/foresight_core && env -u FORESIGHT_SEARCH_API_KEY -u FORESIGHT_WEB_CONTENT_API_KEY \
-              FORESIGHT_RESOURCES="$task_resources" \
-              dart run tool/verify_cloud_services.dart --download-query) > "$task_report"
-          else
-            echo 'Cloud distribution acceptance skipped: no distribution settings supplied.'
-          fi
-      - name: Real release-model CPU acceptance
-        if: inputs.package-release
-        run: |
-          .venv/bin/python tools/test_macos_release_models.py 'dist/Open Foresight.app' \
-            --models build/release-acceptance-models --output test-results/release-models
-      - name: Installed application tooling tests
-        run: .venv/bin/python -m unittest discover -s tests -p test_macos_tools.py -v
-      - name: Relocated application MCP smoke with minimal environment
-        run: |
-          .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
-            --output test-results/macos-bundle.json
-      - name: Retain development package evidence
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: macos-development-evidence
-          path: |
-            dist/*.manifest.json
-            build/macos-runtimes/runtime-manifest.json
-            build/Testing/Temporary/LastTest.log
-            test-results/
-          if-no-files-found: ignore
-      - name: Archive tested application for DMG packaging
-        if: inputs.package-release
-        run: ditto -c -k --keepParent 'dist/Open Foresight.app' dist/Open-Foresight-macos-arm64.zip
-      - name: Retain release application
-        if: inputs.package-release
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: macos-release-application
-          path: |
-            dist/Open-Foresight-macos-arm64.zip
-            dist/Open Foresight.manifest.json
-          if-no-files-found: error
-          retention-days: 14
-
+        fi
+        test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
+        "$RUNNER_TEMP/flutter/bin/flutter" --version
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.flutter-cache.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/flutter
+        key: flutter-macos-arm64-3.35.7-v1
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: pub-cache
+      with:
+        path: ~/.pub-cache
+        key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
+        restore-keys: pub-macos-
+    - name: Fetch verified macos-sdk
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        python tools/ci_artifacts.py pull --component macos-sdk --prefix build/sdk --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
+        echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
+    - name: Verify SDK checkout guards
+      run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
+    - name: Native, core, service, MCP, and Flutter gates
+      run: |
+        tools/build.sh --platform macos \
+          -DCMAKE_PREFIX_PATH="$PWD/build/sdk" \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local'
+    - name: Retain Dart core coverage
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: dart-core-coverage-macos
+        path: coverage/core/lcov.info
+        if-no-files-found: error
+    - name: Verify native helper identity boundary
+      run: |
+        .venv/bin/python tests/integration/test_native_process.py \
+          build/native/libforesight_native.dylib build/services/helper/ForesightHelper
+    - name: Fetch verified macos-runtime
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        python tools/ci_artifacts.py pull --component macos-runtime --prefix build/macos-runtimes --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/ci_verify_dependency.py --component macos-runtime --prefix build/macos-runtimes
+    - name: Assemble complete ad hoc application
+      env:
+        FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
+        FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
+      run: |
+        .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
+          --python-runtime build/macos-runtimes/python \
+          --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
+          --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
+          --whisper-license build/macos-runtimes/whisper/LICENSE
+        codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
+    - name: Verify bundled inference without developer environment
+      run: |
+        .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
+          --output test-results/macos-release-runtime.json
+    - name: Installed application tooling tests
+      run: .venv/bin/python -m unittest discover -s tests -p test_macos_tools.py -v
+    - name: Relocated application MCP smoke with minimal environment
+      run: |
+        .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
+          --output test-results/macos-bundle.json
+    - name: Retain development package evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: macos-development-evidence
+        path: |
+          dist/*.manifest.json
+          build/macos-runtimes/runtime-manifest.json
+          build/Testing/Temporary/LastTest.log
+          test-results/
+        if-no-files-found: ignore
+    - name: Archive the exact tested application candidate
+      if: github.ref == 'refs/heads/main'
+      run: |-
+        mkdir -p build/candidate
+        ditto -c -k --keepParent 'dist/Open Foresight.app' build/candidate/Open-Foresight-macos-arm64.zip
+        cp 'dist/Open Foresight.manifest.json' build/candidate/
+        python tools/ci_artifacts.py pack --component macos-app --identity "$GITHUB_SHA" --prefix build/candidate --output build/candidate-upload
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: github.ref == 'refs/heads/main'
+      with:
+        name: ci-macos-app-${{ github.sha }}
+        path: build/candidate-upload/
+        retention-days: 30
+        if-no-files-found: error
+        compression-level: 0
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: success() && steps.pub-cache.outputs.cache-hit != 'true'
+      with:
+        path: ~/.pub-cache
+        key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
   linux-native:
-    # Arch provides a current Edition 2024 capable protoc and the matching
-    # gRPC runtime; Ubuntu's older distro protobuf cannot compile this schema.
     runs-on: ubuntu-24.04
     container: archlinux:base-devel
     timeout-minutes: 30
     steps:
-      - name: Install Linux native toolchain
-        run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - name: Install Python development dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install -r requirements-dev.txt
-      - name: Build native helper and run Linux regression gates
-        run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
-          cmake --build build --parallel 4
-          ctest --test-dir build --output-on-failure
-          .venv/bin/python tests/integration/test_native_process.py \
-            build/native/libforesight_native.so build/services/helper/ForesightHelper
+    - name: Install Linux native toolchain
+      run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - name: Install Python development dependencies
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install -r requirements-dev.txt
+    - name: Build native helper and run Linux regression gates
+      run: |
+        cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+          -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
+        cmake --build build --parallel 4
+        ctest --test-dir build --output-on-failure
+        .venv/bin/python tests/integration/test_native_process.py \
+          build/native/libforesight_native.so build/services/helper/ForesightHelper
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      build: ${{ steps.changes.outputs.build }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Classify code versus documentation changes
+      id: changes
+      env:
+        BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        FORCE: ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
+      run: python tools/ci_changes.py --base "$BASE" $FORCE
+    - name: Lint every Actions workflow
+      run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+    - name: Validate release version copies
+      run: python tools/app_version.py --check
+  linux-bundle:
+    needs: changes
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      epoch: ${{ steps.version.outputs.epoch }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Fetch verified Linux SDK descriptor
+      id: sdk
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400
+        python - <<'PY'
+        import json,os,re
+        image=json.load(open('build/sdk-descriptor/image.json'))['image']
+        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK image')
+        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
+        PY
+    - name: Packaging contracts
+      run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
+    - name: Package version
+      id: version
+      run: |
+        python3 - <<'PY'
+        import os, subprocess, sys
+        sys.path.insert(0, 'tools')
+        from app_version import read_version, stale
+        if paths := stale():
+            raise SystemExit('Out of date with apps/desktop/pubspec.yaml: ' + ', '.join(paths))
+        version, _ = read_version()
+        release = '1'
+        epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
+        PY
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Authenticate private SDK registry
+      env:
+        REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Build and test baseline bundle
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: .
+        file: packaging/build.Dockerfile
+        target: artifact
+        outputs: type=local,dest=build/portable
+        build-args: |
+          SDK_IMAGE=${{ steps.sdk.outputs.image }}
+          SOURCE_REVISION=${{ github.sha }}
+          DISTRIBUTION_CONFIG_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
+        secrets: |
+          foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
+          foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
+        cache-from: type=gha,scope=linux-packages-x86-64
+        cache-to: type=gha,mode=max,scope=linux-packages-x86-64
+    - name: Archive executable permissions and record checksums
+      env:
+        VERSION: ${{ steps.version.outputs.version }}
+        RELEASE: ${{ steps.version.outputs.release }}
+        SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+      run: |
+        python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
+        cp build/portable/dist/abi.json dist/packages/abi.json
+    - name: Archive exact tested Linux candidate
+      run: python tools/ci_artifacts.py pack --component linux-app --identity "$GITHUB_SHA" --prefix dist/packages
+        --output build/candidate-upload
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-linux-app-${{ github.sha }}
+        path: build/candidate-upload/
+        retention-days: 30
+        if-no-files-found: error
+        compression-level: 0
+    if: needs.changes.outputs.build == 'true' && github.ref == 'refs/heads/main'
+  platform-checks:
+    if: always()
+    needs:
+    - changes
+    - macos
+    - linux-native
+    - linux-bundle
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - name: Require all selected platform gates
+      env:
+        NEEDS: ${{ toJSON(needs) }}
+        BUILD: ${{ needs.changes.outputs.build }}
+        MAIN: ${{ github.ref == 'refs/heads/main' }}
+      run: python tools/ci_changes.py --check-gates
+'on':
+  push:
+    branches:
+    - main
+  pull_request: null
+  workflow_dispatch: null
