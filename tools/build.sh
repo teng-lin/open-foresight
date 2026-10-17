@@ -35,29 +35,20 @@ cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXEC
 cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
 task_build=$(cd -- "$task_build" && pwd)
 ctest --test-dir "$task_build" --output-on-failure
-if command -v dart >/dev/null; then
-  (
-    export FORESIGHT_NATIVE_LIBRARY="$task_build/native/${task_native##*/}"
-    export FORESIGHT_HELPER="$task_build/services/helper/ForesightHelper"
-    cd "$task_root/packages/foresight_core"
-    dart pub get
-    dart analyze
-    if [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
-      "$task_root/tools/coverage_core.sh"
-    else
-      dart test
-    fi
-  )
-  mkdir -p "$task_build/application"
-  dart compile exe "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
-  dart compile exe "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
+if [[ "${FORESIGHT_PARALLEL_GATES:-0}" == 1 ]] && command -v dart >/dev/null && command -v flutter >/dev/null; then
+  "$task_python" "$task_root/tools/parallel_build_gates.py" \
+    --platform "$task_platform" --build "$task_build" --python "$task_python"
 else
-  echo "Add Dart to PATH to build/test the application service and MCP server." >&2
-fi
-if command -v flutter >/dev/null; then
-  (cd "$task_root/apps/desktop" && flutter pub get && flutter analyze && flutter test && flutter build "$task_platform" --release)
-else
-  echo "Native build passed. Add Flutter to PATH to also build/test the desktop app." >&2
+  if command -v dart >/dev/null; then
+    bash "$task_root/tools/build_dart_gates.sh" core "$task_platform" "$task_build" "$task_python"
+  else
+    echo "Add Dart to PATH to build/test the application service and MCP server." >&2
+  fi
+  if command -v flutter >/dev/null; then
+    bash "$task_root/tools/build_dart_gates.sh" desktop "$task_platform" "$task_build" "$task_python"
+  else
+    echo "Native build passed. Add Flutter to PATH to also build/test the desktop app." >&2
+  fi
 fi
 if [[ -x "$task_build/application/foresight-service" && -x "$task_build/application/foresight-mcp" ]]; then
   # macOS's default /var/folders temp prefix can exhaust sockaddr_un's limit

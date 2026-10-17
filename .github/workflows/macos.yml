@@ -29,6 +29,7 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       FORESIGHT_BUILD_JOBS: '3'
+      FORESIGHT_PARALLEL_GATES: '1'
       FORESIGHT_COVERAGE: '1'
       FORESIGHT_CORE_COVERAGE_MIN: '90'
       FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
