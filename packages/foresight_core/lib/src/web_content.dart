@@ -43,6 +43,7 @@ class WebContentService {
   final bool _ownsChannel;
   final ClientChannel _channel;
   late final ForesightServiceClient _client;
+  final _requests = <ResponseFuture<FetchExternalWebsiteResponse>>{};
   bool _closed = false;
 
   Future<FetchExternalWebsiteResponse?> fetchWebContent(
@@ -52,7 +53,7 @@ class WebContentService {
   }) async {
     if (_closed) throw StateError('Web content service is closed.');
     if (url.isEmpty) return null;
-    final response = await _client.fetchExternalWebsite(
+    final request = _client.fetchExternalWebsite(
       FetchExternalWebsiteRequest(
         url: url,
         useTrawler: false,
@@ -63,6 +64,13 @@ class WebContentService {
         maxInputTokens: 131072,
       ),
     );
+    _requests.add(request);
+    final FetchExternalWebsiteResponse response;
+    try {
+      response = await request;
+    } finally {
+      _requests.remove(request);
+    }
     response.content = sanitizeReferenceUtf8(response.content);
     response.mimeType = 'text/html';
     if (response.title.isEmpty && response.content.isNotEmpty) {
@@ -130,6 +138,9 @@ class WebContentService {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
+    await Future.wait([
+      for (final request in _requests.toList()) request.cancel(),
+    ]);
     if (_ownsChannel) await _channel.shutdown();
   }
 }
