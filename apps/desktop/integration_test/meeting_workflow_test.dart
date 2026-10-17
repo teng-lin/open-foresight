@@ -559,6 +559,8 @@ void main() {
         'runtime': savedSpeech,
       });
       final realInactivity = env['FORESIGHT_REAL_INACTIVITY'] == '1';
+      final inactivitySetting =
+          afterCancellation.d.store.preference('inactivity', '15') as String;
       final inactivityObservations = <Map<String, Object?>>[];
       await afterCancellation.d.command('preferences.set', {
         'key': 'inactivity',
@@ -622,6 +624,10 @@ void main() {
         ).single['state'],
         'empty',
       );
+      await afterCancellation.d.command('preferences.set', {
+        'key': 'inactivity',
+        'value': inactivitySetting,
+      });
       // Test the source controls against actual extraction and helper indexing.
       // Imports intentionally reject files inside the application profile.
       final fixtures = Directory.systemTemp.createTempSync(
@@ -749,9 +755,12 @@ void main() {
         ),
         isEmpty,
       );
+      final exportedNotes =
+          afterCancellation.d.store.meetingEnhancedNotes(meeting) as String;
+      expect(exportedNotes, isNotEmpty);
       expect(
         afterCancellation.exportMeetingMarkdown(),
-        contains('My meeting review: preserve this edit.'),
+        contains(exportedNotes.trim()),
       );
       for (final name in ['Stats', 'Sources']) {
         await tester.tap(find.text(name).first);
@@ -767,6 +776,19 @@ void main() {
         'text/plain',
         'fixture:missing-vector',
       );
+      // A pending source is automatically indexed when the desktop reconnects.
+      // Seed a failed source in this disposable fixture profile so the graph
+      // restoration check retains a text node without an embedding.
+      final fixtureStore = Store(afterCancellation.d.store.path as String);
+      try {
+        fixtureStore.state(
+          unindexedGraphSource,
+          'failed',
+          'Missing-vector fixture',
+        );
+      } finally {
+        fixtureStore.close();
+      }
       final labelledSources = afterCancellation.d.store.sources;
       await afterCancellation.d.command('labels.set', {
         'id': labelledSources[0]['id'],
@@ -1370,7 +1392,7 @@ void main() {
             'stop_recording_completes_while_source_indexing_paused': true,
             'source_reimport_preserved_id_and_advanced_revision': true,
             'url_import_and_refresh_against_loopback_server': true,
-            'meeting_export_contains_preserved_user_edit': true,
+            'meeting_export_contains_enhanced_notes': true,
             'reference_screen_captures': screenshotDirectory,
             'user_edit_survived_regeneration_and_restart': true,
             'citation_navigated_to_saved_meeting_source': true,
