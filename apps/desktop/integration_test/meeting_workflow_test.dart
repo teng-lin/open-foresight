@@ -22,7 +22,18 @@ Future<void> waitUntil(
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  expect(ready(), true, reason: reason);
+  if (!ready()) {
+    final workspaces = find.byType(app.Workspace);
+    if (workspaces.evaluate().isNotEmpty) {
+      final dynamic workspace = tester.state(workspaces);
+      final status = await workspace.d.command('status');
+      fail(
+        '$reason: busy=${workspace.busy}, error=${workspace.error}, '
+        'status=$status',
+      );
+    }
+    fail(reason);
+  }
   final failure = tester.takeException();
   if (failure != null) {
     File(
@@ -52,6 +63,21 @@ Future<dynamic> startedWorkspace(WidgetTester tester) async {
     throw StateError('Desktop did not start: $startupFailure');
   }
   return tester.state(find.byType(app.Workspace));
+}
+
+/// Recording starts only after the desktop confirms the service request.
+/// Clicking Record alone leaves capture idle while this dialog is pending.
+Future<void> allowRecording(WidgetTester tester) async {
+  await waitUntil(
+    tester,
+    () => find
+        .text('Allow microphone and system audio recording?')
+        .evaluate()
+        .isNotEmpty,
+    reason: 'Recording approval dialog did not appear',
+  );
+  await tester.tap(find.text('Allow once'));
+  await tester.pump();
 }
 
 Future<void> captureWindow(
@@ -181,7 +207,20 @@ void main() {
       );
       await tester.tap(find.byTooltip('Meeting options'));
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<String>>(
+              find.widgetWithText(
+                PopupMenuItem<String>,
+                'Record microphone + playback',
+              ),
+            )
+            .enabled,
+        true,
+        reason: 'Recording action is disabled: busy=${workspace.busy}',
+      );
       await tester.tap(find.text('Record microphone + playback'));
+      await allowRecording(tester);
       await waitUntil(
         tester,
         () =>
@@ -454,6 +493,7 @@ void main() {
       await tester.tap(find.byTooltip('Meeting options'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Record microphone + playback'));
+      await allowRecording(tester);
       await waitUntil(
         tester,
         () =>
@@ -500,7 +540,7 @@ void main() {
       });
       // The opt-in path waits for production timekeeping on silent devices.
       await tester.tap(find.text('Start transcribing'));
-      await tester.pump();
+      await allowRecording(tester);
       await waitUntil(
         tester,
         () => afterCancellation.recording?.sampleCounts.length == 2,
