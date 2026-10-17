@@ -64,6 +64,8 @@ def run(args):
         runner, _, _ = packaged_paths(bundle)
         if bundle.suffix != '.app':
             raise ValueError('This Application harness currently requires a macOS app bundle')
+        configuration = json.loads((bundle / 'Contents/Resources/runtime.json').read_text())
+        report['generation_backend'] = configuration.get('FORESIGHT_LITERT_BACKEND', 'cpu')
         for name, path, expected in (
             ('generation', args.generation, GENERATION_SHA256),
             ('embedding', args.embedding, EMBEDDING_SHA256)):
