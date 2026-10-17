@@ -8,8 +8,17 @@ from tools import app_version
 
 ROOT = Path(__file__).resolve().parents[2]
 # Files that must derive the version rather than repeat it.
-DERIVING = ['CMakeLists.txt', 'services/helper/CMakeLists.txt', 'packages/foresight_core/bin/mcp.dart',
-            'tools/package.py', 'tools/package_macos.py', 'apps/desktop/lib/screenshot_ui.dart']
+DERIVING = [
+    "CMakeLists.txt",
+    "services/helper/CMakeLists.txt",
+    "packages/foresight_core/bin/mcp.dart",
+    "tools/package.py",
+    "tools/package_macos.py",
+    *[
+        str(path.relative_to(ROOT))
+        for path in sorted((ROOT / "apps/desktop/lib").rglob("*.dart"))
+    ],
+]
 
 
 def copy_tree(tmp_path):
