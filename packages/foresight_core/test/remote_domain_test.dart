@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/remote_domain.dart';
 import 'package:test/test.dart';
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 import 'fixtures/remote_service.dart';
 
@@ -220,7 +221,7 @@ void main() {
       f.handler = (socket, request) =>
           f.reply(socket, request, 'preview', done: false);
       final iterator = StreamIterator(
-        f.remote.askInConversation('Question', 'desktop'),
+        f.remote.askInConversation('Question', 'desktop', requestId: 'owner'),
       );
       expect(await iterator.moveNext(), isTrue);
       final failure = expectLater(iterator.moveNext(), throwsStateError);
@@ -484,6 +485,120 @@ void main() {
           runtimeConfiguration.environment['FORESIGHT_SERVICE'] = previous;
         }
       }
+    },
+  );
+  test(
+    'request-specific cancellation leaves another desktop generation active',
+    () async {
+      f.handler = (socket, request) =>
+          f.reply(socket, request, 'preview', done: false);
+      final first = StreamIterator(
+        f.remote.askInConversation('First', 'desktop', requestId: 'first'),
+      );
+      final second = StreamIterator(
+        f.remote.askWithWebInConversation(
+          'Second',
+          'desktop',
+          requestId: 'second',
+        ),
+      );
+      expect(await first.moveNext(), isTrue);
+      expect(await second.moveNext(), isTrue);
+      final failure = expectLater(first.moveNext(), throwsStateError);
+      expect(f.remote.runtime.cancel(requestId: 'missing'), isFalse);
+      expect(f.remote.runtime.cancel(requestId: 'first'), isTrue);
+      await failure;
+      final request = f.requests.singleWhere(
+        (request) => (request['args'] as Map?)?['requestId'] == 'second',
+      );
+      f.reply(f.sockets.last, request, 'completed');
+      expect(await second.moveNext(), isTrue);
+      expect(second.current, 'completed');
+      expect(await second.moveNext(), isFalse);
+      await first.cancel();
+      await second.cancel();
+    },
+  );
+
+  test(
+    'a cancelled predicate reaches the service while generation is silent',
+    () async {
+      var current = true;
+      final pending = expectLater(
+        f.remote
+            .askInConversation('Silent', 'desktop', current: () => current)
+            .last,
+        throwsStateError,
+      );
+      await eventually(
+        () => f.requests.any((request) => request['method'] == 'answer.stream'),
+      );
+      final request = f.requests.last;
+      current = false;
+      await pending;
+      await eventually(
+        () => f.requests.any((message) => message['cancel'] == request['id']),
+      );
+    },
+  );
+
+  test(
+    'helper snapshots follow service events without opening a helper watcher',
+    () async {
+      var ready = 0;
+      f.remote.helper.onReady = () async {
+        ready++;
+      };
+      await f.remote.helper.start().timeout(const Duration(seconds: 1));
+      expect(ready, 1);
+      expect(f.remote.helper.watch, isNull);
+      f.event({
+        ...f.status,
+        'helper_state': 'live in relocated runtime',
+        'helper': control.State(
+          pipeline: 'ready',
+          buildId: 'relocated-build',
+          instanceId: 'new-instance',
+        ).toProto3Json(),
+      });
+      await eventually(
+        () => f.remote.helper.snapshot?.buildId == 'relocated-build',
+      );
+      expect(f.remote.helper.state, 'live in relocated runtime');
+      f.event({...f.status, 'helper': null, 'helper_state': 'helper exited'});
+      await eventually(() => f.remote.helper.snapshot == null);
+      expect(f.remote.helper.state, 'helper exited');
+      expect(f.remote.helper.watch, isNull);
+    },
+  );
+  test(
+    'approval events preserve the current service helper snapshot',
+    () async {
+      File(
+        '${f.profile.data}/.desktop-capability',
+      ).writeAsStringSync('test-token');
+      f.handler = (socket, request) => f.reply(socket, request, null);
+      final approvals = <Map<String, dynamic>>[];
+      await f.remote.enableDesktopApprovals(approvals.add);
+      f.event({
+        ...f.status,
+        'helper': control.State(
+          pipeline: 'ready',
+          buildId: 'current-build',
+        ).toProto3Json(),
+      });
+      await eventually(
+        () => f.remote.helper.snapshot?.buildId == 'current-build',
+      );
+      f.event({
+        'event': 'approval',
+        'approval_id': 'test-approval',
+        'method': 'sources.import_url',
+        'args': {'allow_private_network': true},
+      });
+      await eventually(() => approvals.isNotEmpty);
+      expect(f.remote.helper.snapshot?.buildId, 'current-build');
+      expect(f.remote.helper.snapshot?.pipeline, 'ready');
     },
   );
 }

@@ -39,6 +39,7 @@ class ServiceClient {
   final Socket socket;
   final int _maxMessageBytes;
   final _methods = <int, String>{};
+  final _requestIds = <int, String>{};
   final _pending = <int, StreamController<Map<String, dynamic>>>{};
   final events = StreamController<Map<String, dynamic>>.broadcast();
   int _next = 0;
@@ -72,6 +73,7 @@ class ServiceClient {
               if (value['done'] == true) {
                 _pending.remove(value['id']);
                 _methods.remove(value['id']);
+                _requestIds.remove(value['id']);
                 unawaited(controller.close());
               }
             } catch (e, st) {
@@ -112,6 +114,7 @@ class ServiceClient {
     }
     _pending.clear();
     _methods.clear();
+    _requestIds.clear();
     unawaited(events.close());
     socket.destroy();
   }
@@ -125,6 +128,7 @@ class ServiceClient {
     controller = StreamController(
       onCancel: () {
         _methods.remove(id);
+        _requestIds.remove(id);
         if (_pending.remove(id) != null && !_closed)
           socket.writeln(jsonEncode({'cancel': id}));
       },
@@ -135,6 +139,8 @@ class ServiceClient {
     } else {
       _pending[id] = controller;
       _methods[id] = method;
+      if (args['requestId'] is String)
+        _requestIds[id] = args['requestId'] as String;
       socket.writeln(jsonEncode({'id': id, 'method': method, 'args': args}));
     }
     return controller.stream
@@ -156,15 +162,25 @@ class ServiceClient {
     return result;
   }
 
-  bool cancelAnswers() {
+  bool cancelAnswers({String? requestId}) {
     final ids = _methods.entries
-        .where((e) => e.value == 'answer.stream')
+        .where(
+          (entry) =>
+              {
+                'answer.stream',
+                'answer',
+                'meetings.generate',
+                'meetings.enhance',
+              }.contains(entry.value) &&
+              (requestId == null || _requestIds[entry.key] == requestId),
+        )
         .map((e) => e.key)
         .toList();
     for (final id in ids) {
       socket.writeln(jsonEncode({'cancel': id}));
       final pending = _pending.remove(id);
       _methods.remove(id);
+      _requestIds.remove(id);
       pending?.addError(StateError('Answer cancelled'));
       if (pending != null) unawaited(pending.close());
     }
@@ -401,6 +417,7 @@ class ApplicationService {
       'web_search_available': domain.webSearchAvailable,
       'google': domain.application.googleState,
       'helper': domain.helper.snapshot?.toProto3Json(),
+      'helper_state': domain.helper.state,
     };
     for (final client in _clients) {
       _send(client, message);

@@ -546,6 +546,7 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
             time.sleep(.05)
     finally:
         process.terminate();process.wait(timeout=15);log.close()
+        print((running['root']/'crash-restart.log').read_text())
 
 
 @pytest.mark.parametrize("helper_exits_first", [False, True])

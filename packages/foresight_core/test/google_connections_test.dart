@@ -328,6 +328,11 @@ void main() {
           edited,
           reason: 'Metadata-only refresh must also preserve local edit time',
         );
+        fixture.document = 'Remote replacement';
+        fixture.modified = '2022-01-01T00:00:00Z';
+        await connection.refresh();
+        expect(document()['content'], 'My edited copy.');
+        expect(document()['revision'], 2);
         fixture.modified = '';
         await connection.importDriveFile('sheet');
         expect(
