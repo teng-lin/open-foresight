@@ -35,19 +35,20 @@ String serviceEndpoint(ProfilePaths profile) {
 /// Newline framed, multiplexed local RPC. No network listener is opened.
 class ServiceClient {
   final Socket socket;
+  final int _maxMessageBytes;
   final _methods = <int, String>{};
   final _pending = <int, StreamController<Map<String, dynamic>>>{};
   final events = StreamController<Map<String, dynamic>>.broadcast();
   int _next = 0;
   bool _closed = false;
   bool get isClosed => _closed;
-  ServiceClient._(this.socket) {
+  ServiceClient._(this.socket, this._maxMessageBytes) {
     unawaited(socket.done.catchError((Object _) {}));
     var bytes = 0;
     socket
         .map((chunk) {
           bytes += chunk.length;
-          if (bytes > maxServiceMessage)
+          if (bytes > _maxMessageBytes)
             throw StateError('Service message too large');
           return chunk;
         })
@@ -82,13 +83,24 @@ class ServiceClient {
           ),
         );
   }
-  static Future<ServiceClient> connect(String path) async => ServiceClient._(
-    await Socket.connect(
-      InternetAddress(path, type: InternetAddressType.unix),
-      0,
-      timeout: const Duration(seconds: 2),
-    ),
-  );
+
+  /// Bound each reply frame; the default matches the service's 16 MiB limit.
+  static Future<ServiceClient> connect(
+    String path, {
+    int maxMessageBytes = maxServiceMessage,
+  }) async {
+    if (maxMessageBytes < 1)
+      throw ArgumentError.value(maxMessageBytes, 'maxMessageBytes');
+    return ServiceClient._(
+      await Socket.connect(
+        InternetAddress(path, type: InternetAddressType.unix),
+        0,
+        timeout: const Duration(seconds: 2),
+      ),
+      maxMessageBytes,
+    );
+  }
+
   void _fail(Object error, StackTrace st) {
     if (_closed) return;
     _closed = true;
@@ -488,7 +500,7 @@ class ApplicationService {
             for (final s
                 in _subscriptions.remove(client)?.values ??
                     <StreamSubscription<Object?>>[]) {
-              unawaited(s.cancel());
+              unawaited(_cancelSubscription(s));
             }
             client.destroy();
           },
@@ -591,7 +603,20 @@ class ApplicationService {
         domain.application.cancelSignIn(lease.id);
       domain.generator?.cancel(requestId: lease.id);
     }
-    unawaited(_subscriptions[client]?.remove(id)?.cancel());
+    final subscription = _subscriptions[client]?.remove(id);
+    if (subscription != null) unawaited(_cancelSubscription(subscription));
+  }
+
+  Future<void> _cancelSubscription(
+    StreamSubscription<Object?> subscription,
+  ) async {
+    try {
+      await subscription.cancel();
+    } catch (error) {
+      // Async generators can fail during cancellation cleanup. Keep that failure
+      // scoped to the cancelled request rather than terminating the service.
+      stderr.writeln('Request cancellation cleanup: $error');
+    }
   }
 
   Future<void> close({Socket? acknowledgementClient}) => _shutdown ??=

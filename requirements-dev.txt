@@ -2,3 +2,5 @@ grpcio==1.78.0
 grpcio-tools==1.78.0
 protobuf==6.33.5
 pytest==9.0.2
+pytest-cov==7.1.0
+numpy==2.5.1

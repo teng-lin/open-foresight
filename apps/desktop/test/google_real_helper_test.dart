@@ -7,7 +7,8 @@ import 'package:open_foresight/google_connections.dart';
 import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
-import 'google_connections_test.dart' show GoogleFixture;
+import '../../../packages/foresight_core/test/fixtures/google_connections.dart'
+    show GoogleFixture;
 
 void main() {
   test(

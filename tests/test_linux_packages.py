@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -117,8 +118,9 @@ class LinuxPackagesTest(unittest.TestCase):
             ['cmake', '--install', str(build)],
         ):
             subprocess.run(command, check=True, capture_output=True, text=True)
-        self.assertTrue((prefix / 'lib/libgrpc.so').exists())
-        self.assertFalse((build / 'libgrpc_unsecure.so').exists())
+        suffix = '.dylib' if sys.platform == 'darwin' else '.so'
+        self.assertTrue((prefix / f'lib/libgrpc{suffix}').exists())
+        self.assertFalse((build / f'libgrpc_unsecure{suffix}').exists())
         self.assertNotIn('grpc_unsecure', (prefix / 'lib/cmake/gRPC.cmake').read_text())
         consumer = self.root / 'consumer'
         consumer.mkdir()

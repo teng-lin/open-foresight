@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:crypto/crypto.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/gemma_download.dart';
+import 'package:test/test.dart';
+import 'package:foresight_core/src/gemma_download.dart';
 
 void main() {
   test(

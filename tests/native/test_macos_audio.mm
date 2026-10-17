@@ -3,7 +3,78 @@
 #include <stdexcept>
 #define REQUIRE(value) do { if (!(value)) throw std::runtime_error(#value); } while (false)
 #include <iostream>
+// Decode synthetic interleaved PCM through the actual callback converter.
+template<class T>
+void checkInterleaved(std::array<T, 4> input, AudioFormatFlags flags,
+                      std::array<float, 2> mixed, std::array<float, 2> microphone) {
+  auto ring = std::make_unique<Ring>();
+  AudioStreamBasicDescription format{44100, kAudioFormatLinearPCM,
+      flags | kAudioFormatFlagIsPacked, UInt32(sizeof(T) * 2), 1,
+      UInt32(sizeof(T) * 2), 2, UInt32(sizeof(T) * 8), 0};
+  AudioBufferList data{1, {{2, UInt32(sizeof(input)), input.data()}}};
+  REQUIRE(pushAudio(*ring, format, &data));
+  float sample;
+  for (float expected : mixed) {
+    REQUIRE(ring->pop(sample) && std::abs(sample - expected) < 1e-7f);
+  }
+  REQUIRE(!ring->pop(sample));
+  pushMicrophoneAudio(*ring, format, &data, 44100);
+  REQUIRE(ring->convertedBuffers == 1);
+  for (float expected : microphone) {
+    REQUIRE(ring->pop(sample) && std::abs(sample - expected) < 1e-7f);
+  }
+  REQUIRE(!ring->pop(sample));
+  // A route changing sample rate must trigger reconfiguration without putting
+  // mismatched PCM into the queue or satisfying the startup watchdog.
+  pushMicrophoneAudio(*ring, format, &data, 48000);
+  REQUIRE(ring->changed && ring->convertedBuffers == 1 && !ring->pop(sample));
+}
+
+void checkPcmFormats() {
+  checkInterleaved<float>({.5f, -.25f, -.5f, .25f}, kAudioFormatFlagIsFloat,
+      {.125f, -.125f}, {.5f, -.5f});
+  checkInterleaved<double>({.5, -.25, -.5, .25}, kAudioFormatFlagIsFloat,
+      {.125f, -.125f}, {.5f, -.5f});
+  checkInterleaved<int16_t>({16384, -8192, -16384, 8192}, kAudioFormatFlagIsSignedInteger,
+      {.125f, -.125f}, {.5f, -.5f});
+  checkInterleaved<int32_t>({1073741824, -536870912, -1073741824, 536870912}, kAudioFormatFlagIsSignedInteger,
+      {.125f, -.125f}, {.5f, -.5f});
+  auto ring = std::make_unique<Ring>();
+  float input[] = {.5f, -.5f};
+  AudioBufferList data{1, {{1, sizeof(input), input}}};
+  const AudioStreamBasicDescription good{48000, kAudioFormatLinearPCM,
+      kAudioFormatFlagIsFloat, 4, 1, 4, 1, 32, 0};
+  for (int variant = 0; variant < 5; ++variant) {
+    auto invalid = good;
+    switch (variant) {
+      case 0: invalid.mFormatID = kAudioFormatMPEG4AAC; break;
+      case 1: invalid.mBytesPerFrame = 0; break;
+      case 2: invalid.mFormatFlags |= kAudioFormatFlagIsBigEndian; break;
+      case 3: invalid.mBitsPerChannel = 24; break;
+      case 4: invalid.mFormatFlags = 0; break;
+    }
+    ring->changed = false;
+    REQUIRE(!pushAudio(*ring, invalid, &data));
+    float sample;
+    REQUIRE(ring->changed && !ring->pop(sample));
+  }
+  AudioBufferList empty{};
+  REQUIRE(!pushAudio(*ring, good, nullptr));
+  REQUIRE(!pushAudio(*ring, good, &empty));
+  // A short channel buffer is never read past its end. Missing samples are
+  // ignored when averaging the channels that remain available.
+  float left[] = {.75f, -.5f}, right[] = {.25f};
+  struct { UInt32 count; AudioBuffer buffers[2]; } shortChannel{
+      2, {{1, sizeof(left), left}, {1, sizeof(right), right}}};
+  REQUIRE(pushAudio(*ring, good, reinterpret_cast<const AudioBufferList *>(&shortChannel)));
+  float sample;
+  REQUIRE(ring->pop(sample) && sample == .5f);
+  REQUIRE(ring->pop(sample) && sample == -.5f);
+  REQUIRE(!ring->pop(sample));
+}
+
 int main() { @autoreleasepool {
+  checkPcmFormats();
   // One-shot startup watchdog: converted PCM, including silent buffers, satisfies
   // startup; only an on-time zero-callback check falls back or fails.
   using namespace std::chrono_literals;

@@ -20,3 +20,6 @@ google-client*.json
 
 .dart_tool/
 .packages
+
+.coverage
+.coverage.*

@@ -6,7 +6,8 @@ import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/native.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
-import 'domain_lifecycle_test.dart' show DelayedIndexService;
+import '../../../packages/foresight_core/test/fixtures/delayed_index_service.dart'
+    show DelayedIndexService;
 
 class AnswerService extends DelayedIndexService {
   final String id;

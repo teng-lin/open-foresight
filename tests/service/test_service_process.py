@@ -174,6 +174,8 @@ def running(tmp_path):
             try: process.wait(timeout=15)
             except subprocess.TimeoutExpired:
                 process.kill();process.wait()
+        log.seek(0)
+        print(log.read())
         log.close()
 
 
@@ -239,7 +241,8 @@ def test_capture_survives_client_disconnect_and_other_client_cannot_start_second
     assert b.call('sources.search',{'query':'draft'})
 
 
-def test_generation_is_shared_and_cancellation_is_scoped_to_connection(running):
+@pytest.mark.parametrize("disconnect_owner", [False, True])
+def test_generation_is_shared_and_cancellation_is_scoped_to_connection(running, disconnect_owner):
     a=running['peer'];b=Peer(running['path']);running['peers'].append(b)
     a.call('sources.import',{'title':'Planning','text':'Mira sends the draft Tuesday.'})
     a.call('models.generation',{'path':str(running['asset']),'runtime':str(running['runner'])})
@@ -253,11 +256,15 @@ def test_generation_is_shared_and_cancellation_is_scoped_to_connection(running):
         b.call('answer',{'question':'Another answer?'})
     b.socket.sendall((json.dumps({'cancel':request})+'\n').encode())
     assert b.call('status')['generation']['generating'], 'unrelated connection cancelled generation'
-    a.socket.sendall((json.dumps({'cancel':request})+'\n').encode())
+    if disconnect_owner:
+        a.close();running['peers'].remove(a)
+    else:
+        a.socket.sendall((json.dumps({'cancel':request})+'\n').encode())
     deadline=time.monotonic()+5
     while b.call('status')['generation']['generating']:
         assert time.monotonic()<deadline
         time.sleep(.05)
+    assert running['process'].poll() is None, 'cancellation terminated the shared owner'
     Path(running['env']['FORESIGHT_DELAY_GENERATION']).unlink()
     assert 'Mira' in b.call('answer',{'question':'Who sends the draft?'})['text']
 
@@ -265,6 +272,10 @@ def test_generation_is_shared_and_cancellation_is_scoped_to_connection(running):
 def test_restart_preserves_data_and_does_not_reuse_stale_socket(running):
     a=running['peer']
     note=a.call('notes.save',{'title':'Persistent','body':'original'})
+    saved=a.call('notes.list')
+    assert len(saved)==1 and saved[0]['id']==note['id']
+    assert saved[0]['title']=='Persistent' and saved[0]['body']=='original'
+    assert saved[0]['revision']==1 and isinstance(saved[0]['timestamp'], int)
     running['process'].terminate();running['process'].wait(timeout=15)
     a.close();running['peers'].remove(a)
     # Leave a stale socket as a killed service would.
@@ -280,7 +291,7 @@ def test_restart_preserves_data_and_does_not_reuse_stale_socket(running):
             except (FileNotFoundError,ConnectionRefusedError):
                 assert process.poll() is None and time.monotonic()<deadline
                 time.sleep(.05)
-        assert b.call('notes.list')==[{'id':note['id'],'title':'Persistent','body':'original','revision':1}]
+        assert b.call('notes.list')==saved
     finally:
         process.terminate();process.wait(timeout=15);log.close()
 

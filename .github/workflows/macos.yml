@@ -29,6 +29,8 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       FORESIGHT_BUILD_JOBS: '3'
+      FORESIGHT_COVERAGE: '1'
+      FORESIGHT_CORE_COVERAGE_MIN: '90'
       FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -53,11 +55,20 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install build tools
-        run: brew install cmake ninja cocoapods
+        run: brew install cmake ninja cocoapods protobuf
       - name: Install Python development dependencies
         run: |
           python -m venv .venv
           .venv/bin/python -m pip install -r requirements-dev.txt
+      - name: Offline Python tests and branch coverage
+        run: tools/coverage.sh
+      - name: Retain Python coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: python-coverage-macos
+          path: coverage/python/
+          if-no-files-found: warn
       - name: Install pinned Flutter
         run: |
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
@@ -87,15 +98,17 @@ jobs:
             -DCMAKE_PREFIX_PATH="$PWD/build/sdk" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local'
+      - name: Retain Dart core coverage
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dart-core-coverage-macos
+          path: coverage/core/lcov.info
+          if-no-files-found: error
       - name: Verify native helper identity boundary
         run: |
           .venv/bin/python tests/integration/test_native_process.py \
             build/native/libforesight_native.dylib build/services/helper/ForesightHelper
-      - name: Python contracts
-        run: |
-          .venv/bin/python -m pytest tests/contracts \
-            tests/models/test_grounded_generation.py tests/test_profile_migration.py \
-            tests/test_macos_bundle.py -v
       - name: Assemble ad hoc development application
         run: |
           .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk

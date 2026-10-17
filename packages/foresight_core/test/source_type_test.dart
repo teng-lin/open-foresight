@@ -1,5 +1,5 @@
-import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/source_type.dart';
+import 'package:test/test.dart';
+import 'package:foresight_core/src/source_type.dart';
 
 void main() {
   test('exported Drive formats retain their original display categories', () {

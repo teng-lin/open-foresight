@@ -12,3 +12,6 @@ models/local
 **/*.log
 .env*
 **/google-client*.json
+
+.coverage
+.coverage.*
