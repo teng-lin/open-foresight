@@ -1,6 +1,6 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
-import 'package:foresight_test_support/remote_service.dart' show eventually;
+import 'pump_until.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
@@ -12,6 +12,7 @@ void main() {
     'real startup connection failures render guidance and release command ownership before retry',
     (tester) async {
       final root = shortTestTempRoot.createTempSync('of-start-');
+      addTearDown(() => root.deleteSync(recursive: true));
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
       var attempts = 0;
       var quit = false;
@@ -35,18 +36,20 @@ void main() {
             quit: () => quit = true,
           ),
         );
-        // Startup uses real Unix sockets and chmod subprocesses.
-        await eventually(
-          () =>
-              attempts == 1 &&
-              FileSystemEntity.typeSync(
-                    '${profile.runtime}/commands.sock',
-                    followLinks: false,
-                  ) ==
-                  FileSystemEntityType.notFound,
-        );
       });
-      await tester.pumpAndSettle();
+      // Rendering this failure follows actual socket and lock cleanup. A removed
+      // socket alone is observable before AppCommands.close has completed.
+      await pumpUntil(
+        tester,
+        () => find
+            .byWidgetPredicate(
+              (widget) =>
+                  widget is SelectableText &&
+                  (widget.data ?? '').contains('attempt 1'),
+            )
+            .evaluate()
+            .isNotEmpty,
+      );
       expect(find.text('Open Foresight could not start'), findsOneWidget);
       expect(
         attempts,
@@ -71,17 +74,18 @@ void main() {
       });
       await tester.runAsync(() async {
         await tester.tap(find.text('Retry'));
-        await eventually(
-          () =>
-              attempts == 2 &&
-              FileSystemEntity.typeSync(
-                    '${profile.runtime}/commands.sock',
-                    followLinks: false,
-                  ) ==
-                  FileSystemEntityType.notFound,
-        );
       });
-      await tester.pumpAndSettle();
+      await pumpUntil(
+        tester,
+        () => find
+            .byWidgetPredicate(
+              (widget) =>
+                  widget is SelectableText &&
+                  (widget.data ?? '').contains('attempt 2'),
+            )
+            .evaluate()
+            .isNotEmpty,
+      );
       expect(attempts, 2);
       expect(
         find.byWidgetPredicate(
@@ -96,7 +100,6 @@ void main() {
       expect(quit, true);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
-      root.deleteSync(recursive: true);
     },
   );
 }
