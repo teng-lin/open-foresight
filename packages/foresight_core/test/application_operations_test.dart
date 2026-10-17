@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -235,7 +236,16 @@ void main() {
       }
       await app.call('sources.index', {'id': hidden['id']});
       await app.call('sources.delete', {'id': id});
-      await expectLater(app.call('sources.get', {'id': id}), throwsStateError);
+      await expectLater(
+        app.call('sources.get', {'id': id}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
+      );
       await app.call('sources.delete', {'id': hidden['id']});
       expect(await app.call('sources.search', {'query': 'q'}), isEmpty);
     },
@@ -308,10 +318,25 @@ void main() {
         app.call('meetings.get', {'id': 999}),
         throwsStateError,
       );
-      await expectLater(app.call('unsupported', {}), throwsArgumentError);
+      await expectLater(
+        app.call('unsupported', {}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
+      );
       await expectLater(
         app.call('notes.save', {}, current: () => false),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
     },
   );
@@ -482,7 +507,13 @@ void main() {
       expect(app.modelBusy, isTrue);
       await expectLater(
         app.call('models.register', {'kind': 'speech', 'path': model.path}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.busy,
+          ),
+        ),
       );
       rag.release!.complete();
       await pending;

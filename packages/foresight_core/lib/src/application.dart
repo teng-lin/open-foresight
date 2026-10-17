@@ -421,17 +421,16 @@ class Application {
     Map<String, dynamic> a, {
     bool Function()? current,
   }) async {
-    if (_closed)
-      throw const RpcError(RpcErrorCode.unavailable, 'Application closed');
+    if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
     if (_clearingWorkspace)
-      throw const RpcError(RpcErrorCode.busy, 'Workspace is being cleared');
+      throw RpcError(RpcErrorCode.busy, 'Workspace is being cleared');
     final generation = domain.workspaceGeneration;
     final callerCurrent = current;
     current = () =>
         generation == domain.workspaceGeneration &&
         (callerCurrent?.call() ?? true);
     if (!current())
-      throw const RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     if (method.startsWith('models.') &&
         method != 'models.cancel_query_acquisition' &&
         (modelBusy ||
@@ -1062,21 +1061,7 @@ class Application {
       }
     } finally {
       if (modelOperation) _modelBusy = false;
-      if (!{
-        'status',
-        'audio.capabilities',
-        'notifications.capabilities',
-        'sources.list',
-        'sources.get',
-        'sources.search',
-        'notes.list',
-        'meetings.list',
-        'meetings.get',
-        'google.status',
-        'google.drive_files',
-        'graph.embeddings',
-      }.contains(method))
-        changed();
+      if (Operation.parse(method).notifiesChanges) changed();
     }
   }
 
@@ -1178,7 +1163,7 @@ class Application {
     );
     domain.checkWorkspace(generation);
     if (current != null && !current())
-      throw const RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     final existing = store.sources
         .where((s) => s['provenance'] == 'url:$uri')
         .firstOrNull;
@@ -1212,7 +1197,7 @@ class Application {
     for (final file in files) {
       domain.checkWorkspace(generation);
       if (current != null && !current())
-        throw const RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
       try {
         await importFile(file.path, current: current);
       } catch (e) {
@@ -1234,7 +1219,7 @@ class Application {
     for (final s in store.sources) {
       domain.checkWorkspace(generation);
       if (current != null && !current())
-        throw const RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
       if ((s['provenance'] as String).startsWith('user edit; ')) continue;
       bool sourceCurrent() =>
           (current?.call() ?? true) &&
@@ -1411,7 +1396,11 @@ class Application {
     if (current != null && !current())
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
 
-    if (status != 'completed') throw StateError('Generation $status: $failure');
+    if (status != 'completed')
+      throw RpcError(
+        status == 'cancelled' ? RpcErrorCode.cancelled : RpcErrorCode.internal,
+        'Generation $status: $failure',
+      );
     return result;
   }
 
@@ -1469,8 +1458,7 @@ class Application {
   }) async {
     if (current != null && !current())
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
-    if (_closed)
-      throw const RpcError(RpcErrorCode.unavailable, 'Application closed');
+    if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
     if (domain.generator?.generating == true ||
         _noteEnhancements.values.any((state) => state.active)) {
       if (deferWhenBusy) {
@@ -1853,10 +1841,10 @@ class Application {
   Recording _activeRecording(int? id) {
     final active = recording;
     if (active == null || (id != null && id != recordingMeeting)) {
-      throw StateError('No matching active recording');
+      throw RpcError(RpcErrorCode.notFound, 'No matching active recording');
     }
     if (active.finishing || _stopping != null) {
-      throw StateError('Transcription is finalizing');
+      throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     }
     return active;
   }

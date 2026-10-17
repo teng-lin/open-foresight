@@ -93,7 +93,7 @@ class AgentAccessGate {
   bool isHost(Object client) => identical(client, _host);
   void attach(Object client, String token) {
     if (token != desktopToken || token.isEmpty)
-      throw StateError('Invalid desktop capability');
+      throw RpcError(RpcErrorCode.denied, 'Invalid desktop capability');
     if (_host != null && !isHost(client))
       throw RpcError(
         RpcErrorCode.busy,
@@ -119,43 +119,15 @@ class AgentAccessGate {
         'Only the visible desktop can approve requests',
       );
     final pending = _pending[id];
-    if (pending == null) throw StateError('Approval expired');
+    if (pending == null)
+      throw RpcError(RpcErrorCode.notFound, 'Approval expired');
     if (!pending.done.isCompleted) pending.done.complete(allow);
   }
 
   static bool needsApproval(String method, Map<String, dynamic> args) {
-    if ((method == Operation.answer.wire ||
-            method == Operation.answer_stream.wire) &&
-        args['web_search'] == true)
-      return true;
-    return !{
-      Operation.status.wire,
-      Operation.audio_capabilities.wire,
-      Operation.notifications_capabilities.wire,
-      Operation.sources_list.wire,
-      Operation.sources_get.wire,
-      Operation.sources_search.wire,
-      Operation.sources_index.wire,
-      Operation.notes_list.wire,
-      Operation.notes_save.wire,
-      Operation.meetings_list.wire,
-      Operation.meetings_get.wire,
-      Operation.meetings_create.wire,
-      Operation.meetings_notes.wire,
-      Operation.meetings_pause.wire,
-      Operation.meetings_stop.wire,
-      Operation.answer.wire,
-      Operation.answer_stream.wire,
-      Operation.application_resume.wire,
-      Operation.google_status.wire,
-      Operation.artifacts_edit.wire,
-      Operation.meetings_generate.wire,
-      Operation.meetings_enhance.wire,
-      Operation.meetings_cancel_enhance.wire,
-      Operation.meetings_retry_question.wire,
-      Operation.meetings_retry_detection.wire,
-      Operation.meetings_link_answer.wire,
-    }.contains(method);
+    return Operation.parse(
+      method,
+    ).requiresApproval(webSearch: args['web_search'] == true);
   }
 
   Future<void> authorize(
@@ -192,7 +164,8 @@ class AgentAccessGate {
         onTimeout: () => false,
       );
       if (!allowed || !identical(_host, host) || !current()) {
-        throw StateError(
+        throw RpcError(
+          !current() ? RpcErrorCode.cancelled : RpcErrorCode.denied,
           'Operation was denied, cancelled, or its desktop approval expired',
         );
       }

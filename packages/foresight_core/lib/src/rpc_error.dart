@@ -11,10 +11,11 @@ enum RpcErrorCode {
   internal,
 }
 
-class RpcError implements Exception {
+// Preserve existing StateError catches while giving callers a stable wire code.
+// Its message is never serialized through StateError.toString().
+class RpcError extends StateError {
   final RpcErrorCode code;
-  final String message;
-  const RpcError(this.code, this.message);
+  RpcError(this.code, String message) : super(message);
   Map<String, Object?> toJson() => {'code': code.name, 'message': message};
   @override
   String toString() => message;

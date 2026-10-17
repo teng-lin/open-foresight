@@ -465,7 +465,7 @@ class ApplicationService {
               if (_closing) {
                 _send(client, {
                   'id': id,
-                  'error': const RpcError(
+                  'error': RpcError(
                     RpcErrorCode.unavailable,
                     'Application service is shutting down; retry after it exits.',
                   ).toJson(),
@@ -483,7 +483,10 @@ class ApplicationService {
                     access.attach(client, securityArgs['token'] as String);
                   } else if (method == Operation.security_detach_desktop.wire) {
                     if (!access.isHost(client))
-                      throw StateError('Not the desktop approval connection');
+                      throw RpcError(
+                        RpcErrorCode.denied,
+                        'Not the desktop approval connection',
+                      );
                     access.detach(client);
                     unawaited(domain.application.stopRecording());
                   } else if (method == Operation.security_decide.wire) {
@@ -495,7 +498,8 @@ class ApplicationService {
                   } else if (method ==
                       Operation.security_allow_import_root.wire) {
                     if (!access.isHost(client))
-                      throw StateError(
+                      throw RpcError(
+                        RpcErrorCode.denied,
                         'Only the desktop can select import folders',
                       );
                     final root = Directory(
@@ -537,7 +541,7 @@ class ApplicationService {
               if ((_subscriptions[client]?.length ?? 0) >= 32) {
                 _send(client, {
                   'id': id,
-                  'error': const RpcError(
+                  'error': RpcError(
                     RpcErrorCode.busy,
                     'Too many active requests',
                   ).toJson(),
@@ -617,7 +621,7 @@ class ApplicationService {
   ) {
     if (lease.cancelled)
       return Stream.error(
-        const RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
+        RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
       );
     if (lease.method == Operation.answer_stream.wire) {
       return Stream.fromFuture(_ready).asyncExpand(
@@ -656,7 +660,8 @@ class ApplicationService {
       }
       final capture = domain.application.captureState;
       if (capture['active'] == true || capture['finishing'] == true) {
-        throw StateError(
+        throw RpcError(
+          RpcErrorCode.busy,
           'Recording is active or finalizing. Stop recording and wait for the final transcript before upgrading.',
         );
       }
@@ -667,7 +672,8 @@ class ApplicationService {
         (leases) =>
             leases.values.any((lease) => lease.method != Operation.status.wire),
       )) {
-        throw StateError(
+        throw RpcError(
+          RpcErrorCode.busy,
           'Application operations are in progress. Retry the upgrade after they finish.',
         );
       }
