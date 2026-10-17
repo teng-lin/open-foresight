@@ -333,7 +333,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                               ),
                               Chip(
                                 label: Text(
-                                  '${localTokens()} Local output tokens',
+                                  '${localWords()} Local output words',
                                 ),
                               ),
                             ],
@@ -583,31 +583,13 @@ extension _ScreenshotScreens on _WorkspaceState {
         backend == 'litert-lm-embedding-gpu') {
       return 'EmbeddingGemma 2';
     }
-    final path =
-        d.store
-                .rows("SELECT path FROM models WHERE kind='embedding'")
-                .firstOrNull?['path']
-            as String?;
+    final path = d.store.registeredEmbedding().firstOrNull?['path'] as String?;
     return path == null
         ? 'local models'
         : path.split('/').where((s) => s.isNotEmpty).last;
   }
 
-  int localTokens() =>
-      d.store
-          .rows('SELECT body FROM answers WHERE status=\'completed\'')
-          .fold<int>(
-            0,
-            (n, row) =>
-                n + (row['body'] as String).split(RegExp(r'\s+')).length,
-          ) +
-      d.store
-          .rows('SELECT generated FROM artifacts')
-          .fold<int>(
-            0,
-            (n, row) =>
-                n + (row['generated'] as String).split(RegExp(r'\s+')).length,
-          );
+  int localWords() => d.store.localOutputWords;
 
   Future<void> importPath(String path) async {
     await d.command('sources.import_file', {'path': path});
@@ -855,49 +837,7 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Future<void> autoAssignOrganizationLabel(String name) async {
-    final all = d.store.sources;
-    final indexed = all.where((row) => row['state'] == 'indexed').toList();
-    final snapshot = d.helper.snapshot;
-    final saved = snapshot?.pipeline == 'ready'
-        ? d.store.loadGraphLayout(
-            jsonEncode([
-              graphLayoutAlgorithmVersion,
-              snapshot!.model.modelDigest,
-              snapshot.model.tokenizerDigest,
-              snapshot.model.preprocessing,
-              snapshot.model.backend,
-              snapshot.model.dimensions,
-            ]),
-            indexed,
-            snapshot.model.dimensions,
-          )
-        : d.store.loadRegisteredGraphLayout(indexed);
-    final vectors = Map<String, List<double>>.from(saved.vectors);
-    final missing = indexed
-        .where((row) => !vectors.containsKey(row['id']))
-        .toList();
-    if (missing.isNotEmpty) vectors.addAll(await d.graphEmbeddings(missing));
-    final edges = await graphEdgesInBackground(vectors);
-    final plan = await planLabelPropagationInBackground(
-      name,
-      [
-        for (final row in all)
-          LabelDocument(
-            row['id'] as String,
-            row['content'] as String,
-            title: row['title'] as String?,
-          ),
-      ],
-      d.store.documentLabels,
-      vectors,
-      edges,
-    );
-    if (!mounted) return;
-    for (final write in plan.writes) {
-      await putDocumentLabel(write);
-    }
-    await d.command('labels.cluster', {'name': name});
-    await d.command('graph.invalidate');
+    await d.command('labels.auto_assign', {'name': name});
     if (mounted)
       update(() {
         graphOrganizationRevision++;
@@ -986,7 +926,7 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Map<String, String> driveSourceMimes() => {
-    for (final row in d.store.rows('SELECT source_id,mime FROM google_sources'))
+    for (final row in d.store.googleSourceMimes())
       row['source_id'] as String: row['mime'] as String,
   };
 
@@ -1092,7 +1032,7 @@ extension _ScreenshotScreens on _WorkspaceState {
     final rows = filteredSources(all, originals);
     final labelRecords = d.store.documentLabels;
     final clusters = d.store
-        .rows('SELECT * FROM document_clusters')
+        .documentClusters()
         .map(GraphCluster.fromRow)
         .toList();
     final fallbackLabelColor = Theme.of(context).colorScheme.primary;
@@ -1130,9 +1070,7 @@ extension _ScreenshotScreens on _WorkspaceState {
     }
     final labels = {
       ...all.expand(sourceLabels),
-      ...d.store
-          .rows('SELECT label FROM document_clusters')
-          .map((row) => row['label'] as String),
+      ...d.store.documentClusterNames().map((row) => row['label'] as String),
       if (labelFilter.isNotEmpty) labelFilter,
     }.toList()..sort();
     return Column(
@@ -1787,9 +1725,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       var sources = all
           .where((s) => (s['title'] as String? ?? '').trim().isNotEmpty)
           .toList();
-      final registered = d.store.rows(
-        "SELECT digest FROM models WHERE kind='embedding'",
-      );
+      final registered = d.store.registeredEmbedding();
       final key = jsonEncode([
         'cached',
         snapshot?.pipeline,
@@ -2690,12 +2626,7 @@ extension _ScreenshotScreens on _WorkspaceState {
     final scopeAsking = asking && askingScope == scope;
     final question = questionFor(meetingScope);
     final history = d.store
-        .rows(
-          meetingScope == null
-              ? "SELECT * FROM answers WHERE conversation='desktop' ORDER BY id"
-              : 'SELECT answers.* FROM answers JOIN meeting_answers ON answer_id=answers.id WHERE meeting_id=? ORDER BY answers.id',
-          meetingScope == null ? [] : [meetingScope],
-        )
+        .conversationAnswers(meetingScope)
         .where((a) => !hiddenAnswers.contains(a['id']))
         .toList();
     return Container(
@@ -2959,17 +2890,7 @@ extension _ScreenshotScreens on _WorkspaceState {
 
   Widget meetingList({bool showHeading = true}) {
     final rows = d.store
-        .rows(
-          'SELECT meetings.*,meeting_details.created,meeting_details.reminder,'
-          'calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
-          'calendar_events.status AS calendar_status,'
-          'COALESCE(saved.has_transcript,0) AS has_transcript,saved.duration_ms '
-          'FROM meetings LEFT JOIN meeting_details ON meetings.id=meeting_details.meeting_id '
-          'LEFT JOIN calendar_events ON meetings.id=calendar_events.meeting_id '
-          'LEFT JOIN (SELECT meeting_id,1 AS has_transcript,MAX(end_ms) AS duration_ms '
-          'FROM transcript WHERE final=1 GROUP BY meeting_id) AS saved ON saved.meeting_id=meetings.id '
-          'ORDER BY COALESCE(calendar_events.starts,meeting_details.created),meetings.id',
-        )
+        .meetingCollection()
         .where(
           (m) => (m['title'] as String).toLowerCase().contains(
             meetingQuery.toLowerCase(),
@@ -3243,35 +3164,10 @@ extension _ScreenshotScreens on _WorkspaceState {
   String meetingMarkdown() => composeMeetingExport(d.store).markdown;
 
   Widget stats() {
-    final meetings =
-        d.store
-                .rows(
-                  'SELECT COUNT(DISTINCT meeting_id) AS n FROM transcript WHERE final=1',
-                )
-                .single['n']
-            as int;
+    final meetings = d.store.recordedMeetingCountRows().single['n'] as int;
     final sources = d.store.sources.length;
-    final answers =
-        d.store
-                .rows(
-                  "SELECT COUNT(*) AS n FROM answers WHERE status='completed'",
-                )
-                .single['n']
-            as int;
-    final weekly = List<int>.filled(5, 0);
-    for (final a in d.store.rows(
-      "SELECT body,created FROM answers WHERE status='completed'",
-    )) {
-      final week =
-          DateTime.now()
-              .difference(
-                DateTime.fromMillisecondsSinceEpoch(a['created'] as int),
-              )
-              .inDays ~/
-          7;
-      if (week >= 0 && week < 5)
-        weekly[4 - week] += (a['body'] as String).split(RegExp(r'\s+')).length;
-    }
+    final answers = d.store.completedAnswerCountRows().single['n'] as int;
+    final weekly = d.store.weeklyAnswerWords(DateTime.now());
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -3301,14 +3197,14 @@ extension _ScreenshotScreens on _WorkspaceState {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'Local output tokens',
+                            'Local output words',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                           const Spacer(),
-                          DesktopMetricValue(localTokens(), fontSize: 52),
+                          DesktopMetricValue(localWords(), fontSize: 52),
                           const Spacer(),
                           const Text('Estimated from saved local AI output'),
                         ],
@@ -4307,7 +4203,7 @@ class _UsageChart extends CustomPainter {
               size.height,
             ),
             properties: SemanticsProperties(
-              label: '${_weekLabel(i)}: ${values[i]} local output tokens',
+              label: '${_weekLabel(i)}: ${values[i]} local output words',
               textDirection: textDirection,
             ),
           ),

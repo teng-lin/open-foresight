@@ -112,9 +112,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   void loadMeetingNotes(int id, {bool acceptedSave = false}) {
-    final row = d.store.rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [
-      id,
-    ]).firstOrNull;
+    final row = d.store.meetingNoteRows(id).firstOrNull;
     final enhanced = d.store.meetingEnhancedNotes(id);
     final stored = MeetingNoteSnapshot(
       body: row?['body'] as String? ?? '',
@@ -176,13 +174,7 @@ extension _MeetingWorkspace on _WorkspaceState {
 
   Widget meetingPreview(int id) {
     loadMeetingNotes(id);
-    final meeting = d.store.rows(
-      'SELECT meetings.*,meeting_details.created,calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
-      '(SELECT MAX(end_ms) FROM transcript WHERE meeting_id=meetings.id AND final=1) AS duration_ms FROM meetings '
-      'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
-      'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
-      [id],
-    ).single;
+    final meeting = d.store.meetingPreviewRows(id).single;
     final start = meetingStart(meeting);
     final end = meetingEnd(meeting);
     return Container(
@@ -270,12 +262,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   Widget meetingWorkspace() {
     final id = meetingId!;
     loadMeetingNotes(id);
-    final meeting = d.store.rows(
-      'SELECT meetings.*,meeting_details.created,calendar_events.starts,calendar_events.ends FROM meetings '
-      'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
-      'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
-      [id],
-    ).single;
+    final meeting = d.store.meetingWorkspaceRows(id).single;
     final start = (meeting['starts'] ?? meeting['created'] ?? 0) as int;
     final end =
         (meeting['ends'] ?? start + const Duration(minutes: 30).inMilliseconds)
@@ -494,10 +481,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   Widget meetingNotesEditor(int id, bool wide, {bool preview = false}) {
-    final enhanced = d.store.rows(
-      "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
-      [id],
-    ).firstOrNull;
+    final enhanced = d.store.enhancedNoteArtifacts(id).firstOrNull;
     final progress = meetingEnhancements['$id'] as Map?;
     final enhancedText =
         progress?['body'] as String? ?? d.store.meetingEnhancedNotes(id);
@@ -941,16 +925,9 @@ extension _MeetingWorkspace on _WorkspaceState {
 
   Widget meetingQuestionsPanel(int id) {
     final automatic = d.store.preference('proactiveAnswers', 'true') == 'true';
-    final detected = d.store.rows(
-      'SELECT q.*,a.body,a.citations FROM meeting_questions q '
-      'LEFT JOIN answers a ON a.id=q.answer_id WHERE q.meeting_id=? ORDER BY q.id',
-      [id],
-    );
+    final detected = d.store.meetingQuestions(id);
     final manual = d.store
-        .rows(
-          'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-          [id],
-        )
+        .finalTranscript(id)
         .where(
           (row) =>
               (row['text'] as String).contains(RegExp('[?？]')) &&
@@ -1103,10 +1080,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   Widget meetingTranscriptPanel(int id, {bool questions = false}) {
-    final rows = d.store.rows(
-      'SELECT * FROM transcript WHERE meeting_id=? ORDER BY id',
-      [id],
-    );
+    final rows = d.store.meetingTranscript(id);
     final displayed = questions
         ? rows.where((t) => (t['text'] as String).contains('?')).toList()
         : rows;
@@ -1232,10 +1206,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
-    final versions = d.store.rows(
-      'SELECT * FROM artifacts WHERE meeting_id=? AND kind=? ORDER BY id DESC',
-      [id, kind],
-    );
+    final versions = d.store.meetingArtifacts(id, kind);
     final artifact = versions.firstOrNull;
     return Column(
       children: [

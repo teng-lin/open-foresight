@@ -486,9 +486,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       }
     });
     embeddingGpu =
-        d.store
-            .rows("SELECT backend FROM models WHERE kind='embedding'")
-            .firstOrNull?['backend'] ==
+        d.store.registeredEmbedding().firstOrNull?['backend'] ==
         'litert_lm_embedding_gpu';
     commands = widget.commands;
     commands?.onError = reportShortcutFailure;
@@ -1216,10 +1214,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   Future<void> source(Map<String, Object?> s) async {
     if (!s.containsKey('content')) {
-      final current = d.store.rows(
-        'SELECT * FROM sources WHERE id=? AND deleted=0',
-        [s['id']],
-      );
+      final current = d.store.sourceById(s['id'] as String);
       if (current.isEmpty) return;
       s = {...s, ...current.single};
     }
@@ -1312,9 +1307,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       );
       return;
     }
-    final s = d.store.rows('SELECT * FROM sources WHERE id=?', [
-      c['document_id'],
-    ]);
+    final s = d.store.sourceById(
+      c['document_id'] as String,
+      includeDeleted: true,
+    );
     if (s.isEmpty ||
         s.first['deleted'] == 1 ||
         s.first['revision'] != c['revision']) {
@@ -1355,7 +1351,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             Expanded(
               child: ListView(
                 children: d.store
-                    .rows('SELECT * FROM notes ORDER BY id DESC')
+                    .notes()
                     .map(
                       (n) => ListTile(
                         title: Text(n['title'] as String),

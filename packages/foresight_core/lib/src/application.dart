@@ -265,6 +265,37 @@ class Application {
        _queryRuntime = queryRuntime,
        _providedQueryRuntime = queryRuntime != null;
 
+  Future<int> autoAssignLabel(String name) async {
+    name = name.trim();
+    if (name.isEmpty) throw ArgumentError.value(name, 'name');
+    final generation = domain.workspaceGeneration;
+    final all = store.sources;
+    final indexed = all.where((row) => row['state'] == 'indexed').toList();
+    final snapshot = domain.helper.snapshot;
+    final saved = snapshot?.pipeline == 'ready'
+        ? store.loadGraphLayout(
+            jsonEncode([
+              graphLayoutAlgorithmVersion,
+              snapshot!.model.modelDigest,
+              snapshot.model.tokenizerDigest,
+              snapshot.model.preprocessing,
+              snapshot.model.backend,
+              snapshot.model.dimensions,
+            ]),
+            indexed,
+            snapshot.model.dimensions,
+          )
+        : store.loadRegisteredGraphLayout(indexed);
+    final vectors = Map<String, List<double>>.from(saved.vectors);
+    final missing = indexed
+        .where((row) => !vectors.containsKey(row['id']))
+        .toList();
+    if (missing.isNotEmpty)
+      vectors.addAll(await domain.graphEmbeddings(missing));
+    domain.checkWorkspace(generation);
+    return store.autoAssignLabel(name, all, vectors);
+  }
+
   Future<List<String>> _detectQuestions(String text, String request) async {
     if (!_providedQueryRuntime) {
       if (store.model(dedicatedQueryModelKind) == null) {
@@ -973,6 +1004,8 @@ class Application {
                 .map((s) => Map<String, Object?>.from(s as Map))
                 .toList(),
           );
+        case 'labels.auto_assign':
+          return autoAssignLabel(a['name'] as String);
         case 'labels.put':
           store.putDocumentLabel(
             DocumentLabel(
