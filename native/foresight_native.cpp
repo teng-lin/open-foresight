@@ -215,7 +215,6 @@ int run(Worker &w, std::vector<std::string> args,
   };
   std::string pending_input;
   size_t sent = 0;
-  bool capture_child_reaped = false;
   while (!w.cancel) {
     if (duplex && pending_input.empty()) {
       std::lock_guard lock(w.input_mutex);
@@ -250,79 +249,28 @@ int run(Worker &w, std::vector<std::string> args,
       }
     } else if (r < 0 && errno != EINTR)
       break;
-    if (raw_capture) {
-#ifdef __linux__
-      if (owned.finished()) {
-        drain_pcm();
-        break;
-      }
-#else
-      siginfo_t exited{};
-      int result;
-      {
-        std::lock_guard lock(w.process_mutex);
-        result = waitid(P_PID, p, &exited, WEXITED | WNOWAIT | WNOHANG);
-        // Dart's process event handler can reap an unmanaged native subprocess.
-        // Disarm its PID before publishing terminal state to the capture owner.
-        capture_child_reaped = result < 0 && errno == ECHILD;
-        if (capture_child_reaped) w.pid = -1;
-      }
-      // A retained FIFO writer cannot provide EOF; ECHILD is also terminal.
-      if ((result == 0 && exited.si_pid == p) || capture_child_reaped) {
-        drain_pcm();
-        break;
-      }
-#endif
+    if (raw_capture && owned.finished()) {
+      drain_pcm();
+      break;
     }
   }
-  if (w.cancel && !capture_child_reaped) {
+  if (w.cancel) {
     std::lock_guard lock(w.process_mutex);
     owned.stop();
   }
   if (duplex) close(input[1]);
-  int status = 0;
-#ifdef __linux__
+  // Cancellation can still close the ownership pipe while this waits. The
+  // supervisor reserves the worker PID and finishes all group cleanup before
+  // reporting its result, independently of the host runtime's child reaper.
   const int worker_status = owned.result();
-#else
-  // Do not hold life while waiting: cancellation must still be able to signal
-  // a worker that closed stdout early. Keep its PID reserved until disarmed.
-  siginfo_t info{};
-  int observed;
-  do { observed = waitid(P_PID, p, &info, WEXITED | WNOWAIT); }
-  while (observed < 0 && errno == EINTR);
-#endif
-  // The producer is now terminal. Retain every queued pre-pause PCM byte before
-  // the FIFO closes, including a final partial frame; no later audio can arrive.
   if (raw_capture) drain_pcm();
   close(pipes[0]);
-#ifdef __APPLE__
-  // Supervisor has already completed worker cleanup.
-#endif
   std::lock_guard lock(w.process_mutex);
   pid_t reaped;
-  do { reaped = waitpid(p, &status, 0); } while (reaped < 0 && errno == EINTR);
-#ifdef __APPLE__
-  const int reap_error = reaped < 0 ? errno : 0;
-#endif
+  do { reaped = waitpid(p, nullptr, 0); } while (reaped < 0 && errno == EINTR);
   w.pid = -1;
   w.owned_process = nullptr;
-#ifdef __linux__
-  // Dart may already have reaped the supervisor; its private report carries
-  // the actual worker result independently of the host's SIGCHLD policy.
   return worker_status;
-#else
-  if (capture_child_reaped) return -ECHILD;
-  if (reap_error) {
-    // A runtime SIGCHLD handler may reap the child between waitid and waitpid.
-    // Use an exit status only when waitid actually observed this same child.
-    if (reap_error == ECHILD && observed == 0 && info.si_pid == p && info.si_code == CLD_EXITED) return info.si_status;
-    if (reap_error == ECHILD && observed == 0 && info.si_pid == p &&
-        (info.si_code == CLD_KILLED || info.si_code == CLD_DUMPED))
-      return 128 + info.si_status;
-    return -reap_error;
-  }
-  return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
-#endif
 }
 bool valid_asset(const char *runtime, const char *model) {
   return runtime && *runtime && model && *model && access(model, R_OK) == 0;

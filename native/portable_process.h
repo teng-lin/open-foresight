@@ -54,12 +54,10 @@ inline std::filesystem::path executable_path() {
 // a crash at any point during launch therefore cannot leave an unowned model.
 inline int supervise_worker(int argc, char **argv) {
   if (argc < 3 || std::string(argv[1]) != "--foresight-supervise-worker") return -1;
-#ifdef __linux__
   // A host may ignore SIGCHLD. This fresh, single-threaded supervisor owns
   // its child, and reports the result over a pipe the host cannot reap.
   signal(SIGCHLD, SIG_DFL);
   if (fcntl(3, F_SETFD, FD_CLOEXEC) || fcntl(4, F_SETFD, FD_CLOEXEC)) return 127;
-#endif
   pollfd owner{3, POLLIN, 0};
   if (poll(&owner, 1, 0) != 0) return 127; // owner already gone
   posix_spawn_file_actions_t actions;
@@ -81,15 +79,10 @@ inline int supervise_worker(int argc, char **argv) {
   // SIGPIPE is ignored in this internal executable, so failed reporting still
   // reaches the cleanup below.
   bool reported = write(4, &worker, sizeof(worker)) == sizeof(worker);
-#ifdef __APPLE__
-  close(4);
-#endif
   auto finish = [](int result) {
-#ifdef __linux__
     // One small atomic message, separate from model-controlled stdout.
     (void)!write(4, &result, sizeof(result));
     close(4);
-#endif
     return result;
   };
   int status = 0;
@@ -128,9 +121,7 @@ inline std::string supervisor_path() {
 }
 class OwnedSpawn {
   int control_ = -1;
-#ifdef __linux__
   int report_ = -1;
-#endif
 public:
   pid_t worker = -1;
   int spawn(pid_t *supervisor, posix_spawn_file_actions_t *actions,
@@ -171,12 +162,8 @@ public:
       }
       if (received != sizeof(worker)) error = ECHILD;
     }
-#ifdef __linux__
     if (!error) report_ = fds[2];
     else close(fds[2]);
-#else
-    close(fds[2]);
-#endif
     if (error) {
       close(fds[1]);
       if (*supervisor > 0) while (waitpid(*supervisor, nullptr, 0) < 0 && errno == EINTR) {}
@@ -187,7 +174,6 @@ public:
     return 0;
   }
   void stop() { if (control_ >= 0) { close(control_); control_ = -1; } }
-#ifdef __linux__
   bool finished() const {
     pollfd report{report_, POLLIN, 0};
     return poll(&report, 1, 0) > 0;
@@ -203,12 +189,9 @@ public:
     }
     return status;
   }
-#endif
   ~OwnedSpawn() {
     stop();
-#ifdef __linux__
     if (report_ >= 0) close(report_);
-#endif
   }
 };
 }
