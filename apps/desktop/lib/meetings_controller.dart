@@ -661,11 +661,22 @@ class _MeetingsController extends _FeatureController {
     try {
       await flushMeetingNotesDraft();
     } catch (_) {
-      // NoteSaveScheduler's onError already presents this failed save.
+      // flushMeetingNotesDraft already presented this failed save.
     }
   }
 
-  Future<void> flushMeetingNotesDraft() => meetingNoteSaves.flush();
+  Future<void> flushMeetingNotesDraft() async {
+    try {
+      await meetingNoteSaves.flush();
+    } catch (failure) {
+      if (mounted) {
+        shell.update(
+          () => shell.error = 'Unable to save meeting notes: $failure',
+        );
+      }
+      rethrow;
+    }
+  }
 
   void scheduleMeetingNotesSave() {
     final id = loadedMeetingNotes;
