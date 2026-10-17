@@ -80,7 +80,10 @@ void main() {
     'desktop and MCP share content, capture, and service across desktop restart',
     (tester) async {
       await app.main();
-      await tester.pump();
+      await waitFor(
+        tester,
+        () => find.byType(app.Workspace).evaluate().isNotEmpty,
+      );
       dynamic workspace = tester.state(find.byType(app.Workspace));
       await waitFor(
         tester,
@@ -139,7 +142,10 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
       await app.main();
-      await tester.pump();
+      await waitFor(
+        tester,
+        () => find.byType(app.Workspace).evaluate().isNotEmpty,
+      );
       workspace = tester.state(find.byType(app.Workspace));
       await waitFor(tester, () => workspace.recording != null);
       // Capture survives independently of desktop startup. Wait for this

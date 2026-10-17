@@ -130,8 +130,12 @@ def private_pipewire(env, output):
                                                    start_new_session=True))
             deadline = time.monotonic() + 30
             while True:
-                ready = subprocess.run(['pactl', 'info'], env=private, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                if ready.returncode == 0: break
+                try:
+                    ready = subprocess.run(['pactl', 'info'], env=private, stdout=subprocess.DEVNULL,
+                                           stderr=subprocess.DEVNULL, timeout=5)
+                    if ready.returncode == 0: break
+                except subprocess.TimeoutExpired:
+                    pass
                 if time.monotonic() > deadline or any(process.poll() is not None for process in processes):
                     raise RuntimeError('Private PipeWire did not become ready; inspect daemon logs')
                 time.sleep(.1)
