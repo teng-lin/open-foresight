@@ -287,6 +287,16 @@ void main() {
     () async {
       final id =
           (await call('meetings.create', {'title': 'Planning'}))['id'] as int;
+      await expectLater(
+        app.call('meetings.start', {'id': id}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
+      );
       final note = await call('notes.save', {
         'title': 'Personal',
         'body': 'v1',

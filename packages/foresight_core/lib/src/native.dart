@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -172,7 +173,10 @@ class NativeRuntime implements GenerationStatus {
           Int32 Function(Pointer<Void>),
           int Function(Pointer<Void>)
         >('fs_engine_destroy')(loaded);
-        throw StateError('Model load cancelled before adoption');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Model load cancelled before adoption',
+        );
       }
       engine = loaded;
       conversation = lib
@@ -271,9 +275,10 @@ class NativeRuntime implements GenerationStatus {
     int? maxOutputTokens = 256,
   }) async* {
     if (engine == nullptr || conversation == nullptr) {
-      throw StateError('Generation model unavailable');
+      throw RpcError(RpcErrorCode.unavailable, 'Generation model unavailable');
     }
-    if (_active != null) throw StateError('Generation already in progress');
+    if (_active != null)
+      throw RpcError(RpcErrorCode.busy, 'Generation already in progress');
     if ((tools == null) != (toolDispatcher == null) ||
         (tools != null &&
             ((!plainConversation && tools.isEmpty) ||
