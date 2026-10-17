@@ -26,25 +26,32 @@ class BuildSnapshotTest(unittest.TestCase):
         self.git('config', 'user.email', 'snapshot@example.invalid')
         self.file = self.source / 'input.txt'
         self.file.write_text('original\n')
-        self.git('add', 'input.txt')
+        self.abi_file = self.source / 'z_abi.txt'
+        self.abi_file.write_text('original ABI\n')
+        self.git('add', 'input.txt', 'z_abi.txt')
         self.git('commit', '-qm', 'Fixture')
         self.commit = self.git('rev-parse', 'HEAD').decode().strip()
         self.first = self.make_patch('first patch\n')
         self.second = self.make_patch('second patch\n')
         self.patch_path = self.root / 'source.patch'
         self.patch_path.write_bytes(self.first)
+        self.abi_patch = self.make_patch('vendor ABI\n', 'z_abi.txt')
+        self.abi_patch_path = self.root / 'macos.patch'
+        self.abi_patch_path.write_bytes(self.abi_patch)
 
     def git(self, *args):
         return subprocess.check_output(['git', *args], cwd=self.source, stderr=subprocess.PIPE)
 
-    def make_patch(self, value):
-        self.file.write_text(value)
+    def make_patch(self, value, name='input.txt'):
+        (self.source / name).write_text(value)
         result = self.git('diff', 'HEAD', '--binary')
-        self.git('checkout', '--', 'input.txt')
+        self.git('checkout', '--', name)
         return result
 
-    def invoke(self):
+    def invoke(self, system='Linux'):
         with patch.object(builder, 'COMMIT', self.commit), patch.object(builder, 'PATCH', self.patch_path), \
+                patch.object(builder, 'MACOS_ABI_PATCH', self.abi_patch_path), \
+                patch.object(builder.platform, 'system', return_value=system), \
                 patch('sys.argv', ['builder', str(self.source), '--apply-only']):
             builder.main()
 
@@ -52,6 +59,18 @@ class BuildSnapshotTest(unittest.TestCase):
         self.invoke()
         self.assertEqual(self.file.read_text(), 'first patch\n')
         self.assertEqual(self.git('diff', 'HEAD', '--binary'), self.first)
+        self.assertEqual(self.abi_file.read_text(), 'original ABI\n')
+
+    def test_macos_patch_applies_after_common_patch_and_is_idempotent(self):
+        self.invoke()
+        self.invoke(system='Darwin')
+        self.invoke(system='Darwin')
+        self.assertEqual(self.git('diff', 'HEAD', '--binary'), self.first + self.abi_patch)
+        self.assertEqual(self.abi_file.read_text(), 'vendor ABI\n')
+
+    def test_clean_macos_source_gets_both_pinned_patches(self):
+        self.invoke(system='Darwin')
+        self.assertEqual(self.git('diff', 'HEAD', '--binary'), self.first + self.abi_patch)
 
     def test_patch_changed_between_read_and_apply_is_rejected(self):
         original_run = builder.run

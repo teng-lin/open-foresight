@@ -1,0 +1,26 @@
+diff --git a/third_party/abseil/abseil.patch b/third_party/abseil/abseil.patch
+index 30646460..32706eb1 100644
+--- a/third_party/abseil/abseil.patch
++++ b/third_party/abseil/abseil.patch
+@@ -23,3 +23,21 @@
+  
+  #elif defined(__aarch64__) && defined(__LITTLE_ENDIAN__) &&                 \
+      defined(__ARM_FEATURE_CRC32) && defined(ABSL_INTERNAL_HAVE_ARM_NEON) && \
++
++--- absl/base/attributes.h
+++++ absl/base/attributes.h
++@@ -1026,7 +1026,14 @@
++ // compiler support differs. If system libraries compiled with GCC are mixed
++ // with libraries compiled with Clang, types will have different ideas about
++ // their ABI, leading to hard to debug crashes.
+++// The pinned macOS accelerator C++ callbacks return Status in registers.
+++// Keep every source-built translation unit on that same Clang ABI.
+++#if defined(__APPLE__) && defined(__aarch64__) && defined(__clang__) && \
+++    __has_attribute(trivial_abi)
+++#define ABSL_ATTRIBUTE_TRIVIAL_ABI [[clang::trivial_abi]]
+++#else
++ #define ABSL_ATTRIBUTE_TRIVIAL_ABI
+++#endif
++ 
++ // ABSL_ATTRIBUTE_NO_UNIQUE_ADDRESS
++ //

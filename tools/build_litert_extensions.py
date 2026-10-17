@@ -17,6 +17,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 COMMIT = 'b2f686e2ed4718fb84ec398a61dd59ca0f0aff27'
 PATCH = ROOT / 'third_party/litert_lm/stop-token-sequences.patch'
+MACOS_ABI_PATCH = ROOT / 'third_party/litert_lm/macos-trivial-abi.patch'
 # Keep this standalone builder's closure aligned with the release verifier.
 VENDOR_BASENAMES = (
     'libGemmaModelConstraintProvider', 'libLiteRt',
@@ -88,15 +89,23 @@ def main():
     diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
     patch = PATCH.read_bytes()
     patch_digest = hashlib.sha256(patch).hexdigest()
-    if diff != patch:
+    macos_patch = MACOS_ABI_PATCH.read_bytes() if platform.system() == 'Darwin' else b''
+    expected_patch = patch + macos_patch
+    if diff == patch and macos_patch:
+        run(source, 'git', 'apply', '--check', str(MACOS_ABI_PATCH))
+        run(source, 'git', 'apply', str(MACOS_ABI_PATCH))
+    elif diff != expected_patch:
         if diff:
             parser.error('Source has unrelated changes; use a clean checkout')
         run(source, 'git', 'apply', '--check', str(PATCH))
         run(source, 'git', 'apply', str(PATCH))
+        if macos_patch:
+            run(source, 'git', 'apply', '--check', str(MACOS_ABI_PATCH))
+            run(source, 'git', 'apply', str(MACOS_ABI_PATCH))
     def verify_source_snapshot():
         current_commit = run(source, 'git', 'rev-parse', 'HEAD', capture=True).decode().strip()
         current_diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
-        if current_commit != COMMIT or current_diff != patch:
+        if current_commit != COMMIT or current_diff != expected_patch:
             raise RuntimeError('LiteRT source changed from the verified commit/patch snapshot')
 
     verify_source_snapshot()
@@ -162,6 +171,14 @@ def main():
         temporary.replace(library)
     export_report = {}
     if platform.system() == 'Darwin':
+        # The vendor accelerator expects trivial-ABI Status returns. Verify
+        # the actual patched headers selected by this build across a DSO call.
+        from test_litert_status_abi import verify_status_abi
+        output_base = Path(run(source, *bazel, 'info', 'output_base', capture=True).decode().strip())
+        abi_directory = args.output / 'native-status-abi'
+        verify_status_abi(output_base / 'external/com_google_absl', abi_directory)
+        abi_report = args.output / 'native-status-abi-report.json'
+        shutil.copy2(abi_directory / 'report.json', abi_report)
         exported = subprocess.check_output(['/usr/bin/nm', '-gUj', str(library)], text=True)
         symbols = set(exported.splitlines())
         required = {'_litert_lm_engine_create', '_litert_lm_embedding_engine_create',
@@ -171,7 +188,10 @@ def main():
         export_log = args.output / 'native-exported-symbols.txt'
         export_log.write_text(exported)
         export_report = {'native_export_log': export_log.name,
-                         'native_export_log_sha256': sha256(export_log)}
+                         'native_export_log_sha256': sha256(export_log),
+                         'macos_abi_patch_sha256': hashlib.sha256(macos_patch).hexdigest(),
+                         'native_status_abi_report': abi_report.name,
+                         'native_status_abi_report_sha256': sha256(abi_report)}
     (args.output / 'build-manifest.json').write_text(json.dumps({
         'upstream_commit': COMMIT, 'patch_sha256': patch_digest,
         'distribution': package['Name'], 'version': package['Version'],
