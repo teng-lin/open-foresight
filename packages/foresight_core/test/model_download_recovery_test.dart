@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
@@ -222,6 +223,70 @@ void main() {
       ).download(model, root, sourceForTesting: uri);
       expect(await file.readAsBytes(), bytes);
       expect(await staging.exists(), false);
+    },
+  );
+  test(
+    'a concurrent attempt cannot mutate the active downloader staging',
+    () async {
+      final started = Completer<void>(), release = Completer<void>();
+      var requests = 0;
+      server.listen((request) async {
+        requests++;
+        started.complete();
+        await release.future;
+        request.response.add(bytes);
+        await request.response.close();
+      });
+      final first = GemmaDownload(
+        createClient: client,
+      ).download(model, root, sourceForTesting: uri);
+      await started.future;
+      await expectLater(
+        GemmaDownload(
+          createClient: client,
+        ).download(model, root, sourceForTesting: uri),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('already active'),
+          ),
+        ),
+      );
+      expect(requests, 1);
+      release.complete();
+      expect(await (await first).readAsBytes(), bytes);
+    },
+  );
+
+  test(
+    'complete but corrupt retained bytes are discarded rather than resumed forever',
+    () async {
+      final staging =
+          File('${root.path}/${model.directory}/.download/model.part')
+            ..createSync(recursive: true)
+            ..writeAsBytesSync(List.filled(model.bytes, 0));
+      var requests = 0;
+      server.listen((request) async {
+        requests++;
+        request.response.add(bytes);
+        await request.response.close();
+      });
+      await expectLater(
+        GemmaDownload(
+          createClient: client,
+          parallelism: 1,
+        ).download(model, root, sourceForTesting: uri),
+        throwsStateError,
+      );
+      expect(requests, 0);
+      expect(await staging.exists(), false);
+      final file = await GemmaDownload(
+        createClient: client,
+        parallelism: 1,
+      ).download(model, root, sourceForTesting: uri);
+      expect(requests, 1);
+      expect(await file.readAsBytes(), bytes);
     },
   );
 }
