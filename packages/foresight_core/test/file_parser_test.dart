@@ -99,4 +99,47 @@ void main() {
       expect(result, ('café Ω', 'UTF-8 text'));
     },
   );
+  test(
+    'Linux import reports missing PDF and RTF tools as actionable errors',
+    () async {
+      for (final extension in ['pdf', 'rtf']) {
+        final source = File('${directory.path}/file.$extension')
+          ..writeAsStringSync('fixture');
+        await expectLater(
+          Parser(
+            macOS: false,
+            linuxPdfParser: '/missing/pdftotext',
+            linuxRtfParser: '/missing/unrtf',
+          ).extract(source.path),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('Install the Linux import dependency'),
+            ),
+          ),
+        );
+      }
+    },
+  );
+  test('Linux RTF import omits the unrtf translation banner', () async {
+    final helper = executable(
+      "printf '%s\\n' '### Translation from RTF performed by UnRTF, version 0.21' '-----------------' 'Real document body'",
+    );
+    final source = File('${directory.path}/notes.rtf')
+      ..writeAsStringSync('fixture');
+    final result = await Parser(
+      macOS: false,
+      linuxRtfParser: helper.path,
+    ).extract(source.path);
+    expect(result.$1, 'Real document body\n');
+    expect(result.$1, isNot(contains('Translation from RTF')));
+  });
+  test('malformed text and Markdown replace invalid UTF-8 bytes', () async {
+    for (final extension in ['txt', 'md']) {
+      final source = File('${directory.path}/notes.$extension')
+        ..writeAsBytesSync([65, 255, 66]);
+      expect((await Parser(macOS: false).extract(source.path)).$1, 'A\ufffdB');
+    }
+  });
 }

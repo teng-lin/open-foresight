@@ -16,7 +16,7 @@ class Store {
   Store(this.path) : db = sqlite3.open(path) {
     db.execute('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON');
     final version = db.select('PRAGMA user_version').first.values.first as int;
-    if (version > 1) throw StateError('Unsupported newer application database');
+    if (version > 2) throw StateError('Unsupported newer application database');
     db.execute(
       '''CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,mime TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',deleted INTEGER NOT NULL DEFAULT 0,provenance TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,timestamp INTEGER);
@@ -41,7 +41,7 @@ class Store {
     CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
-    PRAGMA user_version=1;''',
+''',
     );
     // Legacy profiles did not record when a note was saved. Preserve unknown
     // timestamps instead of manufacturing them from meeting creation times.
@@ -123,7 +123,7 @@ class Store {
       'CREATE INDEX IF NOT EXISTS answer_conversation_id ON answers(conversation,id)',
     );
     _migrateMeetingQuestions();
-    _reconcileLabelRecords();
+    if (version < 2) _reconcileLabelRecords();
   }
 
   // Keep durable history while allowing interim origins and repeated questions
@@ -171,22 +171,41 @@ class Store {
     }
   }
 
-  // Reconcile the legacy JSON projection on opening so labels edited by an
-  // older Linux bundle retain their names and acquire persistent colors.
+  // Version 2 imports legacy labels once. Malformed legacy JSON is repaired
+  // from structured records; it must never prevent a profile from opening.
   void _reconcileLabelRecords() {
     db.execute('BEGIN IMMEDIATE');
     try {
       for (final row in rows('SELECT source_id,labels FROM source_details')) {
-        final names = (jsonDecode(row['labels'] as String) as List)
-            .cast<String>();
-        _writeLabelRecords(row['source_id'] as String, names);
+        final id = row['source_id'] as String;
+        List<String> names;
+        try {
+          names = (jsonDecode(row['labels'] as String) as List)
+              .cast<String>()
+              .toList();
+        } on FormatException {
+          names = _storedLabelNames(id);
+        } on TypeError {
+          names = _storedLabelNames(id);
+        }
+        _writeLabelRecords(id, names);
+        db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
+          jsonEncode(names),
+          id,
+        ]);
       }
+      db.execute('PRAGMA user_version=2');
       db.execute('COMMIT');
     } catch (_) {
       db.execute('ROLLBACK');
       rethrow;
     }
   }
+
+  List<String> _storedLabelNames(String id) => rows(
+    'SELECT label_name FROM document_labels WHERE document_id=?',
+    [id],
+  ).map((row) => row['label_name'] as String).toList();
 
   List<DocumentLabel> get documentLabels => rows(
     'SELECT l.* FROM document_labels l JOIN sources s ON s.id=l.document_id WHERE s.deleted=0',
@@ -800,9 +819,14 @@ class Store {
 class Parser {
   final bool _macOS;
   final String? _macParser;
-  Parser({bool? macOS, String? macParser})
-    : _macOS = macOS ?? Platform.isMacOS,
-      _macParser = macParser;
+  final String linuxPdfParser, linuxRtfParser;
+  Parser({
+    bool? macOS,
+    String? macParser,
+    this.linuxPdfParser = 'pdftotext',
+    this.linuxRtfParser = 'unrtf',
+  }) : _macOS = macOS ?? Platform.isMacOS,
+       _macParser = macParser;
   Future<ProcessResult> _extractProcess(
     String executable,
     List<String> arguments,
@@ -821,7 +845,7 @@ class Parser {
         }
         bytes.addAll(chunk);
       }
-      return utf8.decode(bytes);
+      return utf8.decode(bytes, allowMalformed: true);
     }
 
     try {
@@ -837,6 +861,21 @@ class Parser {
       );
     } finally {
       timer.cancel();
+    }
+  }
+
+  Future<ProcessResult> _linuxExtract(
+    String tool,
+    List<String> arguments,
+    String dependency,
+  ) async {
+    try {
+      return await _extractProcess(tool, arguments);
+    } on ProcessException catch (error) {
+      throw StateError(
+        'Cannot launch $tool. Install the Linux import dependency '
+        '($dependency): ${error.message}',
+      );
     }
   }
 
@@ -879,16 +918,32 @@ class Parser {
       );
     }
     if (lower.endsWith('.pdf')) {
-      final r = await _extractProcess('pdftotext', ['-layout', path, '-']);
+      final r = await _linuxExtract(linuxPdfParser, [
+        '-layout',
+        path,
+        '-',
+      ], 'poppler-utils');
       if (r.exitCode != 0)
         throw StateError('PDF extraction failed: ${r.stderr}');
       return (r.stdout as String, 'pdftotext -layout (Linux adapter)');
     }
     if (lower.endsWith('.rtf')) {
-      final r = await _extractProcess('unrtf', ['--text', path]);
+      final r = await _linuxExtract(linuxRtfParser, [
+        '--text',
+        '--quiet',
+        path,
+      ], 'unrtf');
       if (r.exitCode != 0)
         throw StateError('RTF extraction failed: ${r.stderr}');
-      return (r.stdout as String, 'unrtf --text (Linux adapter)');
+      // unrtf 0.21 emits metadata before this separator even in text mode.
+      var text = r.stdout as String;
+      const marker = '-----------------';
+      final banner = text.indexOf(marker);
+      if (banner >= 0 &&
+          text.substring(0, banner).contains('Translation from RTF')) {
+        text = text.substring(banner + marker.length).trimLeft();
+      }
+      return (text, 'unrtf --text (Linux adapter)');
     }
     final bytes = <int>[];
     await for (final chunk in File(
@@ -899,6 +954,6 @@ class Parser {
       }
       bytes.addAll(chunk);
     }
-    return (utf8.decode(bytes), 'UTF-8 text');
+    return (utf8.decode(bytes, allowMalformed: true), 'UTF-8 text');
   }
 }

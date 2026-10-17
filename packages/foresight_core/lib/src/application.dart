@@ -1208,18 +1208,20 @@ class Application {
             'SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0',
             [s['id'], s['revision']],
           ).isNotEmpty;
-      final path = (s['provenance'] as String).split('; ').last;
+      final sourceUri = Uri.tryParse(s['source_uri'] as String? ?? '');
       try {
-        if (path.startsWith('url:')) {
+        if (sourceUri != null && ['http', 'https'].contains(sourceUri.scheme)) {
           await importUrl(
-            path.substring(4),
+            sourceUri.toString(),
             current: sourceCurrent,
             allowPrivateNetwork: allowPrivateNetwork,
           );
-        } else if (File(path).existsSync()) {
+        } else if (sourceUri != null && sourceUri.scheme == 'file') {
+          final path = sourceUri.toFilePath();
+          if (!File(path).existsSync()) {
+            throw StateError('Imported file is missing: $path');
+          }
           await importFile(path, current: sourceCurrent);
-        } else if (path.startsWith('/')) {
-          throw StateError('Imported file is missing: $path');
         } else {
           await domain.index(s['id'] as String);
         }
@@ -1868,6 +1870,10 @@ class Application {
           : 'completed';
     } finally {
       recording = null;
+      recordingMeeting = null;
+      recordingBegan = null;
+      _recordingPausedAt = null;
+      _recordingPausedMs = 0;
       provisionalTranscript.clear();
       proactive.clearInterim(id);
       store.db.execute('UPDATE meetings SET state=? WHERE id=?', [status, id]);
