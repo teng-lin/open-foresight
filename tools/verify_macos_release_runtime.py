@@ -6,7 +6,6 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from litert_extensions import PYTHON_CAPABILITY_PROBE
 
 
 def runtime_paths(app):
@@ -14,9 +13,11 @@ def runtime_paths(app):
     resources = app / 'Contents/Resources'
     config = json.loads((resources / 'runtime.json').read_text())
     paths = {}
-    for key in ('FORESIGHT_MODEL_PYTHON', 'FORESIGHT_LITERT_PYTHON',
-                'FORESIGHT_LITERT_RUNNER', 'FORESIGHT_LITERT_EMBEDDING_ADAPTER',
-                'FORESIGHT_WHISPER_RUNTIME', 'FORESIGHT_QUERY_WORKER'):
+    if (resources / 'python').exists() or any(resources.rglob('*.py')):
+        raise ValueError('Release must not bundle a Python runtime or inference scripts')
+    for key in ('FORESIGHT_MODEL_WORKER', 'FORESIGHT_LITERT_RUNNER',
+                'FORESIGHT_LITERT_LIBRARY', 'FORESIGHT_WHISPER_RUNTIME',
+                'FORESIGHT_QUERY_WORKER', 'FORESIGHT_QUERY_RUNTIME'):
         relative = config.get(key)
         if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
             raise ValueError('Release lacks bundled ' + key)
@@ -24,7 +25,11 @@ def runtime_paths(app):
         if not path.is_file() or not path.is_relative_to(app):
             raise ValueError('Release runtime escapes bundle: ' + key)
         paths[key] = path
-    for notice in ('requirements-litert-macos.lock', 'LiteRT-LM-extension.json', 'whisper-LICENSE'):
+    if paths['FORESIGHT_LITERT_RUNNER'] != paths['FORESIGHT_MODEL_WORKER']:
+        raise ValueError('Generation and embedding must share the native worker')
+    if paths['FORESIGHT_QUERY_RUNTIME'] != paths['FORESIGHT_QUERY_WORKER']:
+        raise ValueError('Question detection must use the native worker directly')
+    for notice in ('LiteRT-LM-extension.json', 'LiteRT-LM-LICENSE', 'sentencepiece-LICENSE', 'whisper-LICENSE'):
         if not (resources / 'licenses' / notice).is_file():
             raise ValueError('Release lacks runtime provenance/license: ' + notice)
     return paths
@@ -35,12 +40,10 @@ def verify(app, output):
     report = {'status': 'failed', 'checks': {}}
     with tempfile.TemporaryDirectory(prefix='foresight-release-runtime-') as home:
         env = {'PATH': '/usr/bin:/bin', 'HOME': home, 'TMPDIR': home,
-               'PYTHONDONTWRITEBYTECODE': '1'}
+               'FORESIGHT_LITERT_LIBRARY': str(paths['FORESIGHT_LITERT_LIBRARY'])}
         commands = {
-            'native_first': [paths['FORESIGHT_MODEL_PYTHON'], '-I', '-B', '-c', PYTHON_CAPABILITY_PROBE, '--native-first'],
-            'sentencepiece_first': [paths['FORESIGHT_MODEL_PYTHON'], '-I', '-B', '-c', PYTHON_CAPABILITY_PROBE],
-            'generation': [paths['FORESIGHT_LITERT_RUNNER'], '--check'],
-            'embedding': [paths['FORESIGHT_LITERT_PYTHON'], paths['FORESIGHT_LITERT_EMBEDDING_ADAPTER'], '--check'],
+            'native_generation_embedding': [paths['FORESIGHT_MODEL_WORKER'], '--check'],
+            'native_query': [paths['FORESIGHT_QUERY_WORKER'], '--check'],
             'whisper': [paths['FORESIGHT_WHISPER_RUNTIME'], '--help'],
         }
         try:

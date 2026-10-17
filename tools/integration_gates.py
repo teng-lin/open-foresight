@@ -59,8 +59,8 @@ def bundle_environment(bundle, inherited):
         resources = bundle / 'Contents/Resources'
         config = json.loads((resources / 'runtime.json').read_text())
         keys = ['FORESIGHT_NATIVE', 'FORESIGHT_HELPER', 'FORESIGHT_LITERT_RUNNER',
-                'FORESIGHT_MODEL_WORKER', 'FORESIGHT_MODEL_PYTHON', 'FORESIGHT_LITERT_PYTHON',
-                'FORESIGHT_MODEL_ADAPTER', 'FORESIGHT_LITERT_EMBEDDING_ADAPTER', 'FORESIGHT_QUERY_WORKER']
+                'FORESIGHT_MODEL_WORKER', 'FORESIGHT_LITERT_LIBRARY',
+                'FORESIGHT_QUERY_RUNTIME', 'FORESIGHT_QUERY_WORKER']
         for key in keys:
             if key in config:
                 env[key] = str((resources / config[key]).resolve(strict=True))
@@ -214,7 +214,7 @@ def reference_gate(args, env):
         if args.query_model is None: raise ValueError('--query-model must point to an already authorized local asset')
         env.update(FORESIGHT_QUERY_MODEL_TEST='1', FORESIGHT_PROACTIVE_MODEL_TEST='1',
                    FORESIGHT_QUERY_MODEL=str(args.query_model.resolve(strict=True)),
-                   FORESIGHT_QUERY_PYTHON=env['FORESIGHT_LITERT_PYTHON'], FORESIGHT_QUERY_WORKER=env['FORESIGHT_QUERY_WORKER'])
+                   FORESIGHT_QUERY_PYTHON=env.get('FORESIGHT_QUERY_RUNTIME', env.get('FORESIGHT_LITERT_PYTHON', '')), FORESIGHT_QUERY_WORKER=env['FORESIGHT_QUERY_WORKER'])
         return run_tests('core', ['test/dedicated_query_model_test.dart', 'test/proactive_model_test.dart'],
                          5, env, args.output, 'reference-models', args.flutter, args.dart)
     if not args.original_socket or not args.port_socket: raise ValueError('Both existing tokenizer sockets are required')

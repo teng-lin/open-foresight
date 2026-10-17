@@ -22,81 +22,34 @@ SIGNATURE = {'team': 'test-team', 'adhoc': False}
 
 
 class MacModelProbeTests(unittest.TestCase):
-    def test_default_embedding_worker_is_rejected_as_generation_runner(self):
-        with patch.object(sys, 'platform', 'darwin'), \
-                patch.object(sys, 'argv', ['test_gemma_models.py']), \
-                patch.object(gemma_probe.subprocess, 'run') as run, \
-                patch('sys.stderr') as stderr:
-            with self.assertRaises(SystemExit) as error:
+    def test_native_worker_handles_both_generation_and_embedding(self):
+        with tempfile.TemporaryDirectory(prefix='model probe ') as temporary:
+            with patch.object(sys, 'platform', 'darwin'), \
+                    patch.object(sys, 'argv', ['probe', '--report', temporary + '/report.json']), \
+                    patch.object(gemma_probe.subprocess, 'run') as run:
                 gemma_probe.main()
-            self.assertEqual(error.exception.code, 2)
-            self.assertIn('LiteRT generation runner', str(stderr.write.call_args_list))
-            run.assert_not_called()
+                env = run.call_args.kwargs['env']
+                self.assertEqual(env['FORESIGHT_LITERT_RUNNER'], env['FORESIGHT_MODEL_WORKER'])
+                self.assertTrue(env['FORESIGHT_LITERT_LIBRARY'].endswith('liblitert-lm.dylib'))
 
-    def test_bundle_missing_generation_or_python_entries_reports_setup_error(self):
+    def test_bundle_missing_native_runtime_reports_setup_error(self):
         keys = ('FORESIGHT_NATIVE', 'FORESIGHT_HELPER', 'FORESIGHT_LITERT_RUNNER',
-                'FORESIGHT_MODEL_WORKER', 'FORESIGHT_MODEL_ADAPTER',
-                'FORESIGHT_LITERT_EMBEDDING_ADAPTER', 'FORESIGHT_MODEL_PYTHON',
-                'FORESIGHT_LITERT_PYTHON')
+                'FORESIGHT_MODEL_WORKER', 'FORESIGHT_LITERT_LIBRARY')
         with tempfile.TemporaryDirectory() as temporary:
             app = Path(temporary) / 'Open Foresight.app'
             resources = app / 'Contents/Resources'
             resources.mkdir(parents=True)
-            for missing in ('FORESIGHT_LITERT_RUNNER', 'FORESIGHT_MODEL_PYTHON',
-                            'FORESIGHT_LITERT_PYTHON'):
+            for missing in keys:
                 with self.subTest(missing=missing):
                     (resources / 'runtime.json').write_text(json.dumps(
                         {key: 'runtime/' + key for key in keys if key != missing}))
                     with patch.object(sys, 'platform', 'darwin'), \
                             patch.object(sys, 'argv', ['probe', '--bundle', str(app)]), \
-                            patch.object(gemma_probe.subprocess, 'run') as run, \
-                            patch('sys.stderr') as stderr:
+                            patch.object(gemma_probe.subprocess, 'run') as run:
                         with self.assertRaises(SystemExit) as error:
                             gemma_probe.main()
                         self.assertEqual(error.exception.code, 2)
-                        self.assertIn(missing, str(stderr.write.call_args_list))
                         run.assert_not_called()
-
-    def test_explicit_generation_runner_keeps_separate_embedding_worker(self):
-        with tempfile.TemporaryDirectory(prefix='model probe ') as temporary:
-            runner = Path(temporary) / 'generation runner'
-            with patch.object(sys, 'platform', 'darwin'), \
-                    patch.object(sys, 'argv', ['probe', '--runner', str(runner),
-                                              '--report', temporary + '/report.json']), \
-                    patch.object(gemma_probe.subprocess, 'run') as run:
-                gemma_probe.main()
-                env = run.call_args.kwargs['env']
-                self.assertEqual(env['FORESIGHT_LITERT_RUNNER'], str(runner.resolve()))
-                self.assertEqual(env['FORESIGHT_MODEL_WORKER'],
-                                 str(gemma_probe.ROOT / 'build/services/inference/foresight-model'))
-
-
-class MacModelWorkerTests(unittest.TestCase):
-    def test_worker_dispatch_preserves_relocated_paths_and_gpu_argument(self):
-        with tempfile.TemporaryDirectory(prefix='mac worker ') as temporary:
-            root = Path(temporary)
-            worker = root / 'foresight-model'
-            shutil.copy2(Path(__file__).resolve().parents[1] /
-                         'services/inference/macos/foresight-model', worker)
-            python = root / 'selected python'
-            python.write_text('#!' + sys.executable + '\nimport json,sys; print(json.dumps(sys.argv[1:]))\n')
-            python.chmod(0o755)
-            model = root / 'embedding model.litertlm'
-            model.touch()
-            directory = root / 'sentence transformer'
-            directory.mkdir()
-            for asset, adapter, option in ((model, 'litert_embedding_adapter.py', ['--gpu']),
-                                           (directory, 'model_adapter.py', [])):
-                env = {**os.environ, 'FORESIGHT_MODEL_PYTHON': str(python),
-                       'FORESIGHT_LITERT_PYTHON': str(python)}
-                env.pop('FORESIGHT_MODEL_ADAPTER', None)
-                env.pop('FORESIGHT_LITERT_EMBEDDING_ADAPTER', None)
-                actual = json.loads(subprocess.check_output(
-                    [str(worker), '--embedding', str(asset), *option], env=env,
-                    cwd='/', text=True))
-                self.assertEqual(actual, ['-I', '-B', str(root / adapter), str(asset), *option])
-            invalid = subprocess.run([str(worker), '--invalid'], capture_output=True)
-            self.assertEqual(invalid.returncode, 2)
 
 
 def bundle(path, version, identifier=installer.IDENTIFIER):

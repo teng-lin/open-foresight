@@ -341,13 +341,17 @@ class Store {
 
   static const _runtimeResources = {
     'generation': 'FORESIGHT_LITERT_RUNNER',
-    'query-detection': 'FORESIGHT_LITERT_PYTHON',
+    'query-detection': 'FORESIGHT_QUERY_RUNTIME',
     'speech': 'FORESIGHT_WHISPER_RUNTIME',
   };
 
   String? _ownedRuntime(String resource) {
     final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
-    final path = runtimeConfiguration[resource];
+    final path =
+        runtimeConfiguration[resource] ??
+        (resource == 'FORESIGHT_QUERY_RUNTIME'
+            ? runtimeConfiguration['FORESIGHT_LITERT_PYTHON']
+            : null);
     if (root == null || path == null) return null;
     try {
       final canonicalRoot = Directory(root).resolveSymbolicLinksSync();
@@ -371,7 +375,9 @@ class Store {
     try {
       final record = jsonDecode(preference('modelRuntimeResource.$kind'));
       if (record is! Map ||
-          record['resource'] != resource ||
+          (record['resource'] != resource &&
+              !(kind == 'query-detection' &&
+                  record['resource'] == 'FORESIGHT_LITERT_PYTHON')) ||
           record['runtime'] != model['runtime'] ||
           record['digest'] != model['digest'] ||
           record['backend'] != model['backend'])

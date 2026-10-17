@@ -18,7 +18,9 @@ name: Reusable CI dependencies
     - packaging/minimal-grpc.cmake
     - requirements-dev.lock
     - requirements-litert.lock
-    - requirements-litert-macos.lock
+    - services/speech/**
+    - services/inference/persistent_worker.h
+    - services/inference/output_budget.h
     - third_party/litert_lm/**
   workflow_dispatch: {}
   schedule:
@@ -39,7 +41,9 @@ name: Reusable CI dependencies
     - packaging/minimal-grpc.cmake
     - requirements-dev.lock
     - requirements-litert.lock
-    - requirements-litert-macos.lock
+    - services/speech/**
+    - services/inference/persistent_worker.h
+    - services/inference/output_budget.h
     - third_party/litert_lm/**
 permissions:
   contents: read
@@ -127,7 +131,8 @@ jobs:
       with:
         path: build/macos-runtimes
         key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py',
-          'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch')
+          'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'services/speech/**', 'services/inference/persistent_worker.h',
+          'services/inference/output_budget.h', 'third_party/litert_lm/*.patch')
           }}
     - name: Build or verify SDK
       if: matrix.component == 'sdk'
