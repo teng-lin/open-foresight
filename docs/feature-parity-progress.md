@@ -23,6 +23,16 @@ Historical observations and validation counts below retain their original scope.
 | Meeting export format and filtering | Live original UI observed; a controlled single-note downloaded file is retained as a regression fixture. Filter/preview/copy/download implemented and tested. IDA binds trimming, separators, descending order, actual end times, calendar links, date patterns, elapsed-day preset boundaries, and accepted-save timestamps; see [export trace](reference-meeting-export.md). | Enhanced-note preference, title fallback, standalone-note inclusion, and global timestamp-descending acquisition capped at 1,000 before body/date filtering are implemented. Legacy save times remain unknown and sort last; historical acquisition order cannot be recovered. One-second editor debounce, captured switch/close flushes and save-failure retry are implemented; see [save lifecycle](reference-note-save.md). Nullable manual/enhancement dates and the exact clean-note reload priorities are implemented with dirty-draft protection. Association-title snapshots and exact final enhancement tag cleanup are implemented. Partial enhancement drafts, request-owned cancellation and formatted restoration are implemented; controlled multi-note/live locale comparison remains. Native development-app save-dialog comparison is also pending. Focused export verification: 17 tests pass. |
 | Label editing | Original Sources → Add label opens Create New Organization Label, explains automatic assignment/clustering, and offers Cancel / Create & Auto-Assign. Dialog was cancelled. Existing add/remove/organization-label tests pass in the desktop suite. IDA-backed focus-loss draft retention and palette fallback are implemented; see [label trace](reference-source-labels.md). | Observe document-label editing and persistence with a controlled fixture; compare state changes, cancellation, deletion and graph restoration. Viewing the creation dialog does not verify editing. |
 
+The live transcript embedding lifecycle is now connected: capture preload and
+final callbacks use the recovered speaker formatting, saved transcript mutations
+invalidate their cache entry, and model changes cannot race with note preparation.
+New bounded IDA disassembly also establishes failure cleanup omitted by the earlier
+decompiler view; failed embedding drains clear their running future before
+rethrowing, allowing a later request to retry. See [lifecycle evidence](reference-note-lifecycle.md).
+At this checkpoint, the full core suite passes **449 tests with 7 skipped**,
+50 focused lifecycle/stream/service tests pass, three affected widget tests pass,
+and core static analysis is clean. The older counts below describe earlier stages.
+
 The recovered producer is connected to Application. A focused integration run
 passes **26 tests**, including edit mapping, two-conversation ordered generation,
 debounced drafts, current manual edits and cancellation restoration. Core analysis
