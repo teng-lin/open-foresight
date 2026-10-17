@@ -1,9 +1,30 @@
 diff --git a/c/BUILD b/c/BUILD
-index f7a352b9..d4f5e6bb 100644
+index f7a352b9..349c629d 100644
 --- a/c/BUILD
 +++ b/c/BUILD
-@@ -487,7 +487,10 @@ cc_binary(
+@@ -474,6 +474,14 @@ cc_test(
+     ],
+ )
+ 
++# Limit the shared library's ELF namespace to its supported public C API.
++# An anonymous version script avoids exporting a version-node symbol itself.
++genrule(
++    name = "c_api_export_map",
++    outs = ["c_api_exports.map"],
++    cmd = "echo '{ global: litert_lm_*; local: *; };' > $@",
++)
++
+ cc_binary(
+     name = "litert-lm",
+     srcs = [
+@@ -485,9 +493,24 @@ cc_binary(
+         "model_info.cc",
+     ],
      copts = ["-fvisibility=hidden"],
++    additional_linker_inputs = select({
++        "@platforms//os:linux": [":c_api_export_map"],
++        "//conditions:default": [],
++    }),
      features = ["-legacy_whole_archive"],
      linkopts = select({
 -        "@platforms//os:macos": [],
@@ -11,6 +32,14 @@ index f7a352b9..d4f5e6bb 100644
 +        # previously initialized SentencePiece extension can coalesce their
 +        # globals and deadlock this library's descriptor initializers.
 +        "@platforms//os:macos": ["-Wl,-exported_symbol,_litert_lm_*", "-Wl,-rpath,@loader_path"],
++        "@platforms//os:linux": [
++            "-Wl,--version-script=$(location :c_api_export_map)",
++            "-Wl,--no-undefined",
++            "-Wl,--strip-all",
++            "-Wl,--gc-sections",
++            "-Wl,-Bsymbolic",
++            "-Wl,-rpath,$$ORIGIN",
++        ],
          "@platforms//os:ios": [],
          "@platforms//os:windows": [],
          "//conditions:default": [

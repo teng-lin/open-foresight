@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,7 +67,7 @@ def main():
         command = [worker, '--model', str(args.generation.resolve()), '--backend', args.backend]
         result = subprocess.run([*command, '--prompt', 'Reply with one short sentence: what is 2 + 2?', '--max-output-tokens', '128'],
                                 env=environment, capture_output=True, text=True, timeout=900)
-        assert result.returncode == 0 and '4' in result.stdout, result.stderr[-2000:]
+        assert result.returncode == 0 and re.search(r'\b(?:4|four)\b', result.stdout, re.IGNORECASE), result.stderr[-2000:]
         report['generation'] = result.stdout
         short = subprocess.run([*command, '--prompt', 'Reply exactly YES.', '--max-output-tokens', '16'],
                                env=environment, capture_output=True, text=True, timeout=900)
