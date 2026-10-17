@@ -80,6 +80,55 @@ enum Operation {
 
   const Operation(this.wire);
   final String wire;
+  bool requiresApproval({bool webSearch = false}) {
+    if ((this == Operation.answer || this == Operation.answer_stream) &&
+        webSearch)
+      return true;
+    return !{
+      Operation.status,
+      Operation.audio_capabilities,
+      Operation.notifications_capabilities,
+      Operation.sources_list,
+      Operation.sources_get,
+      Operation.sources_search,
+      Operation.sources_index,
+      Operation.notes_list,
+      Operation.notes_save,
+      Operation.meetings_list,
+      Operation.meetings_get,
+      Operation.meetings_create,
+      Operation.meetings_notes,
+      Operation.meetings_pause,
+      Operation.meetings_stop,
+      Operation.answer,
+      Operation.answer_stream,
+      Operation.application_resume,
+      Operation.google_status,
+      Operation.artifacts_edit,
+      Operation.meetings_generate,
+      Operation.meetings_enhance,
+      Operation.meetings_cancel_enhance,
+      Operation.meetings_retry_question,
+      Operation.meetings_retry_detection,
+      Operation.meetings_link_answer,
+    }.contains(this);
+  }
+
+  bool get notifiesChanges => !{
+    Operation.status,
+    Operation.audio_capabilities,
+    Operation.notifications_capabilities,
+    Operation.sources_list,
+    Operation.sources_get,
+    Operation.sources_search,
+    Operation.notes_list,
+    Operation.meetings_list,
+    Operation.meetings_get,
+    Operation.google_status,
+    Operation.google_drive_files,
+    Operation.graph_embeddings,
+  }.contains(this);
+
   bool get requiresHelper => !{
     Operation.status,
     Operation.audio_capabilities,
