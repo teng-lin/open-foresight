@@ -91,7 +91,7 @@ def main():
         with tarfile.open(archive) as stream:
             stream.extractall(prefix, filter='data')
     python = prefix / 'python/bin/python3'
-    run(python, '-I', '-m', 'pip', 'install', '--only-binary=:all:',
+    run(python, '-I', '-m', 'pip', 'install', '--require-hashes', '--only-binary=:all:',
         '-r', ROOT / 'requirements-litert-macos.lock')
     extension_manifest = prefix / 'litert-extensions/build-manifest.json'
     if not extension_manifest.exists():

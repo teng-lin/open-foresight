@@ -47,24 +47,31 @@ def main():
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Revision must be a full lowercase Git commit hash')
     web_search_keys = release_web_search_keys()
-    assert args.whisper_gpu_device >= 0
+    if args.whisper_gpu_device < 0:
+        raise ValueError('Whisper GPU device must be nonnegative')
     helper = args.build / 'services/helper/ForesightHelper'
     native = args.build / 'native/libforesight_native.so'
     service = args.build / 'application/foresight-service'
     mcp = args.build / 'application/foresight-mcp'
-    assert service.is_file() and mcp.is_file(), 'Build the application service and MCP server first'
-    assert helper.is_file() and native.is_file() and args.flutter_bundle.is_dir(), 'Build all components first'
-    assert not args.output.exists(), 'Choose an empty output directory to avoid stale packaged libraries'
+    if not (service.is_file() and mcp.is_file()):
+        raise ValueError('Build the application service and MCP server first')
+    if not (helper.is_file() and native.is_file() and args.flutter_bundle.is_dir()):
+        raise ValueError('Build all components first')
+    if args.output.exists():
+        raise ValueError('Choose an empty output directory to avoid stale packaged libraries')
     worker = args.build / 'services/inference/foresight-model'
-    assert worker.is_file() and args.litert_library.is_file() and args.onnx_library.is_file(), 'Build native inference and prepare LiteRT-LM/ONNX Runtime first'
+    if not (worker.is_file() and args.litert_library.is_file() and args.onnx_library.is_file()):
+        raise ValueError('Build native inference and prepare LiteRT-LM/ONNX Runtime first')
     extensions = None
     if args.litert_extensions_manifest:
         extensions = verify_extensions_manifest(args.litert_extensions_manifest, platform_name='linux')
         if file_sha256(args.litert_library) != extensions.manifest['library_sha256']:
             raise ValueError('--litert-library does not match the verified extension artifact')
     else:
-        assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
-    assert hashlib.sha256(args.onnx_library.read_bytes()).hexdigest() == ONNX_LIBRARY_SHA256, 'ONNX Runtime checksum mismatch'
+        if not (hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256):
+            raise ValueError('Native LiteRT-LM library checksum mismatch')
+    if not (hashlib.sha256(args.onnx_library.read_bytes()).hexdigest() == ONNX_LIBRARY_SHA256):
+        raise ValueError('ONNX Runtime checksum mismatch')
     # Refuse a Python extension or an incompatible/missing public C runtime.
     environment = dict(os.environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve()))
     if extensions is None:
@@ -78,7 +85,8 @@ def main():
     shutil.copy2(mcp, args.output / 'bin/foresight-mcp')
     shutil.copy2(native, args.output / 'lib/libforesight_native.so')
     if args.whisper_gpu_runtime:
-        assert args.whisper_gpu_runtime.is_file(), 'Build the Vulkan Whisper runtime first'
+        if not (args.whisper_gpu_runtime.is_file()):
+            raise ValueError('Build the Vulkan Whisper runtime first')
         shutil.copy2(args.whisper_gpu_runtime, args.output / 'bin/whisper-cli-vulkan')
         for name in ('LICENSE', 'provenance.json'):
             shutil.copy2(args.whisper_gpu_runtime.parent / name,
@@ -123,7 +131,8 @@ def main():
     # Bundle helper inference/protocol dependencies, keep the Linux C ABI and desktop
     # GTK stack as explicit host prerequisites. ldd is run only on our built binaries.
     dependencies = subprocess.check_output(['ldd', str(helper), str(native), str(worker), str(args.litert_library), str(args.onnx_library)], text=True, env=environment)
-    assert 'not found' not in dependencies, dependencies
+    if 'not found' in dependencies:
+        raise ValueError(dependencies)
     bundled = []
     for name, path in re.findall(r'\s*(\S+) => (/\S+)', dependencies):
         if name.startswith(('libgrpc', 'libgpr', 'libprotobuf', 'libupb', 'libabsl',

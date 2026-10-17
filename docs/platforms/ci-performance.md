@@ -205,3 +205,11 @@ one opt-in native desktop integration skip. Offline Python validation passed
 159 tests with 10 skipped and 86 subtests, including process-level concurrency,
 failure propagation and partial-launch cleanup checks. These local timings do
 not predict GitHub runner timing or establish a hosted speedup.
+
+Dependency publication runs only on main. Pull requests build the full Linux SDK
+locally with read-only credentials and never export registry caches or images.
+The monthly dependency schedule bypasses qualified descriptors and Docker layer
+caches, rebuilds from digest-pinned base images, applies Ubuntu package upgrades,
+and publishes a fresh immutable SDK digest. Release candidates keep the exact
+digest recorded by their successful build. Update the checked-in base-image
+digests deliberately when advancing the OS baseline.

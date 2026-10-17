@@ -2,7 +2,7 @@
   "version": 1,
   "generation": {
     "id": "qwen2.5-1.5b-instruct-q4-k-m",
-    "download": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+    "download": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/91cad51170dc346986eccefdc2dd33a9da36ead9/qwen2.5-1.5b-instruct-q4_k_m.gguf",
     "file": "qwen2.5-1.5b-instruct-q4_k_m.gguf",
     "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
     "runtime_repository": "https://github.com/ggml-org/llama.cpp.git",
@@ -25,7 +25,7 @@
   },
   "speech": {
     "id": "whisper-tiny-en",
-    "download": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+    "download": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.en.bin",
     "file": "ggml-tiny.en.bin",
     "sha256": "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
     "runtime_repository": "https://github.com/ggml-org/whisper.cpp.git",

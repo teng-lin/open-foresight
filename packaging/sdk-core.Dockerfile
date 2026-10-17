@@ -1,16 +1,16 @@
 # syntax=docker/dockerfile:1
 # Ubuntu 24.04 / glibc 2.39 is the supported binary baseline. Build *all*
 # native components here, including Whisper and the isolated Python runtime.
-FROM ubuntu:24.04 AS core
+FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS core
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive CI=true FLUTTER_SUPPRESS_ANALYTICS=true
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     build-essential clang cmake ninja-build git curl ca-certificates pkg-config \
     libgtk-3-dev libblkid-dev liblzma-dev libsqlite3-dev libssl-dev zlib1g-dev \
     python3-dev python3-venv libvulkan-dev glslc glslang-tools \
     unzip xz-utils && rm -rf /var/lib/apt/lists/*
 
-# gRPC 1.83.1 includes protobuf 7.35.1 with Edition 2024 C++ generation.
+# gRPC 1.83.1 includes protobuf 35.1 with Edition 2024 C++ generation.
 ARG GRPC_COMMIT=aae267021b1ac256f8b9038d0ef528c3798cc137
 COPY packaging/minimal-grpc.cmake /opt/minimal-grpc.cmake
 RUN git init /opt/grpc && cd /opt/grpc && git remote add origin https://github.com/grpc/grpc.git && \

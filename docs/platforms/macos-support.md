@@ -19,7 +19,7 @@ CMake, Ninja, Git, and CocoaPods. Enable Flutter's Swift Package Manager support
 ```sh
 flutter config --enable-swift-package-manager
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
 ```
 
 Build the pinned static dependency SDK instead of linking current Homebrew
