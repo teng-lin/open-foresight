@@ -140,8 +140,8 @@ CI builds on ordinary hosted Linux runners without a GPU. After the baseline
 build, parallel native-container jobs create `.deb`, `.rpm`, and `.pkg.tar.zst`
 files. Each installs its dependencies and package, validates the desktop entry,
 verifies installed payload hashes, checks every ELF for missing libraries, imports
-the native LiteRT runtime, rejects bundled Python files, runs Whisper help and
-decodes the public JFK fixture on CPU with a SHA-verified Tiny model, then
+the native LiteRT runtime, rejects bundled Python runtimes and unexpected Python
+source files, runs Whisper help and decodes the public JFK fixture on CPU with a SHA-verified Tiny model, then
 launches the installed app under Xvfb as an ordinary user. It checks activation
 IPC and a private SQLite profile, reinstalls the same version, removes the
 package, and verifies a per-user sentinel survives. The DEB also gets a separate
