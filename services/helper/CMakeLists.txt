@@ -49,4 +49,8 @@ add_executable(model_worker_fixture "${REPO_ROOT}/tests/fixtures/model_worker.cp
 target_link_libraries(model_worker_fixture PRIVATE nlohmann_json::nlohmann_json)
 target_link_libraries(helper_model_lifetime PRIVATE nlohmann_json::nlohmann_json Threads::Threads)
 add_test(NAME helper_model_lifetime COMMAND helper_model_lifetime $<TARGET_FILE:model_worker_fixture>)
+add_executable(helper_adapter_faults "${REPO_ROOT}/tests/helper/adapter_faults.cpp")
+target_include_directories(helper_adapter_faults PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(helper_adapter_faults PRIVATE foresight_protocol nlohmann_json::nlohmann_json Threads::Threads)
+add_test(NAME helper_adapter_faults COMMAND helper_adapter_faults $<TARGET_FILE:ForesightHelper> $<TARGET_FILE:model_worker_fixture>)
 endif()

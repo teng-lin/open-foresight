@@ -675,9 +675,16 @@ def run(args):
         if args.serve:
             PersistentWorker(engine, litert_lm, sys.stdin, sys.stdout).serve()
             return
-        if args.prompt is None:
-            raise ValueError('A prompt is required')
         prompt = args.prompt
+        if prompt is None:
+            line = sys.stdin.readline()
+            try:
+                payload = json.loads(line) if line else None
+            except json.JSONDecodeError:
+                payload = None
+            prompt = payload.get('prompt') if isinstance(payload, dict) else None
+            if not isinstance(prompt, str):
+                raise ValueError('A prompt is required')
         if args.query_detector:
             run_query_detector(engine, prompt)
             return
