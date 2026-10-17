@@ -197,3 +197,9 @@ References: [GitHub Actions artifacts](https://docs.github.com/en/actions/how-to
 [Debian shared-library policy](https://www.debian.org/doc/debian-policy/ch-sharedlibs.html),
 [RPM spec format](https://rpm.org/docs/6.0.x/manual/spec.html),
 [Arch PKGBUILD](https://man.archlinux.org/man/PKGBUILD.5.en).
+
+## Published installer acceptance
+
+[Release acceptance](../validation/release-acceptance.md) downloads the published packages and validates native installation, ordinary-user
+startup, real model workflows and saved-data persistence across reinstall.
+Hardware and normal desktop/Finder checks remain separate manual gates.

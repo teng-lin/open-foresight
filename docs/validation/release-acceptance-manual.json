@@ -1,0 +1,24 @@
+{
+  "release": "v0.1.0",
+  "installer": "",
+  "installer_sha256": "",
+  "os_version": "",
+  "hardware": "",
+  "tester": "",
+  "tested_at_utc": "",
+  "checks": {
+    "normal_download_install_launch": {"status": "not_run", "evidence": []},
+    "guided_setup_and_model_download": {"status": "not_run", "evidence": []},
+    "indexed_grounded_answer_and_note_enhancement": {"status": "not_run", "evidence": []},
+    "native_markdown_export_and_contents": {"status": "not_run", "evidence": []},
+    "restart_persistence": {"status": "not_run", "evidence": []},
+    "microphone_and_system_audio": {"status": "not_run", "evidence": []},
+    "pause_resume_and_device_switch": {"status": "not_run", "evidence": []},
+    "permission_denial_and_revocation": {"status": "not_run", "evidence": []},
+    "sleep_wake_recovery": {"status": "not_run", "evidence": []},
+    "gpu_and_minimum_hardware_performance": {"status": "not_run", "evidence": []},
+    "wayland_shortcuts_and_save_portal": {"status": "not_run", "evidence": []},
+    "macos_finder_quarantine_launch": {"status": "not_run", "evidence": []},
+    "reinstall_uninstall_data_preservation": {"status": "not_run", "evidence": []}
+  }
+}
