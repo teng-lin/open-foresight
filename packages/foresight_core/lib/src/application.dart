@@ -21,6 +21,7 @@ import 'speech_models.dart';
 import 'reference_note_enhancement.dart';
 import 'reference_note_enhancer.dart';
 import 'reference_note_edit_mapping.dart';
+import 'reference_note_live_plan.dart';
 import 'reference_note_transcript_cache.dart';
 import 'reference_note_enhancement_chunking.dart';
 import 'native_note_enhancement.dart';
@@ -46,6 +47,7 @@ class Application {
   final _enhance = <int, Timer>{};
   final _noteEnhancements = <int, _NoteEnhancement>{};
   final _noteEditMappings = <int, ReferenceNoteEditMapping>{};
+  final _pendingNoteTargets = <int, Set<int>>{};
   late final ReferenceNoteTranscriptCache _noteTranscriptCache =
       ReferenceNoteTranscriptCache(
         computeEmbedding: _computeNoteEmbedding,
@@ -619,6 +621,7 @@ class Application {
           }
           _noteEnhancements.clear();
           _noteEditMappings.clear();
+          _pendingNoteTargets.clear();
           _noteTranscriptCache.clear();
           await proactive.reset();
           await googleAuth.disconnect();
@@ -674,7 +677,13 @@ class Application {
           if (oldNotes != a['body']) {
             _shorthandEdited(noteId, a['body'] as String, previousEnhanced);
           }
-          _scheduleEnhance(noteId);
+          if (oldNotes != a['body']) {
+            _scheduleNoteEditEnhancement(
+              noteId,
+              oldNotes as String? ?? '',
+              a['body'] as String,
+            );
+          }
           return null;
         case 'meetings.transcript':
           final id = a['id'] as int;
@@ -1243,23 +1252,47 @@ class Application {
     return result;
   }
 
+  void _requestAutomaticNoteEnhancement(int id, {Set<int>? targets}) {
+    unawaited(
+      enhanceNotes(
+        id,
+        deferWhenBusy: true,
+        isLive: true,
+        targetBulletIndices: targets,
+      ).catchError((Object error) {
+        recordingState = 'Note enhancement: $error';
+        changed();
+      }),
+    );
+  }
+
+  void _scheduleNoteEditEnhancement(int id, String previous, String notes) {
+    if (_closed || store.preference('liveEnhance', 'true') != 'true') return;
+    final mapping = _noteEditMapping(id);
+    final targets = planNoteLiveEnhancementTargets(
+      previousNotes: previous,
+      notes: notes,
+      hasEnhanceableScribbles: hasEnhanceableNoteScribbles(notes),
+      lastSuccessfulShorthand: mapping.lastSuccessfulShorthand,
+      staleIndices: mapping.staleIndices,
+    );
+    if (targets == null) {
+      _scheduleEnhance(id);
+    } else if (targets.isNotEmpty) {
+      _enhance.remove(id)?.cancel();
+      _requestAutomaticNoteEnhancement(id, targets: targets);
+    }
+  }
+
   void _scheduleEnhance(int id) {
     if (_closed) return;
     _enhance.remove(id)?.cancel();
     if (store.preference('liveEnhance', 'true') != 'true') return;
-    _enhance[id] = Timer(
-      const Duration(seconds: 2),
-      () => unawaited(
-        enhanceNotes(
-          id,
-          deferWhenBusy: true,
-          isLive: recordingMeeting == id && recording != null,
-        ).catchError((Object e) {
-          recordingState = 'Note enhancement: $e';
-          changed();
-        }),
-      ),
-    );
+    _enhance[id] = Timer(const Duration(seconds: 30), () {
+      _enhance.remove(id);
+      if (_noteEnhancements.values.any((state) => state.active)) return;
+      _requestAutomaticNoteEnhancement(id);
+    });
   }
 
   Future<void> enhanceNotes(
@@ -1267,12 +1300,23 @@ class Application {
     bool deferWhenBusy = false,
     bool isLive = false,
     bool forceRegenerate = false,
+    Set<int>? targetBulletIndices,
   }) async {
     if (_closed) throw StateError('Application closed');
     if (domain.generator?.generating == true ||
         _noteEnhancements.values.any((state) => state.active)) {
       if (deferWhenBusy) {
-        _scheduleEnhaseRetry(id);
+        if (_noteEnhancements.values.any((state) => state.active)) {
+          if (targetBulletIndices != null) {
+            _pendingNoteTargets[id] = Set.of(targetBulletIndices);
+          }
+        } else {
+          _scheduleEnhaseRetry(
+            id,
+            targetBulletIndices: targetBulletIndices,
+            isLive: isLive,
+          );
+        }
         return;
       }
       throw StateError('Generation already in progress');
@@ -1281,7 +1325,10 @@ class Application {
       'SELECT body,revision FROM meeting_notes WHERE meeting_id=?',
       [id],
     ).firstOrNull;
-    if (notes == null || (notes['body'] as String).trim().isEmpty) return;
+    if (notes == null ||
+        (notes['body'] as String).trim().isEmpty ||
+        (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String)))
+      return;
     final transcript = _noteTranscriptText(id);
     if (domain.generator == null || transcript.isEmpty) return;
     final revision = _meeting(id)['revision'] as int;
@@ -1348,6 +1395,7 @@ class Application {
       await for (final text in producer.enhance(
         notes: notes['body'] as String,
         existingEnhancedBullets: prior,
+        targetBulletIndices: targetBulletIndices,
         isLive: isLive,
         updateExistingWithTranscript: !isLive && !forceRegenerate,
         concise: store.preference('noteStyle', 'Standard') == 'Concise',
@@ -1425,6 +1473,28 @@ class Application {
       enhancement.status = error.toString();
       changed();
       rethrow;
+    } finally {
+      if (isLive &&
+          !_closed &&
+          identical(_noteEditMappings[id], mapping) &&
+          store.preference('liveEnhance', 'true') == 'true') {
+        if (_pendingNoteTargets.isNotEmpty) {
+          final next = _pendingNoteTargets.entries.first;
+          _pendingNoteTargets.remove(next.key);
+          _requestAutomaticNoteEnhancement(next.key, targets: next.value);
+        } else if (isLive) {
+          final currentNotes =
+              store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+                    id,
+                  ]).firstOrNull?['body']
+                  as String? ??
+              '';
+          if (currentNotes != notes['body'] &&
+              hasEnhanceableNoteScribbles(currentNotes)) {
+            _scheduleEnhance(id);
+          }
+        }
+      }
     }
   }
 
@@ -1445,12 +1515,26 @@ class Application {
     });
   }
 
-  void _scheduleEnhaseRetry(int id) {
+  void _scheduleEnhaseRetry(
+    int id, {
+    Set<int>? targetBulletIndices,
+    bool isLive = false,
+  }) {
     if (_closed) return;
     _enhance.remove(id)?.cancel();
     _enhance[id] = Timer(
       const Duration(seconds: 3),
-      () => _scheduleEnhance(id),
+      () => unawaited(
+        enhanceNotes(
+          id,
+          deferWhenBusy: true,
+          isLive: isLive,
+          targetBulletIndices: targetBulletIndices,
+        ).catchError((Object error) {
+          recordingState = 'Note enhancement: $error';
+          changed();
+        }),
+      ),
     );
   }
 

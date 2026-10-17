@@ -205,3 +205,13 @@ Map<int, String> mapNoteEnhancementPriorBullets({
       index: enhanced[index],
   };
 }
+
+/// NotesEnhancer.hasEnhanceableScribbles (0x100a4cca0): trim and retain
+/// meaningful lines, then accept any line not already in enhanced form.
+bool hasEnhanceableNoteScribbles(String notes) => notes
+    .split('\n')
+    .map((line) => line.trim())
+    .where(
+      (line) => line.isNotEmpty && hasMeaningfulNoteEnhancementContent(line),
+    )
+    .any((line) => !isAlreadyEnhancedNoteLine(line));

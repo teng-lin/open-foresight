@@ -76,6 +76,35 @@ class BatchedNoteGenerator extends ControlledNoteGenerator {
   }
 }
 
+class QueuedNoteGenerator extends ControlledNoteGenerator {
+  QueuedNoteGenerator() {
+    events.stream.listen((_) {});
+  }
+  final releaseFirst = Completer<void>();
+  final secondDone = Completer<void>();
+
+  @override
+  Stream<Map<String, dynamic>> generateConversation(
+    String id,
+    String prompt, {
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
+    Duration timeout = const Duration(minutes: 5),
+  }) async* {
+    prompts.add(prompt);
+    if (prompts.length == 1) {
+      entered.complete();
+      await releaseFirst.future;
+      yield {'type': 'delta', 'text': '- First accepted'};
+    } else {
+      yield {'type': 'delta', 'text': '- Third updated'};
+    }
+    yield {'type': 'done', 'status': 'completed'};
+    if (prompts.length == 2) secondDone.complete();
+  }
+}
+
 void main() {
   late Directory directory;
   late Domain domain;
@@ -208,6 +237,73 @@ void main() {
         'body': 'Updated second\nUpdated first',
       });
       expect(progress()['body'], '- Second enhanced\n\n- First enhanced');
+    },
+  );
+
+  test(
+    'targeted requests during generation replace the pending target set',
+    () async {
+      final unused = generator.events.stream.listen((_) {});
+      await generator.events.close();
+      await unused.cancel();
+      generator.close();
+      final queued = QueuedNoteGenerator();
+      generator = queued;
+      domain.generator = queued;
+      domain.store.setPreference('liveEnhance', 'true');
+      domain.store.saveMeetingNotes(id, 'First raw');
+      domain.store.saveMeetingEnhancedDraft(id, '');
+      final first = domain.application.enhanceNotes(id, isLive: true);
+      await queued.entered.future;
+      domain.store.saveMeetingNotes(id, 'First raw\nSecond raw\nThird raw');
+      await domain.application.enhanceNotes(
+        id,
+        isLive: true,
+        deferWhenBusy: true,
+        targetBulletIndices: {1},
+      );
+      await domain.application.enhanceNotes(
+        id,
+        isLive: true,
+        deferWhenBusy: true,
+        targetBulletIndices: {2},
+      );
+      queued.releaseFirst.complete();
+      await first;
+      await queued.secondDone.future;
+      for (
+        var attempt = 0;
+        attempt < 100 &&
+            (domain.application.captureState['note_enhancements'] as Map)
+                .isNotEmpty;
+        attempt++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      expect(queued.prompts, hasLength(2));
+      expect(queued.prompts.last, contains('Third raw'));
+      expect(queued.prompts.last, isNot(contains('First raw')));
+      expect(
+        domain.store.meetingEnhancedNotes(id),
+        '- First accepted\n\nSecond raw\n\n- Third updated',
+      );
+    },
+  );
+
+  test(
+    'manual enhancement can update notes already written in enhanced form',
+    () async {
+      domain.store.saveMeetingNotes(id, '- **Owner:** Mira');
+      final work = domain.application.enhanceNotes(id);
+      await generator.entered.future;
+      expect(generator.prompts.single, contains('- **Owner:** Mira'));
+      await emit('- **Owner:** Mira sends the draft.');
+      generator.events.add({'type': 'done', 'status': 'completed'});
+      await work;
+      expect(
+        domain.store.meetingEnhancedNotes(id),
+        '- **Owner:** Mira sends the draft.',
+      );
     },
   );
 

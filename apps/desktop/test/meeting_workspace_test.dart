@@ -83,7 +83,7 @@ void main() {
         find.byKey(const ValueKey('meeting-notes-editor')),
         'Mira draft Tuesday',
       );
-      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(seconds: 31));
       await tester.runAsync(() async {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });

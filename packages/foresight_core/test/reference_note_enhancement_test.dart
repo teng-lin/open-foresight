@@ -2,6 +2,22 @@ import 'package:foresight_core/src/reference_note_enhancement.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'enhanceable scribbles require meaningful text outside enhanced lines',
+    () {
+      expect(hasEnhanceableNoteScribbles(' \n- \n123'), false);
+      expect(
+        hasEnhanceableNoteScribbles('# Heading\n- **Owner:** Mira\n💡 Topic'),
+        false,
+      );
+      expect(
+        hasEnhanceableNoteScribbles('- **Owner:** Mira\nMira draft'),
+        true,
+      );
+      expect(hasEnhanceableNoteScribbles('- ordinary raw bullet'), true);
+    },
+  );
+
   test('prior map pairs by ordinal without semantic matching', () {
     expect(
       mapNoteEnhancementPriorBullets(
