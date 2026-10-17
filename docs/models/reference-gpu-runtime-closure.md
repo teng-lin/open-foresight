@@ -109,3 +109,16 @@ With the source build, WebGPU selected the discrete NVIDIA adapter. Prompting
 `1, 2, 3, 4, 5, 6, ` with native stop sequence `[[236832]]` (`7`), and
 `1, 2, 3, 4, 5, 6` with the multi-token sequence `[[236764, 236743, 236832]]`
 (`, 7`).
+
+A fresh local build with the anonymous export map (Clang 22.1.8, static
+libc++/libc++abi 18, library SHA-256
+`a7a99bc93330a8fc8a0b4edcee2ab9b27eaa4bb7eb8711598db6332ac05cab1b`)
+exposes 213 public `litert_lm_*` symbols and passes the dependency and cross-DSO
+Status ABI gates. On the same RTX 5070/Vulkan adapter, it passes native text
+generation, a short output budget, constrained JSON, grounded citations,
+17 tokenizer/embedding requests, single- and multi-token stopping, image input,
+stream cancellation, and engine reuse after cancellation. The image probe loads
+the vision graph without fallback and answers `Red` for a synthetic red image.
+The offline suite passes with 205 tests and 17 skips, including a real gold-linked
+TLS regression fixture. These are local Linux hardware results; Ubuntu SDK
+qualification runs separately in CI.
