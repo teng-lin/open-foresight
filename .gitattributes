@@ -1,0 +1,3 @@
+# Patch files contain significant trailing whitespace (blank context lines,
+# nested patches), so exclude them from `git diff --check`.
+*.patch -whitespace
