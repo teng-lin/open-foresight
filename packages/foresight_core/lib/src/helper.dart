@@ -1,4 +1,5 @@
 import 'platform_services.dart';
+import 'version.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ffi';
@@ -6,6 +7,33 @@ import 'package:ffi/ffi.dart';
 import 'package:grpc/grpc.dart';
 import 'generated/rag_service.pbgrpc.dart';
 import 'generated/helper_control.pbgrpc.dart' as control;
+
+void validateHelperCompatibility(
+  PingResponse ping,
+  control.State value, {
+  RuntimeConfiguration? configuration,
+}) {
+  final config = configuration ?? runtimeConfiguration;
+  if (!ping.success ||
+      ping.version != '1.0.3' ||
+      value.referenceVersion != '1.0.3')
+    throw StateError(
+      'Incompatible helper protocol; stop the previous service before restarting',
+    );
+  final revision = config['FORESIGHT_RUNTIME_REVISION'];
+  final prefix = 'open-foresight-$openForesightVersion-';
+  final build = value.buildId;
+  final builtRevision = build.startsWith(prefix)
+      ? build.substring(prefix.length)
+      : '';
+  if (!RegExp(r'^[0-9a-f]{7,40}$').hasMatch(builtRevision) ||
+      (revision != null &&
+          revision.isNotEmpty &&
+          !revision.startsWith(builtRevision)))
+    throw StateError(
+      'Helper build $build differs from this application; stop the previous service before restarting',
+    );
+}
 
 class Helper {
   final String socket, storage;
@@ -76,15 +104,32 @@ class Helper {
     final executable = runtimeConfiguration['FORESIGHT_HELPER'];
     if (manageProcess && executable != null && process == null) {
       bool live = false;
+      PingResponse? existing;
       try {
-        await (_startupProbe = client.ping(
+        existing = await (_startupProbe = client.ping(
           PingRequest(),
           options: CallOptions(timeout: const Duration(milliseconds: 400)),
         ));
-        live = true;
-        _adopted = true;
       } catch (_) {}
       if (stopping) return;
+      if (existing != null) {
+        _adopted = true;
+        try {
+          snapshot = await control.HelperControlClient(channel).getState(
+            control.Empty(),
+            options: CallOptions(timeout: const Duration(seconds: 3)),
+          );
+          validateHelperCompatibility(existing, snapshot!);
+        } catch (error) {
+          state = 'incompatible helper: $error';
+          changed?.call();
+          // The service can keep storage-only RPCs available after startup
+          // failure; none of those calls may reuse this incompatible transport.
+          await channel.terminate();
+          rethrow;
+        }
+        live = true;
+      }
       if (!live) {
         process = await (_launching = Process.start(executable, [
           socket,

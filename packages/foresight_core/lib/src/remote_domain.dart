@@ -10,6 +10,7 @@ import 'profile_paths.dart';
 import 'recording.dart';
 import 'service.dart';
 import 'store.dart';
+import 'generated/helper_control.pb.dart' as control;
 
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
@@ -65,6 +66,12 @@ class RemoteDomain extends Domain {
       event['generation'] as Map? ?? {},
     );
     generator = runtime.state.isEmpty ? null : runtime;
+    helper.snapshot = event['helper'] == null
+        ? null
+        : (control.State()..mergeFromProto3Json(event['helper']));
+    helper.state =
+        event['helper_state'] as String? ??
+        (helper.snapshot == null ? 'disconnected' : 'live (service)');
     helper.changed?.call();
   }
 
@@ -113,10 +120,9 @@ class RemoteDomain extends Domain {
     final runtime = RemoteRuntime(client);
     final domain = RemoteDomain._(
       Store.readOnly('${profile.data}/application.db'),
-      Helper(
-        '${profile.runtime}/helper.sock',
+      RemoteHelper(
+        '${File(serviceEndpoint(profile)).parent.path}/helper.sock',
         '${profile.data}/helper',
-        manageProcess: false,
       ),
       client,
       runtime,
@@ -125,16 +131,7 @@ class RemoteDomain extends Domain {
     final status = Map<String, dynamic>.from(
       await client.call('status') as Map,
     );
-    domain.capture = Map<String, dynamic>.from(status['capture'] as Map);
-    domain.googleStatus = Map<String, dynamic>.from(
-      status['google'] as Map? ?? {},
-    );
-    runtime.state = Map<String, dynamic>.from(
-      status['generation'] as Map? ?? {},
-    );
-    domain.generator = runtime.state.isEmpty ? null : runtime;
-    domain._paused = status['sources_paused'] == true;
-    domain._webSearchAvailable = status['web_search_available'] == true;
+    domain._apply(status);
     return domain;
   }
 
@@ -156,37 +153,72 @@ class RemoteDomain extends Domain {
     return client.call(method, args);
   }
 
+  Stream<Object?> _streamCurrent(
+    String method,
+    Map<String, dynamic> args,
+    bool Function()? current,
+  ) {
+    late StreamController<Object?> controller;
+    StreamSubscription<Object?>? subscription;
+    Timer? timer;
+    void cancelled() {
+      if (controller.isClosed) return;
+      controller.addError(StateError('Operation cancelled'));
+      timer?.cancel();
+      unawaited(subscription?.cancel());
+      unawaited(controller.close());
+    }
+
+    controller = StreamController<Object?>(
+      onListen: () {
+        if (!(current?.call() ?? true)) {
+          cancelled();
+          return;
+        }
+        subscription = client
+            .stream(method, args)
+            .listen(
+              (value) {
+                if (controller.isClosed) return;
+                if (!(current?.call() ?? true)) {
+                  cancelled();
+                } else {
+                  controller.add(value);
+                }
+              },
+              onError: (Object error, StackTrace stack) {
+                if (!controller.isClosed) controller.addError(error, stack);
+              },
+              onDone: () {
+                timer?.cancel();
+                unawaited(controller.close());
+              },
+            );
+        if (current != null) {
+          timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+            if (!current()) cancelled();
+          });
+        }
+      },
+      onCancel: () async {
+        timer?.cancel();
+        await subscription?.cancel();
+      },
+    );
+    return controller.stream;
+  }
+
   @override
   Future<Object?> commandCurrent(
     String method,
     Map<String, dynamic> args,
     bool Function() current,
   ) async {
-    final done = Completer<Object?>();
     Object? result;
-    final subscription = client
-        .stream(method, args)
-        .listen(
-          (value) => result = value,
-          onError: (Object e, StackTrace st) {
-            if (!done.isCompleted) done.completeError(e, st);
-          },
-          onDone: () {
-            if (!done.isCompleted) done.complete(result);
-          },
-        );
-    final timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (!current() && !done.isCompleted) {
-        done.completeError(StateError('Operation cancelled'));
-        unawaited(subscription.cancel());
-      }
-    });
-    try {
-      return await done.future;
-    } finally {
-      timer.cancel();
-      await subscription.cancel();
+    await for (final value in _streamCurrent(method, args, current)) {
+      result = value;
     }
+    return result;
   }
 
   @override
@@ -249,11 +281,12 @@ class RemoteDomain extends Domain {
     bool Function()? current,
   }) async* {
     if (current != null && !current()) throw StateError('Answer cancelled');
-    await for (final value in client.stream('answer.stream', {
+    await for (final value in _streamCurrent('answer.stream', {
       'question': question,
       'conversation': conversation,
+      if (requestId != null) 'requestId': requestId,
       if (meetingId != null) 'meeting_id': meetingId,
-    })) {
+    }, current)) {
       if (current != null && !current()) throw StateError('Answer cancelled');
       yield value as String;
     }
@@ -268,12 +301,13 @@ class RemoteDomain extends Domain {
     bool Function()? current,
   }) async* {
     if (current != null && !current()) throw StateError('Answer cancelled');
-    await for (final value in client.stream('answer.stream', {
+    await for (final value in _streamCurrent('answer.stream', {
       'question': question,
       'conversation': conversation,
       'web_search': true,
+      if (requestId != null) 'requestId': requestId,
       if (meetingId != null) 'meeting_id': meetingId,
-    })) {
+    }, current)) {
       if (current != null && !current()) throw StateError('Answer cancelled');
       yield value as String;
     }
@@ -302,6 +336,18 @@ class RemoteDomain extends Domain {
   }
 }
 
+/// Service events are authoritative; the desktop never starts a second watcher
+/// against the runtime directory from its own launch environment.
+class RemoteHelper extends Helper {
+  RemoteHelper(String socket, String storage)
+    : super(socket, storage, manageProcess: false);
+  @override
+  Future<void> start() async {
+    changed?.call();
+    await onReady?.call();
+  }
+}
+
 class RemoteRuntime implements NativeRuntime {
   ServiceClient client;
   Map<String, dynamic> state = {};
@@ -311,7 +357,8 @@ class RemoteRuntime implements NativeRuntime {
   @override
   bool get generating => state['generating'] == true;
   @override
-  bool cancel({String? requestId}) => client.cancelAnswers();
+  bool cancel({String? requestId}) =>
+      client.cancelAnswers(requestId: requestId);
   @override
   void close() {} // The service owns this worker.
   @override

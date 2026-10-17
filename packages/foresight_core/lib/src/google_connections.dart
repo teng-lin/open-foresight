@@ -171,7 +171,10 @@ class GoogleConnections {
     final old = store.rows('SELECT * FROM sources WHERE id=?', [
       id,
     ]).firstOrNull;
-    if (preserveDeleted && old?['deleted'] == 1) return;
+    if (preserveDeleted &&
+        (old?['deleted'] == 1 ||
+            (old?['provenance'] as String? ?? '').startsWith('user edit; ')))
+      return;
     final contentChanged =
         old == null ||
         old['deleted'] == 1 ||
@@ -475,7 +478,7 @@ class GoogleConnections {
     _check(account);
     final failures = <String>[];
     for (final source in store.rows(
-      'SELECT google_sources.* FROM google_sources JOIN sources ON sources.id=google_sources.source_id WHERE account=? AND deleted=0',
+      'SELECT google_sources.*,sources.revision AS source_revision FROM google_sources JOIN sources ON sources.id=google_sources.source_id WHERE account=? AND deleted=0',
       [account],
     )) {
       try {
@@ -491,6 +494,11 @@ class GoogleConnections {
           }),
         );
         _check(account);
+        if (store.rows(
+          "SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0 AND provenance NOT LIKE 'user edit; %'",
+          [source['source_id'], source['source_revision']],
+        ).isEmpty)
+          continue;
         _setSourceUri(source['source_id'] as String, file['webViewLink']);
         if (file['trashed'] == true) {
           await domain.delete(source['source_id'] as String);
