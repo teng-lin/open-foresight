@@ -80,9 +80,7 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
     if (_process != null) return;
     final epoch = _epoch;
     final process = await _startProcess(python, [
-      '-I',
-      '-B',
-      worker,
+      if (python != worker) ...['-I', '-B', worker],
       '--model',
       model,
     ]);

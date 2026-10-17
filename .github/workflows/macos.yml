@@ -119,7 +119,6 @@ jobs:
         task_args=()
         if [[ "$REQUIRE_GOOGLE_CLIENT" == 'true' ]]; then task_args+=(--require-google-client); fi
         .venv/bin/python tools/package_macos.py "${task_args[@]}" --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
-          --python-runtime build/macos-runtimes/python \
           --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
           --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
           --whisper-license build/macos-runtimes/whisper/LICENSE

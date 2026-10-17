@@ -37,17 +37,21 @@ class DedicatedQueryAcquisition {
         'Automatic question model download is unavailable in this distribution.',
       );
     }
-    for (final name in [
-      'FORESIGHT_LITERT_PYTHON',
-      'FORESIGHT_QUERY_WORKER',
-      'FORESIGHT_MODEL_CRYPTO',
-    ]) {
+    for (final name in ['FORESIGHT_QUERY_WORKER', 'FORESIGHT_MODEL_CRYPTO']) {
       final value = runtimeConfiguration[name];
       if (value == null || !File(value).existsSync()) {
         throw StateError(
           'The bundled automatic question runtime is unavailable.',
         );
       }
+    }
+    final queryRuntime =
+        runtimeConfiguration['FORESIGHT_QUERY_RUNTIME'] ??
+        runtimeConfiguration['FORESIGHT_LITERT_PYTHON'];
+    if (queryRuntime == null || !File(queryRuntime).existsSync()) {
+      throw StateError(
+        'The bundled automatic question runtime is unavailable.',
+      );
     }
     final config = ModelConfigService(apiKey: key);
     return DedicatedQueryAcquisition(

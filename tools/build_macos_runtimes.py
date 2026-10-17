@@ -9,15 +9,11 @@ import platform
 import shutil
 import subprocess
 import sys
-import tarfile
 import urllib.request
 
 from litert_extensions import verify_extensions_manifest
 
 ROOT = Path(__file__).resolve().parents[1]
-PYTHON_ARCHIVE = 'cpython-3.13.16+20261013-aarch64-apple-darwin-install_only.tar.gz'
-PYTHON_URL = 'https://github.com/astral-sh/python-build-standalone/releases/download/20261013/' + PYTHON_ARCHIVE
-PYTHON_SHA256 = 'ca0e6a70fb75a0984751bd75493e3de77680aef7fbd0fea9b903c299537b3423'
 BAZEL_URL = 'https://github.com/bazelbuild/bazel/releases/download/7.6.1/bazel-7.6.1-darwin-arm64'
 BAZEL_SHA256 = '45cca81a839d7495258b19ee8371c7b891f350586ef37b9940f7b531eb654cc8'
 WHISPER_COMMIT = '0c7be696371069e0baa2515ed7aa08d5a5473aa6'
@@ -61,13 +57,13 @@ def checkout(path, repository, commit):
 
 def verify(prefix):
     manifest = json.loads((prefix / 'runtime-manifest.json').read_text())
-    if manifest['python_sha256'] != PYTHON_SHA256 or manifest['whisper_commit'] != WHISPER_COMMIT:
+    if manifest.get('inference_runtime') != 'native-c-api' or manifest['whisper_commit'] != WHISPER_COMMIT:
         raise ValueError('Stale runtime cache')
     if digest(prefix / 'whisper/whisper-cli') != manifest['whisper_sha256']:
         raise ValueError('Whisper cache checksum mismatch')
+    if digest(prefix / 'whisper/foresight-whisper-worker') != manifest['whisper_worker_sha256']:
+        raise ValueError('Whisper worker cache checksum mismatch')
     verify_extensions_manifest(prefix / 'litert-extensions/build-manifest.json', platform_name='darwin')
-    run(prefix / 'python/bin/python3', '-I', '-B', '-c',
-        'import sys,numpy,sentencepiece; assert sys.version_info[:3] == (3,13,16)')
     run(prefix / 'whisper/whisper-cli', '--help')
 
 
@@ -85,14 +81,6 @@ def main():
         return
     prefix.mkdir(parents=True, exist_ok=True)
     sources.mkdir(parents=True, exist_ok=True)
-    archive = sources / PYTHON_ARCHIVE
-    download(PYTHON_URL, archive, PYTHON_SHA256)
-    if not (prefix / 'python/bin/python3').exists():
-        with tarfile.open(archive) as stream:
-            stream.extractall(prefix, filter='data')
-    python = prefix / 'python/bin/python3'
-    run(python, '-I', '-m', 'pip', 'install', '--only-binary=:all:',
-        '-r', ROOT / 'requirements-litert-macos.lock')
     extension_manifest = prefix / 'litert-extensions/build-manifest.json'
     if not extension_manifest.exists():
         bazel = sources / 'bazel-7.6.1'
@@ -113,17 +101,20 @@ def main():
     if subprocess.check_output(['git', '-C', str(whisper), 'status', '--porcelain', '--untracked-files=no']):
         raise ValueError('Whisper source must be clean')
     build = sources / 'whisper-build'
-    run('cmake', '-S', whisper, '-B', build, '-G', 'Ninja',
+    run('cmake', '-S', ROOT / 'services/speech', '-B', build, '-G', 'Ninja',
+        '-DFORESIGHT_WHISPER_SOURCE=' + str(whisper),
         '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_OSX_ARCHITECTURES=arm64',
         '-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0', '-DBUILD_SHARED_LIBS=OFF',
         '-DGGML_NATIVE=OFF', '-DGGML_METAL=ON', '-DGGML_METAL_EMBED_LIBRARY=ON',
         '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_BUILD_EXAMPLES=ON')
-    run('cmake', '--build', build, '--target', 'whisper-cli', '--parallel', args.jobs)
+    run('cmake', '--build', build, '--target', 'whisper-cli', 'foresight-whisper-worker', '--parallel', args.jobs)
     (prefix / 'whisper').mkdir(exist_ok=True)
     shutil.copy2(build / 'bin/whisper-cli', prefix / 'whisper/whisper-cli')
+    shutil.copy2(build / 'bin/foresight-whisper-worker', prefix / 'whisper/foresight-whisper-worker')
     shutil.copy2(whisper / 'LICENSE', prefix / 'whisper/LICENSE')
-    manifest = {'python_sha256': PYTHON_SHA256, 'whisper_commit': WHISPER_COMMIT,
-                'whisper_sha256': digest(prefix / 'whisper/whisper-cli')}
+    manifest = {'inference_runtime': 'native-c-api', 'whisper_commit': WHISPER_COMMIT,
+                'whisper_sha256': digest(prefix / 'whisper/whisper-cli'),
+                'whisper_worker_sha256': digest(prefix / 'whisper/foresight-whisper-worker')}
     stamp = prefix / 'runtime-manifest.json'
     stamp.write_text(json.dumps(manifest, indent=2) + '\n')
     try:
