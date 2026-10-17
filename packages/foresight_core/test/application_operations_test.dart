@@ -69,7 +69,6 @@ class OperationsDomain extends AdapterDomain {
     await super.delete(id);
   }
 
-  @override
   Stream<String> askInConversation(
     String question,
     String conversation, {
@@ -80,7 +79,6 @@ class OperationsDomain extends AdapterDomain {
     yield '$question [$conversation:${meetingId ?? 0}]';
   }
 
-  @override
   Stream<String> askWithWebInConversation(
     String question,
     String conversation, {

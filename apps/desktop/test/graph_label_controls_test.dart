@@ -99,7 +99,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('inspector-cancel-label')));
       await tester.pumpAndSettle();
       expect(store.documentLabels, isEmpty);
-      expect(state.graphLabelInput.text, isEmpty);
+      expect(state.sourceFeature.graphLabelInput.text, isEmpty);
       await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
       await tester.pumpAndSettle();
       await tester.enterText(
@@ -125,7 +125,7 @@ void main() {
       expect(store.documentLabels.single.name, 'Planning');
       expect(store.documentLabels.single.source, 'user_defined');
       expect(store.documentLabels.where((r) => r.documentId == b), isEmpty);
-      expect(state.graphLabelInput.text, isEmpty);
+      expect(state.sourceFeature.graphLabelInput.text, isEmpty);
       final chip = find.byKey(const ValueKey('inspector-label-Planning'));
       expect(tester.getSize(chip).height, 24);
       expect(

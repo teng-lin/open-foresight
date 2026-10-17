@@ -29,8 +29,8 @@ void main() {
         final dynamic state = tester.state(find.byType(Workspace));
         for (final id in [alpha, beta]) {
           state.update(() {
-            state.meetingId = id;
-            state.meetingPanel = 'Chat';
+            state.meetingFeature.meetingId = id;
+            state.meetingFeature.meetingPanel = 'Chat';
           });
           await tester.pumpAndSettle();
           if (id == beta) {
@@ -54,7 +54,7 @@ void main() {
           await tester.pumpAndSettle();
         }
         state.update(() {
-          state.meetingId = null;
+          state.meetingFeature.meetingId = null;
           state.tab = 1;
         });
         await tester.pumpAndSettle();

@@ -1,3 +1,4 @@
+import 'conversation_answer.dart';
 import 'operations.dart';
 import 'rpc_error.dart';
 import 'audio_devices.dart';
@@ -277,6 +278,52 @@ class Application implements ModelGate {
     _applications[domain] = this;
   }
 
+  Stream<String> ask(String question) => askInConversation(question, 'desktop');
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    useWeb: true,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> _askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+    bool useWeb = false,
+  }) => ConversationAnswer(
+    domain,
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+    useWeb: useWeb,
+  ).run();
   Future<int> autoAssignLabel(String name) async {
     name = name.trim();
     if (name.isEmpty) throw ArgumentError.value(name, 'name');
@@ -2019,6 +2066,9 @@ final _applications = Expando<Application>();
 
 extension ApplicationDomain on Domain {
   Application get application => _applications[this] ?? Application(this);
+  Stream<String> ask(String question) => application.ask(question);
+  Stream<String> askInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askWithWebInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
   Future<Object?> command(
     String method, [
     Map<String, dynamic> args = const {},

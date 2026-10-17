@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'text_budget.dart';
 import 'domain.dart';
@@ -46,7 +47,8 @@ class ConversationAnswer {
   SearchCallbacks _searchCallbacks() => domain.searchCallbacks();
   void ensureCurrent() {
     domain.checkWorkspace(generation);
-    if (current != null && !current!()) throw StateError('Answer cancelled');
+    if (current != null && !current!())
+      throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
   }
 
   void saveAnswer(
@@ -119,21 +121,62 @@ class ConversationAnswer {
     }
   }
 
+  bool terminal = false;
+  late String? previousQuestion;
+  late bool followUp;
+  late bool localGrounding;
+  final citations = <Map<String, Object?>>[];
+  final chatSources = ReferenceChatSources();
+  final chatMetadata = <(String, String), Map<String, Object?>>{};
+  final context = StringBuffer();
+  late int through;
+  late List<Map<String, Object?>> historyRows;
+  ReferenceChatMemory? memory;
+  DateTime? requestDate;
+  late String prompt;
+  late String generationId;
+
+  Future<int> estimateMessage(Map<String, dynamic> message) async {
+    ensureCurrent();
+    final tokenizer = helper.snapshot?.tokenizerReady == true
+        ? ReferenceRemoteTokenizer(helper.client)
+        : null;
+    final count = await estimateReferenceHistoryTokens(
+      message,
+      tokenize: tokenizer == null
+          ? null
+          : (text) => tokenizer.count(text, checkCurrent: ensureCurrent),
+    );
+    ensureCurrent();
+    return count;
+  }
+
   Stream<String> run() async* {
     ensureCurrent();
     if (useWeb && !webSearchAvailable) {
-      throw StateError('Web search is unavailable in this build.');
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Web search is unavailable in this build.',
+      );
     }
     if (meetingId != null) {
       if (store.rows('SELECT id FROM meetings WHERE id=?', [
         meetingId,
       ]).isEmpty) {
-        throw StateError('Meeting not found: $meetingId');
+        throw RpcError(RpcErrorCode.notFound, 'Meeting not found: $meetingId');
       }
       conversation = 'meeting:$meetingId';
     }
 
-    if (modelBusy) throw StateError('Model configuration is busy');
+    if (modelBusy)
+      throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
+    yield* retrieve();
+    if (terminal) return;
+    await prepareGeneration();
+    yield* generate();
+  }
+
+  Stream<String> retrieve() async* {
     final scope = store.sourceSummaries
         .where((s) => s['state'] == 'indexed')
         .toList();
@@ -148,15 +191,16 @@ class ConversationAnswer {
         conversation: conversation,
       );
       yield text;
+      terminal = true;
       return;
     }
-    final previousQuestion =
+    previousQuestion =
         store.rows(
               'SELECT question FROM answers WHERE conversation=? ORDER BY id DESC LIMIT 1',
               [conversation],
             ).firstOrNull?['question']
             as String?;
-    final followUp = isContextualFollowUp(question);
+    followUp = isContextualFollowUp(question);
     final retrievalQuestion = followUp && previousQuestion != null
         ? '$previousQuestion\nFollow-up question: $question'
         : question;
@@ -172,11 +216,7 @@ class ConversationAnswer {
               allowedDocumentIds: scope.map((s) => s['id'] as String),
             ),
           );
-    final citations = <Map<String, Object?>>[];
-    final chatSources = ReferenceChatSources();
-    final chatMetadata = <(String, String), Map<String, Object?>>{};
     ensureCurrent();
-    final context = StringBuffer();
     final passages = await retrieveAnswerPassages(
       store.path,
       retrievalQuestion,
@@ -198,7 +238,7 @@ class ConversationAnswer {
         passages.isNotEmpty &&
         passages.every((p) => p['complete_example'] == true);
     final authored = completeProcedure || completeExamples;
-    final localGrounding =
+    localGrounding =
         generator != null &&
         (generator!.effectiveState['backend'] as String? ?? '').startsWith(
           'litert-lm-',
@@ -268,6 +308,7 @@ class ConversationAnswer {
         conversation: conversation,
       );
       yield text;
+      terminal = true;
       return;
     }
     if (authored && !useWeb) {
@@ -295,22 +336,26 @@ class ConversationAnswer {
         conversation: conversation,
       );
       yield answer.rendered;
+      terminal = true;
       return;
     }
     if (generator == null)
       throw StateError(
         'Generation model unavailable. Retrieved ${citations.length} excerpts; configure a local generator.',
       );
+  }
+
+  Future<void> prepareGeneration() async {
     final memoryRows = useWeb
         ? store.rows(
             'SELECT through_answer_id,messages,token_counts FROM conversation_memory WHERE conversation=?',
             [conversation],
           )
         : <Map<String, Object?>>[];
-    final through = memoryRows.isEmpty
+    through = memoryRows.isEmpty
         ? 0
         : memoryRows.single['through_answer_id'] as int;
-    final historyRows = useWeb
+    historyRows = useWeb
         ? store.rows(
             "SELECT id,question,body,model_response FROM answers WHERE conversation=? AND status='completed' AND id>? ORDER BY id",
             [conversation, through],
@@ -322,22 +367,6 @@ class ConversationAnswer {
               )
               .reversed
               .toList();
-    final tokenizer = helper.snapshot?.tokenizerReady == true
-        ? ReferenceRemoteTokenizer(helper.client)
-        : null;
-    final ReferenceTokenCounter? tokenize = tokenizer == null
-        ? null
-        : (text) => tokenizer.count(text, checkCurrent: ensureCurrent);
-    Future<int> estimateMessage(Map<String, dynamic> message) async {
-      ensureCurrent();
-      final count = await estimateReferenceHistoryTokens(
-        message,
-        tokenize: tokenize,
-      );
-      ensureCurrent();
-      return count;
-    }
-
     final checkpointMessages = memoryRows.isEmpty
         ? <Map<String, dynamic>>[]
         : List<Map<String, dynamic>>.from(
@@ -352,7 +381,7 @@ class ConversationAnswer {
     final tailMessages = useWeb
         ? referenceChatHistory(historyRows)
         : <Map<String, dynamic>>[];
-    final memory = useWeb
+    memory = useWeb
         ? await ReferenceChatMemory.load(
             [...checkpointMessages, ...tailMessages],
             estimate: estimateMessage,
@@ -371,8 +400,8 @@ class ConversationAnswer {
         .join('\n');
     final boundedHistory = boundUtf8(history, 500);
     final boundedQuestion = boundUtf8(question, 400);
-    final requestDate = useWeb ? DateTime.now() : null;
-    final prompt = useWeb
+    requestDate = useWeb ? DateTime.now() : null;
+    prompt = useWeb
         ? referenceChatPrompt(
             question,
             context: context.toString(),
@@ -383,10 +412,9 @@ class ConversationAnswer {
             context.toString(),
             boundedQuestion,
           );
-    final generationId =
-        requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}';
+    generationId = requestId ?? 'ask-${DateTime.now().microsecondsSinceEpoch}';
     if (memory != null) {
-      await memory.prune(
+      await memory!.prune(
         incomingTokens: await estimateMessage(
           referenceTextMessage('user', prompt),
         ),
@@ -415,6 +443,9 @@ class ConversationAnswer {
       );
       ensureCurrent();
     }
+  }
+
+  Stream<String> generate() async* {
     var body = '', raw = '', status = 'failed';
     var verifiedLocalAnswer = false;
     Map<String, dynamic>? modelResponse;

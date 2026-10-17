@@ -93,7 +93,7 @@ void main() {
           expect(auth.signingIn, false);
           expect(find.byType(AlertDialog), findsNothing);
           expect(state.error, isEmpty);
-          expect(state.googleState, 'Google sign-in cancelled.');
+          expect(state.integrationFeature.googleState, 'Google sign-in cancelled.');
           expect(state.busy, false);
           expect(store.sources, isEmpty);
         }

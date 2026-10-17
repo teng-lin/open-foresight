@@ -76,7 +76,7 @@ void main() {
       final domain = Domain(store, helper);
       await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
       expect(find.text('Live enhanced notes'), findsOneWidget);
@@ -187,7 +187,7 @@ void main() {
         ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       for (final size in [
         const Size(1952, 1226),
         const Size(1280, 720),

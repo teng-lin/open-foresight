@@ -60,8 +60,8 @@ void main() {
         );
         final dynamic state = tester.state(find.byType(Workspace));
         state.update(() {
-          state.meetingId = meeting;
-          state.meetingPanel = 'Transcript';
+          state.meetingFeature.meetingId = meeting;
+          state.meetingFeature.meetingPanel = 'Transcript';
         });
         await tester.pumpAndSettle();
         await tester.tap(find.byTooltip('Copy full transcript'));

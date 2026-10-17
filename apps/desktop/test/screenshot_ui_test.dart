@@ -30,7 +30,7 @@ void main() {
     final dynamic state = tester.state(find.byType(Workspace));
     await tester.runAsync(() async {
       final importing = state.run(() async {
-        await state.importFolderPath(folder.path);
+        await state.sourceFeature.importFolderPath(folder.path);
       });
       expect(state.busy, true);
       expect(store.sources, isEmpty);
@@ -185,8 +185,8 @@ void main() {
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      expect(state.meetingPreviewId, existing);
-      expect(state.meetingId, isNull);
+      expect(state.meetingFeature.meetingPreviewId, existing);
+      expect(state.meetingFeature.meetingId, isNull);
       expect(store.rows('SELECT * FROM meetings').length, 1);
       expect(find.text('Transcription Model'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
@@ -348,7 +348,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      await tester.runAsync(() async => await state.importFolderPath(tmp.path));
+      await tester.runAsync(() async => await state.sourceFeature.importFolderPath(tmp.path));
       final initial = store.sources.single;
       expect(initial['changed'], originalTime.millisecondsSinceEpoch);
       expect(
@@ -358,7 +358,7 @@ void main() {
       file.writeAsStringSync('Review Monday.');
       final updatedTime = DateTime.utc(2021, 1, 1);
       file.setLastModifiedSync(updatedTime);
-      await tester.runAsync(() async => await state.importFolderPath(tmp.path));
+      await tester.runAsync(() async => await state.sourceFeature.importFolderPath(tmp.path));
       expect(store.sources.single['id'], initial['id']);
       expect(store.sources.single['revision'], 2);
       expect(store.sources.single['imported'], initial['imported']);

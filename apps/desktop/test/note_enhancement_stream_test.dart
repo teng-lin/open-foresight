@@ -67,7 +67,7 @@ void main() {
       final generator = WidgetNoteGenerator();
       await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
       late Future<void> work;

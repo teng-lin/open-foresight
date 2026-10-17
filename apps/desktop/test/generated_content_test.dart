@@ -172,8 +172,8 @@ void main() {
         );
         final dynamic state = tester.state(find.byType(Workspace));
         state.update(() {
-          state.meetingId = id;
-          state.meetingPanel = 'Summary';
+          state.meetingFeature.meetingId = id;
+          state.meetingFeature.meetingPanel = 'Summary';
         });
         await tester.pumpAndSettle();
         expect(find.text('Review summary', findRichText: true), findsOneWidget);

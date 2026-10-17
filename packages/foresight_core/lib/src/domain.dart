@@ -3,7 +3,6 @@ import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'model_gate.dart';
-import 'conversation_answer.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:grpc/grpc.dart';
@@ -398,52 +397,7 @@ class Domain {
         source.first['revision'] == citation['revision'];
   }
 
-  Stream<String> ask(String question) => askInConversation(question, 'desktop');
-  Stream<String> askInConversation(
-    String question,
-    String conversation, {
-    String? requestId,
-    int? meetingId,
-    bool Function()? current,
-  }) => _askInConversation(
-    question,
-    conversation,
-    requestId: requestId,
-    meetingId: meetingId,
-    current: current,
-  );
 
-  Stream<String> askWithWebInConversation(
-    String question,
-    String conversation, {
-    String? requestId,
-    int? meetingId,
-    bool Function()? current,
-  }) => _askInConversation(
-    question,
-    conversation,
-    useWeb: true,
-    requestId: requestId,
-    meetingId: meetingId,
-    current: current,
-  );
-
-  Stream<String> _askInConversation(
-    String question,
-    String conversation, {
-    String? requestId,
-    int? meetingId,
-    bool Function()? current,
-    bool useWeb = false,
-  }) => ConversationAnswer(
-    this,
-    question,
-    conversation,
-    requestId: requestId,
-    meetingId: meetingId,
-    current: current,
-    useWeb: useWeb,
-  ).run();
 }
 
 /// UTF-8 byte limit is conservative for byte-level model tokenizers; no silent Unicode corruption.

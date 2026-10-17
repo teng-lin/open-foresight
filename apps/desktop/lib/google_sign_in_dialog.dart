@@ -1,4 +1,4 @@
-import 'package:foresight_core/remote.dart' show DesktopConnection, GenerationStatus, RecordingStatus, GoogleAccount, ConnectedSources;
+import 'package:foresight_core/remote.dart' show GoogleAccount;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 

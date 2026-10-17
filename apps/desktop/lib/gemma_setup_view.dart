@@ -1,4 +1,4 @@
-import 'package:foresight_core/remote.dart' show DesktopConnection, GenerationStatus, RecordingStatus, GoogleAccount, ConnectedSources;
+import 'package:foresight_core/remote.dart' show GenerationStatus;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'gemma_download.dart';

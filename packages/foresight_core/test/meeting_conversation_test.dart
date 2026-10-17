@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';

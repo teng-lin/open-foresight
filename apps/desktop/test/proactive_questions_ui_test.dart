@@ -81,8 +81,8 @@ void main() {
         );
         final dynamic workspace = tester.state(find.byType(Workspace));
         workspace.update(() {
-          workspace.meetingId = id;
-          workspace.meetingPanel = 'Live Q&A';
+          workspace.meetingFeature.meetingId = id;
+          workspace.meetingFeature.meetingPanel = 'Live Q&A';
         });
         await tester.pumpAndSettle();
         expect(find.text('Automatic · Answered'), findsOneWidget);

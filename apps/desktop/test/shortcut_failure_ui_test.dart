@@ -24,7 +24,7 @@ void main() {
     await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
     await tester.pumpAndSettle();
     final dynamic workspace = tester.state(find.byType(Workspace));
-    workspace.reportShortcutFailure(StateError('Microphone unavailable'));
+    workspace.integrationFeature.reportShortcutFailure(StateError('Microphone unavailable'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Global shortcut failed:'), findsWidgets);
     expect(find.textContaining('Microphone unavailable'), findsWidgets);

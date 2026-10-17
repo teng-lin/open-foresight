@@ -8,7 +8,7 @@ import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
-class WebDomain extends Domain {
+class WebDomain extends AnswerFixtureDomain {
   WebDomain(super.store, super.helper);
   bool available = true;
   final requests = <(bool, String, int?)>[];
@@ -105,7 +105,7 @@ void main() {
       );
       expect(state.tab, 1);
       final input = find.byWidgetPredicate(
-        (w) => w is TextField && w.controller == state.question,
+        (w) => w is TextField && w.controller == state.chatFeature.question,
       );
       await tester.enterText(input, 'Current facts?');
       await tester.pump();
@@ -145,11 +145,11 @@ void main() {
       await tester.sendKeyEvent(LogicalKeyboardKey.space);
       await tester.pumpAndSettle();
       expect(tester.getSemantics(toggle).flagsCollection.isSelected, isTrue);
-      state.update(() => state.asking = true);
+      state.update(() => state.chatFeature.asking = true);
       await tester.pump();
       expect(tester.widget<IconButton>(toggle).onPressed, isNull);
       state.update(() {
-        state.asking = false;
+        state.chatFeature.asking = false;
         domain.available = false;
       });
       await tester.pumpAndSettle();
@@ -174,23 +174,23 @@ void main() {
     await tester.pumpAndSettle();
     state.update(() {
       state.tab = 3;
-      state.meetingId = alpha;
-      state.meetingPanel = 'Chat';
+      state.meetingFeature.meetingId = alpha;
+      state.meetingFeature.meetingPanel = 'Chat';
     });
     await tester.pumpAndSettle();
     expect(tester.widget<IconButton>(webToggle()).isSelected, isFalse);
     await tester.tap(webToggle());
     await tester.pumpAndSettle();
     state.update(() {
-      state.meetingId = beta;
-      state.meetingPanel = 'Chat';
+      state.meetingFeature.meetingId = beta;
+      state.meetingFeature.meetingPanel = 'Chat';
     });
     await tester.pumpAndSettle();
     expect(tester.widget<IconButton>(webToggle()).isSelected, isFalse);
     state.update(() {
       state.tab = 3;
-      state.meetingId = alpha;
-      state.meetingPanel = 'Chat';
+      state.meetingFeature.meetingId = alpha;
+      state.meetingFeature.meetingPanel = 'Chat';
     });
     await tester.pumpAndSettle();
     expect(tester.widget<IconButton>(webToggle()).isSelected, isTrue);

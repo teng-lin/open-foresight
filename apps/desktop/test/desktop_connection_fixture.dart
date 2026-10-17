@@ -50,9 +50,9 @@ class TestDesktopConnection implements DesktopConnection {
   @override
   Future<void> waitForSourceWork() => domain.waitForSourceWork();
   @override
-  Stream<String> askInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => domain.askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => domain is AnswerFixtureDomain ? (domain as AnswerFixtureDomain).askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current) : application.askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
   @override
-  Stream<String> askWithWebInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => domain.askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askWithWebInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => domain is AnswerFixtureDomain ? (domain as AnswerFixtureDomain).askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current) : application.askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
   @override
   Future<Map<String, List<double>>> graphEmbeddings(List<Map<String, Object?>> sources) => domain.graphEmbeddings(sources);
   @override
@@ -72,4 +72,10 @@ class CommandFixtureDomain extends Domain {
   CommandFixtureDomain(super.store, super.helper);
   Future<Object?> command(String method, [Map<String, dynamic> args = const {}]) =>
       application.call(method, args);
+}
+
+class AnswerFixtureDomain extends Domain {
+  AnswerFixtureDomain(super.store, super.helper);
+  Stream<String> askInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
+  Stream<String> askWithWebInConversation(String question, String conversation, {String? requestId, int? meetingId, bool Function()? current}) => application.askWithWebInConversation(question, conversation, requestId: requestId, meetingId: meetingId, current: current);
 }
