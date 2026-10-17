@@ -6,6 +6,72 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'meeting invalidation preserves another complete cached meeting',
+    () async {
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (_) async => [1],
+        currentIsLive: (_) => false,
+        loadSavedTranscript: (id) async => 'Reloaded $id',
+      );
+      await cache.schedule(1, 'Old one', isLive: false);
+      await cache.schedule(2, 'Retained two', isLive: false);
+      final retained = cache.getCachedChunks(2);
+      cache.invalidate(1);
+      expect(cache.getCachedChunks(1), isEmpty);
+      expect(identical(cache.getCachedChunks(2), retained), isTrue);
+      expect((await cache.getEmbeddedChunks(1)).single.text, 'Reloaded 1');
+      expect((await cache.getEmbeddedChunks(2)).single.text, 'Retained two');
+    },
+  );
+
+  test(
+    'meeting invalidation prevents a blocked saved load from scheduling stale text',
+    () async {
+      final oldLoad = Completer<String>();
+      var loads = 0;
+      final embedded = <String>[];
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async {
+          embedded.add(text);
+          return [1];
+        },
+        currentIsLive: (_) => false,
+        loadSavedTranscript: (_) async =>
+            ++loads == 1 ? await oldLoad.future : 'New transcript',
+      );
+      final obsolete = cache.getEmbeddedChunks(1);
+      cache.invalidate(1);
+      oldLoad.complete('Old transcript');
+      expect(await obsolete, isEmpty);
+      expect(cache.getCachedChunks(1), isEmpty);
+      expect(embedded, isEmpty);
+      expect((await cache.getEmbeddedChunks(1)).single.text, 'New transcript');
+      expect(embedded, ['New transcript']);
+    },
+  );
+
+  test(
+    'meeting invalidation prevents old live reader from observing replacement entry',
+    () async {
+      final oldEmbedding = Completer<List<double>>();
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async =>
+            text == 'Old' ? await oldEmbedding.future : [2],
+        currentIsLive: (_) => true,
+        loadSavedTranscript: (_) async => '',
+      );
+      final work = cache.schedule(1, 'Old', isLive: true);
+      final obsolete = cache.getEmbeddedChunks(1);
+      cache.invalidate(1);
+      await cache.schedule(1, 'New', isLive: true);
+      oldEmbedding.complete([1]);
+      await work;
+      expect(await obsolete, isEmpty);
+      expect(cache.getCachedChunks(1).single.text, 'New');
+    },
+  );
+
+  test(
     'workspace clear discards saved loads before they can schedule old text',
     () async {
       final oldLoad = Completer<String>();

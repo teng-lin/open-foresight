@@ -25,6 +25,7 @@ import 'reference_note_live_plan.dart';
 import 'reference_note_service_recovery.dart';
 import 'native.dart';
 import 'reference_note_transcript_cache.dart';
+import 'reference_note_transcript_format.dart';
 import 'reference_note_enhancement_chunking.dart';
 import 'native_note_enhancement.dart';
 import 'google_auth.dart';
@@ -74,13 +75,44 @@ class Application {
       .where((text) => text.isNotEmpty)
       .join('\n\n');
 
+  Iterable<({String speaker, String text})> _liveNoteTranscriptSegments(
+    int id,
+  ) => store
+      .rows(
+        'SELECT text,source FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
+        [id],
+      )
+      .map((row) {
+        final speaker = MeetingSpeaker.fromSource(row['source'] as String);
+        return (
+          speaker: speaker == MeetingSpeaker.unknown ? '' : speaker.label,
+          text: row['text'] as String,
+        );
+      });
+
+  void _scheduleLiveNoteTranscriptEmbedding(int id) {
+    if (_closed || recordingMeeting != id || recording == null) return;
+    final text = formatLiveNoteTranscript(_liveNoteTranscriptSegments(id));
+    if (text.isEmpty) return;
+    unawaited(
+      _noteTranscriptCache.schedule(id, text, isLive: true).catchError((
+        Object e,
+      ) {
+        stderr.writeln('Live transcript embedding: $e');
+      }),
+    );
+  }
+
   Future<List<EmbeddedNoteTranscriptChunk>> _embeddedNoteTranscript(
     int id,
     String transcript, {
     required bool isLive,
   }) async {
-    if (isLive) {
-      await _noteTranscriptCache.schedule(id, transcript, isLive: true);
+    if (isLive && recordingMeeting == id && recording != null) {
+      final text = formatLiveNoteTranscript(_liveNoteTranscriptSegments(id));
+      if (text.isNotEmpty) {
+        await _noteTranscriptCache.schedule(id, text, isLive: true);
+      }
     }
     final cached = await _noteTranscriptCache.getEmbeddedChunks(id);
     if (cached.isNotEmpty) return cached;
@@ -375,6 +407,7 @@ class Application {
         method != 'models.cancel_query_acquisition' &&
         (modelBusy ||
             domain.generator?.generating == true ||
+            _noteEnhancements.values.any((state) => state.active) ||
             recording != null)) {
       throw StateError(
         'Model configuration is busy while generation or recording is active',
@@ -698,6 +731,11 @@ class Application {
             a['end'] as int? ?? 0,
             a['source'] as String? ?? 'imported',
           );
+          if (recordingMeeting == id && recording != null) {
+            _scheduleLiveNoteTranscriptEmbedding(id);
+          } else {
+            _noteTranscriptCache.invalidate(id);
+          }
           await indexMeeting(id);
           return null;
         case 'meetings.index':
@@ -850,6 +888,9 @@ class Application {
             options: CallOptions(timeout: const Duration(minutes: 30)),
           );
           if (!result.success) throw StateError(result.errorMessage);
+          // The helper already adopted a new vector space, even if persisting
+          // its registration below fails. Never reuse the previous vectors.
+          _noteTranscriptCache.clear();
           await store.register(
             'embedding',
             a['path'] as String,
@@ -1331,7 +1372,16 @@ class Application {
         (notes['body'] as String).trim().isEmpty ||
         (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String)))
       return;
-    final transcript = _noteTranscriptText(id);
+    final transcript = isLive
+        ? _liveNoteTranscriptSegments(id)
+              .map(
+                (segment) => formatNoteTranscriptSegment(
+                  speaker: segment.speaker,
+                  text: segment.text,
+                ),
+              )
+              .join('\n')
+        : _noteTranscriptText(id);
     if (transcript.isEmpty) return;
     final revision = _meeting(id)['revision'] as int;
     final previousState = _noteEnhancements[id];
@@ -1581,6 +1631,7 @@ class Application {
         provisionalTranscript.remove(source);
         proactive.clearInterim(id, source);
         proactive.notify(id);
+        _scheduleLiveNoteTranscriptEmbedding(id);
         _scheduleEnhance(id);
         _liveIndex?.cancel();
         _liveIndex = Timer(
@@ -1636,6 +1687,7 @@ class Application {
     recording = active;
     proactive.begin(id);
     recordingMeeting = id;
+    _scheduleLiveNoteTranscriptEmbedding(id);
     recordingBegan = DateTime.now();
     _recordingPausedAt = null;
     _recordingPausedMs = 0;

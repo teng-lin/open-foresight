@@ -22,12 +22,21 @@ class ReferenceNoteTranscriptCache {
   final Future<String> Function(int meetingId) loadSavedTranscript;
   final _entries = LinkedHashMap<int, _TranscriptEntry>();
 
-  /// Discard ephemeral entries when workspace identifiers may be reused.
+  /// Discard ephemeral entries when the workspace or embedding model changes.
   int _epoch = 0;
+  final _revisions = <int, int>{};
 
   void clear() {
     _epoch++;
     _entries.clear();
+    _revisions.clear();
+  }
+
+  /// Port mutation ownership: a changed saved transcript must be read again.
+  /// Old readers may finish, but cannot schedule text from the old revision.
+  void invalidate(int meetingId) {
+    _revisions[meetingId] = (_revisions[meetingId] ?? 0) + 1;
+    _entries.remove(meetingId);
   }
 
   _TranscriptEntry _entryFor(int meetingId) {
@@ -96,12 +105,15 @@ class ReferenceNoteTranscriptCache {
     int meetingId,
   ) async {
     final epoch = _epoch;
+    final revision = _revisions[meetingId] ?? 0;
+    bool current() =>
+        epoch == _epoch && revision == (_revisions[meetingId] ?? 0);
     var entry = _entries[meetingId];
     if (currentIsLive(meetingId)) {
       if (entry == null) return [];
       final running = entry.running;
       if (running != null) await running;
-      if (epoch != _epoch) return [];
+      if (!current()) return [];
       return entry.isLive == true ? getCachedChunks(meetingId) : [];
     }
     if (entry == null ||
@@ -110,11 +122,11 @@ class ReferenceNoteTranscriptCache {
         entry.chunks.isEmpty ||
         entry.chunks.any((chunk) => chunk.embedding.isEmpty)) {
       final text = await loadSavedTranscript(meetingId);
-      if (epoch != _epoch) return [];
+      if (!current()) return [];
       if (text.trim().isEmpty) return [];
       final work = schedule(meetingId, text, isLive: false);
       await work;
-      if (epoch != _epoch) return [];
+      if (!current()) return [];
       entry = _entries[meetingId];
     }
     return entry?.isLive == false ? getCachedChunks(meetingId) : [];

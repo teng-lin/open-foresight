@@ -1,0 +1,29 @@
+# Note enhancement lifecycle
+
+The live transcript manager's `formatSegments` at `0x1009ec774` filters segments whose text is empty after trimming, formats the retained original fields, and joins them with one LF. The shared segment formatter at `0x1009ec80c` returns text unchanged when the speaker is empty, otherwise `speaker + ': ' + text`. It does not trim either field. The parent live enhancement path maps the same formatter without the manager's empty-text filter. The public speaker constants in `_handleIncomingTranscript` are `Microphone` for channel zero and `Remote` for the other capture channel. These are capture routes rather than identities of people.
+
+Application now formats its capture records through these recovered helpers. Final capture callbacks schedule background live embeddings, and starting capture schedules the existing transcript. This connects the behavior seen in `_handleIncomingTranscript` (`0x1009ebd80`, manager call at `0x1009ebf6c`) and `_loadExistingTranscript` (`0x100a8ab74`, manager call at `0x100a8b1a8`). Scheduling requires a currently live meeting and nonempty formatted content, matching `embedLiveTranscript` at `0x1009ec6a4`. Interim hypotheses remain outside this cache. Pending work uses the existing sequential, latest-request-wins drain. Closing capture causes a later saved read to reload through the saved-mode path rather than return live-mode vectors.
+
+Saved transcript rows retain the separate trim/filter/two-LF preparation path. The recovered original saved loader also joins extracted records with two LFs; its structured JSON/legacy transcript parsing is a separate, incomplete reconstruction. This change does not claim support for every original structured transcript serialization.
+
+## Ownership in the port
+
+The following changes are port ownership invariants rather than claims that the original has the same API or storage design:
+
+- Appending a saved transcript through `meetings.transcript` invalidates only that meeting. A per-meeting revision prevents an older asynchronous saved load or live reader from scheduling stale text or returning a replacement entry. Workspace clearing also advances a global epoch. A live append schedules its new complete transcript without dropping the existing running drain or reusable vectors.
+- Model configuration is rejected while note enhancement is active, including service initialization, embedding and tokenizer preparation before a native conversation starts. This closes a gap in the existing model/recording exclusion boundary, which previously checked only native generation.
+- A successful helper embedding-model change clears transcript vectors immediately after helper adoption. The old vector space must not survive even if the later persistent model registration fails. A rejected helper model change preserves valid vectors.
+
+The recovered cancellation policy is unchanged: the owning request sets a flag, and the stream consumer observes it at its next event, disposes its iterator/conversation, restores the prior extracted/formatted notes and rebuilds associations using current raw edits. Cancellation during embedding preparation also creates no conversation and no completed artifact; a subsequent request can reuse the valid transcript embedding. It does not discard the cache merely because a consumer cancelled.
+
+The original visible cache drain clears its running future on normal completion. Exception recovery has not been established; the port still retains a failed running future. No speculative retry policy was added.
+
+## Evidence and validation
+
+Retained direct IDA evidence in `test-results/reference-functions/ida/` includes `note-handle-incoming-transcript.json`, `note-embed-live-transcript-entry.json`, `note-load-existing-transcript.json`, `note-live-transcript-format.json`, `note-live-transcript-segment-format.json`, `note-transcript-segment-filter.json` and `note-lifecycle-public-speaker-labels.log`. The earlier raw captures live in the missing-functions worktree's evidence directory. The bounded public pool probe reads the two public channel labels and the final-state closure address; it does not extract a configuration map or credentials. The final-state closure at `0x1009ec8d4` directly calls `LiveTranscriptNotifier.addSegment`, adding no further transformation beyond the incoming handler's upstream trim/clean step (`note-incoming-final-transcript-state.json`, exit-0 terminal log). These direct IDA captures are not new REA process captures.
+
+`note_transcript_cache_application_test.dart` exercises the real Application and Domain with a Unix-socket gRPC embedding service. Its capture test uses the native recording ABI fixture without physical audio devices and invokes the actual final-transcript callback installed by Application. It verifies initial live embedding, appended channel-labelled one-LF content, and reload to the saved two-LF content after recording stops. Other integration cases cover append invalidation, cancellation during preparation, model configuration exclusion and successful/rejected embedding-model changes, including registry persistence failure. Unit tests cover per-meeting invalidation, blocked stale loads/readers, formatting and the recovered cache lifecycle.
+
+Production model/GPU/package acceptance is independent of these fixture-backed lifecycle checks. Vision-enabled startup and model asset discovery remain deferred separately.
+
+Validation on 2026-10-16: the focused lifecycle/cache/formatting/stream/service run passes **48 tests**. The full core suite passes **447 tests with 7 skipped**, core static analysis reports no issues, and the two affected desktop files pass **3 widget tests**. Logs are `note-lifecycle-focused-tests.log`, `note-lifecycle-full-core-tests.log`, `note-lifecycle-core-analysis.log` and `note-lifecycle-widgets.log` in the evidence directory.
