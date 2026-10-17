@@ -143,6 +143,40 @@ class BuildSnapshotTest(unittest.TestCase):
                 valid_exports]):
             builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
 
+    def test_linux_abi_report_contains_all_normalized_exports(self):
+        dynamic = '0x1 (NEEDED) Shared library: [libc.so.6]\n'
+        versions = 'Version needs section\n  Name: GLIBC_2.34\n'
+        symbols = {
+            'litert_lm_engine_create', 'litert_lm_embedding_engine_create',
+            'litert_lm_session_config_add_stop_token_sequence',
+            'litert_lm_session_config_delete',
+            '_init', '_fini', '__bss_start', '_edata', '_end',
+        }
+        for suffix in ('', '@LITERT_1.0', '@@LITERT_1.0'):
+            exports = '\n'.join('0001 T ' + name + suffix for name in sorted(symbols))
+            # Multiple versions of the same export must be recorded once.
+            exports += '\n0002 T litert_lm_engine_create@LITERT_0.9\n\n'
+            with self.subTest(suffix=suffix), patch.object(
+                    builder.subprocess, 'check_output', side_effect=[dynamic, versions, exports]):
+                report = builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
+                self.assertEqual(report, dynamic + '\n' + versions + '\n' +
+                                 '\n'.join(sorted(symbols)) + '\n')
+
+    def test_linux_abi_rejects_exports_outside_public_api_and_loader_allowlist(self):
+        required = (
+            '0001 T litert_lm_engine_create\n'
+            '0002 T litert_lm_embedding_engine_create\n'
+            '0003 T litert_lm_session_config_add_stop_token_sequence\n'
+        )
+        for symbol in ('_ZN6google8protobuf7MessageD1Ev', 'private_helper',
+                       'litert_lmPrivate', '_init_private'):
+            for suffix in ('', '@PRIVATE_1.0', '@@PRIVATE_1.0'):
+                with self.subTest(symbol=symbol, suffix=suffix), patch.object(
+                        builder.subprocess, 'check_output', side_effect=[
+                            '', '', required + '0004 T ' + symbol + suffix + '\n']):
+                    with self.assertRaisesRegex(RuntimeError, 'public C API'):
+                        builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
+
 
 if __name__ == '__main__':
     unittest.main()

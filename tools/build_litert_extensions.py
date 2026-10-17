@@ -65,12 +65,16 @@ def verify_linux_library_abi(library):
     for family in ('GLIBCXX_', 'CXXABI_'):
         if family in needs:
             raise RuntimeError(f'Linux LiteRT library must not require {family} symbols')
-    symbols = {line.split()[-1] for line in exported.splitlines() if line.strip()}
+    symbols = {line.split()[-1].split('@', 1)[0]
+               for line in exported.splitlines() if line.strip()}
     required = {'litert_lm_engine_create', 'litert_lm_embedding_engine_create',
                 'litert_lm_session_config_add_stop_token_sequence'}
     if not required <= symbols:
         raise RuntimeError('Linux LiteRT library lacks required public C API exports')
-    return dynamic + '\n' + versions + '\n' + '\n'.join(sorted(required)) + '\n'
+    loader_symbols = {'_init', '_fini', '__bss_start', '_edata', '_end'}
+    if any(not name.startswith('litert_lm_') and name not in loader_symbols for name in symbols):
+        raise RuntimeError('Linux LiteRT library must export only the public C API and loader symbols')
+    return dynamic + '\n' + versions + '\n' + '\n'.join(sorted(symbols)) + '\n'
 
 
 def wheel_vendor_hashes(archive, system):
