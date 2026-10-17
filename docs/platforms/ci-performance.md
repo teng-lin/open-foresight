@@ -55,22 +55,24 @@ Flutter is cached by pinned version/platform and its git revision is verified.
 Pub dependencies are cached by lockfile. Native/test gates retain the existing
 parallel core/desktop execution.
 
-Before publishing a release, finish successful main CI for the exact tag commit.
-It archives the tested macOS application and the Linux portable bundle. macOS
-release CI verifies the promoted app, runs the existing real-model and cloud
-acceptance, then makes the DMG. Linux release CI wraps the promoted tarball and
-runs the distro installation/lifecycle matrix. No release job compiles an SDK
-or application. Final downloaded-installer acceptance runs separately in `release-acceptance.yml`.
-Main candidates require the bundled Google application registration; macOS
-promotion also verifies the registration and browser invitation without an account.
-Rotated distribution settings require a fresh main candidate; release promotion
-does not silently change its bundled configuration.
+Use `release.yml` on reviewed main to prepare a release. Before creating a tag,
+the coordinator requires successful candidates for that exact commit: the macOS
+application and Linux portable bundle. If candidates are absent, expired, or
+missing after a documentation-only commit, it forces `macos.yml` on main and waits.
+A failed candidate build leaves no new release tag.
 
-Do not publish from a docs-only commit without creating candidates: manually run
-`macos.yml` on main at that commit first. `workflow_dispatch` forces full checks.
-If a candidate expired, rerun main checks for that commit before releasing.
-Old tags whose committed workflows predate this change retain their old build
-behavior; this does not rewrite or retag v0.1.0.
+Both reusable packagers check out the tag, promote those candidates into a draft,
+and perform platform checks. macOS runs runtime/model/cloud checks before making
+the DMG; Linux runs its native installation/lifecycle matrix. Final downloaded
+installer acceptance in `release-acceptance.yml` must pass for every format before
+the coordinator publishes the draft. No release job compiles an SDK or application.
+The Linux package release increases for each full draft rebuild. Public release
+assets cannot be overwritten; corrections require a new app version.
+
+Main candidates require the bundled Google application registration. Rotated
+distribution settings require a fresh candidate; promotion does not change its
+bundled configuration. Existing tags retain their historical committed workflows;
+v0.1.0 is not rewritten or retagged, and v0.1.1 replaces its mismatched assets.
 
 ## Recovery
 
