@@ -20,6 +20,8 @@ char *fs_event_poll(void *handle, int timeout_ms);
 void *fs_engine_create(const char *runtime_executable, const char *model_path);
 /* Additive ABI v1: 0 llama.cpp CLI, 1 packaged LiteRT-LM CPU runner. */
 void *fs_engine_create_backend(const char *runtime_executable, const char *model_path, int backend);
+/* Internal distribution model type selects recovered vision/audio startup. */
+void *fs_engine_create_model_type(const char *runtime_executable, const char *model_path, int model_type);
 char *fs_engine_state(void *engine);
 int fs_engine_probe(
     void *engine); /* synchronous actual model load; no retained KV/model */

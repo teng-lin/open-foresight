@@ -1,3 +1,4 @@
+import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -67,6 +68,13 @@ class Store {
       db.execute(
         "ALTER TABLE models ADD COLUMN backend TEXT NOT NULL DEFAULT 'llama_cpp'",
       );
+    if (!db
+        .select('PRAGMA table_info(models)')
+        .any((row) => row['name'] == 'model_type')) {
+      db.execute(
+        'ALTER TABLE models ADD COLUMN model_type INTEGER NOT NULL DEFAULT 0',
+      );
+    }
     if (!db
         .select('PRAGMA table_info(source_details)')
         .any((row) => row['name'] == 'source_uri')) {
@@ -378,7 +386,19 @@ class Store {
     final registration = rows('SELECT * FROM models WHERE kind=?', [
       kind,
     ]).firstOrNull;
-    return registration == null ? null : resolveModelRuntime(registration);
+    if (registration == null) return null;
+    final resolved = resolveModelRuntime(registration);
+    if (kind == 'generation' &&
+        resolved['backend'] == 'litert_lm' &&
+        resolved['model_type'] == 0) {
+      return {
+        ...resolved,
+        'model_type': referenceGenerationModelType(
+          resolved['digest'] as String,
+        ),
+      };
+    }
+    return resolved;
   }
 
   List<Map<String, Object?>> get models =>
@@ -390,8 +410,12 @@ class Store {
     String runtime, {
     String backend = 'llama_cpp',
     String? expectedDigest,
+    int? modelType,
     bool Function()? current,
   }) async {
+    if (modelType != null && (modelType < 0 || modelType > 17)) {
+      throw ArgumentError.value(modelType, 'modelType');
+    }
     final backends = [
       'llama_cpp',
       'litert_lm',
@@ -446,8 +470,18 @@ class Store {
     db.execute('SAVEPOINT register_model_runtime');
     try {
       db.execute(
-        'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?) ON CONFLICT(kind) DO UPDATE SET path=excluded.path,digest=excluded.digest,runtime=excluded.runtime,backend=excluded.backend',
-        [kind, File(path).absolute.path, digest.toString(), runtime, backend],
+        'INSERT INTO models(kind,path,digest,runtime,backend,model_type) VALUES(?,?,?,?,?,?) ON CONFLICT(kind) DO UPDATE SET path=excluded.path,digest=excluded.digest,runtime=excluded.runtime,backend=excluded.backend,model_type=excluded.model_type',
+        [
+          kind,
+          File(path).absolute.path,
+          digest.toString(),
+          runtime,
+          backend,
+          modelType ??
+              (kind == 'generation' && backend == 'litert_lm'
+                  ? referenceGenerationModelType(digest)
+                  : 0),
+        ],
       );
       final key = 'modelRuntimeResource.$kind';
       if (resource == null) {

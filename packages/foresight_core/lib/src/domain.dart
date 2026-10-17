@@ -1,3 +1,5 @@
+import 'model_setup.dart';
+import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'application.dart';
@@ -243,8 +245,23 @@ class Domain {
 
   Future<void> _initializeNoteEnhancementService() async {
     final model = store.model('generation');
-    if (model == null) return;
+    if (model == null) {
+      final candidate = await discoverGenerationRuntime(
+        store,
+        runtimeConfiguration.nativeLibrary,
+        current: () => !_closed,
+      );
+      if (_closed) {
+        candidate?.close();
+        _checkOpen();
+      }
+      if (candidate != null) generator = candidate;
+      return;
+    }
     final candidate = createNoteEnhancementRuntime();
+    candidate.modelType =
+        model['model_type'] as int? ??
+        referenceGenerationModelType(model['digest'] as String);
     generator?.close();
     generator = candidate;
     try {
@@ -316,10 +333,20 @@ class Domain {
         if (!result.success) throw StateError(result.errorMessage);
       }
     }
+    if (generator == null && store.model('generation') == null) {
+      generator = await discoverGenerationRuntime(
+        store,
+        runtimeConfiguration.nativeLibrary,
+        current: () => !_closed,
+      );
+    }
     if (generator == null) {
       final gen = store.model('generation');
       if (gen != null) {
         generator = NativeRuntime(runtimeConfiguration.nativeLibrary);
+        generator!.modelType =
+            gen['model_type'] as int? ??
+            referenceGenerationModelType(gen['digest'] as String);
         await generator!.load(
           gen['runtime'] as String,
           gen['path'] as String,
