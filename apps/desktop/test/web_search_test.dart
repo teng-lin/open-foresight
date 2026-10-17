@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/main.dart';
@@ -37,9 +38,7 @@ class WebDomain extends Domain {
   }
 }
 
-Finder webToggle([String tooltip = 'Search the web']) => find.byWidgetPredicate(
-  (widget) => widget is IconButton && widget.tooltip == tooltip,
-);
+Finder webToggle() => find.byKey(const ValueKey('chat-web-search'));
 
 void main() {
   late Directory directory;
@@ -79,10 +78,31 @@ void main() {
     (tester) async {
       final state = await mount(tester);
       final toggle = webToggle();
+      expect(toggle, findsOneWidget);
+      expect(find.byTooltip('Knowledge sources'), findsNothing);
+      expect(find.byIcon(Icons.manage_search), findsNothing);
+      expect(find.byIcon(Icons.public_outlined), findsNothing);
+      expect(find.byIcon(Icons.travel_explore), findsOneWidget);
       expect(tester.widget<IconButton>(toggle).isSelected, isFalse);
+      expect(
+        tester.widget<IconButton>(toggle).tooltip,
+        'Answer does not use web search',
+      );
+      final toolbar = find
+          .ancestor(of: toggle, matching: find.byType(Row))
+          .first;
+      expect(
+        find.descendant(of: toolbar, matching: find.byType(IconButton)),
+        findsOneWidget,
+      );
       await tester.tap(toggle);
       await tester.pumpAndSettle();
       expect(tester.widget<IconButton>(toggle).isSelected, isTrue);
+      expect(
+        tester.widget<IconButton>(toggle).tooltip,
+        'Answer include web search result',
+      );
+      expect(state.tab, 1);
       final input = find.byWidgetPredicate(
         (w) => w is TextField && w.controller == state.question,
       );
@@ -93,6 +113,10 @@ void main() {
       expect(domain.requests, [(true, 'desktop', null)]);
       await tester.tap(toggle);
       await tester.pumpAndSettle();
+      expect(
+        tester.widget<IconButton>(toggle).tooltip,
+        'Answer does not use web search',
+      );
       await tester.enterText(input, 'Local question');
       await tester.pump();
       await tester.tap(find.byTooltip('Ask'));
@@ -102,12 +126,50 @@ void main() {
     },
   );
 
+  testWidgets(
+    'web toggle supports keyboard and selected semantics, busy and unavailable states',
+    (tester) async {
+      final semantics = tester.ensureSemantics();
+      final state = await mount(tester);
+      final toggle = webToggle();
+      expect(
+        tester.getSemantics(toggle).flagsCollection.hasSelectedState,
+        isTrue,
+      );
+      expect(tester.getSemantics(toggle).flagsCollection.isSelected, isFalse);
+      Focus.of(
+        tester.element(find.byIcon(Icons.travel_explore)),
+      ).requestFocus();
+      await tester.pumpAndSettle();
+      await tester.sendKeyEvent(LogicalKeyboardKey.space);
+      await tester.pumpAndSettle();
+      expect(tester.getSemantics(toggle).flagsCollection.isSelected, isTrue);
+      state.update(() => state.asking = true);
+      await tester.pump();
+      expect(tester.widget<IconButton>(toggle).onPressed, isNull);
+      state.update(() {
+        state.asking = false;
+        domain.available = false;
+      });
+      await tester.pumpAndSettle();
+      // An active scope can still be switched off if credentials disappear.
+      expect(tester.widget<IconButton>(toggle).onPressed, isNotNull);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(tester.widget<IconButton>(toggle).isSelected, isFalse);
+      expect(tester.widget<IconButton>(toggle).onPressed, isNull);
+      expect(tester.getSemantics(toggle).flagsCollection.isEnabled, isFalse);
+      semantics.dispose();
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('web mode is isolated between Ask and individual meeting chats', (
     tester,
   ) async {
     final alpha = store.meeting('Alpha'), beta = store.meeting('Beta');
     final state = await mount(tester);
-    await tester.tap(find.byTooltip('Search the web'));
+    await tester.tap(webToggle());
     await tester.pumpAndSettle();
     state.update(() {
       state.tab = 3;
@@ -116,7 +178,7 @@ void main() {
     });
     await tester.pumpAndSettle();
     expect(tester.widget<IconButton>(webToggle()).isSelected, isFalse);
-    await tester.tap(find.byTooltip('Search the web'));
+    await tester.tap(webToggle());
     await tester.pumpAndSettle();
     state.update(() {
       state.meetingId = beta;
@@ -155,13 +217,10 @@ void main() {
         conversation: 'desktop',
       );
       await mount(tester);
+      expect(tester.widget<IconButton>(webToggle()).onPressed, isNull);
       expect(
-        tester
-            .widget<IconButton>(
-              webToggle('Web search is unavailable in this build'),
-            )
-            .onPressed,
-        isNull,
+        tester.widget<IconButton>(webToggle()).tooltip,
+        'Web search is unavailable in this build',
       );
       expect(find.text('[Source:1] Web result'), findsOneWidget);
       expect(find.textContaining('revision null'), findsNothing);

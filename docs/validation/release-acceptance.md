@@ -4,12 +4,19 @@ The `Published installer acceptance` workflow tests the exact assets downloaded
 from a GitHub release. It never rebuilds a package to substitute for the release
 bytes. Each download requires a unique installer, its filename-bound SHA-256
 sidecar, and the advertised asset size. Evidence records the release ID, asset
-ID, SHA-256, tag and resolved source commit.
+ID, SHA-256, tag, release-tag commit and the installer-specific source commit.
+Linux `.build.json` metadata must match the installer checksum, package format,
+and release version. DMGs use their published `.manifest.json`. Metadata identity
+and its checksum are recorded alongside the installer identity; missing or
+ambiguous provenance fails acceptance.
 
 The workflow runs when either release-packaging workflow completes successfully.
 If the other workflow has not yet published its installers, it explicitly reports
 **acceptance NOT RUN**, skips the test jobs, and waits for the other completion
-event. A manual run with missing assets fails instead of silently skipping.
+event. Successful manual Linux recovery builds explicitly dispatch acceptance
+with their target release tag after publishing; the build branch name is never
+used as the release tag. A manual run with missing assets fails instead of
+silently skipping.
 After this workflow lands on main, run it against an existing release with:
 
 ```sh
@@ -65,9 +72,9 @@ reports and desktop/speech logs are retained as Actions artifacts for 30 days.
 Failures fail the job; the functional report stays failed until all its automated
 checks complete. Passing functional reports say `automated_passed_manual_pending`.
 The container OS release and Mac OS/hardware architecture are recorded. Runtime
-reports require the installed app revision to match the release tag commit and
-record the app revision so a package cannot silently attach to another
-installation. These reports use synthetic fixture content, not a real profile.
+reports require the installed app revision to match its published installer
+provenance and record the app revision so a package cannot silently attach to
+another installation. These reports use synthetic fixture content, not a real profile.
 
 ## Real desktop and hardware acceptance
 

@@ -17,6 +17,8 @@ import 'package:flutter/scheduler.dart' show Ticker;
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/semantics.dart' show SemanticsProperties;
+import 'package:intl/intl.dart' show NumberFormat;
 import 'domain.dart';
 import 'package:foresight_core/remote.dart';
 import 'graph_labels.dart';
@@ -28,7 +30,9 @@ import 'label_propagation.dart';
 import 'recording.dart';
 import 'model_setup.dart';
 import 'app_theme.dart';
+import 'meeting_visuals.dart';
 import 'desktop_settings.dart';
+import 'desktop_visuals.dart';
 import 'commands.dart';
 import 'global_shortcuts.dart';
 import 'hypr_shortcuts.dart';
@@ -1556,8 +1560,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       ],
     ),
   );
-  Widget meetings() =>
-      meetingId == null ? meetingCollection() : meetingWorkspace();
+  Widget meetings() => MeetingStyleScope(
+    child: meetingId == null ? meetingCollection() : meetingWorkspace(),
+  );
   Future<String> importText(
     String title,
     String text,

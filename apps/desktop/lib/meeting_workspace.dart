@@ -32,7 +32,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                   ),
                 ),
                 const SizedBox(height: 12),
-                Expanded(child: meetingWorkspace()),
+                Expanded(child: MeetingStyleScope(child: meetingWorkspace())),
               ],
             ),
           ),
@@ -190,7 +190,7 @@ extension _MeetingWorkspace on _WorkspaceState {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(18),
+        borderRadius: MeetingVisuals.previewRadius,
       ),
       child: Column(
         children: [
@@ -205,10 +205,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                     Expanded(
                       child: Text(
                         meeting['title'] as String,
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
+                        style: MeetingVisuals.title,
                       ),
                     ),
                     IconButton(
@@ -232,7 +229,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                 ),
                 Text(
                   '${meetingDay(start)} · ${meetingClock(start)} – ${meetingClock(end)}',
-                  style: const TextStyle(fontSize: 12),
+                  style: MeetingVisuals.metadata,
                 ),
               ],
             ),
@@ -318,22 +315,14 @@ extension _MeetingWorkspace on _WorkspaceState {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    meeting['title'] as String,
-                    style: const TextStyle(
-                      fontSize: 23,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  Text(meeting['title'] as String, style: MeetingVisuals.title),
                   const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     children: [
-                      Chip(label: Text(dateText)),
-                      Chip(
-                        label: Text(
-                          '${meetingClock(start)} - ${meetingClock(end)}',
-                        ),
+                      MeetingMetadataBadge(dateText),
+                      MeetingMetadataBadge(
+                        '${meetingClock(start)} - ${meetingClock(end)}',
                       ),
                     ],
                   ),
@@ -513,14 +502,14 @@ extension _MeetingWorkspace on _WorkspaceState {
     final enhancedText =
         progress?['body'] as String? ?? d.store.meetingEnhancedNotes(id);
     final live = d.store.preference('liveEnhance', 'true') == 'true';
-    final editor = TextField(
+    final editorField = TextField(
       key: const ValueKey('meeting-notes-editor'),
       controller: meetingNotesController,
       expands: true,
       maxLines: null,
       minLines: null,
       textAlignVertical: TextAlignVertical.top,
-      style: const TextStyle(fontSize: 16, height: 1.7),
+      style: MeetingVisuals.notes,
       onChanged: (_) => scheduleMeetingNotesSave(),
       decoration: const InputDecoration(
         filled: false,
@@ -528,19 +517,35 @@ extension _MeetingWorkspace on _WorkspaceState {
         enabledBorder: InputBorder.none,
         focusedBorder: InputBorder.none,
         contentPadding: EdgeInsets.all(24),
-        hintStyle: TextStyle(
-          color: Color(0xff9ba3b3),
-          fontWeight: FontWeight.w500,
-        ),
-        hintText:
-            'Enter your notes here. Markdown formatting is supported.\n\nMarkdown guide:\n• # Heading\n• **bold**\n• *italics*\n• - Bullet list\n• 1. Numbered list',
       ),
+    );
+    final editor = Stack(
+      fit: StackFit.expand,
+      children: [
+        Semantics(label: 'Meeting notes', child: editorField),
+        ValueListenableBuilder<TextEditingValue>(
+          valueListenable: meetingNotesController,
+          builder: (_, value, _) => value.text.isNotEmpty
+              ? const SizedBox.shrink()
+              : IgnorePointer(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      'Enter your notes here. Markdown formatting is supported.\n\nMarkdown guide:\n• # Heading\n• **bold**\n• *italics*\n• - Bullet list\n• 1. Numbered list',
+                      style: MeetingVisuals.notes.copyWith(
+                        color: const Color(0xff9ba3b3),
+                      ),
+                    ),
+                  ),
+                ),
+        ),
+      ],
     );
     final enhancedPane = Container(
       margin: EdgeInsets.fromLTRB(preview ? 24 : 0, 24, 24, 24),
       decoration: BoxDecoration(
-        color: const Color(0xffeaf0f8),
-        borderRadius: BorderRadius.circular(18),
+        color: MeetingVisuals.enhancedSurface,
+        borderRadius: MeetingVisuals.previewRadius,
       ),
       child: LayoutBuilder(
         builder: (_, bounds) => SingleChildScrollView(
@@ -550,23 +555,9 @@ extension _MeetingWorkspace on _WorkspaceState {
               children: [
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
-                  child: Row(
-                    children: [
-                      const Icon(
-                        Icons.auto_awesome,
-                        size: 19,
-                        color: Color(0xff556272),
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          preview ? 'Enhanced notes' : 'Live enhanced notes',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ),
+                  child: MeetingPanelHeading(
+                    title: preview ? 'Enhanced notes' : 'Live enhanced notes',
+                    actions: [
                       IconButton(
                         tooltip: 'Copy enhanced notes',
                         onPressed:
@@ -674,7 +665,7 @@ extension _MeetingWorkspace on _WorkspaceState {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(28),
+        borderRadius: MeetingVisuals.panelRadius,
       ),
       child: Column(
         children: [
@@ -850,34 +841,34 @@ extension _MeetingWorkspace on _WorkspaceState {
   Widget meetingAssistant(int id) => Container(
     decoration: BoxDecoration(
       color: Colors.white,
-      borderRadius: BorderRadius.circular(28),
+      borderRadius: MeetingVisuals.panelRadius,
     ),
     clipBehavior: Clip.antiAlias,
     child: Column(
       children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(12, 12, 8, 4),
-          child: Row(
+          child: Wrap(
+            crossAxisAlignment: WrapCrossAlignment.center,
+            runSpacing: 4,
             children: [
               for (final panel in ['Chat', 'Live Q&A', 'Summary'])
-                Flexible(
-                  child: TextButton(
-                    style: TextButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 12,
-                      ),
-                      backgroundColor: meetingPanel == panel ? _blue : null,
-                      foregroundColor: meetingPanel == panel
-                          ? _ink
-                          : const Color(0xff4d5358),
+                TextButton(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 12,
                     ),
-                    onPressed: () => update(() => meetingPanel = panel),
-                    child: Text(
-                      panel,
-                      maxLines: 1,
-                      style: const TextStyle(fontWeight: FontWeight.w700),
-                    ),
+                    backgroundColor: meetingPanel == panel ? _blue : null,
+                    foregroundColor: meetingPanel == panel
+                        ? _ink
+                        : const Color(0xff4d5358),
+                  ),
+                  onPressed: () => update(() => meetingPanel = panel),
+                  child: Text(
+                    panel,
+                    maxLines: 1,
+                    style: MeetingVisuals.control,
                   ),
                 ),
               PopupMenuButton<String>(
@@ -912,7 +903,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                     ),
                     child: Text(
                       delta < 0 ? 'A−' : 'A+',
-                      style: const TextStyle(fontSize: 12),
+                      style: MeetingVisuals.metadata,
                     ),
                   ),
                 ),

@@ -237,7 +237,7 @@ void main() {
       await tester.tap(send);
       await tester.pumpAndSettle();
       expect(store.rows('SELECT * FROM answers').length, 2);
-      await tester.tap(find.byTooltip('Knowledge sources'));
+      await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
       expect(find.text('Knowledge Sources'), findsOneWidget);
       expect(tester.takeException(), isNull);

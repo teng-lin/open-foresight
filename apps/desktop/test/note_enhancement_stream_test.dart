@@ -103,7 +103,10 @@ void main() {
       await tester.pump();
       expect(store.meetingEnhancedNotes(id), '- Streamed first');
       expect(store.rows('SELECT * FROM artifacts'), hasLength(1));
-      await tester.tap(find.byKey(const ValueKey('cancel-note-enhancement')));
+      final cancel = find.byKey(const ValueKey('cancel-note-enhancement'));
+      await tester.ensureVisible(cancel);
+      await tester.pump();
+      await tester.tap(cancel);
       await tester.pump();
       expect(
         (domain.application.captureState['note_enhancements']

@@ -35,6 +35,9 @@ extension _ScreenshotScreens on _WorkspaceState {
   void showHelperMonitor() => showDialog<void>(
     context: context,
     builder: (_) => AlertDialog(
+      shape: const RoundedRectangleBorder(
+        borderRadius: DesktopVisuals.panelRadius,
+      ),
       title: const Text('Local helper'),
       content: SelectableText(
         'Connection: ${d.helper.state}\nEmbedding: ${d.helper.snapshot?.pipeline ?? 'unconfigured'}\nBackend: ${d.helper.snapshot?.model.backend ?? 'unconfigured'}\nDimensions: ${d.helper.snapshot?.model.dimensions ?? 0}\nIndex: ${d.helper.snapshot?.index ?? 'empty'}\nLast error: ${d.helper.snapshot?.lastError.isNotEmpty == true ? d.helper.snapshot!.lastError : 'None'}\nGeneration: ${d.generator?.effectiveState}\nSpeech: ${speechSetupProblem(d.store) ?? 'Ready'}',
@@ -77,10 +80,7 @@ extension _ScreenshotScreens on _WorkspaceState {
     padding: const EdgeInsets.only(bottom: 16),
     child: LayoutBuilder(
       builder: (context, constraints) {
-        final label = Text(
-          title,
-          style: const TextStyle(fontSize: 28, height: 1.1),
-        );
+        final label = Text(title, style: DesktopVisuals.pageTitle);
         final controls = Wrap(spacing: 12, runSpacing: 8, children: actions);
         if (constraints.maxWidth < 700 && actions.isNotEmpty) {
           return Column(
@@ -104,6 +104,7 @@ extension _ScreenshotScreens on _WorkspaceState {
     TextEditingController? controller,
   }) => TextField(
     controller: controller,
+    style: DesktopVisuals.field,
     onChanged: (value) => update(() => onChanged(value)),
     decoration: InputDecoration(
       hintText: hint,
@@ -687,19 +688,32 @@ extension _ScreenshotScreens on _WorkspaceState {
     final input = TextEditingController();
     final accepted = await showInputDialog<bool>(
       builder: (context) => AlertDialog(
-        title: const Text('Add from URL'),
+        title: const Text('Please enter the URL'),
         content: TextField(
           controller: input,
-          decoration: const InputDecoration(hintText: 'https://…'),
+          autofocus: true,
+          style: DesktopVisuals.field,
+          decoration: const InputDecoration(
+            hintText: 'Please enter the URL',
+            filled: true,
+            fillColor: Color(0xffe1e6ef),
+            border: UnderlineInputBorder(),
+            enabledBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xff74777d)),
+            ),
+            focusedBorder: UnderlineInputBorder(
+              borderSide: BorderSide(color: Color(0xff006c97), width: 2),
+            ),
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancel'),
           ),
-          FilledButton(
+          TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Import'),
+            child: const Text('OK'),
           ),
         ],
       ),
@@ -1192,6 +1206,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                     PopupMenuButton<String>(
                       enabled: !busy,
                       tooltip: 'Add source',
+                      position: PopupMenuPosition.under,
                       onSelected: (choice) => run(() async {
                         switch (choice) {
                           case 'file':
@@ -1216,54 +1231,56 @@ extension _ScreenshotScreens on _WorkspaceState {
                       itemBuilder: (_) => [
                         PopupMenuItem(
                           value: 'file',
-                          child: ListTile(
-                            leading: Icon(Icons.attach_file),
-                            title: Text('Add a file'),
+                          child: DesktopImportMenuTile(
+                            icon: Icons.attach_file,
+                            label: 'Add a file',
                           ),
                         ),
                         PopupMenuItem(
                           value: 'folder',
-                          child: ListTile(
-                            leading: Icon(Icons.folder),
-                            title: Text('Import folder'),
+                          child: DesktopImportMenuTile(
+                            icon: Icons.folder,
+                            label: 'Import folder',
                           ),
                         ),
                         PopupMenuItem(
                           value: 'find-files',
-                          child: ListTile(
-                            leading: Icon(Icons.manage_search),
-                            title: Text('Find files on this computer'),
+                          child: DesktopImportMenuTile(
+                            icon: Icons.search,
+                            label: Platform.isMacOS
+                                ? 'Find files on this Mac'
+                                : 'Find files on this computer',
                           ),
                         ),
                         PopupMenuItem(
                           value: 'drive-file',
                           enabled: !busy,
-                          child: const ListTile(
-                            leading: Icon(Icons.cloud_outlined),
-                            title: Text('Add files from Drive'),
+                          child: DesktopImportMenuTile(
+                            icon: Icons.cloud_outlined,
+                            label: 'Add files from Drive',
                           ),
                         ),
                         PopupMenuItem(
                           value: 'drive-folder',
                           enabled: !busy,
-                          child: const ListTile(
-                            leading: Icon(Icons.folder_shared_outlined),
-                            title: Text('Add an entire Drive folder'),
+                          child: DesktopImportMenuTile(
+                            icon: Icons.folder_shared_outlined,
+                            label: 'Add an entire Drive folder',
                           ),
                         ),
                         PopupMenuItem(
                           value: 'drive-year',
                           enabled: !busy,
-                          child: const ListTile(
-                            leading: Icon(Icons.history),
-                            title: Text('Import last 1 year from Drive'),
+                          child: DesktopImportMenuTile(
+                            icon: Icons.history,
+                            label: 'Import last 1 year from Drive',
                           ),
                         ),
                         PopupMenuItem(
                           value: 'url',
-                          child: ListTile(
-                            leading: Icon(Icons.link),
-                            title: Text('Add from URL'),
+                          child: DesktopImportMenuTile(
+                            icon: Icons.link,
+                            label: 'Add from URL',
                           ),
                         ),
                       ],
@@ -1272,7 +1289,10 @@ extension _ScreenshotScreens on _WorkspaceState {
                         backgroundColor: _blue,
                         padding: const EdgeInsets.all(16),
                         avatar: const Icon(Icons.add),
-                        label: const Text('Add source'),
+                        label: const Text(
+                          'Add source',
+                          style: DesktopVisuals.control,
+                        ),
                       ),
                     ),
                   ],
@@ -1291,7 +1311,10 @@ extension _ScreenshotScreens on _WorkspaceState {
                         Theme.of(context).scaffoldBackgroundColor,
                       ),
                       avatar: const Icon(Icons.add, size: 18),
-                      label: const Text('Add label'),
+                      label: const Text(
+                        'Add label',
+                        style: DesktopVisuals.control,
+                      ),
                       onPressed: busy ? null : createOrganizationLabel,
                     ),
                     ...labels.map(
@@ -1323,7 +1346,10 @@ extension _ScreenshotScreens on _WorkspaceState {
                       FilterChip(
                         showCheckmark: false,
                         shape: const StadiumBorder(side: BorderSide.none),
-                        label: Text('All ${all.length}'),
+                        label: Text(
+                          'All ${all.length}',
+                          style: DesktopVisuals.control,
+                        ),
                         selected: typeFilter == null,
                         onSelected: (_) => update(() => typeFilter = null),
                       ),
@@ -1344,7 +1370,10 @@ extension _ScreenshotScreens on _WorkspaceState {
                               size: 16,
                               color: sourceColor(type),
                             ),
-                            label: Text('${counts[type] ?? 0}'),
+                            label: Text(
+                              '${counts[type] ?? 0}',
+                              style: DesktopVisuals.control,
+                            ),
                             selected: typeFilter == type,
                             onSelected: (_) => update(
                               () =>
@@ -1445,7 +1474,7 @@ extension _ScreenshotScreens on _WorkspaceState {
         ),
         Expanded(
           child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: DesktopVisuals.panelRadius,
             child: ColoredBox(
               color: const Color(0xfff8faff),
               child: (graphView ? all : rows).isEmpty
@@ -1495,10 +1524,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                       itemBuilder: (_, index) {
                         if (index == 0)
                           return Padding(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
+                            padding: DesktopVisuals.sourceHeaderPadding,
                             child: sourceCells(null),
                           );
                         if (index == 1) return const Divider(height: 1);
@@ -1637,7 +1663,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       child: InkWell(
         onTap: () => this.source(source),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          padding: DesktopVisuals.sourceRowPadding,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2735,20 +2761,19 @@ extension _ScreenshotScreens on _WorkspaceState {
           Row(
             children: [
               IconButton(
-                tooltip: 'Knowledge sources',
-                onPressed: () => update(() => tab = 0),
+                key: const ValueKey('chat-web-search'),
+                tooltip: d.webSearchAvailable
+                    ? searchWeb
+                          ? 'Answer include web search result'
+                          : 'Answer does not use web search'
+                    : 'Web search is unavailable in this build',
+                isSelected: searchWeb,
                 style: IconButton.styleFrom(
                   backgroundColor: const Color(0xffeeeeee),
+                  foregroundColor: const Color(0xff757575),
                   minimumSize: const Size(36, 28),
                   padding: const EdgeInsets.symmetric(horizontal: 10),
                 ),
-                icon: const Icon(Icons.manage_search, size: 18),
-              ),
-              IconButton(
-                tooltip: d.webSearchAvailable
-                    ? 'Search the web'
-                    : 'Web search is unavailable in this build',
-                isSelected: searchWeb,
                 onPressed: asking || (!d.webSearchAvailable && !searchWeb)
                     ? null
                     : () => update(() {
@@ -2758,8 +2783,12 @@ extension _ScreenshotScreens on _WorkspaceState {
                           webSearchScopes.add(scope);
                         }
                       }),
-                icon: const Icon(Icons.public_outlined, size: 18),
-                selectedIcon: const Icon(Icons.public, size: 18, color: _ink),
+                icon: const Icon(Icons.travel_explore, size: 18),
+                selectedIcon: const Icon(
+                  Icons.travel_explore,
+                  size: 18,
+                  color: _ink,
+                ),
               ),
               const Spacer(),
               if (history.isNotEmpty && !compact)
@@ -2786,7 +2815,7 @@ extension _ScreenshotScreens on _WorkspaceState {
               minLines: 1,
               maxLines: 4,
               textInputAction: TextInputAction.send,
-              style: const TextStyle(fontSize: 14),
+              style: DesktopVisuals.field,
               onSubmitted: (_) {
                 if (!busy &&
                     !meetingEnhancing &&
@@ -2958,10 +2987,7 @@ extension _ScreenshotScreens on _WorkspaceState {
         entries.add(
           Padding(
             padding: const EdgeInsets.only(top: 12, bottom: 16),
-            child: Text(
-              day,
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
-            ),
+            child: Text(day, style: MeetingVisuals.dateHeading),
           ),
         );
         previousDay = day;
@@ -3032,6 +3058,10 @@ extension _ScreenshotScreens on _WorkspaceState {
     final active = state == 'recording' || state == 'transcribing';
     void open() => update(() => meetingPreviewId = id);
     return Card(
+      margin: EdgeInsets.zero,
+      shape: const RoundedRectangleBorder(
+        borderRadius: MeetingVisuals.previewRadius,
+      ),
       color: meetingPreviewId == id ? const Color(0xffd2deee) : Colors.white,
       child: LayoutBuilder(
         builder: (context, constraints) {
@@ -3043,7 +3073,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                 meeting['title'] as String,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(fontSize: 16),
+                style: MeetingVisuals.listTitle,
               ),
               if (narrow && start > 0)
                 Text(
@@ -3114,7 +3144,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                       width: 155,
                       child: Text(
                         '${meetingClock(start)} – ${meetingClock(end)}',
-                        style: const TextStyle(fontSize: 12),
+                        style: MeetingVisuals.metadata,
                       ),
                     ),
                   Expanded(child: details),
@@ -3131,7 +3161,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                         const Icon(Icons.attach_file, size: 14),
                         Text(
                           '$attachmentCount',
-                          style: const TextStyle(fontSize: 12),
+                          style: MeetingVisuals.metadata,
                         ),
                       ],
                     ),
@@ -3191,15 +3221,21 @@ extension _ScreenshotScreens on _WorkspaceState {
   String meetingMarkdown() => composeMeetingExport(d.store).markdown;
 
   Widget stats() {
-    final meetings = d.store
-        .rows(
-          'SELECT COUNT(DISTINCT meeting_id) AS n FROM transcript WHERE final=1',
-        )
-        .single['n'];
+    final meetings =
+        d.store
+                .rows(
+                  'SELECT COUNT(DISTINCT meeting_id) AS n FROM transcript WHERE final=1',
+                )
+                .single['n']
+            as int;
     final sources = d.store.sources.length;
-    final answers = d.store
-        .rows("SELECT COUNT(*) AS n FROM answers WHERE status='completed'")
-        .single['n'];
+    final answers =
+        d.store
+                .rows(
+                  "SELECT COUNT(*) AS n FROM answers WHERE status='completed'",
+                )
+                .single['n']
+            as int;
     final weekly = List<int>.filled(5, 0);
     for (final a in d.store.rows(
       "SELECT body,created FROM answers WHERE status='completed'",
@@ -3222,6 +3258,9 @@ extension _ScreenshotScreens on _WorkspaceState {
           SizedBox(
             width: double.infinity,
             child: Card(
+              shape: const RoundedRectangleBorder(
+                borderRadius: DesktopVisuals.panelRadius,
+              ),
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Wrap(
@@ -3247,10 +3286,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                             ),
                           ),
                           const Spacer(),
-                          Text(
-                            '${localTokens()}',
-                            style: const TextStyle(fontSize: 52),
-                          ),
+                          DesktopMetricValue(localTokens(), fontSize: 52),
                           const Spacer(),
                           const Text('Estimated from saved local AI output'),
                         ],
@@ -3279,7 +3315,14 @@ extension _ScreenshotScreens on _WorkspaceState {
                                 double.infinity,
                                 double.infinity,
                               ),
-                              painter: _UsageChart(weekly),
+                              painter: _UsageChart(
+                                weekly,
+                                textStyle: Theme.of(
+                                  context,
+                                ).textTheme.bodySmall!,
+                                textScaler: MediaQuery.textScalerOf(context),
+                                textDirection: Directionality.of(context),
+                              ),
                             ),
                           ),
                         ],
@@ -3301,21 +3344,21 @@ extension _ScreenshotScreens on _WorkspaceState {
                 runSpacing: 16,
                 children: [
                   statCard(
-                    '$meetings',
+                    meetings,
                     'Meetings transcribed',
                     'Fully processed on-device',
                     Icons.mic_none,
                     width: cardWidth,
                   ),
                   statCard(
-                    '$sources',
+                    sources,
                     'Knowledge sources added',
                     'Indexed with ${embeddingName()}',
                     Icons.folder_outlined,
                     width: cardWidth,
                   ),
                   statCard(
-                    '$answers',
+                    answers,
                     'AI answers provided',
                     'Zero cloud API calls',
                     Icons.auto_awesome,
@@ -3327,6 +3370,9 @@ extension _ScreenshotScreens on _WorkspaceState {
           ),
           const SizedBox(height: 16),
           Card(
+            shape: const RoundedRectangleBorder(
+              borderRadius: DesktopVisuals.panelRadius,
+            ),
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: LayoutBuilder(
@@ -3418,7 +3464,7 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Widget statCard(
-    String value,
+    int value,
     String title,
     String subtitle,
     IconData icon, {
@@ -3426,6 +3472,9 @@ extension _ScreenshotScreens on _WorkspaceState {
   }) => SizedBox(
     width: width,
     child: Card(
+      shape: const RoundedRectangleBorder(
+        borderRadius: DesktopVisuals.panelRadius,
+      ),
       child: Padding(
         padding: const EdgeInsets.all(20),
         child: Row(
@@ -3451,7 +3500,7 @@ extension _ScreenshotScreens on _WorkspaceState {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(value, style: const TextStyle(fontSize: 24)),
+                  DesktopMetricValue(value),
                   Text(
                     title,
                     style: const TextStyle(
@@ -3555,30 +3604,25 @@ extension _ScreenshotScreens on _WorkspaceState {
     final devices = availableAudioDevices
         .where((device) => device.playback == playback)
         .toList();
-    return SizedBox(
+    return DesktopSettingSelect<String>(
       width: 300,
-      child: DropdownButton<String>(
-        isExpanded: true,
-        value: current,
-        items: [
-          const DropdownMenuItem(value: 'auto', child: Text('System default')),
-          if (current != 'auto' &&
-              !devices.any((device) => device.name == current))
-            DropdownMenuItem(
-              value: current,
-              child: const Text('Saved device unavailable'),
-            ),
-          ...devices.map(
-            (device) => DropdownMenuItem(
-              value: device.name,
-              child: Text(device.label, overflow: TextOverflow.ellipsis),
-            ),
+      value: current,
+      items: [
+        const DropdownMenuItem(value: 'auto', child: Text('System default')),
+        if (current != 'auto' &&
+            !devices.any((device) => device.name == current))
+          DropdownMenuItem(
+            value: current,
+            child: const Text('Saved device unavailable'),
           ),
-        ],
-        onChanged: recording != null
-            ? null
-            : (value) => preference(key, value!),
-      ),
+        ...devices.map(
+          (device) => DropdownMenuItem(
+            value: device.name,
+            child: Text(device.label, overflow: TextOverflow.ellipsis),
+          ),
+        ),
+      ],
+      onChanged: recording != null ? null : (value) => preference(key, value!),
     );
   }
 
@@ -3588,10 +3632,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       children: [
         heading('Settings'),
         const SizedBox(height: 30),
-        const Text(
-          'General',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
-        ),
+        const Text('General', style: DesktopVisuals.sectionTitle),
         const SizedBox(height: 6),
         const Text('Configure general application settings.'),
         const SizedBox(height: 16),
@@ -3733,13 +3774,19 @@ extension _ScreenshotScreens on _WorkspaceState {
               settingRow(
                 'Auto-stop transcribing after inactivity',
                 'Finalize when microphone and playback audio are inactive.',
-                DropdownButton<String>(
+                DesktopSettingSelect<String>(
                   value: d.store.preference('inactivity', '15'),
                   items: ['0', '5', '10', '15', '30']
                       .map(
                         (v) => DropdownMenuItem(
                           value: v,
-                          child: Text(v == '0' ? 'Never' : '$v minutes'),
+                          child: Text(
+                            v == '0'
+                                ? 'Never'
+                                : v == '15'
+                                ? '15 minutes (Default)'
+                                : '$v minutes',
+                          ),
                         ),
                       )
                       .toList(),
@@ -3786,10 +3833,7 @@ extension _ScreenshotScreens on _WorkspaceState {
           ),
         ),
         const SizedBox(height: 24),
-        const Text(
-          'Hotkeys',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
-        ),
+        const Text('Hotkeys', style: DesktopVisuals.sectionTitle),
         const SizedBox(height: 8),
         Text(
           d.store.preference('globalShortcut') == 'true'
@@ -3833,7 +3877,7 @@ extension _ScreenshotScreens on _WorkspaceState {
         const SizedBox(height: 24),
         const Text(
           'Audio and notifications',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
+          style: DesktopVisuals.sectionTitle,
         ),
         Card(
           child: Column(
@@ -3906,10 +3950,7 @@ extension _ScreenshotScreens on _WorkspaceState {
           ),
         ),
         const SizedBox(height: 24),
-        const Text(
-          'Connected services',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.w500),
-        ),
+        const Text('Connected services', style: DesktopVisuals.sectionTitle),
         Card(
           child: Padding(
             padding: const EdgeInsets.all(20),
@@ -4004,7 +4045,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                 settingRow(
                   'Refresh interval for Calendar events and Drive files',
                   'Refreshes imported Drive folders, files and upcoming Calendar events.',
-                  DropdownButton<String>(
+                  DesktopSettingSelect<String>(
                     value: d.store.preference('googleRefreshHours', '4'),
                     items: ['1', '2', '4', '8', '24']
                         .map(
@@ -4140,44 +4181,115 @@ class _SourceLinks extends CustomPainter {
 
 class _UsageChart extends CustomPainter {
   final List<int> values;
-  _UsageChart(this.values);
+  final TextStyle textStyle;
+  final TextScaler textScaler;
+  final TextDirection textDirection;
+  _UsageChart(
+    this.values, {
+    required this.textStyle,
+    required this.textScaler,
+    required this.textDirection,
+  });
+
+  TextPainter label(
+    String text,
+    double fontSize, {
+    double maxWidth = double.infinity,
+  }) => TextPainter(
+    text: TextSpan(
+      text: text,
+      style: textStyle.copyWith(
+        fontSize: fontSize,
+        color: const Color(0xff50565c),
+      ),
+    ),
+    textDirection: textDirection,
+    textScaler: textScaler,
+    maxLines: 1,
+    ellipsis: '…',
+  )..layout(maxWidth: maxWidth);
+
   @override
   void paint(Canvas canvas, Size size) {
     final maxValue = math.max(4, values.reduce(math.max));
-    final paint = Paint()..color = const Color(0xffdfe3e9);
-    for (var i = 0; i <= 4; i++) {
-      final y = i * (size.height - 30) / 4;
-      canvas.drawLine(Offset(44, y), Offset(size.width, y), paint);
-      final tick = TextPainter(
-        text: TextSpan(
-          text: '${(maxValue * (4 - i) / 4).round()}',
-          style: const TextStyle(color: Color(0xff50565c), fontSize: 11),
+    final ticks = [
+      for (var i = 0; i <= 4; i++)
+        label(
+          NumberFormat.compact().format((maxValue * (4 - i) / 4).round()),
+          11,
         ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tick.paint(canvas, Offset(0, y));
+    ];
+    final gutter = math.min(
+      size.width * .3,
+      math.max(40.0, ticks.map((t) => t.width).reduce(math.max) + 8),
+    );
+    final columnWidth = (size.width - gutter) / values.length;
+    final labels = [
+      for (var i = 0; i < values.length; i++) label(_weekLabel(i), 12),
+    ];
+    for (var i = 0; i < labels.length; i++) {
+      if (labels[i].width > columnWidth - 4) {
+        labels[i].dispose();
+        labels[i] = label(
+          _weekLabel(i).replaceFirst('Week of ', ''),
+          12,
+          maxWidth: math.max(1, columnWidth - 4),
+        );
+      }
+    }
+    final plotHeight = math.max(
+      0.0,
+      size.height - labels.map((t) => t.height).reduce(math.max) - 10,
+    );
+    final paint = Paint()..color = const Color(0xffdfe3e9);
+    for (var i = 0; i < ticks.length; i++) {
+      final y = i * plotHeight / 4;
+      canvas.drawLine(Offset(gutter, y), Offset(size.width, y), paint);
+      ticks[i].paint(canvas, Offset(0, math.max(0, y - ticks[i].height / 2)));
     }
     paint.color = const Color(0xff75c8ff);
     for (var i = 0; i < values.length; i++) {
-      final x = 44 + (i + .3) * (size.width - 44) / 5;
-      final height = values[i] / maxValue * (size.height - 30);
+      final height = values[i] / maxValue * plotHeight;
+      final center = gutter + (i + .5) * columnWidth;
       canvas.drawRRect(
         RRect.fromRectAndRadius(
-          Rect.fromLTWH(x, size.height - 30 - height, size.width / 12, height),
+          Rect.fromLTWH(
+            center - columnWidth * .2,
+            plotHeight - height,
+            columnWidth * .4,
+            height,
+          ),
           const Radius.circular(4),
         ),
         paint,
       );
-      final label = TextPainter(
-        text: TextSpan(
-          text: _weekLabel(i),
-          style: const TextStyle(color: Color(0xff50565c), fontSize: 12),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      label.paint(canvas, Offset(x, size.height - 20));
+      labels[i].paint(
+        canvas,
+        Offset(center - labels[i].width / 2, plotHeight + 8),
+      );
+    }
+    for (final painter in [...ticks, ...labels]) {
+      painter.dispose();
     }
   }
+
+  @override
+  SemanticsBuilderCallback get semanticsBuilder =>
+      (size) => [
+        for (var i = 0; i < values.length; i++)
+          CustomPainterSemantics(
+            rect: Rect.fromLTWH(
+              i * size.width / values.length,
+              0,
+              size.width / values.length,
+              size.height,
+            ),
+            properties: SemanticsProperties(
+              label: '${_weekLabel(i)}: ${values[i]} local output tokens',
+              textDirection: textDirection,
+            ),
+          ),
+      ];
 
   String _weekLabel(int index) {
     final today = DateTime.now();
