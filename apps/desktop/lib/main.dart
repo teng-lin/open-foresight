@@ -39,6 +39,7 @@ import 'hypr_shortcuts.dart';
 import 'google_auth.dart';
 import 'google_connections.dart';
 import 'google_picker.dart';
+import 'google_sign_in_dialog.dart';
 import 'audio_devices.dart';
 import 'gemma_setup_view.dart';
 import 'speech_setup_view.dart';
@@ -379,8 +380,16 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   double answerFontSize = 16;
   final hiddenAnswers = <int>{};
   String error = '', answer = '', modelState = '';
-  final question = TextEditingController(),
-      noteTitle = TextEditingController(),
+  String? askingScope;
+  final questionDrafts = <String, TextEditingController>{};
+  TextEditingController questionFor(int? meetingScope) =>
+      questionDrafts.putIfAbsent(
+        meetingScope == null ? 'desktop' : 'meeting:$meetingScope',
+        TextEditingController.new,
+      );
+  TextEditingController get question =>
+      questionFor(tab == 3 ? meetingId : null);
+  final noteTitle = TextEditingController(),
       noteBody = TextEditingController(),
       modelPath = TextEditingController(),
       runtimePath = TextEditingController(),
@@ -592,7 +601,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     graphTransform.dispose();
     recording?.dispose();
     for (final c in [
-      question,
+      ...questionDrafts.values,
       sourceSearchController,
       graphLabelInput,
       noteTitle,
@@ -1048,15 +1057,22 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       await importGoogleClient();
       if (!mounted || googleAuth.client == null) return;
     }
-    await googleAuth.signIn((uri) async {
-      if (mounted)
-        setState(
-          () => googleState = 'Complete Google sign-in in your browser.',
-        );
-      await openPlatformUri(uri);
-    });
-    if (mounted)
-      setState(() => googleState = 'Connected as ${googleAuth.email}');
+    final outcome = await showDialog<GoogleSignInOutcome>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) =>
+          GoogleSignInDialog(auth: googleAuth, openBrowser: openPlatformUri),
+    );
+    if (!mounted) return;
+    if (outcome == null || outcome.cancelled) {
+      setState(() => googleState = 'Google sign-in cancelled.');
+      return;
+    }
+    if (outcome.error != null) {
+      setState(() => googleState = 'Google sign-in did not finish. Try again.');
+      Error.throwWithStackTrace(outcome.error!, outcome.stackTrace!);
+    }
+    setState(() => googleState = 'Connected as ${googleAuth.email}');
     await google.syncCalendar();
   }
 
