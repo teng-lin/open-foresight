@@ -27,7 +27,8 @@ int main(int argc, char **argv) {
             << std::endl;
   const char *stall_after = std::getenv("FORESIGHT_FIXTURE_STALL_AFTER");
   const int stall_at = stall_after ? std::atoi(stall_after) : -1;
-  const bool fail_encode = std::getenv("FORESIGHT_FIXTURE_FAIL_ENCODE") != nullptr;
+  const bool fail_encode =
+      std::getenv("FORESIGHT_FIXTURE_FAIL_ENCODE") != nullptr;
   int handled = 0;
   std::string line;
   while (std::getline(std::cin, line)) {

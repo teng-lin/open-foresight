@@ -16,7 +16,9 @@
 static bool dead(pid_t pid) {
 #ifdef __APPLE__
   proc_bsdinfo info{};
-  return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info) || info.pbi_status == SZOMB;
+  return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) !=
+             sizeof(info) ||
+         info.pbi_status == SZOMB;
 #else
   std::ifstream status("/proc/" + std::to_string(pid) + "/stat");
   std::string line;
@@ -32,11 +34,13 @@ int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
 #ifdef __APPLE__
   int supervised = foresight::supervise_worker(argc, argv);
-  if (supervised >= 0) return supervised;
+  if (supervised >= 0)
+    return supervised;
   setenv("FORESIGHT_HELPER", foresight::executable_path().c_str(), 1);
 #endif
   std::string directory =
-      (fs::temp_directory_path().string()+"/foresight-model-lifetime-") + std::to_string(getpid());
+      (fs::temp_directory_path().string() + "/foresight-model-lifetime-") +
+      std::to_string(getpid());
   fs::create_directories(directory + "/stubborn");
   try {
     REQUIRE(argc == 2);
@@ -125,8 +129,13 @@ int main(int argc, char **argv) {
       pid_t racing = fork();
       REQUIRE(racing >= 0);
       if (racing == 0) {
-        try { Model launching(directory + "/stubborn", false); for (;;) pause(); }
-        catch (...) { _exit(2); }
+        try {
+          Model launching(directory + "/stubborn", false);
+          for (;;)
+            pause();
+        } catch (...) {
+          _exit(2);
+        }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(delay));
       kill(racing, SIGKILL);
