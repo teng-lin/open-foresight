@@ -116,6 +116,25 @@ void main() {
       expect(state.graphYaw, greaterThan(initial));
       await tester.tap(find.byTooltip('Pause graph animation'));
       await tester.pumpAndSettle();
+      for (var i = 0; i < 100 && state.graphOrganizing; i++) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+      }
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Zoom in'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(state.graphCameraController.isAnimating, true);
+      await tester.pump(const Duration(milliseconds: 51));
+      expect(state.graphCameraController.isAnimating, false);
+      await tester.tap(find.byTooltip('Fit graph'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(state.graphCameraController.isAnimating, true);
+      await tester.pump(const Duration(milliseconds: 51));
+      expect(state.graphCameraController.isAnimating, false);
       final paused = state.graphYaw as double;
       final sourcePaused = domain.sourcesPaused;
       await tester.pump(const Duration(seconds: 5));
