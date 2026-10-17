@@ -66,7 +66,7 @@ def main():
         "file": FILENAME,
         "sha256": SHA256,
         "bytes": SIZE,
-        "license": "Apache-2.0",
+        "license_source": f"https://huggingface.co/{REPOSITORY}/blob/{REVISION}/README.md",
         "source": "Public LiteRT Community conversion linked by Google",
         "limitation": "Exact Mac downloaded weight checksum is not established",
     }
