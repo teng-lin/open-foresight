@@ -65,6 +65,21 @@ void main() {
       final generator = WidgetNoteGenerator();
       await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
+      Future<void> waitForUi(bool Function() ready) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        while (!ready() && DateTime.now().isBefore(deadline)) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 20)),
+          );
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(
+          ready(),
+          isTrue,
+          reason: 'Throttled service state must reach the visible editor',
+        );
+      }
+
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
@@ -73,7 +88,12 @@ void main() {
         work = domain.application.enhanceNotes(id);
         await Future<void>.delayed(const Duration(milliseconds: 20));
       });
-      await tester.pump();
+      await waitForUi(
+        () => find
+            .byKey(const ValueKey('cancel-note-enhancement'))
+            .evaluate()
+            .isNotEmpty,
+      );
       expect(
         find.byKey(const ValueKey('cancel-note-enhancement')),
         findsOneWidget,
@@ -88,7 +108,16 @@ void main() {
         generator.events.add({'type': 'delta', 'text': '- Streamed first'});
         await Future<void>.delayed(const Duration(milliseconds: 20));
       });
-      await tester.pump();
+      await waitForUi(
+        () => find
+            .byWidgetPredicate(
+              (widget) =>
+                  widget is GeneratedContent &&
+                  widget.markdown == '- Streamed first',
+            )
+            .evaluate()
+            .isNotEmpty,
+      );
       expect(
         find.byWidgetPredicate(
           (widget) =>
@@ -117,7 +146,12 @@ void main() {
         generator.events.add({'type': 'delta', 'text': ' ignored'});
         await work;
       });
-      await tester.pump();
+      await waitForUi(
+        () => find
+            .byKey(const ValueKey('cancel-note-enhancement'))
+            .evaluate()
+            .isEmpty,
+      );
       expect(
         find.byKey(const ValueKey('cancel-note-enhancement')),
         findsNothing,
