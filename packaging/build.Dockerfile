@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Reusable SDK is built separately; pass its immutable registry digest in CI.
 ARG SDK_IMAGE=open-foresight-sdk:local
-FROM ${SDK_IMAGE} AS builder
+FROM ${SDK_IMAGE} AS tested
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Header-only application dependency, independent of the expensive SDK build.
 RUN apt-get update && apt-get install -y --no-install-recommends nlohmann-json3-dev libicu-dev && \
@@ -15,12 +15,19 @@ RUN git -C /opt/flutter fetch --depth=1 origin refs/tags/3.35.7:refs/tags/3.35.7
     rm -f /opt/flutter/bin/cache/flutter.version.json && \
     flutter --version --machine | python3 -c 'import json, sys; assert json.load(sys.stdin)["frameworkVersion"] == "3.35.7"'
 WORKDIR /src
+# Fetch this pinned runtime independently of application/source-revision changes.
+COPY tools/prepare_onnx.py tools/prepare_onnx.py
+RUN python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 COPY . .
 ARG SOURCE_REVISION
-ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python
-RUN python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
+ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python FORESIGHT_PARALLEL_GATES=1
 RUN test -n "$SOURCE_REVISION" && \
     ./tools/build.sh "-DFORESIGHT_BUILD_REVISION=$SOURCE_REVISION"
+# Export only this tested, secret-free stage to the reusable registry cache.
+# Packaging consumes the same local BuildKit result without exporting a fresh
+# secret-bearing bundle to the cache on every release attempt.
+FROM tested AS builder
+ARG SOURCE_REVISION
 # Application OAuth configuration is optional. BuildKit secrets never become
 # build arguments/layers; the intentionally distributed application config is
 # copied into the final bundle. Account tokens must never be supplied here.

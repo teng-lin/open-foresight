@@ -98,6 +98,56 @@ cost time. The existing timing evidence below predates this redesign.
 
 ---
 
+## Linux candidate cache and gate scheduling
+
+The successful bundle job in [run 39044666354](https://github.com/teng-lin/open-foresight/actions/runs/39044666354/job/117430975486)
+took about eleven minutes: application build/test took 373.9 seconds, while
+actual bundle assembly and ABI validation took only 2.3 seconds. Exporting the
+complete builder cache to Actions took another 175.1 seconds. SDK setup/pull,
+archive/upload and cleanup account for most of the rest. These measurements
+predate the changes below and do not establish their speedup.
+
+Linux candidates now use the SDK image's GHCR repository for a rolling
+`app-buildcache-x86-64` tag. SDK layers already exist in that repository, so
+exporting the application cache no longer sends them to the separate Actions
+cache service. Only the main-only `linux-bundle` job receives `packages: write`;
+it must have write access to the existing SDK package. Registry permissions,
+network transfers and cold application layers still cost time. Unlike Actions
+caches, GHCR versions have no automatic seven-day eviction: the tag is rolling,
+but untagged cache versions/blobs may need registry retention/cleanup. Keep
+qualified SDK digests when cleaning up this shared repository.
+
+The `tested` Docker target ends after native build/CTest, core and desktop
+analysis/tests/builds, and service integration. It enables the existing parallel
+core/desktop orchestrator, preserving failure propagation and the service
+integration prerequisite. The pinned ONNX download now precedes the repository
+copy and revision argument, so application-only changes reuse it. Its archive
+and library checksum checks are unchanged.
+
+CI exports only `tested` to the registry cache, then assembles the distribution
+bundle using the same local BuildKit result. Distribution secrets are supplied
+only to that second build, which refreshes packaging for every run/attempt and
+still requires Google configuration and ABI validation. The completed bundle
+continues through exact-commit qualification and distro installation gates.
+
+`SOURCE_REVISION` remains the actual source commit in both the helper binary and
+bundle manifest. A new commit therefore still invalidates the revision-stamped
+build/test layer; this change does not promise reusing a whole application build
+across documentation, packaging or source commits. `COPY . .` still includes the
+full repository context. Further separation would require explicit compile/test
+boundaries and provenance checks, rather than replacing the commit with a stable
+content hash. The first registry cache export is also cold. Compare successful
+hosted runs before claiming an overall time reduction.
+
+Local verification: all workflows passed actionlint; Docker's build check passed
+without warnings; 11 CI dependency/provenance tests and three process-level
+parallel-gate tests passed. Packaging contracts passed on the host (five passed,
+two Linux-only skips) and in a Linux GCC container (six passed, one CMake-only
+skip), exercising all seven distinct contracts across those environments. A full
+x86-64 SDK/application build remains a hosted-CI validation requirement.
+
+---
+
 ## Earlier macOS timing and parallel gates
 
 Run [39009404171](https://github.com/teng-lin/open-foresight/actions/runs/39009404171)
@@ -122,8 +172,8 @@ build/CTest prerequisite. macOS CI enables this within its existing runner,
 without allocating additional jobs. Both gates must pass before service
 integration or packaging. The core group still runs analysis, coverage, and both
 AOT compilations in order. The desktop group still runs analysis, all widget
-tests, and the release build in order. Default developer and Linux builds retain
-the sequential path; both paths call the same gate script.
+tests, and the release build in order. Default developer builds retain the sequential path; Linux candidate builds
+now enable the same parallel gates; both paths call the same gate script.
 
 Each parallel gate writes its own log under `test-results/build-gates/`. Full
 logs and exit statuses are printed in separate Actions groups after each awaited
