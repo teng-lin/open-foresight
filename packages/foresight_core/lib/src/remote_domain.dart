@@ -2,19 +2,28 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'google_auth.dart';
-import 'google_connections.dart';
-import 'domain.dart';
+import 'desktop_connection.dart';
 import 'helper.dart';
-import 'native.dart';
 import 'profile_paths.dart';
-import 'recording.dart';
 import 'service.dart';
 import 'store.dart';
 import 'generated/helper_control.pb.dart' as control;
 
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
-class RemoteDomain extends Domain {
+class RemoteDomain implements DesktopConnection {
+  @override
+  final Store store;
+  @override
+  final Helper helper;
+  GenerationStatus? generator;
+  @override
+  late final GoogleAccount googleAuth = RemoteGoogleAuth(this);
+  @override
+  late final ConnectedSources google = RemoteGoogleConnections(
+    this,
+    googleAuth,
+  );
   ServiceClient client;
   final RemoteRuntime runtime;
   final ProfilePaths profile;
@@ -44,12 +53,12 @@ class RemoteDomain extends Domain {
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
   RemoteDomain._(
-    Store store,
-    Helper helper,
+    this.store,
+    this.helper,
     this.client,
     this.runtime,
     this.profile,
-  ) : super(store, helper) {
+  ) {
     _listen();
   }
   void _apply(Map<String, dynamic> event) {
@@ -272,6 +281,8 @@ class RemoteDomain extends Domain {
     }
   }
 
+  Stream<String> ask(String question) => askInConversation(question, 'desktop');
+
   @override
   Stream<String> askInConversation(
     String question,
@@ -332,7 +343,6 @@ class RemoteDomain extends Domain {
     _disposed = true;
     unawaited(_events?.cancel());
     unawaited(client.close());
-    super.close();
   }
 }
 
@@ -348,7 +358,7 @@ class RemoteHelper extends Helper {
   }
 }
 
-class RemoteRuntime implements NativeRuntime {
+class RemoteRuntime implements GenerationStatus {
   ServiceClient client;
   Map<String, dynamic> state = {};
   RemoteRuntime(this.client);
@@ -361,11 +371,9 @@ class RemoteRuntime implements NativeRuntime {
       client.cancelAnswers(requestId: requestId);
   @override
   void close() {} // The service owns this worker.
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class RemoteRecording implements Recording {
+class RemoteRecording implements RecordingStatus {
   final Map<String, dynamic> snapshot;
   RemoteRecording(this.snapshot);
   @override
@@ -394,11 +402,9 @@ class RemoteRecording implements Recording {
       .toList();
   @override
   void dispose() {}
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class RemoteGoogleAuth implements GoogleAuth {
+class RemoteGoogleAuth implements GoogleAccount {
   final RemoteDomain domain;
   RemoteGoogleAuth(this.domain);
   @override
@@ -449,15 +455,11 @@ class RemoteGoogleAuth implements GoogleAuth {
   Future<void> disconnect() => _call('google.disconnect');
   @override
   Future<void> close() async {}
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class RemoteGoogleConnections implements GoogleConnections {
-  @override
+class RemoteGoogleConnections implements ConnectedSources {
   final RemoteDomain domain;
-  @override
-  final GoogleAuth auth;
+  final GoogleAccount auth;
   RemoteGoogleConnections(this.domain, this.auth);
   @override
   int get lastCompletedRefreshMs =>
@@ -530,13 +532,9 @@ class RemoteGoogleConnections implements GoogleConnections {
         .toList();
   }
 
-  @override
   Future<void> reminders(
     DateTime now,
     Future<void> Function(String) deliver,
   ) async {} // Service timer owns delivery.
-  @override
   void close() {}
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

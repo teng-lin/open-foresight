@@ -1,3 +1,4 @@
+import 'package:foresight_core/remote.dart' show DesktopConnection, GenerationStatus, RecordingStatus, GoogleAccount, ConnectedSources;
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'gemma_download.dart';
@@ -13,9 +14,9 @@ class GemmaSetupDialog extends StatefulWidget {
   final Directory directory;
   final String library, runner;
   final int memoryGb;
-  final void Function(NativeRuntime, GemmaModel) installed;
+  final void Function(GenerationStatus, GemmaModel) installed;
   final VoidCallback localSetup;
-  final Future<NativeRuntime> Function(String, String, bool Function())?
+  final Future<GenerationStatus> Function(String, String, bool Function())?
   installGeneration;
   const GemmaSetupDialog({
     super.key,

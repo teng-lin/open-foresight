@@ -14,7 +14,6 @@ import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 class _Domain extends Domain {
   _Domain(super.store, super.helper, this.detector);
   final QueryCompletionRuntime detector;
-  @override
   late final Application application = Application(
     this,
     queryRuntime: detector,

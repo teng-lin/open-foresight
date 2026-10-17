@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -66,7 +67,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+    await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
     final dynamic state = tester.state(find.byType(Workspace));
     state.update(() => state.tab = 1);
     await tester.pumpAndSettle();

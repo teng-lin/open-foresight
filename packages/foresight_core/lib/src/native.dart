@@ -1,3 +1,4 @@
+import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -110,7 +111,7 @@ class _GenerationRequest {
   _GenerationRequest(this.id, this.handle, this.epoch);
 }
 
-class NativeRuntime {
+class NativeRuntime implements GenerationStatus {
   late final DynamicLibrary lib;
   Pointer<Void> engine = nullptr, conversation = nullptr;
   String template = 'raw';

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -52,7 +53,7 @@ void main() {
       final opened = <Uri>[];
       await tester.pumpWidget(
         Foresight(
-          domain,
+          TestDesktopConnection(domain),
           deviceLoader: () async => [],
           sourceLinkOpener: (uri) async {
             opened.add(uri);

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -23,7 +24,7 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(Domain(store, helper), deviceLoader: () async => []),
+          Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();
@@ -155,7 +156,7 @@ void main() {
           RepaintBoundary(
             key: key,
             child: Foresight(
-              Domain(store, helper),
+              TestDesktopConnection(Domain(store, helper)),
               deviceLoader: () async => [],
             ),
           ),

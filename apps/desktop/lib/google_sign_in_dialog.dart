@@ -1,6 +1,6 @@
+import 'package:foresight_core/remote.dart' show DesktopConnection, GenerationStatus, RecordingStatus, GoogleAccount, ConnectedSources;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'google_auth.dart';
 
 class GoogleSignInOutcome {
   const GoogleSignInOutcome({
@@ -21,7 +21,7 @@ class GoogleSignInDialog extends StatefulWidget {
     required this.auth,
     required this.openBrowser,
   });
-  final GoogleAuth auth;
+  final GoogleAccount auth;
   final Future<void> Function(Uri) openBrowser;
 
   @override

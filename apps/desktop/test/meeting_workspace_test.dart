@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/application.dart';
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -72,7 +74,7 @@ void main() {
       );
       final generator = NotesRuntime();
       final domain = Domain(store, helper);
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();
@@ -181,7 +183,7 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
-          child: Foresight(Domain(store, helper), deviceLoader: () async => []),
+          child: Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
         ),
       );
       final dynamic state = tester.state(find.byType(Workspace));

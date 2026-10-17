@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -80,7 +81,7 @@ void main() {
       }
 
       Future<void> showGraph(RestoringGraphDomain d) async {
-        await tester.pumpWidget(Foresight(d, deviceLoader: () async => []));
+        await tester.pumpWidget(Foresight(TestDesktopConnection(d), deviceLoader: () async => []));
         await tester.tap(find.text('Sources'));
         await tester.pumpAndSettle();
         await tester.tap(find.text('Graph view'));

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -8,7 +9,7 @@ import 'package:open_foresight/store.dart';
 import 'package:open_foresight/note_save_scheduler.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
-class GatedNoteDomain extends Domain {
+class GatedNoteDomain extends CommandFixtureDomain {
   GatedNoteDomain(super.store, super.helper);
   Completer<void>? saveGate;
   Map<String, dynamic>? artifactEdit;
@@ -42,7 +43,7 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();
@@ -122,7 +123,7 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();
@@ -187,7 +188,7 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();
@@ -341,7 +342,7 @@ void main() {
       store,
       OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
     );
-    await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+    await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
     final dynamic state = tester.state(find.byType(Workspace));
     state.update(() => state.meetingId = first);
     await tester.pumpAndSettle();

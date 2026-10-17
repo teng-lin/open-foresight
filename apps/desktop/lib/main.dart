@@ -19,15 +19,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/semantics.dart' show SemanticsProperties;
 import 'package:intl/intl.dart' show NumberFormat;
-import 'domain.dart';
 import 'package:foresight_core/remote.dart';
 import 'graph_labels.dart';
 import 'graph_label_controls.dart';
 import 'graph_clusters.dart';
 import 'cluster_rendering.dart';
 import 'force_layout.dart';
-import 'label_propagation.dart';
-import 'recording.dart';
 import 'model_setup.dart';
 import 'app_theme.dart';
 import 'meeting_visuals.dart';
@@ -36,8 +33,6 @@ import 'desktop_visuals.dart';
 import 'commands.dart';
 import 'global_shortcuts.dart';
 import 'hypr_shortcuts.dart';
-import 'google_auth.dart';
-import 'google_connections.dart';
 import 'google_picker.dart';
 import 'google_sign_in_dialog.dart';
 import 'audio_devices.dart';
@@ -66,7 +61,7 @@ Future<void> main([List<String> arguments = const []]) async {
   runApp(DesktopStartup(arguments: arguments));
 }
 
-Future<Domain> connectDesktopDomain(ProfilePaths profile) =>
+Future<DesktopConnection> connectDesktopDomain(ProfilePaths profile) =>
     RemoteDomain.connect(profile);
 void quitDesktop() => exit(0);
 
@@ -75,7 +70,7 @@ void quitDesktop() => exit(0);
 class DesktopStartup extends StatefulWidget {
   final List<String> arguments;
   final ProfilePaths? profile;
-  final Future<Domain> Function(ProfilePaths) connect;
+  final Future<DesktopConnection> Function(ProfilePaths) connect;
   final VoidCallback quit;
   final void Function(String) configureRuntime;
   const DesktopStartup({
@@ -230,7 +225,7 @@ Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
 void ensurePrivateDirectory(String path) => privateDirectory(path);
 
 class Foresight extends StatelessWidget {
-  final Domain domain;
+  final DesktopConnection domain;
   final AppCommands? commands;
   final bool quickOnLaunch;
   final Future<List<AudioDevice>> Function() deviceLoader;
@@ -259,7 +254,7 @@ class Foresight extends StatelessWidget {
 }
 
 class Workspace extends StatefulWidget {
-  final Domain domain;
+  final DesktopConnection domain;
   final AppCommands? commands;
   final bool quickOnLaunch;
   final Future<List<AudioDevice>> Function() deviceLoader;
@@ -277,7 +272,7 @@ class Workspace extends StatefulWidget {
 }
 
 class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
-  Domain get d => widget.domain;
+  DesktopConnection get d => widget.domain;
   void update(VoidCallback action) => setState(action);
   int tab = 3;
   bool graphView = false,
@@ -440,17 +435,13 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   bool embeddingGpu = false;
   bool notifications = false;
   String notificationState = 'checking notify-send';
-  Recording? recording;
+  RecordingStatus? recording;
   final provisionalTranscript = <String, String>{};
   AppCommands? commands;
   GlobalShortcuts? globalShortcuts;
   String globalShortcutState = 'disabled';
-  late final GoogleAuth googleAuth = d is RemoteDomain
-      ? RemoteGoogleAuth(d as RemoteDomain)
-      : d.application.googleAuth;
-  late final GoogleConnections google = d is RemoteDomain
-      ? RemoteGoogleConnections(d as RemoteDomain, googleAuth)
-      : d.application.google;
+  GoogleAccount get googleAuth => d.googleAuth;
+  ConnectedSources get google => d.google;
   String googleState = '';
   List<AudioDevice> availableAudioDevices = [];
   String audioDeviceState = '';
@@ -466,9 +457,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       }[captureCapabilities['microphone']] ??
       'Checking';
 
-  bool get googleSyncing => d is RemoteDomain
-      ? (d as RemoteDomain).googleStatus['syncing'] == true
-      : d.application.google.syncing;
+  bool get googleSyncing => d.googleStatus['syncing'] == true;
   HyprShortcuts get hyprShortcuts =>
       HyprShortcuts(desktopSettings.config, desktopSettings.launcher);
   String recordingState = 'idle';
@@ -523,11 +512,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     notifications = d.store.preference('notifications') == 'true';
     unawaited(refreshNotifications());
     syncCapture();
-    if (d is! RemoteDomain) {
-      noteEnhancementChanges = d.application.changes.stream.listen((_) {
-        if (mounted) setState(syncCapture);
-      });
-    }
     d.helper.changed = () {
       if (mounted) setState(syncCapture);
     };
@@ -561,7 +545,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   void dispose() {
     unawaited(noteEnhancementChanges?.cancel());
-    if (d is! RemoteDomain) google.close();
     void releaseDomain() {
       d.close();
       d.generator?.close();
@@ -569,12 +552,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       d.store.close();
     }
 
-    void closeDomain() {
-      if (d is RemoteDomain)
-        releaseDomain();
-      else
-        unawaited(d.application.close().whenComplete(releaseDomain));
-    }
+    void closeDomain() => releaseDomain();
 
     final hasPendingNoteSave = meetingNoteSaves.hasWork;
     final pendingNoteSave = meetingNoteSaves.close();
@@ -959,11 +937,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             'runtime': runtime,
             'backend': 'litert_lm',
           }, current);
-          return d is RemoteDomain ? (d as RemoteDomain).runtime : d.generator!;
+          return d.runtime;
         },
         installed: (runtime, model) {
-          d.generator?.close();
-          d.generator = runtime;
           if (mounted)
             setState(() {
               error = '';
@@ -1599,9 +1575,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   void syncCapture() {
-    final state = d is RemoteDomain
-        ? (d as RemoteDomain).capture
-        : d.application.captureState;
+    final state = d.capture;
     meetingEnhancements = Map<String, dynamic>.from(
       state['note_enhancements'] as Map? ?? {},
     );
@@ -1711,8 +1685,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     final workspace = meetingImmersive && meetingId != null
         ? immersiveMeetingWorkspace()
         : screenshotWorkspace(context);
-    return d is RemoteDomain
-        ? AgentApprovalSurface(domain: d as RemoteDomain, child: workspace)
-        : workspace;
+    return AgentApprovalSurface(domain: d, child: workspace);
   }
 }

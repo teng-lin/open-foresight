@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -55,7 +56,7 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
         );
         final dynamic state = tester.state(find.byType(Workspace));
         void navigate(int? id) => state.update(() {

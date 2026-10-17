@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -63,7 +65,7 @@ void main() {
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
       final generator = WidgetNoteGenerator();
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();

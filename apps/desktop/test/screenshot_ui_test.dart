@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +20,7 @@ void main() {
     final store = Store('${tmp.path}/app.db');
     final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
     final domain = AdapterDomain(store, helper);
-    await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+    await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
     await tester.tap(find.text('Sources'));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Pause source imports and indexing'));
@@ -65,7 +66,7 @@ void main() {
       );
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
@@ -177,7 +178,7 @@ void main() {
       final existing = store.meeting('Existing meeting');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
       );
       await tester.tap(find.text('Existing meeting'));
       await tester.pumpAndSettle();
@@ -206,7 +207,7 @@ void main() {
       final store = Store('${tmp.path}/application.db');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
       );
       await tester.tap(find.text('Ask'));
       await tester.pumpAndSettle();
@@ -267,7 +268,7 @@ void main() {
       store.importText('Borealis', 'Review Monday.', 'text/plain', 'fixture');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
       );
       final status = find.byTooltip('Local helper status');
       expect(
@@ -343,7 +344,7 @@ void main() {
       final store = Store('${tmp.path}/application.db');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(AdapterDomain(store, helper), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(AdapterDomain(store, helper)), deviceLoader: () async => []),
       );
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
@@ -385,7 +386,7 @@ void main() {
       store.importText('Apollo', 'Plan', 'text/plain', 'fixture');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
       );
       for (final name in ['Meetings', 'Ask', 'Sources', 'Stats', 'Settings']) {
         await tester.tap(find.text(name).first);
@@ -424,7 +425,7 @@ void main() {
         '${root.path}/helper',
       );
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
       );
       store.db.execute('INSERT INTO google_sources VALUES(?,?,?,?,?)', [
         sheet,

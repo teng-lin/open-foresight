@@ -1,3 +1,4 @@
+import 'application.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';

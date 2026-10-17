@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -68,7 +69,7 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: captureKey,
-          child: Foresight(domain, deviceLoader: () async => []),
+          child: Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
         ),
       );
       await tester.pumpAndSettle();

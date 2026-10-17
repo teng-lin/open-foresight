@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -165,13 +166,7 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            Domain(
-              store,
-              OfflineHelper(
-                '${directory.path}/socket',
-                '${directory.path}/helper',
-              ),
-            ),
+            TestDesktopConnection(Domain(store, OfflineHelper('${directory.path}/socket', '${directory.path}/helper'))),
             deviceLoader: () async => [],
           ),
         );

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -21,9 +22,8 @@ class BundledGoogleAuth extends GoogleAuth {
 
 class BundledGoogleDomain extends Domain {
   final GoogleAuth auth;
-  BundledGoogleDomain(super.store, super.helper, this.auth);
+  BundledGoogleDomain(super.store, super.helper, this.auth) { _application; }
   late final _application = Application(this, auth: auth);
-  @override
   Application get application => _application;
 }
 
@@ -53,7 +53,7 @@ void main() {
       final domain = BundledGoogleDomain(store, helper, auth);
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();
@@ -111,7 +111,7 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();

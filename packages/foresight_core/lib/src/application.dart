@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'domain.dart';
+import 'model_gate.dart';
 import 'recording.dart';
 import 'meeting_speakers.dart';
 import 'proactive_questions.dart';
@@ -37,7 +38,7 @@ import 'package:grpc/grpc.dart';
 
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
-class Application {
+class Application implements ModelGate {
   final Domain domain;
   ImportPolicy? importPolicy;
   Store get store => domain.store;
@@ -263,7 +264,10 @@ class Application {
     QueryCompletionRuntime? queryRuntime,
   }) : _auth = auth,
        _queryRuntime = queryRuntime,
-       _providedQueryRuntime = queryRuntime != null;
+       _providedQueryRuntime = queryRuntime != null {
+    domain.modelGate = this;
+    _applications[domain] = this;
+  }
 
   Future<int> autoAssignLabel(String name) async {
     name = name.trim();
@@ -1959,4 +1963,21 @@ class _NoteEnhancement {
     'cancel_requested': cancelRequested,
     'active_index': activeIndex,
   };
+}
+
+// Convenience composition for tools/tests; Domain never imports or constructs
+// its orchestrator. The service explicitly owns the Application lifecycle.
+final _applications = Expando<Application>();
+
+extension ApplicationDomain on Domain {
+  Application get application => _applications[this] ?? Application(this);
+  Future<Object?> command(
+    String method, [
+    Map<String, dynamic> args = const {},
+  ]) => application.call(method, args);
+  Future<Object?> commandCurrent(
+    String method,
+    Map<String, dynamic> args,
+    bool Function() current,
+  ) => application.call(method, args, current: current);
 }

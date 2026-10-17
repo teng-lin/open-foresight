@@ -5,9 +5,7 @@ const _ink = Color(0xff07577b);
 
 extension _ScreenshotScreens on _WorkspaceState {
   String get echoCancellationDescription {
-    final capture = d is RemoteDomain
-        ? (d as RemoteDomain).capture
-        : d.application.captureState;
+    final capture = d.capture;
     final echo = capture['echo_cancellation'] as Map? ?? {};
     if (capture['active'] != true)
       return 'Reduce system playback picked up by your microphone.';

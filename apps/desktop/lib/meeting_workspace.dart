@@ -934,9 +934,7 @@ extension _MeetingWorkspace on _WorkspaceState {
               !detected.any((question) => question['question'] == row['text']),
         )
         .toList();
-    final pipeline = d is RemoteDomain
-        ? (d as RemoteDomain).capture['proactive'] as Map? ?? const {}
-        : d.application.proactive.state;
+    final pipeline = d.capture['proactive'] as Map? ?? const {};
     final detectionError = (pipeline['errors'] as Map?)?['$id'] as String?;
     return Column(
       children: [

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -56,7 +57,7 @@ void main() {
     }
     final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
     await tester.pumpWidget(
-      Foresight(Domain(store, helper), deviceLoader: () async => []),
+      Foresight(TestDesktopConnection(Domain(store, helper)), deviceLoader: () async => []),
     );
     await tester.tap(find.text('Sources'));
     await tester.pumpAndSettle();
@@ -103,7 +104,7 @@ void main() {
         '${temp.path}/helper',
       );
       final domain = Domain(store, helper);
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Graph view'));
@@ -248,7 +249,7 @@ void main() {
         model: control.ModelIdentity(modelDigest: 'fixture', dimensions: 3),
       );
       final domain = GraphDomain(store, helper);
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(Foresight(TestDesktopConnection(domain), deviceLoader: () async => []));
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Graph view'));
