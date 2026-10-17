@@ -39,15 +39,28 @@ void main() {
       await store.register('generation', file.path, '/bin/true');
       store.close();
       file.writeAsStringSync('changed bytes');
-      await expectLater(
-        ApplicationService.start(ProfilePaths(directory.path, directory.path)),
-        throwsStateError,
+      final service = await ApplicationService.start(
+        ProfilePaths(directory.path, directory.path),
       );
+      addTearDown(service.close);
+      expect(service.domain.store.model('generation'), isNull);
+      expect(
+        service.domain.store.preference('modelIntegrityError.generation'),
+        contains('Set up the model again'),
+      );
+      expect(file.readAsStringSync(), 'changed bytes');
       expect(
         File('${directory.path}/.application-endpoint.json').existsSync(),
-        isFalse,
+        isTrue,
       );
-      expect(File('${directory.path}/application.sock').existsSync(), isFalse);
+      file.writeAsStringSync('verified replacement');
+      await service.domain.store.register('generation', file.path, '/bin/true');
+      await service.domain.store.verifyRegisteredModels();
+      expect(service.domain.store.model('generation'), isNotNull);
+      expect(
+        service.domain.store.preference('modelIntegrityError.generation'),
+        isEmpty,
+      );
     },
   );
 

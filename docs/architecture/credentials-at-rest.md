@@ -25,4 +25,6 @@ following it. The mode does not depend on the caller's umask.
 
 The service rehashes every registered model using the registration digest contract
 before constructing Domain or native/model workers. Changed or missing stored
-assets refuse startup rather than loading bytes under a stale recorded digest.
+assets lose their model registration before workers start. Their files remain
+untouched, and the service stays available so setup can download a verified
+replacement. Rejected registrations record an integrity error in preferences.

@@ -407,18 +407,54 @@ class Store {
   List<Map<String, Object?>> get models =>
       rows('SELECT * FROM models').map(resolveModelRuntime).toList();
 
-  /// Re-read stored bytes before any model worker is created. A cache that was
-  /// modified after registration must never acquire trust from its saved digest.
-  Future<void> verifyRegisteredModels() async {
+  /// Re-read stored bytes before any model worker is created. Startup rejects
+  /// invalid registrations while preserving their files so setup can repair them.
+  Future<List<String>> verifyRegisteredModels({
+    bool rejectInvalidRegistrations = false,
+  }) async {
+    final rejected = <Map<String, Object?>>[];
     for (final model in rows('SELECT kind,path,digest FROM models')) {
-      final actual = await modelAssetDigest(model['path'] as String);
-      if (actual != model['digest']) {
-        throw StateError(
-          'The ${model['kind']} model no longer matches its stored digest. '
-          'Restore or replace the model before starting the service.',
+      String? actual;
+      try {
+        actual = await modelAssetDigest(model['path'] as String);
+      } on FileSystemException {
+        // Missing/unreadable files cannot retain trust from a stored digest.
+      } on StateError {
+        // An empty model directory is also an invalid registration.
+      }
+      if (actual != model['digest']) rejected.add(model);
+    }
+    if (rejected.isNotEmpty && !rejectInvalidRegistrations) {
+      throw StateError(
+        'The ${rejected.first['kind']} model no longer matches its stored digest. '
+        'Restore or replace the model.',
+      );
+    }
+    db.execute('SAVEPOINT verify_model_assets');
+    try {
+      for (final model in rejected) {
+        // Do not erase a replacement that was registered while hashing awaited IO.
+        db.execute('DELETE FROM models WHERE kind=? AND path=? AND digest=?', [
+          model['kind'],
+          model['path'],
+          model['digest'],
+        ]);
+        if (db.updatedRows == 0) continue;
+        db.execute('DELETE FROM preferences WHERE key=?', [
+          'modelRuntimeResource.${model['kind']}',
+        ]);
+        setPreference(
+          'modelIntegrityError.${model['kind']}',
+          'Stored ${model['kind']} model changed or is missing. Set up the model again.',
         );
       }
+      db.execute('RELEASE verify_model_assets');
+    } catch (_) {
+      db.execute('ROLLBACK TO verify_model_assets');
+      db.execute('RELEASE verify_model_assets');
+      rethrow;
     }
+    return rejected.map((model) => model['kind'] as String).toList();
   }
 
   Future<void> register(
@@ -482,6 +518,9 @@ class Store {
                   : 0),
         ],
       );
+      db.execute('DELETE FROM preferences WHERE key=?', [
+        'modelIntegrityError.$kind',
+      ]);
       final key = 'modelRuntimeResource.$kind';
       if (resource == null) {
         db.execute('DELETE FROM preferences WHERE key=?', [key]);
