@@ -16,3 +16,22 @@ String sourceIdentity(Map<String, Object?> source) {
   final uri = source['source_uri'] as String?;
   return uri == null || uri.isEmpty ? source['id'] as String : uri;
 }
+
+/// Bound model input by Unicode scalars. Interim CJK text advances one scalar
+/// at a time, so a whole unspaced sentence is never treated as one word.
+String proactiveTranscriptWindow(String history, {required bool isFinal}) {
+  final normalized = history.replaceAll(RegExp(r'\s+'), ' ').trim();
+  final units = RegExp(
+    r'[\u2e80-\u9fff\uac00-\ud7af\u{20000}-\u{3134f}]|[^\s\u2e80-\u9fff\uac00-\ud7af\u{20000}-\u{3134f}]+',
+    unicode: true,
+  ).allMatches(normalized).toList();
+  final eligible = units.length - (isFinal ? 0 : 5);
+  if (eligible <= 0) return '';
+  final scalars = normalized
+      .substring(0, units[eligible - 1].end)
+      .runes
+      .toList();
+  return String.fromCharCodes(
+    scalars.skip(scalars.length > 1000 ? scalars.length - 1000 : 0),
+  );
+}

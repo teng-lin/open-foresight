@@ -310,8 +310,7 @@ class NativeRuntime implements GenerationStatus {
           prompt = '$systemPrompt\n\n$prompt';
         }
       }
-      final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
-      final schema = tools != null
+      final encodedSchema = tools != null
           ? jsonEncode({
               'tools': tools,
               'system_message': systemPrompt,
@@ -320,10 +319,12 @@ class NativeRuntime implements GenerationStatus {
               if (stopTokenIds.isNotEmpty) 'stop_token_ids': stopTokenIds,
               if (maxOutputTokens == null) 'use_default_output_limit': true,
               if (maxInputTokens != null) 'max_input_tokens': maxInputTokens,
-            }).toNativeUtf8()
+            })
           : responseSchema == null
-          ? nullptr.cast<Utf8>()
-          : jsonEncode(responseSchema).toNativeUtf8();
+          ? null
+          : jsonEncode(responseSchema);
+      final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
+      final schema = encodedSchema?.toNativeUtf8() ?? nullptr.cast<Utf8>();
       late int rc;
       try {
         if (tools != null) {
@@ -501,8 +502,9 @@ class NativeRuntime implements GenerationStatus {
           }
           if (clock.elapsed >= timeout)
             throw TimeoutException('Native generation timed out', timeout);
+          final encodedReply = jsonEncode(message);
           final request = id.toNativeUtf8();
-          final reply = jsonEncode(message).toNativeUtf8();
+          final reply = encodedReply.toNativeUtf8();
           try {
             final result = lib
                 .lookupFunction<

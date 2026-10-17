@@ -492,14 +492,14 @@ void main() {
       await app.call('sources.import_directory', {'path': directory.path});
       expect(domain.store.sources.single['id'], first);
       expect(domain.store.sources.single['revision'], 2);
-      File('${directory.path}/bad.txt').writeAsBytesSync([255]);
+      File('${directory.path}/bad.pdf').writeAsBytesSync([255]);
       await expectLater(
         app.importDirectory(directory.path),
         throwsA(
           isA<StateError>().having(
             (e) => e.message,
             'failure',
-            allOf(contains('Imported 1 files'), contains('bad.txt')),
+            allOf(contains('Imported 1 files'), contains('bad.pdf')),
           ),
         ),
       );
@@ -823,6 +823,21 @@ void main() {
       expect(results, hasLength(1));
       expect(results.single['id'], ids.last);
       expect(results.single['revision'], 1);
+    },
+  );
+
+  test(
+    'refresh uses source_uri for file names containing the provenance separator',
+    () async {
+      final file = File('${root.path}/project; draft.txt')
+        ..writeAsStringSync('Original');
+      final id = await app.importFile(file.path);
+      file.writeAsStringSync('Updated literal file');
+      await app.reimport();
+      final source = domain.store.sources.single;
+      expect(source['id'], id);
+      expect(source['content'], 'Updated literal file');
+      expect(source['source_uri'], file.uri.toString());
     },
   );
 
