@@ -15,6 +15,130 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 METADATA = json.loads((HERE / 'metadata.json').read_text())
+NOTICES = HERE / 'notices'
+UPGRADE_LOCK = HERE / 'upgrade_lock.sh'
+DOC_DIR = Path('usr/share/doc/open-foresight')
+# macOS copies these names from the pinned gRPC SDK (tools/build_macos_sdk.py).
+# ICU and SQLite are added because the Linux bundle ships those shared libraries.
+BUNDLED_NOTICES = (
+    'grpc-LICENSE', 'grpc-NOTICE.txt', 'protobuf-LICENSE', 'abseil-cpp-LICENSE',
+    're2-LICENSE', 'cares-cares-LICENSE.md', 'icu-LICENSE', 'sqlite-LICENSE')
+NOTICE_LICENSE = {
+    'grpc-LICENSE': ('2015, gRPC authors', 'Apache-2.0'),
+    'grpc-NOTICE.txt': ('2014, gRPC authors', 'Apache-2.0'),
+    'protobuf-LICENSE': ('2008, Google Inc.', 'BSD-3-Clause'),
+    'abseil-cpp-LICENSE': ('2017, The Abseil Authors', 'Apache-2.0'),
+    're2-LICENSE': ('2009, The RE2 Authors', 'BSD-3-Clause'),
+    'cares-cares-LICENSE.md': ('1998, Massachusetts Institute of Technology and later c-ares contributors', 'MIT-c-ares'),
+    'icu-LICENSE': ('1995-2025, Unicode, Inc. and ICU contributors', 'Unicode-3.0'),
+    'sqlite-LICENSE': ('the SQLite authors (public-domain dedication)', 'public-domain'),
+}
+PAYLOAD_PATHS = (
+    '/opt/open-foresight', '/usr/bin/open-foresight',
+    '/usr/share/applications/io.openforesight.App.desktop',
+    '/usr/share/pixmaps/open-foresight.png', '/usr/share/doc/open-foresight')
+
+
+def upgrade_helper():
+    # Inlined into maintainer scripts. Those scripts run before the new payload
+    # is unpacked, so they cannot source the copy that this package installs.
+    return UPGRADE_LOCK.read_text()
+
+
+def deb_maintainer(action):
+    return (
+        '#!/bin/sh\nset -eu\n'
+        + upgrade_helper()
+        + 'case "${1-}" in\n'
+        f'  {action})\n'
+        '    refuse_upgrade_if_recording /opt/open-foresight\n'
+        '    ;;\nesac\n')
+
+
+def deb_prerm():
+    return deb_maintainer('upgrade|remove')
+
+
+def deb_preinst():
+    # preinst of the incoming package runs before unpack. prerm of this package
+    # then covers the next upgrade and removal.
+    return deb_maintainer('upgrade|install')
+
+
+def rpm_scriptlets():
+    helper = upgrade_helper()
+    return (
+        '%pre\n' + helper + 'refuse_upgrade_if_recording /opt/open-foresight\n'
+        '%preun\nif [ "$1" = 0 ]; then\n' + helper
+        + '  refuse_upgrade_if_recording /opt/open-foresight\nfi\n')
+
+
+def arch_install_script():
+    return upgrade_helper() + (
+        'pre_upgrade() {\n'
+        '  refuse_upgrade_if_recording /opt/open-foresight\n'
+        '}\n\n'
+        'pre_remove() {\n'
+        '  refuse_upgrade_if_recording /opt/open-foresight\n'
+        '}\n')
+
+
+def install_legal_notices(root):
+    doc = Path(root) / DOC_DIR
+    notices = doc / 'notices'
+    notices.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(HERE.parent / 'LICENSE', doc / 'LICENSE')
+    for name in BUNDLED_NOTICES:
+        shutil.copy2(NOTICES / name, notices / name)
+    for path in doc.rglob('*'):
+        if not path.is_symlink():
+            path.chmod(0o755 if path.is_dir() else 0o644)
+
+
+def indent_license(text):
+    return '\n'.join(' .' if line == '' else ' ' + line for line in text.strip('\n').splitlines())
+
+
+def debian_copyright_text():
+    project = (HERE.parent / 'LICENSE').read_text()
+    chunks = [
+        'Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n'
+        'Upstream-Name: open-foresight\n'
+        f'Upstream-Contact: {METADATA["maintainer"]}\n'
+        f'Source: {METADATA["url"]}\n'
+        '\nFiles: *\nCopyright: 2026, Teng Lin\nLicense: MIT\n']
+    bodies = {'MIT': project}
+    for name in BUNDLED_NOTICES:
+        holder, license_id = NOTICE_LICENSE[name]
+        chunks.append(f'\nFiles: notices/{name}\nCopyright: {holder}\nLicense: {license_id}\n')
+        bodies.setdefault(license_id, (NOTICES / name).read_text())
+    for license_id, text in bodies.items():
+        chunks.append(f'\nLicense: {license_id}\n{indent_license(text)}\n')
+    return ''.join(chunks)
+
+
+def write_debian_copyright(root):
+    path = Path(root) / DOC_DIR / 'copyright'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(debian_copyright_text())
+    path.chmod(0o644)
+
+
+def rpm_spec(version, release, metadata):
+    files = ''.join(path + '\n' for path in PAYLOAD_PATHS)
+    return (
+        '%global debug_package %{nil}\n%global __os_install_post %{nil}\n'
+        f'Name: open-foresight\nVersion: {version}\nRelease: {release}\n'
+        f'Summary: {metadata["summary"]}\nLicense: {metadata["license"]}\n'
+        f'URL: {metadata["url"]}\nBuildArch: x86_64\nSource0: payload.tar.gz\n'
+        # Private protobuf/Python/wheel libraries are supplied by the payload.
+        # Host requirements are explicit and install-tested.
+        f'AutoReqProv: no\nRequires: {", ".join(metadata["rpm_dependencies"])}\n'
+        '%description\nLocal knowledge, meeting notes and transcription.\n'
+        + rpm_scriptlets()
+        + '%prep\n%setup -q -c\n%build\n%install\n'
+        'mkdir -p %{buildroot}\ncp -a payload/. %{buildroot}/\n'
+        '%files\n' + files)
 
 
 def digest(path):
@@ -73,6 +197,11 @@ def stage(bundle, root):
     icon = root / 'usr/share/pixmaps/open-foresight.png'
     icon.parent.mkdir(parents=True)
     shutil.copy2(bundle / 'app/data/flutter_assets/assets/images/foresight-logo.png', icon)
+    install_legal_notices(root)
+    lock = root / 'opt/open-foresight/share/open-foresight/upgrade_lock.sh'
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(UPGRADE_LOCK, lock)
+    lock.chmod(0o644)
 
 
 def archive(source, output, arcname, epoch):
@@ -88,9 +217,10 @@ def archive(source, output, arcname, epoch):
 
 
 def make_deb(root, output, version, release, metadata):
+    write_debian_copyright(root)
     control = root / 'DEBIAN'
     control.mkdir()
-    size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file()) // 1024
+    size = sum(p.stat().st_size for p in root.rglob('*') if p.is_file() and not p.is_relative_to(control)) // 1024
     (control / 'control').write_text(
         f'Package: open-foresight\nVersion: {version}-{release}\nArchitecture: amd64\n'
         f'Maintainer: {metadata["maintainer"]}\nSection: utils\nPriority: optional\n'
@@ -98,6 +228,12 @@ def make_deb(root, output, version, release, metadata):
         f'Depends: {", ".join(metadata["deb_dependencies"])}\n'
         f'Description: {metadata["summary"]}\n'
         ' Flutter desktop application with local retrieval, model setup and speech transcription.\n')
+    prerm = control / 'prerm'
+    prerm.write_text(deb_prerm())
+    prerm.chmod(0o755)
+    preinst = control / 'preinst'
+    preinst.write_text(deb_preinst())
+    preinst.chmod(0o755)
     subprocess.run(['dpkg-deb', '--root-owner-group', '--build', str(root), str(output)], check=True)
 
 
@@ -108,19 +244,7 @@ def make_rpm(root, output, version, release, metadata, epoch):
             (top / name).mkdir()
         archive(root, top / 'SOURCES/payload.tar.gz', 'payload', epoch)
         spec = top / 'SPECS/open-foresight.spec'
-        spec.write_text(
-            '%global debug_package %{nil}\n%global __os_install_post %{nil}\n'
-            f'Name: open-foresight\nVersion: {version}\nRelease: {release}\n'
-            f'Summary: {metadata["summary"]}\nLicense: {metadata["license"]}\n'
-            f'URL: {metadata["url"]}\nBuildArch: x86_64\nSource0: payload.tar.gz\n'
-            # Private protobuf/Python/wheel libraries are supplied by the
-            # payload. Host requirements are explicit and install-tested.
-            f'AutoReqProv: no\nRequires: {", ".join(metadata["rpm_dependencies"])}\n'
-            '%description\nLocal knowledge, meeting notes and transcription.\n'
-            '%prep\n%setup -q -c\n%build\n%install\n'
-            'mkdir -p %{buildroot}\ncp -a payload/. %{buildroot}/\n'
-            '%files\n/opt/open-foresight\n/usr/bin/open-foresight\n'
-            '/usr/share/applications/io.openforesight.App.desktop\n/usr/share/pixmaps/open-foresight.png\n')
+        spec.write_text(rpm_spec(version, release, metadata))
         subprocess.run(['rpmbuild', '-bb', '--define', f'_topdir {top}', str(spec)], check=True)
         candidates = list((top / 'RPMS').rglob('*.rpm'))
         if len(candidates) != 1:
@@ -134,12 +258,14 @@ def make_arch(root, output, version, release, metadata, epoch):
         source = directory / 'payload.tar.gz'
         archive(root, source, 'payload', epoch)
         dependencies = ' '.join(repr(item) for item in metadata['arch_dependencies'])
+        (directory / 'open-foresight.install').write_text(arch_install_script())
         (directory / 'PKGBUILD').write_text(
             f'pkgname=open-foresight-bin\npkgver={version}\npkgrel={release}\n'
             f'pkgdesc={metadata["summary"]!r}\narch=(x86_64)\nurl={metadata["url"]!r}\n'
             f'license=({metadata["license"]!r})\ndepends=({dependencies})\n'
             "provides=('open-foresight')\nconflicts=('open-foresight')\n"
-            "options=('!strip' '!debug' 'staticlibs')\nsource=('payload.tar.gz')\nnoextract=('payload.tar.gz')\n"
+            "options=('!strip' '!debug' 'staticlibs')\ninstall=open-foresight.install\n"
+            "source=('payload.tar.gz')\nnoextract=('payload.tar.gz')\n"
             f"sha256sums=('{digest(source)}')\n"
             'package() {\n  bsdtar -xf "$srcdir/payload.tar.gz" --strip-components=1 -C "$pkgdir"\n}\n')
         subprocess.run(['makepkg', '--nodeps', '--noconfirm'], cwd=directory, check=True)
@@ -152,6 +278,7 @@ def make_arch(root, output, version, release, metadata, epoch):
         recipe = output.parent / 'arch-recipe'
         recipe.mkdir()
         shutil.copy2(directory / 'PKGBUILD', recipe / 'PKGBUILD')
+        shutil.copy2(directory / 'open-foresight.install', recipe / 'open-foresight.install')
         shutil.copy2(source, recipe / 'payload.tar.gz')
 
 

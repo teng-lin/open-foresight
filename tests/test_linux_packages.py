@@ -144,6 +144,64 @@ class LinuxPackagesTest(unittest.TestCase):
         self.assertTrue(abi.inspect(binary, '99.0', '99.0')['passed'])
         self.assertFalse(abi.inspect(binary, '2.0', '3.0')['passed'])
 
+    def test_packages_declare_poppler_and_unrtf_and_ship_notices(self):
+        metadata = json.loads((ROOT / 'packaging/metadata.json').read_text())
+        self.assertIn('poppler-utils', metadata['deb_dependencies'])
+        self.assertIn('poppler-utils', metadata['rpm_dependencies'])
+        self.assertIn('poppler', metadata['arch_dependencies'])
+        self.assertNotIn('poppler-utils', metadata['arch_dependencies'])
+        for family in ('deb_dependencies', 'rpm_dependencies', 'arch_dependencies'):
+            self.assertIn('unrtf', metadata[family])
+        self.assertIn('perl', metadata['rpm_dependencies'])
+        self.assertIn('perl', metadata['arch_dependencies'])
+        self.assertNotIn('perl', metadata['deb_dependencies'])
+        packages.stage(self.bundle, self.root / 'stage')
+        doc = self.root / 'stage/usr/share/doc/open-foresight'
+        self.assertEqual((doc / 'LICENSE').read_text(), (ROOT / 'LICENSE').read_text())
+        self.assertFalse((doc / 'copyright').exists())
+        phrases = {
+            'grpc-LICENSE': 'Apache License',
+            'grpc-NOTICE.txt': 'gRPC authors',
+            'protobuf-LICENSE': 'Google Inc.',
+            'abseil-cpp-LICENSE': 'Apache License',
+            're2-LICENSE': 'RE2 Authors',
+            'cares-cares-LICENSE.md': 'Massachusetts Institute of Technology',
+            'icu-LICENSE': 'UNICODE LICENSE',
+            'sqlite-LICENSE': 'Public Domain',
+        }
+        for name, phrase in phrases.items():
+            text = (doc / 'notices' / name).read_text(errors='replace')
+            self.assertIn(phrase, text)
+        packages.write_debian_copyright(self.root / 'stage')
+        copyright_text = (doc / 'copyright').read_text()
+        self.assertIn('Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/', copyright_text)
+        for name in phrases:
+            self.assertIn(f'notices/{name}', copyright_text)
+        self.assertIn('License: MIT', copyright_text)
+        self.assertIn('Teng Lin', copyright_text)
+        spec = packages.rpm_spec('0.1.0', '1', metadata)
+        install = packages.arch_install_script()
+        prerm = packages.deb_prerm()
+        preinst = packages.deb_preinst()
+        for path in packages.PAYLOAD_PATHS:
+            self.assertIn(path, spec)
+        for script in (prerm, preinst, spec, install):
+            self.assertIn('upgrade_lock_decision', script)
+            self.assertIn('F_SETLK', script)
+            self.assertNotIn('flock -n', script)
+            self.assertIn('refuse_upgrade_if_recording /opt/open-foresight', script)
+        self.assertIn('upgrade|remove', prerm)
+        self.assertIn('upgrade|install', preinst)
+        self.assertIn('%pre\n', spec)
+        self.assertIn('%preun\n', spec)
+        self.assertIn('if [ "$1" = 0 ]; then', spec)
+        self.assertLess(spec.index('%pre\n'), spec.index('cp -a payload/'))
+        self.assertIn('pre_upgrade()', install)
+        self.assertIn('pre_remove()', install)
+        print('Package notices, Debian copyright, and upgrade scripts passed.', flush=True)
+        self.assertTrue((self.root / 'stage/opt/open-foresight/share/open-foresight/upgrade_lock.sh').is_file())
+        self.assertFalse((doc / 'copyright').read_text().isspace())
+
 
 @unittest.skipUnless(sys.platform == 'linux' and shutil.which('cc') and shutil.which('ldd'),
                      'Linux ELF loader and C compiler required')
@@ -242,6 +300,144 @@ class NativePythonPayloadTest(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, name):
                         smoke.validate_native_python_payload(root)
                     path.unlink()
+
+
+class LinuxDocumentImportTest(unittest.TestCase):
+    def test_shipped_parser_imports_pdf_and_rtf_when_tools_exist(self):
+        tool = (ROOT / 'packages/foresight_core/tool/import_fixture.dart').read_text()
+        self.assertIn('Parser(macOS: false).extract', tool)
+        self.assertNotIn('pdftotext', tool)
+        self.assertNotIn('unrtf', tool)
+        missing = [name for name in ('pdftotext', 'unrtf', 'dart') if shutil.which(name) is None]
+        if missing:
+            print('PDF/RTF import was not executed; missing: ' + ', '.join(missing)
+                  + '. Package metadata declares poppler-utils (deb, rpm), poppler (arch), and unrtf. '
+                  + 'No successful import was fabricated.', flush=True)
+            return
+        phrase = 'Foresight import fixture'
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf = root / 'fixture.pdf'
+            rtf = root / 'fixture.rtf'
+            pdf.write_bytes(_minimal_pdf(phrase))
+            rtf.write_bytes(b'{\\rtf1\\ansi\\pard Foresight import fixture\\par}')
+            for path, adapter in ((pdf, 'pdftotext -layout (Linux adapter)'),
+                                  (rtf, 'unrtf --text (Linux adapter)')):
+                result = subprocess.run(
+                    ['dart', 'run', 'tool/import_fixture.dart', str(path)],
+                    cwd=ROOT / 'packages/foresight_core', check=False,
+                    capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                parsed = json.loads(result.stdout)
+                self.assertEqual(parsed['adapter'], adapter)
+                self.assertIn(phrase, parsed['text'])
+                print(f'Imported {path.name} via shipped Parser.extract ({adapter})', flush=True)
+
+
+def _minimal_pdf(phrase):
+    stream = f'BT /F1 24 Tf 72 120 Td ({phrase}) Tj ET\n'.encode()
+    objects = [
+        b'<< /Type /Catalog /Pages 2 0 R >>',
+        b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+        b'<< /Length %d >>\nstream\n' % len(stream) + stream + b'endstream',
+        b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ]
+    out = bytearray(b'%PDF-1.4\n')
+    offsets = []
+    for index, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f'{index} 0 obj\n'.encode() + body + b'\nendobj\n'
+    xref = len(out)
+    out += f'xref\n0 {len(objects) + 1}\n'.encode()
+    out += b'0000000000 65535 f \n'
+    for offset in offsets:
+        out += f'{offset:010d} 00000 n \n'.encode()
+    out += (f'trailer<< /Size {len(objects) + 1} /Root 1 0 R >>\n'
+            f'startxref\n{xref}\n%%EOF\n').encode()
+    return bytes(out)
+
+
+class SpeechCpuBlockTest(unittest.TestCase):
+    @unittest.skipUnless(shutil.which('g++'), 'g++ required to call speech_cpu_blocker')
+    def test_shipped_blocker_refuses_each_missing_feature(self):
+        directory = Path(tempfile.mkdtemp(prefix='speech-cpu-'))
+        self.addCleanup(shutil.rmtree, directory)
+        source = directory / 'call.cc'
+        source.write_text(
+            '#include "speech_cpu.h"\n#include <iostream>\n#include <string>\n'
+            'int main(int argc, char **argv) {\n'
+            '  if (argc == 2 && std::string(argv[1]) == "--probe") {\n'
+            '    auto error = linux_speech_cpu_block();\n'
+            '    std::cout << (error ? *error : std::string("allow")) << "\\n";\n'
+            '    return 0;\n'
+            '  }\n'
+            '  auto error = speech_cpu_blocker(argv[1][0] == \'1\', argv[2][0] == \'1\', argv[3][0] == \'1\');\n'
+            '  if (!error) { std::cout << "allow\\n"; return 0; }\n'
+            '  std::cout << *error << "\\n";\n'
+            '  return 1;\n'
+            '}\n')
+        binary = directory / 'call'
+        subprocess.run(['g++', '-std=c++20', '-Wall', '-Wextra', '-Wpedantic', '-I',
+                        str(ROOT / 'native'), str(source), '-o', str(binary)], check=True)
+        probe = subprocess.run([str(binary), '--probe'], check=True, capture_output=True, text=True)
+        print('Host speech CPU probe (not required to lack AVX2): ' + probe.stdout.strip(), flush=True)
+        allow = subprocess.run([str(binary), '1', '1', '1'], check=False, capture_output=True, text=True)
+        self.assertEqual(allow.returncode, 0)
+        self.assertEqual(allow.stdout.strip(), 'allow')
+        for flags, missing in ((('0', '1', '1'), 'AVX2'), (('1', '0', '1'), 'FMA'),
+                               (('1', '1', '0'), 'F16C'), (('0', '0', '0'), 'AVX2, FMA, F16C')):
+            result = subprocess.run([str(binary), *flags], check=False, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertIn('this CPU is missing ' + missing + '.', result.stdout)
+            self.assertIn('Speech runtime requires AVX2, FMA, and F16C', result.stdout)
+            self.assertIn('Transcription was not started', result.stdout)
+            print(f'speech_cpu_blocker {" ".join(flags)} refused: {result.stdout.strip()}', flush=True)
+        native = (ROOT / 'native/foresight_native.cpp').read_text()
+        body = native[native.index('int fs_speech_finish'):native.index('int fs_speech_cancel')]
+        self.assertLess(body.index('linux_speech_cpu_block'), body.index('run(s,'))
+        self.assertIn('speech_runtime_failure', body[body.index('linux_speech_cpu_block'):body.index('run(s,')])
+
+
+class UpgradeLockDecisionTest(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux',
+                         'upgrade_lock_decision packs the 32-byte Linux LP64 flock structure')
+    def test_held_lock_refuses_and_free_lock_allows(self):
+        import fcntl
+        script = ROOT / 'packaging/upgrade_lock.sh'
+        directory = Path(tempfile.mkdtemp(prefix='upgrade-lock-'))
+        self.addCleanup(shutil.rmtree, directory)
+        lock = directory / 'lock'
+        lock.write_text('')
+        os.chmod(lock, 0o600)
+
+        def decision(path):
+            result = subprocess.run(
+                ['bash', '-c', '. "$1"; upgrade_lock_decision "$2"', 'bash', str(script), str(path)],
+                check=False, capture_output=True, text=True)
+            return result.returncode, result.stdout.strip(), result.stderr
+
+        missing = directory / 'absent'
+        self.assertEqual(decision(missing), (0, 'allow', ''))
+        self.assertFalse(missing.exists())
+        self.assertEqual(decision(lock), (0, 'allow', ''))
+        print('upgrade_lock_decision free lock => allow', flush=True)
+        link = directory / 'linked'
+        link.symlink_to(lock)
+        self.assertEqual(decision(link)[:2], (1, 'refuse'))
+        held = os.open(lock, os.O_RDWR)
+        self.addCleanup(os.close, held)
+        fcntl.lockf(held, fcntl.LOCK_SH)
+        code, output, error = decision(lock)
+        self.assertEqual((code, output), (1, 'refuse'), error)
+        print('upgrade_lock_decision held shared record lock => refuse', flush=True)
+        fcntl.lockf(held, fcntl.LOCK_UN)
+        self.assertEqual(decision(lock), (0, 'allow', ''))
+        print('upgrade_lock_decision released lock => allow', flush=True)
+        identity = subprocess.run(
+            ['bash', '-c', '. "$1"; installation_identity "$2"', 'bash', str(script), str(directory)],
+            check=True, capture_output=True, text=True).stdout.strip()
+        self.assertEqual(identity, hashlib.sha256(str(directory.resolve()).encode()).hexdigest()[:24])
 
 
 if __name__ == '__main__':
