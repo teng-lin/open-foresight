@@ -571,4 +571,34 @@ void main() {
       expect(f.remote.helper.watch, isNull);
     },
   );
+  test(
+    'approval events preserve the current service helper snapshot',
+    () async {
+      File(
+        '${f.profile.data}/.desktop-capability',
+      ).writeAsStringSync('test-token');
+      f.handler = (socket, request) => f.reply(socket, request, null);
+      final approvals = <Map<String, dynamic>>[];
+      await f.remote.enableDesktopApprovals(approvals.add);
+      f.event({
+        ...f.status,
+        'helper': control.State(
+          pipeline: 'ready',
+          buildId: 'current-build',
+        ).toProto3Json(),
+      });
+      await eventually(
+        () => f.remote.helper.snapshot?.buildId == 'current-build',
+      );
+      f.event({
+        'event': 'approval',
+        'approval_id': 'test-approval',
+        'method': 'sources.import_url',
+        'args': {'allow_private_network': true},
+      });
+      await eventually(() => approvals.isNotEmpty);
+      expect(f.remote.helper.snapshot?.buildId, 'current-build');
+      expect(f.remote.helper.snapshot?.pipeline, 'ready');
+    },
+  );
 }

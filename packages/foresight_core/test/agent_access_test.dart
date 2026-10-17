@@ -161,6 +161,17 @@ void main() {
         await expectLater(denied, throwsStateError);
       },
     );
+    test('private URL opt-in still requires visible agent approval', () async {
+      gate.attach(desktop, 'private-token');
+      final pending = gate.authorize(agent, 'sources.import_url', {
+        'url': 'http://127.0.0.1/private',
+        'allow_private_network': true,
+      }, current: () => true);
+      expect(events.single['method'], 'sources.import_url');
+      expect((events.single['args'] as Map)['allow_private_network'], isTrue);
+      gate.decide(desktop, events.single['approval_id'] as String, false);
+      await expectLater(pending, throwsStateError);
+    });
     test('network augmented answers require approval', () async {
       await expectLater(
         gate.authorize(agent, 'answer.stream', {
