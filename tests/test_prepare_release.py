@@ -25,7 +25,8 @@ class PrepareReleaseTest(unittest.TestCase):
             raise subprocess.CalledProcessError(1, ['gh', 'api', route], stderr='HTTP 404')
 
         with patch.object(release, 'api', side_effect=response), \
-                patch.object(release.subprocess, 'run') as command:
+                patch.object(release.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps({**draft, 'target_commitish': 'a' * 40}))) as command:
             self.assertEqual(release.create_draft('owner/repo', 'v0.1.1', 'a' * 40), '1')
         self.assertEqual(command.call_count, 2)
         self.assertEqual(command.call_args_list[0].args[0][:4], ['gh', 'release', 'create', 'v0.1.1'])
@@ -98,8 +99,54 @@ class PrepareReleaseTest(unittest.TestCase):
         draft = [{'tag_name': 'v0.1.1', 'id': 5, 'body': '<!-- foresight-package-release: 7 -->', 'draft': True, 'assets': [{'id': 123}]}]
         with patch.object(release, 'api', side_effect=[[{'ref': 'refs/tags/v0.1.1'}],
                                                      {'sha': 'a' * 40}, draft]), \
-                patch.object(release.subprocess, 'run') as command:
+                patch.object(release.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps({**draft[0], 'target_commitish': 'a' * 40}))) as command:
             self.assertEqual(release.create_draft('owner/repo', 'v0.1.1', 'a' * 40), '8')
             self.assertEqual(command.call_count, 2)
             self.assertIn('foresight-package-release: 8', command.call_args_list[0].args[0][-1])
             self.assertEqual(command.call_args.args[0][-1], 'repos/owner/repo/releases/assets/123')
+
+    def test_generation_reservation_explicitly_preserves_the_frozen_draft_binding(self):
+        commit = 'a' * 40
+        draft = {'tag_name': 'v0.1.1', 'id': 5, 'target_commitish': commit, 'draft': True,
+                 'body': 'Release notes\n<!-- foresight-package-release: 7 -->', 'assets': [{'id': 123}]}
+        payload = {}
+
+        def command(arguments, **kwargs):
+            if arguments[3] == 'PATCH':
+                self.assertTrue(kwargs['capture_output'])
+                self.assertTrue(kwargs['check'])
+                for flag, field in zip(arguments[5::2], arguments[6::2]):
+                    key, value = field.split('=', 1)
+                    payload[key] = json.loads(value) if flag == '-F' else value
+                # Reproduce the live body-only PATCH failure if identity is omitted.
+                response = {**draft, **payload,
+                            'tag_name': payload.get('tag_name', 'vGitHubuntagged-fixture')}
+                return subprocess.CompletedProcess(arguments, 0, json.dumps(response))
+            self.assertEqual(arguments[3], 'DELETE')
+            self.assertEqual(payload['tag_name'], 'v0.1.1')
+            self.assertEqual(payload['target_commitish'], commit)
+            self.assertIs(payload['draft'], True)
+            self.assertEqual(payload['body'], 'Release notes\n<!-- foresight-package-release: 8 -->')
+            return subprocess.CompletedProcess(arguments, 0)
+
+        with patch.object(release, 'api', side_effect=[
+                [{'ref': 'refs/tags/v0.1.1'}], {'sha': commit}, [draft]]), \
+                patch.object(release.subprocess, 'run', side_effect=command) as process:
+            self.assertEqual(release.create_draft('owner/repo', 'v0.1.1', commit), '8')
+        self.assertEqual(process.call_count, 2)
+
+    def test_unexpected_patch_response_never_deletes_draft_assets(self):
+        commit = 'a' * 40
+        draft = {'tag_name': 'v0.1.1', 'id': 5, 'target_commitish': commit, 'draft': True,
+                 'body': '', 'assets': [{'id': 123}]}
+        for change in ({'tag_name': 'vGitHubuntagged-fixture'}, {'id': 6},
+                       {'target_commitish': 'b' * 40}, {'draft': False}, {'draft': 'true'}):
+            with self.subTest(change=change), patch.object(release, 'api', side_effect=[
+                    [{'ref': 'refs/tags/v0.1.1'}], {'sha': commit}, [draft]]), \
+                    patch.object(release.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                        [], 0, json.dumps({**draft, **change}))) as command:
+                with self.assertRaisesRegex(ValueError, 'immutable release binding'):
+                    release.create_draft('owner/repo', 'v0.1.1', commit)
+                self.assertEqual(command.call_count, 1)
+                self.assertEqual(command.call_args.args[0][3], 'PATCH')

@@ -95,9 +95,15 @@ def create_draft(repository, tag, commit):
     body += f'\n<!-- foresight-package-release: {generation} -->'
     # Persist the reservation before deleting anything. Retrying an old workflow
     # still advances the draft generation, even after a partially failed rebuild.
-    subprocess.run(['gh', 'api', '--method', 'PATCH',
-                    f'repos/{repository}/releases/{release["id"]}',
-                    '-f', 'body=' + body], check=True)
+    updated = subprocess.run(['gh', 'api', '--method', 'PATCH',
+                              f'repos/{repository}/releases/{release["id"]}',
+                              '-f', f'tag_name={tag}', '-f', f'target_commitish={commit}',
+                              '-F', 'draft=true', '-f', 'body=' + body],
+                             check=True, capture_output=True, text=True)
+    metadata = json.loads(updated.stdout)
+    if (metadata.get('id') != release['id'] or metadata.get('tag_name') != tag or
+            metadata.get('target_commitish') != commit or metadata.get('draft') is not True):
+        raise ValueError('Draft metadata update changed the immutable release binding; assets were not deleted')
     for asset in release['assets']:
         subprocess.run(['gh', 'api', '--method', 'DELETE',
                         f'repos/{repository}/releases/assets/{asset["id"]}'], check=True)
