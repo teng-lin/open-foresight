@@ -74,3 +74,11 @@ the exact 0.5-second lateness boundary. The modified Dart source and test analyz
 without issues. Physical echo quality, default-device changes, headset
 removal/reconnection, sleep/wake, and
 comparison against the original remain unverified.
+
+## Device-parity follow-up
+
+The original stopped-engine configuration debounce and the production Linux
+PipeWire capture fixes, including controlled overlap, pause exclusion and pinned
+route loss/return, are recorded in [recording device parity](recording-device-parity.md).
+These controlled results leave physical acoustic echo and hardware recovery as
+explicit acceptance gates.

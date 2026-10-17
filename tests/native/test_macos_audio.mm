@@ -102,6 +102,27 @@ int main() { @autoreleasepool {
   watchdog.arm(now, wall);
   REQUIRE(watchdog.check(now + 1000ms, wall + 1000ms, false, 0, true) == Action::none);
 
+  // Configuration changes from a still-running engine are harmless. Stopped
+  // notifications debounce for 150ms, replace the old deadline, and cannot
+  // restart after the owning recording has stopped.
+  InputConfigurationRecovery configuration;
+  configuration.observe(now, true, true);
+  REQUIRE(!configuration.pending());
+  REQUIRE(!configuration.restart(now + 1000ms, true));
+  configuration.observe(now, true, false);
+  REQUIRE(configuration.pending());
+  REQUIRE(!configuration.restart(now + 149ms, true));
+  configuration.observe(now + 100ms, true, false);
+  REQUIRE(!configuration.restart(now + 150ms, true));
+  REQUIRE(!configuration.restart(now + 249ms, true));
+  REQUIRE(configuration.restart(now + 250ms, true));
+  REQUIRE(!configuration.restart(now + 251ms, true));
+  configuration.observe(now, true, false);
+  REQUIRE(!configuration.restart(now + 150ms, false));
+  REQUIRE(!configuration.pending());
+  configuration.observe(now, false, false);
+  REQUIRE(!configuration.pending());
+
   // A partially started processed engine must be released before the standard
   // engine is created. Failed fallback must propagate rather than report capture.
   std::vector<std::string> startup;

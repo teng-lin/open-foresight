@@ -96,11 +96,37 @@ struct Worker : Events {
     join();
   }
 };
+// pw-record's stdout contains unconnected/error diagnostics even without -v.
+// A private raw FIFO gives libsndfile a separate PCM destination. Keep one
+// nonblocking writer open here so a slow child open cannot look like EOF.
+struct CapturePcmPipe {
+  std::string directory, path;
+  int fd = -1, error = 0;
+  explicit CapturePcmPipe(bool enabled) {
+    if (!enabled) return;
+    char pattern[] = "/tmp/foresight-capture-XXXXXX";
+    const char *created = mkdtemp(pattern);
+    if (!created) { error = errno; return; }
+    directory = created;
+    path = directory + "/audio.raw";
+    if (mkfifo(path.c_str(), 0600) < 0) { error = errno; return; }
+    fd = open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) error = errno;
+  }
+  ~CapturePcmPipe() {
+    if (fd >= 0) close(fd);
+    if (!path.empty()) unlink(path.c_str());
+    if (!directory.empty()) rmdir(directory.c_str());
+  }
+};
 // posix_spawn avoids unsafe post-fork work inside a multi-threaded Flutter
 // host.
 int run(Worker &w, std::vector<std::string> args,
         const std::function<void(const char *, size_t)> &output,
-        bool duplex = false) {
+        bool duplex = false, bool raw_capture = false) {
+  CapturePcmPipe capture_pipe(raw_capture);
+  if (capture_pipe.error) return -capture_pipe.error;
+  if (raw_capture) args.back() = capture_pipe.path;
   std::unique_lock launch(foresight::launch_mutex);
   int pipes[2];
   if (foresight::cloexec_pipe(pipes) < 0)
@@ -141,7 +167,10 @@ int run(Worker &w, std::vector<std::string> args,
   }
   posix_spawn_file_actions_t actions;
   posix_spawn_file_actions_init(&actions);
-  posix_spawn_file_actions_adddup2(&actions, pipes[1], STDOUT_FILENO);
+  if (raw_capture)
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+  else
+    posix_spawn_file_actions_adddup2(&actions, pipes[1], STDOUT_FILENO);
   posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
                                    O_WRONLY, 0);
   if (duplex) {
@@ -200,9 +229,16 @@ int run(Worker &w, std::vector<std::string> args,
     kill(-p, SIGKILL);
 #endif
   }
+  const int read_fd = raw_capture ? capture_pipe.fd : pipes[0];
   char buffer[4096];
+  auto drain_pcm = [&] {
+    ssize_t n;
+    while ((n = read(read_fd, buffer, sizeof(buffer))) > 0)
+      output(buffer, size_t(n));
+  };
   std::string pending_input;
   size_t sent = 0;
+  bool capture_child_reaped = false;
   while (!w.cancel) {
     if (duplex && pending_input.empty()) {
       std::lock_guard lock(w.input_mutex);
@@ -211,7 +247,7 @@ int run(Worker &w, std::vector<std::string> args,
         w.input.pop_front(); sent = 0;
       }
     }
-    pollfd fds[2]{{pipes[0], POLLIN, 0},
+    pollfd fds[2]{{read_fd, POLLIN, 0},
                   {input[1], short(pending_input.empty() ? 0 : POLLOUT), 0}};
     int r = poll(fds, duplex ? 2 : 1, 100);
     if (r > 0) {
@@ -231,14 +267,31 @@ int run(Worker &w, std::vector<std::string> args,
         }
       }
       if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) {
-        ssize_t n = read(pipes[0], buffer, sizeof(buffer));
-        if (n <= 0) break;
-        output(buffer, size_t(n));
+        ssize_t n = read(read_fd, buffer, sizeof(buffer));
+        if (n <= 0 && !(raw_capture && n < 0 && errno == EAGAIN)) break;
+        if (n > 0) output(buffer, size_t(n));
       }
     } else if (r < 0 && errno != EINTR)
       break;
+    if (raw_capture) {
+      siginfo_t exited{};
+      int result;
+      {
+        std::lock_guard lock(w.process_mutex);
+        result = waitid(P_PID, p, &exited, WEXITED | WNOWAIT | WNOHANG);
+        // Dart's process event handler can reap an unmanaged native subprocess.
+        // Disarm its PID before publishing terminal state to the capture owner.
+        capture_child_reaped = result < 0 && errno == ECHILD;
+        if (capture_child_reaped) w.pid = -1;
+      }
+      // A retained FIFO writer cannot provide EOF; ECHILD is also terminal.
+      if ((result == 0 && exited.si_pid == p) || capture_child_reaped) {
+        drain_pcm();
+        break;
+      }
+    }
   }
-  if (w.cancel) {
+  if (w.cancel && !capture_child_reaped) {
 #ifdef __APPLE__
     std::lock_guard lock(w.process_mutex);
     owned.stop();
@@ -246,13 +299,16 @@ int run(Worker &w, std::vector<std::string> args,
     kill(-p, SIGKILL);
 #endif
   }
-  close(pipes[0]);
   if (duplex) close(input[1]);
   int status = 0;
   // Do not hold life while waiting: cancellation must still be able to signal
   // a worker that closed stdout early. Keep its PID reserved until disarmed.
   siginfo_t info{};
   while (waitid(P_PID, p, &info, WEXITED | WNOWAIT) < 0 && errno == EINTR) {}
+  // The producer is now terminal. Retain every queued pre-pause PCM byte before
+  // the FIFO closes, including a final partial frame; no later audio can arrive.
+  if (raw_capture) drain_pcm();
+  close(pipes[0]);
 #ifdef __APPLE__
   // Supervisor has already completed worker cleanup.
 #endif
@@ -263,6 +319,7 @@ int run(Worker &w, std::vector<std::string> args,
 #ifdef __APPLE__
   w.owned_process = nullptr;
 #endif
+  if (capture_child_reaped) return -ECHILD;
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 }
 bool valid_asset(const char *runtime, const char *model) {
@@ -883,7 +940,9 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate, 
     while (!c->cancel) {
       c->emit("{\"type\":\"state\",\"channel\":\"foresight.linux/"
               "audio_state_v1\",\"state\":\"connecting\"}");
-      std::vector<std::string> args{c->runtime.empty() ? "pw-record" : c->runtime,  "--raw",
+      // PipeWire (including Ubuntu 24.04) has no --raw option. The production
+      // path writes to an owned .raw FIFO so stdout diagnostics cannot be PCM.
+      std::vector<std::string> args{c->runtime.empty() ? "pw-record" : c->runtime,
                                     "--format",   "s16",
                                     "--rate",     std::to_string(c->rate),
                                     "--channels", "1",
@@ -921,7 +980,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate, 
           if (!c->playback)
             break;
         }
-      });
+      }, false, c->runtime.empty());
       if (c->cancel) {
         residual.resize(residual.size() & ~size_t(1));
         if (!residual.empty()) audio_frame(*c, residual);
