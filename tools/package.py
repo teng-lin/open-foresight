@@ -80,6 +80,10 @@ def main():
     if args.whisper_gpu_runtime:
         assert args.whisper_gpu_runtime.is_file(), 'Build the Vulkan Whisper runtime first'
         shutil.copy2(args.whisper_gpu_runtime, args.output / 'bin/whisper-cli-vulkan')
+        speech_worker = args.whisper_gpu_runtime.parent / 'foresight-whisper-worker'
+        if not speech_worker.is_file():
+            raise ValueError('Whisper runtime must include foresight-whisper-worker')
+        shutil.copy2(speech_worker, args.output / 'bin/foresight-whisper-worker')
         for name in ('LICENSE', 'provenance.json'):
             shutil.copy2(args.whisper_gpu_runtime.parent / name,
                          args.output / 'share/open-foresight' / ('whisper-' + name))

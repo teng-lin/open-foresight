@@ -243,6 +243,7 @@ class Generator {
   std::unique_ptr<LiteRtLmEngine, void (*)(LiteRtLmEngine *)> engine;
   std::unique_ptr<LiteRtLmConversation, void (*)(LiteRtLmConversation *)> base;
   std::string base_key;
+  std::function<bool(void *)> request_registration;
 
 public:
   Generator(LiteRt &api, const std::string &path, bool gpu,
@@ -273,6 +274,7 @@ public:
         [&] { engine.reset(); }, foresight::startup_warning, config.vision,
         [&] { settings = make_settings(false); });
   }
+  void register_request(std::function<bool(void *)> callback) { request_registration = std::move(callback); }
   void cancel(void *pointer) {
     LM(conversation_cancel_process)(static_cast<LiteRtLmConversation *>(pointer));
   }
@@ -289,7 +291,8 @@ public:
                        std::ostream *stream = nullptr,
                        const json &tools = nullptr,
                        std::istream *controls = nullptr,
-                       const std::function<bool(void *)> &register_conversation = {}) {
+                       const std::function<bool(void *)> &registration_callback = {}) {
+    const auto &register_conversation = registration_callback ? registration_callback : request_registration;
     const auto tool_request = tools.is_null() ? foresight::ToolRequest{} :
                                                foresight::parse_tool_request(tools);
     const auto tool_tokens = tools.is_null() ? 0 :
@@ -591,9 +594,23 @@ int main(int argc, char **argv) {
       foresight::persistent_worker(std::cin, protocol,
           [&](const json &request, std::istream &controls, std::ostream &frames,
               const std::function<bool(void *)> &registration) {
-            generator.generate(request.at("prompt").get<std::string>(),
-                request.value("max_output_tokens", 256), false, nullptr, &frames,
-                request.at("tools"), &controls, registration);
+            generator.register_request(registration);
+            struct Reset { Generator &generator; ~Reset() { generator.register_request({}); } } reset{generator};
+            const auto schema = request.value("schema", json(nullptr));
+            const auto tools = request.value("tools", json(nullptr));
+            const auto budget = request.value("max_output_tokens", 256);
+            if (!schema.is_null() && !schema.is_object())
+              throw std::runtime_error("JSON schema must be an object");
+            if (!tools.is_null()) {
+              generator.generate(request.at("prompt").get<std::string>(), budget,
+                  false, schema, &frames, tools, &controls, registration);
+            } else {
+              auto text = schema.contains("x-foresight-grounded-request")
+                  ? grounded_answer(generator, schema.at("x-foresight-grounded-request"), budget).dump()
+                  : generator.generate(request.at("prompt").get<std::string>(), budget, false, schema);
+              // Plain results are one JSON string frame, including embedded newlines.
+              frames << "text " << json(text).dump() << std::endl;
+            }
           }, [&](void *pointer) { generator.cancel(pointer); });
       return 0;
     }

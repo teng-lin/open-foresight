@@ -62,13 +62,14 @@ void shutdown_persistent(Engine &engine, bool graceful = true) {
   engine.persistent.reset();
 }
 
-bool start_persistent(Engine &engine, Conversation &request) {
+bool start_persistent(Engine &engine, Worker &request) {
   if (engine.persistent && !engine.persistent->ended()) return true;
   shutdown_persistent(engine, false);
   engine.persistent = std::make_unique<PersistentGeneration>();
   auto *worker = engine.persistent.get();
   worker->active = true;
   auto args = std::vector<std::string>{engine.runtime, "--model", engine.model, "--serve"};
+  if (const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE"); engine.backend == 2 && device && *device) { args.push_back("--device"); args.push_back(device); }
   if (engine.cpu_fallback) { args.push_back("--backend"); args.push_back("cpu"); }
   if (engine.model_type) { args.push_back("--model-type"); args.push_back(std::to_string(engine.model_type)); }
   worker->thread = std::thread([worker, args = std::move(args)]() mutable {
@@ -107,7 +108,7 @@ bool start_persistent(Engine &engine, Conversation &request) {
   return false;
 }
 
-int run_persistent(Engine &engine, Conversation &request, const std::string &json,
+int run_persistent(Engine &engine, Worker &request, const std::string &json,
                    const std::function<void(const std::string &)> &output) {
   if (!start_persistent(engine, request)) return -1;
   auto &worker = *engine.persistent;

@@ -14,6 +14,13 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 
 class SourceReadCountingStore extends Store {
   int sourceReads = 0;
+  int bodyReads = 0;
+  @override
+  List<Map<String, Object?>> get sources {
+    bodyReads++;
+    return super.sources;
+  }
+
   SourceReadCountingStore(super.path);
   @override
   List<Map<String, Object?>> rows(String sql, [List<Object?> args = const []]) {
@@ -74,6 +81,25 @@ void main() {
       store.sourceReads - before,
       0,
       reason: 'Projection-only frames must reuse the source snapshot',
+    );
+    final helpBefore = tester.widget(find.byTooltip('Help'));
+    final bodiesBefore = store.bodyReads;
+    final revisionBefore = state.serviceUiRevision.value as int;
+    for (var i = 0; i < 20; i++) {
+      helper.changed?.call();
+    }
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(state.serviceUiRevision.value, revisionBefore + 1);
+    expect(
+      identical(tester.widget(find.byTooltip('Help')), helpBefore),
+      true,
+      reason:
+          'Service events update the active panel and header without rebuilding navigation',
+    );
+    expect(
+      store.bodyReads,
+      bodiesBefore,
+      reason: 'Service events must not load document bodies on the UI isolate',
     );
     await tester.tap(find.byTooltip('Pause graph animation'));
     await tester.pumpAndSettle();

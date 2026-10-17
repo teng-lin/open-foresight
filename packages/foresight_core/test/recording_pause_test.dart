@@ -62,6 +62,43 @@ void main() {
 
   for (final stopLimit in [Duration.zero, const Duration(milliseconds: 60)]) {
     test(
+      'live segments reuse their native speech handle until recording stops',
+      () async {
+        final creations = fixture
+            .lookupFunction<Int32 Function(), int Function()>(
+              'fixture_speech_creations',
+            );
+        final before = creations();
+        final rows = <String>[];
+        final recording = Recording(
+          library,
+          (_) {},
+          (text, _, __, ___) => rows.add(text),
+        );
+        try {
+          recording.start('/usr/bin/true', model, playback: false);
+          for (var segment = 0; segment < 3; segment++) {
+            emit(0, 100 + segment, count: 20000);
+            recording.drain();
+            final deadline = DateTime.now().add(const Duration(seconds: 2));
+            while (rows.length <= segment &&
+                DateTime.now().isBefore(deadline)) {
+              await Future<void>.delayed(const Duration(milliseconds: 10));
+            }
+            expect(rows.length, segment + 1);
+          }
+          expect(
+            creations() - before,
+            2,
+            reason: 'One startup probe and one retained speech handle',
+          );
+          await recording.stop();
+        } finally {
+          recording.dispose();
+        }
+      },
+    );
+    test(
       'hung speech stop limit ${stopLimit.inMilliseconds} ms retains committed text',
       () async {
         fail(-1);

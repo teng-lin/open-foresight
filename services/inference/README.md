@@ -129,7 +129,9 @@ cancel N
 shutdown
 ```
 
-Responses are `N delta|model|tool|answer <JSON>`, optionally
+Plain, schema-constrained and grounded requests use the same worker with a `schema` field (or `null`) instead of `tools`. Their result is `N text <JSON string>`; the JSON string preserves embedded newlines. Grounded evidence selection and verification reuse that worker’s loaded engine.
+
+Responses for tool conversations are `N delta|model|tool|answer <JSON>`, optionally
 `N error <JSON string>`, followed by `N done completed|cancelled|failed`.
 `model` remains the complete authoritative response used for delegated tool
 parsing; `delta` carries unparsed structured partial model text. `reply` keeps

@@ -275,120 +275,123 @@ extension _ScreenshotScreens on _WorkspaceState {
       child: Scaffold(
         body: Column(
           children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                24,
-                28,
-                recording != null ? 16 : 24,
-                8,
-              ),
-              child: LayoutBuilder(
-                builder: (_, constraints) => SizedBox(
-                  width: constraints.maxWidth,
-                  child: Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 16,
-                    runSpacing: 12,
-                    children: [
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: math.max(200, constraints.maxWidth - 260),
-                        ),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Image.asset(
-                                  'assets/images/open-foresight-logo.png',
-                                  width: 24,
-                                  height: 24,
-                                ),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text.rich(
-                                    TextSpan(
-                                      children: const [
-                                        TextSpan(
-                                          text: 'Open ',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w700,
+            ValueListenableBuilder<int>(
+              valueListenable: serviceUiRevision,
+              builder: (_, __, ___) => Padding(
+                padding: EdgeInsets.fromLTRB(
+                  24,
+                  28,
+                  recording != null ? 16 : 24,
+                  8,
+                ),
+                child: LayoutBuilder(
+                  builder: (_, constraints) => SizedBox(
+                    width: constraints.maxWidth,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 16,
+                      runSpacing: 12,
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: math.max(200, constraints.maxWidth - 260),
+                          ),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Image.asset(
+                                    'assets/images/open-foresight-logo.png',
+                                    width: 24,
+                                    height: 24,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text.rich(
+                                      TextSpan(
+                                        children: const [
+                                          TextSpan(
+                                            text: 'Open ',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                            ),
                                           ),
-                                        ),
-                                        TextSpan(text: 'Foresight'),
-                                      ],
+                                          TextSpan(text: 'Foresight'),
+                                        ],
+                                      ),
+                                      style: const TextStyle(fontSize: 18),
                                     ),
-                                    style: const TextStyle(fontSize: 18),
+                                  ),
+                                ],
+                              ),
+                              if (MediaQuery.sizeOf(context).width > 1100) ...[
+                                Chip(
+                                  label: Text('Powered by ${embeddingName()}'),
+                                ),
+                                Chip(
+                                  label: Text(
+                                    '${localTokens()} Local output tokens',
                                   ),
                                 ),
                               ],
-                            ),
-                            if (MediaQuery.sizeOf(context).width > 1100) ...[
-                              Chip(
-                                label: Text('Powered by ${embeddingName()}'),
-                              ),
-                              Chip(
-                                label: Text(
-                                  '${localTokens()} Local output tokens',
+                              SizedBox(
+                                width: 32,
+                                height: 28,
+                                child: IconButton(
+                                  tooltip: 'Local helper status',
+                                  onPressed: showHelperMonitor,
+                                  padding: EdgeInsets.zero,
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: Colors.white.withValues(
+                                      alpha: .7,
+                                    ),
+                                    foregroundColor: _ink,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  icon: Icon(
+                                    helperEmbeddingHealthy
+                                        ? Icons.task_alt
+                                        : Icons.info_outline,
+                                    size: 18,
+                                  ),
                                 ),
                               ),
                             ],
-                            SizedBox(
-                              width: 32,
-                              height: 28,
-                              child: IconButton(
-                                tooltip: 'Local helper status',
-                                onPressed: showHelperMonitor,
-                                padding: EdgeInsets.zero,
-                                style: IconButton.styleFrom(
-                                  backgroundColor: Colors.white.withValues(
-                                    alpha: .7,
-                                  ),
-                                  foregroundColor: _ink,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                                icon: Icon(
-                                  helperEmbeddingHealthy
-                                      ? Icons.task_alt
-                                      : Icons.info_outline,
-                                  size: 18,
-                                ),
+                          ),
+                        ),
+                        if (recording != null)
+                          recordingHeader()
+                        else
+                          FilledButton.icon(
+                            onPressed: busy || quickStarting || meetingEnhancing
+                                ? null
+                                : quickStart,
+                            icon: Icon(
+                              recording != null ? Icons.stop : Icons.graphic_eq,
+                            ),
+                            label: Text(
+                              recording != null
+                                  ? 'Stop transcribing'
+                                  : 'Start transcribing',
+                            ),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _ink,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 16,
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                      if (recording != null)
-                        recordingHeader()
-                      else
-                        FilledButton.icon(
-                          onPressed: busy || quickStarting || meetingEnhancing
-                              ? null
-                              : quickStart,
-                          icon: Icon(
-                            recording != null ? Icons.stop : Icons.graphic_eq,
                           ),
-                          label: Text(
-                            recording != null
-                                ? 'Stop transcribing'
-                                : 'Start transcribing',
-                          ),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _ink,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 18,
-                              vertical: 16,
-                            ),
-                          ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -509,15 +512,18 @@ extension _ScreenshotScreens on _WorkspaceState {
                               ),
                             ),
                           Expanded(
-                            child: [
-                              sources,
-                              chat,
-                              notes,
-                              meetings,
-                              models,
-                              stats,
-                              settings,
-                            ][tab](),
+                            child: ValueListenableBuilder<int>(
+                              valueListenable: serviceUiRevision,
+                              builder: (_, __, ___) => [
+                                sources,
+                                chat,
+                                notes,
+                                meetings,
+                                models,
+                                stats,
+                                settings,
+                              ][tab](),
+                            ),
                           ),
                         ],
                       ),
@@ -593,21 +599,23 @@ extension _ScreenshotScreens on _WorkspaceState {
         : path.split('/').where((s) => s.isNotEmpty).last;
   }
 
-  int localTokens() =>
-      d.store
-          .rows('SELECT body FROM answers WHERE status=\'completed\'')
-          .fold<int>(
-            0,
-            (n, row) =>
-                n + (row['body'] as String).split(RegExp(r'\s+')).length,
-          ) +
-      d.store
-          .rows('SELECT generated FROM artifacts')
-          .fold<int>(
-            0,
-            (n, row) =>
-                n + (row['generated'] as String).split(RegExp(r'\s+')).length,
-          );
+  int localTokens() {
+    final revision = d.store.dataRevision;
+    if (localOutputRevision != revision) {
+      localOutputRevision = revision;
+      unawaited(
+        localOutputWords(d.store.path).then((count) {
+          if (mounted &&
+              localOutputRevision == revision &&
+              localOutputCount != count) {
+            localOutputCount = count;
+            serviceChanged();
+          }
+        }, onError: (Object _) {}),
+      );
+    }
+    return localOutputCount;
+  }
 
   Future<void> importPath(String path) async {
     await d.command('sources.import_file', {'path': path});
@@ -616,7 +624,7 @@ extension _ScreenshotScreens on _WorkspaceState {
 
   Future<void> findFilesOnComputer({List<String>? roots}) async {
     final excluded = <String>{};
-    for (final row in d.store.sources) {
+    for (final row in d.store.sourceSummaries) {
       final provenance = row['provenance'] as String;
       for (final prefix in [
         'UTF-8 text; ',
@@ -806,7 +814,9 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Future<void> removeSelectedGraphLabel(String id, String name) async {
-    final source = d.store.sources.where((row) => row['id'] == id).single;
+    final source = d.store.sourceSummaries
+        .where((row) => row['id'] == id)
+        .single;
     await d.command('labels.set', {
       'id': id,
       'labels': sourceLabels(source).where((label) => label != name).toList(),
@@ -1027,19 +1037,30 @@ extension _ScreenshotScreens on _WorkspaceState {
     if (sourceQuery.isNotEmpty) {
       final key = jsonEncode([sourceQuery, d.store.dataRevision]);
       if (key != sourceSearchCacheKey) {
-        final searchable =
-            collection != null &&
-                collection.every((s) => s.containsKey('content'))
-            ? collection
-            : d.store.sources;
-        final query = sourceQuery.toLowerCase();
+        sourceSearchCacheKey = key;
+        // Titles can respond immediately from the already-loaded summaries.
         sourceSearchMatches = {
-          for (final source in searchable)
-            if ('${source['title']} ${source['content']}'
-                .toLowerCase()
-                .contains(query))
+          for (final source in collection ?? d.store.sourceSummaries)
+            if ((source['title'] as String).toLowerCase().contains(
+              sourceQuery.toLowerCase(),
+            ))
               source['id'] as String,
         };
+        final databasePath = d.store.path;
+        final query = sourceQuery.toLowerCase();
+        // Search SQLite on a worker isolate; only matching IDs cross to the UI.
+        unawaited(
+          searchSourceIds(databasePath, query).then(
+            (matches) {
+              if (mounted && sourceSearchCacheKey == key)
+                update(() => sourceSearchMatches = matches);
+            },
+            onError: (Object error) {
+              if (mounted && sourceSearchCacheKey == key)
+                update(() => this.error = error.toString());
+            },
+          ),
+        );
         sourceSearchCacheKey = key;
       }
       searchMatches = sourceSearchMatches;
@@ -1087,7 +1108,7 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Widget sources() {
-    final all = graphView ? d.store.sources : d.store.sourceSummaries;
+    final all = d.store.sourceSummaries;
     final originals = driveSourceMimes();
     final rows = filteredSources(all, originals);
     final labelRecords = d.store.documentLabels;
@@ -1756,7 +1777,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
             graphSelectedDocument == selected &&
-            !d.store.sources.any((row) => row['id'] == selected)) {
+            !d.store.sourceSummaries.any((row) => row['id'] == selected)) {
           selectGraphDocument(null);
         }
       });
@@ -3250,7 +3271,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                 )
                 .single['n']
             as int;
-    final sources = d.store.sources.length;
+    final sources = d.store.sourceSummaries.length;
     final answers =
         d.store
                 .rows(

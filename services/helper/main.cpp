@@ -19,6 +19,8 @@
 #include <fcntl.h>
 #include <chrono>
 #include "model.h"
+#include "vector_index.h"
+#include <atomic>
 #include <cctype>
 using json=nlohmann::json;
 namespace rpc=research::xeno::labs::foresight::launch_agent::proto;
@@ -37,6 +39,14 @@ struct Statement {
  int64_t integer(int n){return sqlite3_column_int64(p,n);}
 };
 class Service:public rpc::RagService::Service,public ctl::HelperControl::Service {
+ struct SearchSnapshot { std::shared_ptr<Model> model; foresight::VectorIndex index; SearchSnapshot(std::shared_ptr<Model> m,std::vector<foresight::IndexedChunk> chunks):model(std::move(m)),index(std::move(chunks)){} };
+ std::atomic<std::shared_ptr<const SearchSnapshot>> search_snapshot;
+ void publish_index() {
+  std::vector<foresight::IndexedChunk> chunks;
+  Statement q(db,"SELECT c.text,c.document_id,c.mime,c.embedding FROM vectors.chunks c JOIN linux.source_revisions r ON r.id=c.document_id AND r.revision=c.revision WHERE r.tombstone=0 AND c.generation=? ORDER BY c.document_id,c.ordinal");q.num(1,state.active_generation());
+  while(q.row()) chunks.push_back({q.str(0),q.str(1),q.str(2),foresight::read_vector(q.str(3))});
+  search_snapshot.store(std::make_shared<SearchSnapshot>(model,std::move(chunks)));
+ }
  struct PreparedChunk { std::string text; std::vector<double> embedding; };
  struct DocWork { std::string id, content, mime; int size=0, overlap=0; uint64_t rev=0; std::vector<PreparedChunk> chunks; };
  sqlite3* db=nullptr; std::recursive_mutex mu; std::mutex view_mu, reconfig_mu; std::condition_variable reconfig_cv; bool reconfiguring=false; std::shared_ptr<Model> model;ctl::State state,view;bool allow_test,use_gpu=false;std::string path,cache,storage_root;
@@ -44,7 +54,12 @@ class Service:public rpc::RagService::Service,public ctl::HelperControl::Service
  void sql(const std::string& q){char* e=nullptr;if(sqlite3_exec(db,q.c_str(),nullptr,nullptr,&e)!=SQLITE_OK){std::string msg=e?e:"SQLite failure";sqlite3_free(e);throw std::runtime_error(msg);}}
  struct Tx {Service& s;bool done=false;Tx(Service& x):s(x){s.sql("BEGIN IMMEDIATE");}~Tx(){if(!done)sqlite3_exec(s.db,"ROLLBACK",nullptr,nullptr,nullptr);}void commit(){s.sql("COMMIT");done=true;}};
  void changed(){state.set_revision(state.revision()+1);std::lock_guard lock(view_mu);view=state;}
- void crash(const char* step){if(!allow_test)return;std::string value;std::ifstream in(storage_root+"/.crash-at");std::getline(in,value);const char* env=getenv("FORESIGHT_CRASH_AT");if(value==step||(env&&std::string(env)==step))_exit(86);}
+ void crash(const char* step){if(!allow_test)return;
+  // Test-only publication barrier: prove active readers never wait on the
+  // writer's SQLite transaction or on construction of its replacement index.
+  std::string pause;{std::ifstream file(storage_root+"/.pause-at");std::getline(file,pause);}
+  if(pause==step){std::ofstream(storage_root+"/.paused")<<step;for(int i=0;i<100&&fs::exists(storage_root+"/.pause-at");++i)std::this_thread::sleep_for(std::chrono::milliseconds(50));}
+std::string value;std::ifstream in(storage_root+"/.crash-at");std::getline(in,value);const char* env=getenv("FORESIGHT_CRASH_AT");if(value==step||(env&&std::string(env)==step))_exit(86);}
  uint64_t revision(const std::string& id){Statement q(db,"SELECT revision FROM linux.source_revisions WHERE id=?");q.text(1,id);return q.row()?q.integer(0)+1:1;}
  void journal(const std::string& op,const std::string& id,uint64_t rev){Statement q(db,"INSERT INTO linux.journal(operation,document_id,revision,generation,status) VALUES(?,?,?,?, 'committed')");q.text(1,op);q.text(2,id);q.num(3,rev);q.num(4,state.active_generation());q.row();}
  std::vector<PreparedChunk> prepare_chunks(Model& m,const std::string& content,int size,int overlap,const std::string& mime,grpc::ServerContext* context){
@@ -54,7 +69,7 @@ class Service:public rpc::RagService::Service,public ctl::HelperControl::Service
  }
  void insert_vectors(const std::vector<PreparedChunk>& chunks,const std::string& id,uint64_t rev,uint64_t gen,const std::string& mime,grpc::ServerContext* context){
   // Foreground insertion is grouped in five-chunk batches, inside one atomic publication.
-  for(size_t batch=0;batch<chunks.size();batch+=5)for(size_t i=batch;i<std::min(chunks.size(),batch+5);++i){if(context && context->IsCancelled())throw std::runtime_error("Index operation cancelled");Statement q(db,"INSERT INTO vectors.chunks(generation,document_id,revision,ordinal,text,mime,embedding) VALUES(?,?,?,?,?,?,?)");q.num(1,gen);q.text(2,id);q.num(3,rev);q.num(4,i);q.text(5,chunks[i].text);q.text(6,mime);q.text(7,json(chunks[i].embedding).dump());q.row();crash("partial_vectors");}
+  for(size_t batch=0;batch<chunks.size();batch+=5)for(size_t i=batch;i<std::min(chunks.size(),batch+5);++i){if(context && context->IsCancelled())throw std::runtime_error("Index operation cancelled");Statement q(db,"INSERT INTO vectors.chunks(generation,document_id,revision,ordinal,text,mime,embedding) VALUES(?,?,?,?,?,?,?)");q.num(1,gen);q.text(2,id);q.num(3,rev);q.num(4,i);q.text(5,chunks[i].text);q.text(6,mime);q.blob(7,foresight::vector_blob(chunks[i].embedding));q.row();crash("partial_vectors");}
  }
  void note_adapter_failure(const std::shared_ptr<Model>& current,const std::exception& e){if(model==current && current && !current->available() && state.pipeline()=="ready"){state.set_pipeline("failed");state.set_tokenizer_ready(false);state.set_index("degraded");state.set_last_error(e.what());changed();}}
  void refresh_model_health(){std::unique_lock lock(mu,std::try_to_lock);if(lock.owns_lock()&&model&&!model->available()&&state.pipeline()=="ready"){state.set_pipeline("failed");state.set_tokenizer_ready(false);state.set_index("degraded");state.set_last_error("Embedding adapter exited; reload the model");changed();}}
@@ -75,6 +90,7 @@ class Service:public rpc::RagService::Service,public ctl::HelperControl::Service
   identity->set_tokenizer_digest(model->tokenizer_digest);
   identity->set_preprocessing(model->test?"test-only-byte-tokenizer/fnv-word-v1":model->preprocessing);
   identity->set_backend(model->backend);identity->set_dimensions(model->dimensions);
+  publish_index();
   identity->set_path(path);identity->clear_modalities();identity->add_modalities("text");changed();
  }
  bool restore_vectors(const Model& replacement, const std::string& next,
@@ -97,7 +113,10 @@ public:
   {Statement a(db,"ATTACH DATABASE ? AS linux");a.text(1,root+"/linux_state.db");a.row();}
   sql("PRAGMA linux.journal_mode=DELETE; PRAGMA linux.synchronous=FULL; CREATE TABLE IF NOT EXISTS linux.source_revisions(id TEXT PRIMARY KEY,revision INTEGER NOT NULL,tombstone INTEGER NOT NULL); CREATE TABLE IF NOT EXISTS linux.journal(sequence INTEGER PRIMARY KEY,operation TEXT,document_id TEXT,revision INTEGER,generation INTEGER,status TEXT)");
   {Statement a(db,"ATTACH DATABASE ? AS vectors");a.text(1,root+"/rag_vector.db");a.row();}
-  sql("PRAGMA vectors.journal_mode=DELETE; PRAGMA vectors.synchronous=FULL; CREATE TABLE IF NOT EXISTS vectors.chunks(generation INTEGER,document_id TEXT,revision INTEGER,ordinal INTEGER,text TEXT,mime TEXT,embedding TEXT,PRIMARY KEY(generation,document_id,revision,ordinal)); CREATE TABLE IF NOT EXISTS vectors.generations(id INTEGER PRIMARY KEY,model_digest TEXT,status TEXT)");
+  sql("PRAGMA vectors.journal_mode=DELETE; PRAGMA vectors.synchronous=FULL; CREATE TABLE IF NOT EXISTS vectors.chunks(generation INTEGER,document_id TEXT,revision INTEGER,ordinal INTEGER,text TEXT,mime TEXT,embedding BLOB,PRIMARY KEY(generation,document_id,revision,ordinal)); CREATE TABLE IF NOT EXISTS vectors.generations(id INTEGER PRIMARY KEY,model_digest TEXT,status TEXT)");
+  // Migrate legacy JSON once at startup; requests only consume binary snapshots.
+  { Tx tx(*this); Statement rows(db,"SELECT rowid,embedding FROM vectors.chunks WHERE typeof(embedding)='text'");
+    while(rows.row()){auto bytes=foresight::vector_blob(json::parse(rows.str(1)).get<std::vector<double>>());Statement update(db,"UPDATE vectors.chunks SET embedding=? WHERE rowid=?");update.blob(1,bytes);update.num(2,rows.integer(0));update.row();} tx.commit(); }
   sql("INSERT OR IGNORE INTO linux.source_revisions SELECT id,1,0 FROM documents; DELETE FROM vectors.chunks WHERE NOT EXISTS (SELECT 1 FROM linux.source_revisions r WHERE r.id=chunks.document_id AND r.revision=chunks.revision AND r.tombstone=0); DELETE FROM vectors.chunks WHERE generation IN(SELECT id FROM vectors.generations WHERE status!='active'); DELETE FROM vectors.generations WHERE status!='active'");
   state.set_build_id(FORESIGHT_BUILD_ID);state.set_reference_version("1.0.3");state.set_instance_id(std::to_string(getpid())+"-"+std::to_string(std::chrono::system_clock::now().time_since_epoch().count()));state.set_pipeline("unconfigured");state.set_index("empty");state.set_revision(1);state.set_totals_known(true);
   Statement q(db,"SELECT value FROM settings WHERE key='embedding_model_path'");if(q.row())path=q.str(0);
@@ -125,10 +144,26 @@ public:
   {Statement q(db,"INSERT OR REPLACE INTO documents VALUES(?,?,?,?,?,?,?)");q.text(1,id);q.text(2,content);q.text(3,user);q.num(4,size);q.num(5,overlap);q.text(6,mime);if(image.empty())sqlite3_bind_null(q.p,7);else q.blob(7,image);q.row();}
   {Statement q(db,"INSERT OR REPLACE INTO linux.source_revisions VALUES(?,?,0)");q.text(1,id);q.num(2,rev);q.row();}
   {Statement q(db,"DELETE FROM vectors.chunks WHERE document_id=?");q.text(1,id);q.row();}
-  crash("metadata_written");insert_vectors(prepared,id,rev,state.active_generation(),mime,context);crash("vectors_written");journal("replace",id,rev);crash("replace_before_commit");if(context->IsCancelled())throw std::runtime_error("Index operation cancelled");tx.commit();crash("replace_after_commit");state.set_index("ready");changed();r->set_success(true);return Status::OK;
+  crash("metadata_written");insert_vectors(prepared,id,rev,state.active_generation(),mime,context);crash("vectors_written");journal("replace",id,rev);crash("replace_before_commit");if(context->IsCancelled())throw std::runtime_error("Index operation cancelled");tx.commit();publish_index();crash("replace_after_commit");state.set_index("ready");changed();r->set_success(true);return Status::OK;
  }catch(const std::exception& e){std::lock_guard lock(mu);return app_error(r,e);}}
- Status DeleteDocument(grpc::ServerContext*,const rpc::DeleteRequest* req,rpc::DeleteResponse* r)override{ReconfigGuard guard(*this);guard.enter();std::lock_guard lock(mu);try{if(req->document_id().empty())throw std::runtime_error("Document ID is empty");Tx tx(*this);std::vector<std::string> ids{req->document_id()};if(req->document_id().starts_with("file://"))ids.push_back(req->document_id().substr(7));else ids.push_back("file://"+req->document_id());for(auto& id:ids){auto rev=revision(id);for(auto sqltext:{"DELETE FROM documents WHERE id=?","DELETE FROM vectors.chunks WHERE document_id=?"}){Statement q(db,sqltext);q.text(1,id);q.row();}Statement q(db,"INSERT OR REPLACE INTO linux.source_revisions VALUES(?,?,1)");q.text(1,id);q.num(2,rev);q.row();journal("delete",id,rev);}crash("delete_before_commit");tx.commit();crash("delete_after_commit");changed();r->set_success(true);return Status::OK;}catch(const std::exception& e){return app_error(r,e);}}
- Status RetrieveContext(grpc::ServerContext*,const rpc::RetrieveRequest* req,rpc::RetrieveResponse* r)override{if(!req->has_query()||req->query().query_case()==rpc::Query::QUERY_NOT_SET)return {StatusCode::INVALID_ARGUMENT,"Query required"};if(req->query().query_case()==rpc::Query::kAudioQuery){std::lock_guard lock(mu);if(!model||!model->available())return absent();return {StatusCode::UNIMPLEMENTED,"Audio query unavailable in text-only model"};}if(req->max_results()<=0)return {StatusCode::INVALID_ARGUMENT,"max_results must be positive (Linux policy)"};std::shared_ptr<Model> current;{std::lock_guard lock(mu);if(!model||!model->available())return absent();current=model;}try{auto query=current->embed(req->query().text_query(), EmbeddingTask::Query);std::lock_guard lock(mu);if(model!=current||!current->available())return absent();struct Match{double score;std::string text,id,mime;};std::vector<Match> matches;Statement q(db,"SELECT c.text,c.document_id,c.mime,c.embedding FROM vectors.chunks c JOIN linux.source_revisions r ON r.id=c.document_id AND r.revision=c.revision WHERE r.tombstone=0 AND c.generation=?");q.num(1,state.active_generation());while(q.row()){auto id=q.str(1);if(req->allowed_document_ids_size()&&std::find(req->allowed_document_ids().begin(),req->allowed_document_ids().end(),id)==req->allowed_document_ids().end())continue;auto v=json::parse(q.str(3)).get<std::vector<double>>();if(v.size()!=query.size())throw std::runtime_error("Stored model dimension mismatch");double dot=0,a=0,b=0;for(size_t i=0;i<v.size();++i){dot+=v[i]*query[i];a+=v[i]*v[i];b+=query[i]*query[i];}double score=a&&b?dot/std::sqrt(a*b):0;float threshold=req->min_similarity_score();if(score>=threshold)matches.push_back({score,q.str(0),id,q.str(2)});}std::stable_sort(matches.begin(),matches.end(),[](auto& a,auto& b){return a.score>b.score;});for(size_t i=0;i<std::min(matches.size(),size_t(req->max_results()));++i){auto* c=r->add_chunks();c->set_text(matches[i].text);c->set_document_id(matches[i].id);c->set_mime_type(matches[i].mime);c->set_relevance_score(matches[i].score);}return Status::OK;}catch(const std::exception& e){std::lock_guard lock(mu);note_adapter_failure(current,e);return {StatusCode::INTERNAL,e.what()};}}
+ Status DeleteDocument(grpc::ServerContext*,const rpc::DeleteRequest* req,rpc::DeleteResponse* r)override{ReconfigGuard guard(*this);guard.enter();std::lock_guard lock(mu);try{if(req->document_id().empty())throw std::runtime_error("Document ID is empty");Tx tx(*this);std::vector<std::string> ids{req->document_id()};if(req->document_id().starts_with("file://"))ids.push_back(req->document_id().substr(7));else ids.push_back("file://"+req->document_id());for(auto& id:ids){auto rev=revision(id);for(auto sqltext:{"DELETE FROM documents WHERE id=?","DELETE FROM vectors.chunks WHERE document_id=?"}){Statement q(db,sqltext);q.text(1,id);q.row();}Statement q(db,"INSERT OR REPLACE INTO linux.source_revisions VALUES(?,?,1)");q.text(1,id);q.num(2,rev);q.row();journal("delete",id,rev);}crash("delete_before_commit");tx.commit();publish_index();crash("delete_after_commit");changed();r->set_success(true);return Status::OK;}catch(const std::exception& e){return app_error(r,e);}}
+ Status RetrieveContext(grpc::ServerContext*,const rpc::RetrieveRequest* req,rpc::RetrieveResponse* r)override {
+  if(!req->has_query()||req->query().query_case()==rpc::Query::QUERY_NOT_SET)return {StatusCode::INVALID_ARGUMENT,"Query required"};
+  if(req->max_results()<=0)return {StatusCode::INVALID_ARGUMENT,"max_results must be positive (Linux policy)"};
+  // Atomic shared ownership is the reader lock: a writer may publish a new
+  // generation without invalidating, locking or mutating any active reader.
+  auto snapshot=search_snapshot.load();
+  if(!snapshot || !snapshot->model || !snapshot->model->available()){std::lock_guard lock(mu);return absent();}
+  if(req->query().query_case()==rpc::Query::kAudioQuery)return {StatusCode::UNIMPLEMENTED,"Audio query unavailable in text-only model"};
+  try {
+    auto query=snapshot->model->embed(req->query().text_query(),EmbeddingTask::Query);
+    std::set<std::string> allowed(req->allowed_document_ids().begin(),req->allowed_document_ids().end());
+    for(auto match:snapshot->index.search(std::move(query),req->max_results(),static_cast<float>(req->min_similarity_score()),allowed)) {
+      const auto &value=snapshot->index.chunks[match.chunk];auto *chunk=r->add_chunks();chunk->set_text(value.text);chunk->set_document_id(value.id);chunk->set_mime_type(value.mime);chunk->set_relevance_score(match.score);
+    }
+    return Status::OK;
+  } catch(const std::exception &e){std::lock_guard lock(mu);note_adapter_failure(snapshot->model,e);return {StatusCode::INTERNAL,e.what()};}
+ }
  Status Encode(grpc::ServerContext*,const rpc::EncodeRequest* req,rpc::EncodeResponse* r)override{std::shared_ptr<Model> current;{std::lock_guard lock(mu);if(!model)return {StatusCode::UNAVAILABLE,"Tokenizer not initialized"};current=model;}try{auto tokens=current->encode(req->text());std::lock_guard lock(mu);for(int t:tokens)r->add_tokens(t);return Status::OK;}catch(const std::exception& e){std::lock_guard lock(mu);note_adapter_failure(current,e);return {StatusCode::INTERNAL,e.what()};}}
  Status ChunkText(grpc::ServerContext*,const rpc::ChunkTextRequest* req,rpc::ChunkTextResponse* r)override{if(req->max_tokens_per_chunk()<=0)return {StatusCode::INVALID_ARGUMENT,"Chunk size must be positive (Linux policy)"};std::shared_ptr<Model> current;{std::lock_guard lock(mu);if(!model)return {StatusCode::UNAVAILABLE,"Tokenizer not initialized"};current=model;}try{auto parts=current->chunks(req->text(),req->max_tokens_per_chunk(),0);std::lock_guard lock(mu);for(auto& part:parts)r->add_chunks(part);return Status::OK;}catch(const std::exception& e){std::lock_guard lock(mu);note_adapter_failure(current,e);return {StatusCode::INTERNAL,e.what()};}}
  Status TruncateText(grpc::ServerContext*,const rpc::TruncateTextRequest* req,rpc::TruncateTextResponse* r)override{std::shared_ptr<Model> current;{std::lock_guard lock(mu);if(!model)return {StatusCode::UNAVAILABLE,"Tokenizer not initialized"};current=model;}try{auto tokens=current->encode(req->text());if(req->max_tokens()>0&&size_t(req->max_tokens())<tokens.size())tokens.resize(req->max_tokens());auto text=current->decode(tokens);std::lock_guard lock(mu);r->set_truncated_text(text);return Status::OK;}catch(const std::exception& e){std::lock_guard lock(mu);note_adapter_failure(current,e);return {StatusCode::INTERNAL,e.what()};}}

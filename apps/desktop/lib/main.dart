@@ -1,3 +1,4 @@
+import 'background_store.dart';
 import 'package:foresight_core/foresight_core.dart'
     show
         runtimeConfiguration,
@@ -279,6 +280,20 @@ class Workspace extends StatefulWidget {
 class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   Domain get d => widget.domain;
   void update(VoidCallback action) => setState(action);
+  String? localOutputRevision;
+  int localOutputCount = 0;
+  final serviceUiRevision = ValueNotifier<int>(0);
+  Timer? serviceUiTimer;
+  void serviceChanged() {
+    if (!mounted || serviceUiTimer != null) return;
+    serviceUiTimer = Timer(const Duration(milliseconds: 100), () {
+      serviceUiTimer = null;
+      if (!mounted) return;
+      syncCapture();
+      serviceUiRevision.value++;
+    });
+  }
+
   int tab = 3;
   bool graphView = false,
       gridView = false,
@@ -329,7 +344,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         mounted &&
         tab == 0 &&
         graphView &&
-        d.store.sources.isNotEmpty &&
+        d.store.sourceSummaries.isNotEmpty &&
         !graphAnimationPaused &&
         graphMousePointer == null &&
         !graphModalOpen &&
@@ -527,11 +542,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     syncCapture();
     if (d is! RemoteDomain) {
       noteEnhancementChanges = d.application.changes.stream.listen((_) {
-        if (mounted) setState(syncCapture);
+        serviceChanged();
       });
     }
     d.helper.changed = () {
-      if (mounted) setState(syncCapture);
+      serviceChanged();
     };
     d.helper.onReady = () async {
       try {
@@ -562,6 +577,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    serviceUiTimer?.cancel();
+    serviceUiRevision.dispose();
     unawaited(noteEnhancementChanges?.cancel());
     if (d is! RemoteDomain) google.close();
     void releaseDomain() {
@@ -1713,7 +1730,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   Widget build(BuildContext context) {
     syncGraphMotion();
     final workspace = meetingImmersive && meetingId != null
-        ? immersiveMeetingWorkspace()
+        ? ValueListenableBuilder<int>(
+            valueListenable: serviceUiRevision,
+            builder: (_, __, ___) => immersiveMeetingWorkspace(),
+          )
         : screenshotWorkspace(context);
     return d is RemoteDomain
         ? AgentApprovalSurface(domain: d as RemoteDomain, child: workspace)

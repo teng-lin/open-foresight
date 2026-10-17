@@ -6,7 +6,7 @@ import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/service.dart';
 
 Future<void> main(List<String> args) async {
-  ApplicationService? service;
+  IsolatedApplicationService? service;
   try {
     if (args.isNotEmpty) {
       if (args.length != 1)
@@ -65,7 +65,7 @@ Future<void> main(List<String> args) async {
       }
       return;
     }
-    service = await ApplicationService.start(
+    service = await IsolatedApplicationService.start(
       ProfilePaths.resolve(Platform.environment),
     );
     final done = Completer<void>();

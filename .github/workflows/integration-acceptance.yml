@@ -25,6 +25,7 @@ on:
       - 'apps/desktop/test/live*'
       - 'native/**'
       - 'services/inference/**'
+      - 'services/speech/**'
       - 'services/helper/**'
       - 'packages/foresight_core/test/*model*'
       - 'packages/foresight_core/test/recording_pipewire_test.dart'

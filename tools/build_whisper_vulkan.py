@@ -18,7 +18,8 @@ def main():
     parser.add_argument('--spirv-prefix', type=Path)
     parser.add_argument('--jobs', type=int, default=4)
     args = parser.parse_args()
-    command = ['cmake', '-S', str(args.source), '-B', str(args.build),
+    command = ['cmake', '-S', str(Path(__file__).resolve().parents[1] / 'services/speech'), '-B', str(args.build),
+               '-DFORESIGHT_WHISPER_SOURCE=' + str(args.source.resolve()),
                '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_SHARED_LIBS=OFF',
                '-DGGML_VULKAN=ON', '-DGGML_NATIVE=OFF',
                '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_BUILD_EXAMPLES=ON']
@@ -30,7 +31,7 @@ def main():
         command.extend(['-DCMAKE_PREFIX_PATH=' + str(args.spirv_prefix),
                         '-DCMAKE_CXX_FLAGS=-I' + str(args.spirv_prefix / 'include')])
     subprocess.run(command, check=True)
-    subprocess.run(['cmake', '--build', str(args.build), '--target', 'whisper-cli',
+    subprocess.run(['cmake', '--build', str(args.build), '--target', 'whisper-cli', 'foresight-whisper-worker',
                     '-j', str(args.jobs)], check=True)
     executable = args.build / 'bin/whisper-cli'
     dependencies = subprocess.check_output(['ldd', str(executable)], text=True)
@@ -38,6 +39,7 @@ def main():
         raise RuntimeError(dependencies)
     args.output.mkdir(parents=True, exist_ok=True)
     shutil.copy2(executable, args.output / 'whisper-cli')
+    shutil.copy2(args.build / 'bin/foresight-whisper-worker', args.output / 'foresight-whisper-worker')
     shutil.copy2(args.source / 'LICENSE', args.output / 'LICENSE')
     provenance = {
         'source': 'https://github.com/ggml-org/whisper.cpp',

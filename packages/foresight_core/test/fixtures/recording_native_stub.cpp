@@ -9,7 +9,9 @@ static Handle* channels[2] = {};
 static int fail_channel = -1;
 static std::string speech_event;
 static bool hold_speech = false;
+static int speech_creations = 0;
 extern "C" {
+int fixture_speech_creations() { return speech_creations; }
 void fixture_hold_speech(int hold) { hold_speech = hold != 0; }
 void fixture_speech_event(const char* event) { speech_event = event; }
 void fixture_fail_channel(int channel) { fail_channel = channel; }
@@ -44,7 +46,7 @@ void fs_capture_stop(void* pointer) {
   if (channels[handle->channel] == handle) channels[handle->channel] = nullptr;
   delete handle;
 }
-void* fs_speech_create(const char*, const char*) { return new Handle{true, -1}; }
+void* fs_speech_create(const char*, const char*) { ++speech_creations; return new Handle{true, -1}; }
 void fs_speech_destroy(void* handle) { delete static_cast<Handle*>(handle); }
 int fs_speech_push(void* pointer, const int16_t* samples, size_t count, int) {
   if (count) static_cast<Handle*>(pointer)->marker = samples[0];

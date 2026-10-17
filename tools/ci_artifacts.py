@@ -24,7 +24,9 @@ FILES = {
                      'tools/litert_extensions.py', 'tools/test_litert_status_abi.py',
                      'third_party/litert_lm/stop-token-sequences.patch',
                      'third_party/litert_lm/linux-trivial-abi.patch'],
-    'linux-whisper': ['packaging/sdk-whisper.Dockerfile', 'tools/build_whisper_vulkan.py'],
+    'linux-whisper': ['packaging/sdk-whisper.Dockerfile', 'tools/build_whisper_vulkan.py',
+                      'services/speech/CMakeLists.txt', 'services/speech/worker.cpp',
+                      'services/inference/persistent_worker.h', 'services/inference/output_budget.h'],
     'linux-sdk': ['packaging/sdk.Dockerfile'],
 }
 PARENTS = {'linux-litert': ['linux-core'], 'linux-whisper': ['linux-core'],
