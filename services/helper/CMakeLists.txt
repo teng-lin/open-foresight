@@ -25,13 +25,6 @@ add_custom_command(OUTPUT "${GEN}/helper_control.pb.cc" "${GEN}/helper_control.p
  DEPENDS "${REPO_ROOT}/proto/linux/helper_control.proto" VERBATIM)
 add_library(foresight_protocol ${GENERATED})
 target_compile_options(foresight_protocol PUBLIC -Ulinux)
-if(FORESIGHT_SANITIZERS)
- # Protobuf 36 switches ClassDataFull layout under ASan. Keep generated messages
- # ABI-compatible with the distro's unsanitized shared libprotobuf; all generated
- # code and callers still receive the full ASan/UBSan compiler instrumentation.
- # This is also the upstream Chromium protobuf_config compatibility define.
- target_compile_definitions(foresight_protocol PUBLIC PROTOBUF_MESSAGE_GLOBALS_TEMPORARY_OPTOUT)
-endif()
 target_include_directories(foresight_protocol PUBLIC "${GEN}")
 target_link_libraries(foresight_protocol PUBLIC protobuf::libprotobuf gRPC::grpc++)
 add_executable(ForesightHelper main.cpp)
