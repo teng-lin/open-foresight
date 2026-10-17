@@ -27,6 +27,9 @@ class Store {
     try {
       // Refuse newer profiles before even changing their journal mode.
       _checkVersion();
+      // Migrations populate the WAL before readers open the fresh profile.
+      // Switching only after COMMIT leaves no WAL for macOS read-only clients.
+      db.execute('PRAGMA journal_mode=WAL');
       db.execute('PRAGMA foreign_keys=ON');
       db.execute('BEGIN IMMEDIATE');
       try {
@@ -42,7 +45,6 @@ class Store {
         if (!db.autocommit) db.execute('ROLLBACK');
         rethrow;
       }
-      db.execute('PRAGMA journal_mode=WAL');
     } catch (_) {
       db.dispose();
       rethrow;

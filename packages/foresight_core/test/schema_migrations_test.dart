@@ -13,6 +13,34 @@ void main() {
   });
   tearDown(() => directory.deleteSync(recursive: true));
 
+  test('fresh and current profiles support concurrent read-only connections', () {
+    void checkReader() {
+      final writer = Store(path);
+      try {
+        // No application writes occur before the desktop opens its reader.
+        final reader = Store.readOnly(path);
+        try {
+          expect(reader.sources, isEmpty);
+          expect(
+            reader.rows('PRAGMA user_version').single.values.single,
+            Store.schemaVersion,
+          );
+          expect(
+            reader.rows('PRAGMA journal_mode').single.values.single,
+            'wal',
+          );
+        } finally {
+          reader.close();
+        }
+      } finally {
+        writer.close();
+      }
+    }
+
+    checkReader(); // The migration transaction populated a new WAL.
+    checkReader(); // The current schema needs no migration or application writes.
+  });
+
   test('Store owns Google tables before a connection exists', () {
     final store = Store(path);
     addTearDown(store.close);
