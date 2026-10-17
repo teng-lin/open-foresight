@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:ffi';
@@ -60,6 +61,30 @@ void main() {
       'data': base64Encode(bytes.buffer.asUint8List()),
     });
   }
+
+  test('disposing during finalization returns an owned cancellation', () async {
+    fail(-1);
+    holdSpeech(true);
+    addTearDown(() => holdSpeech(false));
+    final recording = Recording(library, (_) {}, (_, _, _, _) {});
+    addTearDown(recording.dispose);
+    recording.start('/usr/bin/true', model, playback: false);
+    emit(0, 222, count: 20000);
+    recording.drain();
+    final pending = recording.stop();
+    final rejected = expectLater(
+      pending,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    await expectLater(
+      recording.stop(),
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
+    recording.dispose();
+    await rejected;
+  });
 
   for (final stopLimit in [Duration.zero, const Duration(milliseconds: 60)]) {
     test(

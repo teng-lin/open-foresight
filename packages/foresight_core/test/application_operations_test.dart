@@ -576,6 +576,43 @@ void main() {
     },
   );
 
+  test('retrying a missing proactive question returns notFound', () async {
+    await expectLater(
+      app.call('meetings.retry_question', {'id': -1}),
+      throwsA(
+        isA<RpcError>()
+            .having((e) => e.code, 'code', RpcErrorCode.notFound)
+            .having((e) => e.message, 'message', 'Question not found'),
+      ),
+    );
+  });
+
+  test(
+    'cancelled model registration preserves configuration and returns a stable code',
+    () async {
+      final old = File('${root.path}/old-speech.bin')
+        ..writeAsStringSync('existing model');
+      final candidate = File('${root.path}/candidate-speech.bin')
+        ..writeAsStringSync('candidate model');
+      await app.call('models.register', {'kind': 'speech', 'path': old.path});
+      final before = Map.of(domain.store.model('speech')!);
+      var checks = 0;
+      await expectLater(
+        app.call('models.register', {
+          'kind': 'speech',
+          'path': candidate.path,
+        }, current: () => ++checks == 1),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e.message, 'message', 'Model setup cancelled'),
+        ),
+      );
+      expect(domain.store.model('speech'), before);
+      expect(app.modelBusy, isFalse);
+    },
+  );
+
   test(
     'Google operations use the authenticated adapter and preserve calendar provenance',
     () async {

@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -212,6 +213,45 @@ void main() {
       throwsStateError,
     );
   });
+
+  for (final failure in [false, true]) {
+    test(
+      'caller cancellation during DNS ${failure ? "failure" : "success"} returns cancelled',
+      () async {
+        final lookup = Completer<List<InternetAddress>>();
+        var current = true, connected = false;
+        final importer = WebPageImporter(
+          lookup: (_) => lookup.future,
+          connect: (_, _) async {
+            connected = true;
+            throw StateError('Unexpected cancelled connection');
+          },
+        );
+        final pending = importer.fetch(
+          Uri.parse('http://cancelled.test/'),
+          current: () => current,
+        );
+        final rejected = expectLater(
+          pending,
+          throwsA(
+            isA<RpcError>().having(
+              (e) => e.code,
+              'code',
+              RpcErrorCode.cancelled,
+            ),
+          ),
+        );
+        current = false;
+        if (failure) {
+          lookup.completeError(const SocketException('Fixture DNS failed'));
+        } else {
+          lookup.complete([InternetAddress('8.8.8.8')]);
+        }
+        await rejected;
+        expect(connected, isFalse);
+      },
+    );
+  }
 
   test('DNS deadline prevents a late lookup from opening a socket', () async {
     final lookup = Completer<List<InternetAddress>>();
