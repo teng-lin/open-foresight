@@ -145,11 +145,13 @@ class Helper {
       if (stopping) return;
       if (existing != null) {
         _adopted = true;
+        // A failed lookup is a transport failure, not proof of an incompatible
+        // build. Keep that channel retryable; only reject a validated mismatch.
+        snapshot = await control.HelperControlClient(channel).getState(
+          control.Empty(),
+          options: CallOptions(timeout: const Duration(seconds: 3)),
+        );
         try {
-          snapshot = await control.HelperControlClient(channel).getState(
-            control.Empty(),
-            options: CallOptions(timeout: const Duration(seconds: 3)),
-          );
           validateHelperCompatibility(existing, snapshot!);
         } catch (error) {
           incompatible = true;
