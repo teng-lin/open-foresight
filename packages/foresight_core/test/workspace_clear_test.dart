@@ -214,7 +214,10 @@ void main() {
     });
     try {
       final pending = expectLater(
-        app.importUrl('http://127.0.0.1:${server.port}/private'),
+        app.importUrl(
+          'http://127.0.0.1:${server.port}/private',
+          allowPrivateNetwork: true,
+        ),
         throwsStateError,
       );
       await entered.future;

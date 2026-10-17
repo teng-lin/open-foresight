@@ -534,8 +534,7 @@ class Application {
               allowedDocumentIds: allowed.keys,
             ),
           );
-          if (current != null && !current())
-            throw StateError('Search cancelled');
+          if (!current()) throw StateError('Search cancelled');
           return [
             for (final chunk in result.chunks)
               if (allowed.containsKey(chunk.documentId))

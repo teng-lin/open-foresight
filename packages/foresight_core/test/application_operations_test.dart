@@ -805,7 +805,10 @@ void main() {
       'url:$url',
     );
     try {
-      final pending = expectLater(app.reimport(), throwsStateError);
+      final pending = expectLater(
+        app.reimport(allowPrivateNetwork: true),
+        throwsStateError,
+      );
       await entered.future;
       domain.store.importText(
         'Page',
