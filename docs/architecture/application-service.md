@@ -83,6 +83,8 @@ The capability file is not a sandbox against arbitrary malicious programs runnin
 
 | Tools | Behavior |
 | --- | --- |
+| `audio_capabilities` | Inspect audio backend, permissions, and system settings guidance without capturing. |
+| `audio_request_microphone`, `audio_request_system` | Explicitly request microphone or system audio consent in an interactive session. |
 | `get_status` | Model/helper readiness, index state, service PID, active capture, profile revision, and Google connection status. |
 | `list_sources`, `get_source`, `search` | Source metadata/full text and relevant passages with IDs, titles, revisions, and scores. Search limit is 1–100. |
 | `import_text`, `import_file`, `import_url`, `import_directory`, `refresh_sources` | Import/update sources and index them using the application's workflows. Supported local files: UTF-8 text/Markdown, PDF, RTF. |
@@ -94,7 +96,7 @@ The capability file is not a sandbox against arbitrary malicious programs runnin
 | `start_recording`, `pause_recording`, `resume_recording`, `stop_recording` | Use the shared microphone/playback capture and transcription lifecycle. Pause releases capture devices and retains queued pre-pause speech; Resume reacquires the same routes. |
 | `ask` | Generate a grounded answer with checked citations using the configured local generator. |
 
-Tool failures return `isError: true` with a useful message. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
+Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
 ## Shared operation and lifecycle
 
