@@ -12,11 +12,11 @@ void main() {
 
   setUp(() {
     root = Directory.systemTemp.createTempSync('desktop-queries-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     store = Store('${root.path}/app.db');
-  });
-  tearDown(() {
-    store.close();
-    root.deleteSync(recursive: true);
+    addTearDown(store.close);
   });
 
   test(
@@ -77,13 +77,11 @@ void main() {
     'meeting projections preserve scope, final duration, and newest artifacts',
     () {
       final helper = Helper('${root.path}/socket', '${root.path}/helper');
+      addTearDown(helper.close);
       final domain = Domain(store, helper);
+      addTearDown(domain.close);
       final app = Application(domain);
-      addTearDown(() async {
-        await app.close();
-        domain.close();
-        await helper.close();
-      });
+      addTearDown(app.close);
       app.google; // Initialize the optional calendar projection schema.
       final first = store.meeting('Recorded');
       final second = store.meeting('No recording');
