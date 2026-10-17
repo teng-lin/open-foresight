@@ -44,9 +44,33 @@ WORKDIR /src
 COPY requirements-dev.lock requirements-litert.lock ./
 RUN python3 -m venv /opt/dev-python && /opt/dev-python/bin/pip install --no-cache-dir --require-hashes -r requirements-dev.lock && \
     python3 -m venv /opt/litert-python && /opt/litert-python/bin/pip install --no-cache-dir --require-hashes -r requirements-litert.lock
+# Build the C API required by note enhancement rather than shipping the stock
+# wheel, which has no native ordered-stop setter. Keep this stage independent
+# from Whisper so either expensive build can reuse its completed layers.
+FROM core AS litert-extensions
+RUN apt-get update && apt-get install -y --no-install-recommends git-lfs zip && \
+    rm -rf /var/lib/apt/lists/* && \
+    curl -fL --retry 3 -o /usr/local/bin/bazel \
+      https://github.com/bazelbuild/bazel/releases/download/7.6.1/bazel-7.6.1-linux-x86_64 && \
+    echo 'ac6249d1192aea9feaf49dfee2ab50c38cee2454b00cf29bbec985a11795c025  /usr/local/bin/bazel' | sha256sum -c - && \
+    chmod +x /usr/local/bin/bazel
+ARG LITERT_LM_COMMIT=b2f686e2ed4718fb84ec398a61dd59ca0f0aff27
+RUN git init /opt/litert-source && cd /opt/litert-source && \
+    git remote add origin https://github.com/google-ai-edge/LiteRT-LM.git && \
+    git fetch --depth=1 origin "$LITERT_LM_COMMIT" && \
+    GIT_LFS_SKIP_SMUDGE=1 git checkout --detach FETCH_HEAD && \
+    git lfs install --local && git lfs pull --include='prebuilt/linux_x86_64/*' --exclude=''
+COPY tools/build_litert_extensions.py /opt/foresight-extension/tools/build_litert_extensions.py
+COPY third_party/litert_lm/stop-token-sequences.patch /opt/foresight-extension/third_party/litert_lm/stop-token-sequences.patch
+RUN --mount=type=cache,target=/tmp/litert-bazel \
+    python3 /opt/foresight-extension/tools/build_litert_extensions.py /opt/litert-source \
+      --output /opt/litert-extensions --output-user-root /tmp/litert-bazel --jobs 2 && \
+    rm -rf /opt/litert-source
+
 # Publish/cache the core before building the GPU runner. Shader dependency
 # failures must not discard a successful gRPC/Flutter/Python bootstrap.
 FROM core AS sdk
+COPY --from=litert-extensions /opt/litert-extensions /opt/litert-extensions
 ARG SPIRV_HEADERS_COMMIT=86f980c731e62ae4eaf383d320449d71687936bf
 RUN git init /opt/spirv-source && cd /opt/spirv-source && \
     git remote add origin https://github.com/KhronosGroup/SPIRV-Headers.git && \

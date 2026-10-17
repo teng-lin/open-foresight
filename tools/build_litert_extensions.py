@@ -57,11 +57,19 @@ def main():
         parser.error(f'Source must be exactly {COMMIT}')
     diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
     patch = PATCH.read_bytes()
+    patch_digest = hashlib.sha256(patch).hexdigest()
     if diff != patch:
         if diff:
             parser.error('Source has unrelated changes; use a clean checkout')
         run(source, 'git', 'apply', '--check', str(PATCH))
         run(source, 'git', 'apply', str(PATCH))
+    def verify_source_snapshot():
+        current_commit = run(source, 'git', 'rev-parse', 'HEAD', capture=True).decode().strip()
+        current_diff = run(source, 'git', 'diff', 'HEAD', '--binary', capture=True)
+        if current_commit != COMMIT or current_diff != patch:
+            raise RuntimeError('LiteRT source changed from the verified commit/patch snapshot')
+
+    verify_source_snapshot()
     if args.apply_only:
         return
     version = run(source, args.bazel, '--version', capture=True).decode().strip()
@@ -95,6 +103,7 @@ def main():
     # has no setter and must never be substituted for this source build.
     build = bazel + ['build', *flags, '//python/litert_lm:wheel']
     run(source, *build)
+    verify_source_snapshot()
     wheels = list((source / 'bazel-bin/python/litert_lm').glob('*.whl'))
     if len(wheels) != 1:
         raise RuntimeError('Expected exactly one built API wheel')
@@ -120,14 +129,27 @@ def main():
         with archive.open(entries[0]) as source_stream, temporary.open('wb') as output_stream:
             shutil.copyfileobj(source_stream, output_stream)
         temporary.replace(library)
+    export_report = {}
+    if platform.system() == 'Darwin':
+        exported = subprocess.check_output(['/usr/bin/nm', '-gUj', str(library)], text=True)
+        symbols = set(exported.splitlines())
+        required = {'_litert_lm_engine_create', '_litert_lm_embedding_engine_create',
+                    '_litert_lm_session_config_add_stop_token_sequence'}
+        if not required <= symbols or any(not name.startswith('_litert_lm_') for name in symbols):
+            raise RuntimeError('macOS LiteRT library must export only the public C API')
+        export_log = args.output / 'native-exported-symbols.txt'
+        export_log.write_text(exported)
+        export_report = {'native_export_log': export_log.name,
+                         'native_export_log_sha256': sha256(export_log)}
     (args.output / 'build-manifest.json').write_text(json.dumps({
-        'upstream_commit': COMMIT, 'patch_sha256': sha256(PATCH),
+        'upstream_commit': COMMIT, 'patch_sha256': patch_digest,
         'distribution': package['Name'], 'version': package['Version'],
         'wheel': destination.name, 'wheel_sha256': sha256(destination),
         'library': library.name, 'library_sha256': sha256(library),
         'native_test_log': retained_test_log.name,
         'native_test_log_sha256': sha256(retained_test_log),
         'native_test_command': test, 'build_command': build,
+        **export_report,
     }, indent=2) + '\n')
     print(destination)
 

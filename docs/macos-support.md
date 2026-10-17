@@ -83,9 +83,20 @@ are never copied. Build the pinned Whisper runtime described in
 its source license. Models themselves belong in the user profile and are not
 sealed into the application.
 
+Build the source-pinned LiteRT extension with Bazel 7.6.1 from a checkout at
+`b2f686e2ed4718fb84ec398a61dd59ca0f0aff27`. Materialize its
+`prebuilt/macos_arm64/*` Git LFS objects first. The builder applies the repository
+patch, runs the native regression, limits the C API's exported symbols and writes
+a verified wheel/library manifest. The packager overlays that wheel into its
+private Python copy; the source Python installation remains untouched. The stock
+0.18.0 runtime lacks the native stop sequences required by note enhancement.
+
 ```sh
+.venv/bin/python tools/build_litert_extensions.py /path/to/LiteRT-LM \
+  --output "$PWD/build/litert-extensions"
 .venv/bin/python tools/package_macos.py \
   --python-runtime /path/to/standalone/python \
+  --litert-extensions-manifest "$PWD/build/litert-extensions/build-manifest.json" \
   --sdk "$PWD/build/macos-sdk" \
   --whisper-runtime /path/to/whisper-cli \
   --whisper-license /path/to/whisper.cpp/LICENSE \
@@ -107,6 +118,8 @@ relocates non-system Mach-O dependencies, audits arm64 and minimum OS metadata,
 signs nested binaries before containers, submits notarization, staples the ticket,
 and assesses the app. It writes its provenance/verification manifest beside the
 sealed app. Release builds require both model runtimes and dependency licenses.
+See [production runtime acceptance](reference-production-runtime-acceptance.md)
+for real model probes and the limits of local ad-hoc validation.
 
 The AOT exception follows Dart 3.9.2's
 [Mach-O snapshot loader](https://github.com/dart-lang/sdk/blob/3.9.2/runtime/bin/macho_loader.cc)

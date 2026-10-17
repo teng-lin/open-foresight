@@ -139,10 +139,21 @@ def install_extension_wheel(bundle, *, site_packages, source_prefix, destination
 
 
 PYTHON_CAPABILITY_PROBE = r'''
-import ctypes, inspect, json, sys
+import ctypes, inspect, json, signal, sys
 from pathlib import Path
 import litert_lm
 from litert_lm._ffi import _get_lib
+# A real initialized SentencePiece processor reproduces the native protobuf
+# symbol-coalescing deadlock; importing the Python modules alone does not.
+# Bound this model-free child probe even if dlopen blocks in native code.
+signal.alarm(15)
+if '--native-first' in sys.argv:
+    _get_lib()
+import sentencepiece
+processor = sentencepiece.SentencePieceProcessor(
+    model_proto=b'\x0a\x09\x0a\x05<unk>\x18\x02\x0a\x05\x0a\x01a\x18\x01')
+if processor.get_piece_size() != 2:
+    raise RuntimeError('SentencePiece co-load fixture did not initialize')
 prefix = Path(sys.executable).resolve().parents[1]
 lib = _get_lib()
 if not Path(litert_lm.__file__).resolve().is_relative_to(prefix):

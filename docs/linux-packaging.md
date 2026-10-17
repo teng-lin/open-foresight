@@ -12,7 +12,12 @@ pushes alone. The release tag must be `v` followed by the version in
 
 Application executables are rebuilt inside Ubuntu 24.04: the helper, Flutter app,
 application service/MCP server, inference worker and Whisper Vulkan executable.
-Standalone LiteRT-LM and ONNX libraries use pinned, SHA-verified upstream archives. The build pins
+LiteRT-LM is source-built at the pinned upstream commit with the native ordered
+stop-sequence extension required by note enhancement. The SDK retains its wheel,
+native library, passing native regression log and checksum manifest; the application
+packager verifies those artifacts and copies the wheel's Linux vendor dependencies.
+The stock 0.18.0 library lacks that setter and is not selected by release CI.
+ONNX uses a pinned, SHA-verified upstream archive. The build pins
 Flutter, gRPC (including its protobuf submodule) and Whisper to full source
 commits. The modern protobuf toolchain is intentional: our authoritative
 descriptor uses Edition 2024, which older distro protoc packages cannot generate.
@@ -27,17 +32,22 @@ reconstructed worker modules and distribution notices are copied explicitly;
 original oracle code and model weights are excluded. A native-only bundle
 keeps dedicated-runtime setup unavailable until an explicit runtime is supplied. The reusable SDK retains its build-time Python environments
 and dependency locks, independently of the native inference runtime.
-The SDK (gRPC, Flutter, Python and Whisper) is a separate private GHCR image.
-Its tag hashes the SDK Dockerfile, CMake hook, dependency locks and Whisper builder;
+The SDK (gRPC, Flutter, Python, LiteRT-LM and Whisper) is a separate private GHCR image.
+Its tag hashes the SDK Dockerfile, CMake hook, dependency locks, runtime builders
+and native stop-sequence patch;
 application CI consumes the resolved immutable image digest. Ordinary app changes
 skip the SDK build entirely. The first bootstrap is slower on two-core runners;
 unused duplicate gRPC libraries are excluded and compilation uses `-O2`.
-CI saves the SDK core image/cache before building Whisper, preserving the
+CI saves the SDK core image/cache before building LiteRT-LM and Whisper, preserving the
 successful C++/Flutter/Python build if a shader build fails. Whisper uses pinned
 SPIRV-Headers; upstream RE2 tests are disabled alongside gRPC/protobuf tests.
 Release CI publishes a missing SDK with its repository token and reuses an
 already published matching SDK on subsequent releases.
-No larger paid runner is required. BuildKit caches intermediate SDK layers too.
+BuildKit caches intermediate SDK layers too. The first source-extension build
+is included in the SDK job's existing timeout.
+
+See [production runtime acceptance](reference-production-runtime-acceptance.md)
+for the actual model/package checks and the boundaries of local validation.
 
 `packaging/check_abi.py` audits version requirements of every ELF file, including
 inference libraries, and rejects requirements above glibc 2.39 or GLIBCXX 3.4.33.

@@ -1,3 +1,19 @@
+diff --git a/c/BUILD b/c/BUILD
+index f7a352b9..df701e0d 100644
+--- a/c/BUILD
++++ b/c/BUILD
+@@ -487,7 +487,10 @@ cc_binary(
+     copts = ["-fvisibility=hidden"],
+     features = ["-legacy_whole_archive"],
+     linkopts = select({
+-        "@platforms//os:macos": [],
++        # Keep statically linked protobuf/Abseil symbols private. Otherwise a
++        # previously initialized SentencePiece extension can coalesce their
++        # globals and deadlock this library's descriptor initializers.
++        "@platforms//os:macos": ["-Wl,-exported_symbol,_litert_lm_*"],
+         "@platforms//os:ios": [],
+         "@platforms//os:windows": [],
+         "//conditions:default": [
 diff --git a/c/engine.cc b/c/engine.cc
 index 2db9ae21..c12230d5 100644
 --- a/c/engine.cc
