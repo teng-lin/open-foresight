@@ -1,0 +1,116 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
+import 'package:grpc/grpc.dart';
+import 'package:test/test.dart';
+
+class Retrieval extends RagServiceBase {
+  late String document;
+  @override
+  Future<RetrieveResponse> retrieveContext(
+    ServiceCall call,
+    RetrieveRequest request,
+  ) async => RetrieveResponse(
+    chunks: [
+      RetrievedChunk(
+        documentId: document,
+        text: 'Mira leads Atlas.',
+        relevanceScore: .9,
+      ),
+    ],
+  );
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class DraftRuntime extends NativeRuntime {
+  DraftRuntime(this.raw, this.status)
+    : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
+  final String raw, status;
+  @override
+  Map<String, dynamic> get effectiveState => {'backend': 'fixture'};
+  @override
+  Stream<Map<String, dynamic>> generate(
+    String id,
+    String prompt, {
+    String systemPrompt = '',
+    Map<String, dynamic>? responseSchema,
+    Duration timeout = const Duration(minutes: 5),
+    int maxOutputTokens = 256,
+  }) async* {
+    yield {'type': 'delta', 'text': raw};
+    yield {'type': 'done', 'status': status};
+  }
+}
+
+void main() {
+  for (final payload in [
+    ('{"answer":"Unverified draft [S1, S9]","citations":["S1"]}', 'completed'),
+    ('{"answer":"Unverified draft","citations":[1]}', 'completed'),
+    ('{"answer":"Unverified draft","citations":["S1"]}', 'failed'),
+    ('{"answer":"Unverified draft","citations":["S1"]}', 'cancelled'),
+    (
+      '{"answer":"Unverified draft","citations":["S1"]}',
+      'insufficient_context',
+    ),
+  ]) {
+    test(
+      'unverified local answer never reaches persisted body or citations: $payload',
+      () async {
+        final directory = Directory.systemTemp.createTempSync(
+          'answer-validation-',
+        );
+        final store = Store('${directory.path}/app.db');
+        final socket = '${directory.path}/helper.sock';
+        final retrieval = Retrieval()
+          ..document = store.importText(
+            'Atlas',
+            'Mira leads Atlas.',
+            'text/plain',
+            'fixture',
+          );
+        store.state(retrieval.document, 'indexed');
+        final server = Server.create(services: [retrieval]);
+        await server.serve(
+          address: InternetAddress(socket, type: InternetAddressType.unix),
+          port: 0,
+        );
+        final helper = Helper(
+          socket,
+          '${directory.path}/unused',
+          manageProcess: false,
+        );
+        final runtime = DraftRuntime(payload.$1, payload.$2);
+        final domain = Domain(store, helper)..generator = runtime;
+        try {
+          final visible = <String>[];
+          final answer = domain
+              .askInConversation('Who leads Atlas?', 'fixture')
+              .forEach(visible.add);
+          if (payload.$2 == 'completed') {
+            await expectLater(answer, throwsFormatException);
+          } else {
+            await answer;
+          }
+          expect(visible, contains(contains('Unverified draft')));
+          final row = store.rows('SELECT * FROM answers').single;
+          expect(
+            row['status'],
+            ['completed', 'insufficient_context'].contains(payload.$2)
+                ? 'failed'
+                : payload.$2,
+          );
+          expect(row['body'], 'Answer generation failed. Please retry.');
+          expect(jsonDecode(row['citations'] as String), isEmpty);
+        } finally {
+          domain.close();
+          await helper.close();
+          await server.shutdown();
+          store.close();
+          directory.deleteSync(recursive: true);
+        }
+      },
+    );
+  }
+}

@@ -25,7 +25,14 @@ class GroundedAnswer {
   final bool sufficient;
   GroundedAnswer(this.text, this.citations, this.sufficient);
   factory GroundedAnswer.parse(String raw, Set<String> allowed) {
-    final result = jsonDecode(raw) as Map<String, dynamic>;
+    final result = jsonDecode(raw);
+    if (result is! Map<String, dynamic> ||
+        result['answer'] is! String ||
+        result['citations'] is! List ||
+        (result['citations'] as List).any((id) => id is! String) ||
+        (result.containsKey('status') && result['status'] is! String)) {
+      throw const FormatException('Invalid grounded-answer shape');
+    }
     final text = result['answer'] as String;
     final citations = (result['citations'] as List)
         .cast<String>()
@@ -47,16 +54,15 @@ class GroundedAnswer {
         'The answer has missing or unknown source citations',
       );
     }
-    final inline = RegExp(
-      r'\[(S\d+)\]',
-    ).allMatches(text).map((m) => m.group(1));
+    final inline = citationIds(text, citations.length);
     if (inline.any((id) => !citations.contains(id)))
       throw const FormatException('The answer cites an unselected source');
     return GroundedAnswer(text, citations, true);
   }
   String get rendered {
+    final inline = citationIds(text, citations.length);
     final missing = citations
-        .where((id) => !text.contains('[$id]'))
+        .where((id) => !inline.contains(id))
         .map((id) => '[$id]')
         .join(' ');
     return missing.isEmpty ? text : '$text $missing';
@@ -75,4 +81,37 @@ String? provisionalAnswer(String raw) {
   } on FormatException {
     return null;
   }
+}
+
+/// Citation groups support comma/space lists and inclusive source ranges.
+/// Fail closed on malformed groups and bound ranges by the selected sources.
+Set<String> citationIds(String text, int limit) {
+  final ids = <String>{};
+  const item = r'S([1-9][0-9]*)(?:\s*[-–—]\s*S?([1-9][0-9]*))?';
+  for (final bracket in RegExp(
+    r'\[[^\[\]]*\bS[0-9]+[^\[\]]*\]',
+  ).allMatches(text)) {
+    final content = bracket
+        .group(0)!
+        .substring(1, bracket.group(0)!.length - 1)
+        .trim();
+    if (!RegExp('^$item(?:(?:\\s*,\\s*|\\s+)$item)*\$').hasMatch(content)) {
+      throw const FormatException('Malformed citation group');
+    }
+    for (final match in RegExp(item).allMatches(content)) {
+      final first = int.tryParse(match.group(1)!);
+      final last = int.tryParse(match.group(2) ?? match.group(1)!);
+      if (first == null ||
+          last == null ||
+          last < first ||
+          last - first >= limit) {
+        throw const FormatException('Invalid citation range');
+      }
+      for (var n = first; ; n++) {
+        ids.add('S$n');
+        if (n == last) break;
+      }
+    }
+  }
+  return ids;
 }

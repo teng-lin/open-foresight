@@ -1,0 +1,332 @@
+[
+  {
+    "text": "Mira leads Atlas. [S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [S1, S2]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [S1 S2]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [S1-S3]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [S1–S3]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [S1—3]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [S1, S2-S3]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [ S1 , S2 ]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Mira leads Atlas. [S1, S9]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1 S9]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1-S4]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S3-S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1-S9999999999999999999999999999]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1; S2]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1.1]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "## Overview [S99]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "[S99]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas.",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "## Overview",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "INSUFFICIENT_CONTEXT",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": true
+  },
+  {
+    "text": "Launch 2025. [S2]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S0]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S01]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1,]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1 S2 S99]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S1-9223372036854775807]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S9223372036854775807]",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Atlas launches Friday.",
+      "S3": "Mira plans Atlas."
+    },
+    "valid": false
+  },
+  {
+    "text": "Montreal consultation: Sept 207. [S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.",
+      "S2": "The planning meeting is Friday."
+    },
+    "valid": false
+  },
+  {
+    "text": "Duration 124 months. [S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.",
+      "S2": "The planning meeting is Friday."
+    },
+    "valid": false
+  },
+  {
+    "text": "Duration 12–24 days. [S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.",
+      "S2": "The planning meeting is Friday."
+    },
+    "valid": false
+  },
+  {
+    "text": "Duration 24–12 months. [S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.",
+      "S2": "The planning meeting is Friday."
+    },
+    "valid": false
+  },
+  {
+    "text": "Efficacy <95%. [S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.",
+      "S2": "The planning meeting is Friday."
+    },
+    "valid": false
+  },
+  {
+    "text": "Cost <€3. [S1]",
+    "evidence": {
+      "S1": "Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.",
+      "S2": "The planning meeting is Friday."
+    },
+    "valid": false
+  },
+  {
+    "text": "Mira leads Atlas. [S2]",
+    "evidence": {
+      "S1": "Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.",
+      "S2": "The planning meeting is Friday."
+    },
+    "valid": false
+  },
+  {
+    "text": "Historical target cost <$3; not current prices. [S1]",
+    "evidence": {
+      "S1": "Cost <$3. These are historical targets, not current prices."
+    },
+    "valid": true
+  },
+  {
+    "text": "Cost <$3. [S1]",
+    "evidence": {
+      "S1": "Cost <$3. These are historical targets, not current prices."
+    },
+    "valid": false
+  },
+  {
+    "text": "| Item | Value |\n|---|---|\n| Launch | 2024 [S1] |\n| Lead | Mira leads Atlas [S2] |",
+    "evidence": {
+      "S1": "Mira leads Atlas.",
+      "S2": "Launch 2024."
+    },
+    "valid": false
+  }
+]

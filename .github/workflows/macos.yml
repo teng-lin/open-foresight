@@ -32,7 +32,7 @@ jobs:
       with:
         python-version: '3.13'
     - name: Install build tools
-      run: brew install cmake ninja cocoapods protobuf git-lfs
+      run: brew install cmake ninja cocoapods protobuf git-lfs icu4c
     - name: Install Python development dependencies
       run: |
         python -m venv .venv
@@ -88,6 +88,7 @@ jobs:
         tools/build.sh --platform macos \
           -DCMAKE_PREFIX_PATH="$PWD/build/sdk" \
           -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          -DICU_ROOT="$(brew --prefix icu4c)" \
           -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local'
     - name: Retain Dart core coverage
       if: always()

@@ -1,10 +1,11 @@
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
-    'grounded', Path(__file__).resolve().parents[2] / 'tests/reference/inference/grounded_generation.py')
+    'grounded', Path(__file__).resolve().parents[2] / 'services/inference/macos/grounded_generation.py')
 grounded = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(grounded)
 
@@ -15,6 +16,14 @@ class Tokenizer:
 
 
 class GroundedGenerationTests(unittest.TestCase):
+    def test_shared_citation_and_validation_corpus(self):
+        cases = json.loads((Path(__file__).resolve().parents[2] /
+                            'tests/inference/grounding_cases.json').read_text())
+        for case in cases:
+            with self.subTest(text=case['text']):
+                self.assertEqual(not grounded.validate_draft(case['text'], case['evidence']), case['valid'])
+
+
     def test_numeric_copy_and_citation_attribution(self):
         evidence = {'S1': 'Mira leads Atlas. Montreal consultation: Sept 2019. Duration 12–24 months; dose 100 mg; efficacy >95%; cost <$3.',
                     'S2': 'The planning meeting is Friday.'}
@@ -33,6 +42,18 @@ class GroundedGenerationTests(unittest.TestCase):
         ]:
             with self.subTest(bad=bad):
                 self.assertTrue(grounded.validate_draft(bad, evidence))
+
+    def test_synthesis_keeps_all_range_citations_and_verifies_their_evidence(self):
+        request = {'version': 1, 'question': 'Who leads Atlas?', 'sources': [
+            {'citation': f'S{i}', 'title': 'Atlas', 'excerpt': 'Mira leads Atlas.'}
+            for i in range(1, 4)]}
+        with patch.object(grounded, '_generate', side_effect=[
+                'S1.1 S2.1 S3.1', 'Mira leads Atlas. [S1-S3]', 'SUPPORTED']) as generate:
+            result = grounded.grounded_answer(Tokenizer(), None, request, 512)
+        self.assertEqual(result['citations'], ['S1', 'S2', 'S3'])
+        self.assertEqual(result['method'], 'verified-synthesis')
+        verifier_prompt = generate.call_args_list[-1].args[2]
+        self.assertEqual(set(json.loads(verifier_prompt.split('\n')[-1])['evidence']), {'S1', 'S2', 'S3'})
 
     def test_each_paragraph_needs_its_own_support(self):
         evidence = {'S1': 'Mira leads Atlas.', 'S2': 'Launch 2024.'}
