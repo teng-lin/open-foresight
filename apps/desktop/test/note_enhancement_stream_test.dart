@@ -14,14 +14,28 @@ class WidgetNoteGenerator extends NativeRuntime {
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   final events = StreamController<Map<String, dynamic>>();
   @override
-  Stream<Map<String, dynamic>> generate(
+  Stream<Map<String, dynamic>> generateConversation(
     String id,
     String prompt, {
-    String systemPrompt = '',
-    Map<String, dynamic>? responseSchema,
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
     Duration timeout = const Duration(minutes: 5),
-    int maxOutputTokens = 256,
-  }) => events.stream;
+  }) async* {
+    var text = '';
+    await for (final event in events.stream) {
+      if (event['type'] == 'delta') {
+        text += event['text'] as String;
+        yield {'type': 'preview', 'text': text};
+      } else if (event['type'] == 'done') {
+        yield {'type': 'delta', 'text': text};
+        yield event;
+        break;
+      } else {
+        yield event;
+      }
+    }
+  }
 }
 
 void main() {
@@ -64,16 +78,12 @@ void main() {
       );
       expect(
         find.byWidgetPredicate(
-          (widget) =>
-              widget is GeneratedContent && widget.markdown == 'Raw notes',
+          (widget) => widget is GeneratedContent && widget.markdown == '- Old',
         ),
         findsOneWidget,
       );
       await tester.runAsync(() async {
-        generator.events.add({
-          'type': 'delta',
-          'text': '<L:1>- Streamed first</L:1>',
-        });
+        generator.events.add({'type': 'delta', 'text': '- Streamed first'});
         await Future<void>.delayed(const Duration(milliseconds: 20));
       });
       await tester.pump();

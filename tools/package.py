@@ -8,6 +8,9 @@ import re
 import shutil
 import subprocess
 from prepare_litert import LIBRARY_SHA256
+from litert_extensions import (verify_extensions_manifest, file_sha256,
+    probe_native_extensions, write_extension_provenance,
+    copy_linux_extension_dependencies, validate_linux_extension_dependencies)
 from prepare_onnx import LIBRARY_SHA256 as ONNX_LIBRARY_SHA256
 from app_version import read_version
 from query_worker_packaging import copy_worker as copy_query_worker, copy_runtime as copy_query_runtime
@@ -24,6 +27,8 @@ def main():
     parser.add_argument('--google-client', type=Path, help='Optional application OAuth configuration; never account tokens')
     parser.add_argument('--revision', help='Source commit for exported trees without .git')
     parser.add_argument('--litert-library', type=Path, default=ROOT / 'build/lib/liblitert-lm.so', help='Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py')
+    parser.add_argument('--litert-extensions-manifest', type=Path,
+                        help='Explicit source-built runtime manifest; --litert-library must select its verified library')
     parser.add_argument('--onnx-library', type=Path, default=ROOT / 'build/lib/libonnxruntime.so', help='Pinned ONNX Runtime from tools/prepare_onnx.py')
     parser.add_argument('--query-python-runtime', type=Path,
                         help='Optional standalone Python >=3.12 prefix with NumPy2.5.1/SentencePiece0.2.1 for the dedicated CPU detector')
@@ -44,11 +49,18 @@ def main():
     assert not args.output.exists(), 'Choose an empty output directory to avoid stale packaged libraries'
     worker = args.build / 'services/inference/foresight-model'
     assert worker.is_file() and args.litert_library.is_file() and args.onnx_library.is_file(), 'Build native inference and prepare LiteRT-LM/ONNX Runtime first'
-    assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
+    extensions = None
+    if args.litert_extensions_manifest:
+        extensions = verify_extensions_manifest(args.litert_extensions_manifest, platform_name='linux')
+        if file_sha256(args.litert_library) != extensions.manifest['library_sha256']:
+            raise ValueError('--litert-library does not match the verified extension artifact')
+    else:
+        assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
     assert hashlib.sha256(args.onnx_library.read_bytes()).hexdigest() == ONNX_LIBRARY_SHA256, 'ONNX Runtime checksum mismatch'
     # Refuse a Python extension or an incompatible/missing public C runtime.
     environment = dict(__import__('os').environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve()))
-    subprocess.run([str(worker), '--check'], env=environment, check=True)
+    if extensions is None:
+        subprocess.run([str(worker), '--check'], env=environment, check=True)
     shutil.copytree(args.flutter_bundle, args.output / 'app')
     (args.output / 'bin').mkdir()
     (args.output / 'lib').mkdir()
@@ -65,10 +77,18 @@ def main():
                          args.output / 'share/open-foresight' / ('whisper-' + name))
     shutil.copy2(worker, args.output / 'bin/foresight-model')
     shutil.copy2(args.litert_library, args.output / 'lib/liblitert-lm.so')
+    if extensions is not None:
+        extension_libraries = copy_linux_extension_dependencies(extensions, args.output / 'lib')
+        environment = validate_linux_extension_dependencies(extension_libraries, args.output / 'lib')
+        environment['FORESIGHT_LITERT_LIBRARY'] = str((args.output / 'lib/liblitert-lm.so').resolve())
+        probe_native_extensions(args.output / 'lib/liblitert-lm.so')
+        subprocess.run([str(worker), '--check'], env=environment, check=True)
     shutil.copy2(args.onnx_library, args.output / 'lib/libonnxruntime.so')
     for license_file in ('LICENSE', 'ThirdPartyNotices.txt'):
         shutil.copy2(ROOT / 'third_party/onnxruntime' / license_file, args.output / 'share/open-foresight' / ('onnxruntime-' + license_file))
     shutil.copy2(ROOT / 'third_party/litert_lm/LICENSE', args.output / 'share/open-foresight/LiteRT-LM-LICENSE')
+    if extensions is not None:
+        write_extension_provenance(extensions, args.output / 'share/open-foresight/LiteRT-LM-extension.json')
     for dependency in ('sentencepiece', 'flatbuffers'):
         shutil.copy2(args.build / '_deps' / (dependency + '-src') / 'LICENSE',
                      args.output / 'share/open-foresight' / (dependency + '-LICENSE'))
@@ -97,7 +117,7 @@ def main():
         (args.output / 'share/open-foresight/google-client.json').chmod(0o600)
     # Bundle helper inference/protocol dependencies, keep the Linux C ABI and desktop
     # GTK stack as explicit host prerequisites. ldd is run only on our built binaries.
-    dependencies = subprocess.check_output(['ldd', str(helper), str(native), str(worker), str(args.litert_library), str(args.onnx_library)], text=True)
+    dependencies = subprocess.check_output(['ldd', str(helper), str(native), str(worker), str(args.litert_library), str(args.onnx_library)], text=True, env=environment)
     assert 'not found' not in dependencies, dependencies
     bundled = []
     for name, path in re.findall(r'\s*(\S+) => (/\S+)', dependencies):

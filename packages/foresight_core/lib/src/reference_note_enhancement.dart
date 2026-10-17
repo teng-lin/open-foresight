@@ -179,3 +179,29 @@ String toNoteEnhancementFallbackBullet(String text) {
       ? trimmed
       : '* $trimmed';
 }
+
+/// Original consumer map rebuild (0x1006ea688–0x1006ea8d8) pairs by ordinal.
+/// Raw extraction retains topic headings, unlike producer input planning.
+Map<int, String> mapNoteEnhancementPriorBullets({
+  required String notes,
+  required String enhancedNotes,
+}) {
+  final enhancedText = enhancedNotes.trim();
+  if (enhancedText.isEmpty) return {};
+  final shorthand = notes
+      .split('\n')
+      .map((line) => line.trim())
+      .where(
+        (line) => line.isNotEmpty && hasMeaningfulNoteEnhancementContent(line),
+      )
+      .toList();
+  final enhanced = extractEnhancedNoteBullets(enhancedText);
+  return {
+    for (
+      var index = 0;
+      index < shorthand.length && index < enhanced.length;
+      index++
+    )
+      index: enhanced[index],
+  };
+}

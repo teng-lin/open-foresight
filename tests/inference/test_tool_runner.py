@@ -162,6 +162,85 @@ class RawDetectorTest(unittest.TestCase):
             runner.run_query_detector(engine, ' <ctrl1>Statement.')
 
 
+class OutputBudgetTest(unittest.TestCase):
+    def test_zero_is_only_the_explicit_plain_native_default(self):
+        plain = {'tools': [], 'use_default_output_limit': True}
+        self.assertTrue(runner.valid_output_budget(0, plain))
+        for budget in [True, False, -1, 0.0, 3073, '0']:
+            self.assertFalse(runner.valid_output_budget(budget, plain))
+        for definitions in [None, [], {}, {'tools': []},
+                            {'tools': [], 'use_default_output_limit': 1},
+                            {'tools': [{'name': 'search'}], 'use_default_output_limit': True}]:
+            self.assertFalse(runner.valid_output_budget(0, definitions))
+        for budget in [1, 256, 3072]:
+            self.assertTrue(runner.valid_output_budget(budget, None))
+
+
+class NativeStopsTest(unittest.TestCase):
+    def test_sequences_keep_order_duplicates_and_ignore_empty(self):
+        value = [[101, 202], [], [303], [101, 202]]
+        actual = runner.normalize_stop_token_ids(value)
+        self.assertEqual(actual, [[101, 202], [303], [101, 202]])
+        value[0][0] = 999
+        self.assertEqual(actual[0], [101, 202])
+
+    def test_invalid_token_sequences_are_rejected(self):
+        for value in (None, 'ids', [1], [[True]], [[1.5]], [[1 << 31]], [[-(1 << 31) - 1]]):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                runner.normalize_stop_token_ids(value)
+
+    def test_both_native_symbol_and_python_config_parameter_are_required(self):
+        def patched(*, stop_token_ids=None): pass
+        def stock(): pass
+        symbol = types.SimpleNamespace(litert_lm_session_config_add_stop_token_sequence=lambda: None)
+        for function, library, expected in ((patched, symbol, True), (stock, symbol, False),
+                                             (patched, object(), False)):
+            self.assertEqual(runner.native_stop_tokens_supported(
+                types.SimpleNamespace(create_conversation=function, _lib=library)), expected)
+
+    def test_stops_are_passed_before_creation_and_base_reuse_is_disabled(self):
+        engine = Engine([{'role': 'assistant', 'content': 'Done'}])
+        original = engine.create_conversation
+        def patched(*, stop_token_ids=None, **config):
+            return original(stop_token_ids=stop_token_ids, **config)
+        engine.create_conversation = patched
+        engine._lib = types.SimpleNamespace(litert_lm_session_config_add_stop_token_sequence=lambda: None)
+        leases = []
+        def lease(key, eligible, config):
+            leases.append(eligible)
+            return runner.create_configured_conversation(engine, config)
+        runner.run_tool_conversation(engine, API, 'prompt', {
+            'tools': [{'name': 'search'}], 'system_message': '',
+            'stop_token_ids': [[11, 22], []]}, 50, emit=lambda *args: None, lease=lease)
+        self.assertEqual(engine.config['stop_token_ids'], [[11, 22]])
+        self.assertEqual(leases, [False])
+
+    def test_missing_native_capability_fails_before_any_generation(self):
+        engine = Engine([])
+        with self.assertRaisesRegex(RuntimeError, 'lacks native stop-token'):
+            runner.run_tool_conversation(engine, API, 'prompt', {
+                'tools': [], 'system_message': '', 'stop_token_ids': [[11, 22]]},
+                50, emit=lambda *args: None)
+        self.assertEqual(engine.creations, 0)
+
+    def test_default_output_limit_omits_session_and_send_budget(self):
+        engine = Engine([{'role': 'assistant', 'content': 'Done'}])
+        runner.run_tool_conversation(engine, API, 'prompt', {
+            'tools': [], 'system_message': '', 'use_default_output_limit': True},
+            0, emit=lambda *args: None)
+        self.assertNotIn('max_output_tokens', engine.config)
+        self.assertIsNone(engine.conversation.options[0]['max_output_tokens'])
+
+    def test_default_output_limit_is_plain_only_and_requires_boolean(self):
+        for tools, flag in (([{'name': 'search'}], True), ([], 1)):
+            engine = Engine([])
+            with self.assertRaises(ValueError):
+                runner.run_tool_conversation(engine, API, 'prompt', {
+                    'tools': tools, 'system_message': '', 'use_default_output_limit': flag},
+                    0, emit=lambda *args: None)
+            self.assertEqual(engine.creations, 0)
+
+
 class ToolRunnerTest(unittest.TestCase):
     def test_stream_emits_unicode_before_final_and_reads_control_only_after_final(self):
         ready = threading.Event()
@@ -423,6 +502,18 @@ class PersistentTest(unittest.TestCase):
         input_stream.send('reply ' + str(token) + ' {"finish":true}')
         self.assertTrue(output.read().startswith(str(token) + ' answer '))
         self.assertEqual(output.read(), str(token) + ' done completed')
+
+    def test_plain_request_preserves_native_default_across_persistent_protocol(self):
+        engine = Engine([{'role': 'assistant', 'content': 'Note'}])
+        engine.conversation.close = lambda: setattr(engine.conversation, 'closed', True)
+        input_stream, output, thread = self.start(engine)
+        definitions = dict(self.definitions, tools=[], system_message='',
+                           use_default_output_limit=True)
+        input_stream.send('generate 1 ' + json.dumps({
+            'prompt': 'Note prompt', 'tools': definitions, 'max_output_tokens': 0}))
+        self.finish(input_stream, output, 1)
+        self.assertNotIn('max_output_tokens', engine.config)
+        self.assertIsNone(engine.conversation.options[0]['max_output_tokens'])
 
     def test_reuses_only_matching_empty_history_base_and_closes_before_done(self):
         events = []

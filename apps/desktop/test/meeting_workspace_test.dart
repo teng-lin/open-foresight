@@ -13,16 +13,16 @@ class NotesRuntime extends NativeRuntime {
   NotesRuntime()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   @override
-  Stream<Map<String, dynamic>> generate(
+  Stream<Map<String, dynamic>> generateConversation(
     String id,
     String prompt, {
-    String systemPrompt = '',
-    Map<String, dynamic>? responseSchema,
     Duration timeout = const Duration(minutes: 5),
-    int maxOutputTokens = 256,
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
   }) async* {
     this.prompt = prompt;
-    yield {'type': 'delta', 'text': 'Mira will send the draft on Tuesday.'};
+    yield {'type': 'delta', 'text': '- Mira will send the draft on Tuesday.'};
     yield {'type': 'done', 'status': 'completed'};
   }
 }
@@ -69,11 +69,12 @@ void main() {
         '${directory.path}/helper',
       );
       final generator = NotesRuntime();
-      final domain = Domain(store, helper)..generator = generator;
+      final domain = Domain(store, helper);
       await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() => state.meetingId = id);
       await tester.pumpAndSettle();
+      domain.generator = generator;
       expect(find.text('Live enhanced notes'), findsOneWidget);
       expect(find.text('Chat'), findsOneWidget);
       expect(find.text('Live Q&A'), findsOneWidget);
@@ -83,6 +84,9 @@ void main() {
         'Mira draft Tuesday',
       );
       await tester.pump(const Duration(seconds: 3));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
       await tester.pumpAndSettle();
       expect(
         store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
@@ -91,8 +95,8 @@ void main() {
         'Mira draft Tuesday',
       );
       expect(generator.prompt, contains('Mira draft Tuesday'));
-      expect(generator.prompt, contains('audio channel labels, not people'));
-      expect(generator.prompt, contains('real person only when their name'));
+      expect(generator.prompt, contains('<shorthand_notes>'));
+      expect(generator.prompt, contains('<relevant_excerpts>'));
       expect(
         generator.prompt,
         contains('Mira will send the draft on Tuesday.'),

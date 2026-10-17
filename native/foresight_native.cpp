@@ -277,6 +277,7 @@ struct Engine {
   bool busy = false;
   std::string state = "configured", error;
   bool persistent_protocol = false;
+  bool native_stop_token_sequences = false;
   uint64_t generation = 0;
   std::unique_ptr<PersistentGeneration> persistent;
   ~Engine();
@@ -455,6 +456,7 @@ char *fs_engine_state(void *h) {
                      std::string(std::getenv("FORESIGHT_LITERT_BACKEND")) == "gpu"
                      ? "litert-lm-gpu-native" : "litert-lm-cpu-native") +
                  ",\"load_policy\":" + quote(e.persistent_protocol ? "persistent_worker" : "per_request") + ","
+                 "\"native_stop_token_sequences\":" + std::string(e.native_stop_token_sequences ? "true" : "false") + ","
                  "\"context_length\":4096,\"temperature\":0.4,\"top_k\":40,\"top_p\":0.9,"
                  "\"thinking\":false,\"json\":\"ll_guidance_and_application_validation\",\"text\":true,\"tools\":true,\"error\":" + quote(e.error) + "}");
   return owned("{\"state\":" + quote(e.state) +
@@ -489,6 +491,9 @@ int fs_engine_probe(void *h) {
     e.persistent_protocol = status == 0 && e.backend == 1 &&
         (diagnostics.find("\"worker_protocol\":1") != std::string::npos ||
          diagnostics.find("\"worker_protocol\": 1") != std::string::npos);
+    e.native_stop_token_sequences = status == 0 && e.backend == 1 &&
+        (diagnostics.find("\"native_stop_token_sequences\":true") != std::string::npos ||
+         diagnostics.find("\"native_stop_token_sequences\": true") != std::string::npos);
     e.state = status == 0 ? "ready" : "failed";
     e.error = status == 0 ? ""
                           : "Model initialization probe failed with status " +
@@ -521,7 +526,9 @@ void *fs_conversation_create(void *h) {
 static int generate_with_schema(void *h, const char *id, const char *prompt,
                                 const char *schema, int max_output_tokens = 256,
                                 bool tools = false) {
-  if (max_output_tokens < 1 || max_output_tokens > 3072) return -1;
+  // Zero is the plain-conversation request to preserve the runtime default.
+  if (max_output_tokens < 0 || max_output_tokens > 3072 ||
+      (max_output_tokens == 0 && !tools)) return -1;
   if (!h || !id || !*id || !prompt)
     return -1;
   auto &c = *static_cast<Conversation *>(h);

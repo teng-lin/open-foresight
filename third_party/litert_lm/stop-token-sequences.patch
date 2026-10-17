@@ -1,0 +1,115 @@
+diff --git a/c/engine.cc b/c/engine.cc
+index 2db9ae21..c12230d5 100644
+--- a/c/engine.cc
++++ b/c/engine.cc
+@@ -281,6 +281,15 @@ void litert_lm_session_config_set_max_output_tokens(
+   }
+ }
+ 
++int litert_lm_session_config_add_stop_token_sequence(
++    LiteRtLmSessionConfig* config, const int32_t* token_ids, size_t count) {
++  if (!config || !config->config || (count != 0 && !token_ids)) return 1;
++  if (count == 0) return 0;
++  config->config->GetMutableStopTokenIds().emplace_back(token_ids,
++                                                       token_ids + count);
++  return 0;
++}
++
+ void litert_lm_session_config_set_apply_prompt_template(
+     LiteRtLmSessionConfig* config, bool apply_prompt_template) {
+   if (config && config->config) {
+diff --git a/c/engine.h b/c/engine.h
+index 30124e2f..9d003c59 100644
+--- a/c/engine.h
++++ b/c/engine.h
+@@ -206,6 +206,14 @@ LITERT_LM_C_API_EXPORT
+ void litert_lm_session_config_set_max_output_tokens(
+     LiteRtLmSessionConfig* config, int max_output_tokens);
+ 
++// Open Foresight extension to the pinned 0.18.0 C API. Appends one
++// generated-token stop sequence to the session's existing stop sequences.
++// Empty sequences are ignored. The token IDs are copied before returning.
++// Returns zero on success, or one for a missing config/nonempty null buffer.
++LITERT_LM_C_API_EXPORT
++int litert_lm_session_config_add_stop_token_sequence(
++    LiteRtLmSessionConfig* config, const int32_t* token_ids, size_t count);
++
+ // Sets whether to apply prompt template for this session.
+ // @param config The config to modify.
+ // @param apply_prompt_template Whether to apply prompt template.
+diff --git a/c/engine_test.cc b/c/engine_test.cc
+index 181574bd..2a46b396 100644
+--- a/c/engine_test.cc
++++ b/c/engine_test.cc
+@@ -400,6 +400,34 @@ TEST(EngineCTest, CreateSessionConfigWithSamplerParams) {
+   EXPECT_EQ(params.seed(), 1234);
+ }
+ 
++TEST(EngineCTest, AppendStopTokenSequencesBeforeConversationConfigCopy) {
++  SessionConfigPtr config(litert_lm_session_config_create(),
++                          &litert_lm_session_config_delete);
++  const int32_t first[] = {101, 202};
++  const int32_t second[] = {303};
++  const auto previous = config->config->GetStopTokenIds().size();
++  EXPECT_EQ(litert_lm_session_config_add_stop_token_sequence(
++                config.get(), first, 2), 0);
++  EXPECT_EQ(litert_lm_session_config_add_stop_token_sequence(
++                config.get(), nullptr, 0), 0);
++  EXPECT_EQ(litert_lm_session_config_add_stop_token_sequence(
++                config.get(), second, 1), 0);
++  const auto& sequences = config->config->GetStopTokenIds();
++  ASSERT_EQ(sequences.size(), previous + 2);
++  EXPECT_EQ(sequences[previous], (std::vector<int>{101, 202}));
++  EXPECT_EQ(sequences[previous + 1], (std::vector<int>{303}));
++  EXPECT_EQ(litert_lm_session_config_add_stop_token_sequence(
++                nullptr, first, 2), 1);
++  EXPECT_EQ(litert_lm_session_config_add_stop_token_sequence(
++                config.get(), nullptr, 1), 1);
++  auto* conversation_config = litert_lm_conversation_config_create();
++  litert_lm_conversation_config_set_session_config(conversation_config,
++                                                  config.get());
++  EXPECT_EQ(conversation_config->session_config->GetStopTokenIds(),
++            sequences);
++  litert_lm_conversation_config_delete(conversation_config);
++}
++
+ TEST(EngineCTest, CreateSessionConfigWithNoSamplerParams) {
+   SessionConfigPtr config(litert_lm_session_config_create(),
+                           &litert_lm_session_config_delete);
+diff --git a/python/litert_lm/engine.py b/python/litert_lm/engine.py
+index c1b36110..985f2cb3 100644
+--- a/python/litert_lm/engine.py
++++ b/python/litert_lm/engine.py
+@@ -245,8 +245,32 @@ class Engine(interfaces.AbstractEngine):
+       max_output_tokens: int | None = None,
+       chat_template: str | None = None,
+       enable_speculative_decoding: bool | None = None,
++      stop_token_ids: collections.abc.Sequence[collections.abc.Sequence[int]] | None = None,
+   ) -> Conversation:
++    # Open Foresight extension: configure token sequences on the real native
++    # SessionConfig before conversation_config_set_session_config copies it.
++    stop_sequences = []
++    for sequence in stop_token_ids or ():
++      values = list(sequence)
++      if any(type(value) is not int or not -(1 << 31) <= value < (1 << 31)
++             for value in values):
++        raise ValueError("Stop token IDs must be signed 32-bit integers")
++      if values:
++        stop_sequences.append(values)
++    add_stop = None
++    if stop_sequences:
++      try:
++        add_stop = self._lib.litert_lm_session_config_add_stop_token_sequence
++      except AttributeError as error:
++        raise RuntimeError("LiteRT-LM runtime lacks native stop-token sequence support") from error
++      add_stop.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_int32), ctypes.c_size_t]
++      add_stop.restype = ctypes.c_int
+     session_config = self._lib.litert_lm_session_config_create()
++    for sequence in stop_sequences:
++      values = (ctypes.c_int32 * len(sequence))(*sequence)
++      if add_stop(session_config, values, len(sequence)) != 0:
++        self._lib.litert_lm_session_config_delete(session_config)
++        raise RuntimeError("Failed to configure native stop-token sequence")
+     if enable_speculative_decoding is not None:
+       self._lib.litert_lm_session_config_set_enable_speculative_decoding(
+           session_config, enable_speculative_decoding

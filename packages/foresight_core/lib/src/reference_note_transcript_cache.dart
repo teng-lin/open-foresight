@@ -22,6 +22,14 @@ class ReferenceNoteTranscriptCache {
   final Future<String> Function(int meetingId) loadSavedTranscript;
   final _entries = LinkedHashMap<int, _TranscriptEntry>();
 
+  /// Discard ephemeral entries when workspace identifiers may be reused.
+  int _epoch = 0;
+
+  void clear() {
+    _epoch++;
+    _entries.clear();
+  }
+
   _TranscriptEntry _entryFor(int meetingId) {
     final entry = _entries.remove(meetingId) ?? _TranscriptEntry();
     if (_entries.length >= 5) _entries.remove(_entries.keys.first);
@@ -87,11 +95,13 @@ class ReferenceNoteTranscriptCache {
   Future<List<EmbeddedNoteTranscriptChunk>> getEmbeddedChunks(
     int meetingId,
   ) async {
+    final epoch = _epoch;
     var entry = _entries[meetingId];
     if (currentIsLive(meetingId)) {
       if (entry == null) return [];
       final running = entry.running;
       if (running != null) await running;
+      if (epoch != _epoch) return [];
       return entry.isLive == true ? getCachedChunks(meetingId) : [];
     }
     if (entry == null ||
@@ -100,9 +110,11 @@ class ReferenceNoteTranscriptCache {
         entry.chunks.isEmpty ||
         entry.chunks.any((chunk) => chunk.embedding.isEmpty)) {
       final text = await loadSavedTranscript(meetingId);
+      if (epoch != _epoch) return [];
       if (text.trim().isEmpty) return [];
       final work = schedule(meetingId, text, isLive: false);
       await work;
+      if (epoch != _epoch) return [];
       entry = _entries[meetingId];
     }
     return entry?.isLive == false ? getCachedChunks(meetingId) : [];

@@ -2,6 +2,81 @@ import 'package:foresight_core/src/reference_note_enhancement.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('prior map pairs by ordinal without semantic matching', () {
+    expect(
+      mapNoteEnhancementPriorBullets(
+        notes: 'Budget\nSchedule',
+        enhancedNotes: '- Schedule details\n- Budget details',
+      ),
+      {0: '- Schedule details', 1: '- Budget details'},
+    );
+  });
+
+  test('prior map filters marker-only shorthand before pairing', () {
+    expect(
+      mapNoteEnhancementPriorBullets(
+        notes: '\n 123 \n -- ** • \n first \n + \n third ',
+        enhancedNotes: 'heading prose\n  * First \n- Second\n+ Third\n- Extra',
+      ),
+      {0: '* First', 1: '- Second', 2: '+ Third'},
+    );
+  });
+
+  test('prior map uses shorter count and stops at enhanced topics heading', () {
+    expect(
+      mapNoteEnhancementPriorBullets(
+        notes: 'one\ntwo\nthree',
+        enhancedNotes:
+            '- Only\n### Potential Important Topics Not In Notes\n- Topic',
+      ),
+      {0: '- Only'},
+    );
+    expect(
+      mapNoteEnhancementPriorBullets(
+        notes: 'only',
+        enhancedNotes: '- One\n- Excess',
+      ),
+      {0: '- One'},
+    );
+  });
+
+  test(
+    'prior raw extraction retains topic headings unlike producer planning',
+    () {
+      expect(
+        mapNoteEnhancementPriorBullets(
+          notes: 'Potential Important Topics Not In Notes\n* raw topic',
+          enhancedNotes: '- First\n- Second',
+        ),
+        {0: '- First', 1: '- Second'},
+      );
+    },
+  );
+
+  test(
+    'prior map is empty for blank enhanced text or empty extracted lists',
+    () {
+      expect(
+        mapNoteEnhancementPriorBullets(notes: 'raw', enhancedNotes: ' \t\n '),
+        isEmpty,
+      );
+      expect(
+        mapNoteEnhancementPriorBullets(
+          notes: 'raw',
+          enhancedNotes: 'plain prose',
+        ),
+        isEmpty,
+      );
+      expect(
+        mapNoteEnhancementPriorBullets(
+          notes: '123\n -- ',
+          enhancedNotes: '- Enhanced',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
   test('preview removes lowercase markdown or generic boundary fences', () {
     expect(
       cleanNoteEnhancementPreviewOutput('  ```markdown\n* Kept\n```  '),

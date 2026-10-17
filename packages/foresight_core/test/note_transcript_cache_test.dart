@@ -5,6 +5,53 @@ import 'package:foresight_core/src/reference_note_transcript_cache.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'workspace clear discards saved loads before they can schedule old text',
+    () async {
+      final oldLoad = Completer<String>();
+      var loads = 0;
+      final embedded = <String>[];
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async {
+          embedded.add(text);
+          return [1];
+        },
+        currentIsLive: (_) => false,
+        loadSavedTranscript: (_) async =>
+            ++loads == 1 ? await oldLoad.future : 'New workspace',
+      );
+      final obsolete = cache.getEmbeddedChunks(1);
+      cache.clear();
+      oldLoad.complete('Old workspace');
+      expect(await obsolete, isEmpty);
+      expect(cache.getCachedChunks(1), isEmpty);
+      expect(embedded, isEmpty);
+      expect((await cache.getEmbeddedChunks(1)).single.text, 'New workspace');
+      expect(embedded, ['New workspace']);
+    },
+  );
+
+  test(
+    'workspace clear prevents an old live reader from returning new same-ID data',
+    () async {
+      final gate = Completer<List<double>>();
+      final cache = ReferenceNoteTranscriptCache(
+        computeEmbedding: (text) async =>
+            text == 'Old' ? await gate.future : [2],
+        currentIsLive: (_) => true,
+        loadSavedTranscript: (_) async => '',
+      );
+      final running = cache.schedule(1, 'Old', isLive: true);
+      final obsolete = cache.getEmbeddedChunks(1);
+      cache.clear();
+      await cache.schedule(1, 'New', isLive: true);
+      gate.complete([1]);
+      await running;
+      expect(await obsolete, isEmpty);
+      expect(cache.getCachedChunks(1).single.text, 'New');
+    },
+  );
+
   test('coalesces pending requests and shares the running future', () async {
     final first = Completer<List<double>>();
     final calls = <String>[];

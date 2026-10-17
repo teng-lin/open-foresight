@@ -8,25 +8,71 @@ class ControlledNoteGenerator extends NativeRuntime {
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   final entered = Completer<void>();
   final events = StreamController<Map<String, dynamic>>();
+  final prompts = <String>[];
+  final inputLimits = <int?>[];
+  final outputLimits = <int?>[];
   var cancelled = false;
   @override
-  Stream<Map<String, dynamic>> generate(
+  Stream<Map<String, dynamic>> generateConversation(
     String id,
     String prompt, {
-    String systemPrompt = '',
-    Map<String, dynamic>? responseSchema,
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
     Duration timeout = const Duration(minutes: 5),
-    int maxOutputTokens = 256,
   }) async* {
+    prompts.add(prompt);
+    inputLimits.add(maxInputTokens);
+    outputLimits.add(maxOutputTokens);
     entered.complete();
+    final response = StringBuffer();
     try {
       await for (final event in events.stream) {
-        yield event;
-        if (event['type'] == 'done') break;
+        if (event['type'] == 'delta') {
+          response.write(event['text'] as String);
+          yield {'type': 'preview', 'text': response.toString()};
+        } else if (event['type'] == 'done') {
+          // Native plain conversations report cumulative previews and then
+          // repeat the authoritative complete response in the final delta.
+          yield {'type': 'delta', 'text': response.toString()};
+          yield event;
+          break;
+        } else {
+          yield event;
+        }
       }
     } finally {
       cancelled = true;
     }
+  }
+}
+
+class BatchedNoteGenerator extends ControlledNoteGenerator {
+  BatchedNoteGenerator() {
+    events.stream.listen((_) {});
+  }
+  final responses = [
+    '- Enhanced one\n- Enhanced two\n- Enhanced three\n- Enhanced four',
+    '- Enhanced five\n- Enhanced six',
+  ];
+
+  @override
+  Stream<Map<String, dynamic>> generateConversation(
+    String id,
+    String prompt, {
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
+    Duration timeout = const Duration(minutes: 5),
+  }) async* {
+    final response = responses[prompts.length];
+    prompts.add(prompt);
+    inputLimits.add(maxInputTokens);
+    outputLimits.add(maxOutputTokens);
+    yield {'type': 'preview', 'text': response.split('\n').first};
+    yield {'type': 'preview', 'text': response};
+    yield {'type': 'delta', 'text': response};
+    yield {'type': 'done', 'status': 'completed'};
   }
 }
 
@@ -75,13 +121,163 @@ void main() {
   }
 
   test(
-    'initial raw copy is visible and saved before the first stream event',
+    'shorthand reordering immediately reorders the draft and debounces persistence',
     () async {
+      generator.events.stream.listen((_) {});
+      domain.store.saveMeetingNotes(id, 'First raw\nSecond raw');
+      domain.store.artifact(
+        id,
+        'enhanced_notes',
+        '- First enhanced\n\n- Second enhanced',
+        'fixture',
+      );
+      await domain.command('meetings.notes', {
+        'id': id,
+        'body': 'Second raw\nFirst raw',
+        'last_manual_edit': 333,
+      });
+      expect(progress()['body'], '- Second enhanced\n\n- First enhanced');
+      expect(
+        domain.store.meetingEnhancedNotes(id),
+        '- First enhanced\n\n- Second enhanced',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(
+        domain.store.meetingEnhancedNotes(id),
+        '- Second enhanced\n\n- First enhanced',
+      );
+      expect(
+        domain.store
+            .rows('SELECT last_manual_edit FROM meeting_notes')
+            .single['last_manual_edit'],
+        333,
+      );
+    },
+  );
+
+  test(
+    'editing the current enhancement invalidates the prior used by generation',
+    () async {
+      final artifact = domain.store
+          .rows('SELECT id FROM artifacts ORDER BY id DESC')
+          .first['id'];
+      await domain.command('artifacts.edit', {
+        'id': artifact,
+        'text': '- Manually changed',
+      });
       final work = domain.application.enhanceNotes(id);
       await generator.entered.future;
+      expect(
+        generator.prompts.single,
+        isNot(contains('<previous_enhanced_notes>')),
+      );
+      await domain.command('meetings.cancel_enhance', {
+        'id': id,
+        'request_id': progress()['request_id'],
+      });
+      await emit('cancel observation');
+      await work;
+      expect(progress()['body'], '- Manually changed');
+    },
+  );
+
+  test(
+    'cancellation rebuilds associations from raw edits made during generation',
+    () async {
+      domain.store.saveMeetingNotes(id, 'First raw\nSecond raw');
+      domain.store.artifact(
+        id,
+        'enhanced_notes',
+        '- First enhanced\n\n- Second enhanced',
+        'fixture',
+      );
+      final work = domain.application.enhanceNotes(id);
+      await generator.entered.future;
+      await domain.command('meetings.notes', {
+        'id': id,
+        'body': 'Updated first\nUpdated second',
+      });
+      await domain.command('meetings.cancel_enhance', {
+        'id': id,
+        'request_id': progress()['request_id'],
+      });
+      await emit('cancel observation');
+      await work;
+      await domain.command('meetings.notes', {
+        'id': id,
+        'body': 'Updated second\nUpdated first',
+      });
+      expect(progress()['body'], '- Second enhanced\n\n- First enhanced');
+    },
+  );
+
+  test(
+    'six notes use two grounded conversations and persist one ordered enhancement',
+    () async {
+      final unusedEvents = generator.events.stream.listen((_) {});
+      await generator.events.close();
+      await unusedEvents.cancel();
+      generator.close();
+      final batched = BatchedNoteGenerator();
+      generator = batched;
+      domain.generator = generator;
+      final raw = [
+        'one',
+        'two',
+        'three',
+        'four',
+        'five',
+        'six',
+      ].map((word) => 'Raw $word').join('\n');
+      domain.store.saveMeetingNotes(id, raw, lastManualEdit: 300);
+
+      await domain.application.enhanceNotes(id);
+
+      expect(batched.prompts, hasLength(2));
+      expect(batched.prompts.first, contains('Raw one'));
+      expect(batched.prompts.first, contains('Raw four'));
+      expect(batched.prompts.first, isNot(contains('Raw five')));
+      expect(batched.prompts.last, contains('Raw five'));
+      expect(batched.prompts.last, contains('Raw six'));
+      expect(batched.prompts.last, isNot(contains('Raw one')));
+      for (final prompt in batched.prompts) {
+        expect(prompt, contains('<relevant_excerpts>'));
+        expect(prompt, contains('Transcript evidence'));
+        expect(prompt, contains('<shorthand_notes>'));
+      }
+      expect(batched.inputLimits, [2048, 2048]);
+      expect(batched.outputLimits, [null, null]);
+      final body = domain.store.meetingEnhancedNotes(id);
+      expect(body.split('\n').where((line) => line.isNotEmpty).toList(), [
+        '- Enhanced one',
+        '- Enhanced two',
+        '- Enhanced three',
+        '- Enhanced four',
+        '- Enhanced five',
+        '- Enhanced six',
+      ]);
+      final artifacts = domain.store.rows(
+        'SELECT generated FROM artifacts ORDER BY id',
+      );
+      expect(artifacts, hasLength(2));
+      expect(artifacts.last['generated'], body);
+      final stored = domain.store.rows('SELECT * FROM meeting_notes').single;
+      expect(stored['body'], raw);
+      expect(stored['last_manual_edit'], 300);
+      expect(stored['last_enhanced'], greaterThan(100));
+      expect(domain.application.captureState['note_enhancements'], isEmpty);
+    },
+  );
+
+  test(
+    'initial raw copy precedes the producer prior-map preview and draft save',
+    () async {
+      final work = domain.application.enhanceNotes(id);
       expect(progress()['body'], 'Raw notes');
+      await generator.entered.future;
+      expect(progress()['body'], '- Prior');
       await Future<void>.delayed(const Duration(milliseconds: 1100));
-      expect(domain.store.meetingEnhancedNotes(id), 'Raw notes');
+      expect(domain.store.meetingEnhancedNotes(id), '- Prior');
       expect(
         domain.store
             .rows('SELECT last_enhanced,last_manual_edit FROM meeting_notes')
@@ -140,8 +336,15 @@ void main() {
     () async {
       final work = domain.application.enhanceNotes(id);
       await generator.entered.future;
-      expect(progress()['body'], 'Raw notes');
-      await emit('<L:1>- First</L:1>');
+      expect(progress()['body'], '- Prior');
+      await emit('- First');
+      expect(generator.prompts.single, contains('<relevant_excerpts>'));
+      expect(generator.prompts.single, contains('Transcript evidence'));
+      expect(generator.prompts.single, contains('<shorthand_notes>'));
+      expect(generator.prompts.single, contains('Raw notes'));
+      expect(generator.prompts.single, contains('<previous_enhanced>'));
+      expect(generator.inputLimits, [2048]);
+      expect(generator.outputLimits, [null]);
       expect(progress()['body'], '- First');
       expect(domain.store.meetingEnhancedNotes(id), contains('- Prior'));
       await Future<void>.delayed(const Duration(milliseconds: 1100));

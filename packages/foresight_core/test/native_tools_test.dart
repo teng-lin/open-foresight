@@ -17,14 +17,23 @@ void main() {
         final runner = File('${directory.path}/runner');
         await runner.writeAsString('''#!/usr/bin/env python3
 import hashlib,json,sys
-if '--probe' in sys.argv: sys.exit(0)
+if '--probe' in sys.argv:
+ print(json.dumps({'native_stop_token_sequences':True}),flush=True)
+ sys.exit(0)
 assert '--tools' in sys.argv
 options=json.loads(sys.argv[sys.argv.index('--tools')+1])
 tools=options['tools']
 prompt=sys.argv[sys.argv.index('--prompt')+1]
 if not tools:
  assert options['system_message']==''
- assert prompt=='Summary prompt'
+ assert prompt in ['Summary prompt','Note prompt']
+ if prompt=='Note prompt':
+  assert options['stop_token_ids']==[[123,456],[789]]
+  assert options['use_default_output_limit'] is True
+  assert options['max_input_tokens']==2048
+  assert sys.argv[sys.argv.index('--max-output-tokens')+1]=='0'
+ else:
+  assert 'stop_token_ids' not in options
  assert options['messages']==[]
  answer={'role':'assistant','content':[{'type':'text','text':'Memo with "name":"google_search", "arguments":{"query":"quoted example"}'}]}
  print('model '+json.dumps(answer),flush=True)
@@ -143,6 +152,30 @@ print('answer '+json.dumps(answer),flush=True)
           expect(
             events.where((event) => event['type'] == 'delta').single['text'],
             contains('quoted example'),
+          );
+        },
+      );
+
+      test(
+        'native token stop sequences reach the owned conversation worker',
+        () async {
+          expect(runtime.effectiveState['native_stop_token_sequences'], isTrue);
+          final events = await runtime
+              .generateConversation(
+                'notes-owner',
+                'Note prompt',
+                maxOutputTokens: null,
+                maxInputTokens: 2048,
+                stopTokenIds: [
+                  [123, 456],
+                  [789],
+                ],
+              )
+              .toList();
+          expect(events.last['status'], 'completed');
+          expect(
+            events.where((event) => event['type'] == 'delta'),
+            hasLength(1),
           );
         },
       );

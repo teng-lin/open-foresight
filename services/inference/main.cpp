@@ -1,3 +1,4 @@
+#include "output_budget.h"
 #include "tool_conversation.h"
 #include "conversation_stream.h"
 #include "persistent_worker.h"
@@ -285,7 +286,16 @@ public:
           "Prompt and output reserve exceed the 4096-token context");
     auto session =
         handle(LM(session_config_create)(), LM(session_config_delete));
-    LM(session_config_set_max_output_tokens)(session.get(), budget);
+    if (!tool_request.stop_token_ids.empty()) {
+      if (!lm.supports_native_stop_tokens())
+        throw std::runtime_error("LiteRT-LM runtime lacks native stop-token sequence support");
+      const auto add_stop = LM(session_config_add_stop_token_sequence);
+      for (const auto &sequence : tool_request.stop_token_ids)
+        if (add_stop(session.get(), sequence.data(), sequence.size()) != 0)
+          throw std::runtime_error("Failed to configure native stop-token sequence");
+    }
+    if (!tool_request.use_default_output_limit)
+      LM(session_config_set_max_output_tokens)(session.get(), budget);
     LM(session_config_set_enable_speculative_decoding)(session.get(),
                                                        schema.is_null());
     auto sampler = handle(LM(sampler_params_create)(kLiteRtLmSamplerTypeTopP),
@@ -332,7 +342,8 @@ public:
     // The original retains only an empty-history base. Never promote the
     // generated clone, and never evict the chat base for a plain summary.
     const bool cache_eligible = register_conversation && !tools.is_null() &&
-        !tool_request.tools.empty() && tool_request.messages.empty();
+        !tool_request.tools.empty() && tool_request.messages.empty() &&
+        tool_request.stop_token_ids.empty() && !tool_request.use_default_output_limit;
     LiteRtLmConversation *pointer = nullptr;
     if (cache_eligible) {
       const auto key = json::array({tool_request.system_message,
@@ -358,7 +369,8 @@ public:
       throw std::runtime_error("Request cancelled");
     auto args = handle(LM(conversation_optional_args_create)(),
                        LM(conversation_optional_args_delete));
-    LM(conversation_optional_args_set_max_output_tokens)(args.get(), budget);
+    if (!tool_request.use_default_output_limit)
+      LM(conversation_optional_args_set_max_output_tokens)(args.get(), budget);
     auto penalty = handle(LM(repetition_penalty_config_create)(),
                           LM(repetition_penalty_config_delete));
     LM(repetition_penalty_config_set_repetition_penalty)(penalty.get(),
@@ -545,7 +557,7 @@ int main(int argc, char **argv) {
     fs::create_directories(cache);
     Generator generator(lm, path, backend == "gpu", cache, query_detector);
     if (args.count("--probe")) {
-      protocol << json({{"worker_protocol", 1}}).dump() << std::endl;
+      protocol << json({{"worker_protocol", 1}, {"native_stop_token_sequences", lm.supports_native_stop_tokens()}}).dump() << std::endl;
       return 0;
     }
     if (args.count("--serve")) {
@@ -565,7 +577,8 @@ int main(int argc, char **argv) {
     int budget = args.count("--max-output-tokens")
                      ? std::stoi(args["--max-output-tokens"])
                      : 256;
-    if (budget < 1 || budget > 3072)
+    if (!foresight::valid_output_budget(budget, args.count("--tools")
+            ? json::parse(args.at("--tools")) : json(nullptr)))
       throw std::runtime_error("Output budget must be between 1 and 3072");
     json schema = args.count("--json-schema")
                       ? json::parse(args["--json-schema"])

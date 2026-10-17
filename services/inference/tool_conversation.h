@@ -1,5 +1,8 @@
 #pragma once
 #include <istream>
+#include <cstdint>
+#include <limits>
+#include <vector>
 #include <ostream>
 #include <stdexcept>
 #include <string>
@@ -11,6 +14,8 @@ struct ToolRequest {
   std::string system_message = "Follow the requested task faithfully. Do not invent facts.";
   bool delegate_tool_detection = false;
   nlohmann::json messages = nlohmann::json::array();
+  std::vector<std::vector<int32_t>> stop_token_ids;
+  bool use_default_output_limit = false;
 };
 
 inline nlohmann::json wrap_tools(const nlohmann::json &tools) {
@@ -34,6 +39,28 @@ inline ToolRequest parse_tool_request(const nlohmann::json &value) {
     result.tools = definitions.is_array() && definitions.empty() ? definitions : wrap_tools(definitions);
     result.system_message = value.at("system_message").get<std::string>();
     result.delegate_tool_detection = value.value("delegate_tool_detection", false);
+    result.use_default_output_limit = value.value("use_default_output_limit", false);
+    if (result.use_default_output_limit && !result.tools.empty())
+      throw std::runtime_error("Default output limit requires a plain conversation");
+    if (value.contains("stop_token_ids")) {
+      const auto &sequences = value.at("stop_token_ids");
+      if (!sequences.is_array())
+        throw std::runtime_error("Stop token sequences must be an array");
+      for (const auto &sequence : sequences) {
+        if (!sequence.is_array())
+          throw std::runtime_error("Stop token sequence must be an array");
+        std::vector<int32_t> ids;
+        for (const auto &id : sequence) {
+          if (!id.is_number_integer() ||
+              (id.is_number_unsigned() && id.get<uint64_t>() > INT32_MAX) ||
+              (!id.is_number_unsigned() &&
+               (id.get<int64_t>() < INT32_MIN || id.get<int64_t>() > INT32_MAX)))
+            throw std::runtime_error("Stop token IDs must be signed 32-bit integers");
+          ids.push_back(id.get<int32_t>());
+        }
+        if (!ids.empty()) result.stop_token_ids.push_back(std::move(ids));
+      }
+    }
     result.messages = value.value("messages", nlohmann::json::array());
     if (!result.messages.is_array())
       throw std::runtime_error("Conversation messages must be an array");

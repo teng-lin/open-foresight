@@ -1,4 +1,5 @@
 #pragma once
+#include "output_budget.h"
 #include <condition_variable>
 #include <deque>
 #include <functional>
@@ -133,8 +134,8 @@ void persistent_worker(std::istream &input, std::ostream &output,
       auto payload = json::parse(request->payload);
       if (!payload.is_object() || !payload.at("prompt").is_string())
         throw std::runtime_error("Invalid generation request");
-      auto budget = payload.value("max_output_tokens", 256);
-      if (!payload.value("max_output_tokens", json(256)).is_number_integer() || budget < 1 || budget > 3072)
+      if (!valid_output_budget(payload.value("max_output_tokens", json(256)),
+                               payload.value("tools", json(nullptr))))
         throw std::runtime_error("Output budget must be between 1 and 3072");
       {
         std::lock_guard lock(mutex);

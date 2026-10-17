@@ -52,7 +52,9 @@ class ToolRuntime extends NativeRuntime {
   Stream<Map<String, dynamic>> generateConversation(
     String id,
     String prompt, {
-    int maxOutputTokens = 1024,
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
     Duration timeout = const Duration(minutes: 5),
   }) async* {
     summaries.add(prompt);

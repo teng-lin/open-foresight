@@ -9,6 +9,17 @@ using json = nlohmann::json;
 void check(bool value) { if (!value) throw std::runtime_error("Tool protocol assertion failed"); }
 int main() {
   try {
+    const json native_default = {{"tools", json::array()}, {"use_default_output_limit", true}};
+    check(foresight::valid_output_budget(0, native_default));
+    for (const auto &invalid : {json(true), json(false), json(-1), json(0.0), json(3073), json("0")})
+      check(!foresight::valid_output_budget(invalid, native_default));
+    for (const auto &invalid : {json(nullptr), json::array(), json::object(),
+          json({{"tools", json::array()}}),
+          json({{"tools", json::array()}, {"use_default_output_limit", 1}}),
+          json({{"tools", {{{"name", "search"}}}}, {"use_default_output_limit", true}})})
+      check(!foresight::valid_output_budget(0, invalid));
+    check(foresight::valid_output_budget(1, nullptr));
+    check(foresight::valid_output_budget(3072, nullptr));
     const auto calls = json::array({{{"function", {{"name", "google_search"}, {"arguments", "{\"query\":\"nested\"}"}}}}});
     foresight::ConversationStreamMessage streamed;
     streamed.append({{"role", "assistant"}, {"content", "蓝🧭\n"},
@@ -53,6 +64,29 @@ int main() {
     check(foresight::parse_tool_request(wrapped).tools == wrapped);
     auto plain = foresight::parse_tool_request({{"tools", json::array()}, {"system_message", ""}});
     check(plain.tools.empty() && plain.system_message.empty());
+    auto stopped = foresight::parse_tool_request({{"tools", json::array()}, {"system_message", ""},
+        {"stop_token_ids", {{101, 202}, json::array(), {303}, {101, 202}}},
+        {"use_default_output_limit", true}});
+    check(stopped.stop_token_ids == std::vector<std::vector<int32_t>>{{101, 202}, {303}, {101, 202}});
+    check(stopped.use_default_output_limit);
+    for (const auto &invalid : {json(nullptr), json("ids"), json({1}), json({{true}}),
+                               json({{1.5}}), json({{2147483648LL}}), json({{-2147483649LL}}),
+                               json({{UINT64_MAX}})}) {
+      bool rejected = false;
+      try { foresight::parse_tool_request({{"tools", json::array()}, {"system_message", ""},
+                                           {"stop_token_ids", invalid}}); }
+      catch (const std::exception &) { rejected = true; }
+      check(rejected);
+    }
+    for (const auto &invalid : {json({{"tools", wrapped}, {"system_message", ""},
+                                     {"use_default_output_limit", true}}),
+                                json({{"tools", json::array()}, {"system_message", ""},
+                                      {"use_default_output_limit", 1}})}) {
+      bool rejected = false;
+      try { foresight::parse_tool_request(invalid); }
+      catch (const std::exception &) { rejected = true; }
+      check(rejected);
+    }
     auto history = json::array({{{"role", "user"}, {"content", "Earlier query"}},
                                 {{"role", "assistant"}, {"content", "Earlier answer [Source:8]"}}});
     auto replay = foresight::parse_tool_request({{"tools", wrapped}, {"system_message", "Instructions"}, {"messages", history}});

@@ -11,6 +11,7 @@ import ctypes
 import copy
 import importlib.metadata
 import importlib.util
+import inspect
 import json
 import os
 import queue
@@ -18,6 +19,16 @@ import threading
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+
+
+def valid_output_budget(budget, definitions):
+    if type(budget) is not int:
+        return False
+    if 1 <= budget <= 3072:
+        return True
+    return (budget == 0 and isinstance(definitions, dict) and
+            definitions.get('tools') == [] and
+            definitions.get('use_default_output_limit') is True)
 
 
 def merge_stream_message(result, chunk):
@@ -112,16 +123,51 @@ def stream_tool_response(conversation, litert_lm, message, budget, emit=None, on
         conversation._delete_optional_args(optional)
 
 
+def native_stop_tokens_supported(engine):
+    """Both layers must configure the real SessionConfig before its copy."""
+    return ('stop_token_ids' in inspect.signature(engine.create_conversation).parameters and
+            hasattr(engine._lib, 'litert_lm_session_config_add_stop_token_sequence'))
+
+
+def normalize_stop_token_ids(value):
+    if not isinstance(value, list):
+        raise ValueError('Stop token sequences must be an array')
+    sequences = []
+    for sequence in value:
+        if not isinstance(sequence, list):
+            raise ValueError('Stop token sequence must be an array')
+        if any(type(token) is not int or not -(1 << 31) <= token < (1 << 31)
+               for token in sequence):
+            raise ValueError('Stop token IDs must be signed 32-bit integers')
+        if sequence:
+            sequences.append(sequence.copy())
+    return sequences
+
+
+def create_configured_conversation(engine, config):
+    if config.get('stop_token_ids') and not native_stop_tokens_supported(engine):
+        raise RuntimeError('LiteRT-LM runtime lacks native stop-token sequence support')
+    return engine.create_conversation(**config)
+
+
 def run_tool_conversation(engine, litert_lm, prompt, definitions, budget, *,
                           emit=None, read_control=None, lease=None, on_stream_started=None):
     emit = emit or (lambda kind, value: print(kind + " " + json.dumps(value, ensure_ascii=False), flush=True))
     read_control = read_control or sys.stdin.readline
-    lease = lease or (lambda key, eligible, config: engine.create_conversation(**config))
+    lease = lease or (lambda key, eligible, config: create_configured_conversation(engine, config))
     system = 'Follow the requested task faithfully. Do not invent facts.'
     delegate_tool_detection = False
     messages = []
+    stop_token_ids = []
+    use_default_output_limit = False
     plain_conversation = isinstance(definitions, dict) and definitions.get('tools') == []
     if isinstance(definitions, dict):
+        stop_token_ids = normalize_stop_token_ids(definitions.get('stop_token_ids', []))
+        use_default_output_limit = definitions.get('use_default_output_limit', False)
+        if not isinstance(use_default_output_limit, bool):
+            raise ValueError('Default output limit flag must be a boolean')
+        if use_default_output_limit and not plain_conversation:
+            raise ValueError('Default output limit requires a plain conversation')
         messages = definitions.get('messages', [])
         if not isinstance(messages, list) or any(
                 not isinstance(message, dict) or 'content' not in message or
@@ -157,8 +203,7 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget, *,
             (len(engine.tokenize(json.dumps(messages, ensure_ascii=False, separators=(',', ':')))) if messages else 0) > 4096):
         raise ValueError('Conversation input exceeds the 4096-token context')
 
-    with lease(json.dumps([system, encoded_tools, budget], ensure_ascii=False),
-               bool(definitions) and not messages, dict(
+    conversation_config = dict(
             system_message=system,
             messages=messages or None,
             tools=delegated,
@@ -167,12 +212,23 @@ def run_tool_conversation(engine, litert_lm, prompt, definitions, budget, *,
             thinking_config=litert_lm.ThinkingConfig(enable_thinking=False),
             filter_channel_content_from_kv_cache=True,
             enable_speculative_decoding=True,
-            max_output_tokens=budget)) as conversation:
+            max_output_tokens=budget)
+    if use_default_output_limit:
+        conversation_config.pop('max_output_tokens')
+    if stop_token_ids:
+        if not native_stop_tokens_supported(engine):
+            raise RuntimeError('LiteRT-LM runtime lacks native stop-token sequence support')
+        conversation_config['stop_token_ids'] = stop_token_ids
+    with lease(json.dumps([system, encoded_tools, budget], ensure_ascii=False),
+               bool(definitions) and not messages and not stop_token_ids and not use_default_output_limit,
+               conversation_config) as conversation:
         message = {'role': 'user', 'content': prompt}
         for turn in range(20):
             # The raw C callback preserves verbatim string tool arguments;
             # Python Message.from_json would JSON-decode those arguments.
-            value = stream_tool_response(conversation, litert_lm, message, budget, emit, on_stream_started)
+            value = stream_tool_response(conversation, litert_lm, message,
+                                         None if use_default_output_limit else budget,
+                                         emit, on_stream_started)
             if not isinstance(value, dict):
                 raise ValueError('Invalid tool generation response')
             if delegate_tool_detection:
@@ -229,10 +285,10 @@ class ConversationBase:
 
     def acquire(self, key, eligible, config):
         if not eligible:
-            return self.engine.create_conversation(**config)
+            return create_configured_conversation(self.engine, config)
         if self.base is None or key != self.key:
             # Create before replacing so a failed creation preserves the base.
-            replacement = self.engine.create_conversation(**config)
+            replacement = create_configured_conversation(self.engine, config)
             self.close()
             self.base, self.key = replacement, key
         lib = self.base._lib
@@ -364,7 +420,7 @@ class PersistentWorker:
                     if not isinstance(value, dict) or not isinstance(value.get('prompt'), str):
                         raise ValueError('Invalid generation request')
                     budget = value.get('max_output_tokens', 256)
-                    if isinstance(budget, bool) or not isinstance(budget, int) or not 1 <= budget <= 3072:
+                    if not valid_output_budget(budget, value.get('tools')):
                         raise ValueError('Output budget must be between 1 and 3072')
                     run_tool_conversation(self.engine, self.api, value['prompt'], value['tools'], budget,
                                           emit=emit, read_control=control, lease=lease, on_stream_started=stream_started)
@@ -449,7 +505,7 @@ def run(args):
                          audio_backend=litert_lm.Backend.CPU(thread_count=4),
                          max_num_tokens=512 if args.query_detector else 4096, cache_dir=str(cache)) as engine:
         if args.probe:
-            print(json.dumps({"worker_protocol": 1}), flush=True)
+            print(json.dumps({"worker_protocol": 1, "native_stop_token_sequences": native_stop_tokens_supported(engine)}), flush=True)
             return
         if args.serve:
             PersistentWorker(engine, litert_lm, sys.stdin, sys.stdout).serve()
@@ -539,8 +595,12 @@ def main():
         parser.error('FORESIGHT_LITERT_BACKEND must be cpu or gpu')
     if not args.check and not args.model:
         parser.error('a local model file is required')
-    if not 1 <= args.max_output_tokens <= 3072:
-        parser.error('output budget must be between 1 and 3072')
+    try:
+        definitions = json.loads(args.tools) if args.tools else None
+    except json.JSONDecodeError:
+        parser.error('invalid conversation configuration')
+    if not valid_output_budget(args.max_output_tokens, definitions):
+        parser.error('output budget must be between 1 and 3072, or the explicit plain native default')
     # Native GPU drivers may write to fd 1. Keep streamed text/JSON on a
     # separate descriptor so driver diagnostics cannot become answer content.
     protocol = os.fdopen(os.dup(sys.stdout.fileno()), 'w', buffering=1)

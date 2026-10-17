@@ -237,8 +237,7 @@ no configuration map or API credential was extracted.
 The transcript cache additionally passes 12 focused tests, including pending-request
 coalescing, post-await mode changes, exact vector reuse, sequential embedding,
 five-entry LRU behavior, live/saved reads, in-flight saved reloads and error propagation.
-The retained test log is `ida/note-transcript-cache-tests.log`. These tests do not
-establish the still-unconnected Application producer integration. Cache tracing used
+The retained test log is `ida/note-transcript-cache-tests.log`. These original component tests did not establish Application integration; the recovered producer is now connected as described below. Cache tracing used
 owned IDA batches 97 and 99, both with retained exit-0 terminal logs; these are direct
 IDA results, not new successful REA process captures.
 
@@ -255,5 +254,44 @@ components, transcript caching, input planning, draft persistence and consumer
 stream cancellation. Core analysis reports no issues. The retained log is
 `ida/note-producer-component-tests-v4.log`. Three new merge regressions cover
 failure overwrites, reordered batch indices and diagnostic order/duplicates.
-The Application still uses the older single-prompt producer; these passes do
-not establish end-to-end recovered generation parity.
+Those component passes did not establish end-to-end recovered generation parity. The subsequent Application integration is described below.
+
+
+## Application producer and edit-state integration
+
+Application now composes the recovered input planner, transcript cache,
+embedding/ranking/batching pipeline and per-batch native conversation adapter.
+Helper embeddings are requested when the pipeline is ready; unavailable embedding
+transport retains the recovered empty-vector path. The tokenizer supplies the
+ordered closing-tag stop sequence when ready. Native cumulative previews are
+converted to incremental producer text without repeating the terminal response.
+Each batch gets a fresh conversation with the serialized input setting 2048 and
+the runtime's default output limit. This does not add input truncation absent
+from the traced native send path.
+
+Manual generation passes the accepted prior map and updates existing notes with
+transcript context; force regeneration omits that map. Successful completion
+rebuilds ordinal map/pair state and full comparison snapshots from current raw
+text. Shorthand saves use the recovered exact/normalized/ordinal matching,
+controller rewrite and stale-bullet rules; current enhanced-text edits update
+staleness without rebuilding successful snapshots. Cancellation restores formatted
+prior notes and rebuilds map/pairs from current raw text while preserving success
+comparisons. Historical artifact edits leave current mapping alone.
+
+Workspace clearing cancels draft timers and discards ephemeral maps/cache entries.
+Cache epoch guards prevent outstanding saved loads and live readers from
+crossing into a cleared workspace whose integer IDs can be reused. These ownership
+guards are port lifecycle policy, not a claim about the original view lifecycle.
+
+A focused Application/edit/draft run passes 26 tests. The source-built stop-token
+extension additionally passes the actual native configuration-copy test and a
+deterministic SDK model check for an ordered two-token sequence; see
+[stop-token evidence](reference-native-stop-tokens.md). That fixture does not
+prove original production-model or GPU output equivalence. Targeted live edit
+queueing, original service retry/reset, complete outer exception behavior and
+production package/model acceptance remain open.
+
+
+Current integrated regression: the full core suite passes **406 tests with 7 skipped**; core static analysis is clean. A subsequent stream regression file passes **10 tests**, including raw edits during generation followed by cancellation and reordering. The full core run also includes both workspace-reset cache regressions (saved load and live reader) and all 14 edit-mapping tests. Retained logs: `ida/note-application-full-core-tests.log`, `ida/note-cancellation-current-raw-tests.log`, and `ida/note-application-core-analysis.log`. Packaging verification passes 15 focused tests and verifies the actual source-built macOS wheel/library manifest; these checks do not establish complete copied-prefix signing/relocation or Linux runtime acceptance.
+
+The final desktop regression passes **192 tests with 10 skipped**, and desktop analysis is clean. Retained logs: `ida/note-application-full-desktop-tests.log` and `ida/note-application-desktop-analysis.log`.

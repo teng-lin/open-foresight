@@ -213,10 +213,14 @@ class NativeRuntime {
   );
 
   /// A fresh local conversation without tools or an implicit system preface.
+  /// A null output limit preserves the native default. The original serialized
+  /// input setting is passed through without inventing a local token limit.
   Stream<Map<String, dynamic>> generateConversation(
     String id,
     String prompt, {
-    int maxOutputTokens = 1024,
+    int? maxOutputTokens = 1024,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
     Duration timeout = const Duration(minutes: 5),
   }) => _generate(
     id,
@@ -224,6 +228,8 @@ class NativeRuntime {
     tools: const [],
     toolDispatcher: ReferenceToolDispatcher({}),
     plainConversation: true,
+    stopTokenIds: stopTokenIds,
+    maxInputTokens: maxInputTokens,
     systemPrompt: '',
     maxOutputTokens: maxOutputTokens,
     timeout: timeout,
@@ -239,8 +245,10 @@ class NativeRuntime {
     ReferenceToolDispatcher? toolDispatcher,
     List<Map<String, dynamic>> initialMessages = const [],
     bool plainConversation = false,
+    int? maxInputTokens,
+    List<List<int>> stopTokenIds = const [],
     Duration timeout = const Duration(minutes: 5),
-    int maxOutputTokens = 256,
+    int? maxOutputTokens = 256,
   }) async* {
     if (engine == nullptr || conversation == nullptr) {
       throw StateError('Generation model unavailable');
@@ -254,10 +262,12 @@ class NativeRuntime {
     }
     if (id.isEmpty ||
         timeout <= Duration.zero ||
-        maxOutputTokens < 1 ||
-        maxOutputTokens > 3072) {
+        (maxOutputTokens == null
+            ? !plainConversation
+            : maxOutputTokens < 1 || maxOutputTokens > 3072)) {
       throw ArgumentError('A request ID and positive timeout are required');
     }
+    final outputBudget = maxOutputTokens ?? 0;
     // Each request owns a conversation. Destroy joins the native worker, so
     // the done-event/active-flag race cannot leak into the next generation.
     final handle = lib
@@ -287,6 +297,9 @@ class NativeRuntime {
               'system_message': systemPrompt,
               'delegate_tool_detection': true,
               'messages': initialMessages,
+              if (stopTokenIds.isNotEmpty) 'stop_token_ids': stopTokenIds,
+              if (maxOutputTokens == null) 'use_default_output_limit': true,
+              if (maxInputTokens != null) 'max_input_tokens': maxInputTokens,
             }).toNativeUtf8()
           : responseSchema == null
           ? nullptr.cast<Utf8>()
@@ -310,7 +323,7 @@ class NativeRuntime {
                   Pointer<Utf8>,
                   int,
                 )
-              >('fs_generate_tools')(handle, a, b, schema, maxOutputTokens);
+              >('fs_generate_tools')(handle, a, b, schema, outputBudget);
         } else if (maxOutputTokens != 256) {
           rc = lib
               .lookupFunction<
@@ -328,7 +341,7 @@ class NativeRuntime {
                   Pointer<Utf8>,
                   int,
                 )
-              >('fs_generate_options')(handle, a, b, schema, maxOutputTokens);
+              >('fs_generate_options')(handle, a, b, schema, outputBudget);
         } else if (responseSchema != null) {
           rc = lib
               .lookupFunction<
