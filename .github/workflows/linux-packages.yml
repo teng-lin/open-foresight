@@ -131,6 +131,10 @@ jobs:
           build-args: |
             SDK_IMAGE=${{ needs.sdk.outputs.image }}
             SOURCE_REVISION=${{ github.sha }}
+            DISTRIBUTION_CONFIG_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
+          secrets: |
+            foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
+            foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
           cache-from: type=gha,scope=linux-packages-x86-64
           cache-to: type=gha,mode=max,scope=linux-packages-x86-64
       - name: Archive executable permissions and record checksums
