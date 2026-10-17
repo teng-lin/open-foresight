@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 
+from google_client_release import release_google_client, write_google_client
 from app_version import read_version
 from query_worker_packaging import (copy_worker as copy_query_worker,
     copy_licenses as copy_query_licenses, inspect_runtime as inspect_query_runtime)
@@ -112,6 +113,8 @@ def main(argv=None):
     parser.add_argument('--whisper-runtime', type=Path)
     parser.add_argument('--whisper-license', type=Path, help='LICENSE from the source used to build the Whisper runtime')
     parser.add_argument('--google-client', type=Path)
+    parser.add_argument('--require-google-client', action='store_true',
+                        help='Reject a release that would send users to Cloud Console setup')
     parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
     parser.add_argument('--identity', default='-', help='Developer ID Application identity; default is ad-hoc development only')
     parser.add_argument('--notary-profile', help='Existing notarytool keychain profile; requires a Developer ID identity')
@@ -124,6 +127,7 @@ def main(argv=None):
                      'from tools/build_litert_extensions.py; the stock runtime lacks native stop sequences')
     extensions = (verify_extensions_manifest(args.litert_extensions_manifest, platform_name='darwin')
                   if args.litert_extensions_manifest else None)
+    google_client = release_google_client(args.google_client, required=args.require_google_client)
     web_search_keys = release_web_search_keys()
     if sys.platform != 'darwin':
         parser.error('Mac application packaging requires macOS')
@@ -195,15 +199,9 @@ def main(argv=None):
             parser.error('--sdk must be a completed source SDK with foresight-sdk.json')
         shutil.copytree(args.sdk / 'share/foresight-sdk/licenses', resources / 'licenses/sdk')
         shutil.copy2(sdk_manifest, resources / 'licenses/sdk-provenance.json')
-    if args.google_client:
-        config = json.loads(args.google_client.read_text())
-        if set(config) != {'installed'} or 'client_id' not in config['installed']:
-            parser.error('Supply installed application OAuth configuration, never account tokens')
-        installed = config['installed']
-        if not isinstance(installed['client_id'], str) or not isinstance(installed.get('client_secret', ''), str):
-            parser.error('Invalid application OAuth configuration')
+    if google_client is not None:
         target = resources / 'google-client.json'
-        target.write_text(json.dumps({'installed': {key: installed[key] for key in ('client_id', 'client_secret') if key in installed}}))
+        write_google_client(target, google_client, mode=0o644)
         values['FORESIGHT_GOOGLE_CLIENT'] = target
     if args.python_runtime:
         copy_python(args.python_runtime, resources, values, extensions)

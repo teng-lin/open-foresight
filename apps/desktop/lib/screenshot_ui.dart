@@ -1207,7 +1207,10 @@ extension _ScreenshotScreens on _WorkspaceState {
                           case 'drive-folder':
                             await chooseDrive(folder: true);
                           case 'drive-year':
-                            await google.importLastYear();
+                            if (!googleAuth.connected) await connectGoogle();
+                            if (mounted && googleAuth.connected) {
+                              await google.importLastYear();
+                            }
                         }
                       }),
                       itemBuilder: (_) => [
@@ -1234,7 +1237,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                         ),
                         PopupMenuItem(
                           value: 'drive-file',
-                          enabled: googleAuth.connected,
+                          enabled: !busy,
                           child: const ListTile(
                             leading: Icon(Icons.cloud_outlined),
                             title: Text('Add files from Drive'),
@@ -1242,7 +1245,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                         ),
                         PopupMenuItem(
                           value: 'drive-folder',
-                          enabled: googleAuth.connected,
+                          enabled: !busy,
                           child: const ListTile(
                             leading: Icon(Icons.folder_shared_outlined),
                             title: Text('Add an entire Drive folder'),
@@ -1250,7 +1253,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                         ),
                         PopupMenuItem(
                           value: 'drive-year',
-                          enabled: googleAuth.connected,
+                          enabled: !busy,
                           child: const ListTile(
                             leading: Icon(Icons.history),
                             title: Text('Import last 1 year from Drive'),
