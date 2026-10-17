@@ -298,16 +298,26 @@ def publish_report_tree(path):
     """
     if not path.exists():
         return
+
+    def relax(entry, bits):
+        # The report root is the container mount, owned by the host user.
+        # chmod there is EPERM when the container drops CAP_FOWNER. Profiles
+        # created by this process are owned here and must still be relaxed.
+        try:
+            entry.chmod(entry.stat().st_mode | bits)
+        except OSError:
+            return
+
     for current, _dirnames, filenames in os.walk(path):
         directory = Path(current)
         if directory.is_symlink():
             continue
-        directory.chmod(directory.stat().st_mode | 0o755)
+        relax(directory, 0o755)
         for name in filenames:
             file = directory / name
             if file.is_symlink():
                 continue
-            file.chmod(file.stat().st_mode | 0o644)
+            relax(file, 0o644)
 
 
 def main():

@@ -10,17 +10,19 @@ import 'package:open_foresight/graph_layout.dart';
 import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
 import 'package:open_foresight/graph_persistence.dart';
+import 'package:foresight_core/src/model_setup.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,
   bool Function() ready, {
   int seconds = 60,
+  String reason = 'Workflow timed out',
 }) async {
   final deadline = DateTime.now().add(Duration(seconds: seconds));
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  expect(ready(), true, reason: 'Workflow timed out');
+  expect(ready(), true, reason: reason);
   final failure = tester.takeException();
   if (failure != null) {
     File(
@@ -172,6 +174,11 @@ void main() {
                 meeting,
               ]).single['title']
               as String;
+      await waitUntil(
+        tester,
+        () => speechSetupProblem(workspace.d.store) == null,
+        reason: 'Speech model and runner were not ready for recording',
+      );
       await tester.tap(find.byTooltip('Meeting options'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Record microphone + playback'));

@@ -120,6 +120,26 @@ def test_private_profile_is_readable_after_the_suite(tmp_path):
     assert secret.read_text() == 'rows'
 
 
+def test_report_tree_continues_when_the_mount_root_cannot_be_changed(tmp_path):
+    private = tmp_path / 'meeting-data'
+    private.mkdir()
+    private.chmod(0o700)
+    secret = private / 'profile.db'
+    secret.write_text('rows')
+    secret.chmod(0o600)
+    original = Path.chmod
+
+    def chmod(self, mode):
+        if self == tmp_path:
+            raise PermissionError(1, 'Operation not permitted', str(self))
+        return original(self, mode)
+
+    with patch.object(Path, 'chmod', chmod):
+        gates.publish_report_tree(tmp_path)
+    assert private.stat().st_mode & 0o007 == 0o005
+    assert secret.stat().st_mode & 0o007 == 0o004
+
+
 def test_meeting_workflow_waits_until_the_desktop_mounts():
     source = (ROOT / 'apps/desktop/integration_test/meeting_workflow_test.dart').read_text()
     start = source.index('Future<dynamic> startedWorkspace')
