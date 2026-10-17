@@ -49,18 +49,14 @@ extension _MeetingWorkspace on _WorkspaceState {
       meetingNotesController.text,
       lastManualEdit: meetingNoteManualEdit,
     );
-    await flushMeetingNotesDraft();
-  }
-
-  Future<void> flushMeetingNotesDraft() async {
     try {
-      await meetingNoteSaves.flush();
-    } catch (failure) {
-      if (mounted)
-        update(() => error = 'Unable to save meeting notes: $failure');
-      rethrow;
+      await flushMeetingNotesDraft();
+    } catch (_) {
+      // NoteSaveScheduler's onError already presents this failed save.
     }
   }
+
+  Future<void> flushMeetingNotesDraft() => meetingNoteSaves.flush();
 
   void scheduleMeetingNotesSave() {
     final id = loadedMeetingNotes;
@@ -759,7 +755,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                             preference('liveEnhance', (!live).toString()),
                           );
                           meetingEnhancedVisible = !live;
-                          if (!live) saveMeetingNotes();
+                          if (!live) unawaited(saveMeetingNotes());
                         }),
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xffdce9ff),

@@ -1,3 +1,4 @@
+import 'service_edit_dialog.dart';
 import 'package:foresight_core/foresight_core.dart'
     show
         runtimeConfiguration,
@@ -1234,37 +1235,24 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   void editSource(Map<String, Object?> s) async {
     final text = TextEditingController(text: s['content'] as String);
     final saved = await showInputDialog<bool>(
-      builder: (context) => AlertDialog(
-        title: Text('Edit ${s['title']}'),
-        content: SizedBox(
-          width: 650,
-          height: 400,
-          child: TextField(controller: text, maxLines: null, expands: true),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Save and index'),
-          ),
-        ],
+      builder: (context) => ServiceEditDialog(
+        title: 'Edit ${s['title']}',
+        controller: text,
+        height: 400,
+        saveLabel: 'Save and index',
+        onSave: () async {
+          await importText(
+            s['title'] as String,
+            text.text,
+            s['mime'] as String,
+            'user edit; ${s['provenance']}',
+            id: s['id'] as String,
+          );
+          await d.index(s['id'] as String);
+        },
       ),
     );
-    if (saved == true && mounted) {
-      await run(() async {
-        await importText(
-          s['title'] as String,
-          text.text,
-          s['mime'] as String,
-          'user edit; ${s['provenance']}',
-          id: s['id'] as String,
-        );
-        await d.index(s['id'] as String);
-      });
-    }
+    if (saved == true && mounted) setState(() {});
     text.dispose();
   }
 
@@ -1638,44 +1626,30 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     );
     final original = controller.text;
     int? lastManualEdit;
-    await showInputDialog<void>(
-      builder: (context) => AlertDialog(
-        title: const Text('Edit generated artifact'),
-        content: SizedBox(
-          width: 650,
-          height: 300,
-          child: TextField(
-            controller: controller,
-            onChanged: (text) {
-              if (a['kind'] == 'enhanced_notes' &&
-                  (text != original ||
-                      (loadedMeetingNotes == a['meeting_id'] &&
-                          meetingNotesController.text !=
-                              loadedMeetingNoteSnapshot?.body))) {
-                lastManualEdit = DateTime.now().millisecondsSinceEpoch;
-              }
-            },
-            maxLines: null,
-            expands: true,
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await d.command('artifacts.edit', {
-                'id': a['id'],
-                'text': controller.text,
-                if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
-              });
-              if (!context.mounted) return;
-              Navigator.pop(context);
-              setState(() {});
-            },
-            child: const Text('Save edit'),
-          ),
-        ],
+    final saved = await showInputDialog<bool>(
+      builder: (context) => ServiceEditDialog(
+        title: 'Edit generated artifact',
+        controller: controller,
+        saveLabel: 'Save edit',
+        onChanged: (text) {
+          if (a['kind'] == 'enhanced_notes' &&
+              (text != original ||
+                  (loadedMeetingNotes == a['meeting_id'] &&
+                      meetingNotesController.text !=
+                          loadedMeetingNoteSnapshot?.body))) {
+            lastManualEdit = DateTime.now().millisecondsSinceEpoch;
+          }
+        },
+        onSave: () async {
+          await d.command('artifacts.edit', {
+            'id': a['id'],
+            'text': controller.text,
+            if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+          });
+        },
       ),
     );
+    if (saved == true && mounted) setState(() {});
     controller.dispose();
   }
 
