@@ -205,8 +205,19 @@ After each emitted snapshot, the original checks the accumulated raw response
 for its four stop markers. A hit cancels conversation processing, cancels the
 stream iterator, then closes the conversation. Caller cancellation during
 emission cancels the iterator before closing the conversation. Normal
-per-batch close is awaited. Full exception-handler orchestration and transport
-integration remain outstanding.
+per-batch close is awaited. The per-batch catch at `0x100a30d2c–0x100a31098`
+logs the error, normalizes each current batch note through fallback formatting,
+appends it to diagnostics, and unconditionally replaces its accepted map entry.
+Unlike normal omissions, failure therefore overwrites prior accepted values.
+Diagnostics also collect every nonempty trimmed terminal response line, retaining
+duplicates; they are separate from displayed notes and accepted topics.
+`NoteEnhancementMerge.failBatch` implements this recovery. The common awaited
+close is followed by advancing to the next batch. Close-error and outer-handler
+behavior, and full transport orchestration, remain unverified. This handler was
+absent from the decompiler's 3,982 output lines: complete decompiled line coverage
+did not establish complete native control-flow coverage. Bounded disassembly
+`ida/note-enhance-batch-handler-instructions.json` supplies the missing range
+(234 instructions), captured in owned IDA batch 127 with an exit-0 terminal log.
 
 ## Verification and limits
 
@@ -238,3 +249,11 @@ reenhancement selection. A combined cache/input run passes 22 tests.
 Preview cleanup adds four regression tests (14 tests in its helper file), covering
 partial/case-sensitive fences, one-layer stripping, cleanup order and the distinct
 final-acceptance behavior. Full core analysis is clean after these additions.
+
+Latest combined note verification: **107 tests passed**, including producer
+components, transcript caching, input planning, draft persistence and consumer
+stream cancellation. Core analysis reports no issues. The retained log is
+`ida/note-producer-component-tests-v4.log`. Three new merge regressions cover
+failure overwrites, reordered batch indices and diagnostic order/duplicates.
+The Application still uses the older single-prompt producer; these passes do
+not establish end-to-end recovered generation parity.

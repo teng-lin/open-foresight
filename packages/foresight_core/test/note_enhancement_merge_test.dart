@@ -18,6 +18,78 @@ void main() {
   );
 
   test(
+    'batch failures overwrite prior accepted values unlike normal omissions',
+    () {
+      final omitted = twoNotes(previous: {0: '- Previous one', 1: ''});
+      omitted.acceptCleaned('unusable prose', [0, 1]);
+      expect(omitted.accepted, {0: '- Previous one', 1: ''});
+
+      final failed = twoNotes(previous: {0: '- Previous one', 1: ''});
+      failed.previewCleaned('- Unaccepted preview', [0, 1]);
+      failed.failBatch([0, 1]);
+      expect(failed.accepted, {0: '* one', 1: '* two'});
+      expect(failed.finalBody, '* one\n\n* two');
+      expect(failed.diagnosticLines, ['* one', '* two']);
+    },
+  );
+
+  test(
+    'failure maps reordered batch through original positions and preserves topics',
+    () {
+      final merge = NoteEnhancementMerge(
+        originalNotes: ['A', 'B', 'C', 'D'],
+        pendingNotes: [
+          (originalIndex: 3, text: ' -no-space '),
+          (originalIndex: 0, text: ' **A** '),
+          (originalIndex: 2, text: ' + C '),
+        ],
+        previousEnhanced: {1: '- Accepted B', 3: '- Old D'},
+      );
+      merge.acceptCleaned('- Accepted C\n$heading\n- Topic', [2]);
+      merge.failBatch([0, 1]);
+      expect(merge.accepted, {
+        0: '**A**',
+        1: '- Accepted B',
+        2: '- Accepted C',
+        3: '-no-space',
+      });
+      expect(merge.savedTopics, [heading, '- Topic']);
+      expect(
+        merge.finalBody,
+        '**A**\n\n- Accepted B\n\n- Accepted C\n\n-no-space\n\n$heading\n\n- Topic',
+      );
+      expect(merge.diagnosticLines, [
+        '- Accepted C',
+        heading,
+        '- Topic',
+        '-no-space',
+        '**A**',
+      ]);
+    },
+  );
+
+  test(
+    'diagnostics retain terminal lines and repeated failures without deduplication',
+    () {
+      final merge = twoNotes();
+      merge.previewCleaned('- Preview only', [0]);
+      expect(merge.diagnosticLines, isEmpty);
+      merge.acceptCleaned('  prose  \n\n- One\n- One  ', [0]);
+      merge.failBatch([1]);
+      merge.failBatch([1]);
+      expect(merge.diagnosticLines, [
+        'prose',
+        '- One',
+        '- One',
+        '* two',
+        '* two',
+      ]);
+      merge.failBatch([]);
+      expect(merge.accepted, {0: '- One', 1: '* two'});
+    },
+  );
+
+  test(
     'each preview starts fresh and shorter parses restore accepted prior text',
     () {
       final merge = twoNotes(previous: {1: '- Previous two'});

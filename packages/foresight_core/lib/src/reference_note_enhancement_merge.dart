@@ -17,6 +17,10 @@ class NoteEnhancementMerge {
   final Map<int, String> accepted;
   final List<String> savedTopics = [];
 
+  /// Nonempty trimmed terminal response lines and per-note failure fallbacks.
+  /// This corresponds to the diagnostic list cleared before batch generation.
+  final List<String> diagnosticLines = [];
+
   ({String body, int activeIndex}) previewCleaned(
     String cleaned,
     List<int> batch,
@@ -59,6 +63,13 @@ class NoteEnhancementMerge {
   }
 
   void acceptCleaned(String cleaned, List<int> batch) {
+    // Terminal-response diagnostics at 0x100a301a4–0x100a30390.
+    diagnosticLines.addAll(
+      cleaned
+          .split('\n')
+          .map((line) => line.trim())
+          .where((line) => line.isNotEmpty),
+    );
     final parsed = parseNoteEnhancementBatchOutput(
       cleaned,
       batch.length,
@@ -77,6 +88,18 @@ class NoteEnhancementMerge {
         note.originalIndex,
         () => toNoteEnhancementFallbackBullet(note.text),
       );
+    }
+  }
+
+  /// The per-batch catch handler (0x100a30d2c–0x100a31098) replaces every
+  /// batch entry unconditionally, including prior accepted enhancements.
+  /// Conversation disposal and error logging remain the producer's job.
+  void failBatch(List<int> batch) {
+    for (final index in batch) {
+      final note = pendingNotes[index];
+      final fallback = toNoteEnhancementFallbackBullet(note.text);
+      diagnosticLines.add(fallback);
+      accepted[note.originalIndex] = fallback;
     }
   }
 
