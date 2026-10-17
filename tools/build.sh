@@ -35,7 +35,16 @@ cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXEC
 cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
 ctest --test-dir "$task_build" --output-on-failure
 if command -v dart >/dev/null; then
-  (cd "$task_root/packages/foresight_core" && dart pub get && dart analyze && dart test)
+  (
+    cd "$task_root/packages/foresight_core"
+    dart pub get
+    dart analyze
+    if [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
+      "$task_root/tools/coverage_core.sh"
+    else
+      dart test
+    fi
+  )
   mkdir -p "$task_build/application"
   dart compile exe "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
   dart compile exe "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"

@@ -1,5 +1,5 @@
-import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/graph_layout.dart';
+import 'package:test/test.dart';
+import 'package:foresight_core/src/graph_layout.dart';
 
 void main() {
   test(

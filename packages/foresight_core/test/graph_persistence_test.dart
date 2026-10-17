@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:typed_data';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/graph_layout.dart';
-import 'package:open_foresight/graph_persistence.dart';
-import 'package:open_foresight/store.dart';
+import 'package:test/test.dart';
+import 'package:foresight_core/src/graph_layout.dart';
+import 'package:foresight_core/src/graph_persistence.dart';
+import 'package:foresight_core/src/store.dart';
 
 void main() {
   test(

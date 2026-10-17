@@ -1,45 +1,12 @@
 import 'dart:async';
 import 'dart:io';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:grpc/grpc.dart';
-import 'package:open_foresight/domain.dart';
-import 'package:open_foresight/helper.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/store.dart';
 
-class DelayedIndexService extends RagServiceBase {
-  final started = Completer<void>(), release = Completer<void>();
-  int calls = 0;
-  final configurations = <UpdateModelPathsRequest>[];
-  @override
-  Future<UpdateModelPathsResponse> updateModelPaths(
-    ServiceCall call,
-    UpdateModelPathsRequest request,
-  ) async {
-    configurations.add(request);
-    return UpdateModelPathsResponse(success: true);
-  }
-
-  @override
-  Future<IndexResponse> indexDocument(
-    ServiceCall call,
-    IndexRequest request,
-  ) async {
-    calls++;
-    if (!started.isCompleted) started.complete();
-    await release.future;
-    return IndexResponse(success: true);
-  }
-
-  @override
-  Future<DeleteResponse> deleteDocument(
-    ServiceCall call,
-    DeleteRequest request,
-  ) async => DeleteResponse(success: true);
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
-}
+import 'fixtures/delayed_index_service.dart';
 
 void main() {
   test('embedding backend selection survives app database restart', () async {

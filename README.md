@@ -229,13 +229,20 @@ Drive and Calendar use browser authorization with your own OAuth client. Provide
 
 ```sh
 python3 tools/verify_descriptor.py
-python3 -m pytest tests/contracts tests/models/test_grounded_generation.py
+python3 -m pytest
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
-cd apps/desktop
-flutter test
-flutter analyze
+(cd packages/foresight_core && dart pub get && dart test)
+(cd apps/desktop && flutter test && flutter analyze)
 ```
+
+The default pytest run selects offline contracts, inference adapter tests, and Python tooling tests via `pytest.ini`. It requires `requirements-dev.txt` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands; standalone scripts under `tests/integration` take executable paths and are not collected by default.
+
+Run `tools/coverage.sh` after installing the development dependencies into `.venv` (or set `FORESIGHT_PYTHON`). It writes branch-aware Python coverage for `tools/` and `services/inference/macos/` to `coverage/python/`: HTML, Cobertura XML, LCOV, and JUnit results. Unexecuted Python source files are included; probe scripts named `test_*.py` are excluded. This baseline measures Python only, including on macOS PR CI, which retains the reports as an artifact. There is no minimum percentage yet; establish stable baselines per language before setting regression thresholds.
+
+Store, graph, Google adapter, and model installation suites now run in `packages/foresight_core/test` using pure Dart. Shared test helpers live under its `test/fixtures/` directory.
+
+Run `tools/coverage_core.sh` after `dart pub get` in `packages/foresight_core` to collect core Dart line coverage into `coverage/core/lcov.info` (or set `FORESIGHT_DART` to the Dart executable). Generated bindings are excluded. The Dart VM reports loaded libraries; this is not a whole-repository denominator. Set `FORESIGHT_COVERAGE=1` when using `tools/build.sh` to collect this report during the normal core gate; macOS PR CI enables it and uploads a separate artifact. MCP protocol tests launch the real Dart entry point against an isolated fake Unix-socket service; subprocess execution is not included in the parent Dart coverage report. Flutter and native coverage remain follow-up work.
 
 Tests that use real models, real capture, or the desktop integration are opt-in. They need their tools and models installed. Their reports and captures go under the ignored `test-results/` directory, or a path you choose.
 

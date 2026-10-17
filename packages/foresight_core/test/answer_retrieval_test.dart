@@ -1,5 +1,5 @@
-import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/answer_retrieval.dart';
+import 'package:test/test.dart';
+import 'package:foresight_core/src/answer_retrieval.dart';
 
 Map<String, Object?> source(String id, String body, {String? title}) => {
   'id': id,

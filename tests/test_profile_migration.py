@@ -82,5 +82,70 @@ class ProfileMigrationTest(unittest.TestCase):
         self.assertFalse(self.backup.exists())
 
 
+    def test_external_model_collision_restores_original_profile(self):
+        collision = self.old / 'models/imported/embedding/model.bin'
+        collision.parent.mkdir(parents=True)
+        collision.write_bytes(b'existing owned model')
+        with self.assertRaisesRegex(ValueError, 'External model destination already exists'):
+            self.migrate()
+        self.assertTrue(self.old.is_dir())
+        self.assertFalse(self.new.exists())
+        self.assertEqual(collision.read_bytes(), b'existing owned model')
+        failed = self.new.with_name(self.new.name + '.migration-failed')
+        self.assertTrue((failed / 'application.db').is_file())
+        for profile in (self.old, self.backup, failed):
+            with sqlite3.connect(profile / 'application.db') as db:
+                self.assertEqual(db.execute(
+                    "SELECT path FROM models WHERE kind='embedding'").fetchone()[0], str(self.asset))
+                self.assertEqual(db.execute('SELECT body FROM notes').fetchone()[0],
+                                 'Keep literal ' + str(self.old))
+        self.assertEqual(self.asset.read_bytes(), b'unchanged shared embedding')
+
+    def test_external_models_can_remain_registered_without_copying(self):
+        migration.migrate(self.old, self.new, self.backup, '/old/bundle', '/new/bundle', False)
+        with sqlite3.connect(self.new / 'application.db') as db:
+            self.assertEqual(db.execute(
+                "SELECT path FROM models WHERE kind='embedding'").fetchone()[0], str(self.asset))
+        self.assertFalse((self.new / 'models/imported').exists())
+        with sqlite3.connect(self.new / 'helper/agent_metadata.db') as db:
+            self.assertEqual(db.execute('SELECT value FROM settings').fetchone()[0], str(self.asset))
+
+    def test_refuses_nested_destinations_before_copying(self):
+        for destination, backup in (
+            (self.old / 'nested', self.backup),
+            (self.new, self.old / 'nested-backup'),
+            (self.new, self.new / 'nested-backup'),
+            (self.backup / 'nested', self.backup),
+        ):
+            with self.subTest(destination=destination, backup=backup):
+                with self.assertRaisesRegex(ValueError, 'directories must be separate'):
+                    migration.migrate(self.old, destination, backup, '/old', '/new')
+                self.assertTrue((self.old / 'application.db').is_file())
+                self.assertFalse(destination.exists())
+                self.assertFalse(backup.exists())
+
+    def test_refuses_symlinked_source_and_destination(self):
+        alias = self.root / 'alias'
+        alias.symlink_to(self.old, target_is_directory=True)
+        for source, destination in ((alias, self.new), (self.old, alias)):
+            with self.subTest(source=source, destination=destination):
+                with self.assertRaisesRegex(ValueError, 'symlinks'):
+                    migration.migrate(source, destination, self.backup, '/old', '/new')
+                self.assertTrue((self.old / 'application.db').is_file())
+                self.assertFalse(self.backup.exists())
+
+    def test_prefix_rewrite_preserves_sibling_paths_and_cloud_uris(self):
+        mappings = [('/old/profile', '/new/profile')]
+        for original, expected in (
+            ('/old/profile', '/new/profile'),
+            ('/old/profile/model.bin', '/new/profile/model.bin'),
+            ('/old/profile-other/model.bin', '/old/profile-other/model.bin'),
+            ('https://example.com/old/profile', 'https://example.com/old/profile'),
+            ('', ''),
+        ):
+            with self.subTest(original=original):
+                self.assertEqual(migration.replace_prefix(original, mappings), expected)
+
+
 if __name__ == '__main__':
     unittest.main()

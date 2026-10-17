@@ -71,7 +71,7 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
 
   Future<int> waitForPid() async {
     final file = File('${directory.path}/pid');
-    for (var i = 0; i < 100; i++) {
+    for (var i = 0; i < 500; i++) {
       if (file.existsSync() && file.readAsStringSync().isNotEmpty) {
         return int.parse(file.readAsStringSync());
       }
@@ -140,18 +140,34 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
 
   test('timeout kills an unresponsive owned worker', () async {
     await runtime.close();
-    runtime = DedicatedQueryRuntime(
-      python: 'python3',
-      worker: worker,
-      model: '${directory.path}/pid',
-      timeout: const Duration(milliseconds: 150),
-    );
-    final pending = runtime.complete('wait', 'owned');
-    final failure = expectLater(pending, throwsA(isA<TimeoutException>()));
-    final pid = await waitForPid();
-    await failure;
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect((await Process.run('kill', ['-0', '$pid'])).exitCode, isNot(0));
+    // Start the real worker before the short response deadline. Under coverage
+    // or CPU contention, interpreter startup alone can exceed 150 ms.
+    final process = await Process.start('python3', [
+      '-I',
+      '-B',
+      worker,
+      '--model',
+      '${directory.path}/pid',
+    ]);
+    try {
+      final pid = await waitForPid();
+      runtime = DedicatedQueryRuntime(
+        python: 'python3',
+        worker: worker,
+        model: '${directory.path}/pid',
+        timeout: const Duration(milliseconds: 150),
+        startProcess: (_, _) async => process,
+      );
+      await expectLater(
+        runtime.complete('wait', 'owned'),
+        throwsA(isA<TimeoutException>()),
+      );
+      await runtime.close();
+      expect((await Process.run('kill', ['-0', '$pid'])).exitCode, isNot(0));
+    } finally {
+      process.kill(ProcessSignal.sigkill);
+      await process.exitCode;
+    }
   });
 
   test(

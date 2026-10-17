@@ -4,9 +4,9 @@ import 'package:grpc/grpc.dart';
 import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/store.dart';
-import 'package:open_foresight/generated/helper_control.pbgrpc.dart'
-    as control;
-import 'domain_lifecycle_test.dart' show DelayedIndexService;
+import 'package:open_foresight/generated/helper_control.pbgrpc.dart' as control;
+import '../../../packages/foresight_core/test/fixtures/delayed_index_service.dart'
+    show DelayedIndexService;
 
 class ResumeStateService extends control.HelperControlServiceBase {
   control.State value = control.State();

@@ -1,11 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter_test/flutter_test.dart';
+import 'package:test/test.dart';
 import 'package:sqlite3/sqlite3.dart';
-import 'package:open_foresight/store.dart';
-import 'package:open_foresight/graph_layout.dart';
-import 'package:open_foresight/graph_persistence.dart';
-import 'package:open_foresight/graph_clusters.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/graph_layout.dart';
+import 'package:foresight_core/src/graph_persistence.dart';
+import 'package:foresight_core/src/graph_clusters.dart';
 
 void main() {
   test('registered scene does not reuse pre-recovery PCA cache identity', () {

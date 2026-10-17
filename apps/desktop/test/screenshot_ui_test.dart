@@ -6,7 +6,8 @@ import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/helper_control.pb.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
-import 'google_connections_test.dart' show AdapterDomain;
+import '../../../packages/foresight_core/test/fixtures/google_connections.dart'
+    show AdapterDomain;
 
 void main() {
   testWidgets('source pause can resume a pending import while the UI is busy', (

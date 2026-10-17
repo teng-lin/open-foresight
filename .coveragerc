@@ -1,0 +1,22 @@
+[run]
+branch = True
+relative_files = True
+source =
+    tools
+    services/inference/macos
+omit =
+    tools/test_*.py
+    tools/original_query_oracle/test_*.py
+
+[report]
+show_missing = True
+skip_empty = True
+
+[html]
+directory = coverage/python/html
+
+[xml]
+output = coverage/python/coverage.xml
+
+[lcov]
+output = coverage/python/lcov.info
