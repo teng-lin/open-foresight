@@ -15,6 +15,7 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
   List<Map<String, dynamic>> files = [];
   bool loading = true;
   String error = '';
+  int generation = 0;
   String? get parent =>
       parents.isEmpty ? (widget.folder ? 'root' : null) : parents.last;
   @override
@@ -30,7 +31,9 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
   }
 
   Future<void> load() async {
+    final request = ++generation;
     setState(() {
+      files = [];
       loading = true;
       error = '';
     });
@@ -39,11 +42,16 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
         parent: parent,
         query: search.text,
       );
-      if (mounted) setState(() => files = result);
+      if (mounted && request == generation) setState(() => files = result);
     } catch (failure) {
-      if (mounted) setState(() => error = failure.toString());
+      if (mounted && request == generation)
+        setState(
+          () => error = failure is StateError
+              ? failure.message.toString()
+              : failure.toString(),
+        );
     } finally {
-      if (mounted) setState(() => loading = false);
+      if (mounted && request == generation) setState(() => loading = false);
     }
   }
 
@@ -88,57 +96,69 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
           ),
           if (loading) const LinearProgressIndicator(),
           if (error.isNotEmpty)
-            Text(error, style: const TextStyle(color: Colors.red)),
-          Expanded(
-            child: ListView(
-              children: files.map((file) {
-                final folder =
-                    file['mimeType'] == 'application/vnd.google-apps.folder';
-                final supported = GoogleConnections.supported(
-                  file['mimeType'] as String,
-                );
-                return ListTile(
-                  leading: folder
-                      ? const Icon(Icons.folder_outlined)
-                      : Checkbox(
-                          value: selected.contains(file['id']),
-                          onChanged: loading || widget.folder || !supported
-                              ? null
-                              : (checked) => setState(() {
-                                  if (checked == true) {
-                                    selected.add(file['id'] as String);
-                                  } else {
-                                    selected.remove(file['id']);
-                                  }
-                                }),
-                        ),
-                  title: Text(file['name'] as String),
-                  subtitle: Text(
-                    folder
-                        ? 'Folder'
-                        : supported
-                        ? file['mimeType'] as String
-                        : 'Unsupported file type',
-                  ),
-                  trailing: folder ? const Icon(Icons.chevron_right) : null,
-                  onTap: loading
-                      ? null
-                      : folder
-                      ? () {
-                          parents.add(file['id'] as String);
-                          search.clear();
-                          load();
-                        }
-                      : widget.folder || !supported
-                      ? null
-                      : () => setState(() {
-                          if (!selected.add(file['id'] as String))
-                            selected.remove(file['id']);
-                        }),
-                );
-              }).toList(),
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  children: [
+                    Text(error, style: const TextStyle(color: Colors.red)),
+                    TextButton(onPressed: load, child: const Text('Try again')),
+                  ],
+                ),
+              ),
             ),
-          ),
+          if (!loading && error.isEmpty && files.isEmpty)
+            const Expanded(child: Center(child: Text('No matching files.'))),
+          if (error.isEmpty && (loading || files.isNotEmpty))
+            Expanded(
+              child: ListView(
+                children: files.map((file) {
+                  final folder =
+                      file['mimeType'] == 'application/vnd.google-apps.folder';
+                  final supported = GoogleConnections.supported(
+                    file['mimeType'] as String,
+                  );
+                  return ListTile(
+                    leading: folder
+                        ? const Icon(Icons.folder_outlined)
+                        : Checkbox(
+                            value: selected.contains(file['id']),
+                            onChanged: loading || widget.folder || !supported
+                                ? null
+                                : (checked) => setState(() {
+                                    if (checked == true) {
+                                      selected.add(file['id'] as String);
+                                    } else {
+                                      selected.remove(file['id']);
+                                    }
+                                  }),
+                          ),
+                    title: Text(file['name'] as String),
+                    subtitle: Text(
+                      folder
+                          ? 'Folder'
+                          : supported
+                          ? file['mimeType'] as String
+                          : 'Unsupported file type',
+                    ),
+                    trailing: folder ? const Icon(Icons.chevron_right) : null,
+                    onTap: loading
+                        ? null
+                        : folder
+                        ? () {
+                            parents.add(file['id'] as String);
+                            search.clear();
+                            load();
+                          }
+                        : widget.folder || !supported
+                        ? null
+                        : () => setState(() {
+                            if (!selected.add(file['id'] as String))
+                              selected.remove(file['id']);
+                          }),
+                  );
+                }).toList(),
+              ),
+            ),
         ],
       ),
     ),

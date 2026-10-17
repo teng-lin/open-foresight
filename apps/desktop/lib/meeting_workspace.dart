@@ -1097,7 +1097,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                           onPressed: busy || asking || meetingEnhancing
                               ? null
                               : () {
-                                  question.text = row['text'] as String;
+                                  questionFor(id).text = row['text'] as String;
                                   update(() => meetingPanel = 'Chat');
                                   unawaited(askQuestion(meetingScope: id));
                                 },
@@ -1206,7 +1206,8 @@ extension _MeetingWorkspace on _WorkspaceState {
                                   onPressed: busy || asking || meetingEnhancing
                                       ? null
                                       : () {
-                                          question.text = t['text'] as String;
+                                          questionFor(id).text =
+                                              t['text'] as String;
                                           update(() => meetingPanel = 'Chat');
                                           unawaited(
                                             askQuestion(meetingScope: id),

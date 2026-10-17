@@ -2613,34 +2613,38 @@ extension _ScreenshotScreens on _WorkspaceState {
   Future<void> askQuestion({int? meetingScope}) => run(() async {
     if (meetingEnhancing)
       throw StateError('Wait for note enhancement to finish.');
-    if (question.text.trim().isEmpty) throw StateError('Enter a question.');
+    final prompt = questionFor(meetingScope).text;
+    if (prompt.trim().isEmpty) throw StateError('Enter a question.');
+    final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
     update(() {
       answer = '';
       asking = true;
+      askingScope = scope;
     });
     try {
-      final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
       final ask = webSearchScopes.contains(scope)
           ? d.askWithWebInConversation
           : d.askInConversation;
-      await for (final text in ask(
-        question.text,
-        meetingScope == null ? 'desktop' : 'meeting:$meetingScope',
-        meetingId: meetingScope,
-      )) {
+      await for (final text in ask(prompt, scope, meetingId: meetingScope)) {
         if (mounted) update(() => answer = text);
       }
     } finally {
-      if (mounted) update(() => asking = false);
+      if (mounted)
+        update(() {
+          asking = false;
+          askingScope = null;
+        });
     }
   });
   Widget chat({int? meetingScope, bool compact = false}) {
     final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
     final searchWeb = webSearchScopes.contains(scope);
+    final scopeAsking = asking && askingScope == scope;
+    final question = questionFor(meetingScope);
     final history = d.store
         .rows(
           meetingScope == null
-              ? 'SELECT * FROM answers ORDER BY id'
+              ? "SELECT * FROM answers WHERE conversation='desktop' ORDER BY id"
               : 'SELECT answers.* FROM answers JOIN meeting_answers ON answer_id=answers.id WHERE meeting_id=? ORDER BY answers.id',
           meetingScope == null ? [] : [meetingScope],
         )
@@ -2655,7 +2659,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       child: Column(
         children: [
           Expanded(
-            child: history.isEmpty && !asking
+            child: history.isEmpty && !scopeAsking
                 ? const Center(
                     child: Text(
                       'Get answer from your personalized\nknowledge sources.',
@@ -2664,6 +2668,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                     ),
                   )
                 : ListView(
+                    key: ValueKey('chat-history:$scope'),
                     children: [
                       for (final a in history)
                         Padding(
@@ -2715,7 +2720,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                             ],
                           ),
                         ),
-                      if (asking)
+                      if (scopeAsking)
                         GeneratedContent(
                           answer.isEmpty
                               ? searchWeb
@@ -2776,6 +2781,7 @@ extension _ScreenshotScreens on _WorkspaceState {
           ValueListenableBuilder<TextEditingValue>(
             valueListenable: question,
             builder: (_, value, __) => TextField(
+              key: ValueKey('chat-input:$scope'),
               controller: question,
               minLines: 1,
               maxLines: 4,
@@ -2806,8 +2812,8 @@ extension _ScreenshotScreens on _WorkspaceState {
                 suffixIcon: Padding(
                   padding: const EdgeInsets.all(4),
                   child: IconButton.filled(
-                    tooltip: asking ? 'Cancel answer' : 'Ask',
-                    onPressed: asking
+                    tooltip: scopeAsking ? 'Cancel answer' : 'Ask',
+                    onPressed: scopeAsking
                         ? () => d.generator?.cancel()
                         : busy || meetingEnhancing || value.text.trim().isEmpty
                         ? null
@@ -2822,7 +2828,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                       padding: EdgeInsets.zero,
                       shape: const CircleBorder(),
                     ),
-                    icon: Icon(asking ? Icons.stop : Icons.arrow_upward),
+                    icon: Icon(scopeAsking ? Icons.stop : Icons.arrow_upward),
                   ),
                 ),
               ),
