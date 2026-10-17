@@ -206,7 +206,7 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
         self.assertEqual(drain(self.lib,a)[-1]['status'],'cancelled')
         before=time.monotonic();self.lib.fs_conversation_destroy(a,1);self.assertLess(time.monotonic()-before,1)
         self.lib.fs_conversation_destroy(b,1);self.lib.fs_engine_destroy(e)
-    @unittest.skipUnless(sys.platform == 'linux', 'Linux unmanaged-child reaping regression')
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'POSIX child reaping regression')
     def test_probe_never_reports_success_when_child_exit_status_is_lost(self):
         runner = self.runner("import json,sys\nprint(json.dumps({'worker_protocol':1,'native_stop_token_sequences':True}),flush=True)\nsys.exit(7)\n")
         for ignored in (False, True):
@@ -224,7 +224,7 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
                     signal.signal(signal.SIGCHLD, previous)
                     self.lib.fs_engine_destroy(engine)
 
-    @unittest.skipUnless(sys.platform == 'linux', 'Linux host reaper regression')
+    @unittest.skipUnless(sys.platform in ('linux', 'darwin'), 'POSIX host reaper regression')
     def test_probe_retains_actual_status_with_host_child_reaper(self):
         import threading
         stop = threading.Event()
