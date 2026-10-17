@@ -5,8 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:intl/intl.dart';
 import 'package:open_foresight/meeting_export.dart';
+import 'package:open_foresight/generated_content.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/domain.dart';
+import 'package:open_foresight/main.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 void main() {
@@ -726,10 +728,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         tester
-            .widget<SelectableText>(
+            .widget<GeneratedContent>(
               find.byKey(const ValueKey('meeting-export-preview')),
             )
-            .data,
+            .markdown,
         isNot(contains('Old notes')),
       );
       await tester.tap(find.text('Copy markdown'));
@@ -759,14 +761,101 @@ void main() {
       expect(find.text('Date range: Today'), findsOneWidget);
       expect(
         tester
-            .widget<SelectableText>(
+            .widget<GeneratedContent>(
               find.byKey(const ValueKey('meeting-export-preview')),
             )
-            .data,
+            .markdown,
         isNot(contains('Old notes')),
       );
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets(
+    'desktop export renders multiple localized notes and saves exact Markdown through file selector',
+    (tester) async {
+      tester.view.physicalSize = const Size(1100, 850);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await initializeDateFormatting('fr_FR');
+      final oldLocale = Intl.defaultLocale;
+      Intl.defaultLocale = 'fr_FR';
+      addTearDown(() => Intl.defaultLocale = oldLocale);
+      final day = DateTime.now();
+      meeting('Réunion récente', day, notes: '**Décision**\n\n- Premier point');
+      meeting(
+        'Deuxième réunion',
+        day.subtract(const Duration(days: 1)),
+        notes: '_Suite_',
+      );
+      final expected = composeMeetingExport(store).markdown;
+      final output = File('${directory.path}/selected.md');
+      var calls = 0;
+      final channel = const MethodChannel('plugins.flutter.io/file_selector');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        expect(call.method, 'getSavePath');
+        final args = call.arguments as Map;
+        expect(args['suggestedName'], 'meeting_notes.md');
+        final types = args['acceptedTypeGroups'] as List;
+        expect(types.single['label'], 'Markdown');
+        expect(types.single['extensions'], ['md']);
+        calls++;
+        return calls == 1 ? null : output.path;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      final helper = OfflineHelper(
+        '${directory.path}/socket',
+        '${directory.path}/helper',
+      );
+      await tester.pumpWidget(
+        Foresight(Domain(store, helper), deviceLoader: () async => []),
+      );
+      await tester.tap(find.text('Meetings').first);
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.text('Export meeting notes'));
+      await tester.pump(const Duration(milliseconds: 400));
+      final preview = tester.widget<GeneratedContent>(
+        find.byKey(const ValueKey('meeting-export-preview')),
+      );
+      expect(preview.markdown, expected);
+      expect(expected, contains('\n\n\n\n## Deuxième réunion'));
+      expect(find.text('Décision', findRichText: true), findsOneWidget);
+      expect(find.text('Premier point', findRichText: true), findsOneWidget);
+      expect(find.text('**Décision**'), findsNothing);
+      await tester.tap(find.text('Download markdown'));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(calls, 1);
+      expect(output.existsSync(), false);
+      expect(find.text('Meeting notes saved successfully'), findsNothing);
+      await tester.tap(find.text('Download markdown'));
+      // Let the real file write and close finish outside the widget fake clock.
+      for (
+        var i = 0;
+        i < 100 &&
+            find.text('Meeting notes saved successfully').evaluate().isEmpty;
+        i++
+      ) {
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await tester.pump();
+      }
+      expect(calls, 2);
+      expect(output.readAsStringSync(), expected);
+      expect(find.text('Meeting notes saved successfully'), findsOneWidget);
+      await tester.tap(find.text('Close'));
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pumpWidget(const SizedBox.shrink());
+      await helper.close();
     },
   );
 

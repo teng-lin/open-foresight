@@ -74,6 +74,9 @@ void main() {
         );
         await tester.pumpAndSettle();
         await tester.tap(find.byTooltip('Pause transcribing'));
+        // The outer double-tap recognizer holds single control taps until its
+        // standard double-tap window expires.
+        await tester.pump(const Duration(milliseconds: 300));
         await tester.pumpAndSettle();
         expect(recording.paused, true);
         expect(
@@ -85,16 +88,27 @@ void main() {
         expect(find.byTooltip('Resume transcribing'), findsOneWidget);
         recording.failResume = true;
         await tester.tap(find.byTooltip('Resume transcribing'));
+        await tester.pump(const Duration(milliseconds: 300));
         await tester.pumpAndSettle();
         expect(recording.paused, true);
         expect(find.textContaining('Fixture device unavailable'), findsWidgets);
         recording.failResume = false;
         await tester.tap(find.byTooltip('Resume transcribing'));
+        await tester.pump(const Duration(milliseconds: 300));
         await tester.pumpAndSettle();
         expect(recording.paused, false);
-        await tester.tap(find.byKey(const ValueKey('recording-pill')));
-        await tester.pump(const Duration(milliseconds: 50));
-        await tester.tap(find.byKey(const ValueKey('recording-pill')));
+        final clock = find.byKey(const ValueKey('recording-clock'));
+        await tester.tap(clock);
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('Exit Immersive View'), findsNothing);
+        await tester.tap(clock);
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('Exit Immersive View'), findsNothing);
+        // The original wraps the entire pill, including the timer, in its
+        // standard double-tap recognizer rather than just the waveform.
+        await tester.tap(clock);
+        await tester.pump(const Duration(milliseconds: 250));
+        await tester.tap(clock);
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsOneWidget);
         expect(find.text('Knowledge Sources'), findsNothing);

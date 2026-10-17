@@ -1,5 +1,6 @@
 #include "output_budget.h"
 #include "model_startup.h"
+#include "generation_model_config.h"
 #include "tool_conversation.h"
 #include "conversation_stream.h"
 #include "persistent_worker.h"
@@ -244,16 +245,21 @@ class Generator {
 
 public:
   Generator(LiteRt &api, const std::string &path, bool gpu,
-            const std::string &cache, bool query_detector = false)
+            const std::string &cache, bool query_detector = false, int model_type = 0)
       : lm(api), engine(nullptr, LM(engine_delete)), base(nullptr, LM(conversation_delete)) {
-    auto settings =
-        handle(LM(engine_settings_create)(path.c_str(), gpu ? "gpu" : "cpu",
-                                          nullptr, "cpu"),
-               LM(engine_settings_delete));
-    LM(engine_settings_set_max_num_tokens)(settings.get(), query_detector ? 512 : 4096);
-    if (!gpu) LM(engine_settings_set_num_threads)(settings.get(), 4);
-    LM(engine_settings_set_audio_num_threads)(settings.get(), 4);
-    LM(engine_settings_set_cache_dir)(settings.get(), cache.c_str());
+    auto config = foresight::generation_model_config(query_detector ? 0 : model_type);
+    const auto make_settings = [&](bool vision) {
+      auto settings = handle(LM(engine_settings_create)(path.c_str(), gpu ? "gpu" : "cpu",
+          vision ? config.vision_backend : nullptr, config.audio_backend), LM(engine_settings_delete));
+      LM(engine_settings_set_max_num_tokens)(settings.get(), query_detector ? 512 : 4096);
+      if (!gpu) LM(engine_settings_set_num_threads)(settings.get(), 4);
+      if (std::string(config.audio_backend) == "cpu") LM(engine_settings_set_audio_num_threads)(settings.get(), 4);
+      LM(engine_settings_set_cache_dir)(settings.get(), cache.c_str());
+      if (config.vision) LM(engine_settings_set_enable_speculative_decoding)(settings.get(), true);
+      if (vision) LM(engine_settings_set_max_vision_tokens_per_image)(settings.get(), config.visual_tokens);
+      return settings;
+    };
+    auto settings = make_settings(config.vision);
     foresight::initialize_generation_engine(
         query_detector,
         [&] {
@@ -263,7 +269,8 @@ public:
         },
         [&] { foresight::clear_model_cache(path, cache); },
         [&] { fs::create_directories(cache); },
-        [&] { engine.reset(); });
+        [&] { engine.reset(); }, foresight::startup_warning, config.vision,
+        [&] { settings = make_settings(false); });
   }
   void cancel(void *pointer) {
     LM(conversation_cancel_process)(static_cast<LiteRtLmConversation *>(pointer));
@@ -563,7 +570,9 @@ int main(int argc, char **argv) {
                      : path.parent_path() / ".litert-cache";
     cache /= backend;
     fs::create_directories(cache);
-    Generator generator(lm, path, backend == "gpu", cache, query_detector);
+    int model_type = args.count("--model-type") ? std::stoi(args.at("--model-type")) : 0;
+    if (model_type < 0 || model_type > 17) throw std::runtime_error("Invalid distribution model type");
+    Generator generator(lm, path, backend == "gpu", cache, query_detector, model_type);
     if (args.count("--probe")) {
       protocol << json({{"worker_protocol", 1}, {"native_stop_token_sequences", lm.supports_native_stop_tokens()}}).dump() << std::endl;
       return 0;

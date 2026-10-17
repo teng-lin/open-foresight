@@ -153,6 +153,10 @@ cleanup failure preserving the previous registration. Their retained log is
 query-runtime/acquisition-cleanup-review-test-v2.log. These fixtures avoid
 Keychain and are not cryptographic or live service oracles. No live remote API
 call or credential extraction occurred. Live distribution service access, full
+signed release acceptance, broader GPU numerical parity remain unverified.
+Original refresh/obsolete-model cleanup policy is now implemented as described below.
+
+The ordered refresh catalog, first-existing path lookup, owned recursive fallback and obsolete-model cleanup are now implemented and connected to distribution acquisition and missing-registry recovery. Explicit download still uses its distinct last-duplicate plan. See [model lifecycle](reference-model-lifecycle.md) for exact policies, port ownership constraints, tests and remaining live-service/platform gates.
 signed release acceptance, original refresh/obsolete-model cleanup policy and
 broader GPU numerical parity remain unverified.
 

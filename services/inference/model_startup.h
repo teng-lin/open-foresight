@@ -91,7 +91,9 @@ template <typename Initialize, typename Clear, typename EnsureCache, typename Sh
 void initialize_generation_engine(bool query_detector, Initialize initialize,
                                   Clear clear, EnsureCache ensure_cache,
                                   Shutdown shutdown,
-                                  const StartupWarning &warn = startup_warning) {
+                                  const StartupWarning &warn = startup_warning,
+                                  bool vision_enabled = false,
+                                  const std::function<void()> &disable_vision = {}) {
   if (query_detector) {
     initialize();
     return;
@@ -111,6 +113,15 @@ void initialize_generation_engine(bool query_detector, Initialize initialize,
     throw;
   }
   shutdown();
+  try {
+    initialize();
+    return;
+  } catch (...) {
+    shutdown();
+    if (!vision_enabled || !disable_vision) throw;
+  }
+  warn("Vision initialization failed twice; retrying with vision disabled");
+  disable_vision();
   try {
     initialize();
   } catch (...) {
