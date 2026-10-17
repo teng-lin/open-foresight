@@ -173,6 +173,9 @@ Missing, expired, and documentation-only candidates cause the coordinator to for
 main CI before creating the tag. A failed build leaves no new tag. To rebuild a
 failed draft, rerun all coordinator jobs: preparation reserves the next package
 release and removes only the draft's old assets before both platforms rebuild.
+After fixing orchestration, a fresh dispatch on reviewed main can resume the same
+unpublished tag. It retains the tag's product commit and requires its verified
+candidates to remain available; acceptance tools follow the new control commit.
 Uploading to an existing public release from a different branch is unsupported.
 See [installer acceptance](../validation/release-acceptance.md) for exact-source
 verification and the explicit historical recovery audit option.
