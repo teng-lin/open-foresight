@@ -21,7 +21,7 @@ FILES = {
     'linux-core': ['packaging/sdk-core.Dockerfile', 'packaging/minimal-grpc.cmake',
                    'requirements-dev.lock', 'requirements-litert.lock'],
     'linux-litert': ['packaging/sdk-litert.Dockerfile', 'tools/build_litert_extensions.py',
-                     'tools/test_litert_status_abi.py',
+                     'tools/litert_extensions.py', 'tools/test_litert_status_abi.py',
                      'third_party/litert_lm/stop-token-sequences.patch',
                      'third_party/litert_lm/linux-trivial-abi.patch'],
     'linux-whisper': ['packaging/sdk-whisper.Dockerfile', 'tools/build_whisper_vulkan.py'],

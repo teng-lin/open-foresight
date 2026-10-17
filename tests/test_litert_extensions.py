@@ -54,6 +54,12 @@ class ExtensionArtifactsTest(unittest.TestCase):
         abi_report = self.root / 'native-status-abi-report.json'
         abi_report.write_text(json.dumps({'status': 'passed', 'exit_code': 0,
                                          'stdout': 'vendor_register_return_callback_ok\n'}))
+        export_log = self.root / 'native-exported-symbols.txt'
+        if platform == 'darwin':
+            export_log.write_text('\n'.join('_' + name for name in extensions.REQUIRED_C_EXPORTS) + '\n')
+        else:
+            export_log.write_text('0x1 (NEEDED) Shared library: [libc.so.6]\n' +
+                                  '\n'.join(extensions.REQUIRED_C_EXPORTS) + '\n')
         self.manifest = {
             'upstream_commit': extensions.UPSTREAM_COMMIT,
             'patch_sha256': extensions.file_sha256(extensions.PATCH),
@@ -68,6 +74,8 @@ class ExtensionArtifactsTest(unittest.TestCase):
                {'linux_abi_patch_sha256': extensions.file_sha256(extensions.LINUX_ABI_PATCH)}),
             'native_status_abi_report': abi_report.name,
             'native_status_abi_report_sha256': extensions.file_sha256(abi_report),
+            'native_export_log': export_log.name,
+            'native_export_log_sha256': extensions.file_sha256(export_log),
         }
         self.path = self.root / 'manifest.json'
         self.save()
@@ -114,14 +122,15 @@ class ExtensionArtifactsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cannot describe a macOS build'):
             extensions.verify_extensions_manifest(self.path, platform_name='darwin')
 
-    def test_status_callback_regression_report_is_verified_on_all_platforms(self):
+    def test_status_callback_regression_and_export_reports_are_verified_on_all_platforms(self):
         for platform in ('darwin', 'linux'):
             with self.subTest(platform=platform):
-                self.fixture(platform=platform)
-                del self.manifest['native_status_abi_report']
-                self.save()
-                with self.assertRaisesRegex(ValueError, 'filename'):
-                    extensions.verify_extensions_manifest(self.path, platform_name=platform)
+                for field in ('native_status_abi_report', 'native_export_log'):
+                    self.fixture(platform=platform)
+                    del self.manifest[field]
+                    self.save()
+                    with self.assertRaisesRegex(ValueError, 'filename'):
+                        extensions.verify_extensions_manifest(self.path, platform_name=platform)
                 for report in ({'status': 'failed', 'exit_code': -11},
                                {'status': 'passed', 'exit_code': 0, 'stdout': 'wrong fixture'}):
                     self.fixture(platform=platform)
@@ -136,6 +145,17 @@ class ExtensionArtifactsTest(unittest.TestCase):
                 path.write_text('tampered')
                 with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
                     extensions.verify_extensions_manifest(self.path, platform_name=platform)
+                for bad_export in ('missing_symbols\n',
+                                   '_litert_lm_engine_create\n_extra_private_symbol\n'
+                                   if platform == 'darwin' else
+                                   '\n'.join(extensions.REQUIRED_C_EXPORTS) + '\n[libstdc++.so.6]\n'):
+                    self.fixture(platform=platform)
+                    export_path = self.root / self.manifest['native_export_log']
+                    export_path.write_text(bad_export)
+                    self.manifest['native_export_log_sha256'] = extensions.file_sha256(export_path)
+                    self.save()
+                    with self.assertRaisesRegex(ValueError, 'report is invalid'):
+                        extensions.verify_extensions_manifest(self.path, platform_name=platform)
 
     def test_packaged_provenance_retains_vendor_and_platform_abi_hashes(self):
         for platform, patch_key in (('darwin', 'macos_abi_patch_sha256'),
@@ -146,7 +166,8 @@ class ExtensionArtifactsTest(unittest.TestCase):
                 destination = self.root / f'packaged-provenance-{platform}.json'
                 extensions.write_extension_provenance(bundle, destination)
                 value = json.loads(destination.read_text())
-                for key in ('vendor_libraries', patch_key, 'native_status_abi_report_sha256'):
+                for key in ('vendor_libraries', patch_key,
+                            'native_status_abi_report_sha256', 'native_export_log_sha256'):
                     self.assertEqual(value[key], self.manifest[key])
 
     def test_modified_wheel_library_and_test_log_are_rejected(self):
@@ -333,7 +354,8 @@ class ExtensionArtifactsTest(unittest.TestCase):
                        'libarbitrary.so => /outside/libarbitrary.so (0x0)\n',
                        'libstdc++.so.6 => /usr/lib/libstdc++.so.6 (0x0)\n',
                        'libc++.so.1 => /usr/lib/libc++.so.1 (0x0)\n',
-                       'libc++abi.so.1 => /usr/lib/libc++abi.so.1 (0x0)\n'):
+                       'libc++abi.so.1 => /usr/lib/libc++abi.so.1 (0x0)\n',
+                       'libunwind.so.1 => /usr/lib/libunwind.so.1 (0x0)\n'):
             with self.subTest(output=output), patch.object(
                     extensions.subprocess, 'check_output', return_value=output):
                 with self.assertRaises(ValueError):

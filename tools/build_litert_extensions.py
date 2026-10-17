@@ -57,14 +57,20 @@ def require_materialized_prebuilts(source, directory, suffix):
 def verify_linux_library_abi(library):
     dynamic = subprocess.check_output(['readelf', '-d', str(library)], text=True)
     versions = subprocess.check_output(['readelf', '--version-info', str(library)], text=True)
+    exported = subprocess.check_output(['nm', '-D', '--defined-only', str(library)], text=True)
     needs = versions.partition('Version needs section')[2]
-    for forbidden in ('libstdc++.so', 'libc++.so', 'libc++abi.so'):
+    for forbidden in ('libstdc++.so', 'libc++.so', 'libc++abi.so', 'libunwind.so', 'libunwind-'):
         if f'[{forbidden}' in dynamic:
             raise RuntimeError(f'Linux LiteRT library must not dynamically link {forbidden}')
     for family in ('GLIBCXX_', 'CXXABI_'):
         if family in needs:
             raise RuntimeError(f'Linux LiteRT library must not require {family} symbols')
-    return dynamic + '\n' + versions
+    symbols = {line.split()[-1] for line in exported.splitlines() if line.strip()}
+    required = {'litert_lm_engine_create', 'litert_lm_embedding_engine_create',
+                'litert_lm_session_config_add_stop_token_sequence'}
+    if not required <= symbols:
+        raise RuntimeError('Linux LiteRT library lacks required public C API exports')
+    return dynamic + '\n' + versions + '\n' + '\n'.join(sorted(required)) + '\n'
 
 
 def wheel_vendor_hashes(archive, system):
@@ -168,8 +174,8 @@ def main():
             '--host_cxxopt=-nostdinc++',
             f'--host_cxxopt=-isystem{include_dir}',
             f'--repo_env=BAZEL_LINKLIBS={lib_dir}/libc++.a:{lib_dir}/libc++abi.a:-lm',
-            '--linkopt=-Wl,--exclude-libs,libc++.a:libc++abi.a',
-            '--host_linkopt=-Wl,--exclude-libs,libc++.a:libc++abi.a',
+            '--linkopt=-Wl,--exclude-libs,libc++.a:libc++abi.a:libunwind.a',
+            '--host_linkopt=-Wl,--exclude-libs,libc++.a:libc++abi.a:libunwind.a',
         ]
     else:
         parser.error('Supported build hosts are macOS arm64 and Linux x86_64')
@@ -239,8 +245,12 @@ def main():
                          'native_status_abi_report': abi_report.name,
                          'native_status_abi_report_sha256': sha256(abi_report)}
     else:
-        verify_linux_library_abi(library)
-        export_report = {'linux_abi_patch_sha256': hashlib.sha256(platform_patch).hexdigest(),
+        exported = verify_linux_library_abi(library)
+        export_log = args.output / 'native-exported-symbols.txt'
+        export_log.write_text(exported)
+        export_report = {'native_export_log': export_log.name,
+                         'native_export_log_sha256': sha256(export_log),
+                         'linux_abi_patch_sha256': hashlib.sha256(platform_patch).hexdigest(),
                          'native_status_abi_report': abi_report.name,
                          'native_status_abi_report_sha256': sha256(abi_report)}
     (args.output / 'build-manifest.json').write_text(json.dumps({

@@ -29,6 +29,13 @@ MACOS_VENDOR_LIBRARIES = (
     'libwebgpu_dawn.dylib', 'libLiteRtMetalAccelerator.dylib',
     'libLiteRtTopKMetalSampler.dylib',
 )
+FORBIDDEN_LINUX_STDLIBS = (
+    'libstdc++.so', 'libc++.so', 'libc++abi.so', 'libunwind.so', 'libunwind-',
+)
+REQUIRED_C_EXPORTS = (
+    'litert_lm_engine_create', 'litert_lm_embedding_engine_create',
+    'litert_lm_session_config_add_stop_token_sequence',
+)
 
 
 def file_sha256(path):
@@ -101,6 +108,16 @@ def verify_extensions_manifest(path, *, platform_name):
     if (abi_report.get('status') != 'passed' or abi_report.get('exit_code') != 0 or
             abi_report.get('stdout', '').strip() != 'vendor_register_return_callback_ok'):
         raise ValueError('LiteRT extension Status callback ABI regression did not pass')
+    export_text = _artifact(path.parent, manifest, 'native_export_log').read_text()
+    if platform_name == 'darwin':
+        symbols = set(export_text.splitlines())
+        required_macos = {'_' + name for name in REQUIRED_C_EXPORTS}
+        if not required_macos <= symbols or any(not name.startswith('_litert_lm_') for name in symbols):
+            raise ValueError('LiteRT extension macOS export report is invalid')
+    else:
+        if (not all(name in export_text for name in REQUIRED_C_EXPORTS) or
+                any(token in export_text for token in (*FORBIDDEN_LINUX_STDLIBS, 'GLIBCXX_', 'CXXABI_'))):
+            raise ValueError('LiteRT extension Linux export/ABI report is invalid')
     wheel = _artifact(path.parent, manifest, 'wheel')
     library = _artifact(path.parent, manifest, 'library')
     test_log = _artifact(path.parent, manifest, 'native_test_log')
@@ -110,10 +127,8 @@ def verify_extensions_manifest(path, *, platform_name):
         raise ValueError('LiteRT extension native config-copy regression did not pass')
     if platform_name == 'darwin':
         library_name, tag = 'liblitert-lm.dylib', 'py3-none-macosx_12_0_arm64'
-    elif platform_name == 'linux':
-        library_name, tag = 'liblitert-lm.so', 'py3-none-manylinux_2_27_x86_64'
     else:
-        raise ValueError('Unsupported LiteRT extension release platform')
+        library_name, tag = 'liblitert-lm.so', 'py3-none-manylinux_2_27_x86_64'
     if library.name != library_name:
         raise ValueError('LiteRT extension library does not match the release platform')
     library_entry = 'litert_lm/' + library_name
@@ -296,7 +311,7 @@ def validate_linux_extension_dependencies(libraries, destination):
     pinned = {'liblitert-lm.so', *LINUX_VENDOR_LIBRARIES}
     system_roots = [Path(name).resolve() for name in ('/lib', '/lib64', '/usr/lib', '/usr/lib64')]
     for name, location in re.findall(r'\s*(\S+) => (/\S+)', output):
-        if name.startswith(('libstdc++.so', 'libc++.so', 'libc++abi.so')):
+        if name.startswith(FORBIDDEN_LINUX_STDLIBS):
             raise ValueError('LiteRT extension must not dynamically link C++ standard library: ' + name)
         path = Path(location).resolve()
         if name in pinned:

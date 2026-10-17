@@ -120,19 +120,27 @@ class BuildSnapshotTest(unittest.TestCase):
         self.assertEqual(self.file.read_text(), 'second patch\n')
 
     def test_verify_linux_library_abi_rejects_dynamic_stdlib_and_glibcxx_needs(self):
-        for dynamic, versions in (
-            ('0x1 (NEEDED) Shared library: [libstdc++.so.6]\n', 'Version needs section\n'),
-            ('0x1 (NEEDED) Shared library: [libc++.so.1]\n', 'Version needs section\n'),
-            ('0x1 (NEEDED) Shared library: [libc.so.6]\n', 'Version needs section\n  Name: GLIBCXX_3.4.30\n'),
-            ('0x1 (NEEDED) Shared library: [libc.so.6]\n', 'Version needs section\n  Name: CXXABI_1.3\n'),
+        valid_exports = (
+            '0001 T litert_lm_engine_create\n'
+            '0002 T litert_lm_embedding_engine_create\n'
+            '0003 T litert_lm_session_config_add_stop_token_sequence\n'
+        )
+        for dynamic, versions, exports in (
+            ('0x1 (NEEDED) Shared library: [libstdc++.so.6]\n', 'Version needs section\n', valid_exports),
+            ('0x1 (NEEDED) Shared library: [libc++.so.1]\n', 'Version needs section\n', valid_exports),
+            ('0x1 (NEEDED) Shared library: [libunwind.so.1]\n', 'Version needs section\n', valid_exports),
+            ('0x1 (NEEDED) Shared library: [libc.so.6]\n', 'Version needs section\n  Name: GLIBCXX_3.4.30\n', valid_exports),
+            ('0x1 (NEEDED) Shared library: [libc.so.6]\n', 'Version needs section\n  Name: CXXABI_1.3\n', valid_exports),
+            ('0x1 (NEEDED) Shared library: [libc.so.6]\n', 'Version needs section\n', '0001 T litert_lm_engine_create\n'),
         ):
-            with self.subTest(dynamic=dynamic, versions=versions), patch.object(
-                    builder.subprocess, 'check_output', side_effect=[dynamic, versions]):
-                with self.assertRaisesRegex(RuntimeError, 'Linux LiteRT library must not'):
+            with self.subTest(dynamic=dynamic, versions=versions, exports=exports), patch.object(
+                    builder.subprocess, 'check_output', side_effect=[dynamic, versions, exports]):
+                with self.assertRaisesRegex(RuntimeError, 'Linux LiteRT library'):
                     builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
         with patch.object(builder.subprocess, 'check_output', side_effect=[
                 '0x1 (NEEDED) Shared library: [libc.so.6]\n',
-                'Version needs section\n  Name: GLIBC_2.34\n']):
+                'Version needs section\n  Name: GLIBC_2.34\n',
+                valid_exports]):
             builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
 
 
