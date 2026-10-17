@@ -401,7 +401,7 @@ void audio_frame(Capture &c, const std::vector<unsigned char> &bytes) {
 } // namespace
 extern "C" {
 int fs_abi_version() {
-  try { return 1; 
+  try { return 1;
   } catch (const std::exception &barrier_error) {
     foresight::report_barrier_error(barrier_error.what());
     return 1;
@@ -460,7 +460,7 @@ int fs_audio_request_microphone() {
   }
 }
 void fs_string_free(char *p) {
-  try { free(p); 
+  try { free(p);
   } catch (const std::exception &barrier_error) {
     foresight::report_barrier_error(barrier_error.what());
   } catch (...) {
