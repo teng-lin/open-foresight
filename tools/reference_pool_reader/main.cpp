@@ -52,6 +52,23 @@ int main(int argc, char** argv) {
         }
       }
     }
+    // One style enum selected directly by NotesEnhancer.buildPrompt.
+    {
+      const auto index = dart::ObjectPool::IndexFromOffset(29539 * 8 - dart::kHeapObjectTag);
+      const auto& value = dart::Object::Handle(zone, pool.ObjectAt(index));
+      if (value.IsInstance()) {
+        const auto& cls = dart::Class::Handle(zone, dart::Instance::Cast(value).clazz());
+        std::printf("PUBLIC_NOTE_STYLE_CLASS[%s]\n", dart::String::Handle(zone, cls.Name()).ToCString());
+        const auto bitmap = isolate->group()->class_table()->GetUnboxedFieldsMapAt(value.GetClassId());
+        for (intptr_t offset : {8, 16}) {
+          if (offset >= cls.host_instance_size() || bitmap.Get(offset / 8)) continue;
+          dart::ObjectPtr raw;
+          std::memcpy(&raw, reinterpret_cast<void*>(dart::UntaggedObject::ToAddr(value.ptr()->untag()) + offset), sizeof(raw));
+          const auto& field = dart::Object::Handle(zone, raw);
+          if (field.IsString() || field.IsSmi()) std::printf("PUBLIC_NOTE_STYLE_SLOT[%ld] VALUE[%s]\n", (long)offset, field.ToCString());
+        }
+      }
+    }
     // Selected public download URL fragments/schema labels only. Never inspect
     // credential PP9019 or any entire application configuration map.
     for (intptr_t pp : {34554,34590,34591,34592,34593,34602,34603,34604,34605,34606,34607,34608,34609,10614,9196,19651,1109,19655,19656,19658,19659,19671,19672,19673,34477,34478,34479,1112,19652,19654,8985,13036,13106,57,483,5327,1553,4523,13124,13125,13126,5320,1229,4714,4687,17024,17025,16982,17026,17027,13087,13090,13176,17017,17018,17019,10483,17021,2349}) {

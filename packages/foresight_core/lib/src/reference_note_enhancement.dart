@@ -113,3 +113,41 @@ List<List<int>> clusterNoteEnhancementBatches(
   }
   return batches;
 }
+
+/// Original parseBatchOutput returns two lists in X0/X1. The topic heading
+/// itself belongs to missedTopics when parseMissedTopics is enabled.
+({List<String> notes, List<String> missedTopics})
+parseNoteEnhancementBatchOutput(
+  String text,
+  int maxNotes, {
+  bool parseMissedTopics = false,
+}) {
+  final notes = <String>[];
+  final missedTopics = <String>[];
+  var inMissedTopics = false;
+  for (final raw in text.split('\n')) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    if (inMissedTopics) {
+      missedTopics.add(line);
+      continue;
+    }
+    if (line.contains('Potential Important Topics Not In Notes')) {
+      if (!parseMissedTopics) break;
+      missedTopics.add(line);
+      inMissedTopics = true;
+      continue;
+    }
+    if (notes.length >= maxNotes || _noteMarkerOnlyPattern.hasMatch(line)) {
+      continue;
+    }
+    if (line.startsWith('**')) {
+      notes.add('* $line');
+    } else if (line.startsWith('*') || line.startsWith('-')) {
+      notes.add(line);
+    }
+  }
+  return (notes: notes, missedTopics: missedTopics);
+}
+
+final _noteMarkerOnlyPattern = RegExp(r'^[*\-]+$', caseSensitive: false);
