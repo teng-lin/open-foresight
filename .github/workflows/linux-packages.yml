@@ -54,6 +54,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: write
     steps:
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
@@ -68,6 +69,13 @@ jobs:
           artifacts/open-foresight-deb-x86-64/*.deb* \
           artifacts/open-foresight-rpm-x86-64/*.rpm* \
           artifacts/open-foresight-arch-x86-64/*.pkg.tar.zst* --clobber
+    - name: Validate published installers after a manual recovery
+      if: github.event_name == 'workflow_dispatch'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: gh workflow run release-acceptance.yml -f tag="$RELEASE_TAG"
+
   packages:
     needs: bundle
     runs-on: ubuntu-24.04

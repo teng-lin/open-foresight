@@ -10,6 +10,17 @@ import subprocess
 SUFFIXES = {'deb': '.deb', 'rpm': '.rpm', 'arch': '.pkg.tar.zst', 'dmg': '.dmg'}
 
 
+def provenance_name(asset, kind):
+    return asset['name'] + ('.manifest.json' if kind == 'dmg' else '.build.json')
+
+
+def named_asset(release, name):
+    matches = [asset for asset in release['assets'] if asset['name'] == name]
+    if len(matches) != 1:
+        raise ValueError('Expected exactly one published asset: ' + name)
+    return matches[0]
+
+
 def select_asset(release, kind):
     matches = [a for a in release['assets'] if a['name'].endswith(SUFFIXES[kind])]
     if len(matches) != 1:
@@ -18,8 +29,8 @@ def select_asset(release, kind):
     name = asset['name']
     if Path(name).name != name or not re.fullmatch(r'[A-Za-z0-9._+-]+', name):
         raise ValueError('Unsafe release asset filename')
-    if not any(a['name'] == name + '.sha256' for a in release['assets']):
-        raise ValueError('Published installer checksum is missing')
+    named_asset(release, name + '.sha256')
+    named_asset(release, provenance_name(asset, kind))
     return asset
 
 
@@ -37,6 +48,22 @@ def verify_checksum(package, sidecar):
     if actual != fields[0].lower():
         raise ValueError('Published installer checksum mismatch')
     return actual
+
+
+def source_revision(metadata, kind, tag, installer_digest):
+    """Bind Linux build provenance to these exact installer bytes, not the tag HEAD."""
+    if not isinstance(metadata, dict):
+        raise ValueError('Installer provenance must be an object')
+    revision = metadata.get('revision')
+    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+        raise ValueError('Installer provenance requires a full source commit')
+    if kind == 'dmg':
+        if metadata.get('architecture') != 'arm64':
+            raise ValueError('DMG provenance must describe the published arm64 installer')
+    elif (metadata.get('sha256') != installer_digest or
+          metadata.get('format') != kind or metadata.get('version') != tag[1:]):
+        raise ValueError('Build provenance does not match the installer checksum, format or release version')
+    return revision
 
 
 def main():
@@ -58,17 +85,31 @@ def main():
         raise ValueError('Acceptance requires the requested published release')
     asset = select_asset(release, args.format)
     args.directory.mkdir(parents=True, exist_ok=True)
-    for name in (asset['name'], asset['name'] + '.sha256'):
+    metadata_name = provenance_name(asset, args.format)
+    metadata_asset = named_asset(release, metadata_name)
+    for name in (asset['name'], asset['name'] + '.sha256', metadata_name):
         subprocess.run(['gh', 'release', 'download', args.tag, '--repo', args.repo,
                         '--pattern', name, '--dir', str(args.directory), '--clobber'], check=True)
     package = args.directory / asset['name']
     digest = verify_checksum(package, args.directory / (asset['name'] + '.sha256'))
     if package.stat().st_size != asset['size']:
         raise ValueError('Downloaded installer size differs from published asset')
-    commit = json.loads(subprocess.check_output(
+    metadata_path = args.directory / metadata_name
+    if metadata_path.stat().st_size != metadata_asset['size']:
+        raise ValueError('Downloaded provenance size differs from published asset')
+    commit = source_revision(json.loads(metadata_path.read_text()), args.format, args.tag, digest)
+    tag_commit = json.loads(subprocess.check_output(
         ['gh', 'api', f'repos/{args.repo}/commits/{args.tag}']))['sha']
+    if commit != tag_commit:
+        resolved = json.loads(subprocess.check_output(
+            ['gh', 'api', f'repos/{args.repo}/commits/{commit}']))['sha']
+        if resolved != commit:
+            raise ValueError('Installer provenance source commit is not valid in this repository')
     report = {'tag': args.tag, 'release_id': release['id'], 'asset_id': asset['id'],
               'asset': asset['name'], 'sha256': digest, 'source_commit': commit,
+              'release_tag_commit': tag_commit, 'provenance_asset': metadata_name,
+              'provenance_asset_id': metadata_asset['id'],
+              'provenance_sha256': hashlib.sha256(metadata_path.read_bytes()).hexdigest(),
               'release_url': release['html_url'], 'status': 'verified_download'}
     (args.directory / 'installer.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))
