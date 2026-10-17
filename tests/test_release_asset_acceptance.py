@@ -18,6 +18,48 @@ from argparse import Namespace
 
 
 class ReleaseAssetAcceptanceTest(unittest.TestCase):
+    def test_draft_download_uses_list_lookup_and_requires_explicit_permission(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = 'open-foresight_0.1.1-1_amd64.deb'
+            digest = hashlib.sha256(b'installer').hexdigest()
+            metadata = json.dumps({'revision': 'a' * 40, 'sha256': digest,
+                                   'version': '0.1.1', 'format': 'deb'}).encode()
+            payloads = {name: b'installer', name + '.sha256': f'{digest}  {name}\n'.encode(),
+                        name + '.build.json': metadata}
+            draft = {'draft': True, 'tag_name': 'v0.1.1', 'id': 42,
+                     'html_url': 'https://example/release', 'assets': [
+                         {'name': key, 'size': len(value), 'id': index + 1}
+                         for index, (key, value) in enumerate(payloads.items())]}
+
+            def response(command, **kwargs):
+                if command == ['gh', 'api', 'repos/owner/repo/releases?per_page=100&page=1']:
+                    return json.dumps([draft])
+                if command == ['gh', 'api', 'repos/owner/repo/commits/v0.1.1']:
+                    return json.dumps({'sha': 'a' * 40})
+                raise subprocess.CalledProcessError(1, command, stderr='HTTP 404')
+
+            def download(arguments, **kwargs):
+                selected = arguments[arguments.index('--pattern') + 1]
+                (root / selected).write_bytes(payloads[selected])
+
+            arguments = ['download', '--tag', 'v0.1.1', '--repo', 'owner/repo',
+                         '--format', 'deb', '--directory', directory]
+            with patch.object(sys, 'argv', arguments), \
+                    patch('release_asset_acceptance.subprocess.run') as command, \
+                    patch('release_asset_acceptance.subprocess.check_output', side_effect=response):
+                with self.assertRaisesRegex(ValueError, 'requested published release'):
+                    download_main()
+                command.assert_not_called()
+            with patch.object(sys, 'argv', arguments + ['--allow-draft']), \
+                    patch('release_asset_acceptance.subprocess.run', side_effect=download), \
+                    patch('release_asset_acceptance.subprocess.check_output', side_effect=response):
+                download_main()
+            report = json.loads((root / 'installer.json').read_text())
+            self.assertEqual(report['release_id'], 42)
+            self.assertEqual(report['source_commit'], 'a' * 40)
+            self.assertEqual(report['status'], 'verified_download')
+
     def test_all_package_formats_require_a_unique_asset_and_its_checksum(self):
         """An incomplete or ambiguous release must never choose arbitrary bytes."""
         for kind, suffix in [('deb', '.deb'), ('rpm', '.rpm'), ('arch', '.pkg.tar.zst'), ('dmg', '.dmg')]:
@@ -71,7 +113,7 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                                             '--directory', directory, '--allow-recovery-revision']), \
                     patch('release_asset_acceptance.subprocess.run', side_effect=download), \
                     patch('release_asset_acceptance.subprocess.check_output', side_effect=[
-                        json.dumps(release), json.dumps({'sha': 'a' * 40}), json.dumps({'sha': 'b' * 40})]):
+                        json.dumps([release]), json.dumps({'sha': 'a' * 40}), json.dumps({'sha': 'b' * 40})]):
                 download_main()
             report = json.loads((root / 'installer.json').read_text())
             self.assertEqual(report['source_commit'], 'b' * 40)
@@ -99,7 +141,7 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                                             '--directory', directory]), \
                     patch('release_asset_acceptance.subprocess.run', side_effect=download), \
                     patch('release_asset_acceptance.subprocess.check_output', side_effect=[
-                        json.dumps(release), json.dumps({'sha': 'a' * 40}), json.dumps({'sha': 'b' * 40})]):
+                        json.dumps([release]), json.dumps({'sha': 'a' * 40}), json.dumps({'sha': 'b' * 40})]):
                 with self.assertRaisesRegex(ValueError, "differs from release tag"):
                     download_main()
             self.assertEqual(json.loads((root / 'installer.json').read_text())['status'], 'failed')

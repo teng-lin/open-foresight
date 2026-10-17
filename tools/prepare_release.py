@@ -10,6 +10,7 @@ import time
 
 from app_version import PUBSPEC, SOURCE, read_version, stale
 from ci_artifacts import api, name, trusted_run
+from github_release import release_for_tag
 
 
 def candidates_ready(repository, commit):
@@ -81,14 +82,13 @@ def create_draft(repository, tag, commit):
     else:
         subprocess.run(['gh', 'api', '--method', 'POST', f'repos/{repository}/git/refs',
                         '-f', f'ref=refs/tags/{tag}', '-f', f'sha={commit}'], check=True)
-    releases = api(repository, 'releases?per_page=100')
-    release = next((item for item in releases if item['tag_name'] == tag), None)
-    if release and not release['draft']:
-        raise ValueError('Public releases are immutable; cut a new version')
+    release = release_for_tag(repository, tag, optional=True, request=api)
     if release is None:
         subprocess.run(['gh', 'release', 'create', tag, '--repo', repository, '--verify-tag',
                         '--draft', '--title', 'Open Foresight ' + tag, '--generate-notes'], check=True)
-        release = api(repository, f'releases/tags/{tag}')
+        release = release_for_tag(repository, tag, request=api)
+    if not release['draft']:
+        raise ValueError('Public releases are immutable; cut a new version')
     body = release.get('body') or ''
     generation = package_release(body)
     body = re.sub(r'\n?<!-- foresight-package-release: [0-9]+ -->', '', body)

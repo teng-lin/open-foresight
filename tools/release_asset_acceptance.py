@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 import subprocess
 
+from github_release import release_for_tag
+
 SUFFIXES = {'deb': '.deb', 'rpm': '.rpm', 'arch': '.pkg.tar.zst', 'dmg': '.dmg'}
 
 
@@ -81,8 +83,7 @@ def main():
     (args.directory / 'installer.json').write_text(json.dumps({
         'tag': args.tag, 'format': args.format, 'status': 'failed',
         'stage': 'download_or_verification_not_completed'}, indent=2) + '\n')
-    release = json.loads(subprocess.check_output(
-        ['gh', 'api', f'repos/{args.repo}/releases/tags/{args.tag}']))
+    release = release_for_tag(args.repo, args.tag)
     if (release['draft'] and not args.allow_draft) or release['tag_name'] != args.tag:
         raise ValueError('Acceptance requires the requested published release')
     asset = select_asset(release, args.format)

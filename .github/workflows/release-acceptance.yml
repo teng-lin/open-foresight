@@ -42,13 +42,14 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           python3 - <<'PYCODE'
-          import json, os, re, subprocess, sys
+          import os, re, sys
           sys.path.insert(0, 'tools')
           from release_asset_acceptance import select_asset
+          from github_release import release_for_tag
           tag = os.environ['RELEASE_TAG']
           if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
               raise ValueError('An explicit stable release tag is required')
-          release = json.loads(subprocess.check_output(['gh', 'api', f'repos/{os.environ["GITHUB_REPOSITORY"]}/releases/tags/{tag}']))
+          release = release_for_tag(os.environ['GITHUB_REPOSITORY'], tag)
           for kind in ('deb', 'rpm', 'arch', 'dmg'):
               select_asset(release, kind)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
