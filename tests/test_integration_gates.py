@@ -105,6 +105,32 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     assert 'FORESIGHT_PLAYBACK_TARGET' not in observed[0][2]
 
 
+def test_private_profile_is_readable_after_the_suite(tmp_path):
+    private = tmp_path / 'meeting-data' / 'nested'
+    private.mkdir(parents=True)
+    (tmp_path / 'meeting-data').chmod(0o700)
+    private.chmod(0o700)
+    secret = private / 'profile.db'
+    secret.write_text('rows')
+    secret.chmod(0o600)
+    gates.publish_report_tree(tmp_path)
+    assert (tmp_path / 'meeting-data').stat().st_mode & 0o007 == 0o005
+    assert private.stat().st_mode & 0o007 == 0o005
+    assert secret.stat().st_mode & 0o007 == 0o004
+    assert secret.read_text() == 'rows'
+
+
+def test_meeting_workflow_waits_until_the_desktop_mounts():
+    source = (ROOT / 'apps/desktop/integration_test/meeting_workflow_test.dart').read_text()
+    start = source.index('Future<dynamic> startedWorkspace')
+    helper = source[start:source.index('Future<void> captureWindow')]
+    assert "find.text('Open Foresight could not start')" in helper
+    assert 'find.byType(app.Workspace)' in helper
+    assert 'Desktop did not start:' in helper
+    assert source.count('await startedWorkspace(tester)') == 4
+    assert 'await tester.pump();\n      final dynamic workspace = tester.state' not in source
+
+
 def test_meeting_workflow_alias_is_outside_the_device_test_directory():
     relative = gates.widget_test_alias('integration_test/meeting_workflow_test.dart')
     alias = ROOT / 'apps/desktop' / relative

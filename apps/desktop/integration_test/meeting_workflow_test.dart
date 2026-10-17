@@ -30,6 +30,28 @@ Future<void> waitUntil(
   expect(failure, isNull);
 }
 
+/// Desktop startup connects the service before it mounts [app.Workspace].
+/// One frame is still the "Starting…" screen, so a state lookup there throws
+/// "Bad state: No element" and hides the real connection error.
+Future<dynamic> startedWorkspace(WidgetTester tester) async {
+  await app.main();
+  String? startupFailure;
+  await waitUntil(tester, () {
+    if (find.text('Open Foresight could not start').evaluate().isNotEmpty) {
+      final details = find.byType(SelectableText);
+      startupFailure = details.evaluate().isEmpty
+          ? 'unknown startup failure'
+          : tester.widget<SelectableText>(details).data;
+      return true;
+    }
+    return find.byType(app.Workspace).evaluate().isNotEmpty;
+  });
+  if (startupFailure != null) {
+    throw StateError('Desktop did not start: $startupFailure');
+  }
+  return tester.state(find.byType(app.Workspace));
+}
+
 Future<void> captureWindow(
   String path, {
   List<int> expectedGutter = const [234, 238, 247],
@@ -111,9 +133,7 @@ void main() {
       final env = Platform.environment;
       final sink = env['FORESIGHT_PLAYBACK_TARGET']!;
       final fixture = env['FORESIGHT_AUDIO_FIXTURE']!;
-      await app.main();
-      await tester.pump();
-      final dynamic workspace = tester.state(find.byType(app.Workspace));
+      final dynamic workspace = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -326,9 +346,7 @@ void main() {
       // Release the actual widget/domain and launch a fresh one against the saved profile.
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
-      await app.main();
-      await tester.pump();
-      final dynamic reopened = tester.state(find.byType(app.Workspace));
+      final dynamic reopened = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -449,9 +467,7 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
-      await app.main();
-      await tester.pump();
-      dynamic afterCancellation = tester.state(find.byType(app.Workspace));
+      dynamic afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () => afterCancellation.d.generator?.effectiveState['state'] == 'ready',
@@ -1034,9 +1050,7 @@ void main() {
       };
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
-      await app.main();
-      await tester.pump();
-      afterCancellation = tester.state(find.byType(app.Workspace));
+      afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>

@@ -289,6 +289,27 @@ def reference_gate(args, env):
     return run_tests('core', ['test/reference_tokenizer_live_test.dart'], 1, env, args.output, 'reference-tokenizer', args.flutter, args.dart)
 
 
+def publish_report_tree(path):
+    """Let the host artifact uploader read profiles created mode 0700.
+
+    The service refuses a profile other users can read, so the suite keeps that
+    mode while tests run. Upload then scans the same tree as another user and
+    fails with EACCES on the private directory. This runs only after the suite.
+    """
+    if not path.exists():
+        return
+    for current, _dirnames, filenames in os.walk(path):
+        directory = Path(current)
+        if directory.is_symlink():
+            continue
+        directory.chmod(directory.stat().st_mode | 0o755)
+        for name in filenames:
+            file = directory / name
+            if file.is_symlink():
+                continue
+            file.chmod(file.stat().st_mode | 0o644)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--suite', required=True, choices=['fast', 'models', 'virtual-audio', 'reference-models', 'reference-tokenizer'])
@@ -316,6 +337,7 @@ def main():
             else: result = reference_gate(args, env)
         report.update(status='passed', result=result)
     finally:
+        publish_report_tree(args.output)
         (args.output / 'summary.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))
 
