@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'desktop_visuals.dart';
 
 /// Original Google Sans assets; role sizes and colors follow the supplied
 /// main-window Mac references. Host accessibility text scaling stays enabled.
@@ -16,6 +17,16 @@ ThemeData foresightTheme() {
     colorScheme: scheme,
     scaffoldBackgroundColor: const Color(0xffeaeef7),
     useMaterial3: true,
+    popupMenuTheme: const PopupMenuThemeData(
+      color: Color(0xfff2f4fa),
+      surfaceTintColor: Colors.transparent,
+    ),
+    dialogTheme: const DialogThemeData(
+      backgroundColor: DesktopVisuals.dialogSurface,
+      surfaceTintColor: Colors.transparent,
+      titleTextStyle: DesktopVisuals.dialogTitle,
+      contentTextStyle: DesktopVisuals.dialogBody,
+    ),
     dividerColor: const Color(0xffeceef0),
     dividerTheme: const DividerThemeData(
       color: Color(0xffeceef0),
@@ -54,7 +65,7 @@ ThemeData foresightTheme() {
         height: 1.2,
       ),
       labelLarge: TextStyle(
-        fontSize: 12,
+        fontSize: 14,
         fontWeight: FontWeight.w500,
         letterSpacing: 0,
         height: 1.2,
