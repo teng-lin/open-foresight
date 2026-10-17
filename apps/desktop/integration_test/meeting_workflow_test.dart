@@ -23,6 +23,12 @@ Future<void> waitUntil(
     await tester.pump(const Duration(milliseconds: 100));
   }
   if (!ready()) {
+    final report = Platform.environment['FORESIGHT_MEETING_REPORT'];
+    if (report != null) {
+      File(
+        '$report.widget-tree.txt',
+      ).writeAsStringSync(tester.allElements.first.toStringDeep());
+    }
     final workspaces = find.byType(app.Workspace);
     if (workspaces.evaluate().isNotEmpty) {
       final dynamic workspace = tester.state(workspaces);
@@ -383,6 +389,11 @@ void main() {
         await tester.tap(enhancedTab);
         await tester.pumpAndSettle();
       }
+      await waitUntil(
+        tester,
+        () => find.text('Enhance notes').evaluate().isNotEmpty,
+        reason: 'Enhanced notes did not refresh after editing the draft',
+      );
       await tester.ensureVisible(find.text('Enhance notes'));
       await tester.tap(find.text('Enhance notes'));
       await waitUntil(
@@ -428,6 +439,8 @@ void main() {
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await tester.tap(find.text(title).last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Expand meeting'));
       await tester.pumpAndSettle();
       expect(
         reopened.d.store.rows(
@@ -610,8 +623,11 @@ void main() {
         'empty',
       );
       // Test the source controls against actual extraction and helper indexing.
-      final fixtures = Directory('${env['FORESIGHT_DATA']}/acceptance-imports')
-        ..createSync();
+      // Imports intentionally reject files inside the application profile.
+      final fixtures = Directory.systemTemp.createTempSync(
+        'of-meeting-imports-',
+      );
+      addTearDown(() => fixtures.delete(recursive: true));
       for (final name in [
         'Apollo planning',
         'Borealis review',
@@ -666,11 +682,18 @@ void main() {
       final address = 'http://127.0.0.1:${server.port}/notes';
       try {
         await afterCancellation.run(() async {
-          await afterCancellation.importSourceUrl(address);
+          await afterCancellation.d.command('sources.import_url', {
+            'url': address,
+            'allow_private_network': true,
+          });
         });
         expect(afterCancellation.error, isEmpty);
         page = 'URL acceptance fixture: the review is Wednesday.';
-        await afterCancellation.run(afterCancellation.refreshSources);
+        await afterCancellation.run(() async {
+          await afterCancellation.d.command('sources.refresh', {
+            'allow_private_network': true,
+          });
+        });
         final imported = afterCancellation.d.store.sources
             .where((s) => s['provenance'] == 'url:$address')
             .single;

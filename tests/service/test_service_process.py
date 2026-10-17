@@ -403,7 +403,9 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
         owner=a['pid']
         first.tool('save_note',{'title':'Restart-safe','body':'persisted'})
         os.kill(owner,signal.SIGTERM)
-        deadline=time.monotonic()+10
+        # Shutdown may wait up to five seconds for the helper, and a new
+        # launcher allows ten seconds for the replacement service to bind.
+        deadline=time.monotonic()+30
         while True:
             status=first.tool('get_status')
             if not status.get('isError'):
@@ -411,7 +413,7 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
                 if replacement!=owner:
                     owner=replacement
                     break
-            assert time.monotonic()<deadline
+            assert time.monotonic()<deadline, status
             time.sleep(.05)
         assert 'persisted' in first.tool('list_notes')['content'][0]['text']
         first.close();second.close()
@@ -421,7 +423,9 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
     finally:
         for client in [first,second]:
             if client.process.poll() is None: client.process.kill();client.process.wait()
-        if owner is not None: os.kill(owner,signal.SIGTERM)
+        if owner is not None:
+            try: os.kill(owner,signal.SIGTERM)
+            except ProcessLookupError: pass
 
 
 def test_cancelled_model_setup_preserves_previous_registration(running):
