@@ -72,6 +72,7 @@ class GoogleAuth {
   Completer<String>? _authorization;
   Future<String>? _refreshing;
   bool _closed = false, _disconnecting = false;
+  int _authorizationGeneration = 0;
   GoogleAuth(
     this.directory, {
     GoogleEndpoints? endpoints,
@@ -123,7 +124,11 @@ class GoogleAuth {
   String _random(int bytes) => base64UrlEncode(
     List.generate(bytes, (_) => Random.secure().nextInt(256)),
   ).replaceAll('=', '');
-  Future<void> _save(String name, Map<String, dynamic> data) async {
+  Future<void> _save(
+    String name,
+    Map<String, dynamic> data, {
+    int? authorizationGeneration,
+  }) async {
     if (_closed) throw StateError('Google connection closed');
     await directory.create(recursive: true);
     await Process.run('chmod', ['700', directory.path]);
@@ -133,7 +138,10 @@ class GoogleAuth {
       final mode = await Process.run('chmod', ['600', temp.path]);
       if (mode.exitCode != 0 || _closed)
         throw StateError('Cannot protect Google connection data');
-      await temp.rename('${directory.path}/$name');
+      if (authorizationGeneration != null &&
+          authorizationGeneration != _authorizationGeneration)
+        throw StateError('Google connection changed');
+      temp.renameSync('${directory.path}/$name');
     } finally {
       if (temp.existsSync()) await temp.delete();
     }
@@ -206,6 +214,7 @@ class GoogleAuth {
   }
 
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
+    final generation = _authorizationGeneration;
     if (connected)
       throw StateError(
         'Disconnect the current Google account before signing in again.',
@@ -309,7 +318,9 @@ class GoogleAuth {
         throw StateError(
           'Google did not return a persistent account authorization. Reconnect.',
         );
-      await _save('tokens.json', saved);
+      await _save('tokens.json', saved, authorizationGeneration: generation);
+      if (generation != _authorizationGeneration)
+        throw StateError('Google connection changed');
       _tokens = saved;
       loadError = '';
     } finally {
@@ -338,6 +349,7 @@ class GoogleAuth {
   }
 
   Future<String> _refresh() async {
+    final generation = _authorizationGeneration;
     final token = _json(
       await request(
         endpoints.token,
@@ -350,7 +362,7 @@ class GoogleAuth {
         },
       ),
     );
-    if (_disconnecting || _closed)
+    if (_disconnecting || _closed || generation != _authorizationGeneration)
       throw StateError('Google connection changed during refresh');
     final saved = {
       ..._tokens!,
@@ -359,7 +371,9 @@ class GoogleAuth {
           DateTime.now().millisecondsSinceEpoch +
           (token['expires_in'] as num).toInt() * 1000,
     };
-    await _save('tokens.json', saved);
+    await _save('tokens.json', saved, authorizationGeneration: generation);
+    if (generation != _authorizationGeneration)
+      throw StateError('Google connection changed');
     _tokens = saved;
     return saved['access_token'] as String;
   }
@@ -386,7 +400,33 @@ class GoogleAuth {
   }
 
   Future<Map<String, dynamic>> apiJson(Uri uri) async => _json(await api(uri));
+
+  /// Forget credentials immediately; remote revocation cannot gate local erasure.
+  Future<void> forget() {
+    _authorizationGeneration++;
+    cancelSignIn();
+    final token = _tokens?['refresh_token'] as String?;
+    final file = File('${directory.path}/tokens.json');
+    if (file.existsSync()) file.deleteSync();
+    _tokens = null;
+    return _revokeBestEffort(token);
+  }
+
+  Future<void> _revokeBestEffort(String? token) async {
+    if (token == null) return;
+    try {
+      await request(
+        endpoints.revoke,
+        method: 'POST',
+        form: {'token': token},
+      ).timeout(const Duration(seconds: 5));
+    } catch (_) {
+      // Revocation cannot prevent clearing an offline local workspace.
+    }
+  }
+
   Future<void> disconnect() async {
+    _authorizationGeneration++;
     cancelSignIn();
     _disconnecting = true;
     try {
