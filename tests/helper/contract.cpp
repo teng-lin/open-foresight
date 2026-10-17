@@ -1,4 +1,4 @@
-#include "research/xeno/labs/foresight/launch_agent/proto/rag_service.grpc.pb.h"
+#include "rag_service.grpc.pb.h"
 #include "helper_control.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #include <sqlite3.h>
@@ -10,11 +10,18 @@
 #include <unistd.h>
 #include <signal.h>
 #include <sys/stat.h>
-namespace p=research::xeno::labs::foresight::launch_agent::proto;
+namespace p=foresight::helper::v1;
 namespace c=foresight::linux::control::v1;
 #define REQUIRE(x) do{if(!(x))throw std::runtime_error(#x);}while(0)
 template<class Q,class R,class F> grpc::Status call(Q& q,R& r,F f){grpc::ClientContext ctx;ctx.set_deadline(std::chrono::system_clock::now()+std::chrono::seconds(5));return f(&ctx,q,&r);}
 int main(int argc,char** argv){setenv("FORESIGHT_TEST_DELAY_MS","2",1);std::string dir=(std::filesystem::temp_directory_path().string()+"/foresight-contract-")+std::to_string(getpid());std::filesystem::create_directories(dir);chmod(dir.c_str(),0700);std::string socket=dir+"/run/helper.sock";pid_t pid=-1;try{auto start=[&]{pid=fork();if(pid==0){execl(argv[1],argv[1],socket.c_str(),dir.c_str(),"--allow-test-models",(char*)nullptr);_exit(127);}auto channel=grpc::CreateChannel("unix:"+socket,grpc::InsecureChannelCredentials());REQUIRE(channel->WaitForConnected(std::chrono::system_clock::now()+std::chrono::seconds(10)));return p::RagService::NewStub(channel);};auto stub=start();p::PingRequest ping;p::PingResponse pong;REQUIRE(call(ping,pong,[&](auto* ctx,auto& q,auto* r){return stub->Ping(ctx,q,r);}).ok());REQUIRE(pong.success()&&pong.version()=="1.0.3");p::ComputeImageEmbeddingRequest img;p::ComputeEmbeddingResponse vec;REQUIRE(call(img,vec,[&](auto* ctx,auto& q,auto* r){return stub->ComputeImageEmbedding(ctx,q,r);}).error_code()==grpc::StatusCode::UNAVAILABLE);
+ // All failure responses are non-OK gRPC statuses, never success=false payloads.
+ p::IndexRequest invalid_index;p::IndexResponse invalid_index_result;
+ REQUIRE(call(invalid_index,invalid_index_result,[&](auto* ctx,auto& q,auto* r){return stub->IndexDocument(ctx,q,r);}).error_code()==grpc::StatusCode::FAILED_PRECONDITION);
+ p::DeleteRequest invalid_delete;p::DeleteResponse invalid_delete_result;
+ REQUIRE(call(invalid_delete,invalid_delete_result,[&](auto* ctx,auto& q,auto* r){return stub->DeleteDocument(ctx,q,r);}).error_code()==grpc::StatusCode::INVALID_ARGUMENT);
+ p::UpdateModelPathsRequest invalid_model;invalid_model.set_sentence_piece_model_path("external.model");p::UpdateModelPathsResponse invalid_model_result;
+ REQUIRE(call(invalid_model,invalid_model_result,[&](auto* ctx,auto& q,auto* r){return stub->UpdateModelPaths(ctx,q,r);}).error_code()==grpc::StatusCode::INVALID_ARGUMENT);
  p::UpdateModelPathsRequest model;model.set_embedding_model_path("test://deterministic");p::UpdateModelPathsResponse configured;REQUIRE(call(model,configured,[&](auto* ctx,auto& q,auto* r){return stub->UpdateModelPaths(ctx,q,r);}).ok()&&configured.success());
  auto active_generation=[&]{auto status=c::HelperControl::NewStub(grpc::CreateChannel("unix:"+socket,grpc::InsecureChannelCredentials()));c::Empty q;c::State r;REQUIRE(call(q,r,[&](auto* ctx,auto& x,auto* y){return status->GetState(ctx,x,y);}).ok());return r.active_generation();};
  auto first_generation=active_generation();

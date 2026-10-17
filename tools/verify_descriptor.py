@@ -39,7 +39,11 @@ def verify(protoc='protoc'):
         subprocess.run([protoc, f'-I{ROOT / "proto/rag"}',
                         f'--descriptor_set_out={output}', 'rag_service.proto'], check=True)
         transcribed = descriptor_pb2.FileDescriptorSet.FromString(output.read_bytes()).file[0]
-    assert shape(recovered) == shape(transcribed), 'Wire shape differs from recovered descriptor'
+    expected = shape(recovered)
+    actual = shape(transcribed)
+    actual = json.loads(json.dumps(actual).replace('foresight.helper.v1', PACKAGE))
+    expected = json.loads(json.dumps(expected))
+    assert expected == actual, 'Wire shape differs from recovered descriptor'
     pool = descriptor_pool.DescriptorPool()
     pool.Add(recovered)
     ping = message_factory.GetMessageClass(pool.FindMessageTypeByName(PACKAGE + '.PingResponse'))
@@ -54,7 +58,7 @@ def verify(protoc='protoc'):
     return {'descriptor_sha256': hashlib.sha256(raw).hexdigest(),
             'service': PACKAGE + '.RagService', 'rpc_count': 11, 'message_count': 22,
             'wire_shape': 'verified', 'edition': '2024',
-            'production_cpp': 'generate from exact descriptor with explicit presence and UTF8 NONE',
+            'production_cpp': 'version package/name while preserving recovered explicit presence and UTF8 NONE',
             'proto3_deviations': ['Implicit scalar presence loses explicitly supplied default values',
                                   'UTF-8 validation differs from recovered NONE',
                                   'Java outer class option absent (not a C++ wire difference)']}

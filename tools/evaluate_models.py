@@ -10,10 +10,11 @@ import tempfile
 import time
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 from google.protobuf import json_format
+from generate_bindings import production_descriptor
 import grpc
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGE = 'research.xeno.labs.foresight.launch_agent.proto'
+PACKAGE = 'foresight.helper.v1'
 CORPUS = {
     'release': 'The Foresight prototype release is scheduled for November 12. Sam owns the release checklist.',
     'meeting': 'The weekly design meeting starts at 10 AM on Tuesday. Priya will prepare the accessibility review.',
@@ -27,8 +28,7 @@ QUERIES = [('When will the prototype be released?', 'release'),
 
 def messages():
     pool = descriptor_pool.DescriptorPool()
-    pool.Add(descriptor_pb2.FileDescriptorProto.FromString(
-        (ROOT / 'proto/rag/rag_service.descriptor.pb').read_bytes()))
+    pool.Add(production_descriptor())
     return {name: message_factory.GetMessageClass(pool.FindMessageTypeByName(PACKAGE + '.' + name))
             for name in ['PingRequest', 'PingResponse', 'UpdateModelPathsRequest',
                          'UpdateModelPathsResponse', 'IndexRequest', 'IndexResponse',
