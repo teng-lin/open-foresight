@@ -159,6 +159,14 @@ void main() {
       tester.platformDispatcher.textScaleFactorTestValue = 1;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final env = Platform.environment;
+      if (env['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') {
+        // Widget tests default to 800x600; this workflow uses the wide desktop
+        // panels from the native 1280x720 acceptance display.
+        tester.view.physicalSize = const Size(1280, 720);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
       final sink = env['FORESIGHT_PLAYBACK_TARGET']!;
       final fixture = env['FORESIGHT_AUDIO_FIXTURE']!;
       final dynamic workspace = await startedWorkspace(tester);
@@ -370,6 +378,11 @@ void main() {
         'Ask what you can do for your country.',
       );
       await tester.pumpAndSettle();
+      final enhancedTab = find.widgetWithText(Tab, 'Enhanced');
+      if (enhancedTab.evaluate().isNotEmpty) {
+        await tester.tap(enhancedTab);
+        await tester.pumpAndSettle();
+      }
       await tester.ensureVisible(find.text('Enhance notes'));
       await tester.tap(find.text('Enhance notes'));
       await waitUntil(
