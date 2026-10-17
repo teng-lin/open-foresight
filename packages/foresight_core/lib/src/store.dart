@@ -38,7 +38,8 @@ class Store {
         }
         db.execute('COMMIT');
       } catch (_) {
-        db.execute('ROLLBACK');
+        // SQLITE_FULL/IOERR can already roll back the transaction.
+        if (!db.autocommit) db.execute('ROLLBACK');
         rethrow;
       }
       db.execute('PRAGMA journal_mode=WAL');
