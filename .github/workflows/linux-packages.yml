@@ -3,12 +3,23 @@ name: Linux packages
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published release to receive Linux packages (for example v0.1.0)
+        required: true
+        type: string
+
+# Manual recovery builds use the selected branch's source while publishing to
+# this existing release. SOURCE_REVISION records the actual build commit.
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
 
 permissions:
   contents: read
 
 concurrency:
-  group: linux-packages-${{ github.ref }}
+  group: linux-packages-${{ inputs.tag || github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
@@ -22,6 +33,11 @@ jobs:
       image: ${{ steps.resolve.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Require an existing published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Authenticate private SDK registry
         env:
@@ -99,8 +115,6 @@ jobs:
         run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
       - name: Package version
         id: version
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           python3 - <<'PY'
           import os, subprocess, sys
@@ -168,7 +182,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           gh release upload "$RELEASE_TAG" \
             artifacts/portable-bundle/* \

@@ -2,9 +2,9 @@
 
 Open Foresight builds one portable x86-64 application bundle, then wraps it with
 the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy. The workflow is
-`.github/workflows/linux-packages.yml`. It runs only when a GitHub release is
-published (including prereleases), not on pull requests, branch pushes, or tag
-pushes alone. The release tag must be `v` followed by the version in
+`.github/workflows/linux-packages.yml`. It runs when a GitHub release is
+published (including prereleases), or through a manual recovery run. Pull
+requests, branch pushes, and tag pushes alone do not start packaging. The release tag must be `v` followed by the version in
 `apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
 [Versioning and releases](../../README.md#versioning-and-releases).
 
@@ -163,6 +163,20 @@ attaches the portable archive, `.deb`, `.rpm`, `.pkg.tar.zst`, checksums, build
 manifests, and ABI report to the triggering GitHub release. Reruns replace assets
 with matching names. CI does not create the release, sign Linux packages, or
 configure apt/dnf/pacman repositories.
+
+To rebuild Linux packages from a fixed branch and attach them to an existing
+published release, run:
+
+```sh
+gh workflow run linux-packages.yml --repo teng-lin/open-foresight --ref main -f tag=v0.1.0
+```
+
+The selected branch must contain the fixes and have the same application version
+as the release tag. The bundle records the selected source commit as its revision.
+The existing content-addressed SDK is reused when its inputs have not changed.
+The release tag and macOS assets are left in place. Release-triggered and manual
+builds for the same target release are serialized.
+
 
 GitHub Actions must be enabled and its account spending/payment limits must allow
 hosted jobs. A failure before any steps execute does not validate the build.
