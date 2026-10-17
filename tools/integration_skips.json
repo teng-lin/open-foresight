@@ -1,0 +1,179 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "path": "apps/desktop/test/answer_failure_test.dart",
+      "conditions": [
+        "!(Platform.isLinux || Platform.isMacOS)"
+      ],
+      "gate": "platform",
+      "reason": "Runs on its supported operating system in the regular platform build."
+    },
+    {
+      "path": "apps/desktop/test/capture_failure_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_CAPTURE_STATE_TEST'] != '1'"
+      ],
+      "gate": "fast",
+      "reason": "Deterministic process failure with the built Linux native library."
+    },
+    {
+      "path": "apps/desktop/test/gemma_native_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_GEMMA_TEST'] != '1'"
+      ],
+      "gate": "models",
+      "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
+    },
+    {
+      "path": "apps/desktop/test/google_real_helper_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_GOOGLE_REAL_HELPER'] != '1'"
+      ],
+      "gate": "models",
+      "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
+    },
+    {
+      "path": "apps/desktop/test/integration_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_INTEGRATION'] != '1'"
+      ],
+      "gate": "models",
+      "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
+    },
+    {
+      "path": "apps/desktop/test/live_gap_recording_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_LIVE_GAP_TEST'] != '1'"
+      ],
+      "gate": "virtual-audio",
+      "reason": "Isolated Linux PipeWire server; no host sound devices or session sockets."
+    },
+    {
+      "path": "apps/desktop/test/live_recording_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_LIVE_TEST'] != '1'"
+      ],
+      "gate": "virtual-audio",
+      "reason": "Isolated Linux PipeWire server; no host sound devices or session sockets."
+    },
+    {
+      "path": "apps/desktop/test/macos_desktop_test.dart",
+      "conditions": [
+        "!Platform.isMacOS"
+      ],
+      "gate": "platform",
+      "reason": "Runs on its supported operating system in the regular platform build."
+    },
+    {
+      "path": "apps/desktop/test/meeting_citation_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_INTEGRATION'] != '1'"
+      ],
+      "gate": "models",
+      "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
+    },
+    {
+      "path": "apps/desktop/test/native_load_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_INTEGRATION'] != '1'"
+      ],
+      "gate": "models",
+      "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
+    },
+    {
+      "path": "apps/desktop/test/quick_start_test.dart",
+      "conditions": [
+        "!Platform.isMacOS",
+        "!Platform.isMacOS",
+        "!Platform.isMacOS",
+        "!Platform.isMacOS"
+      ],
+      "gate": "platform",
+      "reason": "Runs on its supported operating system in the regular platform build."
+    },
+    {
+      "path": "apps/desktop/test/saved_answer_native_test.dart",
+      "conditions": [
+        "Platform.environment['FORESIGHT_ANSWER_DATABASE'] == null"
+      ],
+      "gate": "saved-profile",
+      "reason": "Manual diagnostic requiring an explicit private database copy and helper socket; synthetic grounding is covered by models."
+    },
+    {
+      "path": "packages/foresight_core/test/audio_permission_failure_test.dart",
+      "conditions": [
+        "!Platform.isMacOS ? 'Purpose strings apply to macOS bundles' : false"
+      ],
+      "gate": "platform",
+      "reason": "Runs on its supported operating system in the regular platform build."
+    },
+    {
+      "path": "packages/foresight_core/test/dedicated_query_model_test.dart",
+      "conditions": [
+        "env['FORESIGHT_QUERY_MODEL_TEST'] != '1' ? 'Set supported asset and bundled runtime for cleanup integration' : false",
+        "env['FORESIGHT_QUERY_MODEL_TEST'] != '1' ? 'Set original model and bundled runtime for acquisition integration' : false",
+        "env['FORESIGHT_QUERY_MODEL_TEST'] != '1' ? 'Set dedicated model and bundled runtime paths for guided import' : false",
+        "env['FORESIGHT_QUERY_MODEL_TEST'] != '1' ? 'Set dedicated model, worker and Python paths to run original weights' : false"
+      ],
+      "gate": "reference-models",
+      "reason": "Requires an independently authorized, authenticated detector asset; never downloaded or uploaded by CI."
+    },
+    {
+      "path": "packages/foresight_core/test/distribution_model_discovery_test.dart",
+      "conditions": [
+        "library == null ? 'Requires native runtime and process supervisor' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Regular core build supplies FORESIGHT_NATIVE_LIBRARY."
+    },
+    {
+      "path": "packages/foresight_core/test/native_persistent_test.dart",
+      "conditions": [
+        "library == null"
+      ],
+      "gate": "core-native",
+      "reason": "Regular core build supplies FORESIGHT_NATIVE_LIBRARY."
+    },
+    {
+      "path": "packages/foresight_core/test/native_tools_test.dart",
+      "conditions": [
+        "library == null ? 'Requires a built FORESIGHT_NATIVE_LIBRARY and its process supervisor' : false"
+      ],
+      "gate": "core-native",
+      "reason": "Regular core build supplies FORESIGHT_NATIVE_LIBRARY."
+    },
+    {
+      "path": "packages/foresight_core/test/proactive_model_test.dart",
+      "conditions": [
+        "env['FORESIGHT_PROACTIVE_MODEL_TEST'] != '1'"
+      ],
+      "gate": "reference-models",
+      "reason": "Requires an independently authorized, authenticated detector asset; never downloaded or uploaded by CI."
+    },
+    {
+      "path": "packages/foresight_core/test/recording_pipewire_test.dart",
+      "conditions": [
+        "!(Platform.isLinux && Platform.environment['FORESIGHT_PRIVATE_PIPEWIRE'] == '1')"
+      ],
+      "gate": "virtual-audio",
+      "reason": "Isolated Linux PipeWire server; no host sound devices or session sockets."
+    },
+    {
+      "path": "packages/foresight_core/test/reference_tokenizer_live_test.dart",
+      "conditions": [
+        "env['FORESIGHT_ORIGINAL_TOKENIZER_SOCKET'] == null || env['FORESIGHT_PORT_TOKENIZER_SOCKET'] == null"
+      ],
+      "gate": "reference-tokenizer",
+      "reason": "Requires original and port helper sockets; CI cannot supply the original application."
+    },
+    {
+      "path": "packages/foresight_core/test/web_model_test.dart",
+      "conditions": [
+        "env['FORESIGHT_WEB_MODEL_TEST'] != '1'"
+      ],
+      "gate": "models",
+      "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
+    }
+  ]
+}

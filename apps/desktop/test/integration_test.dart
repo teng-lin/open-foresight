@@ -6,8 +6,7 @@ import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/native.dart';
 import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
-import 'package:open_foresight/generated/helper_control.pbgrpc.dart'
-    as control;
+import 'package:open_foresight/generated/helper_control.pbgrpc.dart' as control;
 
 void main() {
   test(
@@ -37,11 +36,17 @@ void main() {
           'generation',
           Platform.environment['FORESIGHT_GENERATION_MODEL']!,
           Platform.environment['FORESIGHT_GENERATION_RUNNER']!,
+          backend:
+              Platform.environment['FORESIGHT_GENERATION_BACKEND'] ??
+              'litert_lm',
         );
         d.generator = NativeRuntime(Platform.environment['FORESIGHT_NATIVE']!);
         await d.generator!.load(
           Platform.environment['FORESIGHT_GENERATION_RUNNER']!,
           Platform.environment['FORESIGHT_GENERATION_MODEL']!,
+          backend:
+              Platform.environment['FORESIGHT_GENERATION_BACKEND'] ??
+              'litert_lm',
         );
         final id = store.importText(
           'Mission briefing',

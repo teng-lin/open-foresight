@@ -26,6 +26,7 @@ void main() {
           'generation',
           env['FORESIGHT_GENERATION_MODEL']!,
           env['FORESIGHT_GENERATION_RUNNER']!,
+          backend: env['FORESIGHT_GENERATION_BACKEND'] ?? 'litert_lm',
         );
         helper.onReady = domain.resume;
         await helper.start();

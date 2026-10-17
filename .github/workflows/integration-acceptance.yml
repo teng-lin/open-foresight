@@ -1,0 +1,121 @@
+name: Model and virtual audio acceptance
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '43 5 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'native/**'
+      - 'services/**'
+      - 'tools/**'
+      - 'packaging/**'
+      - '.github/workflows/integration-acceptance.yml'
+  pull_request:
+    paths:
+      - '.github/workflows/integration-acceptance.yml'
+      - 'tools/integration_gates.py'
+      - 'packaging/build.Dockerfile'
+      - 'apps/desktop/test/*native*'
+      - 'apps/desktop/test/integration_test.dart'
+      - 'apps/desktop/test/meeting_citation_test.dart'
+      - 'apps/desktop/test/google_real_helper_test.dart'
+      - 'apps/desktop/test/live*'
+      - 'native/**'
+      - 'services/inference/**'
+      - 'services/helper/**'
+      - 'packages/foresight_core/test/*model*'
+      - 'packages/foresight_core/test/recording_pipewire_test.dart'
+      - 'packages/foresight_core/lib/src/native.dart'
+      - 'packages/foresight_core/lib/src/domain.dart'
+      - 'packages/foresight_core/lib/src/recording.dart'
+      - 'tools/test_macos_release_models.py'
+permissions:
+  contents: read
+  actions: read
+  packages: read
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Free hosted-runner space for SDK and model fixtures
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Fetch verified Linux SDK descriptor
+        id: sdk
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400
+          python - <<'PY'
+          import json, os, re
+          image = json.load(open('build/sdk-descriptor/image.json'))['image']
+          if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image):
+              raise ValueError('Unpinned SDK image')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+              print('image=' + image, 'cache=' + image.split('@')[0] + ':app-buildcache-x86-64', sep='\n', file=stream)
+          PY
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Authenticate SDK registry
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Build disposable acceptance image
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: packaging/build.Dockerfile
+          target: integration
+          load: true
+          tags: foresight-integration:local
+          build-args: |
+            SDK_IMAGE=${{ steps.sdk.outputs.image }}
+            SOURCE_REVISION=${{ github.sha }}
+          cache-from: type=registry,ref=${{ steps.sdk.outputs.cache }}
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: models
+        with:
+          path: build/acceptance-models
+          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py') }}
+      - name: Prepare checksum-pinned public model fixtures
+        id: fixtures
+        run: |
+          python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output test-results/model-download
+      - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        if: steps.models.outputs.cache-hit != 'true'
+        with:
+          path: build/acceptance-models
+          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py') }}
+      - name: Real CPU model, helper, citation and cancellation gates
+        run: |
+          mkdir -p test-results/models test-results/virtual-audio
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/test-results/models:/reports" \
+            foresight-integration:local python3 tools/integration_gates.py --suite models \
+            --bundle dist/open-foresight --models /models --output /reports
+      - name: Private virtual-audio and device-recovery gates
+        if: ${{ !cancelled() && steps.image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
+        run: |
+          mkdir -p test-results/virtual-audio
+          docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
+            -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/test-results/virtual-audio:/reports" \
+            foresight-integration:local dbus-run-session -- python3 tools/integration_gates.py --suite virtual-audio \
+            --bundle dist/open-foresight --models /models --output /reports
+      - name: Retain explicit integration evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-acceptance-evidence
+          path: test-results/

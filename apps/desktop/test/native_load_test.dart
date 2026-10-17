@@ -9,14 +9,19 @@ void main() {
       final native = NativeRuntime(Platform.environment['FORESIGHT_NATIVE']!);
       final model = Platform.environment['FORESIGHT_GENERATION_MODEL']!;
       final runner = Platform.environment['FORESIGHT_GENERATION_RUNNER']!;
-      await expectLater(native.load('/bin/false', model), throwsStateError);
+      final backend =
+          Platform.environment['FORESIGHT_GENERATION_BACKEND'] ?? 'litert_lm';
+      await expectLater(
+        native.load(runner, '$model.missing-fixture', backend: backend),
+        throwsStateError,
+      );
       expect(native.effectiveState['state'], 'failed');
-      final pending = native.load(runner, model);
+      final pending = native.load(runner, model, backend: backend);
       expect(native.effectiveState['state'], 'loading');
       native.close();
       await expectLater(pending, throwsStateError);
       expect(native.effectiveState['state'], 'unconfigured');
-      await native.load(runner, model);
+      await native.load(runner, model, backend: backend);
       expect(native.effectiveState['state'], 'ready');
       native.close();
     },
