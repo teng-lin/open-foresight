@@ -31,13 +31,29 @@ void main() {
   test(
     'remote facades and service reference registry operation identities',
     () {
-      for (final name in ['remote_domain.dart', 'service.dart']) {
+      for (final name in [
+        'remote_domain.dart',
+        'service.dart',
+        'application.dart',
+      ]) {
         final source = File('lib/src/$name').readAsStringSync();
         expect(
           RegExp(r"\.(?:call|stream|command)\(\s*'[^']+'").allMatches(source),
           isEmpty,
           reason: '$name contains an unregistered RPC literal',
         );
+        for (final operation in Operation.values.where(
+          (value) => value.wire.contains('.'),
+        )) {
+          expect(
+            [
+              "'",
+              '"',
+            ].any((quote) => source.contains('$quote${operation.wire}$quote')),
+            isFalse,
+            reason: '$name duplicates ${operation.wire} outside the registry',
+          );
+        }
       }
     },
   );
