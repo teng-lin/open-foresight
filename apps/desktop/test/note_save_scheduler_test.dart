@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -8,15 +9,18 @@ import 'package:open_foresight/store.dart';
 import 'package:open_foresight/note_save_scheduler.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
-class GatedNoteDomain extends Domain {
+class GatedNoteDomain extends CommandFixtureDomain {
   GatedNoteDomain(super.store, super.helper);
   Completer<void>? saveGate;
+  bool rejectNotes = false;
   Map<String, dynamic>? artifactEdit;
   @override
   Future<Object?> command(
     String method, [
     Map<String, dynamic> args = const {},
   ]) async {
+    if (method == 'meetings.notes' && rejectNotes)
+      throw StateError('Service disconnected');
     if (method == 'artifacts.edit') artifactEdit = Map.of(args);
     if (method == 'meetings.notes' && saveGate != null) await saveGate!.future;
     return super.command(method, args);
@@ -42,11 +46,15 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
-      state.editArtifact(store.rows('SELECT * FROM artifacts').single);
+      state.meetingFeature.editArtifact(
+        store.rows('SELECT * FROM artifacts').single,
+      );
       await tester.pumpAndSettle();
       final before = DateTime.now().millisecondsSinceEpoch;
       await tester.enterText(
@@ -67,7 +75,9 @@ void main() {
             .single,
         {'last_manual_edit': captured, 'last_enhanced': enhancedDate},
       );
-      state.editArtifact(store.rows('SELECT * FROM artifacts').single);
+      state.meetingFeature.editArtifact(
+        store.rows('SELECT * FROM artifacts').single,
+      );
       await tester.pumpAndSettle();
       await tester.tap(find.text('Save edit'));
       await tester.pumpAndSettle();
@@ -83,6 +93,41 @@ void main() {
       directory.deleteSync(recursive: true);
     },
   );
+  testWidgets(
+    'explicit Live Enhance note save reports failure without an uncaught error',
+    (tester) async {
+      final directory = Directory.systemTemp.createTempSync(
+        'note-save-explicit-',
+      );
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final store = Store('${directory.path}/app.db');
+      store.setPreference('liveEnhance', 'false');
+      final id = store.meeting('Explicit save');
+      store.saveMeetingNotes(id, 'Keep this draft');
+      final domain = GatedNoteDomain(
+        store,
+        OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
+      );
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
+      final dynamic state = tester.state(find.byType(Workspace));
+      state.update(() => state.meetingFeature.meetingId = id);
+      await tester.pumpAndSettle();
+      domain.rejectNotes = true;
+      await tester.tap(find.text('Live Enhance OFF'));
+      await tester.pumpAndSettle();
+      expect(state.error, contains('Unable to save meeting notes:'));
+      expect(state.error, contains('Service disconnected'));
+      expect(state.meetingFeature.meetingNoteSaves.isDirty(id), isTrue);
+      expect(tester.takeException(), isNull);
+      domain.rejectNotes = false;
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'captured manual dates survive failed writes, retry and note switches',
     (tester) async {
@@ -122,9 +167,11 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       final editor = find.byKey(const ValueKey('meeting-notes-editor'));
       store.saveMeetingNotes(id, 'External first', lastManualEdit: 200);
@@ -134,7 +181,7 @@ void main() {
         tester.widget<TextField>(editor).controller!.text,
         'External first',
       );
-      state.meetingEnhancing = true;
+      state.meetingFeature.meetingEnhancing = true;
       store.saveMeetingNotes(id, 'External second', lastManualEdit: 300);
       state.update(() {});
       await tester.pump();
@@ -142,7 +189,7 @@ void main() {
         tester.widget<TextField>(editor).controller!.text,
         'External first',
       );
-      state.update(() => state.meetingEnhancing = false);
+      state.update(() => state.meetingFeature.meetingEnhancing = false);
       await tester.pump();
       expect(
         tester.widget<TextField>(editor).controller!.text,
@@ -150,7 +197,7 @@ void main() {
       );
       domain.saveGate = Completer<void>();
       await tester.enterText(editor, 'Local draft');
-      final captured = state.meetingNoteManualEdit;
+      final captured = state.meetingFeature.meetingNoteManualEdit;
       await tester.pump(const Duration(seconds: 1));
       store.saveMeetingNotes(
         id,
@@ -166,8 +213,11 @@ void main() {
         store.rows('SELECT body,last_manual_edit FROM meeting_notes').single,
         {'body': 'Local draft', 'last_manual_edit': captured},
       );
-      expect(state.loadedMeetingNoteSnapshot.body, 'Local draft');
-      expect(state.meetingNoteSaves.isDirty(id), isFalse);
+      expect(
+        state.meetingFeature.loadedMeetingNoteSnapshot.body,
+        'Local draft',
+      );
+      expect(state.meetingFeature.meetingNoteSaves.isDirty(id), isFalse);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
       directory.deleteSync(recursive: true);
@@ -187,9 +237,11 @@ void main() {
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
       );
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.saveGate = Completer<void>();
       await tester.enterText(
@@ -199,10 +251,10 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.tap(find.byTooltip('All meetings'));
       await tester.pump();
-      expect(state.meetingId, id);
+      expect(state.meetingFeature.meetingId, id);
       domain.saveGate!.completeError(StateError('Fixture save failed'));
       await tester.pumpAndSettle();
-      expect(state.meetingId, id);
+      expect(state.meetingFeature.meetingId, id);
       expect(state.error, contains('Unable to save meeting notes'));
       expect(
         store.rows('SELECT body FROM meeting_notes').single['body'],
@@ -211,7 +263,7 @@ void main() {
       domain.saveGate = null;
       await tester.tap(find.byTooltip('All meetings'));
       await tester.pumpAndSettle();
-      expect(state.meetingId, isNull);
+      expect(state.meetingFeature.meetingId, isNull);
       expect(
         store.rows('SELECT body FROM meeting_notes').single['body'],
         'Unsaved latest',
@@ -341,9 +393,11 @@ void main() {
       store,
       OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
     );
-    await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+    await tester.pumpWidget(
+      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+    );
     final dynamic state = tester.state(find.byType(Workspace));
-    state.update(() => state.meetingId = first);
+    state.update(() => state.meetingFeature.meetingId = first);
     await tester.pumpAndSettle();
     final editor = find.byKey(const ValueKey('meeting-notes-editor'));
     await tester.enterText(editor, 'Intermediate');
@@ -365,7 +419,7 @@ void main() {
       {'body': 'Latest first', 'revision': 2},
     );
     await tester.enterText(editor, 'Flushed first');
-    state.update(() => state.meetingId = second);
+    state.update(() => state.meetingFeature.meetingId = second);
     await tester.pumpAndSettle();
     expect(
       store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [

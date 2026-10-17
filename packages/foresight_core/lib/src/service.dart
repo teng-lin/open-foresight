@@ -1,3 +1,4 @@
+import 'application.dart';
 import 'rpc_error.dart';
 import 'operations.dart';
 import 'platform_services.dart';
@@ -246,6 +247,7 @@ class _RequestLease {
 
 class ApplicationService {
   final Domain domain;
+  final Application application;
   late final AgentAccessGate access;
   final ServerSocket listener;
   final String path;
@@ -268,6 +270,7 @@ class ApplicationService {
     this.path,
     this.lock,
     this.installationLock,
+    this.application,
   ) {
     final token = base64Url.encode(
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
@@ -288,7 +291,7 @@ class ApplicationService {
       (host, event) => _send(host as Socket, event),
     );
     listener.listen(_accept);
-    _changes = domain.application.changes.stream.listen((_) => _broadcast());
+    _changes = application.changes.stream.listen((_) => _broadcast());
     _heartbeat = Timer.periodic(
       const Duration(seconds: 1),
       (_) => _broadcast(),
@@ -355,11 +358,12 @@ class ApplicationService {
         '${profile.data}/helper',
       );
       final domain = Domain(store, helper, webSearch: webSearch);
-      domain.application.importPolicy = ImportPolicy(profile.data, () {
+      final application = Application(domain);
+      application.importPolicy = ImportPolicy(profile.data, () {
         final saved = store!.preference('importRoots', '[]');
         return (jsonDecode(saved) as List).cast<String>();
       });
-      domain.application.startBackground();
+      application.startBackground();
       listener = await ServerSocket.bind(
         InternetAddress(path, type: InternetAddressType.unix),
         0,
@@ -382,6 +386,7 @@ class ApplicationService {
         path,
         lock,
         installationLock,
+        application,
       );
       final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
@@ -417,12 +422,12 @@ class ApplicationService {
     if (_closing) return;
     final message = {
       'event': 'changed',
-      'capture': domain.application.captureState,
+      'capture': application.captureState,
       'revision': domain.store.dataRevision,
       'sources_paused': domain.sourcesPaused,
-      'generation': domain.application.generationState,
+      'generation': application.generationState,
       'web_search_available': domain.webSearchAvailable,
-      'google': domain.application.googleState,
+      'google': application.googleState,
       'helper': domain.helper.snapshot?.toProto3Json(),
       'helper_state': domain.helper.state,
     };
@@ -488,7 +493,7 @@ class ApplicationService {
                         'Not the desktop approval connection',
                       );
                     access.detach(client);
-                    unawaited(domain.application.stopRecording());
+                    unawaited(application.stopRecording());
                   } else if (method == Operation.security_decide.wire) {
                     access.decide(
                       client,
@@ -594,7 +599,7 @@ class ApplicationService {
             access.detach(client);
             if (wasHost) {
               unawaited(
-                domain.application.stopRecording().catchError((Object e) {
+                application.stopRecording().catchError((Object e) {
                   stderr.writeln('Stop capture after desktop closed: $e');
                 }),
               );
@@ -627,8 +632,8 @@ class ApplicationService {
       return Stream.fromFuture(_ready).asyncExpand(
         (_) =>
             (args['web_search'] == true
-            ? domain.askWithWebInConversation
-            : domain.askInConversation)(
+            ? application.askWithWebInConversation
+            : application.askInConversation)(
               args['question'] as String,
               args['conversation'] as String,
               requestId: lease.id,
@@ -638,7 +643,7 @@ class ApplicationService {
       );
     }
     if (lease.method == Operation.google_sign_in.wire)
-      return domain.application.signIn(lease.id);
+      return application.signIn(lease.id);
     return Stream.fromFuture(_execute(lease.method, args, lease));
   }
 
@@ -658,7 +663,7 @@ class ApplicationService {
           'Application service ownership changed before idle shutdown; retry without replacing the app.',
         );
       }
-      final capture = domain.application.captureState;
+      final capture = application.captureState;
       if (capture['active'] == true || capture['finishing'] == true) {
         throw RpcError(
           RpcErrorCode.busy,
@@ -726,11 +731,7 @@ class ApplicationService {
         'Recording requires an open desktop indicator',
       );
     }
-    return domain.application.call(
-      method,
-      args,
-      current: () => !lease.cancelled,
-    );
+    return application.call(method, args, current: () => !lease.cancelled);
   }
 
   void _cancel(Socket client, int id) {
@@ -738,7 +739,7 @@ class ApplicationService {
     if (lease != null) {
       lease.cancelled = true;
       if (lease.method == Operation.google_sign_in.wire)
-        domain.application.cancelSignIn(lease.id);
+        application.cancelSignIn(lease.id);
       domain.generator?.cancel(requestId: lease.id);
     }
     final subscription = _subscriptions[client]?.remove(id);
@@ -776,7 +777,7 @@ class ApplicationService {
 
     // Application.close synchronously rejects new business calls and cancels
     // background timers before its first await.
-    await attempt(domain.application.close);
+    await attempt(application.close);
     await attempt(() async {
       await _changes?.cancel();
     });

@@ -1,10 +1,11 @@
+import 'package:foresight_core/remote.dart' show DesktopConnection;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:foresight_core/remote.dart';
 
 /// The service can authorize agent operations only while this surface is alive.
 class AgentApprovalSurface extends StatefulWidget {
-  final RemoteDomain domain;
+  final DesktopConnection domain;
   final Widget child;
   const AgentApprovalSurface({
     super.key,
@@ -142,7 +143,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
     _activeId = null;
     _route = null;
     if (!mounted || _closed.remove(id)) return;
-    await widget.domain.client.call('security.decide', {
+    await widget.domain.command('security.decide', {
       'approval_id': id,
       'allow': allow,
     });

@@ -1,3 +1,4 @@
+import 'conversation_answer.dart';
 import 'operations.dart';
 import 'rpc_error.dart';
 import 'audio_devices.dart';
@@ -8,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'domain.dart';
+import 'model_gate.dart';
 import 'recording.dart';
 import 'meeting_speakers.dart';
 import 'proactive_questions.dart';
@@ -39,7 +41,7 @@ import 'package:grpc/grpc.dart';
 
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
-class Application {
+class Application implements ModelGate {
   final Domain domain;
   ImportPolicy? importPolicy;
   Store get store => domain.store;
@@ -271,7 +273,90 @@ class Application {
     QueryCompletionRuntime? queryRuntime,
   }) : _auth = auth,
        _queryRuntime = queryRuntime,
-       _providedQueryRuntime = queryRuntime != null;
+       _providedQueryRuntime = queryRuntime != null {
+    domain.modelGate = this;
+    _applications[domain] = this;
+  }
+
+  Stream<String> ask(String question) => askInConversation(question, 'desktop');
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    useWeb: true,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> _askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+    bool useWeb = false,
+  }) => ConversationAnswer(
+    domain,
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+    useWeb: useWeb,
+  ).run();
+  Future<int> autoAssignLabel(String name, {bool Function()? current}) async {
+    name = name.trim();
+    if (name.isEmpty) throw ArgumentError.value(name, 'name');
+    final generation = domain.workspaceGeneration;
+    final all = store.sources;
+    final indexed = all.where((row) => row['state'] == 'indexed').toList();
+    final snapshot = domain.helper.snapshot;
+    final saved = snapshot?.pipeline == 'ready'
+        ? store.loadGraphLayout(
+            jsonEncode([
+              graphLayoutAlgorithmVersion,
+              snapshot!.model.modelDigest,
+              snapshot.model.tokenizerDigest,
+              snapshot.model.preprocessing,
+              snapshot.model.backend,
+              snapshot.model.dimensions,
+            ]),
+            indexed,
+            snapshot.model.dimensions,
+          )
+        : store.loadRegisteredGraphLayout(indexed);
+    final vectors = Map<String, List<double>>.from(saved.vectors);
+    final missing = indexed
+        .where((row) => !vectors.containsKey(row['id']))
+        .toList();
+    if (missing.isNotEmpty)
+      vectors.addAll(await domain.graphEmbeddings(missing));
+    domain.checkWorkspace(generation);
+    if (!(current?.call() ?? true)) {
+      throw RpcError(RpcErrorCode.cancelled, 'Label assignment cancelled');
+    }
+    return store.autoAssignLabel(name, all, vectors);
+  }
 
   Future<List<String>> _detectQuestions(String text, String request) async {
     if (!_providedQueryRuntime) {
@@ -569,8 +654,8 @@ class Application {
           return {
             'text':
                 await (a['web_search'] == true
-                        ? domain.askWithWebInConversation
-                        : domain.askInConversation)(
+                        ? askWithWebInConversation
+                        : askInConversation)(
                       a['question'] as String,
                       a['conversation'] as String? ?? 'desktop',
                       meetingId: a['meeting_id'] as int?,
@@ -991,6 +1076,8 @@ class Application {
                 .map((s) => Map<String, Object?>.from(s as Map))
                 .toList(),
           );
+        case Operation.labels_auto_assign:
+          return await autoAssignLabel(a['name'] as String, current: current);
         case Operation.labels_put:
           store.putDocumentLabel(
             DocumentLabel(
@@ -1227,21 +1314,23 @@ class Application {
             'SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0',
             [s['id'], s['revision']],
           ).isNotEmpty;
-      final path = (s['provenance'] as String).split('; ').last;
+      final sourceUri = Uri.tryParse(s['source_uri'] as String? ?? '');
       try {
-        if (path.startsWith('url:')) {
+        if (sourceUri != null && ['http', 'https'].contains(sourceUri.scheme)) {
           await importUrl(
-            path.substring(4),
+            sourceUri.toString(),
             current: sourceCurrent,
             allowPrivateNetwork: allowPrivateNetwork,
           );
-        } else if (File(path).existsSync()) {
+        } else if (sourceUri != null && sourceUri.scheme == 'file') {
+          final path = sourceUri.toFilePath();
+          if (!File(path).existsSync()) {
+            throw RpcError(
+              RpcErrorCode.notFound,
+              'Imported file is missing: $path',
+            );
+          }
           await importFile(path, current: sourceCurrent);
-        } else if (path.startsWith('/')) {
-          throw RpcError(
-            RpcErrorCode.notFound,
-            'Imported file is missing: $path',
-          );
         } else {
           await domain.index(s['id'] as String);
         }
@@ -1904,6 +1993,10 @@ class Application {
           : 'completed';
     } finally {
       recording = null;
+      recordingMeeting = null;
+      recordingBegan = null;
+      _recordingPausedAt = null;
+      _recordingPausedMs = 0;
       provisionalTranscript.clear();
       proactive.clearInterim(id);
       store.db.execute('UPDATE meetings SET state=? WHERE id=?', [status, id]);
@@ -1962,4 +2055,48 @@ class _NoteEnhancement {
     'cancel_requested': cancelRequested,
     'active_index': activeIndex,
   };
+}
+
+// Convenience composition for tools/tests; Domain never imports or constructs
+// its orchestrator. The service explicitly owns the Application lifecycle.
+final _applications = Expando<Application>();
+
+extension ApplicationDomain on Domain {
+  Application get application => _applications[this] ?? Application(this);
+  Stream<String> ask(String question) => application.ask(question);
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askWithWebInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  Future<Object?> command(
+    String method, [
+    Map<String, dynamic> args = const {},
+  ]) => application.call(method, args);
+  Future<Object?> commandCurrent(
+    String method,
+    Map<String, dynamic> args,
+    bool Function() current,
+  ) => application.call(method, args, current: current);
 }

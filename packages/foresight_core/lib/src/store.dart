@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'agent_access.dart';
 import 'dart:io';
 import 'graph_labels.dart';
+import 'label_propagation.dart';
+import 'graph_layout.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
@@ -16,7 +18,7 @@ class Store {
   Store(this.path) : db = sqlite3.open(path) {
     db.execute('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON');
     final version = db.select('PRAGMA user_version').first.values.first as int;
-    if (version > 1) throw StateError('Unsupported newer application database');
+    if (version > 2) throw StateError('Unsupported newer application database');
     db.execute(
       '''CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,mime TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',deleted INTEGER NOT NULL DEFAULT 0,provenance TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,timestamp INTEGER);
@@ -41,7 +43,7 @@ class Store {
     CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
-    PRAGMA user_version=1;''',
+''',
     );
     // Legacy profiles did not record when a note was saved. Preserve unknown
     // timestamps instead of manufacturing them from meeting creation times.
@@ -123,7 +125,7 @@ class Store {
       'CREATE INDEX IF NOT EXISTS answer_conversation_id ON answers(conversation,id)',
     );
     _migrateMeetingQuestions();
-    _reconcileLabelRecords();
+    if (version < 2) _reconcileLabelRecords();
   }
 
   // Keep durable history while allowing interim origins and repeated questions
@@ -171,22 +173,41 @@ class Store {
     }
   }
 
-  // Reconcile the legacy JSON projection on opening so labels edited by an
-  // older Linux bundle retain their names and acquire persistent colors.
+  // Version 2 imports legacy labels once. Malformed legacy JSON is repaired
+  // from structured records; it must never prevent a profile from opening.
   void _reconcileLabelRecords() {
     db.execute('BEGIN IMMEDIATE');
     try {
       for (final row in rows('SELECT source_id,labels FROM source_details')) {
-        final names = (jsonDecode(row['labels'] as String) as List)
-            .cast<String>();
-        _writeLabelRecords(row['source_id'] as String, names);
+        final id = row['source_id'] as String;
+        List<String> names;
+        try {
+          names = (jsonDecode(row['labels'] as String) as List)
+              .cast<String>()
+              .toList();
+        } on FormatException {
+          names = _storedLabelNames(id);
+        } on TypeError {
+          names = _storedLabelNames(id);
+        }
+        _writeLabelRecords(id, names);
+        db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
+          jsonEncode(names),
+          id,
+        ]);
       }
+      db.execute('PRAGMA user_version=2');
       db.execute('COMMIT');
     } catch (_) {
       db.execute('ROLLBACK');
       rethrow;
     }
   }
+
+  List<String> _storedLabelNames(String id) => rows(
+    'SELECT label_name FROM document_labels WHERE document_id=?',
+    [id],
+  ).map((row) => row['label_name'] as String).toList();
 
   List<DocumentLabel> get documentLabels => rows(
     'SELECT l.* FROM document_labels l JOIN sources s ON s.id=l.document_id WHERE s.deleted=0',
@@ -694,7 +715,7 @@ class Store {
     [key, value],
   );
   void putDocumentLabel(DocumentLabel label) {
-    db.execute('BEGIN IMMEDIATE');
+    db.execute('SAVEPOINT put_document_label');
     try {
       db.execute(
         'REPLACE INTO document_labels(document_id,label_name,label_source,color_hex,rationale) VALUES(?,?,?,?,?)',
@@ -716,7 +737,51 @@ class Store {
         jsonEncode(names),
         label.documentId,
       ]);
+      db.execute('RELEASE put_document_label');
+    } catch (_) {
+      db.execute('ROLLBACK TO put_document_label');
+      db.execute('RELEASE put_document_label');
+      rethrow;
+    }
+  }
+
+  /// Planning and publication share one write transaction. The vectors were
+  /// acquired asynchronously, so reject any source snapshot that became stale.
+  int autoAssignLabel(
+    String name,
+    List<Map<String, Object?>> expectedSources,
+    Map<String, List<double>> vectors,
+  ) {
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      final current = sources;
+      String revisions(List<Map<String, Object?>> rows) => jsonEncode(
+        rows.map((row) => [row['id'], row['revision'], row['state']]).toList(),
+      );
+      if (revisions(current) != revisions(expectedSources)) {
+        throw StateError('Sources changed while organizing labels; retry');
+      }
+      final plan = planLabelPropagation(
+        name,
+        [
+          for (final row in current)
+            LabelDocument(
+              row['id'] as String,
+              row['content'] as String,
+              title: row['title'] as String?,
+            ),
+        ],
+        documentLabels,
+        vectors,
+        semanticGraphEdges(vectors),
+      );
+      for (final label in plan.writes) {
+        putDocumentLabel(label);
+      }
+      saveLabelCluster(name);
+      invalidateGraphOrganization();
       db.execute('COMMIT');
+      return plan.writes.length;
     } catch (_) {
       db.execute('ROLLBACK');
       rethrow;
@@ -794,15 +859,171 @@ class Store {
     }
   }
 
+  String? _outputStatsRevision;
+  int _localOutputWords = 0;
+  List<({int created, int words})> _answerWordCounts = [];
+
+  void _refreshOutputStats() {
+    final revision = dataRevision;
+    if (_outputStatsRevision == revision) return;
+    int words(String text) => RegExp(r'\S+').allMatches(text).length;
+    _answerWordCounts = [
+      for (final row in completedAnswerHistory())
+        (created: row['created'] as int, words: words(row['body'] as String)),
+    ];
+    _localOutputWords =
+        _answerWordCounts.fold<int>(0, (sum, row) => sum + row.words) +
+        artifactBodies().fold<int>(
+          0,
+          (sum, row) => sum + words(row['generated'] as String),
+        );
+    _outputStatsRevision = revision;
+  }
+
+  /// Saved text has no tokenizer usage metadata. Report words honestly and cache
+  /// the scan across builds until the WAL snapshot or this connection changes.
+  int get localOutputWords {
+    _refreshOutputStats();
+    return _localOutputWords;
+  }
+
+  List<int> weeklyAnswerWords(DateTime now) {
+    _refreshOutputStats();
+    final weekly = List<int>.filled(5, 0);
+    for (final row in _answerWordCounts) {
+      final days = now
+          .difference(DateTime.fromMillisecondsSinceEpoch(row.created))
+          .inDays;
+      if (days >= 0 && days < 35) weekly[4 - days ~/ 7] += row.words;
+    }
+    return weekly;
+  }
+
+  // Typed desktop queries keep SQL and snapshot policy in core.
+  List<Map<String, Object?>> registeredEmbedding() =>
+      rows("SELECT * FROM models WHERE kind='embedding'");
+  List<Map<String, Object?>> sourceById(
+    String id, {
+    bool includeDeleted = false,
+  }) => rows('SELECT * FROM sources WHERE id=? AND (? OR deleted=0)', [
+    id,
+    includeDeleted ? 1 : 0,
+  ]);
+  List<Map<String, Object?>> notes() =>
+      rows('SELECT * FROM notes ORDER BY id DESC');
+  List<Map<String, Object?>> completedAnswerBodies() =>
+      rows('SELECT body FROM answers WHERE status=\'completed\'');
+  List<Map<String, Object?>> artifactBodies() =>
+      rows('SELECT generated FROM artifacts');
+  List<Map<String, Object?>> googleSourceMimes() =>
+      rows('SELECT source_id,mime FROM google_sources');
+  List<Map<String, Object?>> documentClusters() =>
+      rows('SELECT * FROM document_clusters');
+  List<Map<String, Object?>> documentClusterNames() =>
+      rows('SELECT label FROM document_clusters');
+  List<Map<String, Object?>> conversationAnswers(int? meetingId) => rows(
+    meetingId == null
+        ? "SELECT * FROM answers WHERE conversation='desktop' ORDER BY id"
+        : 'SELECT answers.* FROM answers JOIN meeting_answers ON answer_id=answers.id WHERE meeting_id=? ORDER BY answers.id',
+    meetingId == null ? [] : [meetingId],
+  );
+  List<Map<String, Object?>> meetingCollection() => rows(
+    'SELECT meetings.*,meeting_details.created,meeting_details.reminder,'
+    'calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
+    'calendar_events.status AS calendar_status,'
+    'COALESCE(saved.has_transcript,0) AS has_transcript,saved.duration_ms '
+    'FROM meetings LEFT JOIN meeting_details ON meetings.id=meeting_details.meeting_id '
+    'LEFT JOIN calendar_events ON meetings.id=calendar_events.meeting_id '
+    'LEFT JOIN (SELECT meeting_id,1 AS has_transcript,MAX(end_ms) AS duration_ms '
+    'FROM transcript WHERE final=1 GROUP BY meeting_id) AS saved ON saved.meeting_id=meetings.id '
+    'ORDER BY COALESCE(calendar_events.starts,meeting_details.created),meetings.id',
+  );
+  List<Map<String, Object?>> recordedMeetingCountRows() => rows(
+    'SELECT COUNT(DISTINCT meeting_id) AS n FROM transcript WHERE final=1',
+  );
+  List<Map<String, Object?>> completedAnswerCountRows() =>
+      rows("SELECT COUNT(*) AS n FROM answers WHERE status='completed'");
+  List<Map<String, Object?>> completedAnswerHistory() =>
+      rows("SELECT body,created FROM answers WHERE status='completed'");
+  List<Map<String, Object?>> meetingNoteRows(int id) =>
+      rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [id]);
+  List<Map<String, Object?>> meetingPreviewRows(int id) => rows(
+    'SELECT meetings.*,meeting_details.created,calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
+    '(SELECT MAX(end_ms) FROM transcript WHERE meeting_id=meetings.id AND final=1) AS duration_ms FROM meetings '
+    'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
+    'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
+    [id],
+  );
+  List<Map<String, Object?>> meetingWorkspaceRows(int id) => rows(
+    'SELECT meetings.*,meeting_details.created,calendar_events.starts,calendar_events.ends FROM meetings '
+    'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
+    'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
+    [id],
+  );
+  List<Map<String, Object?>> enhancedNoteArtifacts(int id) => rows(
+    "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
+    [id],
+  );
+  List<Map<String, Object?>> meetingQuestions(int id) => rows(
+    'SELECT q.*,a.body,a.citations FROM meeting_questions q '
+    'LEFT JOIN answers a ON a.id=q.answer_id WHERE q.meeting_id=? ORDER BY q.id',
+    [id],
+  );
+  List<Map<String, Object?>> finalTranscript(int id) => rows(
+    'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
+    [id],
+  );
+  List<Map<String, Object?>> meetingTranscript(int id) =>
+      rows('SELECT * FROM transcript WHERE meeting_id=? ORDER BY id', [id]);
+  List<Map<String, Object?>> meetingArtifacts(int id, String kind) => rows(
+    'SELECT * FROM artifacts WHERE meeting_id=? AND kind=? ORDER BY id DESC',
+    [id, kind],
+  );
+  List<Map<String, Object?>> exportNotes() => rows(
+    'WITH candidates(note_type,note_id,timestamp) AS ('
+    'SELECT 0,meeting_id,timestamp FROM meeting_notes UNION ALL '
+    'SELECT 1,id,timestamp FROM notes), '
+    'acquired AS (SELECT * FROM candidates ORDER BY timestamp DESC LIMIT 1000) '
+    'SELECT * FROM ('
+    'SELECT meetings.id,meetings.title,meeting_notes.body,'
+    'COALESCE(meeting_notes.enhanced_body,(SELECT COALESCE(edited,generated) FROM artifacts '
+    "WHERE artifacts.meeting_id=meetings.id AND kind='enhanced_notes' "
+    'ORDER BY id DESC LIMIT 1)) AS enhanced_body,'
+    'COALESCE(calendar_events.starts,meeting_notes.timestamp,meeting_details.created,0) AS export_date,'
+    'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata,'
+    '(SELECT title FROM meeting_note_events WHERE meeting_id=meetings.id '
+    'AND event_key=note_event.event_key AND title!=\'\' ORDER BY id DESC LIMIT 1) AS association_title '
+    'FROM acquired JOIN meetings ON acquired.note_type=0 AND meetings.id=acquired.note_id '
+    'JOIN meeting_notes ON meeting_notes.meeting_id=meetings.id '
+    'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
+    'LEFT JOIN meeting_note_events AS note_event ON note_event.id=('
+    'SELECT id FROM meeting_note_events WHERE meeting_id=meetings.id '
+    'AND event_key!=\'\' ORDER BY id LIMIT 1) '
+    'LEFT JOIN calendar_events ON calendar_events.event_key=COALESCE(note_event.event_key,('
+    'SELECT event_key FROM calendar_events AS export_event '
+    'WHERE export_event.meeting_id=meetings.id ORDER BY export_event.rowid LIMIT 1'
+    ')) UNION ALL '
+    'SELECT notes.id,notes.title,notes.body,NULL AS enhanced_body,'
+    'COALESCE(notes.timestamp,0) AS export_date,NULL AS export_end,NULL AS export_metadata,NULL AS association_title '
+    'FROM acquired JOIN notes ON acquired.note_type=1 AND notes.id=acquired.note_id'
+    ') ORDER BY export_date DESC,id',
+  );
+  List<Map<String, Object?>> registeredSpeech() =>
+      rows("SELECT digest FROM models WHERE kind='speech'");
   void close() => db.dispose();
 }
 
 class Parser {
   final bool _macOS;
   final String? _macParser;
-  Parser({bool? macOS, String? macParser})
-    : _macOS = macOS ?? Platform.isMacOS,
-      _macParser = macParser;
+  final String linuxPdfParser, linuxRtfParser;
+  Parser({
+    bool? macOS,
+    String? macParser,
+    this.linuxPdfParser = 'pdftotext',
+    this.linuxRtfParser = 'unrtf',
+  }) : _macOS = macOS ?? Platform.isMacOS,
+       _macParser = macParser;
   Future<ProcessResult> _extractProcess(
     String executable,
     List<String> arguments,
@@ -821,7 +1042,7 @@ class Parser {
         }
         bytes.addAll(chunk);
       }
-      return utf8.decode(bytes);
+      return utf8.decode(bytes, allowMalformed: true);
     }
 
     try {
@@ -837,6 +1058,21 @@ class Parser {
       );
     } finally {
       timer.cancel();
+    }
+  }
+
+  Future<ProcessResult> _linuxExtract(
+    String tool,
+    List<String> arguments,
+    String dependency,
+  ) async {
+    try {
+      return await _extractProcess(tool, arguments);
+    } on ProcessException catch (error) {
+      throw StateError(
+        'Cannot launch $tool. Install the Linux import dependency '
+        '($dependency): ${error.message}',
+      );
     }
   }
 
@@ -879,16 +1115,32 @@ class Parser {
       );
     }
     if (lower.endsWith('.pdf')) {
-      final r = await _extractProcess('pdftotext', ['-layout', path, '-']);
+      final r = await _linuxExtract(linuxPdfParser, [
+        '-layout',
+        path,
+        '-',
+      ], 'poppler-utils');
       if (r.exitCode != 0)
         throw StateError('PDF extraction failed: ${r.stderr}');
       return (r.stdout as String, 'pdftotext -layout (Linux adapter)');
     }
     if (lower.endsWith('.rtf')) {
-      final r = await _extractProcess('unrtf', ['--text', path]);
+      final r = await _linuxExtract(linuxRtfParser, [
+        '--text',
+        '--quiet',
+        path,
+      ], 'unrtf');
       if (r.exitCode != 0)
         throw StateError('RTF extraction failed: ${r.stderr}');
-      return (r.stdout as String, 'unrtf --text (Linux adapter)');
+      // unrtf 0.21 emits metadata before this separator even in text mode.
+      var text = r.stdout as String;
+      const marker = '-----------------';
+      final banner = text.indexOf(marker);
+      if (banner >= 0 &&
+          text.substring(0, banner).contains('Translation from RTF')) {
+        text = text.substring(banner + marker.length).trimLeft();
+      }
+      return (text, 'unrtf --text (Linux adapter)');
     }
     final bytes = <int>[];
     await for (final chunk in File(
@@ -899,6 +1151,6 @@ class Parser {
       }
       bytes.addAll(chunk);
     }
-    return (utf8.decode(bytes), 'UTF-8 text');
+    return (utf8.decode(bytes, allowMalformed: true), 'UTF-8 text');
   }
 }

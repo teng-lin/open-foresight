@@ -1,3 +1,4 @@
+import 'desktop_connection.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -5,7 +6,7 @@ import 'domain.dart';
 import 'google_auth.dart';
 import 'store.dart';
 
-class GoogleConnections {
+class GoogleConnections implements ConnectedSources {
   final Domain domain;
   final GoogleAuth auth;
   bool _closed = false;

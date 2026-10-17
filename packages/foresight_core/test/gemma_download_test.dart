@@ -30,7 +30,11 @@ void main() {
       final phases = <ModelDownloadPhase>[];
       try {
         expect(
-          localModelFile(model, cache, registration: registration)?.path,
+          (await localModelFile(
+            model,
+            cache,
+            registration: registration,
+          ))?.path,
           file.path,
         );
         final reused = await GemmaDownload(

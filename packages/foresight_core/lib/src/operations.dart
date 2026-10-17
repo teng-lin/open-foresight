@@ -62,6 +62,7 @@ enum Operation {
   models_embedding('models.embedding'),
   application_resume('application.resume'),
   graph_embeddings('graph.embeddings'),
+  labels_auto_assign('labels.auto_assign'),
   labels_put('labels.put'),
   labels_set('labels.set'),
   labels_cluster('labels.cluster'),
