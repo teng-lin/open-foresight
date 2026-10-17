@@ -16,6 +16,7 @@ runs rather than the current test suite.
 
 ## Validation and release status
 
+- [Published installer functional acceptance](validation/release-acceptance.md)
 - [Feature parity progress](validation/feature-parity-progress.md)
 - [macOS validation](validation/macos-validation.md)
 - [Production models and packaged runtime acceptance](validation/reference-production-runtime-acceptance.md)

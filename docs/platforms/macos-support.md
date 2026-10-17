@@ -232,3 +232,9 @@ REGISTERED_MODEL` copies and relocates the actual prefix, runs from a moved path
 containing spaces with poisoned working-directory imports, and checks both a
 positive and empty detector result. Its output report belongs under ignored
 `test-results`; it does not copy the registered model into the test bundle.
+
+## Published DMG acceptance
+
+[Release acceptance](../validation/release-acceptance.md) mounts the downloaded DMG and validates a new owned installed copy, real model
+workflows and saved-data persistence across reinstall. Existing apps are refused.
+Hardware and normal desktop/Finder checks remain separate manual gates.
