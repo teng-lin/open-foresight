@@ -101,6 +101,27 @@ void privateDirectory(String path) {
   }
 }
 
+/// Protect only a temporary directory freshly created by this operation.
+/// Dart's Linux createTemp honors umask and can otherwise produce mode 0755.
+/// Keep privateDirectory strict for existing caller-supplied directories.
+Future<Directory> createPrivateTempDirectory(
+  Directory parent,
+  String prefix,
+) async {
+  final directory = await parent.createTemp(prefix);
+  try {
+    final result = await Process.run('/bin/chmod', ['700', directory.path]);
+    if (result.exitCode != 0) {
+      throw StateError('Cannot protect ${directory.path}');
+    }
+    privateDirectory(directory.path);
+    return directory;
+  } catch (_) {
+    await directory.delete(recursive: true);
+    rethrow;
+  }
+}
+
 int systemMemoryGb() {
   if (Platform.isMacOS) {
     final result = Process.runSync('/usr/sbin/sysctl', ['-n', 'hw.memsize']);

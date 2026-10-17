@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
+import 'package:foresight_core/src/platform_services.dart';
 
 late String mcpKernel;
 
@@ -21,7 +22,7 @@ class McpFixture {
   int sequence = 0;
 
   Future<void> start() async {
-    root = Directory('/tmp').createTempSync('of-mcp-');
+    root = await createPrivateTempDirectory(Directory('/tmp'), 'of-mcp-');
     listener = await ServerSocket.bind(
       InternetAddress(
         '${root.path}/application.sock',
