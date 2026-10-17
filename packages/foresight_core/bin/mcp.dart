@@ -195,7 +195,13 @@ Future<void> main() async {
       'import_url',
       'sources.import_url',
       'Fetch and index an HTTP or HTTPS text/HTML page.',
-      {'url': text},
+      {
+        'url': text,
+        'allow_private_network': JsonSchema.boolean(
+          description:
+              'Explicitly permit local/private/special-use addresses for this import. Defaults to false.',
+        ),
+      },
       ['url'],
       openWorld: true,
     );
@@ -210,7 +216,12 @@ Future<void> main() async {
       'refresh_sources',
       'sources.refresh',
       'Refresh imported sources and connected Google sources, then update the index.',
-      {},
+      {
+        'allow_private_network': JsonSchema.boolean(
+          description:
+              'Explicitly permit private network URL refreshes for this request. Defaults to false.',
+        ),
+      },
       [],
       openWorld: true,
     );

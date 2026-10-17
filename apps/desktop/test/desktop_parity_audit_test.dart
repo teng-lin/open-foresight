@@ -203,6 +203,16 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
         expect(find.text('Please enter the URL'), findsWidgets);
+        expect(
+          tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+          isFalse,
+        );
+        await tester.tap(find.text('Allow private network addresses'));
+        await tester.pump();
+        expect(
+          tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+          isTrue,
+        );
         await capture('05-url-dialog');
         final titleContext = tester.element(find.byType(AlertDialog));
         expect(Theme.of(titleContext).dialogTheme.titleTextStyle!.fontSize, 24);
@@ -238,6 +248,10 @@ void main() {
         await tester.tap(find.text('Add from URL'));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
+        expect(
+          tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+          isFalse,
+        );
         await capture('09-dialog-scaled');
         expect(tester.takeException(), isNull);
         await tester.tap(find.text('Cancel'));

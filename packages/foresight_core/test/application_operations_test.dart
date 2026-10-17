@@ -387,23 +387,30 @@ void main() {
       });
       addTearDown(() => server.close(force: true));
       String url(String path) => 'http://127.0.0.1:${server.port}$path';
-      final id = await app.importUrl(url('/page'));
+      final id = await app.importUrl(url('/page'), allowPrivateNetwork: true);
       expect(domain.store.sources.single['content'], 'Apollo & Friday <yes>');
       content = '<p>Updated</p>';
-      expect(await app.importUrl(url('/page')), id);
+      expect(await app.importUrl(url('/page'), allowPrivateNetwork: true), id);
       expect(domain.store.sources.single['revision'], 2);
       for (final path in ['/missing', '/binary', '/empty', '/large']) {
-        await expectLater(app.importUrl(url(path)), throwsStateError);
+        await expectLater(
+          app.importUrl(url(path), allowPrivateNetwork: true),
+          throwsStateError,
+        );
       }
       for (final invalid in ['file:///private', 'https:', 'garbage']) {
         await expectLater(app.importUrl(invalid), throwsStateError);
       }
       await expectLater(
-        app.importUrl(url('/cancel'), current: () => false),
+        app.importUrl(
+          url('/cancel'),
+          current: () => false,
+          allowPrivateNetwork: true,
+        ),
         throwsStateError,
       );
       expect(domain.store.sources, hasLength(1));
-      await app.call('sources.refresh', {});
+      await app.call('sources.refresh', {'allow_private_network': true});
       expect(domain.store.sources.single['revision'], 3);
     },
   );
