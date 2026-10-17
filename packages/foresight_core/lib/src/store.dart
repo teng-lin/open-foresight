@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
@@ -473,7 +474,7 @@ class Store {
       digest = (await sha256.bind(File(path).openRead()).first).toString();
     }
     if (current != null && !current())
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     if (expectedDigest != null && digest != expectedDigest)
       throw StateError(
         'The $kind model does not match its installation digest',

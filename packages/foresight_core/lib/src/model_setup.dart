@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
@@ -29,7 +30,7 @@ Future<NativeRuntime> configureGeneration(
   try {
     onCandidate?.call(candidate);
     if (current != null && !current())
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     final digest = backend == 'litert_lm'
         ? (await sha256.bind(File(model).openRead()).first).toString()
         : null;
@@ -37,7 +38,7 @@ Future<NativeRuntime> configureGeneration(
         modelType ?? referenceGenerationModelType(digest ?? '');
     await candidate.load(runner, model, backend: backend);
     if (current != null && !current())
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     onRegister?.call();
     await store.register(
       'generation',
@@ -163,7 +164,8 @@ Future<void> configureEncryptedDedicatedQuery(
   bool Function()? current,
   MacModelVault? vault,
 }) async {
-  if (current != null && !current()) throw StateError('Model setup cancelled');
+  if (current != null && !current())
+    throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
   final encrypted = File(path);
   if (FileSystemEntity.typeSync(path, followLinks: false) !=
           FileSystemEntityType.file ||
@@ -210,7 +212,7 @@ Future<String> _prepareDedicatedQuery(
 }) async {
   void checkCurrent() {
     if (current != null && !current())
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
   }
 
   checkCurrent();
