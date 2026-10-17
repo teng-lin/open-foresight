@@ -2,6 +2,38 @@ import 'package:foresight_core/src/reference_note_enhancement.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('model output stops at earliest exact marker before trimming', () {
+    expect(
+      cleanNoteEnhancementModelOutput('  * Kept<eos>discard</output>'),
+      '* Kept',
+    );
+    for (final marker in ['</output>', '<turn|>', '<eos>', '<end_of_turn>']) {
+      expect(
+        cleanNoteEnhancementModelOutput(' * Kept $marker discarded'),
+        '* Kept',
+      );
+      expect(cleanNoteEnhancementModelOutput('$marker discarded'), '');
+    }
+    expect(cleanNoteEnhancementModelOutput('  <EOS>literal  '), '<EOS>literal');
+  });
+
+  test(
+    'Key Notes cleanup retains the original case and whole-response scope',
+    () {
+      expect(cleanNoteEnhancementModelOutput('  ### Key Notes  '), '');
+      expect(cleanNoteEnhancementModelOutput('## KeyNotes'), '');
+      expect(cleanNoteEnhancementModelOutput('## key notes'), '## key notes');
+      expect(
+        cleanNoteEnhancementModelOutput('## Key Notes\n* Kept'),
+        '## Key Notes\n* Kept',
+      );
+      expect(
+        cleanNoteEnhancementModelOutput('* Kept\n## Key Notes'),
+        '* Kept\n## Key Notes',
+      );
+    },
+  );
+
   test('status messages match whole snapshots exactly', () {
     expect(isNoteEnhancementStatus('Evaluating notes...'), isTrue);
     expect(isNoteEnhancementStatus('Scanning the transcripts...'), isTrue);

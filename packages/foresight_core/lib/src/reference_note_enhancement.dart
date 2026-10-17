@@ -54,3 +54,62 @@ final _noteMarkerPatterns = [
   RegExp(r'<\s*[lL]\s*:\s*', caseSensitive: false),
   RegExp(r'</?\s*[lL](?:\s*:\s*\d*)?\s*$', caseSensitive: false),
 ];
+
+/// NotesEnhancer._cleanModelOutput (0x100a322b0). The header expression
+/// applies to the complete response, with caseSensitive=true and multiline=false.
+String cleanNoteEnhancementModelOutput(String text) {
+  var end = text.length;
+  for (final marker in const [
+    '</output>',
+    '<turn|>',
+    '<eos>',
+    '<end_of_turn>',
+  ]) {
+    final index = text.indexOf(marker);
+    if (index >= 0 && index < end) end = index;
+  }
+  return text.substring(0, end).replaceAll(_keyNotesHeaderPattern, '').trim();
+}
+
+final _keyNotesHeaderPattern = RegExp(r'^\s*#+\s*Key\s*Notes\s*$');
+
+/// Original _clusterScribblesIntoBatches (0x100a328bc), returning note indices.
+/// References are indexed by note. The initial seed is never budget-rejected.
+List<List<int>> clusterNoteEnhancementBatches(
+  List<List<int>> transcriptReferences,
+  int noteCount,
+) {
+  final remaining = List<int>.generate(noteCount, (index) => index);
+  final batches = <List<int>>[];
+  while (remaining.isNotEmpty) {
+    final seed = remaining.removeAt(0);
+    final batch = [seed];
+    final excerpts = transcriptReferences[seed].toSet();
+    void scan({required bool requireOverlap}) {
+      var index = 0;
+      while (index < remaining.length && batch.length < 4) {
+        final candidate = remaining[index];
+        final refs = transcriptReferences[candidate];
+        if (requireOverlap && !refs.any(excerpts.contains)) {
+          index++;
+          continue;
+        }
+        final union = {...excerpts, ...refs};
+        if (union.length * 350 + (batch.length + 1) * 50 + 300 > 2000) {
+          index++;
+          continue;
+        }
+        batch.add(candidate);
+        excerpts.addAll(refs);
+        remaining.removeAt(index);
+      }
+    }
+
+    scan(requireOverlap: true);
+    if (batch.length < 2 && remaining.isNotEmpty) {
+      scan(requireOverlap: false);
+    }
+    batches.add(batch);
+  }
+  return batches;
+}

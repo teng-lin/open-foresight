@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
     }
     // Selected public download URL fragments/schema labels only. Never inspect
     // credential PP9019 or any entire application configuration map.
-    for (intptr_t pp : {34590,34591,34592,34593,34602,34603,34604,34605,34606,34607,34608,34609,10614,9196,19651,1109,19655,19656,19658,19659,19671,19672,19673,34477,34478,34479,1112,19652,19654,8985,13036,13106,57,483,5327,1553,4523,13124,13125,13126,5320,1229,4714,4687,17024,17025,16982,17026,17027,13087,13090,13176,17017,17018,17019,10483,17021,2349}) {
+    for (intptr_t pp : {34554,34590,34591,34592,34593,34602,34603,34604,34605,34606,34607,34608,34609,10614,9196,19651,1109,19655,19656,19658,19659,19671,19672,19673,34477,34478,34479,1112,19652,19654,8985,13036,13106,57,483,5327,1553,4523,13124,13125,13126,5320,1229,4714,4687,17024,17025,16982,17026,17027,13087,13090,13176,17017,17018,17019,10483,17021,2349}) {
       const auto index = dart::ObjectPool::IndexFromOffset(pp * 8 - dart::kHeapObjectTag);
       if (index < 0 || index >= pool.Length()) continue;
       if (pool.TypeAt(index) == dart::ObjectPool::EntryType::kImmediate) {
@@ -69,6 +69,14 @@ int main(int argc, char** argv) {
       else
         std::printf("PUBLIC_DOWNLOAD_PP[%ld] CID[%ld] NONSCALAR_OMITTED\n", (long)pp,
           (long)value.GetClassId());
+      if (pp == 34554 && value.IsArray()) {
+        const auto& markers = dart::Array::Cast(value);
+        for (intptr_t i=0; i<markers.Length(); ++i) {
+          const auto& marker = dart::Object::Handle(zone, markers.At(i));
+          if (marker.IsString())
+            std::printf("PUBLIC_NOTE_STOP_MARKER[%ld] VALUE[%s]\n", (long)i, marker.ToCString());
+        }
+      }
       if ((pp == 19671 || pp == 19672 || pp == 19673) && value.IsRegExp()) {
         const auto& pattern = dart::String::Handle(zone, dart::RegExp::Cast(value).pattern());
         std::printf("PUBLIC_NOTE_REGEX_PP[%ld] PATTERN[%s]\n", (long)pp, pattern.ToCString());
@@ -231,6 +239,8 @@ int main(int argc, char** argv) {
     std::printf("LIBC_CEIL_THREAD_OFFSET[%ld]\n", (long)dart::Thread::LibcCeil_entry_point_offset());
     std::printf("LIBC_ROUND_THREAD_OFFSET[%ld]\n", (long)dart::Thread::LibcRound_entry_point_offset());
     const auto origin = isolate->group()->dispatch_table()->ArrayOrigin();
+    std::printf("LIST_ANY_DISPATCH CODE_OFFSET[0x%lx]\n",
+      (unsigned long)(origin[dart::kGrowableObjectArrayCid + 41834] - reinterpret_cast<dart::uword>(image.lib)));
     std::printf("LIST_EMPTY_DISPATCH CODE_OFFSET[0x%lx]\n",
       (unsigned long)(origin[dart::kGrowableObjectArrayCid + 42110] - reinterpret_cast<dart::uword>(image.lib)));
 
