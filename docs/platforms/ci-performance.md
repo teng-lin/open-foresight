@@ -72,7 +72,8 @@ assets cannot be overwritten; corrections require a new app version.
 Main candidates require the bundled Google application registration. Rotated
 distribution settings require a fresh candidate; promotion does not change its
 bundled configuration. Existing tags retain their historical committed workflows;
-v0.1.0 is not rewritten or retagged, and v0.1.1 replaces its mismatched assets.
+v0.1.0 is not rewritten or retagged. The v0.1.1 release supersedes the mismatched
+v0.1.0 release.
 
 ## Recovery
 

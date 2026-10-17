@@ -24,7 +24,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 ### Fixed
 
 - Clearing a workspace removes private conversation checkpoints locally, works offline, and rejects work from the cleared generation.
-- Citation groups and malformed answers fail verification consistently in the shipped native and macOS checkers; unverified drafts are not saved as answers.
+- Citation groups are checked consistently by the shipped C++ and macOS Python checkers. The shared Dart contract rejects malformed answer payloads, and unverified drafts are not saved as answers.
 - Cancelled meeting generation does not save artifacts; search and refresh validate source revisions, preserve local edits, and follow the service's adopted helper state.
 - Meeting worker failures retain indexed transcript segments, paused meetings recover after a crash, Stop has a deadline, and explicit resume restores an exhausted helper. Speech retries on CPU; failed GPU generation prepares CPU for a retry.
 - Native capture overflow writes interruption rows, and global shortcut failures appear in the workspace.
