@@ -1824,7 +1824,10 @@ class Application implements ModelGate {
       throw RpcError(RpcErrorCode.busy, 'A meeting is already recording');
     final speech = store.model('speech');
     if (speech == null)
-      throw StateError('Register speech model and whisper.cpp runner first');
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Register speech model and whisper.cpp runner first',
+      );
     provisionalTranscript.clear();
     final active = Recording(
       runtimeConfiguration.nativeLibrary,
