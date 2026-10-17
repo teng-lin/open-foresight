@@ -17,7 +17,7 @@ void main() {
       'allows selected files; denies outside roots, profile and symlink escapes',
       () {
         final good = File('${root.path}/good.txt')..writeAsStringSync('hello');
-        expect(policy.validate(good.path), good.path);
+        expect(policy.validate(good.path), good.resolveSymbolicLinksSync());
         final secret = File('${profile.path}/tokens.json')
           ..writeAsStringSync('secret');
         final outside = File('${temp.path}/outside.txt')
@@ -62,7 +62,9 @@ void main() {
         profile.deleteSync(recursive: true);
         File('${root.path}/ok.txt').writeAsStringSync('hello');
         Link('${root.path}/escape.txt').createSync('/dev/zero');
-        expect(await policy.directoryFiles(root.path), ['${root.path}/ok.txt']);
+        expect(await policy.directoryFiles(root.path), [
+          File('${root.path}/ok.txt').resolveSymbolicLinksSync(),
+        ]);
       },
     );
   });
