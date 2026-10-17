@@ -33,6 +33,29 @@ class TapStartupWatchdog {
   bool armed_ = false;
 };
 
+// Original InputRecorder ignores configuration notifications while its engine
+// still runs. A stopped-engine notification replaces the pending 150ms restart;
+// the delayed closure checks recording ownership again before touching devices.
+class InputConfigurationRecovery {
+ public:
+  using Clock = std::chrono::steady_clock;
+  void observe(Clock::time_point now, bool active, bool running) {
+    if (!active || running) return;
+    due_ = now + std::chrono::milliseconds(150);
+    pending_ = true;
+  }
+  bool pending() const { return pending_; }
+  bool restart(Clock::time_point now, bool active) {
+    if (!active) { pending_ = false; return false; }
+    if (!pending_ || now < due_) return false;
+    pending_ = false;
+    return true;
+  }
+ private:
+  Clock::time_point due_{};
+  bool pending_ = false;
+};
+
 struct VoiceCaptureStart {
   int status;
   bool processed;

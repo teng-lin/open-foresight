@@ -58,6 +58,7 @@ struct Ring {
   std::atomic<uint64_t> dropped{0};
   std::atomic<uint64_t> convertedBuffers{0};
   std::atomic<bool> changed{false};
+  std::atomic<uint64_t> configurationChanges{0};
   void push(float value) {
     auto w = write.load(std::memory_order_relaxed), next = (w + 1) % capacity;
     if (next == read.load(std::memory_order_acquire)) { ++dropped; return; }
@@ -197,7 +198,7 @@ OSStatus startEngine(Session &s, AudioDeviceID device, bool processed) { @try {
     if ([s.engine startAndReturnError:&error]) {
       s.engineObserver = [[NSNotificationCenter defaultCenter]
           addObserverForName:AVAudioEngineConfigurationChangeNotification object:s.engine queue:nil
-          usingBlock:^(NSNotification *) { ring->changed = true; }];
+          usingBlock:^(NSNotification *) { ++ring->configurationChanges; }];
       return noErr;
     }
     if (attempt + 1 < attempts) std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -420,6 +421,9 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
     TapStartupWatchdog watchdog;
     if (!playback) watchdog.arm(TapStartupWatchdog::Clock::now(), TapStartupWatchdog::WallClock::now());
     bool watchdogFallback = false;
+    bool configurationRestart = false;
+    InputConfigurationRecovery configuration;
+    uint64_t configurationChanges = 0;
     while (true) {
       if (cancel) {
         if (session.engine) [session.engine stop];
@@ -440,6 +444,18 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
         previous = value; position += 1;
       }
       if (cancel) break;
+      if (session.engine) {
+        const auto observed = session.ring->configurationChanges.load();
+        if (observed != configurationChanges) {
+          configurationChanges = observed;
+          configuration.observe(InputConfigurationRecovery::Clock::now(), !cancel, session.engine.running);
+        }
+        if (configuration.restart(InputConfigurationRecovery::Clock::now(), !cancel)) {
+          configurationRestart = true;
+          reconnect = true;
+          break;
+        }
+      }
       if (!playback && echoCancellation && echoCancellation->load() != appliedEcho) {
         appliedEcho = echoCancellation->load();
         if (appliedEcho) tapStartupFallback = false;
@@ -475,7 +491,7 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
         else get(session.aggregate, kAudioDevicePropertyDeviceIsRunning, running);
         double deviceRate = initialDeviceRate; get(device, kAudioDevicePropertyNominalSampleRate, deviceRate);
         UInt32 alive = 0;
-        if (!running || session.ring->changed || deviceRate != initialDeviceRate || resolve(target, playback) != device || !get(device, kAudioDevicePropertyDeviceIsAlive, alive) || !alive) { reconnect = true; break; }
+        if ((!running && !configuration.pending()) || session.ring->changed || deviceRate != initialDeviceRate || resolve(target, playback) != device || !get(device, kAudioDevicePropertyDeviceIsAlive, alive) || !alive) { reconnect = true; break; }
         check = std::chrono::steady_clock::now();
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -490,6 +506,9 @@ void fs_macos_capture(const std::string &target, bool playback, int rate, std::a
     if (!reconnect || cancel) break;
     emit(json(@{@"type":@"gap", @"reason":@"audio_device_changed", @"discarded_bytes":@0}));
     ownedSession.reset();
+    // The original restarts directly after its 150ms debounce. Device removal
+    // and other health failures retain the port's separate retry backoff.
+    if (configurationRestart) continue;
     if (++attempt >= 5) { event(@"state", @"failed", @"Audio device retries exhausted. Select a device and restart recording.", @"device_unavailable"); break; }
     for (int i = 0; i < attempt * 10 && !cancel; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }

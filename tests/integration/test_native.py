@@ -221,7 +221,7 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
         inp=(C.c_int16*6)(0,1000,2000,3000,4000,5000);out=(C.c_int16*3)()
         self.assertEqual(self.lib.fs_resample_pcm(inp,6,48000,out,3,24000),3);self.assertEqual(list(out),[0,2000,4000])
     def test_capture_fixed_playback_frames_and_legacy_microphone_map(self):
-        runner=self.path/'pw-record';runner.write_text('#!/usr/bin/env python3\nimport os,time,sys\ntarget=sys.argv[sys.argv.index("--target")+1]\nif target != "auto":\n props=sys.argv[sys.argv.index("--properties")+1]\n assert "node.dont-fallback = true" in props\n assert "node.dont-reconnect = true" in props\nfor n in [1,500,4000,3219]:\n os.write(1,b"\\0"*n);time.sleep(.02)\ntime.sleep(60)\n');runner.chmod(0o755)
+        runner=self.path/'pw-record';runner.write_text('#!/usr/bin/env python3\nimport os,time,sys\nassert "--raw" not in sys.argv\nassert sys.argv[-1] == "-"\ntarget=sys.argv[sys.argv.index("--target")+1]\nif target != "auto":\n props=sys.argv[sys.argv.index("--properties")+1]\n assert "node.dont-fallback = true" in props\n assert "node.dont-reconnect = true" in props\nfor n in [1,500,4000,3219]:\n os.write(1,b"\\0"*n);time.sleep(.02)\ntime.sleep(60)\n');runner.chmod(0o755)
         override=patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME':str(runner)})
         override.start()
         old=os.environ['PATH'];os.environ['PATH']=str(self.path)+':'+old
@@ -242,6 +242,101 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
         finally:
             os.environ['PATH']=old
             override.stop()
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'production PipeWire adapter')
+    def test_capture_raw_fifo_excludes_stdout_diagnostics_and_cleans_up(self):
+        import base64
+        marker = self.path / 'fifo-path'
+        runner = self.path / 'pw-record'
+        runner.write_text('#!/usr/bin/env python3\n' +
+            'import os,pathlib,stat,sys\n' +
+            'assert "--raw" not in sys.argv\n' +
+            'p=pathlib.Path(sys.argv[-1])\n' +
+            'assert p.suffix == ".raw" and stat.S_ISFIFO(p.stat().st_mode)\n' +
+            'assert stat.S_IMODE(p.stat().st_mode) == 0o600\n' +
+            'assert stat.S_IMODE(p.parent.stat().st_mode) == 0o700\n' +
+            'pathlib.Path(' + repr(str(marker)) + ').write_text(str(p))\n' +
+            'print("stream node 42 error: target not found",flush=True)\n' +
+            'with p.open("wb",buffering=0) as output: output.write(b"A"*3840)\n' +
+            'print("stream node 42 unconnected",flush=True)\n')
+        runner.chmod(0o755)
+        environment = patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME': '', 'PATH': str(self.path) + ':' + os.environ['PATH']})
+        environment.start()
+        handle = self.lib.fs_capture_start(b'missing-selected-target', 1, 48000)
+        self.assertTrue(handle)
+        try:
+            events = []
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                event = owned_json(self.lib, self.lib.fs_event_poll(handle, 100))
+                if event:
+                    events.append(event)
+                    if event['type'] == 'gap': break
+            self.assertTrue(any(e['type'] == 'gap' for e in events), events)
+            self.assertEqual([base64.b64decode(e['data']) for e in events if e['type'] == 'pcm'], [b'A' * 3840], events)
+            path = Path(marker.read_text())
+            self.assertFalse(path.exists())
+            self.assertFalse(path.parent.exists())
+        finally:
+            self.lib.fs_capture_stop(handle)
+            environment.stop()
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'production PipeWire adapter')
+    def test_capture_raw_fifo_child_exit_without_open_is_observed(self):
+        import errno, signal
+        previous = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+        runner = self.path / 'pw-record'
+        runner.write_text('#!/usr/bin/env python3\nprint("stream node 42 error: target not found",flush=True)\n')
+        runner.chmod(0o755)
+        environment = patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME': '', 'PATH': str(self.path) + ':' + os.environ['PATH']})
+        environment.start()
+        handle = self.lib.fs_capture_start(b'missing-selected-target', 0, 48000)
+        try:
+            events = []
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                event = owned_json(self.lib, self.lib.fs_event_poll(handle, 100))
+                if event:
+                    events.append(event)
+                    if event['type'] == 'gap': break
+            self.assertTrue(any(e['type'] == 'gap' for e in events), events)
+            self.assertFalse(any(e['type'] == 'pcm' or e.get('state') == 'capturing' for e in events), events)
+            self.assertEqual(events[-1]['exit_status'], -errno.ECHILD)
+        finally:
+            self.lib.fs_capture_stop(handle)
+            environment.stop()
+            signal.signal(signal.SIGCHLD, previous)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'production PipeWire adapter')
+    def test_capture_raw_fifo_finish_preserves_partial_final_frame(self):
+        import base64
+        runner = self.path / 'pw-record'
+        runner.write_text('#!/usr/bin/env python3\nimport pathlib,sys,time\n' +
+            'with pathlib.Path(sys.argv[-1]).open("wb",buffering=0) as output: output.write(b"A"*3858)\n' +
+            'time.sleep(60)\n')
+        runner.chmod(0o755)
+        environment = patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME': '', 'PATH': str(self.path) + ':' + os.environ['PATH']})
+        environment.start()
+        handle = self.lib.fs_capture_start(b'selected-target', 1, 48000)
+        try:
+            events = []
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                event = owned_json(self.lib, self.lib.fs_event_poll(handle, 100))
+                if event:
+                    events.append(event)
+                    if event['type'] == 'pcm': break
+            self.assertTrue(any(e['type'] == 'pcm' for e in events), events)
+            self.lib.fs_capture_finish(handle)
+            while True:
+                event = owned_json(self.lib, self.lib.fs_event_poll(handle, 0))
+                if not event: break
+                events.append(event)
+            self.assertEqual([len(base64.b64decode(e['data'])) for e in events if e['type'] == 'pcm'], [3840, 18])
+            self.assertEqual(events[-1]['state'], 'stopped')
+        finally:
+            self.lib.fs_capture_stop(handle)
+            environment.stop()
+
     def test_capture_finish_preserves_partial_final_frame(self):
         import base64
         runner=self.path/'capture-tail'
