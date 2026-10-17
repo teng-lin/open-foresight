@@ -964,6 +964,7 @@ class Application {
           );
           return null;
         case 'application.resume':
+          await domain.helper.recover();
           await domain.resume();
           return null;
         case 'graph.embeddings':
@@ -1843,16 +1844,28 @@ class Application {
     if (active == null || id == null) return;
     _liveIndex?.cancel();
     _inactivity?.cancel();
-    var status = 'failed';
+    var status = 'interrupted';
+    Object? failure;
     store.db.execute("UPDATE meetings SET state='transcribing' WHERE id=?", [
       id,
     ]);
     changed();
     try {
-      await active.stop();
-      status = 'transcribed';
+      try {
+        await active.stop();
+      } catch (error) {
+        failure = error;
+        active.dispose();
+        recordingState = 'Transcript retained after speech failure: $error';
+      }
+      // Already committed segments remain useful even if a later segment or
+      // shutdown failed. Index them before publishing the recoverable state.
       await indexMeeting(id);
-      status = recordingState.startsWith('No speech') ? 'empty' : 'completed';
+      status = failure != null || active.lastError.isNotEmpty
+          ? 'interrupted'
+          : recordingState.startsWith('No speech')
+          ? 'empty'
+          : 'completed';
     } finally {
       recording = null;
       provisionalTranscript.clear();

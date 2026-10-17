@@ -341,7 +341,7 @@ class ApplicationService {
         stale.deleteSync();
       store = Store('${profile.data}/application.db');
       store.db.execute(
-        "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing')",
+        "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing','paused')",
       );
       helper = Helper(
         '${profile.runtime}/helper.sock',
