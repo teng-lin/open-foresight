@@ -6,4 +6,6 @@ __attribute__((constructor)) static void loaded() {
       std::fclose(file);
   }
 }
-extern "C" int litert_lm_test() { return 123; }
+extern "C" int litert_lm_test() {
+  return 123;
+}

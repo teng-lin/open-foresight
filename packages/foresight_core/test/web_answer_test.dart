@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -376,7 +377,12 @@ void main() {
         client = await RemoteDomain.connect(profile);
         await client.enableDesktopApprovals((event) {
           if (event['event'] == 'approval') {
-            unawaited(client!.client.call('security.decide', {'approval_id': event['approval_id'], 'allow': true}));
+            unawaited(
+              client!.client.call('security.decide', {
+                'approval_id': event['approval_id'],
+                'allow': true,
+              }),
+            );
           }
         });
         expect(client.webSearchAvailable, isTrue);

@@ -1,13 +1,13 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
-class StreamingChatDomain extends Domain {
+class StreamingChatDomain extends AnswerFixtureDomain {
   StreamingChatDomain(super.store, super.helper);
   final response = StreamController<String>();
   final prompts = <String>[];
@@ -55,13 +55,16 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         final dynamic state = tester.state(find.byType(Workspace));
         void navigate(int? id) => state.update(() {
-          state.meetingId = id;
+          state.meetingFeature.meetingId = id;
           state.tab = id == null ? 1 : 3;
-          state.meetingPanel = 'Chat';
+          state.meetingFeature.meetingPanel = 'Chat';
         });
         Finder composer() => find.byWidgetPredicate(
           (w) =>

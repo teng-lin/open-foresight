@@ -100,7 +100,9 @@ public:
   }
   ChildProcess(const ChildProcess &) = delete;
   ChildProcess &operator=(const ChildProcess &) = delete;
-  ~ChildProcess() { stop(); }
+  ~ChildProcess() {
+    stop();
+  }
   void stop() {
     {
       std::lock_guard lock(mutex_);
@@ -110,6 +112,10 @@ public:
     if (creator_.joinable())
       creator_.join();
   }
-  bool alive() const { return alive_.load(); }
-  pid_t pid() const { return pid_.load(); }
+  bool alive() const {
+    return alive_.load();
+  }
+  pid_t pid() const {
+    return pid_.load();
+  }
 };

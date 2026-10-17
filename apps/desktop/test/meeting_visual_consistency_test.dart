@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -68,7 +69,10 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: captureKey,
-          child: Foresight(domain, deviceLoader: () async => []),
+          child: Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         ),
       );
       await tester.pumpAndSettle();
@@ -130,8 +134,8 @@ void main() {
       await capture('03-detail');
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() {
-        state.answerFontSize = 21.0;
-        state.meetingPanel = 'Summary';
+        state.chatFeature.answerFontSize = 21.0;
+        state.meetingFeature.meetingPanel = 'Summary';
       });
       await tester.pumpAndSettle();
       expect(
@@ -142,7 +146,7 @@ void main() {
             .fontSize,
         21,
       );
-      state.update(() => state.meetingPanel = 'Chat');
+      state.update(() => state.meetingFeature.meetingPanel = 'Chat');
       await tester.pumpAndSettle();
 
       tester.view.physicalSize = const Size(700, 800);

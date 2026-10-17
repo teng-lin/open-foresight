@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -74,7 +75,10 @@ void main() {
       final Domain domain = BundledGoogleDomain(store, helper, auth);
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         final dynamic state = tester.state(find.byType(Workspace));
         Future<void> cancel({bool keyboard = false}) async {
@@ -92,7 +96,10 @@ void main() {
           expect(auth.signingIn, false);
           expect(find.byType(AlertDialog), findsNothing);
           expect(state.error, isEmpty);
-          expect(state.googleState, 'Google sign-in cancelled.');
+          expect(
+            state.integrationFeature.googleState,
+            'Google sign-in cancelled.',
+          );
           expect(state.busy, false);
           expect(store.sources, isEmpty);
         }

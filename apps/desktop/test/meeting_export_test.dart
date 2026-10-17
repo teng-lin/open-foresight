@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -817,7 +819,10 @@ void main() {
         '${directory.path}/helper',
       );
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Meetings').first);
       await tester.pump(const Duration(milliseconds: 400));

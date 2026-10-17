@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -45,7 +47,10 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.pumpAndSettle();
         expect(find.text('Calendar cancelled'), findsOneWidget);
@@ -81,9 +86,11 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            Domain(
-              store,
-              OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              ),
             ),
             deviceLoader: () async => [],
           ),

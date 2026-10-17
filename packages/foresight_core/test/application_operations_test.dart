@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -69,7 +70,6 @@ class OperationsDomain extends AdapterDomain {
     await super.delete(id);
   }
 
-  @override
   Stream<String> askInConversation(
     String question,
     String conversation, {
@@ -80,7 +80,6 @@ class OperationsDomain extends AdapterDomain {
     yield '$question [$conversation:${meetingId ?? 0}]';
   }
 
-  @override
   Stream<String> askWithWebInConversation(
     String question,
     String conversation, {
@@ -131,6 +130,38 @@ class ArtifactGenerator extends NativeRuntime {
   }
 }
 
+class OperationsApplication extends Application {
+  OperationsApplication(super.domain, {super.auth});
+  @override
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => (domain as OperationsDomain).askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  @override
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => (domain as OperationsDomain).askWithWebInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+}
+
 void main() {
   late Directory root;
   late OperationsDomain domain;
@@ -159,7 +190,7 @@ void main() {
       Directory('${root.path}/google'),
       endpoints: google.endpoints,
     );
-    app = Application(domain, auth: auth);
+    app = OperationsApplication(domain, auth: auth);
   });
   tearDown(() async {
     await app.close();
@@ -235,7 +266,16 @@ void main() {
       }
       await app.call('sources.index', {'id': hidden['id']});
       await app.call('sources.delete', {'id': id});
-      await expectLater(app.call('sources.get', {'id': id}), throwsStateError);
+      await expectLater(
+        app.call('sources.get', {'id': id}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
+      );
       await app.call('sources.delete', {'id': hidden['id']});
       expect(await app.call('sources.search', {'query': 'q'}), isEmpty);
     },
@@ -308,10 +348,25 @@ void main() {
         app.call('meetings.get', {'id': 999}),
         throwsStateError,
       );
-      await expectLater(app.call('unsupported', {}), throwsArgumentError);
+      await expectLater(
+        app.call('unsupported', {}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
+      );
       await expectLater(
         app.call('notes.save', {}, current: () => false),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
     },
   );
@@ -482,7 +537,13 @@ void main() {
       expect(app.modelBusy, isTrue);
       await expectLater(
         app.call('models.register', {'kind': 'speech', 'path': model.path}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.busy,
+          ),
+        ),
       );
       rag.release!.complete();
       await pending;

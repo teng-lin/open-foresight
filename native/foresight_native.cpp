@@ -39,7 +39,9 @@
 extern char **environ;
 namespace {
 using foresight::quote;
-char *owned(const std::string &s) { return strdup(s.c_str()); }
+char *owned(const std::string &s) {
+  return strdup(s.c_str());
+}
 struct PollLifetime {
   std::shared_mutex gate;
   std::atomic<bool> closed{false};
@@ -372,7 +374,9 @@ void failure(Worker &w, const std::string &id, uint64_t &seq,
                    ",\"retryable\":false"));
 }
 #include "persistent_generation.h"
-Engine::~Engine() { shutdown_persistent(*this); }
+Engine::~Engine() {
+  shutdown_persistent(*this);
+}
 struct Speech : Worker {
   std::string runtime, model;
   std::vector<int16_t> samples, pending;
