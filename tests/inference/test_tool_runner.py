@@ -241,6 +241,48 @@ class NativeStopsTest(unittest.TestCase):
             self.assertEqual(engine.creations, 0)
 
 
+class ConversationBaseTest(unittest.TestCase):
+    def test_failed_clone_uses_fresh_request_and_preserves_base_for_next_send(self):
+        for failure in (None, RuntimeError('native clone failed')):
+            with self.subTest(failure=failure):
+                class Clone:
+                    def __init__(self): self.calls = 0
+                    def __call__(self, pointer):
+                        self.calls += 1
+                        if self.calls == 1:
+                            if isinstance(failure, Exception): raise failure
+                            return failure
+                        return pointer + 100
+                clone = Clone()
+                closed = []
+                class OwnedConversation:
+                    def __init__(self, lib, pointer, **kwargs):
+                        self._lib, self._ptr = lib, pointer
+                    def close(self): closed.append(self._ptr)
+                lib = types.SimpleNamespace(litert_lm_conversation_clone=clone)
+                configurations = []
+                def create(**config):
+                    configurations.append(config)
+                    return OwnedConversation(lib, len(configurations))
+                cache = runner.ConversationBase(
+                    types.SimpleNamespace(create_conversation=create), API)
+                module = types.ModuleType('litert_lm.conversation')
+                module.Conversation = OwnedConversation
+                config = {'system_message': 'Instruction', 'max_output_tokens': 256}
+                with patch.dict(sys.modules, {'litert_lm.conversation': module}):
+                    request = cache.acquire('same', True, config)
+                    self.assertEqual(request._ptr, 2)
+                    self.assertEqual(configurations, [config, config])
+                    request.close()
+                    retried = cache.acquire('same', True, config)
+                    self.assertEqual(retried._ptr, 101)
+                    self.assertEqual(len(configurations), 2)
+                    self.assertEqual(cache.base._ptr, 1)
+                    retried.close()
+                    cache.close()
+                self.assertEqual(closed, [2, 101, 1])
+
+
 class ToolRunnerTest(unittest.TestCase):
     def test_stream_emits_unicode_before_final_and_reads_control_only_after_final(self):
         ready = threading.Event()
@@ -371,6 +413,23 @@ class ToolRunnerTest(unittest.TestCase):
             runner.run_tool_conversation(engine, API, 'New query', {
                 'tools': [{'name': 'google_search'}], 'system_message': 'Instructions',
                 'messages': history}, 256)
+
+    def test_non_text_history_bypasses_base_and_retains_its_content(self):
+        for modality in ('image', 'audio'):
+            with self.subTest(modality=modality):
+                history = [{'role': 'user', 'content': [
+                    {'type': modality, 'path': '/fixture/' + modality},
+                    {'type': 'text', 'text': 'Describe it.'}]}]
+                engine = Engine([{'role': 'assistant', 'content': 'Answer'}])
+                leases = []
+                def lease(key, eligible, config):
+                    leases.append(eligible)
+                    return runner.create_configured_conversation(engine, config)
+                runner.run_tool_conversation(engine, API, 'Follow-up', {
+                    'tools': [{'name': 'search'}], 'system_message': 'Instructions',
+                    'messages': history}, 256, emit=lambda *args: None, lease=lease)
+                self.assertEqual(leases, [False])
+                self.assertEqual(engine.config['messages'], history)
 
     def test_delegated_detection_retains_conversation_and_waits_for_finish(self):
         value = {'content': [{'type': 'text', 'text': 'textual tool request'}]}

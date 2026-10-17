@@ -53,6 +53,48 @@ void main() {
       );
     },
   );
+  test('wrong-type analysis recovers text without salvaging tool calls', () {
+    for (final analysis in ['[]', '42', 'true', '"invalid"']) {
+      expect(
+        parseReferenceChatResponse(
+          '{"text":"Recovered.","analysis":$analysis,"intent":"answer",'
+          '"reasoning":"root reason","tool_calls":[{"name":"search"}]}',
+        ),
+        {
+          'text': 'Recovered.',
+          'analysis': {'intent': 'answer', 'reasoning': 'root reason'},
+          'tool_calls': [],
+        },
+        reason: analysis,
+      );
+    }
+  });
+  test('null and non-string metadata retain the decoded-map policy', () {
+    expect(
+      parseReferenceChatResponse(
+        '{"analysis":{"text":false,"intent":0,"reasoning":["why"]},'
+        '"intent":"root","reasoning":"root reason","tool_calls":false}',
+      ),
+      {
+        'text': 'false',
+        'analysis': {
+          'intent': 0,
+          'reasoning': ['why'],
+        },
+        'tool_calls': false,
+      },
+    );
+    expect(
+      parseReferenceChatResponse(
+        '{"text":null,"analysis":null,"intent":null,"reasoning":null}',
+      ),
+      {
+        'text': '',
+        'analysis': {'intent': 'unknown', 'reasoning': ''},
+        'tool_calls': [],
+      },
+    );
+  });
   test(
     'completion recovers sanitized raw text before considering date fallback',
     () {

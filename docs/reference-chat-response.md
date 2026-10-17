@@ -109,7 +109,14 @@ If decoding or map access fails, the processor selects the last quoted
 unescapes their string literals. Missing fields use the same defaults. Empty
 recovered text falls back to normalized, fence-stripped input only when that
 input does not start with `{`. Recovery always sets `tool_calls` to an empty
-list; it does not repair arbitrary JSON or infer executable calls.
+list; it does not repair arbitrary JSON or infer executable calls. A follow-up audit
+also covers a syntactically valid JSON map whose `analysis` value is a list,
+number, boolean, or string: failed nested access takes this same recovery path,
+including resetting `tool_calls`. Null analysis uses the decoded-map defaults.
+Non-string intent/reasoning and non-null tool-call values in a valid map retain
+the original values; this pass does not introduce a stricter metadata schema.
+The added regressions distinguish those branches. Existing implementation
+already matched these cases, so no parser rewrite was needed.
 
 This corrects visible output as well as stored metadata: an analysis-first
 map now displays its selected text instead of exposing a brace, and malformed
