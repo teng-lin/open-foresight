@@ -1,5 +1,5 @@
 // Response transformations recovered from the original Foresight Dart snapshot.
-// See docs/reference-chat-response.md for addresses and evidence boundaries.
+// See docs/chat/reference-chat-response.md for addresses and evidence boundaries.
 import 'dart:convert';
 import 'package:intl/intl.dart';
 

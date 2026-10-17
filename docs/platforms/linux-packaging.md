@@ -6,7 +6,7 @@ the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy. The workflow is
 published (including prereleases), not on pull requests, branch pushes, or tag
 pushes alone. The release tag must be `v` followed by the version in
 `apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
-[Versioning and releases](../README.md#versioning-and-releases).
+[Versioning and releases](../../README.md#versioning-and-releases).
 
 ## Compatibility baseline
 
@@ -46,7 +46,7 @@ already published matching SDK on subsequent releases.
 BuildKit caches intermediate SDK layers too. The first source-extension build
 is included in the SDK job's existing timeout.
 
-See [production runtime acceptance](reference-production-runtime-acceptance.md)
+See [production runtime acceptance](../validation/reference-production-runtime-acceptance.md)
 for the actual model/package checks and the boundaries of local validation.
 
 `packaging/check_abi.py` audits version requirements of every ELF file, including

@@ -44,4 +44,4 @@ The macOS `foresight-model-crypto` helper stores dedicated detector assets in th
 recovered Tink/AES-256-GCM format using only Open Foresight’s own Keychain entry.
 Its `--self-test` uses temporary keys and fixed vectors without accessing Keychain.
 The application opens private plaintext leases and removes them after their owned
-worker has exited. See [model acquisition](../docs/reference-model-acquisition.md).
+worker has exited. See [model acquisition](../docs/models/reference-model-acquisition.md).

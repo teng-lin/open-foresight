@@ -1,5 +1,10 @@
 # Missing-function reconstruction
 
+Archived cross-feature investigation. Statements below describe their original
+checkpoints and can be superseded by later work. Use the
+[feature parity ledger](../validation/feature-parity-progress.md) for current
+status and links to the detailed topic evidence.
+
 The new implementation worktree is `open-foresight-missing-functions`, branch
 `feature/missing-functions`. It starts from the export, Markdown preview and
 meeting-conversation fixes, and includes remote main `d15a096`.
@@ -25,7 +30,7 @@ retained there. No account credentials or profile contents were extracted.
 | Web fallback | `enable_web_search`, web-search-toggle events, `google_search` function schema, and meeting-assistant prompt instructions | Search is switchable. The assistant is instructed to call Google search for factual queries outside its meeting context and cite tool results using `[Source:N]`. Endpoint, credential handling and complete orchestration need further inspection. |
 
 Further native investigation uses REA with IDA Pro. See the
-[IDA search investigation](ida-search-investigation.md) for the current provider
+[IDA search investigation](../chat/ida-search-investigation.md) for the current provider
 attempt, timeout, and configuration questions. Earlier UI observation failed
 with `cgWindowNotFound`. These limits have not been treated as proof of behavior,
 and static findings have not been relabeled as runtime observations. No OS
@@ -95,7 +100,7 @@ ownership. A failed question does not block later questions; the UI exposes retr
 actions and displays grounded answers, citations, and current-meeting status.
 
 These include tested reconstruction decisions. Subsequent IDA evidence is
-recorded in [proactive-reference-trace.md](proactive-reference-trace.md).
+recorded in [proactive-reference-trace.md](../recording/proactive-reference-trace.md).
 Detection now uses growing finalized history rather than six-row batches,
 retains its cursor on empty results, and limits model input to the last 200
 whitespace units. Snapshot-pool recovery now binds the splitter to whitespace
@@ -157,7 +162,7 @@ Q&A reconstruction: the original uses rolling five-second duplicate suppression,
 a further twenty-second prefix/similarity filter, interim transcript input, and
 advances the history cursor only after nonempty detection. Those history and
 filter rules are now integrated; the initial lifetime uniqueness and six-row
-batching have been removed. See [the function-level trace](proactive-reference-trace.md)
+batching have been removed. See [the function-level trace](../recording/proactive-reference-trace.md)
 for remaining model, scheduling and runtime differences. Full proactive-Q&A
 parity remains unproven.
 
@@ -187,7 +192,7 @@ the preexisting system-tap downmix and continuous output resampling remain.
 Device/engine configuration changes enter the existing gap/reconnect path.
 
 The original native functions and REA evidence IDs are recorded in the
-[IDA investigation](ida-search-investigation.md). Apple's documentation confirms
+[IDA investigation](../chat/ida-search-investigation.md). Apple's documentation confirms
 that [voice processing can be enabled only while the engine is stopped](https://developer.apple.com/documentation/avfaudio/avaudioionode/setvoiceprocessingenabled%28_%3A%29?language=objc)
 and that [automatic gain control is enabled by default](https://developer.apple.com/documentation/avfaudio/avaudioinputnode/isvoiceprocessingagcenabled?language=objc),
 which is why the reproduced path disables AGC explicitly and uses bypass for
@@ -243,7 +248,7 @@ native model, not the selected chat model. Its generation prefix and raw
 ASCII-output postprocessing are implemented in reference_query_detector.dart
 and tested through the service callback. The production application now uses the reconstructed dedicated CPU worker
 through the existing model registry; it reports not ready when the dedicated
-asset is absent. See [the current runtime implementation](reference-legacy-detector-runtime.md)
+asset is absent. See [the current runtime implementation](../models/reference-legacy-detector-runtime.md)
 for packaged dependencies, controlled original-runtime comparisons and remaining
 acquisition/numerical gaps. The original postprocessor
 strips non-ASCII detector output; captured transcripts are unaffected.
@@ -257,10 +262,12 @@ No physical audio or original detector generation was observed in this pass.
 
 The recovered search client and callback are implemented in `web_search.dart`.
 Eleven focused tests cover the request and result contract; the full core suite
-passes 108 tests (one opt-in skipped), with clean analysis. This is not yet wired
-into production answers: native page summarization, tool/citation integration
-and release credential provisioning remain. No separate user project setup was
-added. See [the search evidence](ida-search-investigation.md) for exact recovered
+passed 108 tests (one opt-in skipped), with clean analysis. At that checkpoint
+it was not wired into production answers. Search, remote
+page summarization, tool/citation integration and credential packaging are now
+implemented; see [chat integration](../chat/reference-chat-web.md). Live acceptance is
+blocked by absent distribution keys; see [cloud acceptance](../chat/reference-live-cloud-services.md).
+No separate user project setup was added. See [the search evidence](../chat/ida-search-investigation.md) for exact recovered
 constants, IDA addresses and runtime limits.
 
 
@@ -276,7 +283,7 @@ is enabled. This corrects the earlier interpretation of the boolean branch.
 Current core suite: **116 passed, one opt-in skipped**; analyzer clean. Actual
 Google access and remote summary quality remain unverified. The client is not
 yet wired into production answers and requires distribution credentials, with
-no separate user project setup UI. See [the full evidence](reference-web-content.md).
+no separate user project setup UI. See [the full evidence](../chat/reference-web-content.md).
 
 
 ### Native search tool generation bridge
@@ -297,4 +304,4 @@ This does not enable web answers in the normal Ask/meeting flow yet. Production
 activation, citation/source-URL persistence, release credentials, real model
 tool behavior and original streaming/textual-parser comparison remain. The
 complete Linux executable was not built in this pass; its shared C++ loop was
-compiled and tested. See [tool-generation evidence](reference-tool-generation.md).
+compiled and tested. See [tool-generation evidence](../chat/reference-tool-generation.md).

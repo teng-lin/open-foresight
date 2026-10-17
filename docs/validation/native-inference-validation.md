@@ -1,9 +1,14 @@
 # Native inference replacement validation
 
-The implementation replaces distributed Python inference with a compiled C++
-worker. Python remains available to developers for builds, model provisioning
+This ledger records the historical Linux generation/embedding replacement with
+a compiled C++ worker; counts below describe those runs, not the current suite.
+The optional legacy detector still needs a separate Python runtime, and macOS
+uses its Python/LiteRT compatibility adapter. Later production-model CPU/GPU
+checks and the incomplete macOS CI artifact are recorded in
+[production runtime acceptance](reference-production-runtime-acceptance.md).
+Python remains available to developers for builds, model provisioning
 and independent regression oracles. Runtime/model provisioning and migration
-commands are documented in [native inference](../services/inference/README.md).
+commands are documented in [native inference](../../services/inference/README.md).
 
 ## Verified behavior
 
@@ -71,8 +76,10 @@ After incorporating main's macOS process/ownership and resource configuration:
 - Apple Silicon Mac: `foresight-model` and `libforesight_native.dylib` compile;
   native grounding, protocol and helper-worker lifetime/parent-death/launch-race
   tests pass.
-  An unconfigured worker emits valid error JSON without `/proc`. This does not
-  validate real-model Mac inference or distribution packaging.
+  An unconfigured worker emits valid error JSON without `/proc`. That historical
+  run did not
+  validate real-model Mac inference or distribution packaging; later scoped
+  model/artifact evidence is linked above.
 - Review fixes preserve Mac supervisor ownership and launch serialization, use
   portable executable/library paths and protocol descriptors, propagate native
   library configuration from Finder resources, retain compiled fixture PID

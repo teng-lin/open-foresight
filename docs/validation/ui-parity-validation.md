@@ -59,6 +59,18 @@ Native clipboard assertions are saved in `test-results/ui-parity/native-clipboar
 
 The reference uses its existing content; the development app uses synthetic content. These are layout and interaction comparisons, not pixel-equality assertions. Open Foresight retains its own branding and reports its own local output statistics.
 
+## Later implementation and artifact evidence
+
+This UI run does not describe the latest runtime acceptance. Complete local
+macOS bundles subsequently passed production-model CPU/GPU checks and an AOT
+Application note-enhancement scenario; see [artifact acceptance](reference-production-runtime-acceptance.md).
+Current CI DMGs still omit the full inference runtimes. Distribution credential
+packaging and the redacted [cloud acceptance command](../chat/reference-live-cloud-services.md)
+are implemented, but live service access remains blocked by absent keys.
+Google Drive/Calendar OAuth configuration is separate from those distribution
+keys. Model readiness/reset and cache cleanup are implemented; original vision
+startup and metadata refresh remain deferred.
+
 ## Remaining verification boundaries
 
 Live Google account authorization requires an application-owned OAuth Desktop client configuration; this installed build has none. The setup UI and mocked OAuth/Calendar workflow were validated, but an actual Google account connection was not completed. Physical microphone/system-audio accuracy and model throughput were not part of this UI validation. No claim of exhaustive feature or pixel parity is made.

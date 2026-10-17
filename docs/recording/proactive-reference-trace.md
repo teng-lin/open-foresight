@@ -321,7 +321,7 @@ d3b4615c7b7bd9bc1583f15fc6bc229b6aa8d9bd plus upstream single-snapshot PR 213
 It creates a Dart isolate from the snapshot without invoking the application.
 Only allowlisted pool entries are read; no search credential is selected.
 The source, build instructions, pinned inputs and local patch are retained in
-[tools/reference_pool_reader](../tools/reference_pool_reader/README.md).
+[tools/reference_pool_reader](../../tools/reference_pool_reader/README.md).
 
 Pool labels below are the IDA X27-relative array labels. The actual ObjectPool
 index is obtained from the byte offset minus the heap-object tag. For example,
@@ -627,7 +627,7 @@ model and its native inference contract, then integrate that backend. Local
 AEAD wrapping alone is not the dedicated detector implementation.
 
 
-The follow-up [dedicated runtime trace](reference-query-runtime.md) now binds
+The follow-up [dedicated runtime trace](../models/reference-query-runtime.md) now binds
 native model type 35 to Gemma 4 200M, confirms the type-4 encryption policy, and
 adds a raw-session worker primitive with bounded real-library validation.
 Original executor selection, dedicated model compatibility and production

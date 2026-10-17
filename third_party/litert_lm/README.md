@@ -7,5 +7,5 @@ No Google Foresight private ABI is used.
 `c/foresight_extensions.h` is an Open Foresight extension, not an upstream
 0.18.0 API. `stop-token-sequences.patch` implements it in that exact upstream
 source and extends the Python wrapper before session config copying. See
-`docs/reference-native-stop-tokens.md` and `tools/build_litert_extensions.py`
+`docs/models/reference-native-stop-tokens.md` and `tools/build_litert_extensions.py`
 at the repository root. The published stock libraries do not export it.

@@ -56,7 +56,7 @@ History reset and original runtime lifecycle comparisons remain open. Response
 normalization, number alignment and final sanitation are covered in
 [response processing](reference-chat-response.md).
 Helper tokenization and bundled defaults are covered in
-[the tokenizer evidence](reference-tokenizer.md). Ordinary local-only answering retains
+[the tokenizer evidence](../models/reference-tokenizer.md). Ordinary local-only answering retains
 its existing path. This does not establish exhaustive history parity.
 
 ## Recovered memory policy and integration
@@ -141,7 +141,7 @@ and audio estimates (default 280 and 200); application chat remains text-only.
 Domain binds helper Encode when the helper reports tokenizer readiness and
 uses the word fallback otherwise. Per-entry costs are cached across readiness
 changes. Native admission independently counts generation-model input and may
-reject an oversized request. See [tokenizer verification](reference-tokenizer.md).
+reject an oversized request. See [tokenizer verification](../models/reference-tokenizer.md).
 
 The original `_simpleLlmExecutor` creates a fresh local conversation with a
 constant ConversationConfig whose slots are null except false booleans. It

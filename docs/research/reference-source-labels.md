@@ -1,7 +1,7 @@
 # Original source-label editor behavior
 
 The target is the same Foresight `1.0.0.28.20261005` binary identified in
-[the export trace](reference-meeting-export.md). This is IDA Pro static evidence,
+[the export trace](../notes/reference-meeting-export.md). This is IDA Pro static evidence,
 not a new live label-editing experiment. Speaker channel labels are separate
 from these organization/document labels.
 

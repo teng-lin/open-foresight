@@ -1,8 +1,10 @@
 # Native inference
 
 `foresight-model` is a C++ worker shared by the retrieval helper and native
-generation adapter. Linux distributions contain no Python interpreter, scripts,
-or inference packages. macOS currently uses the pinned
+generation adapter. Linux generation and embedding require no Python interpreter
+or inference packages. The optional legacy query detector uses its own Python worker and
+requires `tools/package.py --query-python-runtime PREFIX`; this is separate from
+the native generation/embedding runtime. macOS currently uses the pinned
 [compatibility runtime](macos/README.md).
 
 - LiteRT-LM 0.18.0 uses Google's public C API for Gemma generation and
@@ -105,13 +107,13 @@ tokens without reserving the full output allowance plus 256 tokens in advance.
 The native engine context and output cap still apply. The helper tokenizer and
 generation tokenizer serve different models. The separate grounded-generation
 path retains its input/output reserve check. Exact original native accounting
-remains unverified. See [tokenizer evidence](../../docs/reference-tokenizer.md).
+remains unverified. See [tokenizer evidence](../../docs/models/reference-tokenizer.md).
 
 Experimental `--query-detector` mode uses a raw session with no chat template,
 system instruction, tools or schema. Its fixed 512-token setting and single
 candidate sampling follow the recovered detector options. CPU is currently a
 port testing choice; dedicated-asset compatibility and production integration
-remain unverified. See [runtime evidence](../../docs/reference-query-runtime.md).
+remain unverified. See [runtime evidence](../../docs/models/reference-query-runtime.md).
 
 ## Persistent tool worker
 

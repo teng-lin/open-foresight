@@ -2,7 +2,7 @@
 
 Add macOS support on top of the application-service refactor being developed on MSI. Keep Flutter for presentation, the plain Dart application core for business operations, and the existing retrieval and inference engines. Desktop and MCP must share one service, database writer, recording session, and model lifecycle per profile.
 
-Implementation evidence is tracked in [macos-validation.md](macos-validation.md).
+Implementation evidence is tracked in [macos-validation.md](../validation/macos-validation.md).
 Build, bundle, MCP, and update commands are in [macos-support.md](macos-support.md).
 The implementation has not yet passed the complete signed installed-release and
 physical-audio gates; the acceptance checklist retains that distinction.
@@ -12,7 +12,7 @@ physical-audio gates; the acceptance checklist retains that distinction.
 Reviewed on 2026-10-15:
 
 - Local checkout: `main`, revision `603c1a5d1688acd8992cbf0dfe0d36b90103c243`.
-- MSI: `/home/blackmyth/src/open-foresight-mcp`, branch `feature/application-service-mcp`, at the same revision with substantial uncommitted work. Read `docs/application-service-plan.md`, `docs/application-service.md`, and the actual core, service, MCP, desktop, build, and test changes. Its documentation describes intended behavior; passing verification and merge readiness remain separate gates.
+- MSI: `/home/blackmyth/src/open-foresight-mcp`, branch `feature/application-service-mcp`, at the same revision with substantial uncommitted work. Read `docs/archive/application-service-plan.md`, `docs/architecture/application-service.md`, and the actual core, service, MCP, desktop, build, and test changes. Its documentation describes intended behavior; passing verification and merge readiness remain separate gates.
 - MSI packaging worktree: `/home/blackmyth/src/open-foresight-packaging`, branch `feature/linux-packaging`, revision `4be81c6` with additional uncommitted changes. Coordinate shared build and runtime packaging changes with this branch.
 
 Proposed first release target: Apple Silicon, macOS 15 and later, distributed as a signed and notarized application outside the Mac App Store. This is a scope choice, to be confirmed during the feasibility work. Intel/universal builds, older OS versions, App Store sandboxing, and a Rust migration are separate follow-up work.
@@ -118,12 +118,19 @@ Exit: a signed, notarized artifact passes installed-app checks with no developme
 
 ## Acceptance checklist
 
+Checked items record development implementation evidence from
+[macOS validation](../validation/macos-validation.md), not signed-release approval. The
+[production runtime ledger](../validation/reference-production-runtime-acceptance.md) records
+later local full-runtime CPU/GPU and Application probes. Current CI DMGs omit
+those inference runtimes; physical capture, clean-user/minimum-OS execution and
+signed-release gates remain open. Earlier phases above retain the original plan.
+
 - [x] Application-service baseline is committed and its original Linux verification is recorded.
-- [ ] Mac desktop and two MCP clients resolve the same profile and create exactly one service owner.
-- [ ] Service/MCP work without Flutter installed or a desktop window open; stdout stays protocol-only.
-- [ ] Source mutations, revision checks, read-only desktop queries, citations, graph persistence, and restart recovery retain their contracts.
-- [ ] Launch races, private-directory validation, socket length, stale sockets, and adopted-helper shutdown pass on Mac.
-- [ ] Real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup pass with the packaged runtimes.
+- [x] Mac desktop and two MCP clients resolve the same profile and create exactly one service owner.
+- [x] Service/MCP work without Flutter installed or a desktop window open; stdout stays protocol-only.
+- [x] Source mutations, revision checks, read-only desktop queries, citations, graph persistence, and restart recovery retain their contracts.
+- [x] Launch races, private-directory validation, socket length, stale sockets, and adopted-helper shutdown pass on Mac.
+- [ ] Release CI artifact passes real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup. Local full-runtime development-bundle probes have passed within the validation ledgers' scopes.
 - [ ] Microphone plus system audio work desktop-first and MCP-first, including denied/revoked permission, device changes, and desktop closure.
 - [ ] Explicit stop flushes transcripts; service crash recovery preserves committed data and marks unfinished recordings interrupted.
 - [ ] Shortcuts, app reopen, login, source links, imports, notifications, and Google authorization/sync work in release builds.

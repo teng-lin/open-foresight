@@ -12,7 +12,7 @@ results from before interruption or pause cannot repopulate cleared speech;
 final segments remain queued. The original's 1,500 ms microphone startup
 watchdog now falls back from silent processed startup to a fresh standard
 engine, then reports failure if standard capture also produces no valid PCM
-buffers. Valid silence satisfies startup. See [recording recovery](recording-recovery.md)
+buffers. Valid silence satisfies startup. See [recording recovery](../recording/recording-recovery.md)
 for the fixture coverage and remaining physical/reference validation.
 
 ## Permission and launch identity

@@ -71,8 +71,12 @@ Without credentials, the web toggle is disabled with an unavailable-build
 tooltip. These credentials are part of the release artifact and are not secret
 from its recipient. No original credential has been copied into source.
 
-Actual release provisioning and successful live Google/ODML access remain
-unverified. Fixtures exercise the real search/summary clients separately;
+Credential packaging support is complete; actual release provisioning and
+successful live Google/ODML access remain unverified. The redacted
+[cloud acceptance command](reference-live-cloud-services.md) checks search,
+summary, shared configuration and optional detector download; the recorded host
+run exits 2 before transport because distribution keys are absent. Fixtures
+exercise the real search/summary clients separately;
 application tests inject deterministic search callbacks rather than contacting
 those services.
 
@@ -140,8 +144,12 @@ fields. The C++ and macOS Python backends install those instructions as the
 conversation's system message and send the user prompt separately. Legacy
 array-only native requests keep their generic system default. Prompt admission
 counts system and tool-definition tokens as well as user text and output reserve.
-Structured user/assistant replay is now implemented. Conversation cloning,
-original tokenizer/model configuration and streaming remain integration work.
+Structured user/assistant replay, retained workers, base-conversation cloning
+and streaming are now implemented;
+see [worker evidence](reference-chat-streaming.md). Controlled tokenizer probes
+and bundled sampling defaults match within the recorded scope; alternative
+model configurations and broader original runtime comparison remain open. See
+[cloud/runtime settings evidence](reference-live-cloud-services.md).
 The [history ledger](reference-chat-history.md) describes implemented memory
 compression, FIFO fallback and durable checkpoints. Tests verify the recovered instruction hash,
 date/query envelope, optional context and UTF-16 truncation, plus its use by the

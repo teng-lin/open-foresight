@@ -104,7 +104,7 @@ skip); both analyzers clean; two meeting-workspace widget tests passed. The
 expanded workflow checks all three displayed labels, derived API speaker IDs,
 preservation of original route values, and speaker-attribution instructions in
 note generation. Native AEC implementation and its subsequent tests are tracked
-in [the implementation ledger](missing-functions-investigation.md). Web search
+in [the implementation ledger](../archive/missing-functions-investigation.md). Web search
 and the remaining reference/runtime comparisons are still outstanding.
 
 The ready IDA worker later exited on its idle timeout and left a saved `.i64`.

@@ -289,7 +289,7 @@ guards are port lifecycle policy, not a claim about the original view lifecycle.
 A focused Application/edit/draft run passes 26 tests. The source-built stop-token
 extension additionally passes the actual native configuration-copy test and a
 deterministic SDK model check for an ordered two-token sequence; see
-[stop-token evidence](reference-native-stop-tokens.md). That fixture does not
+[stop-token evidence](../models/reference-native-stop-tokens.md). That fixture does not
 prove original production-model or GPU output equivalence. Targeted live edit queueing and the original 30-second debounce are now connected; see [live scheduling](reference-note-live-scheduling.md). Original note service readiness/reset and the macOS text-only cache initialization retry are now connected; see [service recovery](reference-note-service-recovery.md). Vision/model-refresh behavior and actual Linux runtime acceptance, complete outer exception behavior and production package/model acceptance remain open.
 
 

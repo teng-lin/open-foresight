@@ -4,6 +4,24 @@ This is an evidence ledger, not a release approval. The implementation plan's
 unchecked release gates remain required. Automated fixture capture is never
 evidence of microphone or system-audio permission attribution.
 
+## Current evidence scope (2026-10-17)
+
+The checks below retain their original revisions and counts. Later
+[production runtime acceptance](reference-production-runtime-acceptance.md)
+records complete local development-bundle Gemma E2B/EmbeddingGemma CPU and GPU
+worker checks, native ordered-stop capability, and an all-GPU AOT Application
+note-enhancement scenario with saved transcript correction and clean shutdown.
+These supersede earlier model-runtime gaps only within those tested scopes.
+
+The current `macos.yml` package command omits `--python-runtime` and
+`--whisper-runtime`; `macos-release.yml` archives that same ad-hoc artifact into
+a DMG. It is not inference-ready. Full-runtime local probes do not validate
+that CI artifact. Credential packaging and model readiness/reset/cache cleanup
+are implemented; live cloud acceptance is blocked by absent distribution keys,
+and vision startup/original metadata refresh remain deferred. See
+[cloud acceptance](../chat/reference-live-cloud-services.md) and
+[note recovery](../notes/reference-note-service-recovery.md).
+
 ## Environment and baseline
 
 Development host: MacBook Air, Apple M4, 24 GB memory, macOS 26.6.2,
@@ -99,8 +117,10 @@ physical/release gates remain:
   dependencies, and execution on the intended minimum OS/hardware.
 - Representative latency and peak memory with explicit usable thresholds and
   defaults on that minimum hardware.
-- Linux distribution packaging and clean-machine ABI verification; the isolated
-  MSI prototype bundle and integrated desktop/service tests passed on the build host.
+- Complete Linux GUI/deb/rpm/Arch installation and clean-machine verification.
+  The later native CPU runtime subset passed in minimal Ubuntu 24.04 and all
+  eleven staged ELF files passed its ABI audit; this does not close the installer
+  matrix or Linux GPU boundary.
 
 The local keychain currently has no valid code-signing identities; this is an
 external release prerequisite. Development signatures cannot close these gates.

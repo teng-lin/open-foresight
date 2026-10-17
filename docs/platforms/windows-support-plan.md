@@ -11,7 +11,7 @@ Build, bundle, and validation records will go in their own documents once work s
 Reviewed on 2026-10-16:
 
 - Local checkout: `main`, revision `d15a096`.
-- macOS support is still in integration (see the [validation ledger](macos-validation.md)). Several files this plan changes are also changing for macOS: `platform_services.dart`, `profile_paths.dart`, `foresight_native.cpp`, and the service tests. Land shared changes as small commits on `main` rather than on a long-lived Windows branch.
+- macOS support is still in integration (see the [validation ledger](../validation/macos-validation.md)). Several files this plan changes are also changing for macOS: `platform_services.dart`, `profile_paths.dart`, `foresight_native.cpp`, and the service tests. Land shared changes as small commits on `main` rather than on a long-lived Windows branch.
 
 Proposed first release target: Windows 11 on x86-64, distributed as a signed per-user installer outside the Microsoft Store. Windows 10 reached end of support on 14 October 2025 and is out of scope. Windows on Arm is follow-up work, because LiteRT-LM publishes Windows binaries for `win_amd64` only.
 

@@ -1,5 +1,8 @@
 # Application service and MCP implementation plan
 
+Archived completed plan and revision-specific audit. Current architecture and
+usage are documented in [Application service and MCP](../architecture/application-service.md).
+
 ## Intended result
 
 A Flutter-independent Dart application core and a per-profile local application service own content writes, indexing/recovery, generation, recording/transcription, and model lifecycle. Flutter provides presentation and desktop interaction. An MCP stdio adapter uses the same application operations, works without a desktop window, and shares an existing service rather than starting competing owners. Preserve existing profiles and desktop workflows.
@@ -56,7 +59,7 @@ Verified application code revision: `202386acf26c3cb36a50b809178dc3ab0f5490b0`. 
 | Existing behavior checks | Desktop analysis clean; 132 desktop tests pass, with 9 existing opt-in skips. Google connection tests separately pass after OAuth extraction. Native CTest: 3/3. Contract/grounding/profile migration checks: 15 passed plus 9 subtests. |
 | Build and packaging | Full `tools/build.sh` succeeds; service and MCP AOT executables and Flutter release bundle produced; packaging includes all three launchers and runtime dependencies. |
 | Relocated package | `tools/smoke_bundle.py` passes from `/` with a bundle path containing spaces: live desktop/helper, MCP sharing its PID, independent headless MCP startup, private paths, launcher/library resolution, and explicit service shutdown. Observed helper build ID matches code revision `202386a`. |
-| Documentation and cleanup | Setup, tool inventory, lifecycle, shared edit semantics, and verification commands are in `docs/application-service.md`. Private desktop session destroyed after the final smoke test; original checkout unchanged. |
+| Documentation and cleanup | Setup, tool inventory, lifecycle, shared edit semantics, and verification commands are in `docs/architecture/application-service.md`. Private desktop session destroyed after the final smoke test; original checkout unchanged. |
 
 Local verification records are retained under ignored `test-results/verification/`, with structured reports in `test-results/desktop-service-integration.json` and `test-results/packaged-desktop-mcp-final.json`. The default bundle in this worktree is `dist/open-foresight`; its manifest identifies the verified application code revision above.
 
