@@ -1,49 +1,124 @@
 #pragma once
 #include "child_process.h"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
+#include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <poll.h>
+#include <string>
+#include <thread>
+#include <unistd.h>
 #include <vector>
 using json = nlohmann::json;
 namespace fs = std::filesystem;
+
+inline int adapter_deadline_ms() {
+  const char *configured = std::getenv("FORESIGHT_ADAPTER_DEADLINE_MS");
+  int ms = configured ? std::atoi(configured) : 15000;
+  if (ms <= 0)
+    ms = 15000;
+  if (ms > 120000)
+    ms = 120000;
+  return ms;
+}
+
 enum class EmbeddingTask { Document, Query, Raw };
 struct Model {
   bool test = false;
-  FILE *input = nullptr, *output = nullptr;
+  FILE *input = nullptr;
+  int output_fd = -1;
+  std::string output_pending;
   std::unique_ptr<ChildProcess> process;
-  bool healthy = true;
+  std::atomic<bool> healthy{true};
+  std::mutex io;
   int dimensions = 0;
   std::string digest, tokenizer_digest, preprocessing;
   std::string backend = "litert-lm-embedding-cpu";
   ~Model() {
     if (input)
       fclose(input);
-    if (output)
-      fclose(output);
+    if (output_fd >= 0)
+      close(output_fd);
   }
   bool available() const {
-    return test || (healthy && process && process->alive());
+    return test || (healthy.load() && process && process->alive());
   }
   pid_t worker_pid() const { return process ? process->pid() : -1; }
+  // Serialized by call() except the constructor's banner read, which happens
+  // before the model is shared. A stalled adapter is killed at the deadline.
   json receive() {
-    char *b = nullptr;
-    size_t n = 0;
-    ssize_t sz = getline(&b, &n, output);
-    if (sz < 0) {
-      healthy = false;
-      free(b);
+    if (output_fd < 0) {
+      healthy.store(false);
       throw std::runtime_error("Embedding adapter exited; reload the model");
     }
-    std::string s(b, sz);
-    free(b);
-    auto j = json::parse(s);
-    if (j.contains("error"))
-      throw std::runtime_error(j["error"].get<std::string>());
-    return j;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(adapter_deadline_ms());
+    while (output_pending.find('\n') == std::string::npos) {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now());
+      if (remaining.count() <= 0) {
+        healthy.store(false);
+        if (process)
+          process->stop();
+        throw std::runtime_error(
+            "Embedding adapter timed out; reload the model");
+      }
+      pollfd ready{output_fd, POLLIN, 0};
+      const int waited = poll(&ready, 1, static_cast<int>(remaining.count()));
+      if (waited < 0) {
+        if (errno == EINTR)
+          continue;
+        healthy.store(false);
+        throw std::runtime_error("Embedding adapter exited; reload the model");
+      }
+      if (waited == 0) {
+        healthy.store(false);
+        if (process)
+          process->stop();
+        throw std::runtime_error(
+            "Embedding adapter timed out; reload the model");
+      }
+      char buffer[4096];
+      const ssize_t n = read(output_fd, buffer, sizeof(buffer));
+      if (n < 0) {
+        if (errno == EINTR)
+          continue;
+        healthy.store(false);
+        throw std::runtime_error("Embedding adapter exited; reload the model");
+      }
+      if (n == 0) {
+        healthy.store(false);
+        if (output_pending.empty())
+          throw std::runtime_error(
+              "Embedding adapter exited; reload the model");
+        break;
+      }
+      output_pending.append(buffer, static_cast<size_t>(n));
+      if (output_pending.size() > 32u * 1024u * 1024u) {
+        healthy.store(false);
+        throw std::runtime_error("Embedding adapter response too large");
+      }
+    }
+    const auto newline = output_pending.find('\n');
+    std::string line = newline == std::string::npos
+                           ? std::move(output_pending)
+                           : output_pending.substr(0, newline);
+    if (newline == std::string::npos)
+      output_pending.clear();
+    else
+      output_pending.erase(0, newline + 1);
+    auto parsed = json::parse(line);
+    if (parsed.contains("error"))
+      throw std::runtime_error(parsed["error"].get<std::string>());
+    return parsed;
   }
   Model(const std::string &path, bool allow, bool gpu = false) {
     if (path == "test://deterministic") {
@@ -101,18 +176,11 @@ struct Model {
     close(out[1]);
     launch.unlock();
     input = fdopen(in[1], "w");
-    output = fdopen(out[0], "r");
-    if (!input || !output) {
-      if (input)
-        fclose(input);
-      else
-        close(in[1]);
-      if (output)
-        fclose(output);
-      else
-        close(out[0]);
-      input = nullptr;
-      output = nullptr;
+    output_fd = out[0];
+    if (!input) {
+      close(in[1]);
+      close(output_fd);
+      output_fd = -1;
       throw std::runtime_error("Adapter stream initialization failed");
     }
     try {
@@ -126,19 +194,21 @@ struct Model {
         throw std::runtime_error("Invalid embedding dimensions");
     } catch (...) {
       fclose(input);
-      fclose(output);
       input = nullptr;
-      output = nullptr;
+      if (output_fd >= 0)
+        close(output_fd);
+      output_fd = -1;
       throw;
     }
   }
   json call(json request) {
+    std::lock_guard lock(io);
     if (!available())
       throw std::runtime_error(
           "Embedding adapter unavailable; reload the model");
     std::string s = request.dump() + "\n";
     if (fwrite(s.data(), 1, s.size(), input) != s.size() || fflush(input)) {
-      healthy = false;
+      healthy.store(false);
       throw std::runtime_error("Adapter input failure; reload the model");
     }
     return receive().at("result");

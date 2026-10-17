@@ -56,6 +56,7 @@ public:
                             executable = std::move(executable),
                             mode = std::move(mode), model = std::move(model),
                             option = std::move(option)]() mutable {
+      try {
 #ifdef __APPLE__
       posix_spawn_file_actions_t actions;
       posix_spawn_file_actions_init(&actions);
@@ -139,6 +140,12 @@ public:
 #endif
       pid_.store(-1);
       alive_.store(false);
+      } catch (...) {
+        try {
+          started->set_value(-1);
+        } catch (...) {
+        }
+      }
     });
     if (result.get() < 0) {
       stop();

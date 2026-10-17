@@ -69,6 +69,25 @@ void main() {
     },
   );
 
+  test('encode failure is not treated as missing stop tokens', () async {
+    final failure = StateError('tokenizer failed');
+    var opened = false;
+    final enhancer = ReferenceNoteEnhancer(
+      ensureReady: () async {},
+      loadEmbeddedTranscript: () async => [],
+      encodeStopTokens: (_) async => throw failure,
+      createConversation: (_) async {
+        opened = true;
+        throw StateError('conversation must not open');
+      },
+    );
+    await expectLater(
+      enhancer.enhance(notes: 'raw note').toList(),
+      throwsA(same(failure)),
+    );
+    expect(opened, isFalse);
+  });
+
   test('only final saved batch receives unused decision excerpts', () async {
     final conversations = <FakeConversation>[];
     final enhancer = ReferenceNoteEnhancer(

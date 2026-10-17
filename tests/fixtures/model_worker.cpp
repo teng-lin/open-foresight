@@ -1,5 +1,6 @@
 // Process ownership fixture. It deliberately performs no model inference.
 #include <csignal>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -24,12 +25,29 @@ int main(int argc, char **argv) {
                      {"backend", "onnx-bert-cpu"}})
                    .dump()
             << std::endl;
+  const char *stall_after = std::getenv("FORESIGHT_FIXTURE_STALL_AFTER");
+  const int stall_at = stall_after ? std::atoi(stall_after) : -1;
+  const bool fail_encode = std::getenv("FORESIGHT_FIXTURE_FAIL_ENCODE") != nullptr;
+  int handled = 0;
   std::string line;
   while (std::getline(std::cin, line)) {
+    if (stall_after && handled == stall_at) {
+      if (const char *flag = std::getenv("FORESIGHT_FIXTURE_STALL_FLAG")) {
+        std::ofstream marker(flag);
+        marker << "stalled\n";
+      }
+      for (;;)
+        pause();
+    }
+    ++handled;
     try {
       std::cerr << "fixture progress" << std::endl;
       auto request = json::parse(line);
       json result;
+      if (request.at("op") == "encode" && fail_encode) {
+        std::cout << json({{"error", "tokenizer failed"}}).dump() << std::endl;
+        continue;
+      }
       if (request.at("op") == "encode") {
         std::vector<int> ids;
         for (unsigned char c : request.at("text").get<std::string>())

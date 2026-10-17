@@ -1,4 +1,5 @@
 #pragma once
+#include "exception_barrier.h"
 // Included after the native ownership types. This transport intentionally keeps
 // request JSON opaque; workers own inference/configuration parsing.
 struct PersistentGeneration : Worker {
@@ -71,18 +72,27 @@ bool start_persistent(Engine &engine, Conversation &request) {
   if (engine.cpu_fallback) { args.push_back("--backend"); args.push_back("cpu"); }
   if (engine.model_type) { args.push_back("--model-type"); args.push_back(std::to_string(engine.model_type)); }
   worker->thread = std::thread([worker, args = std::move(args)]() mutable {
-    int status = run(*worker, std::move(args), [worker](const char *data, size_t size) {
-      worker->receive(data, size);
-    }, true);
-    {
+    foresight::guarded_worker([&] {
+      int status = run(*worker, std::move(args), [worker](const char *data, size_t size) {
+        worker->receive(data, size);
+      }, true);
+      {
+        std::lock_guard lock(worker->frame_mutex);
+        worker->exit_status = status;
+        worker->finished = true;
+        if (!worker->pending.empty())
+          worker->protocol_error = "Persistent worker exited with a partial frame";
+        worker->active = false;
+        worker->frames_changed.notify_all();
+      }
+    }, [&](const std::string &message) {
       std::lock_guard lock(worker->frame_mutex);
-      worker->exit_status = status;
+      worker->protocol_error = message;
+      worker->exit_status = -1;
       worker->finished = true;
-      if (!worker->pending.empty())
-        worker->protocol_error = "Persistent worker exited with a partial frame";
       worker->active = false;
       worker->frames_changed.notify_all();
-    }
+    });
   });
   auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (!request.cancel && std::chrono::steady_clock::now() < deadline) {

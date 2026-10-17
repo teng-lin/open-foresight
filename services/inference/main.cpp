@@ -3,6 +3,7 @@
 #include "generation_model_config.h"
 #include "tool_conversation.h"
 #include "conversation_stream.h"
+#include "oneshot_stream.h"
 #include "persistent_worker.h"
 #include "fd_stream.h"
 #include "litert.h"
@@ -56,7 +57,7 @@ struct ConversationStreamState {
     } catch (const std::exception &error) {
       state.error = error.what();
     }
-    if (state.is_final(chunk) || !state.error.empty()) {
+    if (foresight::stream_chunk_completes(state.is_final(chunk), !state.error.empty())) {
       state.done = true;
       state.changed.notify_all();
     }
@@ -353,7 +354,16 @@ public:
         handle(LM(thinking_config_create)(), LM(thinking_config_delete));
     LM(thinking_config_set_enable_thinking)(thinking.get(), false);
     LM(conversation_config_set_thinking_config)(config.get(), thinking.get());
+    struct OneShotCallback {
+      foresight::OneShotStreamState state;
+      decltype(&litert_lm_stream_chunk_get_text) get_text;
+      decltype(&litert_lm_stream_chunk_get_error) get_error;
+      decltype(&litert_lm_stream_chunk_is_final) is_final;
+      std::function<std::string(const char *)> decode;
+      std::ostream *stream = nullptr;
+    };
     std::vector<std::unique_ptr<ConversationStreamState>> callback_states;
+    std::vector<std::unique_ptr<OneShotCallback>> oneshot_callbacks;
     // The original retains only an empty-history base. Never promote the
     // generated clone, and never evict the chat base for a plain summary.
     const bool cache_eligible = register_conversation && !tools.is_null() &&
@@ -450,54 +460,32 @@ public:
     };
     std::string text;
     if (stream) {
-      struct State {
-        std::mutex mutex;
-        std::condition_variable changed;
-        bool done = false;
-        std::string text, error;
-        std::ostream *stream;
-        decltype(decode) &decode_text;
-        decltype(LM(stream_chunk_get_text)) get_text;
-        decltype(LM(stream_chunk_get_error)) get_error;
-        decltype(LM(stream_chunk_is_final)) is_final;
-      } state{{},
-              {},
-              false,
-              {},
-              {},
-              stream,
-              decode,
-              LM(stream_chunk_get_text),
-              LM(stream_chunk_get_error),
-              LM(stream_chunk_is_final)};
+      auto owned = std::make_unique<OneShotCallback>();
+      owned->get_text = LM(stream_chunk_get_text);
+      owned->get_error = LM(stream_chunk_get_error);
+      owned->is_final = LM(stream_chunk_is_final);
+      owned->decode = decode;
+      owned->state.decode = decode;
+      owned->stream = stream;
+      auto *slot = owned.get();
+      oneshot_callbacks.push_back(std::move(owned));
       auto callback = [](void *data, const LiteRtLmStreamChunk *chunk) {
-        auto &state = *static_cast<State *>(data);
-        std::lock_guard lock(state.mutex);
-        try {
-          if (auto error = state.get_error(chunk))
-            state.error = error;
-          if (auto raw = state.get_text(chunk); raw && state.error.empty()) {
-            auto part = state.decode_text(raw);
-            state.text += part;
-            *state.stream << part << std::flush;
-          }
-        } catch (const std::exception &e) {
-          state.error = e.what();
-        }
-        if (state.is_final(chunk)) {
-          state.done = true;
-          state.changed.notify_all();
-        }
+        auto &slot = *static_cast<OneShotCallback *>(data);
+        const char *raw = slot.get_text(chunk);
+        const char *error = slot.get_error(chunk);
+        slot.state.on_chunk(
+            foresight::OneShotChunk{raw, error, slot.is_final(chunk) != 0},
+            [&](const std::string &part) { *slot.stream << part << std::flush; });
       };
       if (LM(conversation_send_message_stream)(conversation.get(),
                                                message.c_str(), nullptr,
-                                               args.get(), callback, &state))
+                                               args.get(), callback, slot))
         throw std::runtime_error("Generation stream failed to start");
-      std::unique_lock lock(state.mutex);
-      state.changed.wait(lock, [&] { return state.done; });
-      if (!state.error.empty())
-        throw std::runtime_error(state.error);
-      text = std::move(state.text);
+      std::unique_lock lock(slot->state.mutex);
+      slot->state.changed.wait(lock, [&] { return slot->state.done; });
+      if (!slot->state.error.empty())
+        throw std::runtime_error(slot->state.error);
+      text = std::move(slot->state.text);
     } else {
       auto response =
           handle(LM(conversation_send_message)(
@@ -521,6 +509,18 @@ public:
     return text;
   }
 };
+std::string prompt_from_arguments(const std::map<std::string, std::string> &args) {
+  if (args.count("--prompt"))
+    return args.at("--prompt");
+  std::string line;
+  if (!std::getline(std::cin, line))
+    throw std::runtime_error("Missing prompt");
+  auto payload = json::parse(line);
+  if (!payload.is_object() || !payload.contains("prompt") ||
+      !payload["prompt"].is_string())
+    throw std::runtime_error("Missing prompt");
+  return payload["prompt"].get<std::string>();
+}
 #include "grounded.h"
 
 int main(int argc, char **argv) {
@@ -598,7 +598,7 @@ int main(int argc, char **argv) {
       return 0;
     }
     if (query_detector) {
-      protocol << generator.detect_query(args.at("--prompt")) << std::flush;
+      protocol << generator.detect_query(prompt_from_arguments(args)) << std::flush;
       return 0;
     }
     int budget = args.count("--max-output-tokens")
@@ -615,7 +615,7 @@ int main(int argc, char **argv) {
     if (args.count("--tools") && !schema.is_null())
       throw std::runtime_error("Tools cannot be combined with a response schema");
     if (args.count("--tools"))
-      generator.generate(args.at("--prompt"), budget, false, nullptr, &protocol,
+      generator.generate(prompt_from_arguments(args), budget, false, nullptr, &protocol,
                          json::parse(args.at("--tools")));
     else if (schema.contains("x-foresight-grounded-request"))
       protocol << grounded_answer(
@@ -623,7 +623,7 @@ int main(int argc, char **argv) {
                       .dump()
                << std::flush;
     else
-      generator.generate(args.at("--prompt"), budget, false, schema, &protocol);
+      generator.generate(prompt_from_arguments(args), budget, false, schema, &protocol);
     return 0;
   } catch (const std::exception &e) {
     if (embedding || probing)
