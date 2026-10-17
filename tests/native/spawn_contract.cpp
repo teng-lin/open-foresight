@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
   const int supervised = foresight::supervise_worker(argc, argv);
   if (supervised >= 0)
     return supervised;

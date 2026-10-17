@@ -52,11 +52,19 @@ extension _MeetingWorkspace on _WorkspaceState {
     try {
       await flushMeetingNotesDraft();
     } catch (_) {
-      // NoteSaveScheduler's onError already presents this failed save.
+      // flushMeetingNotesDraft already presents this failed explicit save.
     }
   }
 
-  Future<void> flushMeetingNotesDraft() => meetingNoteSaves.flush();
+  Future<void> flushMeetingNotesDraft() async {
+    try {
+      await meetingNoteSaves.flush();
+    } catch (failure) {
+      if (mounted)
+        update(() => error = 'Unable to save meeting notes: $failure');
+      rethrow;
+    }
+  }
 
   void scheduleMeetingNotesSave() {
     final id = loadedMeetingNotes;

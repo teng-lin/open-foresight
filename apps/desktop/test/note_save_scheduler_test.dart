@@ -11,12 +11,15 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 class GatedNoteDomain extends Domain {
   GatedNoteDomain(super.store, super.helper);
   Completer<void>? saveGate;
+  bool rejectNotes = false;
   Map<String, dynamic>? artifactEdit;
   @override
   Future<Object?> command(
     String method, [
     Map<String, dynamic> args = const {},
   ]) async {
+    if (method == 'meetings.notes' && rejectNotes)
+      throw StateError('Service disconnected');
     if (method == 'artifacts.edit') artifactEdit = Map.of(args);
     if (method == 'meetings.notes' && saveGate != null) await saveGate!.future;
     return super.command(method, args);
@@ -83,6 +86,39 @@ void main() {
       directory.deleteSync(recursive: true);
     },
   );
+  testWidgets(
+    'explicit Live Enhance note save reports failure without an uncaught error',
+    (tester) async {
+      final directory = Directory.systemTemp.createTempSync(
+        'note-save-explicit-',
+      );
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final store = Store('${directory.path}/app.db');
+      store.setPreference('liveEnhance', 'false');
+      final id = store.meeting('Explicit save');
+      store.saveMeetingNotes(id, 'Keep this draft');
+      final domain = GatedNoteDomain(
+        store,
+        OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
+      );
+      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      final dynamic state = tester.state(find.byType(Workspace));
+      state.update(() => state.meetingId = id);
+      await tester.pumpAndSettle();
+      domain.rejectNotes = true;
+      await tester.tap(find.text('Live Enhance OFF'));
+      await tester.pumpAndSettle();
+      expect(state.error, contains('Unable to save meeting notes:'));
+      expect(state.error, contains('Service disconnected'));
+      expect(state.meetingNoteSaves.isDirty(id), isTrue);
+      expect(tester.takeException(), isNull);
+      domain.rejectNotes = false;
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets(
     'captured manual dates survive failed writes, retry and note switches',
     (tester) async {
