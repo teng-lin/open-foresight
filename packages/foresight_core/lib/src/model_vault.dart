@@ -59,9 +59,8 @@ class MacModelVault {
       throw ArgumentError.value(version, 'version', 'Invalid model version');
     }
     privateDirectory(root.path);
-    final directory = await root.createTemp('model-$version-');
+    final directory = await createPrivateTempDirectory(root, 'model-$version-');
     try {
-      privateDirectory(directory.path);
       final encrypted = File('${directory.path}/model.encrypted');
       await _run('encrypt', plaintext, encrypted);
       _checkOpen();
@@ -78,9 +77,11 @@ class MacModelVault {
     _checkInput(encrypted);
     _checkHelper();
     // The root may be systemTemp itself; only the directory we create is owned.
-    final directory = await _tempRoot.createTemp('foresight-model-lease-');
+    final directory = await createPrivateTempDirectory(
+      _tempRoot,
+      'foresight-model-lease-',
+    );
     try {
-      privateDirectory(directory.path);
       final plaintext = File('${directory.path}/model.plaintext');
       await _run('decrypt', encrypted, plaintext);
       _checkOpen();
