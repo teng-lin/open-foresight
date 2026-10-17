@@ -177,6 +177,29 @@ void main() {
     );
   });
 
+  test(
+    'owned temporary directories are private under a permissive umask',
+    () async {
+      final result = await Process.run('/bin/sh', [
+        '-c',
+        r'umask 000; exec "$@"',
+        'private-temp-test',
+        Platform.resolvedExecutable,
+        'run',
+        'test/fixtures/private_temp_directory.dart',
+        scratch.path,
+      ]);
+      expect(result.exitCode, 0, reason: '${result.stdout} ${result.stderr}');
+      final modes = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+      expect(modes['temporary'], 0x1c0); // 0700, independent of umask.
+      expect(modes['parentAfter'], modes['parentBefore']);
+      expect(modes['publicAfter'], 0x1ff); // Existing 0777 stays rejected.
+      expect(modes['publicRejected'], isTrue);
+      expect(modes['linkRejected'], isTrue);
+      expect(scratch.listSync(), isEmpty);
+    },
+  );
+
   test('private directory refuses public mode and symlink', () {
     final path = '${scratch.path}/private';
     privateDirectory(path);

@@ -3,8 +3,9 @@
 Main CI builds and tests one portable x86-64 application bundle.
 `.github/workflows/linux-packages.yml` retrieves that exact-commit candidate and
 wraps it with the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy.
-The packaging workflow runs only when a GitHub release is published (including prereleases), not on pull requests, branch pushes, or tag
-pushes alone. The release tag must be `v` followed by the version in
+The packaging workflow runs when a GitHub release is published (including
+prereleases), or through a manual recovery run. Pull requests, branch pushes,
+and tag pushes alone do not start packaging. The release tag must be `v` followed by the version in
 `apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
 [Versioning and releases](../../README.md#versioning-and-releases).
 
@@ -159,6 +160,22 @@ attaches the portable archive, `.deb`, `.rpm`, `.pkg.tar.zst`, checksums, build
 manifests, and ABI report to the triggering GitHub release. Reruns replace assets
 with matching names. CI does not create the release, sign Linux packages, or
 configure apt/dnf/pacman repositories.
+
+To rebuild Linux packages from a fixed branch and attach them to an existing
+published release, run:
+
+```sh
+gh workflow run linux-packages.yml --repo teng-lin/open-foresight --ref main -f tag=v0.1.0
+```
+
+The selected branch must contain the fixes and have the same application version
+as the release tag. Its exact source commit must have a successful main CI
+candidate; run main CI first if it is missing or expired. Recovery promotes that
+tested portable bundle rather than rebuilding the application or SDK. The bundle
+records its actual source commit as its revision.
+The release tag and macOS assets are left in place. Release-triggered and manual
+builds for the same target release are serialized.
+
 
 GitHub Actions must be enabled and its account spending/payment limits must allow
 hosted jobs. A failure before any steps execute does not validate the build.

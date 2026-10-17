@@ -3,7 +3,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: linux-packages-${{ github.ref }}
+  group: linux-packages-${{ inputs.tag || github.event.release.tag_name }}
   cancel-in-progress: false
 jobs:
   bundle:
@@ -20,11 +20,15 @@ jobs:
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    - name: Require an existing published release
+      env:
+        GH_TOKEN: ${{ github.token }}
+        GH_REPO: ${{ github.repository }}
+      run: test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = false
     - name: Require the tag version and fetch the tested commit candidate
       id: version
       env:
         GH_TOKEN: ${{ github.token }}
-        RELEASE_TAG: ${{ github.event.release.tag_name }}
       run: |-
         python3 tools/app_version.py --check
         python3 - <<'PY'
@@ -58,7 +62,6 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
-        RELEASE_TAG: ${{ github.event.release.tag_name }}
       run: |
         gh release upload "$RELEASE_TAG" \
           artifacts/portable-bundle/* \
@@ -113,3 +116,11 @@ jobs:
   release:
     types:
     - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing published release to receive Linux packages (for example v0.1.0)
+        required: true
+        type: string
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}

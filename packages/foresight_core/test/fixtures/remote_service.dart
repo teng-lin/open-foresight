@@ -32,7 +32,7 @@ class RemoteFixture {
   void Function(Socket, Map<String, dynamic>)? handler;
 
   Future<void> start() async {
-    root = Directory('/tmp').createTempSync('of-remote-');
+    root = await createPrivateTempDirectory(Directory('/tmp'), 'of-remote-');
     profile = ProfilePaths(
       root.resolveSymbolicLinksSync(),
       root.resolveSymbolicLinksSync(),

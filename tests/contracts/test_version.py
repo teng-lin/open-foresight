@@ -50,8 +50,13 @@ def test_stale_reports_a_hand_edited_pubspec(tmp_path):
                                               app_version.DART_VERSION])
 
 
-@pytest.mark.parametrize('version, build', [('1.2', None), ('v1.2.3', None), ('1.2.3', 1)])
+@pytest.mark.parametrize('version, build', [('1.2', None), ('v1.2.3', None), ('01.2.3', None), ('1.2.3', 1)])
 def test_set_rejects_invalid_versions_and_non_increasing_builds(tmp_path, version, build):
     root = copy_tree(tmp_path)
     with pytest.raises(ValueError):
         app_version.set_version(version, build, root=root)
+    if version == '01.2.3':
+        pubspec = root / app_version.PUBSPEC
+        pubspec.write_text(app_version.SOURCE.sub('version: 01.2.3+99', pubspec.read_text()))
+        with pytest.raises(ValueError):
+            app_version.stale(root)

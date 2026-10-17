@@ -60,12 +60,13 @@ def run(args):
                               '--bundle', str(destination), '--models', str(args.models),
                               '--output', str(args.output / 'functional')]
                 identity_path = dmg.parent / 'installer.json'
-                if identity_path.exists():
-                    identity = json.loads(identity_path.read_text())
-                    if identity['sha256'] != digest or identity['asset'] != dmg.name:
-                        raise ValueError('Installer identity report names different DMG bytes')
-                    report['installer'] = identity
-                    functional += ['--expected-revision', identity['source_commit']]
+                if not identity_path.is_file():
+                    raise FileNotFoundError('Installer identity report is required for revision acceptance')
+                identity = json.loads(identity_path.read_text())
+                if identity['sha256'] != digest or identity['asset'] != dmg.name:
+                    raise ValueError('Installer identity report names different DMG bytes')
+                report['installer'] = identity
+                functional += ['--expected-revision', identity['source_commit']]
                 subprocess.run(functional, check=True, timeout=2400)
                 # The harness stops its isolated GUI/service before replacement.
                 persistence_profile = Path(temporary).resolve() / 'persistence'
@@ -78,8 +79,25 @@ def run(args):
                 report['status'] = 'automated_passed_manual_pending'
             finally:
                 if mounted:
-                    subprocess.run(['hdiutil', 'detach', str(mount)], check=True)
-                    mounted = False
+                    primary_error = sys.exc_info()[0] is not None
+                    detach_error = None
+                    try:
+                        detach = subprocess.run(
+                            ['hdiutil', 'detach', str(mount)], timeout=120)
+                        if detach.returncode:
+                            detach = subprocess.run(
+                                ['hdiutil', 'detach', '-force', str(mount)],
+                                timeout=120)
+                        if detach.returncode:
+                            detach_error = detach.returncode
+                    except Exception as error:
+                        detach_error = type(error).__name__
+                    if detach_error is None:
+                        mounted = False
+                    else:
+                        report['detach_error'] = detach_error
+                        if not primary_error:
+                            raise RuntimeError('Failed to detach the release DMG')
     except BaseException as error:
         report['status'] = 'failed'
         report['error_type'] = type(error).__name__

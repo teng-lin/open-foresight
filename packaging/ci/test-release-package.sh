@@ -67,6 +67,7 @@ case "$task_format" in
 esac
 test ! -e /usr/bin/open-foresight
 test ! -e /opt/open-foresight
+test ! -e /usr/share/applications/io.openforesight.App.desktop
 test "$(cat /home/acceptance/.local/share/open-foresight/release-sentinel)" = preserve
 python3 - <<'PY'
 import json,platform
