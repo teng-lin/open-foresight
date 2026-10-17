@@ -405,7 +405,7 @@ class _SettingsController extends _FeatureController {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            'Your weekly token usage',
+                            'Your weekly output words',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.bold,
