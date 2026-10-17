@@ -191,11 +191,14 @@ void fs_string_free(char *value) { strings--; free(value); }
       final failed = expectLater(pending, throwsStateError);
       try {
         await eventually(() => probeEntered() == 1);
-        candidate!.close();
       } finally {
-        releaseProbe();
+        try {
+          candidate!.close();
+        } finally {
+          releaseProbe();
+          await failed;
+        }
       }
-      await failed;
       expect(store.model('generation')!['runtime'], '/previous/runtime');
     },
   );
