@@ -121,17 +121,16 @@ jobs:
           path: build/macos-runtimes
           key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py', 'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch') }}
       - name: Build and verify complete inference runtimes
-        run: |
-          .venv/bin/python tools/build_macos_runtimes.py --jobs 3
-          # The verified wheel, native regression logs and ABI report live in
-          # macos-runtimes. Release compiler scratch space before app copies.
-          rm -rf -- build/macos-runtime-sources
+        run: .venv/bin/python tools/build_macos_runtimes.py --jobs 3
       - name: Cache verified inference runtimes
         if: steps.inference-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/macos-runtimes
           key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py', 'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch') }}
+      - name: Remove completed runtime compiler scratch
+        # Cache the verified payload first, even if scratch cleanup later fails.
+        run: .venv/bin/python tools/clean_macos_runtime_sources.py
       - name: Assemble complete ad hoc application
         env:
           FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
