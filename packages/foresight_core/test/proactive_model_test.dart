@@ -6,7 +6,7 @@ import 'package:foresight_core/foresight_core.dart';
 void main() {
   final env = Platform.environment;
   test(
-    'real local model detects English and Chinese questions without inventing a question',
+    'dedicated detector queues English and Chinese questions without a chat model',
     () async {
       final directory = Directory.systemTemp.createTempSync('proactive-model-');
       final store = Store('${directory.path}/app.db');
@@ -14,14 +14,9 @@ void main() {
         '${directory.path}/unused.sock',
         '${directory.path}/unused',
       );
-      final runtime = NativeRuntime(env['FORESIGHT_NATIVE']!);
-      final domain = Domain(store, helper)..generator = runtime;
+      final domain = Domain(store, helper);
       try {
-        await runtime.load(
-          env['FORESIGHT_GENERATION_RUNNER']!,
-          env['FORESIGHT_GENERATION_MODEL']!,
-          backend: 'litert_lm',
-        );
+        await configureDedicatedQuery(store, env['FORESIGHT_QUERY_MODEL']!);
         final id = store.meeting('Controlled bilingual fixture');
         domain.application.proactive.begin(id);
         store.transcript(
@@ -43,7 +38,8 @@ void main() {
           'errors': domain.application.proactive.errors.map(
             (key, value) => MapEntry('$key', value),
           ),
-          'runtime': runtime.effectiveState,
+          'backend': store.model('query-detection')?['backend'],
+          'chat_model_registered': store.model('generation') != null,
         };
         final reportPath = env['FORESIGHT_PROACTIVE_REPORT'];
         if (reportPath != null) {
@@ -59,6 +55,8 @@ void main() {
           unorderedEquals(['What is the release date?', '谁负责测试？']),
         );
         expect(store.rows('SELECT * FROM answers'), isEmpty);
+        expect(domain.generator, isNull);
+        expect(store.model('generation'), isNull);
         await domain.application.proactive.reset();
         final quiet = store.meeting('Statement-only fixture');
         domain.application.proactive.begin(quiet);
@@ -82,7 +80,6 @@ void main() {
       } finally {
         await domain.application.close();
         domain.close();
-        runtime.close();
         await helper.close();
         store.close();
         directory.deleteSync(recursive: true);

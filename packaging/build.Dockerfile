@@ -51,5 +51,12 @@ RUN --mount=type=secret,id=google_client \
       --whisper-gpu-device 0 "${task_args[@]}" && \
     python3 packaging/check_abi.py dist/open-foresight --max-glibc 2.39 --report dist/abi.json
 
+# Disposable acceptance runner; weights and reports are mounted at runtime.
+# No host audio devices or host session sockets are passed to this image.
+FROM builder AS integration
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 && \
+    rm -rf /var/lib/apt/lists/*
+
 FROM scratch AS artifact
 COPY --from=builder /src/dist/ /dist/

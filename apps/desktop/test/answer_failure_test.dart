@@ -55,7 +55,7 @@ void main() {
   test(
     'failed generation replaces provisional insufficient text with an error',
     () async {
-      final tmp = Directory.systemTemp.createTempSync('answer-failure-');
+      final tmp = Directory('/tmp').createTempSync('answer-failure-');
       final store = Store('${tmp.path}/app.db');
       final id = store.importText(
         'Atlas',
@@ -89,6 +89,6 @@ void main() {
         tmp.deleteSync(recursive: true);
       }
     },
-    skip: !Platform.isLinux,
+    skip: !(Platform.isLinux || Platform.isMacOS),
   );
 }

@@ -313,7 +313,10 @@ def test_native_desktop_and_mcp_share_service(running):
     session=os.environ.get('FORESIGHT_DESKTOP_SESSION')
     flutter=os.environ.get('FORESIGHT_FLUTTER_EXECUTABLE')
     mac_ui = sys.platform == 'darwin' and os.environ.get('FORESIGHT_MACOS_UI_TEST') == '1'
-    if not flutter or (not mac_ui and not session):
+    linux_ui = sys.platform == 'linux' and os.environ.get('FORESIGHT_LINUX_UI_TEST') == '1'
+    if not flutter or (not mac_ui and not linux_ui and not session):
+        if os.environ.get('FORESIGHT_REQUIRE_NATIVE_UI_TEST') == '1':
+            pytest.fail('Required native UI integration has no configured platform/display runner')
         pytest.skip('Set FORESIGHT_DESKTOP_SESSION and FORESIGHT_FLUTTER_EXECUTABLE for isolated native UI integration')
     peer=running['peer']
     peer.call('models.generation',{'path':str(running['asset']),'runtime':str(running['runner'])})
@@ -322,9 +325,13 @@ def test_native_desktop_and_mcp_share_service(running):
     report=ROOT/'test-results/desktop-service-integration.json'
     report.parent.mkdir(exist_ok=True)
     env={**running['env'], 'FORESIGHT_MCP_EXECUTABLE':str(MCP),'FORESIGHT_SERVICE_UI_REPORT':str(report),'GDK_BACKEND':'wayland'}
-    if mac_ui:
-        env.pop('GDK_BACKEND', None)
-        completed = subprocess.run([flutter, 'test', '--no-pub', '-d', 'macos',
+    if mac_ui or linux_ui:
+        if mac_ui:
+            env.pop('GDK_BACKEND', None)
+        else:
+            assert env.get('DISPLAY'), 'Linux native UI gate requires an isolated X display'
+            env['GDK_BACKEND'] = 'x11'
+        completed = subprocess.run([flutter, 'test', '--no-pub', '-d', 'macos' if mac_ui else 'linux',
             'integration_test/service_mcp_test.dart', '--reporter', 'expanded'],
             cwd=ROOT/'apps/desktop', env=env, capture_output=True, text=True, timeout=300)
         assert completed.returncode == 0, completed.stdout + '\n' + completed.stderr
