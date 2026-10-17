@@ -468,7 +468,7 @@ else:
         override.start()
         old=os.environ['PATH'];os.environ['PATH']=str(self.path)+':'+old
         try:
-            for playback,rate,target in [(0,48000,b'auto'),(1,48000,b'auto'),(1,16000,b'auto'),(1,11025,b'auto'),(0,48000,b'selected-microphone'),(1,48000,b'selected-playback')]:
+            for playback,rate,target in [(0,48000,b'auto'),(1,48000,b'auto'),(1,16000,b'auto'),(1,11013,b'auto'),(0,48000,b'selected-microphone'),(1,48000,b'selected-playback')]:
                 h=self.lib.fs_capture_start(target,playback,rate);frames=[];deadline=time.monotonic()+3
                 while time.monotonic()<deadline:
                     event=owned_json(self.lib,self.lib.fs_event_poll(h,100))
