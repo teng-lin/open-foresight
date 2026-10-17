@@ -11,8 +11,9 @@ import re
 import tempfile
 import time
 
-from install_macos import minimal_environment, process_path, SERVICE
-from smoke_macos_bundle import ApplicationPeer, McpPeer, service_command, wait_stopped
+from install_macos import minimal_environment
+from installed_runtime import layout, process_path, service_command, wait_stopped
+from smoke_macos_bundle import ApplicationPeer, McpPeer
 from test_packaged_model_runtime import (
     digest, packaged_paths, GENERATION_SHA256, EMBEDDING_SHA256)
 
@@ -62,9 +63,8 @@ def run(args):
     try:
         bundle = args.bundle.resolve(strict=True)
         runner, _, _ = packaged_paths(bundle)
-        if bundle.suffix != '.app':
-            raise ValueError('This Application harness currently requires a macOS app bundle')
-        configuration = json.loads((bundle / 'Contents/Resources/runtime.json').read_text())
+        configuration = (json.loads((bundle / 'Contents/Resources/runtime.json').read_text())
+                         if bundle.suffix == '.app' else {})
         report['generation_backend'] = configuration.get('FORESIGHT_LITERT_BACKEND', 'cpu')
         for name, path, expected in (
             ('generation', args.generation, GENERATION_SHA256),
@@ -73,8 +73,8 @@ def run(args):
             if actual != expected:
                 raise ValueError(f'{name} is not the production catalog model: {actual}')
             report[name + '_sha256'] = actual
-        service = (bundle / SERVICE).resolve(strict=True)
-        executable = (bundle / 'Contents/MacOS/foresight-mcp').resolve(strict=True)
+        executable, service = layout(bundle)
+        executable, service = executable.resolve(strict=True), service.resolve(strict=True)
         if not all(path.is_relative_to(bundle) for path in (service, executable)):
             raise ValueError('Application executables escape the bundle')
         profile = Path(tempfile.mkdtemp(prefix='of-note-package-', dir='/tmp'))
@@ -136,6 +136,42 @@ def run(args):
             raise AssertionError('Saved correction was not appended exactly once')
         if second['transcript'][-1]['text'] != correction:
             raise AssertionError('Saved transcript differs from the requested correction')
+        if getattr(args, 'acceptance', False):
+            report['stage'] = 'indexed_grounded_answer'
+            source = application.call('sources.import', {
+                'title': 'Acceptance Project Marigold',
+                'text': 'Project Marigold has launch code 7319. Mira owns Project Marigold.'})
+            answer = application.call('answer', {
+                'question': "What is Project Marigold's launch code?", 'conversation': 'release-acceptance'})['text']
+            report['grounded_answer'] = {'text': answer, 'source_id': source['id']}
+            if '7319' not in answer or not re.search(r'\[S?\d+\]', answer):
+                raise AssertionError('Grounded answer omitted the known fact or citation')
+            note = mcp.tool('save_note', {'title': 'Release persistence', 'body': 'Persisted installed note'})
+            report['stage'] = 'service_restart'
+            application.close()
+            application = None
+            mcp.close()
+            mcp = None
+            service_command(service, env, '--stop')
+            wait_stopped(owner, service)
+            previous_owner = owner
+            owner = None
+            mcp = McpPeer(executable, env)
+            state = mcp.tool('get_status')
+            owner = state['pid']
+            if owner == previous_owner or process_path(owner) != service:
+                raise AssertionError('Restart did not create the requested installed service')
+            application = ApplicationPeer(runtime / 'application.sock')
+            application.socket.settimeout(args.timeout)
+            restored = application.call('meetings.get', {'id': identifier})
+            enhanced(restored, 'Friday')
+            if not any(row['id'] == note['id'] and row['body'] == 'Persisted installed note'
+                       for row in mcp.tool('list_notes')):
+                raise AssertionError('Installed note was not restored')
+            if mcp.tool('get_source', {'id': source['id']})['content'] != \
+                    'Project Marigold has launch code 7319. Mira owns Project Marigold.':
+                raise AssertionError('Installed source was not restored')
+            report['restart_persistence'] = 'passed'
         report['status'] = 'passed'
         report['stage'] = 'completed'
     except BaseException as error:
@@ -183,6 +219,7 @@ def run(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--acceptance', action='store_true', help='Also verify indexed Q&A and restart persistence')
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--generation', type=Path, required=True)
     parser.add_argument('--embedding', type=Path, required=True)

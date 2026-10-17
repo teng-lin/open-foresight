@@ -60,7 +60,9 @@ It archives the tested macOS application and the Linux portable bundle. macOS
 release CI verifies the promoted app, runs the existing real-model and cloud
 acceptance, then makes the DMG. Linux release CI wraps the promoted tarball and
 runs the distro installation/lifecycle matrix. No release job compiles an SDK
-or application. Final downloaded-installer acceptance is separate (PR #19).
+or application. Final downloaded-installer acceptance runs separately in `release-acceptance.yml`.
+Main candidates require the bundled Google application registration; macOS
+promotion also verifies the registration and browser invitation without an account.
 Rotated distribution settings require a fresh main candidate; release promotion
 does not silently change its bundled configuration.
 
@@ -85,7 +87,7 @@ It builds the same four recipes, sequentially for a single local builder. The
 hosted producer parallelizes the independent components. Using emulation on an
 ARM host does not qualify x86-64 runtime support.
 
-Local validation for this change: 185 offline Python tests passed (10 skipped),
+Local validation after merging current main: 198 offline Python tests passed (10 skipped),
 workflow actionlint passed, all embedded Python/shell blocks parsed, and the real
 macOS SDK/runtime prefixes survived archive extraction and verification at new
 paths. The local ARM Mac does not qualify the x86-64 container builds.

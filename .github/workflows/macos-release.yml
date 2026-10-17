@@ -28,6 +28,11 @@ jobs:
         ditto -x -k artifacts/Open-Foresight-macos-arm64.zip staging
         codesign --verify --deep --strict 'staging/Open Foresight.app'
         python tools/verify_macos_release_runtime.py 'staging/Open Foresight.app' --output test-results/runtime.json
+        python - <<'PY'
+        from pathlib import Path
+        from tools.google_client_release import release_google_client
+        release_google_client(Path('staging/Open Foresight.app/Contents/Resources/google-client.json'), required=True)
+        PY
     - name: Run real release-model CPU acceptance
       run: python tools/test_macos_release_models.py 'staging/Open Foresight.app' --models build/release-acceptance-models
         --output test-results/release-models
@@ -36,6 +41,11 @@ jobs:
         git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
         echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
         "$RUNNER_TEMP/flutter/bin/dart" --version
+    - name: Verify Google sign-in from the promoted bundle
+      run: |-
+        task_resources="$PWD/staging/Open Foresight.app/Contents/Resources"
+        (cd packages/foresight_core && dart pub get && env -u FORESIGHT_GOOGLE_CLIENT_JSON \
+          FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_google_configuration.dart) > test-results/google-configuration.json
     - name: Validate cloud distribution from the promoted bundle
       run: |-
         task_resources="$PWD/staging/Open Foresight.app/Contents/Resources"

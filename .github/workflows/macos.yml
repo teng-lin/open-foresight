@@ -107,13 +107,22 @@ jobs:
       env:
         FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
         FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
+        FORESIGHT_GOOGLE_CLIENT_JSON: ${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
+        REQUIRE_GOOGLE_CLIENT: ${{ github.ref == 'refs/heads/main' }}
       run: |
-        .venv/bin/python tools/package_macos.py --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
+        task_args=()
+        if [[ "$REQUIRE_GOOGLE_CLIENT" == 'true' ]]; then task_args+=(--require-google-client); fi
+        .venv/bin/python tools/package_macos.py "${task_args[@]}" --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
           --python-runtime build/macos-runtimes/python \
           --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
           --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
           --whisper-license build/macos-runtimes/whisper/LICENSE
         codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
+        if [[ -n "$FORESIGHT_GOOGLE_CLIENT_JSON" ]]; then
+          task_resources="$PWD/dist/Open Foresight.app/Contents/Resources"
+          (cd packages/foresight_core && env -u FORESIGHT_GOOGLE_CLIENT_JSON \
+            FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_google_configuration.dart)
+        fi
     - name: Verify bundled inference without developer environment
       run: |
         .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
@@ -272,8 +281,10 @@ jobs:
         build-args: |
           SDK_IMAGE=${{ steps.sdk.outputs.image }}
           SOURCE_REVISION=${{ github.sha }}
+          REQUIRE_GOOGLE_CLIENT=1
           DISTRIBUTION_CONFIG_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
         secrets: |
+          google_client=${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
           foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
           foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
         cache-from: type=gha,scope=linux-packages-x86-64

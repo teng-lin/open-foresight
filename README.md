@@ -226,7 +226,9 @@ On macOS, the command is `/Applications/Open Foresight.app/Contents/MacOS/foresi
 
 ## Google connections
 
-Drive and Calendar use browser authorization with your own OAuth client. Provide it at packaging time with `tools/package.py --google-client /path/to/google-client.json`, or in the app's configuration setting. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
+Release builds bundle their Google application registration: choose a Drive import, Connect Calendar, or Connect Google and authorize in your browser. You do not need to create a Cloud project. Drive and Calendar share the same read-only account connection.
+
+Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. Developer builds can omit it and import their own client through Advanced OAuth configuration. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git. See [Google import parity and validation](docs/validation/google-import-parity.md) for reference-registration provisioning and verification.
 
 ## Verification
 
