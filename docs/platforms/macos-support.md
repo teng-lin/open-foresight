@@ -6,10 +6,10 @@ recording, and writes. MCP and the desktop attach to that service. Closing a
 window or an MCP client does not shut down the service.
 
 This document describes the implementation and its build commands. A development
-bundle is not a validated public release. The release gates in
-[the support plan](macos-support-plan.md) include Developer ID signing,
-notarization, physical permission/device tests, a fresh account, and the actual
-minimum OS. Keep the results of those gates separate from automated tests.
+bundle is not a validated public release. The [release gates](#release-gates)
+cover Developer ID signing, notarization, physical permission and device tests,
+a fresh account, and the actual minimum OS. Keep the results of those gates
+separate from automated tests.
 
 ## Build
 
@@ -118,8 +118,8 @@ relocates non-system Mach-O dependencies, audits arm64 and minimum OS metadata,
 signs nested binaries before containers, submits notarization, staples the ticket,
 and assesses the app. It writes its provenance/verification manifest beside the
 sealed app. Release builds require both model runtimes and dependency licenses.
-See [production runtime acceptance](../validation/reference-production-runtime-acceptance.md)
-for real model probes and the limits of local ad-hoc validation.
+A local full-runtime development bundle does not show that the CI DMG can run
+inference.
 
 The AOT exception follows Dart 3.9.2's
 [Mach-O snapshot loader](https://github.com/dart-lang/sdk/blob/3.9.2/runtime/bin/macho_loader.cc)
@@ -214,8 +214,7 @@ the combined download until the user chooses **Download models**.
 
 The responsible service bundle includes microphone and system-audio purpose
 strings. Permission attribution must be tested on the signed installed layout.
-See [the audio feasibility record](macos-audio-feasibility.md) for measured probes
-and the physical device/permission checklist.
+See [Capture](#capture) for the service-owned audio path.
 
 The desktop implements Command-key navigation, app reopen/activation, a global
 quick-meeting shortcut, and open-at-login through the native shell. Login starts
@@ -232,6 +231,61 @@ REGISTERED_MODEL` copies and relocates the actual prefix, runs from a moved path
 containing spaces with poisoned working-directory imports, and checks both a
 positive and empty detector result. Its output report belongs under ignored
 `test-results`; it does not copy the registered model into the test bundle.
+
+## Capture
+
+The native service library owns capture. No Flutter window or plugin does. The
+supported floor is macOS 15. Microphone input uses AVAudioEngine. System audio
+uses a private Core Audio process tap through a private aggregate device, on
+stream 0 of the selected output. Targets are Core Audio device UIDs. `auto`
+follows the current default input or output. An explicit UID does not fall back
+to another device. Apple documents taps in
+[Capturing system audio with Core Audio taps](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps).
+
+Audio callbacks write mono float samples into a bounded single-producer,
+single-consumer ring without allocation, mutexes, or logging. A service worker
+resamples continuously, converts to little-endian signed 16-bit mono, computes
+levels, and emits 40 ms frames. Overflow emits a gap. Device removal and default
+changes cause a gap and bounded reconnect attempts. A stable stream resets the
+retry budget. Stop waits for callbacks, drains the ring, and emits a partial
+final frame. `fs_capture_finish` stops capture and retains queued events.
+Clients drain those events before `fs_capture_stop`.
+
+During a route interruption the recording owner clears the affected channel's
+level, interim hypothesis, and active echo-processing state. A late interim
+result from before the interruption or pause cannot repopulate cleared speech.
+Final segments stay queued. If processed microphone startup produces no valid
+PCM for 1,500 ms, capture falls back to a fresh standard engine, then reports
+failure if that engine also produces no valid PCM. Valid silence satisfies
+startup.
+
+Discovery never requests access. Microphone states are `not_determined`,
+`authorized`, `denied`, and `restricted`. `fs_audio_request_microphone` is an
+explicit setup operation. It can block on a system dialog, so it runs away from
+the service event loop. A completed system-audio request does not prove capture
+permission. Zero PCM is not proof of permission or of a working recording.
+
+The responsible capture executable needs `NSMicrophoneUsageDescription`,
+`NSAudioCaptureUsageDescription`, a stable bundle identity, and a signature.
+Permission granted to the standalone `foresight-audio` probe does not authorize
+the Dart service. The installed service calls the permission operation itself.
+An unresolved tap initialization reports `capture_permission_pending` after 30
+seconds.
+
+`FORESIGHT_CAPTURE_RUNTIME` may name an absolute executable for controlled
+tests. Without that setting, Mac capture uses Core Audio. An invalid override
+is rejected. Probe output is a diagnostic. It is not an acceptance result.
+
+## Release gates
+
+These gates are still open. A local development bundle does not close them.
+
+- The release CI artifact runs real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup. The current CI DMG omits the Python/LiteRT and Whisper runtimes.
+- Microphone and system audio work desktop-first and MCP-first, including denied or revoked permission, device changes, and closing the desktop.
+- Explicit stop flushes transcripts. Service crash recovery preserves committed data and marks an unfinished recording interrupted.
+- Shortcuts, app reopen, login, source links, imports, notifications, and Google authorization and sync work in a release build.
+- A relocated, quarantined, signed artifact works for a fresh account without Homebrew, SDKs, repository files, or a developer environment.
+- An upgrade coordinates with a running service or recording, and macOS 15 is exercised on actual hardware.
 
 ## Published DMG acceptance
 

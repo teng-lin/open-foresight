@@ -13,7 +13,7 @@ Generation continues through the packaged `litert-runner`. Linux packaging does
 not copy this Mac adapter. Its optional legacy query detector can include a
 separate Python runtime via `--query-python-runtime`. Complete local Mac bundles
 pass production-model CPU/GPU checks; current CI DMGs omit the Python/LiteRT and
-Whisper runtimes. See [artifact acceptance](../../../docs/validation/reference-production-runtime-acceptance.md).
+Whisper runtimes.
 
 Generation accepts optional `--tools` JSON: either a legacy definitions array or
 an object with `tools` and `system_message`. Object requests install the supplied
@@ -21,14 +21,11 @@ instructions in the native system role, keeping `--prompt` as user content.
 System, tool and user tokens count toward the existing context admission limit.
 Application requests also set `delegate_tool_detection: true`: every complete
 model response waits for a Dart decision so the recovered native/text fallback
-parser is shared by both backends. See [fallback evidence](../../../docs/chat/reference-tool-fallback.md).
-Memory compression uses an empty-tool object with empty system text and no
-history, creating a separate plain local conversation. See [memory behavior](../../../docs/chat/reference-chat-history.md).
-It retains one conversation
-while delegating callbacks to the application service over the private owned
-process connection. The model subprocess performs no network requests or tool
-callbacks itself. See [reference tool behavior](../../../docs/chat/reference-tool-generation.md)
-for protocol, ownership, tests and remaining production integration.
+parser is shared by both backends. Memory compression uses an empty-tool object
+with empty system text and no history, creating a separate plain local
+conversation. The worker retains one conversation while delegating callbacks to
+the application service over the private owned process connection. The model
+subprocess performs no network requests or tool callbacks itself.
 
 Experimental `--query-detector` mode uses a raw session with no chat template,
 system instruction, tools or schema. Its fixed 512-token setting and single
@@ -37,8 +34,7 @@ experiment does not support the installed legacy weights-only
 asset. Production automatic Q&A instead uses the reconstructed dedicated CPU
 worker with an authenticated registered asset; nine controlled parsed outputs
 match the original Metal runtime. Live acquisition and broader numerical parity
-remain unverified. See [legacy worker evidence](../../../docs/models/reference-legacy-detector-runtime.md)
-and [runtime evidence](../../../docs/models/reference-query-runtime.md).
+remain unverified.
 
 Generation also implements the versioned persistent worker protocol described
 in [the shared inference README](../README.md#persistent-tool-worker). The pinned

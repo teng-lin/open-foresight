@@ -45,9 +45,6 @@ String dispatch targets -4092 and -4090, one-byte/two-byte string hash dispatch
 targets, and the Smi expiry comparison are printed as offsets from the mapped
 image base for binding to original native symbols.
 
-See [the finding ledger](../../docs/recording/proactive-reference-trace.md) for recovered
-values, REA Evidence IDs, and remaining dispatcher integration work.
-
 Upstream sources:
 - https://github.com/worawit/blutter/pull/216
 - https://github.com/worawit/blutter/pull/213
@@ -72,15 +69,12 @@ The allowlist also includes public search keys, endpoint, CSE identifier, output
 labels and timeout. API-key entry 27425 is explicitly excluded. For Duration
 entry 11620, the reader prints the raw +8 field and verifies its unboxed bitmap
 bit before interpreting it as microseconds. These offsets are specific to the
-validated snapshot. See [search findings](../../docs/chat/ida-search-investigation.md).
-
+validated snapshot.
 
 The web-content probes include the RPC path, endpoint, header name, model ID,
 and protobuf field names. Boolean offsets from null bind the ranking branch
 without inferring truth from decompiler bit tests.
-See [web-content evidence](../../docs/chat/reference-web-content.md).
-
 
 The tool-generation probes decode the google_search schema and result/error
 strings, with UTF-16 units for formatting constants. They retain the same explicit
-credential exclusions. See [tool-generation findings](../../docs/chat/reference-tool-generation.md).
+credential exclusions.

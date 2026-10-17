@@ -1,5 +1,5 @@
 // Public prompt fragments bound by original NotesEnhancer.buildPrompt
-// (0x100a32740), selected PP34602–34609. See reference-note-enhancement.md.
+// (0x100a32740), selected PP34602–34609.
 String buildNoteEnhancementPrompt({
   required String relevantExcerpts,
   required String shorthandNotes,

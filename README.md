@@ -81,25 +81,19 @@ Open Foresight reproduces the original's main workflows, and adds features the o
 - **Local and open.** Models are public LiteRT and whisper.cpp files, pinned by SHA-256 hash, and ordinary generation stays local; optional web mode uses remote search and website summaries. The source code is MIT-licensed.
 - **Isolated profiles.** You can run separate profiles side by side, and migrate an existing profile with a tool that keeps a verified backup.
 
-### Original-app parity
+### Limits
 
-Web-search fallback and the original remote Gemini summary RPC are implemented
-for optional web-enabled Ask and meeting Chat. Both packagers support distribution
-credentials; the inspected development environment has none, so live search, summary, shared-config and detector-download
-acceptance is blocked. The [redacted acceptance command](docs/chat/reference-live-cloud-services.md)
-records this separately from implementation support. No separate user project
-setup is required for these services.
-Ordinary answer generation remains local.
+Optional web-enabled Ask and meeting Chat need distribution credentials supplied
+when the package is built. Without those credentials those paths stay off.
+Ordinary answer generation stays on the machine.
 
-The original's single-note Markdown export format has now been observed live and reproduced, with date filters, preview, copy and download. Additional export scenarios and label editing still need reference verification; see the [feature parity progress ledger](docs/validation/feature-parity-progress.md).
+Transcripts label channels Microphone, Remote, and Unknown. Those names are
+capture routes, not individual speakers. Meeting generation attributes a
+statement only when the transcript has established a real name.
 
-Pause/resume and an immersive workspace are implemented. Exact original gestures and physical-audio behavior remain under [investigation and validation](docs/archive/missing-functions-investigation.md).
-
-Automatic meeting answers now use a reconstructed dedicated detector when its authenticated asset is registered. Nine controlled parsed outputs match the original GPU runtime. Model setup includes authenticated acquisition, encrypted storage and owned plaintext leases when the distribution supplies its shared credential. Note generation includes shared readiness, reset/retry, transcript-cache invalidation and failure cleanup. Original vision-enabled startup and metadata refresh/obsolete-model cleanup remain deferred; live service/release validation and broader numerical comparison remain pending. See [model acquisition](docs/models/reference-model-acquisition.md) and [note lifecycle](docs/notes/reference-note-lifecycle.md). Search configuration is also [under investigation](docs/chat/ida-search-investigation.md); a separate user project has not been established as a requirement.
-
-Transcripts label microphone and remote audio channels as Microphone and Remote, with Unknown for other sources. These are capture routes, not individual-speaker identification. Meeting generation is instructed to attribute statements only to clearly established real names.
-
-On macOS, Settings offers optional echo cancellation using system voice processing. The setting defaults to off, reports active processing or standard-recording fallback, and can bypass processing during a recording. Enabling it on a standard recording requires restarting that recording. Physical echo-cancellation quality and comparison with the original remain unverified; see the [implementation ledger](docs/archive/missing-functions-investigation.md).
+On macOS, Settings offers optional echo cancellation. It is off by default.
+Turning it on during a recording requires restarting that recording. Physical
+echo-cancellation quality has not been measured on a live meeting.
 
 ## Platform status
 
@@ -108,13 +102,13 @@ On macOS, Settings offers optional echo cancellation using system voice processi
 | **Linux** x86-64: Ubuntu 24.04, Debian 13, Fedora 44, Arch/Omarchy | Established target | `.deb`, `.rpm`, and Arch packages on [GitHub releases](https://github.com/teng-lin/open-foresight/releases) |
 | **macOS 15+** on Apple Silicon | In integration. Complete local development bundles pass production-model CPU/GPU checks. macOS 15 execution, Developer ID signing, notarization, and physical-device validation remain open. | CI produces an ad-hoc DMG without Python/LiteRT or Whisper runtimes; it is not an inference-ready release. |
 
-The macOS state is tracked in the [validation ledger](docs/validation/macos-validation.md) and the [support plan's remaining gates](docs/platforms/macos-support-plan.md).
+The remaining macOS release gates are listed in [macOS development and release](docs/platforms/macos-support.md#release-gates).
 
 ## Install
 
 Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI when a release is published. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
 
-The current macOS CI DMG is an incomplete development artifact: it is ad-hoc signed, not notarized, and lacks the Python/LiteRT and Whisper runtimes required for inference. For a complete local bundle, follow the [Mac runtime packaging instructions](docs/platforms/macos-support.md#local-assembly-and-signed-distribution). Local full-runtime CPU/GPU validation does not establish release-DMG inference support; see [artifact acceptance](docs/validation/reference-production-runtime-acceptance.md).
+The current macOS CI DMG is an ad-hoc development artifact: it is not notarized, and it lacks the Python/LiteRT and Whisper runtimes required for inference. For a complete local bundle, follow the [Mac runtime packaging instructions](docs/platforms/macos-support.md#local-assembly-and-signed-distribution). A local full-runtime bundle does not show that the release DMG can run inference. See [release gates](docs/platforms/macos-support.md#release-gates).
 
 ### First launch
 
@@ -228,7 +222,7 @@ On macOS, the command is `/Applications/Open Foresight.app/Contents/MacOS/foresi
 
 Release builds bundle their Google application registration: choose a Drive import, Connect Calendar, or Connect Google and authorize in your browser. You do not need to create a Cloud project. Drive and Calendar share the same read-only account connection.
 
-Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. Developer builds can omit it and import their own client through Advanced OAuth configuration. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git. See [Google import parity and validation](docs/validation/google-import-parity.md) for reference-registration provisioning and verification.
+Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. Developer builds can omit it and import their own client through Advanced OAuth configuration. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
 
 ## Verification
 
@@ -272,20 +266,25 @@ gh release create v0.2.0 --generate-notes  # builds the Linux packages and the m
 
 `python3 tools/app_version.py` prints the current version, and `--check` fails if a derived copy is out of date. Release CI refuses a tag that does not match `v` plus the pubspec version.
 
+Record notable changes in [CHANGELOG.md](CHANGELOG.md). Before tagging, move the `Unreleased` notes under the new version heading.
+
 ## Documentation
 
-Browse the [documentation index](docs/README.md) for topic guides, validation
-ledgers, reference evidence, and archived plans.
+Browse the [documentation index](docs/README.md).
 
 | Topic | Document |
 | --- | --- |
-| Reverse-engineering workflow | [Replicating Foresight with REA on Linux and herdr on Mac](docs/research/rea-linux-and-herdr-mac.md) |
-| Desktop UI parity with the original | [ui-parity-validation.md](docs/validation/ui-parity-validation.md) |
-| Application service and MCP | [application-service.md](docs/architecture/application-service.md) · [archived implementation audit](docs/archive/application-service-plan.md) |
-| Native inference | [services/inference](services/inference/README.md) · [validation](docs/validation/native-inference-validation.md) |
+| How this project started | [Replicating Foresight with REA on Linux and herdr on Mac](docs/research/rea-linux-and-herdr-mac.md) |
+| Application service and MCP | [application-service.md](docs/architecture/application-service.md) |
+| Native inference | [services/inference](services/inference/README.md) |
 | Speech models | [speech-models.md](docs/models/speech-models.md) |
-| Linux packages and CI | [linux-packaging.md](docs/platforms/linux-packaging.md) |
-| macOS | [build and release](docs/platforms/macos-support.md) · [support plan](docs/platforms/macos-support-plan.md) · [validation ledger](docs/validation/macos-validation.md) · [audio feasibility](docs/platforms/macos-audio-feasibility.md) |
+| GPU runtime closure | [reference-gpu-runtime-closure.md](docs/models/reference-gpu-runtime-closure.md) |
+| Native stop tokens | [reference-native-stop-tokens.md](docs/models/reference-native-stop-tokens.md) |
+| Linux packages and CI | [linux-packaging.md](docs/platforms/linux-packaging.md) · [CI promotion](docs/platforms/ci-performance.md) |
+| macOS | [build, bundle, and release gates](docs/platforms/macos-support.md) |
+| Integration gates | [integration-gates.md](docs/validation/integration-gates.md) |
+| Published installer acceptance | [release-acceptance.md](docs/validation/release-acceptance.md) |
+| Release history | [CHANGELOG.md](CHANGELOG.md) |
 
 ## License
 

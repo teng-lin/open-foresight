@@ -41,10 +41,8 @@ the exact-commit portable candidate from successful main CI. Neither consumer
 implicitly compiles a missing SDK. Registry authentication and transport errors
 fail before compilation. Component registry caches preserve completed layers.
 See [CI dependencies and promotion](ci-performance.md) for bootstrap, trust,
-artifact expiry, and release readiness.
-
-See [production runtime acceptance](../validation/reference-production-runtime-acceptance.md)
-for the actual model/package checks and the boundaries of local validation.
+artifact expiry, and release readiness. A local model probe does not stand in
+for the published-installer checks below.
 
 `packaging/check_abi.py` audits version requirements of every ELF file, including
 inference libraries, and rejects requirements above glibc 2.39 or GLIBCXX 3.4.33.
