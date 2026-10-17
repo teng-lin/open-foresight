@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'operations.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -82,7 +84,10 @@ class ServiceClient {
           },
           onError: (Object e, StackTrace st) => _fail(e, st),
           onDone: () => _fail(
-            StateError('Application service disconnected'),
+            RpcError(
+              RpcErrorCode.unavailable,
+              'Application service disconnected',
+            ),
             StackTrace.current,
           ),
         );
@@ -134,7 +139,9 @@ class ServiceClient {
       },
     );
     if (_closed) {
-      controller.addError(StateError('Application service disconnected'));
+      controller.addError(
+        RpcError(RpcErrorCode.unavailable, 'Application service disconnected'),
+      );
       unawaited(controller.close());
     } else {
       _pending[id] = controller;
@@ -146,7 +153,7 @@ class ServiceClient {
     return controller.stream
         .where((v) => v.containsKey('result') || v.containsKey('error'))
         .map((v) {
-          if (v['error'] != null) throw StateError(v['error'] as String);
+          if (v['error'] != null) throw RpcError.from(v['error'] as Object);
           return v['result'];
         });
   }
@@ -167,10 +174,10 @@ class ServiceClient {
         .where(
           (entry) =>
               {
-                'answer.stream',
-                'answer',
-                'meetings.generate',
-                'meetings.enhance',
+                Operation.answer_stream.wire,
+                Operation.answer.wire,
+                Operation.meetings_generate.wire,
+                Operation.meetings_enhance.wire,
               }.contains(entry.value) &&
               (requestId == null || _requestIds[entry.key] == requestId),
         )
@@ -181,7 +188,7 @@ class ServiceClient {
       final pending = _pending.remove(id);
       _methods.remove(id);
       _requestIds.remove(id);
-      pending?.addError(StateError('Answer cancelled'));
+      pending?.addError(RpcError(RpcErrorCode.cancelled, 'Answer cancelled'));
       if (pending != null) unawaited(pending.close());
     }
     return ids.isNotEmpty;
@@ -458,8 +465,10 @@ class ApplicationService {
               if (_closing) {
                 _send(client, {
                   'id': id,
-                  'error':
-                      'Application service is shutting down; retry after it exits.',
+                  'error': const RpcError(
+                    RpcErrorCode.unavailable,
+                    'Application service is shutting down; retry after it exits.',
+                  ).toJson(),
                   'done': true,
                 });
                 return;
@@ -470,20 +479,21 @@ class ApplicationService {
               );
               if (method.startsWith('security.')) {
                 try {
-                  if (method == 'security.attach_desktop') {
+                  if (method == Operation.security_attach_desktop.wire) {
                     access.attach(client, securityArgs['token'] as String);
-                  } else if (method == 'security.detach_desktop') {
+                  } else if (method == Operation.security_detach_desktop.wire) {
                     if (!access.isHost(client))
                       throw StateError('Not the desktop approval connection');
                     access.detach(client);
                     unawaited(domain.application.stopRecording());
-                  } else if (method == 'security.decide') {
+                  } else if (method == Operation.security_decide.wire) {
                     access.decide(
                       client,
                       securityArgs['approval_id'] as String,
                       securityArgs['allow'] == true,
                     );
-                  } else if (method == 'security.allow_import_root') {
+                  } else if (method ==
+                      Operation.security_allow_import_root.wire) {
                     if (!access.isHost(client))
                       throw StateError(
                         'Only the desktop can select import folders',
@@ -508,13 +518,13 @@ class ApplicationService {
                 } catch (e) {
                   _send(client, {
                     'id': id,
-                    'error': e.toString(),
+                    'error': RpcError.from(e).toJson(),
                     'done': true,
                   });
                 }
                 return;
               }
-              if (request['method'] == 'service.stop_if_idle') {
+              if (request['method'] == Operation.service_stop_if_idle.wire) {
                 unawaited(
                   _stopIfIdle(
                     client,
@@ -527,7 +537,10 @@ class ApplicationService {
               if ((_subscriptions[client]?.length ?? 0) >= 32) {
                 _send(client, {
                   'id': id,
-                  'error': 'Too many active requests',
+                  'error': const RpcError(
+                    RpcErrorCode.busy,
+                    'Too many active requests',
+                  ).toJson(),
                   'done': true,
                 });
                 return;
@@ -554,7 +567,7 @@ class ApplicationService {
                 onError: (Object e) {
                   _send(client, {
                     'id': id,
-                    'error': e.toString(),
+                    'error': RpcError.from(e).toJson(),
                     'done': true,
                   });
                   _subscriptions[client]?.remove(id);
@@ -568,7 +581,7 @@ class ApplicationService {
                 cancelOnError: true,
               );
             } catch (e) {
-              _send(client, {'error': e.toString(), 'done': true});
+              _send(client, {'error': RpcError.from(e).toJson(), 'done': true});
             }
           },
           onError: (Object _) => client.destroy(),
@@ -602,8 +615,11 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) {
-    if (lease.cancelled) return Stream.error(StateError('Operation cancelled'));
-    if (lease.method == 'answer.stream') {
+    if (lease.cancelled)
+      return Stream.error(
+        const RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
+      );
+    if (lease.method == Operation.answer_stream.wire) {
       return Stream.fromFuture(_ready).asyncExpand(
         (_) =>
             (args['web_search'] == true
@@ -617,7 +633,7 @@ class ApplicationService {
             ),
       );
     }
-    if (lease.method == 'google.sign_in')
+    if (lease.method == Operation.google_sign_in.wire)
       return domain.application.signIn(lease.id);
     return Stream.fromFuture(_execute(lease.method, args, lease));
   }
@@ -648,7 +664,8 @@ class ApplicationService {
       // particular, a recording-start request awaiting helper/model readiness
       // must not slip between an idle status check and shutdown acceptance.
       if (_leases.values.any(
-        (leases) => leases.values.any((lease) => lease.method != 'status'),
+        (leases) =>
+            leases.values.any((lease) => lease.method != Operation.status.wire),
       )) {
         throw StateError(
           'Application operations are in progress. Retry the upgrade after they finish.',
@@ -665,7 +682,11 @@ class ApplicationService {
         'done': true,
       });
     } catch (error) {
-      _send(client, {'id': id, 'error': error.toString(), 'done': true});
+      _send(client, {
+        'id': id,
+        'error': RpcError.from(error).toJson(),
+        'done': true,
+      });
     }
     try {
       await client.flush();
@@ -680,32 +701,24 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) async {
-    if (_closing) throw StateError('Application service is shutting down');
-    if (!{
-      'status',
-      'audio.capabilities',
-      'notifications.capabilities',
-      'notifications.request_permission',
-      'audio.request_microphone',
-      'audio.request_system',
-      'sources.list',
-      'sources.get',
-      'notes.list',
-      'notes.save',
-      'meetings.list',
-      'meetings.get',
-      'meetings.create',
-      'meetings.notes',
-      'preferences.set',
-      'artifacts.edit',
-      'google.status',
-      'google.configure',
-    }.contains(method))
-      await _ready;
-    if (_closing) throw StateError('Application service is shutting down');
-    if ((method == 'meetings.start' || method == 'meetings.resume') &&
+    if (_closing)
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Application service is shutting down',
+      );
+    if (Operation.parse(method).requiresHelper) await _ready;
+    if (_closing)
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Application service is shutting down',
+      );
+    if ((method == Operation.meetings_start.wire ||
+            method == Operation.meetings_resume.wire) &&
         !access.hasHost) {
-      throw StateError('Recording requires an open desktop indicator');
+      throw RpcError(
+        RpcErrorCode.denied,
+        'Recording requires an open desktop indicator',
+      );
     }
     return domain.application.call(
       method,
@@ -718,7 +731,7 @@ class ApplicationService {
     final lease = _leases[client]?.remove(id);
     if (lease != null) {
       lease.cancelled = true;
-      if (lease.method == 'google.sign_in')
+      if (lease.method == Operation.google_sign_in.wire)
         domain.application.cancelSignIn(lease.id);
       domain.generator?.cancel(requestId: lease.id);
     }
@@ -791,7 +804,9 @@ Future<ServiceClient> _connectCompatibleService(String path) async {
   final client = await ServiceClient.connect(path);
   if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
     try {
-      validateServiceCompatibility(await client.call('status') as Map);
+      validateServiceCompatibility(
+        await client.call(Operation.status.wire) as Map,
+      );
     } catch (_) {
       await client.close();
       rethrow;
