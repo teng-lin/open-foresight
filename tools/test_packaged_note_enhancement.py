@@ -8,6 +8,7 @@ import argparse
 import json
 from pathlib import Path
 import re
+import subprocess
 import tempfile
 import time
 
@@ -69,6 +70,7 @@ def run(args):
     env = None
     service = None
     failure = None
+    service_process = service_log = None
     cleanup_errors = []
     try:
         bundle = args.bundle.resolve(strict=True)
@@ -98,6 +100,20 @@ def run(args):
         env['FORESIGHT_RUNTIME'] = str(runtime)
         report['synthetic_profile'] = str(profile)
         report['stage'] = 'application_startup'
+        if bundle.suffix != '.app':
+            # Own the disposable service's stderr so batch-level model errors
+            # survive the ordinary detached-launch path and reach CI artifacts.
+            service_log = (output / 'service.log').open('wb')
+            launcher = bundle / 'open-foresight-service'
+            service_process = subprocess.Popen([str(launcher)], cwd='/', env=env,
+                stdout=service_log, stderr=subprocess.STDOUT)
+            deadline = time.monotonic() + 60
+            while not (runtime / 'application.sock').exists():
+                if service_process.poll() is not None:
+                    raise RuntimeError('Installed service exited; see service.log')
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Installed service startup timed out; see service.log')
+                time.sleep(.05)
         mcp = McpPeer(executable, env)
         state = mcp.tool('get_status')
         owner = state['pid']
@@ -218,6 +234,13 @@ def run(args):
                 report['service_shutdown'] = 'verified_stopped'
             except Exception as error:
                 cleanup_errors.append(str(error))
+        if service_process is not None:
+            try:
+                service_process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                cleanup_errors.append('Owned foreground service did not exit')
+        if service_log is not None:
+            service_log.close()
         if mcp is not None:
             try:
                 (output / 'mcp.stderr.log').write_bytes(mcp.errors)
