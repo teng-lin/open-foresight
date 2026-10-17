@@ -32,7 +32,9 @@ acceptance, with a model cache saved independently of test success.
 Runtime containers have no network, additional capabilities, host session
 sockets or sound-device mounts. Virtual audio refuses to run if `/dev/snd` is
 present; it creates a private runtime/home, PipeWire/Pulse/WirePlumber session,
-null sink and remapped virtual source, and stops owned daemons on exit.
+null sink and remapped virtual source, disables hardware monitors, and stops
+owned daemons on exit. LiteRT compilation caches live in a temporary directory
+separate from the read-only model fixture mount.
 
 | Group | Required executed tests | Scenarios |
 | --- | --- | --- |
@@ -102,7 +104,10 @@ Local: 119 desktop tests pass with nine opt-in skips (the previous Linux-only
 failure test now executes on Mac); the strict fast group passes one selected
 Mac-compatible test with zero skips. Offline Python suite: 211 passed, 11
 pre-existing platform/optional skips and 102 subtests. Both Dart analyzers,
-workflow lint, skip inventory and diff checks pass. Linux native UI, CPU models
+workflow lint, skip inventory and diff checks pass. A local Ubuntu 24.04 ARM64
+container probe also passed private PipeWire startup, real virtual PCM
+playback/capture (44,344 samples) and owned-daemon cleanup with network and
+additional capabilities disabled; this does not validate Whisper. Linux native UI, CPU models
 and virtual audio require the new CI jobs; their outcomes must be reported
 separately from these local checks. Reference groups were not executed without
 their authorized inputs.

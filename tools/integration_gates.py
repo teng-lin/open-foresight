@@ -113,6 +113,16 @@ def private_pipewire(env, output):
                        FLUTTER_SUPPRESS_ANALYTICS='true', HOME=str(home), XDG_RUNTIME_DIR=str(runtime), PIPEWIRE_RUNTIME_DIR=str(runtime),
                        PIPEWIRE_REMOTE='pipewire-0', PULSE_SERVER=f'unix:{runtime}/pulse/native',
                        XDG_CONFIG_HOME=str(home / '.config'), XDG_STATE_HOME=str(home / '.state'))
+        # Ubuntu 24.04's WirePlumber 0.4 otherwise probes logind/Bluetooth.
+        # This session only manages virtual nodes, with no hardware monitors.
+        config = home / '.config/wireplumber'
+        for group, settings in {
+            'main': 'alsa_monitor.enabled = false\nv4l2_monitor.enabled = false\nlibcamera_monitor.enabled = false\n',
+            'bluetooth': 'bluez_monitor.enabled = false\nbluez_midi_monitor.enabled = false\n',
+        }.items():
+            folder = config / f'{group}.lua.d'
+            folder.mkdir(parents=True)
+            (folder / '51-virtual-only.lua').write_text(settings)
         try:
             for daemon in ['pipewire', 'pipewire-pulse', 'wireplumber']:
                 log = (output / f'{daemon}.log').open('w'); streams.append(log)
@@ -130,9 +140,18 @@ def private_pipewire(env, output):
             for command in [
                 ['load-module', 'module-null-sink', 'sink_name=' + sink, 'channels=1', 'rate=48000'],
                 ['load-module', 'module-remap-source', 'master=' + sink + '.monitor', 'source_name=' + source, 'channels=1'],
-                ['set-default-sink', sink], ['set-default-source', source],
             ]:
                 subprocess.run(['pactl', *command], env=private, check=True, stdout=subprocess.DEVNULL, timeout=15)
+            # Pulse can accept module loads before WirePlumber publishes default metadata.
+            for kind, target in [('sink', sink), ('source', source)]:
+                deadline = time.monotonic() + 15
+                while True:
+                    result = subprocess.run(['pactl', f'set-default-{kind}', target], env=private,
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                    if result.returncode == 0: break
+                    if time.monotonic() > deadline or any(process.poll() is not None for process in processes):
+                        raise RuntimeError(f'Private PipeWire default {kind} did not become ready')
+                    time.sleep(.1)
             private.update(FORESIGHT_MICROPHONE_TARGET=source, FORESIGHT_LIVE_SINK=sink)
             yield private
         finally:
