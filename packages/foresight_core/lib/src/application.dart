@@ -71,7 +71,7 @@ class Application {
         'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
         [id],
       )
-      .map((row) => (row['text'] as String).trim())
+      .map((row) => extractSavedTranscriptText(row['text'] as String).trim())
       .where((text) => text.isNotEmpty)
       .join('\n\n');
 

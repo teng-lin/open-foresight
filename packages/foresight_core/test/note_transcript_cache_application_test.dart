@@ -132,6 +132,44 @@ Future<void> withTranscriptFixture(
 
 void main() {
   test(
+    'saved structured transcript records reach enhancement as readable text',
+    () async {
+      await withTranscriptFixture((
+        directory,
+        embeddings,
+        domain,
+        runtime,
+      ) async {
+        final id = domain.store.meeting('Structured saved record');
+        domain.store.saveMeetingNotes(id, 'Raw note');
+        domain.store.transcript(
+          id,
+          '[{"segment_title":"Planning","turns":[{"speaker":"Ada","text":"Ship it"}]}]',
+          true,
+          0,
+          20,
+          'imported',
+        );
+        domain.store.transcript(
+          id,
+          '  Plain evidence  ',
+          true,
+          20,
+          40,
+          'imported',
+        );
+        await domain.application.enhanceNotes(id);
+        expect(
+          embeddings.texts.first,
+          '--- [Planning] ---\nAda: Ship it\n\nPlain evidence',
+        );
+        expect(runtime.prompts.single, contains('Ada: Ship it'));
+        expect(runtime.prompts.single, isNot(contains('segment_title')));
+      });
+    },
+  );
+
+  test(
     'a temporary embedding error does not permanently poison note enhancement',
     () async {
       await withTranscriptFixture((
