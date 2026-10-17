@@ -508,8 +508,7 @@ json grounded_answer(G &engine, const json &request, int budget) {
            "and implications. Avoid repeating the same facts in a table and "
            "prose. ";
   else if (has(question, "(?i)\\b(how|steps?|instructions?|walkthrough)\\b"))
-    task = "Explain the supported steps and their outputs in order. Identify "
-           "any missing steps. ";
+    task = "Explain the supported steps and their outputs in order. ";
   else if (has(question, "(?i)\\bexamples?\\b"))
     task = "Describe actual supported examples with the requested detail; "
            "distinguish reconstructions from published profiles. ";

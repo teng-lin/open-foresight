@@ -91,11 +91,19 @@ def models_gate(args, env):
                FORESIGHT_WEB_MODEL_REPORT=str(args.output / 'web-model.json'))
     env['FORESIGHT_GEMMA_MODEL'] = env['FORESIGHT_GENERATION_MODEL']
     env['FORESIGHT_GENERATION_RUNNER'] = env['FORESIGHT_LITERT_RUNNER']
-    desktop = run_tests('desktop', ['test/integration_test.dart', 'test/native_load_test.dart',
-        'test/meeting_citation_test.dart', 'test/google_real_helper_test.dart', 'test/gemma_native_test.dart'],
-        5, env, args.output, 'models-desktop', args.flutter, args.dart)
-    core = run_tests('core', ['test/web_model_test.dart'], 1, env, args.output, 'models-core', args.flutter, args.dart)
-    return {'desktop': desktop, 'core': core}
+    results, errors = {}, []
+    for package, files, expected in [
+        ('desktop', ['test/integration_test.dart', 'test/native_load_test.dart',
+            'test/meeting_citation_test.dart', 'test/google_real_helper_test.dart', 'test/gemma_native_test.dart'], 5),
+        ('core', ['test/web_model_test.dart'], 1),
+    ]:
+        try:
+            results[package] = run_tests(package, files, expected, env, args.output,
+                                         'models-' + package, args.flutter, args.dart)
+        except Exception as error:
+            errors.append(str(error))
+    if errors: raise RuntimeError('; '.join(errors))
+    return results
 
 
 @contextmanager

@@ -91,3 +91,17 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
         gates.audio_gate(args, {'PATH': '/bin'})
     assert observed[0][0] == 'desktop' and observed[0][1]['FORESIGHT_WHISPER_RUNTIME'] == str(runner)
     assert observed[1][0] == 'core' and 'FORESIGHT_WHISPER_RUNTIME' not in observed[1][1]
+
+
+def test_model_groups_both_execute_when_desktop_group_fails(tmp_path):
+    args = SimpleNamespace(models=tmp_path, output=tmp_path, flutter='flutter', dart='dart')
+    observed = []
+    def run(package, *args):
+        observed.append(package)
+        if package == 'desktop': raise RuntimeError('desktop fixture failed')
+        return {'passed': 1, 'skipped': 0}
+    with patch.object(gates, 'model_file', return_value='/fixture/model'), \
+            patch.object(gates, 'run_tests', side_effect=run):
+        with pytest.raises(RuntimeError, match='desktop fixture failed'):
+            gates.models_gate(args, {'FORESIGHT_LITERT_RUNNER': '/runner'})
+    assert observed == ['desktop', 'core']

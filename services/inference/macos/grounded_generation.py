@@ -313,7 +313,7 @@ def grounded_answer(engine, lm, request, budget):
     if re.search(r'\b(compare|comparison|differences?)\b', question, re.I):
         task = 'Compare the requested attributes and explain supported differences and implications. Avoid repeating the same facts in a table and prose. '
     elif re.search(r'\b(how|steps?|instructions?|walkthrough)\b', question, re.I):
-        task = 'Explain the supported steps and their outputs in order. Identify any missing steps. '
+        task = 'Explain the supported steps and their outputs in order. '
     elif re.search(r'\bexamples?\b', question, re.I):
         task = 'Describe actual supported examples with the requested detail; distinguish reconstructions from published profiles. '
     else:
@@ -327,6 +327,7 @@ def grounded_answer(engine, lm, request, budget):
         'Do not invent names, dates, targets or requirements. Copy numbers, ranges and units '
         'accurately without calculation. Cite every factual paragraph or list item using '
         'the source IDs [S1], [S2], etc. Use only the IDs actually supplied. '
+        'Cite limitations and missing information too; do not append uncited conclusions or claim the evidence is complete. '
         'Do not cite unit IDs. If no evidence addresses the question, reply exactly '
         'INSUFFICIENT_CONTEXT. Do not output JSON or code fences.\n'
         f'Question: {question}\n\nEvidence:\n')
@@ -344,7 +345,7 @@ def grounded_answer(engine, lm, request, budget):
     prompt = prefix + '\n\n'.join(map(unit_text, selected))
     errors = []
     for attempt in range(2):
-        correction = '' if not errors else '\n\nPrevious draft failed verification: ' + '; '.join(errors) + '. Write a corrected answer; omit unsupported claims.'
+        correction = '' if not errors else '\n\nPrevious draft failed verification: ' + '; '.join(errors) + '. Write a corrected answer; omit unsupported claims. Cite each factual paragraph, including limitations. Remove unsupported completeness claims.'
         # Repack with the retry instruction included, without dropping units.
         if len(engine.tokenize(prompt + correction)) + budget + TEMPLATE_RESERVE > CONTEXT_TOKENS:
             break
