@@ -60,6 +60,36 @@ class Domain {
     bool Function() current,
   ) => application.call(method, args, current: current);
   bool _closed = false;
+  int _workspaceGeneration = 0;
+  int get workspaceGeneration => _workspaceGeneration;
+
+  void checkWorkspace(int generation) {
+    _checkOpen();
+    if (generation != _workspaceGeneration)
+      throw StateError('Workspace was cleared; retry the operation');
+  }
+
+  /// Invalidate work before deleting local data.
+  void invalidateWorkspace() => _workspaceGeneration++;
+
+  /// Run after committing local deletion and any helper mutation in progress.
+  void cleanupClearedSources(List<String> sourceIds) {
+    unawaited(
+      _serialize(() async {
+        for (final id in sourceIds) {
+          try {
+            await helper.client.deleteDocument(
+              DeleteRequest(documentId: id, userId: 'local_user'),
+              options: CallOptions(timeout: const Duration(seconds: 5)),
+            );
+          } catch (_) {
+            // Offline helper data is excluded by the now-empty local source scope.
+          }
+        }
+      }).catchError((Object _) {}),
+    );
+  }
+
   bool _sourcesPaused = false;
   bool get sourcesPaused => _sourcesPaused;
   Completer<void>? _sourceWorkResumed;
@@ -100,8 +130,9 @@ class Domain {
 
   Future<void> _mutationTail = Future<void>.value();
   Future<T> _serialize<T>(Future<T> Function() operation) {
+    final generation = workspaceGeneration;
     final task = _mutationTail.then((_) {
-      _checkOpen();
+      checkWorkspace(generation);
       return operation();
     });
     _mutationTail = task.then<void>((_) {}, onError: (Object _) {});
@@ -131,9 +162,11 @@ class Domain {
   }
 
   Future<void> index(String id) async {
+    final generation = workspaceGeneration;
     while (true) {
       // Wait outside the mutation queue so deletions can still proceed.
       await waitForSourceWork();
+      checkWorkspace(generation);
       final completed = await _serialize(() async {
         // Pause may have happened while an earlier mutation was finishing.
         if (sourcesPaused) return false;
@@ -145,6 +178,7 @@ class Domain {
   }
 
   Future<void> _index(String id) async {
+    final generation = workspaceGeneration;
     final current = store.rows(
       'SELECT * FROM sources WHERE id=? AND deleted=0',
       [id],
@@ -164,14 +198,14 @@ class Domain {
         ),
         options: CallOptions(timeout: const Duration(minutes: 30)),
       );
-      _checkOpen();
+      checkWorkspace(generation);
       if (!r.success) throw StateError(r.errorMessage);
       store.db.execute(
         "UPDATE sources SET state='indexed',error='' WHERE id=? AND revision=? AND deleted=0",
         [id, source['revision']],
       );
     } catch (e) {
-      if (_closed) rethrow;
+      checkWorkspace(generation);
       store.db.execute(
         "UPDATE sources SET state='failed',error=? WHERE id=? AND revision=? AND deleted=0",
         [e.toString(), id, source['revision']],
@@ -187,15 +221,16 @@ class Domain {
   }
 
   Future<void> _delete(String id) async {
+    final generation = workspaceGeneration;
     try {
       final r = await helper.client.deleteDocument(
         DeleteRequest(documentId: id, userId: 'local_user'),
       );
-      _checkOpen();
+      checkWorkspace(generation);
       if (!r.success) throw StateError(r.errorMessage);
       store.state(id, 'deleted');
     } catch (e) {
-      if (_closed) rethrow;
+      checkWorkspace(generation);
       store.state(id, 'delete_failed', e.toString());
       rethrow;
     }
@@ -412,8 +447,9 @@ class Domain {
     bool Function()? current,
     bool useWeb = false,
   }) async* {
+    final generation = workspaceGeneration;
     void ensureCurrent() {
-      _checkOpen();
+      checkWorkspace(generation);
       if (current != null && !current()) throw StateError('Answer cancelled');
     }
 
@@ -959,7 +995,9 @@ class Domain {
             : through,
       );
     } catch (e) {
-      if (!_closed && (current == null || current()))
+      if (!_closed &&
+          generation == workspaceGeneration &&
+          (current == null || current()))
         saveAnswer(
           question,
           body,

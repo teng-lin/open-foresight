@@ -187,6 +187,7 @@ class Application {
   int _noteEnhancementSerial = 0;
   Future<void>? _stopping;
   bool _closed = false;
+  bool _clearingWorkspace = false;
   bool _modelBusy = false;
   final _proactivePreparation = <String, Completer<void>>{};
   bool get modelBusy => _modelBusy || domain.restoring;
@@ -315,7 +316,9 @@ class Application {
   String? _signInOwner;
   late final GoogleAuth googleAuth =
       _auth ?? GoogleAuth(Directory('${File(store.path).parent.path}/google'));
-  late final GoogleConnections google = GoogleConnections(domain, googleAuth);
+  GoogleConnections? _google;
+  GoogleConnections get google =>
+      _google ??= GoogleConnections(domain, googleAuth);
   Timer? _googleTimer;
   bool _googleBusy = false;
   Map<String, Object?> get googleState => {
@@ -406,7 +409,13 @@ class Application {
     bool Function()? current,
   }) async {
     if (_closed) throw StateError('Application closed');
-    if (current != null && !current()) throw StateError('Operation cancelled');
+    if (_clearingWorkspace) throw StateError('Workspace is being cleared');
+    final generation = domain.workspaceGeneration;
+    final callerCurrent = current;
+    current = () =>
+        generation == domain.workspaceGeneration &&
+        (callerCurrent?.call() ?? true);
+    if (!current()) throw StateError('Operation cancelled');
     if (method.startsWith('models.') &&
         method != 'models.cancel_query_acquisition' &&
         (modelBusy ||
@@ -671,41 +680,57 @@ class Application {
           _noteEditMappings.clear();
           _pendingNoteTargets.clear();
           _noteTranscriptCache.clear();
-          await proactive.reset();
-          await googleAuth.disconnect();
-          for (final source in store.sources) {
-            await domain.delete(source['id'] as String);
-          }
-          store.db.execute('BEGIN IMMEDIATE');
+          _clearingWorkspace = true;
+          final sourceIds = [
+            for (final source in store.sources) source['id'] as String,
+          ];
+          domain.invalidateWorkspace();
+          final reset = proactive.reset();
           try {
-            for (final table in [
-              'google_sources',
-              'google_folders',
-              'calendar_events',
-              'meeting_questions',
-              'meeting_question_cursors',
-              'meeting_answers',
-              'meeting_notes',
-              'artifacts',
-              'transcript',
-              'meeting_details',
-              'meetings',
-              'answers',
-              'notes',
-              'source_details',
-              'document_labels',
-              'document_clusters',
-              'graph_documents',
-              'graph_force_state',
-              'graph_layouts',
-              'sources',
-            ]) {
-              store.db.execute('DELETE FROM $table');
+            store.db.execute('BEGIN IMMEDIATE');
+            try {
+              for (final table in [
+                'google_sources',
+                'google_folders',
+                'calendar_events',
+                'meeting_questions',
+                'meeting_question_cursors',
+                'meeting_answers',
+                'meeting_notes',
+                'artifacts',
+                'transcript',
+                'meeting_details',
+                'meetings',
+                'answers',
+                'conversation_memory',
+                'notes',
+                'source_details',
+                'document_labels',
+                'document_clusters',
+                'graph_documents',
+                'graph_force_state',
+                'graph_layouts',
+                'sources',
+              ]) {
+                store.db.execute('DELETE FROM $table');
+              }
+              store.db.execute('COMMIT');
+            } catch (_) {
+              store.db.execute('ROLLBACK');
+              rethrow;
             }
-            store.db.execute('COMMIT');
-          } catch (_) {
-            store.db.execute('ROLLBACK');
-            rethrow;
+            domain.cleanupClearedSources(sourceIds);
+            google.close();
+            _google = null;
+            // Local data and credentials are gone before remote cleanup completes.
+            unawaited(googleAuth.forget());
+          } finally {
+            // Wait for cancelled background work before allowing IDs to be reused.
+            try {
+              await reset;
+            } finally {
+              _clearingWorkspace = false;
+            }
           }
           return null;
         case 'meetings.notes':
@@ -1052,9 +1077,13 @@ class Application {
   }
 
   Future<String> importFile(String path) async {
+    final generation = domain.workspaceGeneration;
     await domain.waitForSourceWork();
+    domain.checkWorkspace(generation);
     final file = File(path).absolute;
     final (text, provenance) = await Parser().extract(file.path);
+    final modified = (await file.stat()).modified.millisecondsSinceEpoch;
+    domain.checkWorkspace(generation);
     final uri = Uri.file(file.path).toString();
     final existing = store.sources
         .where((s) => s['source_uri'] == uri)
@@ -1065,7 +1094,7 @@ class Application {
       path.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'text/plain',
       '$provenance; ${file.path}',
       id: existing?['id'] as String?,
-      modifiedAtMs: (await file.stat()).modified.millisecondsSinceEpoch,
+      modifiedAtMs: modified,
       sourceUri: uri,
     );
     await domain.index(id);
@@ -1077,13 +1106,16 @@ class Application {
     bool Function()? current,
     bool allowPrivateNetwork = false,
   }) async {
+    final generation = domain.workspaceGeneration;
     await domain.waitForSourceWork();
+    domain.checkWorkspace(generation);
     final uri = webImportUri(value);
     final text = await WebPageImporter().fetch(
       uri,
       allowPrivateNetwork: allowPrivateNetwork,
       current: current,
     );
+    domain.checkWorkspace(generation);
     if (current != null && !current()) throw StateError('Operation cancelled');
     final existing = store.sources
         .where((s) => s['provenance'] == 'url:$uri')
@@ -1101,6 +1133,7 @@ class Application {
   }
 
   Future<void> importDirectory(String path, {bool Function()? current}) async {
+    final generation = domain.workspaceGeneration;
     final files = Directory(path)
         .listSync(recursive: true, followLinks: false)
         .whereType<File>()
@@ -1113,6 +1146,7 @@ class Application {
         .toList();
     final failures = <String>[];
     for (final file in files) {
+      domain.checkWorkspace(generation);
       if (current != null && !current())
         throw StateError('Operation cancelled');
       try {
@@ -1131,8 +1165,10 @@ class Application {
     bool Function()? current,
     bool allowPrivateNetwork = false,
   }) async {
+    final generation = domain.workspaceGeneration;
     final failures = <String>[];
     for (final s in store.sources) {
+      domain.checkWorkspace(generation);
       if (current != null && !current())
         throw StateError('Operation cancelled');
       final path = (s['provenance'] as String).split('; ').last;
@@ -1206,6 +1242,7 @@ class Application {
   }
 
   Future<void> generateMeeting(int id, String kind) async {
+    final generation = domain.workspaceGeneration;
     if (![
       'summary',
       'actions',
@@ -1231,6 +1268,7 @@ class Application {
       'meeting',
       'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n${boundUtf8(text, 2800)}',
     );
+    domain.checkWorkspace(generation);
     store.artifact(
       id,
       kind,
@@ -1255,7 +1293,9 @@ class Application {
     bool Function()? current,
     void Function(String text)? onText,
   }) async {
+    final generation = domain.workspaceGeneration;
     await Future<void>.value();
+    domain.checkWorkspace(generation);
     if (current != null && !current()) throw StateError('Generation cancelled');
     if (modelBusy) throw StateError('Model configuration is busy');
     final generator = domain.generator;
@@ -1267,6 +1307,7 @@ class Application {
       responseSchema: responseSchema,
       maxOutputTokens: maxTokens,
     )) {
+      domain.checkWorkspace(generation);
       if (current != null && !current())
         throw StateError('Generation cancelled');
       if (event['type'] == 'delta') {
@@ -1276,6 +1317,7 @@ class Application {
       if (event['type'] == 'done') status = event['status'] as String;
       if (event['type'] == 'error') failure = event['message'].toString();
     }
+    domain.checkWorkspace(generation);
     if (status != 'completed') throw StateError('Generation $status: $failure');
     return result;
   }
