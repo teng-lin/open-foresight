@@ -445,20 +445,23 @@ void main() {
 
   test('late source control errors preserve a newer local command', () async {
     f.remote.pauseSources();
-    f.remote.resumeSources();
+    f.remote.pauseSources();
     await eventually(
-      () => f.requests.any((r) => r['method'] == 'sources.resume'),
+      () => f.requests.where((r) => r['method'] == 'sources.pause').length == 2,
     );
-    final pause = f.requests.singleWhere((r) => r['method'] == 'sources.pause');
-    final resume = f.requests.singleWhere(
-      (r) => r['method'] == 'sources.resume',
-    );
-    f.reply(f.sockets.last, resume, null);
+    final pauses = f.requests
+        .where((r) => r['method'] == 'sources.pause')
+        .toList();
+    f.reply(f.sockets.last, pauses.last, null);
     f.sockets.last.writeln(
-      jsonEncode({'id': pause['id'], 'error': 'late failure', 'done': true}),
+      jsonEncode({
+        'id': pauses.first['id'],
+        'error': 'late failure',
+        'done': true,
+      }),
     );
     await eventually(() => f.remote.helper.state.contains('late failure'));
-    expect(f.remote.sourcesPaused, isFalse);
+    expect(f.remote.sourcesPaused, isTrue);
   });
 
   test(
