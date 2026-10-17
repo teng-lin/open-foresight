@@ -1,10 +1,11 @@
 # Linux packages and CI
 
-Open Foresight builds one portable x86-64 application bundle, then wraps it with
-the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy. The workflow is
-`.github/workflows/linux-packages.yml`. It runs when a GitHub release is
-published (including prereleases), or through a manual recovery run. Pull
-requests, branch pushes, and tag pushes alone do not start packaging. The release tag must be `v` followed by the version in
+Main CI builds and tests one portable x86-64 application bundle.
+`.github/workflows/linux-packages.yml` retrieves that exact-commit candidate and
+wraps it with the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy.
+The packaging workflow runs when a GitHub release is published (including
+prereleases), or through a manual recovery run. Pull requests, branch pushes,
+and tag pushes alone do not start packaging. The release tag must be `v` followed by the version in
 `apps/desktop/pubspec.yaml`, for example `v0.1.0`; see
 [Versioning and releases](../../README.md#versioning-and-releases).
 
@@ -32,19 +33,15 @@ reconstructed worker modules and distribution notices are copied explicitly;
 original oracle code and model weights are excluded. A native-only bundle
 keeps dedicated-runtime setup unavailable until an explicit runtime is supplied. The reusable SDK retains its build-time Python environments
 and dependency locks, independently of the native inference runtime.
-The SDK (gRPC, Flutter, Python, LiteRT-LM and Whisper) is a separate private GHCR image.
-Its tag hashes the SDK Dockerfile, CMake hook, dependency locks, runtime builders
-and native stop-sequence patch;
-application CI consumes the resolved immutable image digest. Ordinary app changes
-skip the SDK build entirely. The first bootstrap is slower on two-core runners;
-unused duplicate gRPC libraries are excluded and compilation uses `-O2`.
-CI saves the SDK core image/cache before building LiteRT-LM and Whisper, preserving the
-successful C++/Flutter/Python build if a shader build fails. Whisper uses pinned
-SPIRV-Headers; upstream RE2 tests are disabled alongside gRPC/protobuf tests.
-Release CI publishes a missing SDK with its repository token and reuses an
-already published matching SDK on subsequent releases.
-BuildKit caches intermediate SDK layers too. The first source-extension build
-is included in the SDK job's existing timeout.
+The SDK is assembled from separate content-addressed GHCR images: core
+(gRPC, Flutter, Python), LiteRT, and Whisper. `.github/workflows/ci-dependencies.yml`
+builds changed recipes, running LiteRT and Whisper concurrently after core.
+Application checks consume qualified image digests; release packaging consumes
+the exact-commit portable candidate from successful main CI. Neither consumer
+implicitly compiles a missing SDK. Registry authentication and transport errors
+fail before compilation. Component registry caches preserve completed layers.
+See [CI dependencies and promotion](ci-performance.md) for bootstrap, trust,
+artifact expiry, and release readiness.
 
 See [production runtime acceptance](../validation/reference-production-runtime-acceptance.md)
 for the actual model/package checks and the boundaries of local validation.
@@ -67,7 +64,7 @@ reproducible. Build manifests and ABI reports record what was produced.
 Run from a clean checkout with Docker/BuildKit available:
 
 ```sh
-docker build --file packaging/sdk.Dockerfile --tag open-foresight-sdk:local .
+tools/build_linux_sdk.sh
 docker build --file packaging/build.Dockerfile --target artifact \
   --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
   --output type=local,dest=build/portable .
@@ -172,8 +169,10 @@ gh workflow run linux-packages.yml --repo teng-lin/open-foresight --ref main -f 
 ```
 
 The selected branch must contain the fixes and have the same application version
-as the release tag. The bundle records the selected source commit as its revision.
-The existing content-addressed SDK is reused when its inputs have not changed.
+as the release tag. Its exact source commit must have a successful main CI
+candidate; run main CI first if it is missing or expired. Recovery promotes that
+tested portable bundle rather than rebuilding the application or SDK. The bundle
+records its actual source commit as its revision.
 The release tag and macOS assets are left in place. Release-triggered and manual
 builds for the same target release are serialized.
 
@@ -189,7 +188,7 @@ that includes its OAuth application registration, supply the application-only
 configuration explicitly through a BuildKit secret:
 
 ```sh
-docker build --file packaging/sdk.Dockerfile --tag open-foresight-sdk:local .
+tools/build_linux_sdk.sh
 docker build --file packaging/build.Dockerfile --target artifact \
   --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
   --secret id=google_client,src=/path/to/google-client.json \
