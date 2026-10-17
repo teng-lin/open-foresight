@@ -221,5 +221,28 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                            env={**os.environ, 'LD_LIBRARY_PATH': str(output / 'lib')})
 
 
+class NativePythonPayloadTest(unittest.TestCase):
+    def test_declared_worker_sources_are_allowed_but_runtime_and_extra_code_are_rejected(self):
+        spec = importlib.util.spec_from_file_location('smoke_installed', ROOT / 'packaging/smoke_installed.py')
+        smoke = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(smoke)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sys.path.insert(0, str(ROOT / 'tools'))
+            from query_worker_packaging import copy_worker
+            copy_worker(root / 'share/open-foresight/adapters')
+            smoke.validate_native_python_payload(root)
+            for name in ('share/open-foresight/adapters/unexpected.py',
+                         'elsewhere/legacy_query_worker.py', 'bin/python3',
+                         'lib/libpython3.13.so', 'share/worker.pyc', 'share/worker.pyo'):
+                with self.subTest(name=name):
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b'unexpected payload')
+                    with self.assertRaisesRegex(ValueError, name):
+                        smoke.validate_native_python_payload(root)
+                    path.unlink()
+
+
 if __name__ == '__main__':
     unittest.main()

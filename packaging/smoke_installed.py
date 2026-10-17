@@ -18,6 +18,28 @@ import time
 import urllib.request
 
 
+# These reconstructed worker sources are shipped deliberately. They do not add
+# a Python interpreter or enable a fallback to host Python in native releases.
+QUERY_WORKER_SOURCES = frozenset(
+    'share/open-foresight/adapters/' + name
+    for name in ('legacy_query_worker.py', 'legacy_query_executor.py', 'legacy_query_weights.py')
+)
+
+
+def validate_native_python_payload(root):
+    unexpected = []
+    for path in root.rglob('*'):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative in QUERY_WORKER_SOURCES:
+            continue
+        if path.suffix in ('.py', '.pyc', '.pyo') or path.name.startswith(('python', 'libpython')):
+            unexpected.append(relative)
+    if unexpected:
+        raise ValueError('Unexpected Python payload in native package: ' + ', '.join(sorted(unexpected)))
+
+
 def main():
     root = Path('/opt/open-foresight')
     assert os.getuid() != 0, 'Run the application smoke test as a normal user'
@@ -42,8 +64,7 @@ def main():
         assert 'not found' not in linked.stdout + linked.stderr, (file, linked.stdout, linked.stderr)
         count += 1
     assert count > 0
-    assert not any(p.is_file() and (p.suffix in ('.py', '.pyc', '.pyo') or
-                   p.name.startswith(('python', 'libpython'))) for p in root.rglob('*'))
+    validate_native_python_payload(root)
     subprocess.run([str(root / 'bin/foresight-model'), '--check'],
                    env=env, check=True, timeout=30)
     subprocess.run([str(root / 'bin/whisper-cli-vulkan'), '--help'],
@@ -94,7 +115,7 @@ def main():
                 assert app.poll() is None, log.read_text()
                 print(json.dumps({'installed_startup': True, 'installed_manifest': True, 'activation_ipc': True,
                                   'elf_linkage_files': count, 'private_profile': True,
-                                  'native_litert_runtime': True, 'no_bundled_python': True, 'whisper_cli': True,
+                                  'native_litert_runtime': True, 'no_bundled_python_runtime': True, 'whisper_cli': True,
                                   'whisper_cpu_fixture': True,
                                   'physical_audio_or_gpu_inference_tested': False}))
             finally:
