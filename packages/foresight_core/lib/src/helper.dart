@@ -44,6 +44,7 @@ class Helper {
   Future<PingResponse>? _startupProbe;
   Future<void>? _closing;
   bool stopping = false;
+  bool incompatible = false;
   bool shutdownVerified = true;
   bool _adopted = false;
   int restarts = 0;
@@ -121,6 +122,7 @@ class Helper {
           );
           validateHelperCompatibility(existing, snapshot!);
         } catch (error) {
+          incompatible = true;
           state = 'incompatible helper: $error';
           changed?.call();
           // The service can keep storage-only RPCs available after startup
