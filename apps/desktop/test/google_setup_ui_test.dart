@@ -32,6 +32,9 @@ void main() {
     'bundled Google setup goes directly to sign-in from Settings, Calendar and every Drive import',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('google-bundled-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final client = File('${root.path}/bundled-client.json')
         ..writeAsStringSync(
           jsonEncode({
@@ -104,6 +107,9 @@ void main() {
     'unconfigured Calendar connection opens actionable setup and cancellation leaves it disconnected',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('google-setup-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final domain = Domain(
         store,

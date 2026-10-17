@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -42,7 +43,7 @@ void main() {
   late RecoveryHelper helper;
   late IndexingDomain domain;
   setUp(() {
-    temp = Directory('/tmp').createTempSync('of-meeting-recovery-');
+    temp = shortTestTempRoot.createTempSync('of-meeting-recovery-');
     store = Store('${temp.path}/application.db');
     helper = RecoveryHelper('${temp.path}/helper.sock', '${temp.path}/helper');
     domain = IndexingDomain(store, helper);

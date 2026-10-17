@@ -13,6 +13,9 @@ void main() {
     'real Unix helper + native generation cited answer, restart persistence and deletion',
     () async {
       final tmp = Directory.systemTemp.createTempSync('foresight-e2e-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       Process.runSync('chmod', ['700', tmp.path]);
       final store = Store('${tmp.path}/app.db');
       final helper = Helper('${tmp.path}/helper.sock', '${tmp.path}/helper');

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -22,7 +23,7 @@ class McpFixture {
   int sequence = 0;
 
   Future<void> start() async {
-    root = await createPrivateTempDirectory(Directory('/tmp'), 'of-mcp-');
+    root = await createPrivateTempDirectory(shortTestTempRoot, 'of-mcp-');
     listener = await ServerSocket.bind(
       InternetAddress(
         '${root.path}/application.sock',
@@ -128,7 +129,7 @@ class McpFixture {
 void main() {
   late Directory compiled;
   setUpAll(() async {
-    compiled = Directory('/tmp').createTempSync('of-mcp-kernel-');
+    compiled = Directory.systemTemp.createTempSync('of-mcp-kernel-');
     mcpKernel = '${compiled.path}/mcp.dill';
     final result = await Process.run(Platform.resolvedExecutable, [
       'compile',

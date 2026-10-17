@@ -36,6 +36,9 @@ void main() {
         tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
       );
       final temp = Directory.systemTemp.createTempSync('graph-restoration-ui-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       var store = Store('${temp.path}/app.db');
       final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture:a');
       final b = store.importText(

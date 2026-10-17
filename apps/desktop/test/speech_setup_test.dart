@@ -10,6 +10,9 @@ void main() {
     'active speech model finishes without probing; deleted asset offers download',
     (tester) async {
       final directory = Directory.systemTemp.createTempSync('speech-ui-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final model = speechModels.first;
       final asset = File('${directory.path}/active.bin');

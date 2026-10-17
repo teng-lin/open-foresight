@@ -16,6 +16,9 @@ void main() {
     'Settings selectors retain selection, keyboard and disabled behavior',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('desktop-select-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final helper = OfflineHelper(
         '${root.path}/socket',
@@ -116,6 +119,9 @@ void main() {
         'MaterialIcons',
       )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
       final root = Directory.systemTemp.createTempSync('desktop-audit-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final helper = OfflineHelper(
         '${root.path}/socket',

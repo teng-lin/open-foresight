@@ -346,13 +346,13 @@ class Application {
     if (_googleBusy || !googleAuth.connected) return;
     _googleBusy = true;
     try {
-      await google.reminders(DateTime.now(), (message) async {
+      await google.reminders(domain.clock.now(), (message) async {
         await platformNotification('Open Foresight', message);
       });
       final hours =
           int.tryParse(store.preference('googleRefreshHours', '4')) ?? 4;
       if (!domain.sourcesPaused &&
-          DateTime.now().millisecondsSinceEpoch -
+          domain.clock.now().millisecondsSinceEpoch -
                   google.lastCompletedRefreshMs >=
               hours * 3600000)
         await google.refresh();
@@ -386,7 +386,7 @@ class Application {
     'began': recordingBegan?.millisecondsSinceEpoch,
     'elapsed_ms': recordingBegan == null
         ? 0
-        : (_recordingPausedAt ?? DateTime.now())
+        : (_recordingPausedAt ?? domain.clock.now())
                   .difference(recordingBegan!)
                   .inMilliseconds -
               _recordingPausedMs,
@@ -1350,7 +1350,7 @@ class Application {
     if (generator == null) throw StateError('Generation model unavailable');
     var result = '', status = 'failed', failure = '';
     await for (final event in generator.generate(
-      requestId ?? '$prefix-${DateTime.now().microsecondsSinceEpoch}',
+      requestId ?? '$prefix-${domain.clock.now().microsecondsSinceEpoch}',
       prompt,
       responseSchema: responseSchema,
       maxOutputTokens: maxTokens,
@@ -1408,7 +1408,7 @@ class Application {
     if (_closed) return;
     _enhance.remove(id)?.cancel();
     if (store.preference('liveEnhance', 'true') != 'true') return;
-    _enhance[id] = Timer(const Duration(seconds: 30), () {
+    _enhance[id] = domain.createTimer(const Duration(seconds: 30), () {
       _enhance.remove(id);
       if (_noteEnhancements.values.any((state) => state.active)) return;
       _requestAutomaticNoteEnhancement(id);
@@ -1468,7 +1468,7 @@ class Application {
     previousState?.saveTimer?.cancel();
     final enhancement = _NoteEnhancement(
       requestId ??
-          'notes-${DateTime.now().microsecondsSinceEpoch}-${++_noteEnhancementSerial}',
+          'notes-${domain.clock.now().microsecondsSinceEpoch}-${++_noteEnhancementSerial}',
       notes['body'] as String,
       current: current,
     );
@@ -1653,7 +1653,7 @@ class Application {
   void _scheduleEnhancedDraft(int id, _NoteEnhancement enhancement) {
     if (_closed) return;
     enhancement.saveTimer?.cancel();
-    enhancement.saveTimer = Timer(const Duration(seconds: 1), () {
+    enhancement.saveTimer = domain.createTimer(const Duration(seconds: 1), () {
       enhancement.saveTimer = null;
       if (_closed ||
           !(enhancement.current?.call() ?? true) ||
@@ -1677,7 +1677,7 @@ class Application {
   }) {
     if (_closed) return;
     _enhance.remove(id)?.cancel();
-    _enhance[id] = Timer(
+    _enhance[id] = domain.createTimer(
       const Duration(seconds: 3),
       () => unawaited(
         enhanceNotes(
@@ -1722,7 +1722,7 @@ class Application {
         _scheduleLiveNoteTranscriptEmbedding(id);
         _scheduleEnhance(id);
         _liveIndex?.cancel();
-        _liveIndex = Timer(
+        _liveIndex = domain.createTimer(
           const Duration(seconds: 1),
           () => unawaited(
             indexMeeting(id).catchError((Object e) {
@@ -1776,7 +1776,7 @@ class Application {
     proactive.begin(id);
     recordingMeeting = id;
     _scheduleLiveNoteTranscriptEmbedding(id);
-    recordingBegan = DateTime.now();
+    recordingBegan = domain.clock.now();
     _recordingPausedAt = null;
     _recordingPausedMs = 0;
     store.db.execute("UPDATE meetings SET state='recording' WHERE id=?", [id]);
@@ -1786,7 +1786,7 @@ class Application {
       if (minutes > 0 &&
           !active.paused &&
           !active.finishing &&
-          DateTime.now().difference(active.lastAudioActivity).inSeconds >=
+          domain.clock.now().difference(active.lastAudioActivity).inSeconds >=
               minutes * 60) {
         unawaited(
           stopRecording().catchError((Object e) {
@@ -1815,7 +1815,7 @@ class Application {
 
   void pauseRecording([int? id]) {
     _activeRecording(id).pause();
-    _recordingPausedAt ??= DateTime.now();
+    _recordingPausedAt ??= domain.clock.now();
     provisionalTranscript.clear();
     proactive.clearInterim(recordingMeeting!);
     store.db.execute("UPDATE meetings SET state='paused' WHERE id=?", [
@@ -1827,7 +1827,8 @@ class Application {
   void resumeRecording([int? id]) {
     _activeRecording(id).resume();
     if (_recordingPausedAt != null) {
-      _recordingPausedMs += DateTime.now()
+      _recordingPausedMs += domain.clock
+          .now()
           .difference(_recordingPausedAt!)
           .inMilliseconds;
       _recordingPausedAt = null;

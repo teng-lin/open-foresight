@@ -63,6 +63,9 @@ void main() {
       final dir = Directory.systemTemp.createTempSync(
         'foresight-inline-label-',
       );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
       final store = Store('${dir.path}/app.db');
       final a = store.importText(
         'First',

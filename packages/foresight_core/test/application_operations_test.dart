@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -9,7 +10,7 @@ import 'package:grpc/grpc.dart';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 
-import 'fixtures/google_connections.dart';
+import 'package:foresight_test_support/google_connections.dart';
 
 class OperationsRag extends RagServiceBase {
   RetrieveRequest? query;
@@ -140,7 +141,7 @@ void main() {
   late GoogleFixture google;
   late GoogleAuth auth;
   setUp(() async {
-    root = Directory('/tmp').createTempSync('of-operations-');
+    root = shortTestTempRoot.createTempSync('of-operations-');
     rag = OperationsRag();
     server = Server.create(services: [rag]);
     final socket = '${root.path}/rag.sock';

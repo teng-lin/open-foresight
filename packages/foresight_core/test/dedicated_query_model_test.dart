@@ -77,6 +77,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'query-cleanup-failure-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       try {
         final previous = File('${directory.path}/previous')
@@ -138,6 +141,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'query-acquisition-model-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       EncryptedDedicatedQueryRuntime? detectorRuntime;
       try {
@@ -252,6 +258,9 @@ void main() {
     'guided import authenticates the actual asset and selects bundled runtime',
     () async {
       final directory = Directory.systemTemp.createTempSync('query-import-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       try {
         await configureDedicatedQuery(store, env['FORESIGHT_QUERY_MODEL']!);

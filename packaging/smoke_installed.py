@@ -14,10 +14,16 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from model_pins import release_models  # noqa: E402 - repository acceptance tooling
+
+SPEECH_PIN = release_models()["speech"]
 
 # These reconstructed worker sources are shipped deliberately. They do not add
 # a Python interpreter or enable a fallback to host Python in native releases.
@@ -107,8 +113,7 @@ def main():
         private = Path(temp)
         model = private / "ggml-tiny.bin"
         request = urllib.request.Request(
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/"
-            "5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin",
+            f"https://huggingface.co/{SPEECH_PIN[0]}/resolve/{SPEECH_PIN[1]}/{SPEECH_PIN[2]}",
             headers={"User-Agent": "open-foresight-ci"},
         )
         with (
@@ -118,10 +123,7 @@ def main():
             while block := response.read(1024 * 1024):
                 output.write(block)
         with model.open("rb") as stream:
-            if not (
-                hashlib.file_digest(stream, "sha256").hexdigest()
-                == "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
-            ):
+            if not (hashlib.file_digest(stream, "sha256").hexdigest() == SPEECH_PIN[3]):
                 raise RuntimeError("Verification failed")
         fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/audio/jfk.wav"
         decoded = subprocess.run(

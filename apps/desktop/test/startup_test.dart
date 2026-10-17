@@ -1,4 +1,6 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
+import 'package:foresight_test_support/remote_service.dart' show eventually;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
@@ -9,7 +11,7 @@ void main() {
   testWidgets(
     'real startup connection failures render guidance and release command ownership before retry',
     (tester) async {
-      final root = Directory('/tmp').createTempSync('of-start-');
+      final root = shortTestTempRoot.createTempSync('of-start-');
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
       var attempts = 0;
       var quit = false;
@@ -34,10 +36,15 @@ void main() {
           ),
         );
         // Startup uses real Unix sockets and chmod subprocesses.
-        for (var i = 0; i < 100 && attempts < 1; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await eventually(
+          () =>
+              attempts == 1 &&
+              FileSystemEntity.typeSync(
+                    '${profile.runtime}/commands.sock',
+                    followLinks: false,
+                  ) ==
+                  FileSystemEntityType.notFound,
+        );
       });
       await tester.pumpAndSettle();
       expect(find.text('Open Foresight could not start'), findsOneWidget);
@@ -64,10 +71,15 @@ void main() {
       });
       await tester.runAsync(() async {
         await tester.tap(find.text('Retry'));
-        for (var i = 0; i < 100 && attempts < 2; i++) {
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await eventually(
+          () =>
+              attempts == 2 &&
+              FileSystemEntity.typeSync(
+                    '${profile.runtime}/commands.sock',
+                    followLinks: false,
+                  ) ==
+                  FileSystemEntityType.notFound,
+        );
       });
       await tester.pumpAndSettle();
       expect(attempts, 2);

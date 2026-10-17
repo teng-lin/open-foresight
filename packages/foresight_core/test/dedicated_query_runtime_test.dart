@@ -97,7 +97,6 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
       final failure = expectLater(pending, throwsA(isA<StateError>()));
       final first = await waitForPid();
       runtime.cancel('someone-else');
-      await Future<void>.delayed(const Duration(milliseconds: 20));
       expect((await Process.run('kill', ['-0', '$first'])).exitCode, 0);
       runtime.cancel('owned');
       await failure;

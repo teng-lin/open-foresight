@@ -8,6 +8,8 @@ Developer ID, notarization, physical audio, or a production GPU on another host.
 
 from typing import Any, IO, cast
 
+from model_pins import release_models
+
 import argparse
 import hashlib
 import json
@@ -18,8 +20,8 @@ import subprocess
 import tempfile
 import threading
 
-GENERATION_SHA256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
-EMBEDDING_SHA256 = "e7a8a2204b91e0f96e92960e84a09a89212e1633dcb7575a9bf3378b4df77f4c"
+GENERATION_SHA256 = release_models()["generation"][3]
+EMBEDDING_SHA256 = release_models()["embedding"][3]
 
 
 def digest(path):

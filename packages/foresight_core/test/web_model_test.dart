@@ -10,6 +10,9 @@ void main() {
     'real model searches and persists a cited controlled answer',
     () async {
       final directory = Directory.systemTemp.createTempSync('web-model-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final helper = Helper(
         env['FORESIGHT_WEB_TOKENIZER_SOCKET'] ??

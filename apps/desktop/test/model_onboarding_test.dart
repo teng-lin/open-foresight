@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,6 +33,9 @@ void main() {
       final root = Directory.systemTemp.createTempSync(
         'foresight-model-missing-',
       );
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       try {
         final file = File('${root.path}/embedding.litertlm')
@@ -52,6 +56,9 @@ void main() {
     'embedding-only recovery loads before completion and preserves generation',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('foresight-onboarding-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final generation = File('${root.path}/generation.litertlm')
         ..writeAsStringSync('existing');
@@ -113,9 +120,7 @@ void main() {
           await tester.tap(
             find.widgetWithText(FilledButton, 'Download EmbeddingGemma 2'),
           );
-          for (var i = 0; i < 100 && !loaded; i++) {
-            await Future<void>.delayed(const Duration(milliseconds: 20));
-          }
+          await eventually(() => loaded);
         });
         await tester.pumpAndSettle();
         expect(loaded, true);

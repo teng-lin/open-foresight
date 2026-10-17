@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -248,7 +249,7 @@ void main() {
       Process.runSync('/bin/chmod', ['700', script.path]);
       final previous = runtimeConfiguration.environment['FORESIGHT_HELPER'];
       runtimeConfiguration.environment['FORESIGHT_HELPER'] = script.path;
-      final runtime = Directory('/tmp').createTempSync('of-probe-');
+      final runtime = shortTestTempRoot.createTempSync('of-probe-');
       final socketPath = '${runtime.path}/helper.sock';
       final server = await ServerSocket.bind(
         InternetAddress(socketPath, type: InternetAddressType.unix),

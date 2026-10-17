@@ -40,6 +40,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'meeting-workspace-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final id = store.meeting('[New Meeting]');
       store.transcript(
@@ -171,6 +174,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final directory = Directory.systemTemp.createTempSync('meeting-layout-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final id = store.meeting('[New Meeting]');
       final helper = OfflineHelper(

@@ -7,6 +7,9 @@ void main() {
     'original URI survives edits and reopen, including file punctuation',
     () {
       final temp = Directory.systemTemp.createTempSync('source-uri-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       var store = Store('${temp.path}/app.db');
       final path = '${temp.path}/notes; final ü.txt';
       final uri = Uri.file(path).toString();
@@ -40,6 +43,9 @@ void main() {
 
   test('legacy URI recovery preserves timestamps, revisions and labels', () {
     final temp = Directory.systemTemp.createTempSync('source-uri-legacy-');
+    addTearDown(() {
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    });
     var store = Store('${temp.path}/app.db');
     final path = '${temp.path}/notes; final ü.txt';
     final file = store.importText(

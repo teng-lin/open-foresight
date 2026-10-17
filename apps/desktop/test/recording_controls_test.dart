@@ -57,6 +57,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'recording-controls-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final domain = Domain(
         store,

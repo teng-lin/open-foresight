@@ -7,7 +7,7 @@ import 'package:foresight_core/src/google_connections.dart';
 import 'package:foresight_core/src/helper.dart';
 import 'package:foresight_core/src/store.dart';
 
-import 'fixtures/google_connections.dart';
+import 'package:foresight_test_support/google_connections.dart';
 
 void main() {
   test(
@@ -16,6 +16,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-drive-pause-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final fixture = GoogleFixture();
       await fixture.start();
       final auth = GoogleAuth(
@@ -97,6 +100,9 @@ void main() {
       final root = Directory.systemTemp.createTempSync(
         'foresight-google-default-',
       );
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final profile = Directory('${root.path}/profile');
       final bundled = File('${root.path}/application-client.json')
         ..writeAsStringSync(
@@ -140,6 +146,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-google-auth-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final fixture = GoogleFixture();
       await fixture.start();
       var auth = GoogleAuth(
@@ -203,6 +212,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-source-dates-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final fixture = GoogleFixture()..modified = '2019-01-01T00:00:00Z';
       await fixture.start();
       final auth = GoogleAuth(
@@ -360,6 +372,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-reminder-account-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final fixture = GoogleFixture();
       await fixture.start();
       final auth = GoogleAuth(
@@ -447,6 +462,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-google-adapter-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final fixture = GoogleFixture();
       await fixture.start();
       final auth = GoogleAuth(

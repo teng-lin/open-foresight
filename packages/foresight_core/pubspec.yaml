@@ -5,6 +5,7 @@ version: 0.1.1
 environment:
   sdk: '>=3.8.0 <4.0.0'
 dependencies:
+  clock: ^1.1.2
   mcp_dart: 2.4.3
   grpc: 4.3.1
   protobuf: 5.1.0
@@ -18,6 +19,9 @@ dependencies:
   enough_convert: 1.6.0
   charset: 2.0.1
 dev_dependencies:
+  foresight_test_support:
+    path: ../foresight_test_support
+  fake_async: ^1.3.3
   coverage: ^1.15.1
   matcher: ^0.12.17
   test: ^1.25.15

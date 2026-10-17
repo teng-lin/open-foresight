@@ -144,6 +144,14 @@
       "reason": "Regular core build supplies FORESIGHT_NATIVE_LIBRARY."
     },
     {
+      "path": "packages/foresight_core/test/platform_adapters_test.dart",
+      "conditions": [
+        "!Platform.isMacOS"
+      ],
+      "gate": "platform",
+      "reason": "macOS notification adapters are exercised on the macOS platform runner; Linux explicitly skips this Apple-only contract."
+    },
+    {
       "path": "packages/foresight_core/test/proactive_model_test.dart",
       "conditions": [
         "env['FORESIGHT_PROACTIVE_MODEL_TEST'] != '1'"

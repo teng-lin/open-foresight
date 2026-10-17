@@ -14,6 +14,9 @@ void main() {
       final dir = Directory.systemTemp.createTempSync(
         'foresight-gemma-native-',
       );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
       Process.runSync('chmod', ['700', dir.path]);
       final store = Store('${dir.path}/app.db');
       final helper = Helper('${dir.path}/helper.sock', '${dir.path}/helper');

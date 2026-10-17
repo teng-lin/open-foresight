@@ -10,8 +10,11 @@ void main() {
     'revisions, tombstones, answer provenance and user edits survive restart',
     () async {
       final tmp = Directory.systemTemp.createTempSync('foresight-store-');
+      addTearDown(() => tmp.deleteSync(recursive: true));
       var store = Store('${tmp.path}/application.db');
+      addTearDown(() => store.close());
       final helper = Helper('${tmp.path}/helper.sock', '${tmp.path}/helper');
+      addTearDown(helper.close);
       var domain = Domain(store, helper);
       final id = store.importText(
         'Apollo',
@@ -72,26 +75,23 @@ void main() {
       store.tombstone(id);
       expect(store.sources, isEmpty);
       expect(domain.citationCurrent({'document_id': id, 'revision': 2}), false);
-      store.close();
-      await helper.close();
-      tmp.deleteSync(recursive: true);
     },
   );
   test(
     'insufficient-context response persists without helper or generator',
     () async {
       final tmp = Directory.systemTemp.createTempSync('foresight-domain-');
+      addTearDown(() => tmp.deleteSync(recursive: true));
       final store = Store('${tmp.path}/app.db');
+      addTearDown(store.close);
       final helper = Helper('${tmp.path}/socket', '${tmp.path}/helper');
+      addTearDown(helper.close);
       final output = await Domain(store, helper).ask('What happened?').toList();
       expect(output.single, contains('Insufficient context'));
       expect(
         store.rows('SELECT status FROM answers').single['status'],
         'insufficient_context',
       );
-      store.close();
-      await helper.close();
-      tmp.deleteSync(recursive: true);
     },
   );
 }

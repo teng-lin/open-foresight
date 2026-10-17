@@ -18,6 +18,9 @@ import time
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+from service_ui_report import verify_service_ui_report  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE = Path(
     os.environ.get(
@@ -259,18 +262,17 @@ def running(tmp_path):
                 if process.poll() is not None or time.monotonic() > deadline:
                     log.seek(0)
                     raise AssertionError(log.read()) from None
-                time.sleep(0.05)
+                poll_delay(deadline)
         desktop = ApprovalDesktop(
             tmp_path / "run/application.sock", tmp_path / "data", tmp_path
         )
-        for _ in range(100):
+        deadline = time.monotonic() + 5
+        while True:
             try:
                 peer.call("models.embedding", {"path": str(model)})
                 break
             except RuntimeError:
-                time.sleep(0.05)
-        else:
-            raise AssertionError("embedding fixture failed to load")
+                poll_delay(deadline)
         yield {
             "peer": peer,
             "peers": peers,
@@ -327,7 +329,7 @@ def test_shared_owner_concurrent_writes_search_and_mcp(running):
             "peer did not receive a committed-change notification"
         )
         b.call("status")  # Read queued asynchronous events as well as the reply.
-        time.sleep(0.02)
+        poll_delay(deadline)
     mcp = McpPeer(running["env"])
     try:
         mcp.initialize()
@@ -398,7 +400,7 @@ def test_capture_survives_client_disconnect_and_other_client_cannot_start_second
         assert time.monotonic() < deadline, (
             "shared capture did not deliver audio after client disconnect"
         )
-        time.sleep(0.02)
+        poll_delay(deadline)
     b.call("meetings.stop")
     assert not b.call("status")["capture"]["active"]
     content = b.call("meetings.get", {"id": meeting})
@@ -427,7 +429,7 @@ def test_generation_is_shared_and_cancellation_is_scoped_to_connection(
     deadline = time.monotonic() + 5
     while not b.call("status")["generation"].get("generating"):
         assert time.monotonic() < deadline
-        time.sleep(0.05)
+        poll_delay(deadline)
     with pytest.raises(RuntimeError, match="progress|busy"):
         b.call("answer", {"question": "Another answer?"})
     b.socket.sendall((json.dumps({"cancel": request}) + "\n").encode())
@@ -442,7 +444,7 @@ def test_generation_is_shared_and_cancellation_is_scoped_to_connection(
     deadline = time.monotonic() + 5
     while b.call("status")["generation"]["generating"]:
         assert time.monotonic() < deadline
-        time.sleep(0.05)
+        poll_delay(deadline)
     assert running["process"].poll() is None, "cancellation terminated the shared owner"
     Path(running["env"]["FORESIGHT_DELAY_GENERATION"]).unlink()
     assert "Mira" in b.call("answer", {"question": "Who sends the draft?"})["text"]
@@ -477,7 +479,7 @@ def test_restart_preserves_data_and_does_not_reuse_stale_socket(running):
                 break
             except (FileNotFoundError, ConnectionRefusedError):
                 assert process.poll() is None and time.monotonic() < deadline
-                time.sleep(0.05)
+                poll_delay(deadline)
         assert b.call("notes.list") == saved
     finally:
         process.terminate()
@@ -547,6 +549,7 @@ def test_native_desktop_and_mcp_share_service(running):
     ].close()  # The real desktop owns approval and the capture indicator below.
     report = ROOT / "test-results/desktop-service-integration.json"
     report.parent.mkdir(exist_ok=True)
+    report.unlink(missing_ok=True)
     env = {
         **running["env"],
         "FORESIGHT_MCP_EXECUTABLE": str(MCP),
@@ -580,7 +583,7 @@ def test_native_desktop_and_mcp_share_service(running):
         )
         assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
         evidence = json.loads(report.read_text())
-        assert evidence and all(evidence.values())
+        verify_service_ui_report(evidence)
         return
     desk = [
         "uv",
@@ -622,9 +625,9 @@ def test_native_desktop_and_mcp_share_service(running):
                 assert job["exit_code"] == 0, Path(launch["logs"]).read_text()[-16000:]
                 break
             assert time.monotonic() < deadline, Path(launch["logs"]).read_text()[-6000:]
-            time.sleep(1)
+            poll_delay(deadline)
         evidence = json.loads(report.read_text())
-        assert evidence and all(evidence.values())
+        verify_service_ui_report(evidence)
     finally:
         try:
             os.killpg(launch["pid"], signal.SIGTERM)
@@ -660,7 +663,7 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
                     owner = replacement
                     break
             assert time.monotonic() < deadline
-            time.sleep(0.05)
+            poll_delay(deadline)
         assert "persisted" in first.tool("list_notes")["content"][0]["text"]
         first.close()
         second.close()
@@ -697,11 +700,11 @@ def test_cancelled_model_setup_preserves_previous_registration(running):
     deadline = time.monotonic() + 5
     while not b.call("status")["models_busy"]:
         assert time.monotonic() < deadline
-        time.sleep(0.02)
+        poll_delay(deadline)
     a.socket.sendall((json.dumps({"cancel": request}) + "\n").encode())
     while b.call("status")["models_busy"]:
         assert time.monotonic() < deadline
-        time.sleep(0.05)
+        poll_delay(deadline)
     with sqlite3.connect(
         "file:" + str(running["root"] / "data/application.db") + "?mode=ro", uri=True
     ) as db:
@@ -773,7 +776,7 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running)
         assert time.monotonic() < deadline, (
             "fixture did not deliver audio before shutdown"
         )
-        time.sleep(0.02)
+        poll_delay(deadline)
     stopped = subprocess.run(
         [str(SERVICE), "--stop"],
         env=running["env"],
@@ -837,7 +840,7 @@ def test_idle_upgrade_shutdown_defers_capture_and_requires_verified_ack(running)
     deadline = time.monotonic() + 15
     while sum(peer.call("status")["capture"]["samples"]) < 24000:
         assert time.monotonic() < deadline, "capture stopped after deferred upgrade"
-        time.sleep(0.02)
+        poll_delay(deadline)
     peer.call("meetings.stop")
     stopped = subprocess.run(
         [str(SERVICE), f"--stop-if-idle={owner.pid}"],
@@ -894,7 +897,7 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
                 break
             except (FileNotFoundError, ConnectionRefusedError):
                 assert process.poll() is None and time.monotonic() < deadline
-                time.sleep(0.05)
+                poll_delay(deadline)
         assert not other.call("status")["capture"]["active"]
         assert (
             other.call("meetings.get", {"id": meeting})["meeting"]["state"]
@@ -904,7 +907,7 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
         deadline = time.monotonic() + 15
         while other.call("status")["helper"]["pipeline"] != "ready":
             assert time.monotonic() < deadline, "recovered helper did not become ready"
-            time.sleep(0.05)
+            poll_delay(deadline)
     finally:
         process.terminate()
         process.wait(timeout=15)
@@ -949,7 +952,7 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
             while not (runtime / "helper.sock").exists():
                 assert helper.poll() is None
                 assert time.monotonic() < deadline
-                time.sleep(0.025)
+                poll_delay(deadline)
             service = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
             while peer is None:
                 assert service.poll() is None
@@ -957,14 +960,14 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
                 try:
                     peer = Peer(runtime / "application.sock")
                 except (FileNotFoundError, ConnectionRefusedError):
-                    time.sleep(0.025)
+                    poll_delay(deadline)
             while True:
                 state = peer.call("status")
                 identity = (state.get("helper") or {}).get("instanceId", "")
                 if identity.startswith(f"{helper.pid}-"):
                     break
                 assert time.monotonic() < deadline, state
-                time.sleep(0.025)
+                poll_delay(deadline)
             if helper_exits_first:
                 helper.terminate()
                 helper.wait(timeout=10)
@@ -990,3 +993,75 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
                 if process is not None and process.poll() is None:
                     process.kill()
                     process.wait(timeout=10)
+
+
+def poll_delay(deadline):
+    """Yield between observations without extending the operation's deadline."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Service state was not observed before its deadline")
+    threading.Event().wait(min(0.02, remaining))
+
+
+def test_two_live_profiles_keep_notes_private(running, tmp_path):
+    """Separate owners and databases must isolate actual writes, not just paths."""
+    processes = []
+    peers = []
+    logs = []
+    try:
+        for name in ("first-profile", "second-profile"):
+            profile = tmp_path / name
+            profile.mkdir(mode=0o700)
+            env = {
+                **running["env"],
+                "FORESIGHT_DATA": str(profile / "data"),
+                "FORESIGHT_RUNTIME": str(profile / "run"),
+            }
+            log = (profile / "service.log").open("w+")
+            logs.append(log)
+            process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
+            processes.append(process)
+            deadline = time.monotonic() + 15
+            while True:
+                try:
+                    peer = Peer(profile / "run/application.sock")
+                    peers.append(peer)
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        log.seek(0)
+                        pytest.fail("Profile failed to start: " + log.read())
+                    threading.Event().wait(min(0.02, deadline - time.monotonic()))
+        first, second = peers
+        first_status, second_status = first.call("status"), second.call("status")
+        assert first_status["pid"] != second_status["pid"]
+        assert first.call("notes.list") == second.call("notes.list") == []
+        first.call(
+            "notes.save",
+            {"title": "First private note", "body": "Only first sees this"},
+        )
+        assert first.call("notes.list")[0]["body"] == "Only first sees this"
+        assert second.call("notes.list") == []
+        second.call(
+            "notes.save",
+            {"title": "Second private note", "body": "Only second sees this"},
+        )
+        assert [note["title"] for note in first.call("notes.list")] == [
+            "First private note"
+        ]
+        assert [note["title"] for note in second.call("notes.list")] == [
+            "Second private note"
+        ]
+    finally:
+        for peer in peers:
+            peer.close()
+        for process in processes:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+        for log in logs:
+            log.close()

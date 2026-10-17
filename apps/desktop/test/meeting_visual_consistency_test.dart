@@ -29,6 +29,9 @@ void main() {
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
     final directory = Directory.systemTemp.createTempSync('meeting-visual-');
+    addTearDown(() {
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
     final store = Store('${directory.path}/app.db');
     final id = store.meeting('Product review');
     store.meeting('Planning session');

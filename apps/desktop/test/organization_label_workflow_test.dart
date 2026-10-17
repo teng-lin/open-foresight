@@ -15,6 +15,9 @@ void main() {
       final dir = Directory.systemTemp.createTempSync(
         'foresight-cluster-write-',
       );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
       final store = Store('${dir.path}/app.db');
       final id = store.importText('Title', 'Body', 'text/plain', 'fixture');
       store.putDocumentLabel(
@@ -50,6 +53,9 @@ void main() {
       final dir = Directory.systemTemp.createTempSync(
         'foresight-label-workflow-',
       );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
       final store = Store('${dir.path}/app.db');
       final a = store.importText(
         'Apollo planning',

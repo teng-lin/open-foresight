@@ -98,6 +98,9 @@ Future<void> withTranscriptFixture(
   run,
 ) async {
   final directory = Directory.systemTemp.createTempSync('note-cache-app-');
+  addTearDown(() {
+    if (directory.existsSync()) directory.deleteSync(recursive: true);
+  });
   final socket = '${directory.path}/sock';
   final embeddings = EmbeddingService();
   final server = Server.create(services: [embeddings]);
@@ -411,6 +414,9 @@ void main() {
     'saved transcript append refreshes complete embedded grounding cache',
     () async {
       final directory = Directory.systemTemp.createTempSync('note-cache-app-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final socket = '${directory.path}/sock';
       final embeddings = EmbeddingService();
       final server = Server.create(services: [embeddings]);

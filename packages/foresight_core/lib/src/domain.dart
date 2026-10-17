@@ -1,3 +1,4 @@
+import 'package:clock/clock.dart';
 import 'model_setup.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
@@ -26,8 +27,17 @@ class Domain {
   final Store store;
   final Helper helper;
   NativeRuntime? generator;
-  Domain(this.store, this.helper, {SearchCallbacks? webSearch})
-    : _webSearch = webSearch;
+  final Clock clock;
+  final Timer Function(Duration, void Function()) createTimer;
+  Domain(
+    this.store,
+    this.helper, {
+    SearchCallbacks? webSearch,
+    Clock? clock,
+    Timer Function(Duration, void Function())? createTimer,
+  }) : _webSearch = webSearch,
+       clock = clock ?? const Clock(),
+       createTimer = createTimer ?? Timer.new;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;
   bool get webSearchAvailable =>

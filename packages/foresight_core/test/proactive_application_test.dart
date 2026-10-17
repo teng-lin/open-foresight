@@ -309,7 +309,7 @@ void main() {
       await work;
       expect(runtime.requests, isEmpty);
       rag.gate!.complete();
-      await Future<void>.delayed(const Duration(milliseconds: 30));
+      await Future<void>(() {});
       expect(runtime.requests, isEmpty);
       expect(store.rows('SELECT * FROM answers'), isEmpty);
       expect(

@@ -6,13 +6,16 @@ import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/helper.dart';
 import 'package:foresight_core/src/store.dart';
 
-import 'fixtures/delayed_index_service.dart';
+import 'package:foresight_test_support/delayed_index_service.dart';
 
 void main() {
   test('embedding backend selection survives app database restart', () async {
     final temporary = Directory.systemTemp.createTempSync(
       'foresight-gpu-restore-',
     );
+    addTearDown(() {
+      if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+    });
     final model = File('${temporary.path}/model.litertlm')
       ..writeAsStringSync('registration fixture');
     final service = DelayedIndexService();
@@ -65,6 +68,9 @@ void main() {
       final temporary = Directory.systemTemp.createTempSync(
         'foresight-source-pause-',
       );
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
       final service = DelayedIndexService();
       final server = Server.create(services: [service]);
       final socket = '${temporary.path}/helper.sock';
@@ -146,6 +152,9 @@ void main() {
       final temporary = Directory.systemTemp.createTempSync(
         'foresight-domain-close-',
       );
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
       final service = DelayedIndexService();
       final server = Server.create(services: [service]);
       final socket = '${temporary.path}/helper.sock';

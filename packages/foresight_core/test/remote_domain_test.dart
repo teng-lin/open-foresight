@@ -7,7 +7,7 @@ import 'package:foresight_core/src/remote_domain.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
-import 'fixtures/remote_service.dart';
+import 'package:foresight_test_support/remote_service.dart';
 
 void main() {
   late RemoteFixture f;
