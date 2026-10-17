@@ -193,6 +193,16 @@ void vision_fallback() {
     const auto c = foresight::generation_model_config(type);
     check(c.vision && std::string(c.audio_backend) == "gpu" && c.visual_tokens == 560, "wrong large model config");
   }
+  for (int type : {8, 9, 10, 12, 14, 15, 16}) {
+    const auto reference = foresight::generation_model_config(type);
+    const auto cpu = foresight::generation_model_config(type, true);
+    check(cpu.vision && std::string(cpu.vision_backend) == "cpu" &&
+          std::string(cpu.audio_backend) == "cpu", "CPU model retained a GPU modality");
+    check(cpu.visual_tokens == reference.visual_tokens, "CPU selection changed model token configuration");
+  }
+  const auto cpu_unknown = foresight::generation_model_config(0, true);
+  check(!cpu_unknown.vision && cpu_unknown.vision_backend == nullptr &&
+        std::string(cpu_unknown.audio_backend) == "cpu", "CPU selection enabled an unknown vision model");
   check(!foresight::generation_model_config(0).vision, "unknown model enabled vision");
 }
 

@@ -16,11 +16,19 @@ struct GenerationModelConfig {
   const char *audio_backend = "cpu";
   int visual_tokens = 0;
 };
-inline GenerationModelConfig generation_model_config(int type) {
+inline GenerationModelConfig generation_model_config(int type, bool cpu_only = false) {
+  GenerationModelConfig config;
   switch (canonical_generation_model_type(type)) {
-    case 14: case 15: return {true, "gpu", "cpu", 280};
-    case 16: return {true, "gpu", "gpu", 560};
-    default: return {};
+    case 14: case 15: config = {true, "gpu", "cpu", 280}; break;
+    case 16: config = {true, "gpu", "gpu", 560}; break;
+    default: break;
   }
+  // LiteRT initializes modality executors lazily at conversation creation.
+  // A CPU text engine must not retain a hidden GPU dependency for these.
+  if (cpu_only) {
+    if (config.vision) config.vision_backend = "cpu";
+    config.audio_backend = "cpu";
+  }
+  return config;
 }
 }  // namespace foresight

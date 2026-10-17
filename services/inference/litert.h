@@ -3,6 +3,7 @@
 #include "c/conversation.h"
 #include "c/embedding_engine.h"
 #include "c/engine.h"
+#include "c/error_reporter.h"
 #include "c/foresight_extensions.h"
 #include <dlfcn.h>
 #include <filesystem>
