@@ -155,11 +155,11 @@ These commands target Linux. For macOS, see [Mac build, bundle, and MCP instruct
 - Python, for build and test tooling
 - Flutter, with the GTK3 Linux development dependencies
 
-Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
+Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 35.1, gRPC 1.83.1, and nlohmann-json 3.12.
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python -r requirements-dev.txt
+uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.lock
 python3 tools/prepare_litert.py build/lib/liblitert-lm.so
 python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 ./tools/build.sh
@@ -231,17 +231,17 @@ python3 tools/verify_descriptor.py
 python3 -m pytest
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
-(cd packages/foresight_core && dart pub get && dart test)
+(cd packages/foresight_core && dart pub get --enforce-lockfile && dart test)
 (cd apps/desktop && flutter test && flutter analyze)
 ```
 
-The default pytest run selects offline contracts, inference adapter tests, and Python tooling tests via `pytest.ini`. It requires `requirements-dev.txt` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands; standalone scripts under `tests/integration` take executable paths and are not collected by default.
+The default pytest run selects offline contracts, inference adapter tests, and Python tooling tests via `pytest.ini`. It requires a hash-verified install of `requirements-dev.lock` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands; standalone scripts under `tests/integration` take executable paths and are not collected by default.
 
 Run `tools/coverage.sh` after installing the development dependencies into `.venv` (or set `FORESIGHT_PYTHON`). It writes branch-aware Python coverage for `tools/` and `services/inference/macos/` to `coverage/python/`: HTML, Cobertura XML, LCOV, and JUnit results. Unexecuted Python source files are included; probe scripts named `test_*.py` are excluded. This baseline measures Python only, including on macOS PR CI, which retains the reports as an artifact. Python coverage is reported without a minimum percentage; its baseline is separate from the core Dart gate.
 
 Store, graph, Google adapter, and model installation suites now run in `packages/foresight_core/test` using pure Dart. Shared test helpers live under its `test/fixtures/` directory.
 
-Run `tools/coverage_core.sh` after `dart pub get` in `packages/foresight_core` to collect core Dart line coverage into `coverage/core/lcov.info` (or set `FORESIGHT_DART` to the Dart executable). Generated bindings are excluded. The Dart VM reports loaded libraries; this is not a whole-repository denominator. Set `FORESIGHT_COVERAGE=1` when using `tools/build.sh` to collect this report during the normal core gate; macOS PR CI enables it and uploads a separate artifact.
+Run `tools/coverage_core.sh` after `dart pub get --enforce-lockfile` in `packages/foresight_core` to collect core Dart line coverage into `coverage/core/lcov.info` (or set `FORESIGHT_DART` to the Dart executable). Generated bindings are excluded. The Dart VM reports loaded libraries; this is not a whole-repository denominator. Set `FORESIGHT_COVERAGE=1` when using `tools/build.sh` to collect this report during the normal core gate; macOS PR CI enables it and uploads a separate artifact.
 
 MCP protocol tests launch the real Dart entry point against an isolated fake Unix-socket service; subprocess execution is not included in the parent Dart coverage report.
 
