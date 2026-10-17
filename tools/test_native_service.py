@@ -51,6 +51,9 @@ def main():
                 try:
                     connection = protocol.Peer(root/'run/application.sock')
                     connection.socket.settimeout(300)
+                    token = root/'data/.desktop-capability'
+                    if token.exists():
+                        connection.call('security.attach_desktop', {'token': token.read_text()})
                     return proc, connection
                 except (FileNotFoundError,ConnectionRefusedError):
                     assert proc.poll() is None, (root/'service.log').read_text()[-3000:]
