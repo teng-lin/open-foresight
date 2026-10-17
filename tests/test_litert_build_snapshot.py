@@ -178,5 +178,36 @@ class BuildSnapshotTest(unittest.TestCase):
                         builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
 
 
+@unittest.skipUnless(builder.platform.system() == 'Linux' and all(
+    shutil.which(tool) for tool in ('clang++', 'ld.gold', 'nm', 'readelf')),
+    'Linux Clang and GNU gold required')
+class LinuxExportGateTest(unittest.TestCase):
+    def test_localized_tls_is_not_an_export_but_public_tls_is_rejected(self):
+        """Gold can retain local TLS entries in .dynsym after export isolation."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / 'fixture.cc'
+            source.write_text(
+                'thread_local int private_tls;\n'
+                'extern "C" int litert_lm_engine_create() { return ++private_tls; }\n'
+                'extern "C" void litert_lm_embedding_engine_create() {}\n'
+                'extern "C" void litert_lm_session_config_add_stop_token_sequence() {}\n')
+            export_map = root / 'exports.map'
+            export_map.write_text('{ global: litert_lm_*; local: *; };\n')
+            library = root / 'fixture.so'
+            command = ['clang++', '-shared', '-fPIC', '-fuse-ld=gold', '-nostdlib++', str(source),
+                       '-o', str(library)]
+            subprocess.run([*command, '-Wl,--version-script=' + str(export_map)], check=True)
+            raw_symbols = subprocess.check_output(
+                ['nm', '-D', '--defined-only', str(library)], text=True)
+            self.assertIn(' b private_tls', raw_symbols)
+            report = builder.verify_linux_library_abi(library)
+            self.assertNotIn('private_tls', report)
+            self.assertIn('litert_lm_engine_create', report)
+            subprocess.run(command, check=True)
+            with self.assertRaisesRegex(RuntimeError, 'unexpected exports: private_tls'):
+                builder.verify_linux_library_abi(library)
+
+
 if __name__ == '__main__':
     unittest.main()

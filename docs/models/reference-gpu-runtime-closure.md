@@ -78,6 +78,13 @@ a passing `native_status_abi_report` and `native_export_log` with checksums.
 The builder records the complete defined dynamic export set with symbol versions
 removed. Both gates require the public C API and reject exports outside
 `litert_lm_*`, except the ELF loader symbols `_init`, `_fini`, `__bss_start`, `_edata`, and `_end`.
+The Linux C API target links with an anonymous ELF version script that hides
+all symbols outside `litert_lm_*`, including symbols from static dependencies.
+Hiding only the static C++ runtime archives left thousands of other private
+exports visible and did not satisfy the export gate.
+The export check uses `nm --extern-only`: GNU gold retains some localized TLS
+and section-boundary symbols in `.dynsym`, but their local bindings prevent
+external lookup. They are excluded from the public export report.
 
 `test_litert_status_abi.py` compiles an actual-header callee DSO and an independent
 vendor-convention caller checking both `SubgraphLayout` (`std::string`,

@@ -58,7 +58,10 @@ def verify_linux_library_abi(library):
     """Reject incompatible runtimes or leaked exports and record every symbol."""
     dynamic = subprocess.check_output(['readelf', '-d', str(library)], text=True)
     versions = subprocess.check_output(['readelf', '--version-info', str(library)], text=True)
-    exported = subprocess.check_output(['nm', '-D', '--defined-only', str(library)], text=True)
+    # Gold keeps localized TLS symbols in .dynsym for dynamic relocations.
+    # They are not public exports, so inspect only externally visible symbols.
+    exported = subprocess.check_output(
+        ['nm', '-D', '--extern-only', '--defined-only', str(library)], text=True)
     needs = versions.partition('Version needs section')[2]
     for forbidden in ('libstdc++.so', 'libc++.so', 'libc++abi.so', 'libunwind.so', 'libunwind-'):
         if f'[{forbidden}' in dynamic:
@@ -73,8 +76,11 @@ def verify_linux_library_abi(library):
     if not required <= symbols:
         raise RuntimeError('Linux LiteRT library lacks required public C API exports')
     loader_symbols = {'_init', '_fini', '__bss_start', '_edata', '_end'}
-    if any(not name.startswith('litert_lm_') and name not in loader_symbols for name in symbols):
-        raise RuntimeError('Linux LiteRT library must export only the public C API and loader symbols')
+    unexpected = sorted(name for name in symbols
+                        if not name.startswith('litert_lm_') and name not in loader_symbols)
+    if unexpected:
+        raise RuntimeError('Linux LiteRT library must export only the public C API and loader symbols; '
+                           f'{len(unexpected)} unexpected exports: ' + ', '.join(unexpected[:20]))
     return (dynamic + '\n' + versions + '\nDefined dynamic exports:\n'
             + '\n'.join(sorted(symbols)) + '\n')
 
