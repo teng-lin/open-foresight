@@ -130,9 +130,7 @@ qualified SDK digests when cleaning up this shared repository.
 The `tested` Docker target ends after native build/CTest, core and desktop
 analysis/tests/builds, and service integration. It enables the existing parallel
 core/desktop orchestrator, preserving failure propagation and the service
-integration prerequisite. The pinned ONNX download now precedes the repository
-copy and revision argument, so application-only changes reuse it. Its archive
-and library checksum checks are unchanged.
+integration prerequisite.
 
 CI exports only `tested` to the registry cache, then assembles the distribution
 bundle using the same local BuildKit result. Distribution secrets are supplied

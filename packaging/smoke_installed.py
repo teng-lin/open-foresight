@@ -45,7 +45,6 @@ def main():
     assert os.getuid() != 0, 'Run the application smoke test as a normal user'
     env = dict(os.environ, LD_LIBRARY_PATH=f'{root}/lib:{root}/app/lib',
                FORESIGHT_LITERT_LIBRARY=str(root / 'lib/liblitert-lm.so'),
-               FORESIGHT_ONNX_LIBRARY=str(root / 'lib/libonnxruntime.so'),
                LIBGL_ALWAYS_SOFTWARE='1', GDK_BACKEND='x11')
     # Check all runtime ELFs, including dlopen-only inference libraries. This
     # catches host dependencies that an executable-only ldd check misses.
