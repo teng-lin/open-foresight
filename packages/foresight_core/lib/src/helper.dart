@@ -123,6 +123,9 @@ class Helper {
         } catch (error) {
           state = 'incompatible helper: $error';
           changed?.call();
+          // The service can keep storage-only RPCs available after startup
+          // failure; none of those calls may reuse this incompatible transport.
+          await channel.terminate();
           rethrow;
         }
         live = true;
