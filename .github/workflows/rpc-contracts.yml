@@ -36,4 +36,4 @@ jobs:
         run: |
           dart pub get
           dart analyze
-          dart test test/operation_registry_test.dart test/rpc_error_test.dart test/mcp_protocol_test.dart
+          dart test test/operation_registry_test.dart test/remote_facade_contract_test.dart test/rpc_error_test.dart test/mcp_protocol_test.dart

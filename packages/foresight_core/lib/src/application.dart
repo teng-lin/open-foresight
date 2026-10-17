@@ -517,7 +517,7 @@ class Application implements ModelGate {
     if (!current())
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     if (method.startsWith('models.') &&
-        method != 'models.cancel_query_acquisition' &&
+        method != Operation.models_cancel_query_acquisition.wire &&
         (modelBusy ||
             domain.generator?.generating == true ||
             _noteEnhancements.values.any((state) => state.active) ||
@@ -529,7 +529,7 @@ class Application implements ModelGate {
     }
     final modelOperation =
         method.startsWith('models.') &&
-        method != 'models.cancel_query_acquisition';
+        method != Operation.models_cancel_query_acquisition.wire;
     if (modelOperation) _modelBusy = true;
     try {
       switch (Operation.parse(method)) {
