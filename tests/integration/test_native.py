@@ -160,6 +160,112 @@ print('answer '+json.dumps({'role':'assistant','content':[{'type':'text','text':
                 self.assertTrue(any(e['type']=='error' for e in events),events)
             finally:
                 self.lib.fs_conversation_destroy(handle,1);self.lib.fs_engine_destroy(engine)
+    def test_speech_retries_cpu_once_without_failed_attempt_text(self):
+        log = self.path / 'speech-attempts'
+        runner = self.runner('import pathlib,sys\np=pathlib.Path(' + repr(str(log)) + ')\nwith p.open("a") as f: f.write("cpu\\n" if "-ng" in sys.argv else "gpu\\n")\nif "-ng" not in sys.argv: print("uncommitted GPU junk");sys.exit(7)\nassert "-dev" not in sys.argv\nprint("CPU transcript")\n')
+        with patch.dict(os.environ, {'FORESIGHT_WHISPER_BACKEND': 'gpu', 'FORESIGHT_WHISPER_DEVICE': '1', 'FORESIGHT_WHISPER_RUNTIME': ''}):
+            speech = self.lib.fs_speech_create(runner, str(self.model).encode())
+            try:
+                samples = (C.c_int16 * 1600)(*([100] * 1600))
+                self.lib.fs_speech_push(speech, samples, len(samples), 16000)
+                self.lib.fs_speech_finish(speech, b'cpu-retry')
+                events = drain(self.lib, speech)
+                self.assertEqual(events[-1]['status'], 'completed', events)
+                self.assertEqual(next(e['text'] for e in events if e['type']=='transcript'), 'CPU transcript\n')
+                self.assertEqual(log.read_text().splitlines(), ['gpu', 'cpu'])
+            finally:
+                self.lib.fs_speech_destroy(speech)
+
+    def test_persistent_gpu_failure_rebuilds_retained_cpu_worker(self):
+        attempts = self.path / 'persistent-attempts'
+        runner = self.runner('''import json,pathlib,sys
+log=pathlib.Path(''' + repr(str(attempts)) + ''')
+cpu='--backend' in sys.argv and sys.argv[sys.argv.index('--backend')+1]=='cpu'
+def record(value):
+ with log.open('a') as f:f.write(value+'\\n')
+if '--probe' in sys.argv:
+ print(json.dumps({'worker_protocol':1}),flush=True)
+else:
+ record('cpu serve' if cpu else 'gpu serve')
+ print('ready 1',flush=True)
+ for line in sys.stdin:
+  if line.strip()=='shutdown':break
+  operation,token,payload=line.strip().split(' ',2)
+  if operation=='generate':
+   record('cpu generate' if cpu else 'gpu generate')
+   if cpu:
+    print(token+' answer '+json.dumps({'role':'assistant','content':'CPU answer'}),flush=True)
+    print(token+' done completed',flush=True)
+   else:
+    print(token+' delta '+json.dumps({'content':'partial GPU preview'}),flush=True)
+    print(token+' error '+json.dumps('GPU device lost'),flush=True)
+    print(token+' done failed',flush=True)
+''')
+        with patch.dict(os.environ, {'FORESIGHT_LITERT_BACKEND':'gpu'}):
+            engine=self.lib.fs_engine_create_backend(runner,str(self.model).encode(),1)
+            handle=None
+            try:
+                self.assertEqual(self.lib.fs_engine_probe(engine),0)
+                handle=self.lib.fs_conversation_create(engine)
+                self.assertEqual(self.lib.fs_generate_tools(handle,b'failed-gpu',b'q',b'[{}]',64),0)
+                failed=drain(self.lib,handle)
+                self.assertEqual(failed[-1]['status'],'failed',failed)
+                self.assertTrue(any(e.get('backend')=='cpu' for e in failed),failed)
+                self.assertEqual(attempts.read_text().splitlines(),['gpu serve','gpu generate','cpu serve'])
+                self.lib.fs_conversation_destroy(handle,1)
+                handle=self.lib.fs_conversation_create(engine)
+                self.assertEqual(self.lib.fs_generate_tools(handle,b'recovered-cpu',b'q',b'[{}]',64),0)
+                completed=drain(self.lib,handle)
+                self.assertEqual(completed[-1]['status'],'completed',completed)
+                self.assertIn('CPU answer',next(e['text'] for e in completed if e['type']=='tool_answer'))
+                self.assertEqual(attempts.read_text().splitlines(),['gpu serve','gpu generate','cpu serve','cpu generate'])
+            finally:
+                if handle:self.lib.fs_conversation_destroy(handle,1)
+                self.lib.fs_engine_destroy(engine)
+
+    def test_gpu_generation_failure_rebuilds_cpu_without_replaying_request(self):
+        attempts = self.path / 'generation-attempts'
+        runner = self.runner('import pathlib,sys\np=pathlib.Path(' + repr(str(attempts)) + ')\ncpu="--backend" in sys.argv and sys.argv[sys.argv.index("--backend")+1]=="cpu"\nwith p.open("a") as f:f.write(("cpu" if cpu else "gpu")+(" probe\\n" if "--probe" in sys.argv else " generate\\n"))\nif "--probe" in sys.argv:sys.exit(0)\nif not cpu:print("partial GPU output");sys.exit(9)\nprint("Recovered CPU answer")\n')
+        with patch.dict(os.environ, {'FORESIGHT_LITERT_BACKEND':'gpu'}):
+            engine=self.lib.fs_engine_create_backend(runner,str(self.model).encode(),1)
+            handle=self.lib.fs_conversation_create(engine)
+            try:
+                self.lib.fs_generate(handle,b'gpu-failure',b'q')
+                failed=drain(self.lib,handle)
+                self.assertEqual(failed[-1]['status'],'failed')
+                self.assertTrue(any(e.get('backend')=='cpu' for e in failed),failed)
+                self.assertEqual(attempts.read_text().splitlines(),['gpu generate','cpu probe'])
+                state=owned_json(self.lib,self.lib.fs_engine_state(engine))
+                self.assertEqual(state['state'],'ready')
+                self.assertEqual(state['backend'],'litert-lm-cpu-native')
+                self.lib.fs_conversation_destroy(handle,1)
+                handle=self.lib.fs_conversation_create(engine)
+                self.lib.fs_generate(handle,b'cpu-answer',b'q')
+                done=drain(self.lib,handle)
+                self.assertEqual(done[-1]['status'],'completed')
+                self.assertIn('Recovered CPU answer',''.join(e.get('text','') for e in done if e['type']=='delta'))
+            finally:
+                self.lib.fs_conversation_destroy(handle,1);self.lib.fs_engine_destroy(engine)
+
+    def test_full_capture_queue_emits_real_overflow_gap(self):
+        runner=self.runner('import os,time\nfor _ in range(600):os.write(1,b"A"*3840)\ntime.sleep(2)\n').decode()
+        with patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME':runner}):
+            handle=self.lib.fs_capture_start(b'auto',0,48000)
+            try:
+                time.sleep(.4)  # Deliberately let the real native queue fill.
+                self.lib.fs_capture_finish(handle)
+                events=[]
+                while True:
+                    value=owned_json(self.lib,self.lib.fs_event_poll(handle,0))
+                    if value is None:break
+                    events.append(value)
+                gaps=[e for e in events if e.get('reason')=='capture_buffer_overflow']
+                self.assertTrue(gaps,events[-5:])
+                self.assertGreater(sum(e['discarded_bytes'] for e in gaps),0)
+                self.assertLessEqual(sum(e['type']=='pcm' for e in events),256)
+            finally:
+                self.lib.fs_capture_stop(handle)
+
     def test_speech_runtime_override_and_explicit_cpu(self):
         runner = self.runner('import sys\nassert "-ng" in sys.argv\nprint("GPU runtime CPU override")\n').decode()
         with patch.dict(os.environ, {'FORESIGHT_WHISPER_RUNTIME': runner,

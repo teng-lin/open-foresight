@@ -56,6 +56,7 @@ import 'meeting_export.dart';
 import 'note_save_scheduler.dart';
 import 'meeting_note_state.dart';
 import 'generated_content.dart';
+import 'agent_approval_surface.dart';
 
 part 'screenshot_ui.dart';
 part 'meeting_workspace.dart';
@@ -490,6 +491,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             .firstOrNull?['backend'] ==
         'litert_lm_embedding_gpu';
     commands = widget.commands;
+    commands?.onError = reportShortcutFailure;
     commands?.setHandler(
       (command, token) => command == 'quick-meeting'
           ? activateQuickMeeting(token)
@@ -639,6 +641,15 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     }
   }
 
+  void reportShortcutFailure(Object failure) {
+    if (!mounted) return;
+    setState(() {
+      error = 'Global shortcut failed: $failure';
+      globalShortcutState = error;
+    });
+    unawaited(notify(error));
+  }
+
   Future<void> activateQuickMeeting(String? token) async {
     await activateWindow(token);
     if (mounted && !busy && recording == null) await quickStart();
@@ -655,7 +666,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       await desktopSettings.ensureApplicationEntry();
       globalShortcuts ??= GlobalShortcuts(
         (id, token) {
-          if (id == 'quick-meeting') unawaited(activateQuickMeeting(token));
+          if (id == 'quick-meeting') {
+            unawaited(
+              activateQuickMeeting(token).catchError(reportShortcutFailure),
+            );
+          }
         },
         changed: () {
           if (mounted)
@@ -1697,8 +1712,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   Widget build(BuildContext context) {
     syncGraphMotion();
-    return meetingImmersive && meetingId != null
+    final workspace = meetingImmersive && meetingId != null
         ? immersiveMeetingWorkspace()
         : screenshotWorkspace(context);
+    return d is RemoteDomain
+        ? AgentApprovalSurface(domain: d as RemoteDomain, child: workspace)
+        : workspace;
   }
 }

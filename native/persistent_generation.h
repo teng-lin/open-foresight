@@ -68,6 +68,7 @@ bool start_persistent(Engine &engine, Conversation &request) {
   auto *worker = engine.persistent.get();
   worker->active = true;
   auto args = std::vector<std::string>{engine.runtime, "--model", engine.model, "--serve"};
+  if (engine.cpu_fallback) { args.push_back("--backend"); args.push_back("cpu"); }
   if (engine.model_type) { args.push_back("--model-type"); args.push_back(std::to_string(engine.model_type)); }
   worker->thread = std::thread([worker, args = std::move(args)]() mutable {
     int status = run(*worker, std::move(args), [worker](const char *data, size_t size) {

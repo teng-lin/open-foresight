@@ -12,6 +12,7 @@ class AppCommands {
   final RandomAccessFile _lock;
   final _handler = Completer<CommandAction>();
   bool _closed = false;
+  void Function(Object error)? onError;
   AppCommands._(this.server, this.path, this._lock) {
     server.listen(_accept);
   }
@@ -41,7 +42,8 @@ class AppCommands {
           .transform(const LineSplitter())
           .first
           .timeout(const Duration(seconds: 3));
-      return response == 'accepted';
+      // Acknowledges dispatch; completion/failure is shown by the owning UI.
+      return response == 'queued' || response == 'accepted';
     } on SocketException {
       return false;
     } finally {
@@ -105,7 +107,7 @@ class AppCommands {
           ].contains(message['command'])) {
         socket.writeln('rejected');
       } else {
-        socket.writeln('accepted');
+        socket.writeln('queued');
         await socket.flush();
         unawaited(
           _handler.future
@@ -115,7 +117,12 @@ class AppCommands {
                   message['activation_token'] as String?,
                 ),
               )
-              .catchError((Object _) {}),
+              .catchError((Object error) {
+                if (onError != null)
+                  onError!(error);
+                else
+                  stderr.writeln('Global shortcut failed: $error');
+              }),
         );
       }
       await socket.flush();

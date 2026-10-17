@@ -4,23 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Published release tag to test (for example v0.1.0)
+        description: Release tag to audit
         required: true
         type: string
-  workflow_run:
-    workflows: [Linux packages, macOS release DMG]
-    types: [completed]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: published-acceptance-${{ inputs.tag || github.event.workflow_run.head_branch }}
+  group: published-acceptance-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.event == 'release' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.release.outputs.tag }}
@@ -29,14 +30,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Require published installers from both release workflows
+          ref: refs/tags/${{ inputs.tag }}
+      - name: Require all installers before acceptance
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
-          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
-          python3 - <<'PY'
+          python3 - <<'PYCODE'
           import json, os, re, subprocess, sys
           sys.path.insert(0, 'tools')
           from release_asset_acceptance import select_asset
@@ -44,19 +45,11 @@ jobs:
           if not re.fullmatch(r'v\d+\.\d+\.\d+', tag):
               raise ValueError('An explicit stable release tag is required')
           release = json.loads(subprocess.check_output(['gh', 'api', f'repos/{os.environ["GITHUB_REPOSITORY"]}/releases/tags/{tag}']))
-          if release['draft']: raise ValueError('Release is still a draft')
-          ready = True
-          try:
-              for kind in ('deb', 'rpm', 'arch', 'dmg'): select_asset(release, kind)
-          except ValueError:
-              ready = False
-              if os.environ['MANUAL'] == 'true': raise
+          for kind in ('deb', 'rpm', 'arch', 'dmg'):
+              select_asset(release, kind)
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write(f'tag={tag}\nready={str(ready).lower()}\n')
-          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as output:
-              output.write(f'## {tag}\n\n' + ('Published installer validation starting.' if ready else
-                  'Acceptance NOT RUN: waiting for the other release workflow to publish its installers. Its completion will trigger another run.'))
-          PY
+              output.write(f'tag={tag}\nready=true\n')
+          PYCODE
 
   linux:
     needs: release
@@ -75,6 +68,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          ref: refs/tags/${{ inputs.tag }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
@@ -83,7 +77,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
           FORMAT: ${{ matrix.format }}
-        run: python tools/release_asset_acceptance.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" --format "$FORMAT" --directory assets
+        run: python tools/release_asset_acceptance.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" --format "$FORMAT" --directory assets --allow-draft
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: models-cache
         with:
@@ -127,6 +121,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          ref: refs/tags/${{ inputs.tag }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
@@ -134,7 +129,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
-        run: python tools/release_asset_acceptance.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" --format dmg --directory assets
+        run: python tools/release_asset_acceptance.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" --format dmg --directory assets --allow-draft
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: models-cache
         with:
@@ -165,3 +160,19 @@ jobs:
             reports/
           if-no-files-found: warn
           retention-days: 30
+
+  acceptance:
+    if: always()
+    needs: [release, linux, macos]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require every installer test to have passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PYCODE'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          if any(results.get(job, {}).get('result') != 'success' for job in ('release', 'linux', 'macos')):
+              raise SystemExit('Installer acceptance failed or was skipped: ' + str(results))
+          PYCODE

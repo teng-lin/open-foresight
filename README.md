@@ -69,7 +69,7 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
 Open Foresight reproduces the original's main workflows, and adds features the original does not have:
 
 - **Linux support.** Native packages for Ubuntu, Debian, Fedora, and Arch/Omarchy, with PipeWire audio capture and Linux global shortcuts, including on Hyprland. The same codebase also builds for the Mac.
-- **An MCP server for agents.** The original has no MCP interface. MCP clients can search, import, ask, write notes, and record through the same service the desktop uses. The service runs headless, without a window.
+- **An MCP server for agents.** The original has no MCP interface. MCP clients can search, import, ask, write notes, and record through the same service the desktop uses. Reads run headless; imports, destructive operations, and capture require visible desktop approval.
 - **More model choices.** The original's settings offer a choice of Gemma model only. Open Foresight also lets you choose:
   - the source search model
   - the transcription model: multilingual Whisper from Tiny to Large v3 Turbo, which keeps Chinese and English speech in the language it was spoken
@@ -129,7 +129,7 @@ flowchart LR
   Service --> Capture[PipeWire or Core Audio capture]
 ```
 
-There is one application service per profile. It owns every database write, the loaded models, imports, Google sync, and the recording session. The desktop and MCP clients attach to the service over a private Unix socket, and closing either one does not stop a recording or unload a model. See [Application service and MCP](docs/architecture/application-service.md).
+There is one application service per profile. It owns every database write, the loaded models, imports, Google sync, and the recording session. The desktop and MCP clients attach to the service over a private Unix socket, and closing the MCP client does not unload a model. Recording requires desktop confirmation and an on-screen indicator; closing or hiding the desktop stops capture. See [Application service and MCP](docs/architecture/application-service.md).
 
 | Path | Contents |
 | --- | --- |
@@ -260,13 +260,13 @@ To cut a release:
 ```sh
 python3 tools/app_version.py --set 0.2.0   # updates the pubspec and its derived copies, bumps the build number
 git commit -am "chore: release v0.2.0"
-git tag v0.2.0 && git push origin main v0.2.0
-gh release create v0.2.0 --generate-notes  # builds the Linux packages and the macOS DMG
+git push origin main
+gh workflow run release.yml --ref main -f tag=v0.2.0
 ```
 
 `python3 tools/app_version.py` prints the current version, and `--check` fails if a derived copy is out of date. Release CI refuses a tag that does not match `v` plus the pubspec version.
 
-Record notable changes in [CHANGELOG.md](CHANGELOG.md). Before tagging, move the `Unreleased` notes under the new version heading.
+Record notable changes in [CHANGELOG.md](CHANGELOG.md). Before preparing a release, move the `Unreleased` notes under the new version heading.
 
 ## Documentation
 

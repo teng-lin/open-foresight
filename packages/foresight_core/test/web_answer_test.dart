@@ -374,6 +374,11 @@ void main() {
       RemoteDomain? client;
       try {
         client = await RemoteDomain.connect(profile);
+        await client.enableDesktopApprovals((event) {
+          if (event['event'] == 'approval') {
+            unawaited(client!.client.call('security.decide', {'approval_id': event['approval_id'], 'allow': true}));
+          }
+        });
         expect(client.webSearchAvailable, isTrue);
         final id =
             (await client.command('meetings.create', {

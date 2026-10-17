@@ -8,7 +8,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Added
 
-- Published installer acceptance tests the packages downloaded from a GitHub release. A recovery build is checked against the provenance of that published release.
+- Published installer acceptance tests the packages downloaded from a GitHub release. Installer provenance must match the release tag; explicit recovery audits remain available for historical assets.
 - Model and virtual-audio checks run as explicit integration gates. A skipped test in the regular suite is not treated as acceptance.
 
 ### Changed
@@ -16,10 +16,12 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Ask has one web-search control.
 - Meeting text uses shared roles, and meeting panels fit a narrow window.
 - Each chat conversation keeps its own draft, streaming text, and answer cancellation.
-- Release packaging promotes a tested main candidate. An already published release can be repackaged for Linux through a manual recovery run.
+- Release preparation promotes tested candidates for one commit into a draft, then publishes only after installed-package acceptance succeeds. Public release assets are immutable.
 - The documentation tree keeps the current build, release, and architecture guides.
 
 ### Fixed
+
+- Release builds check out their tag, reject mismatched source revisions, and assign increasing Linux package releases on draft rebuilds.
 
 - Drive and Calendar sign-in uses the Google application registration bundled in a release build. Sign-in can be cancelled from the import flows.
 - Linux CPU generation keeps modality executors on CPU.

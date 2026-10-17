@@ -1,0 +1,81 @@
+name: Prepare and publish release
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: New stable tag matching main's application version
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 190
+    permissions:
+      contents: write
+      actions: write
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+      package_release: ${{ steps.prepare.outputs.package_release }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Require tested main candidates, then create tag and draft
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python tools/prepare_release.py --tag "$RELEASE_TAG"
+  linux:
+    needs: prepare
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/linux-packages.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+      package_release: ${{ needs.prepare.outputs.package_release }}
+  macos:
+    needs: prepare
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/macos-release.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+  acceptance:
+    needs: [prepare, linux, macos]
+    uses: ./.github/workflows/release-acceptance.yml
+    with:
+      tag: ${{ needs.prepare.outputs.tag }}
+  publish:
+    if: always()
+    needs: [prepare, linux, macos, acceptance]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Require complete acceptance and publish the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag }}
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          results = json.loads(os.environ['RESULTS'])
+          if any(results.get(job, {}).get('result') != 'success' for job in ('prepare', 'linux', 'macos', 'acceptance')):
+              raise SystemExit('Release remains unpublished: ' + str(results))
+          PY
+          test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
+          gh release edit "$TAG" --draft=false --latest

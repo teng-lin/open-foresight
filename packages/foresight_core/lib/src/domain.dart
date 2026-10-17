@@ -823,6 +823,7 @@ class Domain {
       ensureCurrent();
     }
     var body = '', raw = '', status = 'failed';
+    var verifiedLocalAnswer = false;
     Map<String, dynamic>? modelResponse;
     final allowed = citations.map((c) => c['citation'] as String).toSet();
     final schema = useWeb ? <String, dynamic>{} : groundedAnswerSchema(allowed);
@@ -924,6 +925,7 @@ class Domain {
       if (status == 'completed' && !useWeb) {
         final answer = GroundedAnswer.parse(raw, allowed);
         body = answer.rendered;
+        verifiedLocalAnswer = true;
         if (!answer.sufficient) status = 'insufficient_context';
         final selected = answer.citations.toSet();
         citations.removeWhere((c) => !selected.contains(c['citation']));
@@ -960,6 +962,12 @@ class Domain {
                 'citation': 'Source:${i + 1}',
               },
           ]);
+        yield body;
+      }
+      if (!useWeb && !verifiedLocalAnswer) {
+        if (status == 'insufficient_context') status = 'failed';
+        body = 'Answer generation failed. Please retry.';
+        citations.clear();
         yield body;
       }
       // Preserve pinned excerpts even if their source changes; live navigation checks revision.
@@ -1000,9 +1008,9 @@ class Domain {
           (current == null || current()))
         saveAnswer(
           question,
-          body,
+          'Answer generation failed. Please retry.',
           'failed',
-          citations,
+          [],
           model,
           conversation: conversation,
         );

@@ -60,6 +60,80 @@ void main() {
     });
   }
 
+  for (final stopLimit in [Duration.zero, const Duration(milliseconds: 60)]) {
+    test(
+      'hung speech stop limit ${stopLimit.inMilliseconds} ms retains committed text',
+      () async {
+        fail(-1);
+        holdSpeech(false);
+        final rows = <String>[];
+        final gaps = <Map<String, dynamic>>[];
+        final recording = Recording(
+          library,
+          (_) {},
+          (text, _, _, _) => rows.add(text),
+          speechTimeout: const Duration(seconds: 10),
+          stopTimeout: stopLimit,
+          interruption: gaps.add,
+        );
+        try {
+          recording.start('/usr/bin/true', model, playback: false);
+          emit(0, 111, count: 20000);
+          recording.drain();
+          final deadline = DateTime.now().add(const Duration(seconds: 2));
+          while (rows.isEmpty && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 10));
+          }
+          expect(rows, ['marker_111']);
+          holdSpeech(true);
+          emit(0, 222, count: 20000);
+          recording.drain();
+          final elapsed = Stopwatch()..start();
+          await expectLater(recording.stop(), throwsStateError);
+          expect(elapsed.elapsed, lessThan(const Duration(seconds: 2)));
+          expect(rows, ['marker_111']);
+          expect(gaps.last['reason'], 'speech_stop_timeout');
+          expect(recording.speeches, isEmpty);
+        } finally {
+          holdSpeech(false);
+          recording.dispose();
+        }
+      },
+    );
+  }
+
+  test(
+    'a stalled segment times out independently while recording remains stoppable',
+    () async {
+      fail(-1);
+      holdSpeech(true);
+      final gaps = <Map<String, dynamic>>[];
+      final recording = Recording(
+        library,
+        (_) {},
+        (_, _, _, _) {},
+        speechTimeout: const Duration(milliseconds: 40),
+        stopTimeout: const Duration(seconds: 1),
+        interruption: gaps.add,
+      );
+      try {
+        recording.start('/usr/bin/true', model, playback: false);
+        emit(0, 333, count: 20000);
+        recording.drain();
+        final deadline = DateTime.now().add(const Duration(seconds: 2));
+        while (gaps.isEmpty && DateTime.now().isBefore(deadline)) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        expect(gaps.single['reason'], 'speech_recognition_error');
+        expect(gaps.single['discarded_bytes'], 40000);
+        await expectLater(recording.stop(), throwsStateError);
+      } finally {
+        holdSpeech(false);
+        recording.dispose();
+      }
+    },
+  );
+
   for (final pause in [false, true]) {
     test(
       'a late speech hypothesis cannot reappear after ${pause ? "pause/resume" : "a route gap"}',

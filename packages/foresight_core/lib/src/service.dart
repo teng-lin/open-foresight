@@ -2,6 +2,8 @@ import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
+import 'agent_access.dart';
 import 'domain.dart';
 import 'web_search.dart';
 import 'helper.dart';
@@ -221,6 +223,7 @@ class _RequestLease {
 
 class ApplicationService {
   final Domain domain;
+  late final AgentAccessGate access;
   final ServerSocket listener;
   final String path;
   final RandomAccessFile lock;
@@ -243,6 +246,24 @@ class ApplicationService {
     this.lock,
     this.installationLock,
   ) {
+    final token = base64Url.encode(
+      List<int>.generate(32, (_) => Random.secure().nextInt(256)),
+    );
+    final tokenFile = File(
+      '${File(domain.store.path).parent.path}/.desktop-capability',
+    );
+    if (FileSystemEntity.typeSync(tokenFile.path, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw StateError('Desktop capability must not be a symbolic link');
+    }
+    tokenFile.writeAsStringSync(token);
+    if (Process.runSync('/bin/chmod', ['600', tokenFile.path]).exitCode != 0) {
+      throw StateError('Cannot protect desktop capability');
+    }
+    access = AgentAccessGate(
+      token,
+      (host, event) => _send(host as Socket, event),
+    );
     listener.listen(_accept);
     _changes = domain.application.changes.stream.listen((_) => _broadcast());
     _heartbeat = Timer.periodic(
@@ -304,13 +325,17 @@ class ApplicationService {
         stale.deleteSync();
       store = Store('${profile.data}/application.db');
       store.db.execute(
-        "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing')",
+        "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing','paused')",
       );
       helper = Helper(
         '${profile.runtime}/helper.sock',
         '${profile.data}/helper',
       );
       final domain = Domain(store, helper, webSearch: webSearch);
+      domain.application.importPolicy = ImportPolicy(profile.data, () {
+        final saved = store!.preference('importRoots', '[]');
+        return (jsonDecode(saved) as List).cast<String>();
+      });
       domain.application.startBackground();
       listener = await ServerSocket.bind(
         InternetAddress(path, type: InternetAddressType.unix),
@@ -422,6 +447,56 @@ class ApplicationService {
                 });
                 return;
               }
+              final method = request['method'] as String;
+              final securityArgs = Map<String, dynamic>.from(
+                request['args'] as Map,
+              );
+              if (method.startsWith('security.')) {
+                try {
+                  if (method == 'security.attach_desktop') {
+                    access.attach(client, securityArgs['token'] as String);
+                  } else if (method == 'security.detach_desktop') {
+                    if (!access.isHost(client))
+                      throw StateError('Not the desktop approval connection');
+                    access.detach(client);
+                    unawaited(domain.application.stopRecording());
+                  } else if (method == 'security.decide') {
+                    access.decide(
+                      client,
+                      securityArgs['approval_id'] as String,
+                      securityArgs['allow'] == true,
+                    );
+                  } else if (method == 'security.allow_import_root') {
+                    if (!access.isHost(client))
+                      throw StateError(
+                        'Only the desktop can select import folders',
+                      );
+                    final root = Directory(
+                      securityArgs['path'] as String,
+                    ).resolveSymbolicLinksSync();
+                    final roots =
+                        (jsonDecode(
+                                  domain.store.preference('importRoots', '[]'),
+                                )
+                                as List)
+                            .cast<String>();
+                    domain.store.setPreference(
+                      'importRoots',
+                      jsonEncode({...roots, root}.toList()),
+                    );
+                  } else {
+                    throw StateError('Unknown security operation');
+                  }
+                  _send(client, {'id': id, 'result': true, 'done': true});
+                } catch (e) {
+                  _send(client, {
+                    'id': id,
+                    'error': e.toString(),
+                    'done': true,
+                  });
+                }
+                return;
+              }
               if (request['method'] == 'service.stop_if_idle') {
                 unawaited(
                   _stopIfIdle(
@@ -448,25 +523,14 @@ class ApplicationService {
               );
               _leases[client]![id] = lease;
               args['requestId'] = lease.id;
-              final Stream<Object?> results =
-                  request['method'] == 'answer.stream'
-                  ? Stream.fromFuture(_ready).asyncExpand(
-                      (_) =>
-                          (args['web_search'] == true
-                          ? domain.askWithWebInConversation
-                          : domain.askInConversation)(
-                            args['question'] as String,
-                            args['conversation'] as String,
-                            requestId: lease.id,
-                            meetingId: args['meeting_id'] as int?,
-                            current: () => !lease.cancelled,
-                          ),
-                    )
-                  : request['method'] == 'google.sign_in'
-                  ? domain.application.signIn(lease.id)
-                  : Stream.fromFuture(
-                      _execute(request['method'] as String, args, lease),
-                    );
+              final results = Stream.fromFuture(
+                access.authorize(
+                  client,
+                  lease.method,
+                  args,
+                  current: () => !lease.cancelled,
+                ),
+              ).asyncExpand((_) => _results(client, args, lease));
               _subscriptions[client]![id] = results.listen(
                 (value) =>
                     _send(client, {'id': id, 'result': value, 'done': false}),
@@ -492,6 +556,15 @@ class ApplicationService {
           },
           onError: (Object _) => client.destroy(),
           onDone: () {
+            final wasHost = access.isHost(client);
+            access.detach(client);
+            if (wasHost) {
+              unawaited(
+                domain.application.stopRecording().catchError((Object e) {
+                  stderr.writeln('Stop capture after desktop closed: $e');
+                }),
+              );
+            }
             _clients.remove(client);
             for (final id in _leases[client]?.keys.toList() ?? <int>[]) {
               _cancel(client, id);
@@ -505,6 +578,31 @@ class ApplicationService {
             client.destroy();
           },
         );
+  }
+
+  Stream<Object?> _results(
+    Socket client,
+    Map<String, dynamic> args,
+    _RequestLease lease,
+  ) {
+    if (lease.cancelled) return Stream.error(StateError('Operation cancelled'));
+    if (lease.method == 'answer.stream') {
+      return Stream.fromFuture(_ready).asyncExpand(
+        (_) =>
+            (args['web_search'] == true
+            ? domain.askWithWebInConversation
+            : domain.askInConversation)(
+              args['question'] as String,
+              args['conversation'] as String,
+              requestId: lease.id,
+              meetingId: args['meeting_id'] as int?,
+              current: () => !lease.cancelled,
+            ),
+      );
+    }
+    if (lease.method == 'google.sign_in')
+      return domain.application.signIn(lease.id);
+    return Stream.fromFuture(_execute(lease.method, args, lease));
   }
 
   Future<void> _stopIfIdle(
@@ -588,6 +686,10 @@ class ApplicationService {
     }.contains(method))
       await _ready;
     if (_closing) throw StateError('Application service is shutting down');
+    if ((method == 'meetings.start' || method == 'meetings.resume') &&
+        !access.hasHost) {
+      throw StateError('Recording requires an open desktop indicator');
+    }
     return domain.application.call(
       method,
       args,
