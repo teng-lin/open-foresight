@@ -59,6 +59,7 @@ class ExtensionArtifactsTest(unittest.TestCase):
             export_log.write_text('\n'.join('_' + name for name in extensions.REQUIRED_C_EXPORTS) + '\n')
         else:
             export_log.write_text('0x1 (NEEDED) Shared library: [libc.so.6]\n' +
+                                  '\nDefined dynamic exports:\n' +
                                   '\n'.join(extensions.REQUIRED_C_EXPORTS) + '\n')
         self.manifest = {
             'upstream_commit': extensions.UPSTREAM_COMMIT,
@@ -148,6 +149,7 @@ class ExtensionArtifactsTest(unittest.TestCase):
                 for bad_export in ('missing_symbols\n',
                                    '_litert_lm_engine_create\n_extra_private_symbol\n'
                                    if platform == 'darwin' else
+                                   '\nDefined dynamic exports:\n' +
                                    '\n'.join(extensions.REQUIRED_C_EXPORTS) + '\n[libstdc++.so.6]\n'):
                     self.fixture(platform=platform)
                     export_path = self.root / self.manifest['native_export_log']
@@ -156,6 +158,34 @@ class ExtensionArtifactsTest(unittest.TestCase):
                     self.save()
                     with self.assertRaisesRegex(ValueError, 'report is invalid'):
                         extensions.verify_extensions_manifest(self.path, platform_name=platform)
+
+    def test_linux_export_report_enforces_complete_public_symbol_set(self):
+        """Release verification must reject leaks and substring-only API matches."""
+        required = '\n'.join(extensions.REQUIRED_C_EXPORTS) + '\n'
+        valid = required + 'litert_lm_engine_delete\n_init\n_fini\n__bss_start\n_edata\n_end\n'
+        reports = (
+            (valid, True),
+            (required + '_ZNSt3__16vector\n', False),
+            (required + 'private_helper\n', False),
+            (required + '_initialize\n', False),
+            (required.replace('litert_lm_engine_create\n',
+                              'litert_lm_engine_create_private\n'), False),
+            (required + 'litert_lm_engine_delete private_helper\n', False),
+            ('', False),
+        )
+        for symbols, accepted in reports:
+            with self.subTest(symbols=symbols):
+                self.fixture(platform='linux')
+                export_path = self.root / self.manifest['native_export_log']
+                # Required names in readelf output are not proof of defined exports.
+                export_path.write_text(required + '\nDefined dynamic exports:\n' + symbols)
+                self.manifest['native_export_log_sha256'] = extensions.file_sha256(export_path)
+                self.save()
+                if accepted:
+                    extensions.verify_extensions_manifest(self.path, platform_name='linux')
+                else:
+                    with self.assertRaisesRegex(ValueError, 'report is invalid'):
+                        extensions.verify_extensions_manifest(self.path, platform_name='linux')
 
     def test_packaged_provenance_retains_vendor_and_platform_abi_hashes(self):
         for platform, patch_key in (('darwin', 'macos_abi_patch_sha256'),

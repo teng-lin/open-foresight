@@ -75,6 +75,9 @@ Clang against `libc++` headers, and statically link PIC `libc++.a` and
 builder and release verifier reject dynamic `libstdc++.so`, `libc++.so`,
 `libc++abi.so`, or `libunwind` linkage and require `linux_abi_patch_sha256` plus
 a passing `native_status_abi_report` and `native_export_log` with checksums.
+The builder records the complete defined dynamic export set with symbol versions
+removed. Both gates require the public C API and reject exports outside
+`litert_lm_*`, except the ELF loader symbols `_init`, `_fini`, `__bss_start`, `_edata`, and `_end`.
 
 `test_litert_status_abi.py` compiles an actual-header callee DSO and an independent
 vendor-convention caller checking both `SubgraphLayout` (`std::string`,

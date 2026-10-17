@@ -159,7 +159,7 @@ class BuildSnapshotTest(unittest.TestCase):
             with self.subTest(suffix=suffix), patch.object(
                     builder.subprocess, 'check_output', side_effect=[dynamic, versions, exports]):
                 report = builder.verify_linux_library_abi(Path('/tmp/liblitert-lm.so'))
-                self.assertEqual(report, dynamic + '\n' + versions + '\n' +
+                self.assertEqual(report, dynamic + '\n' + versions + '\nDefined dynamic exports:\n' +
                                  '\n'.join(sorted(symbols)) + '\n')
 
     def test_linux_abi_rejects_exports_outside_public_api_and_loader_allowlist(self):

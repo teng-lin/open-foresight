@@ -115,7 +115,12 @@ def verify_extensions_manifest(path, *, platform_name):
         if not required_macos <= symbols or any(not name.startswith('_litert_lm_') for name in symbols):
             raise ValueError('LiteRT extension macOS export report is invalid')
     else:
-        if (not all(name in export_text for name in REQUIRED_C_EXPORTS) or
+        _, separator, export_symbols = export_text.partition('\nDefined dynamic exports:\n')
+        symbols = set(export_symbols.splitlines())
+        loader_symbols = {'_init', '_fini', '__bss_start', '_edata', '_end'}
+        if (not separator or not set(REQUIRED_C_EXPORTS) <= symbols or
+                any(not re.fullmatch(r'litert_lm_[A-Za-z0-9_]+', name)
+                    and name not in loader_symbols for name in symbols) or
                 any(token in export_text for token in (*FORBIDDEN_LINUX_STDLIBS, 'GLIBCXX_', 'CXXABI_'))):
             raise ValueError('LiteRT extension Linux export/ABI report is invalid')
     wheel = _artifact(path.parent, manifest, 'wheel')

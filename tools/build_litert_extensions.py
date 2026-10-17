@@ -55,6 +55,7 @@ def require_materialized_prebuilts(source, directory, suffix):
 
 
 def verify_linux_library_abi(library):
+    """Reject incompatible runtimes or leaked exports and record every symbol."""
     dynamic = subprocess.check_output(['readelf', '-d', str(library)], text=True)
     versions = subprocess.check_output(['readelf', '--version-info', str(library)], text=True)
     exported = subprocess.check_output(['nm', '-D', '--defined-only', str(library)], text=True)
@@ -74,7 +75,8 @@ def verify_linux_library_abi(library):
     loader_symbols = {'_init', '_fini', '__bss_start', '_edata', '_end'}
     if any(not name.startswith('litert_lm_') and name not in loader_symbols for name in symbols):
         raise RuntimeError('Linux LiteRT library must export only the public C API and loader symbols')
-    return dynamic + '\n' + versions + '\n' + '\n'.join(sorted(symbols)) + '\n'
+    return (dynamic + '\n' + versions + '\nDefined dynamic exports:\n'
+            + '\n'.join(sorted(symbols)) + '\n')
 
 
 def wheel_vendor_hashes(archive, system):
