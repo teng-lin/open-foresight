@@ -40,12 +40,14 @@ struct Statement {
 };
 class Service:public rpc::RagService::Service,public ctl::HelperControl::Service {
  struct SearchSnapshot { std::shared_ptr<Model> model; foresight::VectorIndex index; SearchSnapshot(std::shared_ptr<Model> m,std::vector<foresight::IndexedChunk> chunks):model(std::move(m)),index(std::move(chunks)){} };
- std::atomic<std::shared_ptr<const SearchSnapshot>> search_snapshot;
+ std::shared_ptr<const SearchSnapshot> search_snapshot; std::mutex snapshot_mu;
  void publish_index() {
   std::vector<foresight::IndexedChunk> chunks;
   Statement q(db,"SELECT c.text,c.document_id,c.mime,c.embedding FROM vectors.chunks c JOIN linux.source_revisions r ON r.id=c.document_id AND r.revision=c.revision WHERE r.tombstone=0 AND c.generation=? ORDER BY c.document_id,c.ordinal");q.num(1,state.active_generation());
   while(q.row()) chunks.push_back({q.str(0),q.str(1),q.str(2),foresight::read_vector(q.str(3))});
-  search_snapshot.store(std::make_shared<SearchSnapshot>(model,std::move(chunks)));
+  std::shared_ptr<const SearchSnapshot> replacement=std::make_shared<SearchSnapshot>(model,std::move(chunks));
+  {std::lock_guard lock(snapshot_mu);search_snapshot.swap(replacement);}
+  // Retire the old tree outside the pointer lock; destruction can be expensive.
  }
  struct PreparedChunk { std::string text; std::vector<double> embedding; };
  struct DocWork { std::string id, content, mime; int size=0, overlap=0; uint64_t rev=0; std::vector<PreparedChunk> chunks; };
@@ -150,9 +152,10 @@ public:
  Status RetrieveContext(grpc::ServerContext*,const rpc::RetrieveRequest* req,rpc::RetrieveResponse* r)override {
   if(!req->has_query()||req->query().query_case()==rpc::Query::QUERY_NOT_SET)return {StatusCode::INVALID_ARGUMENT,"Query required"};
   if(req->max_results()<=0)return {StatusCode::INVALID_ARGUMENT,"max_results must be positive (Linux policy)"};
-  // Atomic shared ownership is the reader lock: a writer may publish a new
-  // generation without invalidating, locking or mutating any active reader.
-  auto snapshot=search_snapshot.load();
+  // Only copy shared ownership under this short pointer lock. Writers build
+  // replacements and retire old trees outside it, without blocking searches.
+  std::shared_ptr<const SearchSnapshot> snapshot;
+  {std::lock_guard lock(snapshot_mu);snapshot=search_snapshot;}
   if(!snapshot || !snapshot->model || !snapshot->model->available()){std::lock_guard lock(mu);return absent();}
   if(req->query().query_case()==rpc::Query::kAudioQuery)return {StatusCode::UNIMPLEMENTED,"Audio query unavailable in text-only model"};
   try {

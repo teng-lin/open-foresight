@@ -7,14 +7,15 @@
 #include <fstream>
 #include <thread>
 #include <future>
+#include <type_traits>
 #include <sys/wait.h>
 #include <unistd.h>
 #include <signal.h>
 #include <sys/stat.h>
 namespace p=research::xeno::labs::foresight::launch_agent::proto;
 namespace c=foresight::linux::control::v1;
-#define REQUIRE(x) do{if(!(x))throw std::runtime_error(#x);}while(0)
-template<class Q,class R,class F> grpc::Status call(Q& q,R& r,F f){grpc::ClientContext ctx;ctx.set_deadline(std::chrono::system_clock::now()+std::chrono::seconds(5));return f(&ctx,q,&r);}
+#define REQUIRE(x) do{if(!(x))throw std::runtime_error(std::string(__FILE__)+":"+std::to_string(__LINE__)+": "+#x);}while(0)
+template<class Q,class R,class F> grpc::Status call(Q& q,R& r,F f){grpc::ClientContext ctx;ctx.set_deadline(std::chrono::system_clock::now()+std::chrono::seconds(5));auto status=f(&ctx,q,&r);if constexpr(std::is_same_v<R,p::UpdateModelPathsResponse>){if(!status.ok()||!r.success())std::cerr<<"Configure error: grpc="<<status.error_code()<<" message="<<status.error_message()<<" application="<<r.error_message()<<"\n";}return status;}
 int main(int argc,char** argv){setenv("FORESIGHT_TEST_DELAY_MS","2",1);std::string dir=(std::filesystem::temp_directory_path().string()+"/foresight-contract-")+std::to_string(getpid());std::filesystem::create_directories(dir);chmod(dir.c_str(),0700);std::string socket=dir+"/run/helper.sock";pid_t pid=-1;try{auto start=[&]{pid=fork();if(pid==0){execl(argv[1],argv[1],socket.c_str(),dir.c_str(),"--allow-test-models",(char*)nullptr);_exit(127);}auto channel=grpc::CreateChannel("unix:"+socket,grpc::InsecureChannelCredentials());REQUIRE(channel->WaitForConnected(std::chrono::system_clock::now()+std::chrono::seconds(10)));return p::RagService::NewStub(channel);};auto stub=start();p::PingRequest ping;p::PingResponse pong;REQUIRE(call(ping,pong,[&](auto* ctx,auto& q,auto* r){return stub->Ping(ctx,q,r);}).ok());REQUIRE(pong.success()&&pong.version()=="1.0.3");p::ComputeImageEmbeddingRequest img;p::ComputeEmbeddingResponse vec;REQUIRE(call(img,vec,[&](auto* ctx,auto& q,auto* r){return stub->ComputeImageEmbedding(ctx,q,r);}).error_code()==grpc::StatusCode::UNAVAILABLE);
  p::UpdateModelPathsRequest model;model.set_embedding_model_path("test://deterministic");p::UpdateModelPathsResponse configured;REQUIRE(call(model,configured,[&](auto* ctx,auto& q,auto* r){return stub->UpdateModelPaths(ctx,q,r);}).ok()&&configured.success());
  auto active_generation=[&]{auto status=c::HelperControl::NewStub(grpc::CreateChannel("unix:"+socket,grpc::InsecureChannelCredentials()));c::Empty q;c::State r;REQUIRE(call(q,r,[&](auto* ctx,auto& x,auto* y){return status->GetState(ctx,x,y);}).ok());return r.active_generation();};
