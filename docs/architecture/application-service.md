@@ -108,6 +108,8 @@ Content is shared: editing/deleting an existing source or note is visible to bot
 
 Internal answer commands and streams accept an optional `meeting_id`. The service validates that meeting, chooses its canonical conversation, and atomically saves each answer with its meeting association. The desktop does not infer ownership from the latest global answer row. This isolates follow-up questions and generated-answer history; retrieval still searches the shared indexed knowledge sources. Previously saved answer conversations are preserved.
 
+URL imports accept globally routable HTTP/HTTPS text pages by default. Every redirect is checked, HTTPS downgrades are refused, and DNS results are pinned for the connection. In the desktop URL dialog, enable **Allow private network addresses** only for a page you intend to read from your local network. MCP `import_url` and `refresh_sources` (service `sources.import_url` and `sources.refresh`) accept `allow_private_network: true` for an explicit per-request opt-in; it is false by default and is not retained for later refreshes. Downloads are limited to 5 MB and 30 seconds; decoding and HTML parsing run in a disposable isolate with a three-second deadline. The response charset controls decoding, including GBK, Big5, and Shift_JIS.
+
 Google credentials and refreshes belong to the service. The service streams a sign-in URL to the desktop, which opens the browser even when MCP started the service without a graphical environment. Browser sign-in and consent are started explicitly from the desktop; MCP does not expose credentials or authentication tools. Google reminders and refresh timers run in the service, independent of an open desktop window.
 
 Inspect or stop the service explicitly:

@@ -686,46 +686,68 @@ extension _ScreenshotScreens on _WorkspaceState {
 
   Future<void> importUrl() async {
     final input = TextEditingController();
+    var allowPrivateNetwork = false;
     final accepted = await showInputDialog<bool>(
-      builder: (context) => AlertDialog(
-        title: const Text('Please enter the URL'),
-        content: TextField(
-          controller: input,
-          autofocus: true,
-          style: DesktopVisuals.field,
-          decoration: const InputDecoration(
-            hintText: 'Please enter the URL',
-            filled: true,
-            fillColor: Color(0xffe1e6ef),
-            border: UnderlineInputBorder(),
-            enabledBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Color(0xff74777d)),
-            ),
-            focusedBorder: UnderlineInputBorder(
-              borderSide: BorderSide(color: Color(0xff006c97), width: 2),
-            ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Please enter the URL'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: input,
+                autofocus: true,
+                style: DesktopVisuals.field,
+                decoration: const InputDecoration(
+                  hintText: 'Please enter the URL',
+                  filled: true,
+                  fillColor: Color(0xffe1e6ef),
+                  border: UnderlineInputBorder(),
+                  enabledBorder: UnderlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xff74777d)),
+                  ),
+                  focusedBorder: UnderlineInputBorder(
+                    borderSide: BorderSide(color: Color(0xff006c97), width: 2),
+                  ),
+                ),
+              ),
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Allow private network addresses'),
+                value: allowPrivateNetwork,
+                onChanged: (value) =>
+                    setDialogState(() => allowPrivateNetwork = value ?? false),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ],
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('OK'),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('OK'),
-          ),
-        ],
       ),
     );
     final value = input.text.trim();
     input.dispose();
     if (accepted != true) return;
-    await importAddress(value);
+    await importAddress(value, allowPrivateNetwork: allowPrivateNetwork);
   }
 
-  Future<void> importAddress(String value) async {
-    await d.command('sources.import_url', {'url': value});
+  Future<void> importAddress(
+    String value, {
+    bool allowPrivateNetwork = false,
+  }) async {
+    await d.command('sources.import_url', {
+      'url': value,
+      if (allowPrivateNetwork) 'allow_private_network': true,
+    });
   }
 
   List<String> sourceLabels(Map<String, Object?> s) =>

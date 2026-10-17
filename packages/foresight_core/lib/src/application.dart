@@ -1,5 +1,6 @@
 import 'audio_devices.dart';
 import 'agent_access.dart';
+import 'web_import.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -481,12 +482,21 @@ class Application {
           if (a['index'] != false) await domain.index(id);
           return {'id': id};
         case 'sources.import_url':
-          return {'id': await importUrl(a['url'] as String, current: current)};
+          return {
+            'id': await importUrl(
+              a['url'] as String,
+              current: current,
+              allowPrivateNetwork: a['allow_private_network'] == true,
+            ),
+          };
         case 'sources.import_directory':
           await importDirectory(a['path'] as String, current: current);
           return null;
         case 'sources.refresh':
-          await reimport(current: current);
+          await reimport(
+            current: current,
+            allowPrivateNetwork: a['allow_private_network'] == true,
+          );
           return null;
         case 'sources.import_file':
           return {'id': await importFile(a['path'] as String)};
@@ -1098,74 +1108,35 @@ class Application {
     return id;
   }
 
-  Future<String> importUrl(String value, {bool Function()? current}) async {
+  Future<String> importUrl(
+    String value, {
+    bool Function()? current,
+    bool allowPrivateNetwork = false,
+  }) async {
     final generation = domain.workspaceGeneration;
     await domain.waitForSourceWork();
     domain.checkWorkspace(generation);
-    final uri = Uri.tryParse(value);
-    if (uri == null ||
-        !['http', 'https'].contains(uri.scheme) ||
-        uri.host.isEmpty)
-      throw StateError('Enter an HTTP or HTTPS URL.');
-    final client = HttpClient()
-      ..connectionTimeout = const Duration(seconds: 20);
-    try {
-      final response = await (await client.getUrl(
-        uri,
-      )).close().timeout(const Duration(seconds: 30));
-      if (response.statusCode != 200)
-        throw StateError('URL returned HTTP ${response.statusCode}');
-      final bytes = <int>[];
-      await for (final chunk in response.timeout(const Duration(seconds: 30))) {
-        if (current != null && !current())
-          throw StateError('Operation cancelled');
-        bytes.addAll(chunk);
-        if (bytes.length > 5 * 1024 * 1024)
-          throw StateError('Page exceeds 5 MB.');
-      }
-      var text = utf8.decode(bytes);
-      if (response.headers.contentType?.mimeType == 'text/html') {
-        text = text
-            .replaceAll(
-              RegExp(
-                r'<(script|style)\b[^>]*>[\s\S]*?</\1>',
-                caseSensitive: false,
-              ),
-              '',
-            )
-            .replaceAll(RegExp(r'<[^>]+>'), ' ')
-            .replaceAll('&nbsp;', ' ')
-            .replaceAll('&amp;', '&')
-            .replaceAll('&lt;', '<')
-            .replaceAll('&gt;', '>')
-            .replaceAll(RegExp(r'\s+'), ' ')
-            .trim();
-      } else if (!(response.headers.contentType?.mimeType.startsWith('text/') ??
-          false)) {
-        throw StateError(
-          'URL must contain HTML or plain text. Add binary documents as files.',
-        );
-      }
-      domain.checkWorkspace(generation);
-      if (current != null && !current())
-        throw StateError('Operation cancelled');
-      if (text.isEmpty) throw StateError('No readable text found.');
-      final existing = store.sources
-          .where((s) => s['provenance'] == 'url:$uri')
-          .firstOrNull;
-      final id = store.importText(
-        uri.host + uri.path,
-        text,
-        'text/plain',
-        'url:$uri',
-        id: existing?['id'] as String?,
-        sourceUri: uri.toString(),
-      );
-      await domain.index(id);
-      return id;
-    } finally {
-      client.close(force: true);
-    }
+    final uri = webImportUri(value);
+    final text = await WebPageImporter().fetch(
+      uri,
+      allowPrivateNetwork: allowPrivateNetwork,
+      current: current,
+    );
+    domain.checkWorkspace(generation);
+    if (current != null && !current()) throw StateError('Operation cancelled');
+    final existing = store.sources
+        .where((s) => s['provenance'] == 'url:$uri')
+        .firstOrNull;
+    final id = store.importText(
+      uri.host + uri.path,
+      text,
+      'text/plain',
+      'url:$uri',
+      id: existing?['id'] as String?,
+      sourceUri: uri.toString(),
+    );
+    await domain.index(id);
+    return id;
   }
 
   Future<void> importDirectory(String path, {bool Function()? current}) async {
@@ -1199,7 +1170,10 @@ class Application {
       );
   }
 
-  Future<void> reimport({bool Function()? current}) async {
+  Future<void> reimport({
+    bool Function()? current,
+    bool allowPrivateNetwork = false,
+  }) async {
     final generation = domain.workspaceGeneration;
     final failures = <String>[];
     for (final s in store.sources) {
@@ -1209,7 +1183,11 @@ class Application {
       final path = (s['provenance'] as String).split('; ').last;
       try {
         if (path.startsWith('url:')) {
-          await importUrl(path.substring(4));
+          await importUrl(
+            path.substring(4),
+            current: current,
+            allowPrivateNetwork: allowPrivateNetwork,
+          );
         } else if (File(path).existsSync()) {
           await importFile(path);
         } else if (path.startsWith('/')) {
