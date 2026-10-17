@@ -400,76 +400,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                     width:
                         72 *
                         MediaQuery.textScalerOf(context).scale(1).clamp(1, 2),
-                    child: Column(
-                      children: [
-                        Expanded(
-                          child: ListView(
-                            children: [
-                              navItem(
-                                3,
-                                'Meetings',
-                                tab == 3
-                                    ? Icons.description
-                                    : Icons.description_outlined,
-                              ),
-                              navItem(
-                                1,
-                                'Ask',
-                                tab == 1
-                                    ? Icons.chat_bubble
-                                    : Icons.chat_bubble_outline,
-                              ),
-                              navItem(
-                                0,
-                                'Sources',
-                                tab == 0
-                                    ? Icons.snippet_folder
-                                    : Icons.snippet_folder_outlined,
-                              ),
-                              navItem(
-                                5,
-                                'Stats',
-                                tab == 5
-                                    ? Icons.emoji_events
-                                    : Icons.emoji_events_outlined,
-                              ),
-                            ],
-                          ),
-                        ),
-                        navItem(
-                          6,
-                          'Settings',
-                          tab == 6 || tab == 4
-                              ? Icons.settings
-                              : Icons.settings_outlined,
-                        ),
-                        IconButton(
-                          tooltip: 'Help',
-                          onPressed: () => showDialog<void>(
-                            context: context,
-                            builder: (_) => const AlertDialog(
-                              title: Text('Foresight'),
-                              content: Text(
-                                'Add local knowledge sources, then ask a question with citations. Start transcribing captures microphone and system playback; live transcription updates during recording.\n\nCtrl+1–5: navigate\nCtrl+O: add file\nCtrl+N: new note\nCtrl+Shift+F: start a meeting',
-                              ),
-                            ),
-                          ),
-                          icon: const Icon(Icons.help_outline),
-                        ),
-                        const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: CircleAvatar(
-                            radius: 16,
-                            backgroundColor: Color(0xff008577),
-                            child: Icon(
-                              Icons.person_outline,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                    child: desktopSidebar(),
                   ),
                   Expanded(
                     child: Padding(
@@ -530,6 +461,71 @@ extension _ScreenshotScreens on _WorkspaceState {
         ),
       ),
     ),
+  );
+
+  Widget desktopSidebar() => LayoutBuilder(
+    builder: (context, constraints) {
+      final items = <Widget>[
+        navItem(
+          3,
+          'Meetings',
+          tab == 3 ? Icons.description : Icons.description_outlined,
+        ),
+        navItem(
+          1,
+          'Ask',
+          tab == 1 ? Icons.chat_bubble : Icons.chat_bubble_outline,
+        ),
+        navItem(
+          0,
+          'Sources',
+          tab == 0 ? Icons.snippet_folder : Icons.snippet_folder_outlined,
+        ),
+        navItem(
+          5,
+          'Stats',
+          tab == 5 ? Icons.emoji_events : Icons.emoji_events_outlined,
+        ),
+      ];
+      final footer = <Widget>[
+        navItem(
+          6,
+          'Settings',
+          tab == 6 || tab == 4 ? Icons.settings : Icons.settings_outlined,
+        ),
+        IconButton(
+          tooltip: 'Help',
+          onPressed: () => showDialog<void>(
+            context: context,
+            builder: (_) => const AlertDialog(
+              title: Text('Foresight'),
+              content: Text(
+                'Add local knowledge sources, then ask a question with citations. Start transcribing captures microphone and system playback; live transcription updates during recording.\n\nCtrl+1–5: navigate\nCtrl+O: add file\nCtrl+N: new note\nCtrl+Shift+F: start a meeting',
+              ),
+            ),
+          ),
+          icon: const Icon(Icons.help_outline),
+        ),
+        const Padding(
+          padding: EdgeInsets.all(12),
+          child: CircleAvatar(
+            radius: 16,
+            backgroundColor: Color(0xff008577),
+            child: Icon(Icons.person_outline, color: Colors.white, size: 20),
+          ),
+        ),
+      ];
+      if (constraints.maxHeight <
+          320 * MediaQuery.textScalerOf(context).scale(1)) {
+        return ListView(children: [...items, ...footer]);
+      }
+      return Column(
+        children: [
+          Expanded(child: ListView(children: items)),
+          ...footer,
+        ],
+      );
+    },
   );
 
   Widget navItem(int index, String title, IconData icon) => Padding(
@@ -640,18 +636,7 @@ extension _ScreenshotScreens on _WorkspaceState {
       ),
     );
     if (!mounted || selected == null) return;
-    final failures = <String>[];
-    for (final path in selected) {
-      try {
-        await importPath(path);
-      } catch (e) {
-        failures.add('${path.split('/').last}: $e');
-      }
-    }
-    if (failures.isNotEmpty)
-      throw StateError(
-        'Imported ${selected.length - failures.length} files. ${failures.join('\n')}',
-      );
+    await importFiles(selected);
   }
 
   Future<void> importFolder() async {
@@ -661,7 +646,19 @@ extension _ScreenshotScreens on _WorkspaceState {
   }
 
   Future<void> importDirectory(String path) async {
-    await d.command('sources.import_directory', {'path': path});
+    final files = await Directory(path)
+        .list(recursive: true, followLinks: false)
+        .where(
+          (entry) =>
+              entry is File &&
+              RegExp(
+                r'\.(txt|md|pdf|rtf)$',
+                caseSensitive: false,
+              ).hasMatch(entry.path),
+        )
+        .map((entry) => entry.path)
+        .toList();
+    await importFiles(files);
   }
 
   Future<void> reimport() async {
@@ -686,13 +683,26 @@ extension _ScreenshotScreens on _WorkspaceState {
 
   Future<void> importUrl() async {
     final input = TextEditingController();
-    final accepted = await showInputDialog<bool>(
-      builder: (context) => AlertDialog(
-        title: const Text('Please enter the URL'),
-        content: TextField(
+    await showInputDialog<bool>(
+      builder: (context) => RecoverableDialog(
+        title: 'Please enter the URL',
+        saveLabel: 'OK',
+        textAction: true,
+        width: 480,
+        validate: () {
+          final uri = Uri.tryParse(input.text.trim());
+          return uri == null ||
+                  !['http', 'https'].contains(uri.scheme) ||
+                  uri.host.isEmpty
+              ? 'Enter a valid http or https URL.'
+              : null;
+        },
+        editor: (saving, submit) => TextField(
           controller: input,
           autofocus: true,
+          enabled: !saving,
           style: DesktopVisuals.field,
+          onSubmitted: (_) => submit(),
           decoration: const InputDecoration(
             hintText: 'Please enter the URL',
             filled: true,
@@ -706,22 +716,13 @@ extension _ScreenshotScreens on _WorkspaceState {
             ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('OK'),
-          ),
-        ],
+        save: () async {
+          await ensureSourceWorkActive();
+          await importAddress(input.text.trim());
+        },
       ),
     );
-    final value = input.text.trim();
     input.dispose();
-    if (accepted != true) return;
-    await importAddress(value);
   }
 
   Future<void> importAddress(String value) async {
@@ -795,10 +796,14 @@ extension _ScreenshotScreens on _WorkspaceState {
 
   Future<void> createOrganizationLabel() async {
     final input = TextEditingController();
-    final name = await showInputDialog<String>(
-      builder: (context) => AlertDialog(
-        title: const Text('Create New Organization Label'),
-        content: Column(
+    await showInputDialog<bool>(
+      builder: (context) => RecoverableDialog(
+        title: 'Create New Organization Label',
+        saveLabel: 'Create & Auto-Assign',
+        width: 480,
+        validate: () =>
+            input.text.trim().isEmpty ? 'Enter a label name.' : null,
+        editor: (saving, submit) => Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
@@ -806,30 +811,19 @@ extension _ScreenshotScreens on _WorkspaceState {
             ),
             TextField(
               controller: input,
+              autofocus: true,
+              enabled: !saving,
+              onSubmitted: (_) => submit(),
               decoration: const InputDecoration(
                 hintText: 'e.g. Eloquent Project',
               ),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final name = input.text.trim();
-              if (name.isNotEmpty) Navigator.pop(context, name);
-            },
-            child: const Text('Create & Auto-Assign'),
-          ),
-        ],
+        save: () => autoAssignOrganizationLabel(input.text.trim()),
       ),
     );
     input.dispose();
-    if (name != null && mounted)
-      await run(() => autoAssignOrganizationLabel(name));
   }
 
   Future<void> autoAssignOrganizationLabel(String name) async {
@@ -1224,7 +1218,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                           case 'drive-year':
                             if (!googleAuth.connected) await connectGoogle();
                             if (mounted && googleAuth.connected) {
-                              await google.importLastYear();
+                              await importRecentDriveFiles();
                             }
                         }
                       }),
@@ -1641,9 +1635,7 @@ extension _ScreenshotScreens on _WorkspaceState {
                       width: 36,
                       child: IconButton(
                         tooltip: 'Delete source',
-                        onPressed: busy
-                            ? null
-                            : () => run(() => d.delete(source['id'] as String)),
+                        onPressed: busy ? null : () => deleteSource(source),
                         visualDensity: VisualDensity.compact,
                         icon: const Icon(Icons.delete_outline, size: 20),
                       ),
@@ -1721,7 +1713,7 @@ extension _ScreenshotScreens on _WorkspaceState {
         ),
         IconButton(
           tooltip: 'Delete source',
-          onPressed: busy ? null : () => run(() => d.delete(s['id'] as String)),
+          onPressed: busy ? null : () => deleteSource(s),
           icon: const Icon(Icons.delete_outline, size: 20),
         ),
       ],
@@ -2670,7 +2662,7 @@ extension _ScreenshotScreens on _WorkspaceState {
     final history = d.store
         .rows(
           meetingScope == null
-              ? "SELECT * FROM answers WHERE conversation='desktop' ORDER BY id"
+              ? "SELECT * FROM answers WHERE conversation='desktop' AND id NOT IN (SELECT answer_id FROM meeting_answers) ORDER BY id"
               : 'SELECT answers.* FROM answers JOIN meeting_answers ON answer_id=answers.id WHERE meeting_id=? ORDER BY answers.id',
           meetingScope == null ? [] : [meetingScope],
         )
@@ -2693,8 +2685,15 @@ extension _ScreenshotScreens on _WorkspaceState {
                       style: TextStyle(fontSize: 20, color: Color(0xff87a8b7)),
                     ),
                   )
-                : ListView(
+                : ChatHistoryViewport(
                     key: ValueKey('chat-history:$scope'),
+                    answering: scopeAsking,
+                    revision: (
+                      history.map((a) => a['id']).join(','),
+                      answer,
+                      scopeAsking,
+                      answerFontSize,
+                    ),
                     children: [
                       for (final a in history)
                         Padding(
@@ -3000,52 +2999,66 @@ extension _ScreenshotScreens on _WorkspaceState {
       );
     }
     if (!insertedNow && rows.isNotEmpty) entries.add(nowMarker());
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (showHeading) meetingListHeading(),
-        searchBox(
-          'Search meetings',
-          (value) => meetingQuery = value,
-          controller: meetingSearchController,
-        ),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-          onPressed: () {
-            meetingSearchController.clear();
-            update(() => meetingQuery = '');
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              final target = meetingNowKey.currentContext;
-              if (target != null)
-                Scrollable.ensureVisible(
-                  target,
-                  duration: const Duration(milliseconds: 250),
-                  alignment: .5,
-                );
-            });
-          },
-          icon: const Icon(Icons.schedule, size: 18),
-          label: const Text('Now'),
-        ),
-        const SizedBox(height: 24),
-        Expanded(
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (rows.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.all(40),
-                    child: Text(
-                      'No meetings yet. Start transcribing or create a new meeting.',
-                    ),
-                  ),
-                ...entries,
-              ],
-            ),
+    final controls = <Widget>[
+      if (showHeading) meetingListHeading(),
+      searchBox(
+        'Search meetings',
+        (value) => meetingQuery = value,
+        controller: meetingSearchController,
+      ),
+      const SizedBox(height: 16),
+      OutlinedButton.icon(
+        onPressed: () {
+          meetingSearchController.clear();
+          update(() => meetingQuery = '');
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final target = meetingNowKey.currentContext;
+            if (target != null)
+              Scrollable.ensureVisible(
+                target,
+                duration: const Duration(milliseconds: 250),
+                alignment: .5,
+              );
+          });
+        },
+        icon: const Icon(Icons.schedule, size: 18),
+        label: const Text('Now'),
+      ),
+      const SizedBox(height: 24),
+    ];
+    final contents = <Widget>[
+      if (rows.isEmpty)
+        const Padding(
+          padding: EdgeInsets.all(40),
+          child: Text(
+            'No meetings yet. Start transcribing or create a new meeting.',
           ),
         ),
-      ],
+      ...entries,
+    ];
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final requiredHeight =
+            (showHeading ? 320 : 180) *
+            MediaQuery.textScalerOf(context).scale(1);
+        if (constraints.maxHeight < requiredHeight) {
+          return ListView(children: [...controls, ...contents]);
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            ...controls,
+            Expanded(
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: contents,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 

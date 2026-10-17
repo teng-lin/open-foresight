@@ -53,6 +53,17 @@ void main() {
         'INSERT INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
         [alpha, store.db.lastInsertRowId],
       );
+      store.answer(
+        'Legacy Alpha question',
+        'Legacy private answer',
+        'completed',
+        [],
+        'fixture',
+      );
+      store.db.execute(
+        'INSERT INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
+        [alpha, store.db.lastInsertRowId],
+      );
       try {
         await tester.pumpWidget(
           Foresight(domain, deviceLoader: () async => []),
@@ -79,6 +90,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(tester.widget<TextField>(composer()).controller!.text, isEmpty);
         expect(find.text('Saved Alpha question'), findsNothing);
+        expect(find.text('Legacy Alpha question'), findsNothing);
         expect(
           find.text('Private Alpha answer', findRichText: true),
           findsNothing,
