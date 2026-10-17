@@ -24,6 +24,7 @@ class BuildSnapshotTest(unittest.TestCase):
         self.git('init', '-q')
         self.git('config', 'user.name', 'Snapshot test')
         self.git('config', 'user.email', 'snapshot@example.invalid')
+        self.git('config', 'core.abbrev', '8')
         self.file = self.source / 'input.txt'
         self.file.write_text('original\n')
         self.abi_file = self.source / 'z_abi.txt'
@@ -71,6 +72,17 @@ class BuildSnapshotTest(unittest.TestCase):
     def test_clean_macos_source_gets_both_pinned_patches(self):
         self.invoke(system='Darwin')
         self.assertEqual(self.git('diff', 'HEAD', '--binary'), self.first + self.abi_patch)
+
+    def test_source_attestation_ignores_git_display_defaults(self):
+        # A shallow hosted checkout defaults to seven-character IDs; global
+        # prefix/color settings also must not alter source verification.
+        self.git('config', 'core.abbrev', '7')
+        self.git('config', 'diff.noprefix', 'true')
+        self.git('config', 'color.ui', 'always')
+        self.invoke(system='Darwin')
+        self.invoke(system='Darwin')
+        self.assertEqual(self.file.read_text(), 'first patch\n')
+        self.assertEqual(self.abi_file.read_text(), 'vendor ABI\n')
 
     def test_patch_changed_between_read_and_apply_is_rejected(self):
         original_run = builder.run
