@@ -3,7 +3,9 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: platform-checks-${{ github.ref }}
+  # Release promotion waits for an exact commit's completed candidate.
+  # Keep main commits independent; updated PR checks can supersede each other.
+  group: platform-checks-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 jobs:
   macos:
