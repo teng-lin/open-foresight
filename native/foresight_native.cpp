@@ -1,5 +1,6 @@
 #include "foresight_native.h"
 #include "portable_process.h"
+#include "speech_cpu.h"
 #ifdef __APPLE__
 #include <libproc.h>
 #include <sys/sysctl.h>
@@ -834,6 +835,12 @@ int fs_speech_finish(void *h, const char *id) {
   s.input_rate = 0;
   s.thread = std::thread([&s, request, samples = std::move(samples)] {
     uint64_t seq = 0;
+    if (const auto blocked = linux_speech_cpu_block()) {
+      failure(s, request, seq, "speech_runtime_failure", *blocked);
+      s.emit(event("done", request, seq++, ",\"status\":\"failed\""));
+      s.active = false;
+      return;
+    }
     char tmp[] = "/tmp/foresight-asr-XXXXXX";
     int fd = mkstemp(tmp);
     int status = -1;
