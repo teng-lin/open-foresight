@@ -7,6 +7,15 @@ Analysis uses IDA Pro and the matching Dart snapshot reader. The complete
 `test-results/reference-functions/ida/note-enhance-stream-producer-*.json`.
 The stream consumer is documented in [note saving](reference-note-save.md).
 
+Coverage audit: the original fixed 600-line page requests had shorter replies
+with cursors at 1758, 2340, 2923 and 3532, leaving gaps before the next fixed
+offset. Those four gaps have now been captured explicitly in
+`ida/note-enhance-stream-gap-*.json`. The checked
+`ida/note-enhance-stream-coverage.json` manifest covers every line from 0
+through 3981 exactly once. The earlier fixed-offset pages alone did not prove
+complete coverage.
+
+
 ## Greedy note batches
 
 `_clusterScribblesIntoBatches` at `0x100a328bc` receives per-note transcript
@@ -99,6 +108,41 @@ and preservation of caller-supplied uncovered content. The fixtures derive
 from the selected original public pool strings. All 27 parser/prompt/batching/
 cleanup tests pass together, and core analysis reports no issues.
 
+## Excerpt ranking
+
+The port now implements `selectNoteEnhancementExcerptRefs` and
+`noteEnhancementCosineSimilarity` in `reference_note_enhancement_ranking.dart`.
+The producer chooses two excerpts per pending shorthand note, or one when
+there are more than five pending notes (`0x100a2cf28`). Each pending note’s
+text is embedded via RagOrchestrator.computeEmbedding, concurrently through
+Future.wait. The callback PP34511 is bound to `0x100a33e4c`.
+
+If that note’s embedding is empty, or **any** transcript chunk embedding is
+empty, selection uses the first one/two chunk indices. Otherwise every chunk
+is scored and sorted by descending Dart `double.compareTo`, then the first
+one/two indices are taken. There is no minimum similarity threshold or
+secondary index tie-break in this selection. With no chunks, each pending
+note receives an empty reference list. The empty-vector predicate PP34513
+uses the same +42110 list-isEmpty dispatch already bound in the reader.
+
+The exact cosine function at `0x1006b4bb4` returns zero for empty vectors,
+unequal dimensions, or either squared norm equal to zero. It accumulates dot
+product and both squared norms in scalar order, then divides by the product
+of their square roots. It adds no epsilon, clipping, or finite-value repair.
+Nonfinite arithmetic is therefore retained. This is an algorithm reconstruction,
+not proof of bitwise equivalence between Dart execution targets.
+
+Evidence: `ida/note-enhance-embed-note-callback.json`,
+`ida/note-enhance-empty-vector-predicate.json`,
+`ida/note-enhance-stream-gap-1758.json`,
+`ida/note-enhance-ranking-sort-arguments.json`,
+`ida/note-enhance-cosine-arguments.json`, and
+`ida/note-enhance-cosine-similarity.json`. Shared callback names from unrelated
+merged IDA symbols are not interpreted as separate application behavior. Eight
+new tests cover cosine sign/magnitude, degenerate inputs, nonfinite arithmetic,
+the five/six-note threshold, and global versus per-note fallback. All 35
+producer helper tests pass together, with clean core analysis.
+
 ## Remaining producer work
 
 These helpers are reconstructed but not yet wired into generation. Current
@@ -109,10 +153,11 @@ references and previous enhancements, creates a conversation per batch, and
 parses/merges batch responses into complete output snapshots. The exact prompt
 fragments are retained as selected public PP34602–34609; the batch parser and
 prompt builder have complete retained decompilations. Prompt assembly and the two-list batch parser are now implemented as helpers.
-Embedding/ranking bindings, remaining token budgets, stream merge rules, and
-full integration remain incomplete.
+Excerpt ranking and its math are now implemented as helpers. Transcript
+chunking/cache integration, embedding transport, remaining token budgets, stream
+merge rules, and full integration remain incomplete.
 
-The newest IDA batches (50, 51, 56, 58 and 61) ran through the owned Node process
+The newest IDA batches (50, 51, 56, 58, 61, 69, 70 and 71) ran through the owned Node process
 launcher because REA process capture could not start. Their raw IDA JSON and
 terminal logs are retained; each dispatcher closed with exit 0. These results
 are static analysis, not a successful new REA process capture or a live app
