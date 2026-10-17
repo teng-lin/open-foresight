@@ -48,15 +48,19 @@ def test_shared_pin_table_drives_all_python_release_consumers():
     assert len(pins) == 9
     assert selected["speech"][3] == pins["ggml-tiny.bin"]["sha256"]
     assert selected["generation"][3] == pins["gemma-4-E2B-it.litertlm"]["sha256"]
-    for name in ["test_macos_release_models", "test_packaged_model_runtime"]:
-        spec = importlib.util.spec_from_file_location(
-            name, ROOT / "tools" / f"{name}.py"
-        )
+    for name, source in [
+        ("test_macos_release_models", ROOT / "tools/test_macos_release_models.py"),
+        ("test_packaged_model_runtime", ROOT / "tools/test_packaged_model_runtime.py"),
+        ("smoke_installed", ROOT / "packaging/smoke_installed.py"),
+    ]:
+        spec = importlib.util.spec_from_file_location(name, source)
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         if name == "test_macos_release_models":
             assert module.MODELS == selected
+        elif name == "smoke_installed":
+            assert module.SPEECH_PIN == selected["speech"]
         else:
             assert module.GENERATION_SHA256 == selected["generation"][3]
             assert module.EMBEDDING_SHA256 == selected["embedding"][3]
