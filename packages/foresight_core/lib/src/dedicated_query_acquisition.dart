@@ -147,8 +147,10 @@ class DedicatedQueryAcquisition {
           'The downloaded question model does not match the supported authenticated asset.',
         );
       }
-      stage = await stagingRoot.createTemp('query-acquisition-');
-      privateDirectory(stage.path);
+      stage = await createPrivateTempDirectory(
+        stagingRoot,
+        'query-acquisition-',
+      );
       final plaintext = File('${stage.path}/model.tflite');
       await plaintext.writeAsBytes(bytes, flush: true);
       final protected = await Process.run('/bin/chmod', [
