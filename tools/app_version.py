@@ -16,8 +16,9 @@ PUBSPEC = 'apps/desktop/pubspec.yaml'
 CORE_PUBSPEC = 'packages/foresight_core/pubspec.yaml'
 DESKTOP_LOCK = 'apps/desktop/pubspec.lock'
 DART_VERSION = 'packages/foresight_core/lib/src/version.dart'
-SOURCE = re.compile(r'^version: (\d+\.\d+\.\d+)\+(\d+)$', re.M)
-SEMVER = re.compile(r'\d+\.\d+\.\d+')
+COMPONENT = r'(?:0|[1-9][0-9]*)'
+SEMVER = re.compile(rf'{COMPONENT}\.{COMPONENT}\.{COMPONENT}')
+SOURCE = re.compile(rf'^version: ({SEMVER.pattern})\+({COMPONENT})$', re.M)
 CORE_VERSION = re.compile(r'^version: .*$', re.M)
 LOCKED_CORE = re.compile(r'(^  foresight_core:\n(?:    .*\n)*?    version: )"[^"]*"', re.M)
 
