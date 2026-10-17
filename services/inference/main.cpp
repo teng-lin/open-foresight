@@ -247,7 +247,7 @@ public:
   Generator(LiteRt &api, const std::string &path, bool gpu,
             const std::string &cache, bool query_detector = false, int model_type = 0)
       : lm(api), engine(nullptr, LM(engine_delete)), base(nullptr, LM(conversation_delete)) {
-    auto config = foresight::generation_model_config(query_detector ? 0 : model_type);
+    auto config = foresight::generation_model_config(query_detector ? 0 : model_type, !gpu);
     const auto make_settings = [&](bool vision) {
       auto settings = handle(LM(engine_settings_create)(path.c_str(), gpu ? "gpu" : "cpu",
           vision ? config.vision_backend : nullptr, config.audio_backend), LM(engine_settings_delete));
@@ -378,8 +378,12 @@ public:
     } else {
       pointer = LM(conversation_create)(engine.get(), config.get());
     }
+    if (!pointer) {
+      const char *detail = LM(get_last_error_message)();
+      throw std::runtime_error(std::string("Cannot create request conversation") +
+          (detail ? ": " + std::string(detail) : ""));
+    }
     auto conversation = handle(pointer, LM(conversation_delete));
-    if (!conversation) throw std::runtime_error("Cannot create request conversation");
     struct Registration {
       const std::function<bool(void *)> &callback;
       ~Registration() { if (callback) callback(nullptr); }
