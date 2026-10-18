@@ -51,3 +51,5 @@ vulnerabilities without blocking normal publication.
 Ubuntu SDK and build images record their snapshot in image labels and package
 provenance. Debian, Fedora and Arch acceptance use current distribution packages
 on purpose. See [Linux packaging](linux-packaging.md).
+
+The minimal Ubuntu base bootstraps HTTPS with a dated Mozilla CA bundle fetched by BuildKit under an explicit SHA256 checksum, then installs the archive snapshot's own `ca-certificates` package. The bootstrap URL and digest are reviewed in `tools/pins.json` and guarded against the Dockerfile. TLS and apt Release-signature verification remain enabled.
