@@ -34,6 +34,8 @@ class SourceTree(unittest.TestCase):
         for path in (
             "native/main.cpp",
             "tools/ci_stage_cache.py",
+            "tools/ci_stage_artifacts.py",
+            "tools/build_service_gate.sh",
             ".github/workflows/macos.yml",
             "packages/foresight_core/lib/app.dart",
             "apps/desktop/lib/main.dart",
@@ -152,6 +154,8 @@ class FingerprintTests(SourceTree):
     def test_tools_workflows_locks_pins_and_shared_support_are_common_inputs(self):
         for path in (
             "tools/ci_stage_cache.py",
+            "tools/ci_stage_artifacts.py",
+            "tools/build_service_gate.sh",
             ".github/workflows/macos.yml",
             "requirements-dev.lock",
             "tools/pins.json",
@@ -304,6 +308,16 @@ class ProducerTests(SourceTree):
         self.write("native/main.cpp", "changed implementation")
         self.write("tests/new_validation.py", "new test")
         self.save()
+        self.assertFalse(self.find(identity=self.key())["hit"])
+        self.assertTrue(self.find_work()["hit"])
+
+    def test_runtime_contract_change_invalidates_slim_identity_but_reuses_native_work(
+        self,
+    ):
+        self.write("tools/ci_stage_artifacts.py", "include service worker in runtime")
+        self.write("tools/build_service_gate.sh", "check executable worker")
+        self.save()
+        self.assertNotEqual(self.identity, self.key())
         self.assertFalse(self.find(identity=self.key())["hit"])
         self.assertTrue(self.find_work()["hit"])
 

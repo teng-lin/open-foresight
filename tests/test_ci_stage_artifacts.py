@@ -183,6 +183,9 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(relative.encode())
+    worker = root / "build/services/helper/model_worker_fixture"
+    worker.write_text("#!/bin/sh\nprintf '%s\\n' model-worker-fixture-ok\n")
+    worker.chmod(0o755)
     output = tmp_path / "runtime"
     manifest = module.pack(root, platform, "native-runtime", output)
     assert not manifest["source_times"]
@@ -194,6 +197,12 @@ def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices
         assert (target / relative).read_bytes() == relative.encode()
     for relative in excluded:
         assert not (target / relative).exists()
+    restored_worker = target / worker.relative_to(root)
+    assert restored_worker.stat().st_mode & 0o111 == 0o111
+    assert (
+        subprocess.check_output([str(restored_worker)], text=True, timeout=10).strip()
+        == "model-worker-fixture-ok"
+    )
 
 
 def test_runtime_manifest_cannot_restore_compiler_objects(tmp_path):
