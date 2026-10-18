@@ -288,7 +288,7 @@ is rejected. Probe output is a diagnostic. It is not an acceptance result.
 
 These gates are still open. A local development bundle does not close them.
 
-- The release CI artifact runs real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup. The current CI DMG omits the Python/LiteRT and Whisper runtimes.
+- Each release candidate must pass real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup checks. The DMG includes those runtimes; runtime presence alone does not establish model acceptance.
 - Microphone and system audio work desktop-first and MCP-first, including denied or revoked permission, device changes, and closing the desktop.
 - Explicit stop flushes transcripts. Service crash recovery preserves committed data and marks an unfinished recording interrupted.
 - Shortcuts, app reopen, login, source links, imports, notifications, and Google authorization and sync work in a release build.

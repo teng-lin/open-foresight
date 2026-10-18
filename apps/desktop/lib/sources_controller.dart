@@ -1920,7 +1920,7 @@ class _SourcesController extends _FeatureController {
                     tooltip: sourceUri,
                     onPressed: () async {
                       final uri = Uri.tryParse(sourceUri);
-                      if (uri == null) return;
+                      if (uri == null || !allowedSourceUri(uri)) return;
                       try {
                         await widget.sourceLinkOpener(uri);
                       } catch (_) {

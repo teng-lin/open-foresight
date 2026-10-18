@@ -178,7 +178,7 @@ jobs:
     timeout-minutes: 60
     steps:
     - name: Install Linux native toolchain
-      run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf which
+      run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
@@ -186,6 +186,8 @@ jobs:
       run: |
         python -m venv .venv
         .venv/bin/python -m pip install -r requirements-dev.txt
+    - name: Offline Python tests
+      run: .venv/bin/python -m pytest
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: /opt/foresight-flutter
@@ -276,9 +278,10 @@ jobs:
       id: sdk
       env:
         GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400
+        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python - <<'PY'
         import json,os,re
         image=json.load(open('build/sdk-descriptor/image.json'))['image']
