@@ -22,6 +22,7 @@ MAINTENANCE = {
     ".github/workflows/quality.yml",
 }
 MACOS_FILES = {
+    "tools/ci_macos_dependencies.py",
     "tools/create_dmg.py",
     "tests/test_create_dmg.py",
     "tools/build_macos_sdk.py",

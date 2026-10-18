@@ -6,6 +6,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS CI consumes the same PR source as dependency producers and builds pinned dependencies locally when no trusted artifact is available, including fork PRs.
+
 ### Changed
 
 - Release publication preserves Latest on the highest stable version and correlates fresh candidate builds to their own dispatch. Shared DMG provenance binds preview and release installer bytes to the source revision, version and build number.
