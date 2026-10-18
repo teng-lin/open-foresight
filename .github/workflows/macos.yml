@@ -25,7 +25,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ inputs.source || github.sha }}
+        ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
     - name: Verify Apple Silicon host
       run: |
         test "$RUNNER_ARCH" = ARM64
@@ -88,7 +88,7 @@ jobs:
         OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component macos-sdk --prefix build/sdk --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/ci_macos_dependencies.py --component macos-sdk --prefix build/sdk --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
         echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
     - name: Verify SDK checkout guards
@@ -117,7 +117,7 @@ jobs:
         OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component macos-runtime --prefix build/macos-runtimes --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/ci_macos_dependencies.py --component macos-runtime --prefix build/macos-runtimes --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python tools/ci_verify_dependency.py --component macos-runtime --prefix build/macos-runtimes
     - name: Assemble complete ad hoc application
       env:

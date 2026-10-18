@@ -11,6 +11,8 @@ import sys
 import tarfile
 import tempfile
 import unittest
+
+import pytest
 from unittest.mock import patch
 import zipfile
 
@@ -713,3 +715,40 @@ def test_shared_dmg_packaging_selects_macos_checks():
     selected = changes.select_gates(["tools/create_dmg.py"])
     assert selected["macos"]
     assert not selected["linux-native"]
+
+
+@pytest.mark.parametrize("artifact", [True, False])
+@pytest.mark.parametrize(
+    "own_head,own_pr", [("a" * 40, 23), ("fork-head", 24), ("main-head", 0)]
+)
+def test_macos_dependencies_build_locally_when_no_trusted_artifact_exists(
+    tmp_path, artifact, own_head, own_pr
+):
+    from tools import ci_macos_dependencies as macos
+
+    with (
+        patch.object(macos, "pull", return_value=artifact) as pull,
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "verify") as verify,
+        patch.object(macos.subprocess, "run") as build,
+    ):
+        assert macos.ensure("macos-sdk", tmp_path, "owner/repo", own_head, own_pr) == (
+            "artifact" if artifact else "local"
+        )
+        assert pull.call_args.kwargs == {"own_head": own_head, "own_pr": own_pr}
+        assert build.call_count == (0 if artifact else 1)
+        verify.assert_called_once_with("macos-sdk", tmp_path)
+
+
+def test_macos_runtime_local_fallback_builds_vendor_before_worker(tmp_path):
+    from tools import ci_macos_dependencies as macos
+
+    with (
+        patch.object(macos, "pull", return_value=False),
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "verify"),
+        patch.object(macos.subprocess, "run") as build,
+    ):
+        macos.ensure("macos-runtime", tmp_path / "runtime", "owner/repo")
+    assert "build_macos_vendor.py" in build.call_args_list[0].args[0][1]
+    assert "build_macos_runtimes.py" in build.call_args_list[1].args[0][1]

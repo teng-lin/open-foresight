@@ -600,3 +600,20 @@ def test_candidate_dispatch_has_unique_display_name_and_concurrency_identity():
     assert "inputs.request_id" in workflow["concurrency"]["group"]
     for name in ("macos-release.yml", "preview-packages.yml"):
         assert "tools/create_dmg.py" in (WORKFLOWS / name).read_text()
+
+
+def test_macos_consumer_uses_same_pr_head_as_dependency_producer():
+    workflow = parse_workflow((WORKFLOWS / "macos.yml").read_text())
+    job = workflow["jobs"]["macos"]
+    checkout = next(
+        step
+        for step in job["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert (
+        checkout["with"]["ref"]
+        == "${{ inputs.source || github.event.pull_request.head.sha || github.sha }}"
+    )
+    source = json.dumps(job)
+    assert source.count("tools/ci_macos_dependencies.py") == 2
+    assert "--wait 5400" not in source
