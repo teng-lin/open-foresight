@@ -1709,9 +1709,7 @@ class Application implements ModelGate {
             (previousState.cancelRequested || previousState.status.isEmpty)
         ? previousState.body
         : store.meetingEnhancedNotes(id);
-    enhancement.restoreBody = formatEnhancedNotesWithSpacing(
-      extractEnhancedNoteBullets(previous),
-    );
+    enhancement.restoreBody = previous;
     final mapping = _noteEditMapping(id);
     _noteEnhancements[id] = enhancement;
     _scheduleEnhancedDraft(id, enhancement);
@@ -1839,9 +1837,7 @@ class Application implements ModelGate {
       if (_closed ||
           !(current?.call() ?? true) ||
           enhancement.cancelRequested) {
-        enhancement.body = formatEnhancedNotesWithSpacing(
-          extractEnhancedNoteBullets(previous),
-        );
+        enhancement.body = previous;
         enhancement.status = '';
         _restoreNoteMapping(
           id,
@@ -1863,9 +1859,7 @@ class Application implements ModelGate {
         return;
       }
       enhancement.saveTimer?.cancel();
-      enhancement.body = formatEnhancedNotesWithSpacing(
-        extractEnhancedNoteBullets(previous),
-      );
+      enhancement.body = previous;
       store.restoreMeetingEnhancedDraft(id, enhancement.body);
       _restoreNoteMapping(
         id,
