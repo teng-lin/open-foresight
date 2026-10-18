@@ -1,5 +1,6 @@
 import 'platform_services.dart';
 import 'version.dart';
+import 'helper_channel.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ffi';
@@ -57,7 +58,7 @@ class Helper {
   Future<void> Function()? onReady;
   final bool manageProcess;
   Helper(this.socket, this.storage, {this.manageProcess = true}) {
-    channel = ClientChannel(
+    channel = HelperChannel(
       InternetAddress(socket, type: InternetAddressType.unix),
       port: 0,
       options: const ChannelOptions(

@@ -8,6 +8,7 @@ dependencies:
   clock: ^1.1.2
   mcp_dart: 2.4.3
   grpc: 4.3.1
+  http2: 2.3.1
   protobuf: 5.1.0
   sqlite3: 2.9.4
   crypto: 3.0.7
