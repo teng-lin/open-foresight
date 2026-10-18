@@ -32,6 +32,7 @@ PRODUCER_CONTROLS = (
     "tools/sdk_approved_legacy.json",
     "tools/sdk_workflow_recipe.py",
     "tools/sdk_transport_contract.json",
+    "tools/sdk_build_transport.py",
 )
 
 
