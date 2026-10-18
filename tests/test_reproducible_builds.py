@@ -187,6 +187,20 @@ class BuildPolicyTests(unittest.TestCase):
                     requirement, r"^\S+==\S+ .*--hash=sha256:[0-9a-f]{64}", str(path)
                 )
 
+    def test_quality_jobs_install_only_hashed_locks(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/quality.yml").read_text())
+        for name, lock in (
+            ("python", "requirements-dev.lock"),
+            ("format", "requirements-format.lock"),
+        ):
+            steps = workflow["jobs"][name]["steps"]
+            installs = [
+                step["run"] for step in steps if "pip install" in step.get("run", "")
+            ]
+            self.assertEqual(
+                installs, [f"python -m pip install --require-hashes -r {lock}"]
+            )
+
     def test_publication_jobs_are_unreachable_from_pull_requests(self):
         for path in (ROOT / ".github/workflows").glob("*.yml"):
             workflow = yaml.safe_load(path.read_text())
@@ -248,7 +262,10 @@ class BuildPolicyTests(unittest.TestCase):
                     for step in steps
                     if "docker/setup-buildx-action@" in step.get("uses", "")
                 )
-                self.assertEqual(driver["with"]["driver"], "docker")
+                self.assertEqual(
+                    driver["with"]["driver"],
+                    "${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}",
+                )
                 build = next(
                     step
                     for step in steps
