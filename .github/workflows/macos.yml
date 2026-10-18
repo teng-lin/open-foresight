@@ -22,7 +22,7 @@ jobs:
       FORESIGHT_MACOS_UI_TEST: '1'
       FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
@@ -30,7 +30,7 @@ jobs:
       run: |
         test "$RUNNER_ARCH" = ARM64
         test "$(uname -m)" = arm64
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Stamp distribution identity before building
@@ -47,7 +47,7 @@ jobs:
       run: |
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       id: flutter-cache
       with:
         path: ${{ runner.temp }}/flutter
@@ -62,12 +62,12 @@ jobs:
         echo "FORESIGHT_FLUTTER_EXECUTABLE=$RUNNER_TEMP/flutter/bin/flutter" >> "$GITHUB_ENV"
         "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
         "$RUNNER_TEMP/flutter/bin/flutter" --version
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: steps.flutter-cache.outputs.cache-hit != 'true'
       with:
         path: ${{ runner.temp }}/flutter
         key: flutter-macos-arm64-3.35.7-v1
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       id: pub-cache
       with:
         path: ~/.pub-cache
@@ -86,7 +86,7 @@ jobs:
       run: tools/coverage.sh
     - name: Retain Python coverage
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: python-coverage-macos
         path: coverage/python/
@@ -102,7 +102,7 @@ jobs:
           -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local'
     - name: Retain Dart core coverage
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: dart-core-coverage-macos
         path: coverage/core/lcov.info
@@ -150,7 +150,7 @@ jobs:
           --output test-results/macos-bundle.json
     - name: Retain development package evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: macos-development-evidence
         path: |
@@ -171,7 +171,7 @@ jobs:
         if [[ "$PREVIEW" != true ]]; then
           python tools/ci_artifacts.py pack --component macos-app --identity "$SOURCE" --prefix build/candidate --output build/candidate-upload
         fi
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: github.ref == 'refs/heads/main' && !inputs.preview
       with:
         name: ci-macos-app-${{ inputs.source || github.sha }}
@@ -180,7 +180,7 @@ jobs:
         retention-days: 30
         if-no-files-found: error
         compression-level: 0
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: inputs.preview
       with:
         name: preview-macos-application
@@ -189,7 +189,7 @@ jobs:
         retention-days: 14
         if-no-files-found: error
         compression-level: 0
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: success() && steps.pub-cache.outputs.cache-hit != 'true'
       with:
         path: ~/.pub-cache
@@ -205,7 +205,7 @@ jobs:
     steps:
     - name: Install Linux native toolchain
       run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
@@ -215,7 +215,7 @@ jobs:
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - name: Offline Python tests
       run: .venv/bin/python -m pytest
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: /opt/foresight-flutter
         key: flutter-linux-x64-3.35.7-v1
@@ -227,7 +227,7 @@ jobs:
         test "$(git -C /opt/foresight-flutter rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
         echo /opt/foresight-flutter/bin >> "$GITHUB_PATH"
         /opt/foresight-flutter/bin/flutter config --enable-linux-desktop --no-analytics
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       if: success()
       with:
         path: /opt/foresight-flutter
@@ -247,7 +247,7 @@ jobs:
           --native build/native/libforesight_native.so --output test-results/fast-integration
     - name: Retain Linux test evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: linux-integration-evidence
         path: test-results/
@@ -259,7 +259,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
@@ -267,7 +267,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends bubblewrap poppler-utils unrtf apparmor
-    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ${{ runner.temp }}/foresight-document-flutter
         key: flutter-linux-document-host-3.35.7-v1
@@ -287,7 +287,7 @@ jobs:
       run: bash tools/ci_document_sandbox.sh
     - name: Retain document sandbox evidence
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: linux-document-sandbox-evidence
         path: test-results/document-sandbox/
@@ -302,12 +302,12 @@ jobs:
       linux_document_imports: ${{ steps.changes.outputs.linux_document_imports }}
       linux_bundle: ${{ steps.changes.outputs.linux_bundle }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
         fetch-depth: 0
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Require a reviewed main source for distribution overrides
@@ -348,11 +348,11 @@ jobs:
       version: ${{ steps.number.outputs.version }}
       build_number: ${{ steps.number.outputs.build_number }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Allocate one build number for both platforms
@@ -376,11 +376,11 @@ jobs:
       release: ${{ steps.version.outputs.release }}
       epoch: ${{ steps.version.outputs.epoch }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Stamp distribution identity before building
@@ -468,7 +468,7 @@ jobs:
         SOURCE: ${{ inputs.source || github.sha }}
       run: python tools/ci_artifacts.py pack --component linux-app --identity "$SOURCE" --prefix dist/packages
         --output build/candidate-upload
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: ${{ !inputs.preview }}
       with:
         name: ci-linux-app-${{ inputs.source || github.sha }}
@@ -477,7 +477,7 @@ jobs:
         retention-days: 30
         if-no-files-found: error
         compression-level: 0
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       if: inputs.preview
       with:
         name: preview-linux-portable
@@ -500,7 +500,7 @@ jobs:
     - linux-bundle
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ inputs.source || github.sha }}

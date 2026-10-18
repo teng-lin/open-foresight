@@ -37,7 +37,7 @@ jobs:
       tag: ${{ steps.release.outputs.tag }}
       ready: ${{ steps.release.outputs.ready }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           # Acceptance tooling follows the reviewed coordinator; installers
@@ -80,11 +80,11 @@ jobs:
           - {name: fedora-44, image: 'fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80', format: rpm}
           - {name: arch-rolling, image: 'archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1', format: arch}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
       - name: Download and verify the published installer
@@ -93,7 +93,7 @@ jobs:
           TAG: ${{ needs.release.outputs.tag }}
           FORMAT: ${{ matrix.format }}
         run: python tools/release_asset_acceptance.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" --format "$FORMAT" --directory assets --allow-draft
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: models-cache
         with:
           path: build/acceptance-models
@@ -102,7 +102,7 @@ jobs:
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
       - name: Cache authenticated model fixtures before application tests
         if: steps.models-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/acceptance-models
           key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
@@ -118,7 +118,7 @@ jobs:
             "$IMAGE" bash /work/packaging/ci/test-release-package.sh "$FORMAT"
       - name: Retain installer identity and acceptance evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: published-acceptance-${{ matrix.name }}
           path: |
@@ -135,11 +135,11 @@ jobs:
       contents: write # Read draft metadata and download unpublished assets.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.13'
       - name: Download and verify the published DMG
@@ -147,7 +147,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.release.outputs.tag }}
         run: python tools/release_asset_acceptance.py --tag "$TAG" --repo "$GITHUB_REPOSITORY" --format dmg --directory assets --allow-draft
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: models-cache
         with:
           path: build/acceptance-models
@@ -156,7 +156,7 @@ jobs:
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
       - name: Cache authenticated model fixtures before application tests
         if: steps.models-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/acceptance-models
           key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
@@ -169,7 +169,7 @@ jobs:
             --models build/acceptance-models --output reports
       - name: Retain installer identity and acceptance evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: published-acceptance-macos-15-arm64
           path: |
@@ -194,7 +194,7 @@ jobs:
           if any(results.get(job, {}).get('result') != 'success' for job in ('release', 'linux', 'macos')):
               raise SystemExit('Installer acceptance failed or was skipped: ' + str(results))
           PYCODE
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -206,7 +206,7 @@ jobs:
           TAG: ${{ inputs.tag }}
           GPU_EVIDENCE: ${{ inputs.gpu_evidence }}
         run: python3 tools/release_acceptance_report.py --tag "$TAG" --directory acceptance-evidence --output release-acceptance.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: release-acceptance-summary
           path: release-acceptance.json

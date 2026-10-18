@@ -78,12 +78,12 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
     - name: Advance the reviewed Ubuntu snapshot proposal
       run: python3 tools/update_ubuntu_snapshot.py --snapshot "$(date -u +%Y%m%dT000000Z)"
-    - uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676
+    - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1
       with:
         branch: maintenance/ubuntu-snapshot
         title: Update the reviewed Ubuntu build snapshot
@@ -105,11 +105,11 @@ jobs:
       linux-whisper: ${{ steps.keys.outputs['linux-whisper'] }}
       linux-sdk: ${{ steps.keys.outputs['linux-sdk'] }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Compute component identities
@@ -136,11 +136,11 @@ jobs:
       PREFIX: ${{ matrix.component == 'sdk' && 'build/sdk' || 'build/macos-runtimes' }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Probe the qualified original before allocating build resources
@@ -176,7 +176,7 @@ jobs:
       if: steps.probe.outputs.hit != 'true'
     - name: Bootstrap from existing sdk cache
       if: steps.probe.outputs.hit != 'true' && (matrix.component == 'sdk' && steps.shared.outputs.hit != 'true')
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: build/sdk
         key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
@@ -188,7 +188,7 @@ jobs:
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
         python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
       if: steps.probe.outputs.hit != 'true'
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-macos-${{ matrix.component }}-${{ env.IDENTITY }}
         path: build/published/
@@ -204,7 +204,7 @@ jobs:
         build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
       if: steps.probe.outputs.hit != 'true'
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-macos-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -234,11 +234,11 @@ jobs:
       COMPONENT: core
       IDENTITY: ${{ needs.plan.outputs['linux-core'] }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -316,7 +316,7 @@ jobs:
         Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
         PY
         python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-linux-core-${{ env.IDENTITY }}
         path: build/published/
@@ -330,7 +330,7 @@ jobs:
       run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
         build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -360,11 +360,11 @@ jobs:
       COMPONENT: litert
       IDENTITY: ${{ needs.plan.outputs['linux-litert'] }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -442,7 +442,7 @@ jobs:
         Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
         PY
         python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-linux-litert-${{ env.IDENTITY }}
         path: build/published/
@@ -456,7 +456,7 @@ jobs:
       run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
         build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -486,11 +486,11 @@ jobs:
       COMPONENT: whisper
       IDENTITY: ${{ needs.plan.outputs['linux-whisper'] }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -568,7 +568,7 @@ jobs:
         Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
         PY
         python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-linux-whisper-${{ env.IDENTITY }}
         path: build/published/
@@ -582,7 +582,7 @@ jobs:
       run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
         build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -614,11 +614,11 @@ jobs:
       COMPONENT: sdk
       IDENTITY: ${{ needs.plan.outputs['linux-sdk'] }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
@@ -699,7 +699,7 @@ jobs:
         Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
         PY
         python tools/ci_artifacts.py pack --component linux-sdk --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-linux-sdk-${{ env.IDENTITY }}
         path: build/published/
@@ -713,7 +713,7 @@ jobs:
       run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
         build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -743,11 +743,11 @@ jobs:
       OWN_HEAD: ${{ github.event.pull_request.head.sha }}
       OWN_PR: ${{ github.event.pull_request.number }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Probe the qualified original before allocating build resources
@@ -771,7 +771,7 @@ jobs:
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
     - name: Retain the verified component immediately
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/published/
@@ -788,7 +788,7 @@ jobs:
         --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
       if: steps.probe.outputs.hit != 'true'
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -827,11 +827,11 @@ jobs:
       OWN_HEAD: ${{ github.event.pull_request.head.sha }}
       OWN_PR: ${{ github.event.pull_request.number }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Probe the qualified original before allocating build resources
@@ -855,7 +855,7 @@ jobs:
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
     - name: Retain the verified component immediately
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/published/
@@ -872,7 +872,7 @@ jobs:
         --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
       if: steps.probe.outputs.hit != 'true'
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -905,11 +905,11 @@ jobs:
       OWN_HEAD: ${{ github.event.pull_request.head.sha }}
       OWN_PR: ${{ github.event.pull_request.number }}
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Probe the qualified original before allocating build resources
@@ -933,7 +933,7 @@ jobs:
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
     - name: Retain the verified component immediately
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/published/
@@ -950,7 +950,7 @@ jobs:
         --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
       if: steps.probe.outputs.hit != 'true'
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -974,11 +974,11 @@ jobs:
       PREFIX: build/macos-vendor
       MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Probe the qualified original before allocating build resources
@@ -1015,7 +1015,7 @@ jobs:
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
         python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
       if: steps.probe.outputs.hit != 'true'
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-macos-vendor-${{ env.IDENTITY }}
         path: build/published/
@@ -1031,7 +1031,7 @@ jobs:
         build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
       if: steps.probe.outputs.hit != 'true'
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-macos-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
@@ -1062,11 +1062,11 @@ jobs:
       PREFIX: ${{ matrix.component == 'sdk' && 'build/sdk' || 'build/macos-runtimes' }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
     steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
       with:
         python-version: '3.13'
     - name: Probe the qualified original before allocating build resources
@@ -1111,7 +1111,7 @@ jobs:
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
         python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
       if: steps.probe.outputs.hit != 'true'
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: ci-macos-${{ matrix.component }}-${{ env.IDENTITY }}
         path: build/published/
@@ -1127,7 +1127,7 @@ jobs:
         build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
       if: steps.probe.outputs.hit != 'true'
     - name: Retain small cache receipt
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
       with:
         name: receipt-ci-macos-${{ env.COMPONENT }}-${{ env.IDENTITY }}
         path: build/receipt/
