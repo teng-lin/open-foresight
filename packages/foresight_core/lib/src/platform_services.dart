@@ -210,11 +210,41 @@ bool allowedSourceUri(Uri uri) {
       !uri.hasFragment;
 }
 
-Future<void> openPlatformUri(Uri uri) async {
-  final result = await Process.run(
-    Platform.isMacOS ? '/usr/bin/open' : 'xdg-open',
-    [uri.toString()],
+/// Until grants can distinguish imported files, reveal local paths instead of
+/// invoking their default application (which can execute scripts on macOS).
+({String executable, List<String> arguments}) platformUriLaunch(
+  Uri uri, {
+  bool? macOS,
+}) {
+  if (!allowedSourceUri(uri))
+    throw ArgumentError.value(uri, 'uri', 'Unsupported source URI');
+  final mac = macOS ?? Platform.isMacOS;
+  if (uri.scheme == 'file') {
+    final path = uri.toFilePath();
+    if (mac)
+      return (executable: '/usr/bin/open', arguments: ['-R', '--', path]);
+    return (
+      executable: '/usr/bin/dbus-send',
+      arguments: [
+        '--session',
+        '--dest=org.freedesktop.FileManager1',
+        '--type=method_call',
+        '/org/freedesktop/FileManager1',
+        'org.freedesktop.FileManager1.ShowItems',
+        'array:string:${Uri.file(path)}',
+        'string:',
+      ],
+    );
+  }
+  return (
+    executable: mac ? '/usr/bin/open' : '/usr/bin/xdg-open',
+    arguments: [uri.toString()],
   );
+}
+
+Future<void> openPlatformUri(Uri uri) async {
+  final launch = platformUriLaunch(uri);
+  final result = await Process.run(launch.executable, launch.arguments);
   if (result.exitCode != 0) {
     throw StateError('Could not open $uri: ${result.stderr}');
   }
@@ -233,7 +263,7 @@ Future<void> platformNotification(String title, String message) async {
                 '--message',
                 message,
               ])
-      : await Process.run('notify-send', [title, message]);
+      : await Process.run('/usr/bin/notify-send', [title, message]);
   if (result.exitCode != 0) {
     throw StateError(
       'Notification delivery failed. ${_notificationFailure(result)}',
@@ -322,11 +352,10 @@ Future<Map<String, dynamic>> notificationCapabilities({
   bool requestPermission = false,
 }) async {
   if (!Platform.isMacOS) {
-    final result = await Process.run('/bin/sh', [
-      '-c',
-      'command -v notify-send',
-    ]);
-    return {'available': result.exitCode == 0, 'backend': 'freedesktop'};
+    return {
+      'available': File('/usr/bin/notify-send').existsSync(),
+      'backend': 'freedesktop',
+    };
   }
   final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
   if (helper == null) {

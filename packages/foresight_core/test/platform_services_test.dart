@@ -8,6 +8,42 @@ import 'package:foresight_core/src/service.dart'
     show serviceEndpoint, serviceLaunchCommand;
 
 void main() {
+  test(
+    'local sources are revealed even for executable document extensions',
+    () {
+      for (final extension in [
+        'command',
+        'terminal',
+        'txt',
+        'md',
+        'pdf',
+        'rtf',
+      ]) {
+        final uri = Uri.file('/home/user/document.$extension');
+        final mac = platformUriLaunch(uri, macOS: true);
+        expect(mac.executable, '/usr/bin/open');
+        expect(mac.arguments, ['-R', '--', uri.toFilePath()]);
+        final linux = platformUriLaunch(uri, macOS: false);
+        expect(linux.executable, '/usr/bin/dbus-send');
+        expect(
+          linux.arguments,
+          contains('org.freedesktop.FileManager1.ShowItems'),
+        );
+      }
+      expect(
+        platformUriLaunch(
+          Uri.parse('https://example.test'),
+          macOS: false,
+        ).executable,
+        '/usr/bin/xdg-open',
+      );
+      expect(
+        () => platformUriLaunch(Uri.parse('file://remote/secret.command')),
+        throwsArgumentError,
+      );
+    },
+  );
+
   late Directory scratch;
   setUp(() {
     scratch = Directory(
