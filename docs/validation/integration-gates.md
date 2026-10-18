@@ -129,3 +129,18 @@ review. They distinguish executed passes, skips, and failures. The skip inventor
 validates registrations; rerun `python tools/check_integration_inventory.py`
 when changing tests, rather than copying an older local pass count into this guide.
 Reference groups require their authorized inputs and must be reported separately.
+
+## ThreadSanitizer probation
+
+`native-thread-sanitizer` builds a separate Clang TSan SDK and test tree, covering
+the native tests and helper vector index, contract, lifetime and adapter faults.
+It cannot reuse the ASan SDK or combine address and thread sanitizers. A planted
+data-race probe must be detected before a clean suite is trusted. Retained
+`thread-sanitizer-evidence` contains the probe, fatal race logs and CTest results.
+
+The first week (through 2026-10-24 UTC) is reporting-only. The workflow switches
+to a failing gate automatically on 2026-10-25 UTC; repository administrators
+should require the `native-thread-sanitizer` context after reviewing that week's
+reports. Do not suppress a report without recording its cause and rationale.
+An unsupported runtime or missing evidence is a failed probe, not a clean TSan
+result.

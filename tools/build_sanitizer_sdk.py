@@ -32,7 +32,18 @@ def main():
         "--sources", type=Path, default=ROOT / "build/sanitizer-sdk-sources"
     )
     parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--sanitizer", choices=("address", "thread"), default="address")
     args = parser.parse_args()
+    flags = (
+        FLAGS
+        if args.sanitizer == "address"
+        else "-O1 -g -shared-libsan -fsanitize=thread -fno-omit-frame-pointer"
+    )
+    link_flags = (
+        "-fsanitize=address,undefined -shared-libasan"
+        if args.sanitizer == "address"
+        else "-fsanitize=thread -shared-libsan"
+    )
     if args.jobs < 1:
         parser.error("--jobs must be positive")
     prefix, sources = args.prefix.resolve(), args.sources.resolve()
@@ -43,7 +54,8 @@ def main():
         "grpc_commit": GRPC_COMMIT,
         "protobuf_commit": PROTOBUF_COMMIT,
         "compiler": compiler,
-        "flags": FLAGS,
+        "flags": flags,
+        "sanitizer": args.sanitizer,
         "recipe_sha256": hashlib.sha256(
             b"".join(
                 path.read_bytes()
@@ -57,7 +69,7 @@ def main():
         ).hexdigest(),
     }
     # Installed generators must load the exact runtime and SDK libraries too.
-    runtime = address_runtime().parent
+    runtime = address_runtime(kind=args.sanitizer).parent
     environment = dict(
         os.environ,
         LD_LIBRARY_PATH=os.pathsep.join(
@@ -111,7 +123,7 @@ def main():
         != PROTOBUF_COMMIT
     ):
         raise ValueError("gRPC protobuf submodule differs from the release SDK")
-    build = sources / "build-clang"
+    build = sources / ("build-clang-" + args.sanitizer)
     run(
         "cmake",
         "-S",
@@ -126,10 +138,10 @@ def main():
         "-DCMAKE_CXX_STANDARD=20",
         f"-DCMAKE_INSTALL_PREFIX={prefix}",
         "-DCMAKE_INSTALL_LIBDIR=lib",
-        f"-DCMAKE_C_FLAGS={FLAGS}",
-        f"-DCMAKE_CXX_FLAGS={FLAGS}",
-        "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined -shared-libasan",
-        "-DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address,undefined -shared-libasan",
+        f"-DCMAKE_C_FLAGS={flags}",
+        f"-DCMAKE_CXX_FLAGS={flags}",
+        f"-DCMAKE_EXE_LINKER_FLAGS={link_flags}",
+        f"-DCMAKE_SHARED_LINKER_FLAGS={link_flags}",
         "-DBUILD_SHARED_LIBS=ON",
         "-DBUILD_TESTING=OFF",
         "-DgRPC_BUILD_TESTS=OFF",
