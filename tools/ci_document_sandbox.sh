@@ -28,6 +28,6 @@ if ! "${task_probe[@]}" 2>test-results/document-sandbox/initial-stderr.txt; then
   "${task_probe[@]}"
 fi
 
-FORESIGHT_REQUIRE_DOCUMENT_SANDBOX=1 python3 tests/test_linux_packages.py \
+FORESIGHT_REQUIRE_DOCUMENT_SANDBOX=1 python3 tests/integration/test_linux_documents.py \
   LinuxDocumentImportTest.test_shipped_parser_imports_pdf_and_rtf_when_tools_exist -v \
   2>&1 | tee test-results/document-sandbox/imports.log
