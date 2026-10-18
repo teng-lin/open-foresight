@@ -35,15 +35,20 @@ void main() {
     );
   });
 
-  test('whole context truncates at 3000 UTF-16 units with original suffix', () {
-    final context = '😀' * 1500;
-    final exact = referenceChatPrompt('?', context: context);
-    expect(exact, contains('$context\nQuery: ?'));
-    expect(exact, isNot(contains('Content Truncated')));
-    final longer = referenceChatPrompt('?', context: '${context}tail');
-    expect(
-      longer,
-      contains('$context\n... [Content Truncated due to length] ...\nQuery: ?'),
-    );
-  });
+  test(
+    'whole context truncates at 3000 Unicode scalars with original suffix',
+    () {
+      final context = '😀' * 3000;
+      final exact = referenceChatPrompt('?', context: context);
+      expect(exact, contains('$context\nQuery: ?'));
+      expect(exact, isNot(contains('Content Truncated')));
+      final longer = referenceChatPrompt('?', context: '${context}tail');
+      expect(
+        longer,
+        contains(
+          '$context\n... [Content Truncated due to length] ...\nQuery: ?',
+        ),
+      );
+    },
+  );
 }

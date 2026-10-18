@@ -207,8 +207,9 @@ class NativeMacSecretStore implements SecretStore {
         final encoded = base64UrlEncode(utf8.encode(value)).toNativeUtf8();
         try {
           final status = _write(label, account, encoded);
-          if (status != 0)
+          if (status != 0) {
             throw StateError('Protected Keychain write failed ($status)');
+          }
           return true;
         } finally {
           calloc.free(encoded);
@@ -224,8 +225,9 @@ class NativeMacSecretStore implements SecretStore {
     try {
       value = _read(label, account, status);
       if (status.value == -25300) return null;
-      if (status.value != 0 || value == nullptr)
+      if (status.value != 0 || value == nullptr) {
         throw StateError('Protected Keychain read failed (${status.value})');
+      }
       return utf8.decode(base64Url.decode(value.toDartString()));
     } finally {
       if (value != nullptr) _free(value);
@@ -235,7 +237,8 @@ class NativeMacSecretStore implements SecretStore {
   @override
   Future<void> delete(String key) async => _withIdentity(key, (label, account) {
     final status = _delete(label, account);
-    if (status != 0 && status != -25300)
+    if (status != 0 && status != -25300) {
       throw StateError('Protected Keychain deletion failed ($status)');
+    }
   });
 }

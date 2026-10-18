@@ -470,8 +470,9 @@ String balancedTranscriptWindow(String text, int budget) {
   const omitted =
       '\n[Transcript abridged: balanced beginning, middle and ending excerpts; omitted passages are not evidence.]\n';
   final share = (budget - utf8.encode(omitted).length - 20) ~/ 3;
-  if (share < 1)
+  if (share < 1) {
     throw StateError('Model context is too small for transcript excerpts');
+  }
   final runes = text.runes.toList();
   final head = boundUtf8(text, share);
   final middle = boundUtf8(

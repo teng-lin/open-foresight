@@ -189,8 +189,10 @@ bundles can refer to the outer app through relative `../` paths. This map must
 contain the service, helper, native library, model runners, audio-device adapter,
 and notification adapter as applicable. All resolved values propagate to detached
 service launches and helper subprocesses. Packaged Mac services launch through
-LaunchServices (`open -g -n --env KEY=value service.app`) with explicit runtime
-and profile overrides, allowing the background service bundle to own its app
+LaunchServices with a single `FORESIGHT_STARTUP_ENV` path in argv. Runtime and
+profile overrides, including distribution keys, travel through a private 0600
+file that the service reads and deletes before resolving its resources. macOS
+default sockets live under its private per-user `TMPDIR`. This lets the service own its app
 identity without a Flutter window. Plain development executables launch directly.
 Service startup stderr is retained in the private runtime directory as
 `service-startup.log`. The installed app must still verify the actual TCC
@@ -291,3 +293,17 @@ Whisper retries a failed GPU invocation once with `-ng` on CPU, preserving the o
 `application.resume` explicitly resets an exhausted helper restart budget and starts the helper again. It preserves a healthy helper. An incompatible helper transport requires an application-service restart instead of retrying a terminated connection. Shortcut IPC acknowledges that a command was queued; failures appear in the desktop workspace and shortcut status.
 
 New `models.generation` registrations default to `litert_lm` when `backend` is omitted. Explicit `llama_cpp` registrations and previously stored registrations retain their selected backend.
+
+
+Automatic question-model downloads require a genuine publisher terms URL in the
+`FORESIGHT_QUERY_TERMS_URL` distribution setting (the same repository Actions
+variable populates macOS packages). Acknowledgment is scoped to the authenticated
+model digest and enforced by the service before acquisition. Distributions that
+have not supplied terms cannot download this opaque model automatically.
+
+Local source links reveal their file in Finder or the Linux file manager instead
+of invoking a default application. Opening allowlisted files under revocable
+import grants remains deferred with the typed import-grant architecture. Approval
+dialogs label peer identity as unverified, highlight risky options and limit
+repeated identical requests; OS-verified requester attribution and distinct local
+capture gestures remain deferred with the desktop peer-verification design.
