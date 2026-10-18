@@ -7,10 +7,17 @@ on:
         description: Release tag to audit
         required: true
         type: string
+      gpu_evidence:
+        description: Installer-bound release-day GPU evidence JSON
+        required: false
+        type: string
   workflow_call:
     inputs:
       tag:
         required: true
+        type: string
+      gpu_evidence:
+        required: false
         type: string
 
 permissions:
@@ -105,7 +112,7 @@ jobs:
           FORMAT: ${{ matrix.format }}
         run: |
           mkdir -p reports
-          docker run --rm -e OPEN_FORESIGHT_ACCEPTANCE_DISPOSABLE=1 \
+          docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined -e OPEN_FORESIGHT_ACCEPTANCE_DISPOSABLE=1 \
             -v "$PWD:/work:ro" -v "$PWD/assets:/assets:ro" \
             -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/reports:/reports" \
             "$IMAGE" bash /work/packaging/ci/test-release-package.sh "$FORMAT"
@@ -187,3 +194,20 @@ jobs:
           if any(results.get(job, {}).get('result') != 'success' for job in ('release', 'linux', 'macos')):
               raise SystemExit('Installer acceptance failed or was skipped: ' + str(results))
           PYCODE
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: published-acceptance-*
+          path: acceptance-evidence
+      - name: Bind automated acceptance and release-day GPU evidence
+        env:
+          TAG: ${{ inputs.tag }}
+          GPU_EVIDENCE: ${{ inputs.gpu_evidence }}
+        run: python3 tools/release_acceptance_report.py --tag "$TAG" --directory acceptance-evidence --output release-acceptance.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-acceptance-summary
+          path: release-acceptance.json
+          if-no-files-found: error

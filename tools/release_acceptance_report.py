@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Bind automated installer acceptance and release-day GPU evidence for publication."""
+
+import argparse
+import json
+from pathlib import Path
+import re
+
+
+def aggregate(directory, tag, evidence):
+    installers = []
+    suffixes = set()
+    for receipt in sorted(directory.glob("*/assets/installer.json")):
+        identity = json.loads(receipt.read_text())
+        artifact = receipt.parents[1]
+        functional = list(artifact.glob("reports/**/functional.json"))
+        if identity.get("tag") != tag or identity.get("status") != "verified_download":
+            raise ValueError(
+                "Acceptance receipt does not identify the requested verified release"
+            )
+        if len(functional) != 1:
+            raise ValueError(
+                "Every installer needs exactly one functional acceptance report"
+            )
+        report = json.loads(functional[0].read_text())
+        if (
+            report.get("status") != "automated_passed_manual_pending"
+            or report.get("gpu_inference", {}).get("status") != "manual_pending"
+        ):
+            raise ValueError("Installer functional acceptance is incomplete")
+        asset = identity["asset"]
+        kind = next(
+            (
+                suffix
+                for suffix in (".deb", ".rpm", ".pkg.tar.zst", ".dmg")
+                if asset.endswith(suffix)
+            ),
+            None,
+        )
+        if kind is None or kind in suffixes:
+            raise ValueError("Unexpected or repeated installer kind")
+        suffixes.add(kind)
+        installers.append(
+            {
+                "asset": asset,
+                "sha256": identity["sha256"],
+                "platform": "macos" if kind == ".dmg" else "linux",
+            }
+        )
+    if suffixes != {".deb", ".rpm", ".pkg.tar.zst", ".dmg"}:
+        raise ValueError(
+            "Acceptance must include DEB, RPM, Arch and DMG installer evidence"
+        )
+    gpu = {"status": "manual_pending", "evidence": []}
+    if evidence:
+        records = json.loads(evidence)
+        if not isinstance(records, list) or len(records) != 2:
+            raise ValueError("GPU evidence needs one Linux and one macOS record")
+        platforms = set()
+        for record in records:
+            if not isinstance(record, dict):
+                raise ValueError("Invalid GPU evidence record")
+            for key in (
+                "platform",
+                "installer_sha256",
+                "gpu",
+                "backend",
+                "tester",
+                "tested_at_utc",
+                "evidence",
+            ):
+                if not isinstance(record.get(key), str) or not record[key].strip():
+                    raise ValueError("GPU evidence missing " + key)
+            if record["platform"] in platforms or not any(
+                item["platform"] == record["platform"]
+                and item["sha256"] == record["installer_sha256"]
+                for item in installers
+            ):
+                raise ValueError(
+                    "GPU evidence does not match an accepted installer/platform"
+                )
+            if not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", record["tested_at_utc"]
+            ):
+                raise ValueError("GPU evidence timestamp must use UTC RFC3339 seconds")
+            platforms.add(record["platform"])
+        if platforms != {"linux", "macos"}:
+            raise ValueError("Both supported platforms need release-day GPU evidence")
+        gpu = {"status": "manual_passed", "evidence": records}
+    return {
+        "tag": tag,
+        "status": "passed"
+        if gpu["status"] == "manual_passed"
+        else "automated_passed_manual_pending",
+        "installers": installers,
+        "gpu_inference": gpu,
+    }
+
+
+def require_publication(report, tag):
+    if (
+        report.get("tag") != tag
+        or report.get("status") != "passed"
+        or report.get("gpu_inference", {}).get("status") != "manual_passed"
+    ):
+        raise ValueError(
+            "Release remains unpublished: automated_passed_manual_pending requires the release-day GPU check and installer-bound gpu_evidence for Linux and macOS"
+        )
+    # Revalidate persisted evidence rather than accepting only a status string.
+    records = report["gpu_inference"].get("evidence", [])
+    installers = report.get("installers", [])
+    if {record.get("platform") for record in records} != {"linux", "macos"} or any(
+        not any(
+            item.get("platform") == record.get("platform")
+            and item.get("sha256") == record.get("installer_sha256")
+            for item in installers
+        )
+        for record in records
+    ):
+        raise ValueError(
+            "Publication GPU evidence is not bound to accepted installer bytes"
+        )
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tag", required=True)
+    parser.add_argument("--directory", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--require-publication", type=Path)
+    args = parser.parse_args()
+    if args.require_publication:
+        require_publication(json.loads(args.require_publication.read_text()), args.tag)
+    else:
+        import os
+
+        if args.directory is None or args.output is None:
+            parser.error("--directory and --output are required for aggregation")
+        report = aggregate(args.directory, args.tag, os.environ.get("GPU_EVIDENCE", ""))
+        args.output.write_text(json.dumps(report, indent=2) + "\n")
+
+
+if __name__ == "__main__":
+    main()
