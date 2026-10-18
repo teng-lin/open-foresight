@@ -129,7 +129,9 @@ def run(
         **environment,
         "cmake_arguments": cmake_args,
         "validation_flags": {
-            key: os.environ.get(key)
+            key: hashlib.sha256(os.environ[key].encode()).hexdigest()
+            if key in os.environ
+            else None
             for key in (
                 "FORESIGHT_COVERAGE",
                 "FORESIGHT_CORE_COVERAGE_MIN",
