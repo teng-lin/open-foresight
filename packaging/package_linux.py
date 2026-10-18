@@ -30,8 +30,10 @@ BUNDLED_NOTICES = (
     "cares-cares-LICENSE.md",
     "icu-LICENSE",
     "sqlite-LICENSE",
+    "nlohmann-json-LICENSE.MIT",
 )
 NOTICE_LICENSE = {
+    "nlohmann-json-LICENSE.MIT": ("2013-2022 Niels Lohmann", "MIT"),
     "grpc-LICENSE": ("2015, gRPC authors", "Apache-2.0"),
     "grpc-NOTICE.txt": ("2014, gRPC authors", "Apache-2.0"),
     "protobuf-LICENSE": ("2008, Google Inc.", "BSD-3-Clause"),
@@ -47,6 +49,174 @@ NOTICE_LICENSE = {
         "public-domain",
     ),
 }
+# One registry for every shipped notice, including Flutter's aggregated notices
+# and the optional standalone Python/wheel closure. New files fail closed.
+BUNDLE_LICENSES = {
+    "LiteRT-LM-LICENSE": ("LiteRT-LM", "2025 Google LLC", "Apache-2.0"),
+    "sentencepiece-LICENSE": ("SentencePiece", "2016 Google Inc.", "Apache-2.0"),
+    "sentencepiece-protobuf-lite-LICENSE": (
+        "Protocol Buffers",
+        "2008 Google Inc.",
+        "BSD-3-Clause",
+    ),
+    "sentencepiece-esaxx-LICENSE": ("esaxx", "2010 Daisuke Okanohara", "MIT"),
+    "sentencepiece-darts_clone-LICENSE": (
+        "Darts clone",
+        "2008-2011 Susumu Yata",
+        "BSD-3-Clause",
+    ),
+    "sentencepiece-absl-LICENSE": ("Abseil", "2017 The Abseil Authors", "Apache-2.0"),
+    "flatbuffers-LICENSE": ("FlatBuffers", "2014 Google Inc.", "Apache-2.0"),
+    "whisper-LICENSE": ("whisper.cpp", "2023-2026 The ggml authors", "MIT"),
+    "NOTICES.Z": (
+        "Flutter engine and Dart packages",
+        "The Flutter authors and package contributors (see notice)",
+        "LicenseRef-Flutter-Notices",
+    ),
+    "licenses/sentencepiece-licenses/LICENSE": (
+        "SentencePiece Python",
+        "2016 Google Inc.",
+        "Apache-2.0",
+    ),
+    "lib/query-python/lib/python3.*/LICENSE.txt": (
+        "Python standalone runtime",
+        "Python Software Foundation and runtime contributors (see notice)",
+        "PSF-2.0",
+    ),
+}
+# NumPy wheels retain this complete vendor hierarchy; each entry is reviewed
+# separately instead of accepting arbitrary files under a license directory.
+NUMPY_LICENSES = {
+    "LICENSE.txt": (
+        "NumPy and bundled numerical libraries",
+        "NumPy Developers and bundled library authors (see notice)",
+        "LicenseRef-NumPy-Bundle",
+    ),
+    "numpy/_core/include/numpy/libdivide/LICENSE.txt": (
+        "libdivide",
+        "2010-2019 ridiculous_fish; 2016-2019 Kim Walisch",
+        "Zlib",
+    ),
+    "numpy/_core/src/common/pythoncapi-compat/COPYING": (
+        "pythoncapi-compat",
+        "Contributors to the pythoncapi_compat project",
+        "0BSD",
+    ),
+    "numpy/_core/src/highway/LICENSE": (
+        "Highway",
+        "The Highway Project Authors",
+        "(Apache-2.0 OR BSD-3-Clause) AND CC0-1.0",
+    ),
+    "numpy/_core/src/multiarray/dragon4_LICENSE.txt": (
+        "Dragon4",
+        "2014 Ryan Juckett",
+        "MIT",
+    ),
+    "numpy/_core/src/npysort/x86-simd-sort/LICENSE.md": (
+        "x86-simd-sort",
+        "2022 Intel Corporation",
+        "BSD-3-Clause",
+    ),
+    "numpy/_core/src/umath/svml/LICENSE": (
+        "SVML",
+        "2005-2021 NumPy Developers",
+        "BSD-3-Clause",
+    ),
+    "numpy/fft/pocketfft/LICENSE.md": (
+        "pocketfft",
+        "2010-2018 Max-Planck-Society",
+        "BSD-3-Clause",
+    ),
+    "numpy/linalg/lapack_lite/LICENSE.txt": (
+        "LAPACK",
+        "1992-2013 The University of Tennessee and contributors",
+        "BSD-3-Clause",
+    ),
+    "numpy/ma/LICENSE": (
+        "NumPy masked arrays",
+        "2006 University of Georgia and Pierre G.F. Gerard-Marchant",
+        "BSD-3-Clause",
+    ),
+    "numpy/random/LICENSE.md": (
+        "NumPy random",
+        "2005-2017 NumPy Developers",
+        "BSD-3-Clause",
+    ),
+    "numpy/random/src/distributions/LICENSE.md": (
+        "Random distributions",
+        "2005-2017 NumPy Developers",
+        "BSD-3-Clause",
+    ),
+    "numpy/random/src/mt19937/LICENSE.md": (
+        "MT19937",
+        "1997-2002 Makoto Matsumoto and Takuji Nishimura",
+        "BSD-3-Clause",
+    ),
+    "numpy/random/src/pcg64/LICENSE.md": (
+        "PCG64",
+        "2014 Melissa O'Neill",
+        "MIT",
+    ),
+    "numpy/random/src/philox/LICENSE.md": (
+        "Philox",
+        "2010-2012 D. E. Shaw Research",
+        "BSD-3-Clause",
+    ),
+    "numpy/random/src/sfc64/LICENSE.md": (
+        "SFC64",
+        "2017 Chris Doty-Humphrey",
+        "public-domain",
+    ),
+    "numpy/random/src/splitmix64/LICENSE.md": (
+        "SplitMix64",
+        "2015 Sebastiano Vigna",
+        "public-domain",
+    ),
+}
+BUNDLE_LICENSES.update(
+    {
+        "licenses/numpy-licenses/" + name: record
+        for name, record in NUMPY_LICENSES.items()
+    }
+)
+
+
+def bundled_license_record(path):
+    text = path.as_posix()
+    from fnmatch import fnmatchcase
+
+    for suffix, record in BUNDLE_LICENSES.items():
+        if fnmatchcase(text, suffix) or text.endswith("/" + suffix):
+            return record
+    # Pinned wheel metadata also remains in the copied interpreter prefix.
+    if ".dist-info/licenses/" in text:
+        wheel, relative = text.split(".dist-info/licenses/", 1)
+        if wheel.rsplit("/", 1)[-1].startswith("numpy-") and relative in NUMPY_LICENSES:
+            return NUMPY_LICENSES[relative]
+        if (
+            wheel.rsplit("/", 1)[-1].startswith("sentencepiece-")
+            and relative == "LICENSE"
+        ):
+            return BUNDLE_LICENSES["licenses/sentencepiece-licenses/LICENSE"]
+    raise ValueError("Unmapped bundled license file: " + text)
+
+
+def bundle_license_files(bundle):
+    for path in sorted(Path(bundle).rglob("*")):
+        if (
+            path.is_file()
+            and (
+                any(
+                    token in path.name.upper()
+                    for token in ("LICENSE", "COPYING", "NOTICE")
+                )
+                or "licenses" in path.parts
+            )
+            and path.suffix != ".json"
+        ):
+            yield path
+
+
 PAYLOAD_PATHS = (
     "/opt/open-foresight",
     "/usr/bin/open-foresight",
@@ -120,7 +290,7 @@ def indent_license(text):
     )
 
 
-def debian_copyright_text():
+def debian_copyright_text(bundle=None):
     project = (HERE.parent / "LICENSE").read_text()
     chunks = [
         "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\n"
@@ -133,9 +303,25 @@ def debian_copyright_text():
     for name in BUNDLED_NOTICES:
         holder, license_id = NOTICE_LICENSE[name]
         chunks.append(
-            f"\nFiles: notices/{name}\nCopyright: {holder}\nLicense: {license_id}\n"
+            f"\nFiles: usr/share/doc/open-foresight/notices/{name}\nCopyright: {holder}\nLicense: {license_id}\n"
         )
         bodies.setdefault(license_id, (NOTICES / name).read_text())
+    if bundle is not None:
+        for path in bundle_license_files(bundle):
+            component, holder, license_id = bundled_license_record(
+                path.relative_to(bundle)
+            )
+            relative = path.relative_to(bundle)
+            chunks.append(
+                f"\nFiles: opt/open-foresight/{relative}\n"
+                f"Copyright: {holder}\nComment: {component}\nLicense: {license_id}\n"
+            )
+            text = path.read_bytes()
+            if path.name == "NOTICES.Z":
+                text = gzip.decompress(text)
+            # Separate inline texts retain component-specific notices even when
+            # several components share one SPDX identifier.
+            chunks[-1] += indent_license(text.decode("utf-8")) + "\n"
     for license_id, text in bodies.items():
         chunks.append(f"\nLicense: {license_id}\n{indent_license(text)}\n")
     return "".join(chunks)
@@ -144,7 +330,8 @@ def debian_copyright_text():
 def write_debian_copyright(root):
     path = Path(root) / DOC_DIR / "copyright"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(debian_copyright_text())
+    bundle = Path(root) / "opt/open-foresight"
+    path.write_text(debian_copyright_text(bundle if bundle.exists() else None))
     path.chmod(0o644)
 
 
@@ -215,6 +402,7 @@ def validate(bundle):
 
 
 def stage(bundle, root):
+    debian_copyright_text(Path(bundle))
     target = root / "opt/open-foresight"
     shutil.copytree(bundle, target, symlinks=True)
     # System-wide program files must be readable by all users, including the

@@ -794,3 +794,109 @@ class UpgradeLockDecisionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_every_shipped_license_has_a_stanza_and_unknown_notices_fail(tmp_path):
+    bundle = tmp_path / "bundle"
+    for name in packages.BUNDLE_LICENSES:
+        if name == "NOTICES.Z":
+            import gzip
+
+            data = gzip.compress(b"Flutter aggregate notices")
+        else:
+            data = b"Fixture complete notice text"
+        path = bundle / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    copyright_text = packages.debian_copyright_text(bundle)
+    for path in packages.bundle_license_files(bundle):
+        assert (
+            f"Files: opt/open-foresight/{path.relative_to(bundle)}\n" in copyright_text
+        )
+    import pytest
+
+    (bundle / "unknown-LICENSE").write_text("unknown")
+    with pytest.raises(ValueError, match="Unmapped bundled license"):
+        packages.stage(bundle, tmp_path / "stage")
+
+
+def test_nlohmann_notice_is_in_shared_deb_rpm_arch_payload(tmp_path):
+    packages.install_legal_notices(tmp_path)
+    path = packages.DOC_DIR / "notices/nlohmann-json-LICENSE.MIT"
+    assert "2013-2022 Niels Lohmann" in (tmp_path / path).read_text()
+    assert "notices/nlohmann-json-LICENSE.MIT" in packages.debian_copyright_text()
+    assert "/usr/share/doc/open-foresight" in packages.PAYLOAD_PATHS
+
+
+def test_install_lock_rejects_untrusted_directories_and_preserves_legitimate_lock(
+    tmp_path,
+):
+    import fcntl
+
+    root = tmp_path / "install"
+    root.mkdir()
+    identity = hashlib.sha256(str(root.resolve()).encode()).hexdigest()[:24]
+    # Rewrite only the candidate glob to keep the maintainer script test entirely
+    # inside this user's temporary directory instead of the global /tmp.
+    script = packages.UPGRADE_LOCK.read_text().replace(
+        "/tmp/of-install-*", str(tmp_path / "of-install-*")
+    )
+    script += '\nrefuse_upgrade_if_recording "$1"\n'
+    for uid, mode, refused in (
+        (os.getuid() + 1, 0o700, False),
+        (os.getuid(), 0o755, False),
+        (os.getuid(), 0o700, True),
+    ):
+        directory = tmp_path / f"of-install-{uid}-{identity}"
+        directory.mkdir(exist_ok=True)
+        directory.chmod(mode)
+        with (directory / "lock").open("w+") as lock:
+            fcntl.lockf(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            result = subprocess.run(
+                ["sh", "-c", script, "fixture", str(root)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        assert (result.returncode != 0) == refused, result.stderr
+        assert ("Ignoring untrusted" in result.stderr) != refused
+        (directory / "lock").unlink()
+        directory.rmdir()
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "kind,tool", [("deb", "dpkg-deb"), ("rpm", "rpmbuild"), ("arch", "makepkg")]
+)
+def test_nlohmann_notice_is_listed_in_native_package_payload(tmp_path, kind, tool):
+    if not shutil.which(tool):
+        pytest.skip(f"Native {kind} packager {tool} required")
+    root = tmp_path / "root"
+    packages.install_legal_notices(root)
+    (root / "opt/open-foresight").mkdir(parents=True)
+    for name in (
+        "usr/bin/open-foresight",
+        "usr/share/applications/io.openforesight.App.desktop",
+        "usr/share/pixmaps/open-foresight.png",
+    ):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture")
+    if kind == "deb":
+        output = tmp_path / "fixture.deb"
+        packages.make_deb(root, output, "0.1.1", "1", packages.METADATA)
+        command = ["dpkg-deb", "--contents", str(output)]
+    elif kind == "rpm":
+        if not shutil.which("rpm"):
+            pytest.skip("RPM payload listing requires rpm")
+        output = tmp_path / "fixture.rpm"
+        packages.make_rpm(root, output, "0.1.1", "1", packages.METADATA, 1234)
+        command = ["rpm", "-qlp", str(output)]
+    else:
+        output = tmp_path / "fixture.pkg.tar.zst"
+        packages.make_arch(root, output, "0.1.1", "1", packages.METADATA, 1234)
+        command = ["bsdtar", "-tf", str(output)]
+    listing = subprocess.check_output(command, text=True, timeout=60)
+    assert "usr/share/doc/open-foresight/notices/nlohmann-json-LICENSE.MIT" in listing
