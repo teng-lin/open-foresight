@@ -172,7 +172,7 @@ The bundle is written to `dist/open-foresight/` and contains three programs:
 - `open-foresight-mcp`: the MCP stdio server
 - `open-foresight-service`: the foreground service and administration commands
 
-Linux and macOS use the same native C++ LiteRT-LM worker for generation and embedding, one citation checker, a native legacy query worker, and Whisper for speech. The packaged application ships no Python runtime. See [runtime packaging](services/inference/README.md).
+Linux and macOS use the same native C++ LiteRT-LM worker for generation and embedding, one citation checker, and Whisper for speech. macOS also uses a native legacy query worker and ships no Python runtime. The optional Linux legacy query diagnostic can use a separately bundled Python runtime. See [runtime packaging](services/inference/README.md).
 
 ### Packaging options
 
