@@ -85,6 +85,9 @@ class CacheReceiptTests(unittest.TestCase):
             return self.sidecar
         if route == "actions/runs/123":
             return self.run
+        if route == "pulls/105":
+            # Cross-PR qualification must inspect the authoritative merge state.
+            return {"merged_at": None}
         if "/jobs?" in route:
             return {"jobs": self.jobs}
         self.fail(route)
