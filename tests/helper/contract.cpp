@@ -1,5 +1,5 @@
 #include "helper_control.grpc.pb.h"
-#include "research/xeno/labs/foresight/launch_agent/proto/rag_service.grpc.pb.h"
+#include "rag_service.grpc.pb.h"
 #include <filesystem>
 #include <fstream>
 #include <grpcpp/grpcpp.h>
@@ -10,7 +10,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
-namespace p = research::xeno::labs::foresight::launch_agent::proto;
+namespace p = foresight::helper::v1;
 namespace c = foresight::linux::control::v1;
 #define REQUIRE(x)                                                             \
   do {                                                                         \
@@ -57,6 +57,30 @@ int main(int argc, char **argv) {
     REQUIRE(call(img, vec, [&](auto *ctx, auto &q, auto *r) {
               return stub->ComputeImageEmbedding(ctx, q, r);
             }).error_code() == grpc::StatusCode::UNAVAILABLE);
+    // All failure responses are non-OK gRPC statuses, never success=false
+    // payloads.
+    p::IndexRequest invalid_index;
+    p::IndexResponse invalid_index_result;
+    REQUIRE(call(invalid_index, invalid_index_result,
+                 [&](auto *ctx, auto &q, auto *r) {
+                   return stub->IndexDocument(ctx, q, r);
+                 })
+                .error_code() == grpc::StatusCode::FAILED_PRECONDITION);
+    p::DeleteRequest invalid_delete;
+    p::DeleteResponse invalid_delete_result;
+    REQUIRE(call(invalid_delete, invalid_delete_result,
+                 [&](auto *ctx, auto &q, auto *r) {
+                   return stub->DeleteDocument(ctx, q, r);
+                 })
+                .error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+    p::UpdateModelPathsRequest invalid_model;
+    invalid_model.set_sentence_piece_model_path("external.model");
+    p::UpdateModelPathsResponse invalid_model_result;
+    REQUIRE(call(invalid_model, invalid_model_result,
+                 [&](auto *ctx, auto &q, auto *r) {
+                   return stub->UpdateModelPaths(ctx, q, r);
+                 })
+                .error_code() == grpc::StatusCode::INVALID_ARGUMENT);
     p::UpdateModelPathsRequest model;
     model.set_embedding_model_path("test://deterministic");
     p::UpdateModelPathsResponse configured;

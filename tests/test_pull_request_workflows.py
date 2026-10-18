@@ -448,7 +448,9 @@ jobs:
                         if "ci_artifacts.py pull --component linux-sdk" not in line:
                             continue
                         with self.subTest(workflow=filename, job=name):
-                            arguments = shlex.split(line)
+                            lexer = shlex.shlex(line, posix=True, punctuation_chars=";")
+                            lexer.whitespace_split = True
+                            arguments = list(lexer)
                             for flag, variable in (
                                 ("--own-head", "$OWN_HEAD"),
                                 ("--own-pr", "$OWN_PR"),

@@ -1,0 +1,9 @@
+# Disposable Ubuntu CI runner only. This profile is never installed by a product
+# package. It permits the sandbox launcher to establish its own namespaces while
+# the production Parser still supplies its complete restricted mount layout.
+abi <abi/4.0>,
+include <tunables/global>
+
+profile foresight-ci-document-sandbox /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}

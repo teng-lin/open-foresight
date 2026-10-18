@@ -1,3 +1,6 @@
+import 'package:foresight_core/src/operations.dart';
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,30 +8,30 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/desktop_settings.dart';
 import 'package:open_foresight/global_shortcuts.dart';
 import 'package:open_foresight/main.dart';
-import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
-class PermissionDomain extends Domain {
+class PermissionDomain extends CommandFixtureDomain {
   final requests = <String>[];
   PermissionDomain(super.store, super.helper);
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]) async {
-    requests.add(method);
-    if (method == 'audio.capabilities')
+    requests.add(operation.wire);
+    if (operation == Operation.audioCapabilities)
       return {
         'microphone': 'not_determined',
         'system_audio': 'permission_checked_on_capture',
       };
-    if (method == 'audio.request_microphone')
+    if (operation == Operation.audioRequestMicrophone)
       return {'granted': false, 'microphone': 'denied'};
-    if (method == 'notifications.request_permission') return {'granted': false};
-    if (method == 'notifications.capabilities')
+    if (operation == Operation.notificationsRequestPermission)
+      return {'granted': false};
+    if (operation == Operation.notificationsCapabilities)
       return {'available': false, 'authorization': 0};
-    return super.command(method, args);
+    return super.command(operation, args);
   }
 }
 
@@ -149,7 +152,9 @@ void main() {
         channel,
         (call) async => call.method == 'login.get' ? false : null,
       );
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       await tester.sendKeyDownEvent(LogicalKeyboardKey.metaLeft);
       await tester.sendKeyEvent(LogicalKeyboardKey.keyN);
       await tester.sendKeyUpEvent(LogicalKeyboardKey.metaLeft);

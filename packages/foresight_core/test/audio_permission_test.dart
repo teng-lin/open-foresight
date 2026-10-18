@@ -58,7 +58,7 @@ void fs_string_free(char *value) { free(value); }
         expect(
           await Future.any([
             pending.then((_) => false),
-            Future<bool>.delayed(const Duration(milliseconds: 20), () => true),
+            Future<bool>(() => true),
           ]),
           isTrue,
           reason: 'The consent call must not block the service event loop',

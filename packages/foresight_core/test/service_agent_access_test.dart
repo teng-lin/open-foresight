@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -19,7 +20,7 @@ void main() {
     ]) {
       runtimeConfiguration.environment.remove(key);
     }
-    temp = Directory('/tmp').createTempSync('of-access-');
+    temp = shortTestTempRoot.createTempSync('of-access-');
     service = await ApplicationService.start(
       ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
     );

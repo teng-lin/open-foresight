@@ -212,15 +212,20 @@ void main() {
   );
 
   test(
-    'detection bounds the growing window to its last 200 whitespace units',
+    'detection bounds the growing window to its last 1000 Unicode scalars',
     () async {
       queue.begin(meeting);
       append(List.generate(220, (i) => 'word$i').join(' '));
       detectionResult = [];
       await drain();
       expect(
-        detectedText.single.split(' '),
-        List.generate(200, (i) => 'word${i + 20}'),
+        detectedText.single,
+        String.fromCharCodes(
+          List.generate(
+            220,
+            (i) => 'word$i',
+          ).join(' ').runes.toList().reversed.take(1000).toList().reversed,
+        ),
       );
       // Capping model input does not consume undetected history.
       expect(
@@ -334,7 +339,7 @@ void main() {
     },
   );
 
-  test('interim tail exclusion occurs before the 200-unit cap', () async {
+  test('interim tail exclusion occurs before the scalar budget', () async {
     queue.begin(meeting);
     queue.updateInterim(
       meeting,
@@ -344,8 +349,13 @@ void main() {
     detectionResult = [];
     await drain();
     expect(
-      detectedText.single.split(' '),
-      List.generate(200, (i) => 'word${i + 15}'),
+      detectedText.single,
+      String.fromCharCodes(
+        List.generate(
+          215,
+          (i) => 'word$i',
+        ).join(' ').runes.toList().reversed.take(1000).toList().reversed,
+      ),
     );
   });
 

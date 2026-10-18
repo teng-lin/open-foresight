@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -384,7 +385,7 @@ void main() {
         });
         expect(client.webSearchAvailable, isTrue);
         final id =
-            (await client.command('meetings.create', {
+            (await client.command(Operation.meetingsCreate, {
                       'title': 'Remote meeting',
                     })
                     as Map)['id']

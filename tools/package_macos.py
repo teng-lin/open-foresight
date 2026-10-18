@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -88,9 +89,7 @@ def copy_python(source, resources, values, extensions=None):
         )
     lock = ROOT / "requirements-litert-macos.lock"
     expected = dict(
-        line.split("==", 1)
-        for line in lock.read_text().splitlines()
-        if line.strip() and not line.startswith("#")
+        re.findall(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)", lock.read_text(), re.MULTILINE)
     )
     query = (
         "import sys,json,importlib.metadata as m; "

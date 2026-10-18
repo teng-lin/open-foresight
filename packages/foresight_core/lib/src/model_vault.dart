@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -180,7 +181,7 @@ class MacModelVault {
 
   static void _checkCurrent(bool Function()? current) {
     if (current != null && !current()) {
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
   }
 }

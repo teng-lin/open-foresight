@@ -39,22 +39,33 @@ void main() {
       );
       final path = '${directory.path}/commands.sock';
       final received = <String>[];
+      final observed = StreamController<String>.broadcast();
+      addTearDown(observed.close);
       var owner = await AppCommands.bind(path, (command, token) async {
         received.add('$command:$token');
+        observed.add(received.last);
       });
+      final quickMeeting = observed.stream.first;
       expect(
         await AppCommands.forward(path, activationToken: 'test-token'),
         true,
       );
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(
+        await quickMeeting.timeout(const Duration(seconds: 2)),
+        'quick-meeting:test-token',
+      );
       expect(received, ['quick-meeting:test-token']);
+      final activation = observed.stream.first;
       expect(await AppCommands.forward(path, quick: false), true);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await activation.timeout(const Duration(seconds: 2));
       expect(received.last, 'activate:null');
+      final stopped = observed.stream.first;
       expect(await AppCommands.forward(path, command: 'stop-meeting'), true);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      await stopped.timeout(const Duration(seconds: 2));
       expect(received.last, 'stop-meeting:null');
+      expect(owner.isClosed, false);
       await owner.close();
+      expect(owner.isClosed, true);
       expect(await AppCommands.forward(path), false);
       owner = await AppCommands.bind(path, (_, _) async {});
       expect(await AppCommands.forward(path), true);

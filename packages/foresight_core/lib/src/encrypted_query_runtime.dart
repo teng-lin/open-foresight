@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -63,7 +64,10 @@ class EncryptedDedicatedQueryRuntime implements QueryCompletionRuntime {
     try {
       lease = await vault.openLease(File(encryptedModel));
       if (_closed || epoch != _epoch) {
-        throw StateError('Encrypted question detection cancelled');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Encrypted question detection cancelled',
+        );
       }
       final runtime = _runtimeFactory(python, worker, lease.path);
       _lease = lease;
@@ -79,23 +83,42 @@ class EncryptedDedicatedQueryRuntime implements QueryCompletionRuntime {
 
   @override
   Future<String> complete(String prompt, String requestId) async {
-    if (_closed) throw StateError('Encrypted question detector is closed');
+    if (_closed) {
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Encrypted question detector is closed',
+      );
+    }
     if (_active != null) {
-      throw StateError('Encrypted question detector is busy');
+      throw RpcError(RpcErrorCode.busy, 'Encrypted question detector is busy');
     }
     final request = _active = _EncryptedRequest(requestId);
     try {
       await _retiring;
       await (_starting = _start());
       if (_closed || request.cancelled) {
-        throw StateError('Encrypted question detection cancelled');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Encrypted question detection cancelled',
+        );
       }
       request.delegated = true;
       final result = await _runtime!.complete(prompt, requestId);
       if (_closed || request.cancelled) {
-        throw StateError('Encrypted question detection cancelled');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Encrypted question detection cancelled',
+        );
       }
       return result;
+    } catch (_) {
+      if (_closed || request.cancelled) {
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Encrypted question detection cancelled',
+        );
+      }
+      rethrow;
     } finally {
       _starting = null;
       try {

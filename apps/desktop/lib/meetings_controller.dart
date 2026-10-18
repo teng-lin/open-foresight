@@ -1,10 +1,620 @@
 part of 'main.dart';
 
-extension _MeetingWorkspace on _WorkspaceState {
+class _MeetingsController extends _FeatureController {
+  _MeetingsController(super.shell);
+
+  String meetingQuery = '';
+
+  final meetingSearchController = TextEditingController();
+
+  final meetingNowKey = GlobalKey();
+
+  bool quickStarting = false;
+
+  bool meetingImmersive = false;
+
+  Duration recordingElapsed = Duration.zero;
+
+  DateTime recordingElapsedAt = DateTime.now();
+
+  bool systemAudioSetupReviewed = false;
+
+  final noteTitle = TextEditingController();
+
+  final noteBody = TextEditingController();
+
+  int? noteId;
+
+  int? meetingId;
+
+  int? recordingMeeting;
+
+  int? meetingPreviewId;
+
+  String meetingPreviewTab = 'Notes';
+
+  final meetingNotesController = TextEditingController();
+
+  late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
+    (id, body, lastManualEdit) async {
+      await d.command(Operation.meetingsNotes, {
+        'id': id,
+        'body': body,
+        if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+      });
+    },
+    onSaved: (id) {
+      if (mounted) {
+        if (loadedMeetingNotes == id && !meetingNoteSaves.isDirty(id)) {
+          loadMeetingNotes(id, acceptedSave: true);
+        }
+        shell.update(() {});
+      }
+    },
+    onError: (failure, stack) {
+      if (mounted)
+        shell.update(
+          () => shell.error = 'Unable to save meeting notes: $failure',
+        );
+      else
+        FlutterError.reportError(
+          FlutterErrorDetails(exception: failure, stack: stack),
+        );
+    },
+  );
+
+  int? loadedMeetingNotes;
+
+  Map<String, dynamic> meetingEnhancements = {};
+
+  StreamSubscription<void>? noteEnhancementChanges;
+
+  bool meetingEnhancementStarting = false;
+
+  MeetingNoteSnapshot? loadedMeetingNoteSnapshot;
+
+  int? meetingNoteManualEdit;
+
+  bool meetingSidecarVisible = true;
+
+  bool meetingEnhancedVisible = true;
+
+  bool meetingEnhancing = false;
+
+  bool meetingCompactAssistant = false;
+
+  String meetingPanel = 'Chat';
+
+  String meetingEnhanceStatus = '';
+
+  double meetingSidecarWidth = 400;
+
+  DateTime? recordingBegan;
+
+  RecordingStatus? recording;
+
+  final provisionalTranscript = <String, String>{};
+
+  String recordingState = 'idle';
+
+  String exportMeetingMarkdown() => meetingMarkdown();
+
+  Widget meetings() => MeetingStyleScope(
+    child: meetingId == null ? meetingCollection() : meetingWorkspace(),
+  );
+
+  Future<String> importText(
+    String title,
+    String text,
+    String mime,
+    String provenance, {
+    String? id,
+    int? modifiedAtMs,
+    String? sourceUri,
+  }) async {
+    final result =
+        await d.command(Operation.sourcesImport, {
+              'title': title,
+              'text': text,
+              'mime': mime,
+              'provenance': provenance,
+              'id': id,
+              'modifiedAtMs': modifiedAtMs,
+              'sourceUri': sourceUri,
+              'index': false,
+            })
+            as Map;
+    return result['id'] as String;
+  }
+
+  void syncCapture() {
+    final state = d.capture;
+    meetingEnhancements = Map<String, dynamic>.from(
+      state['note_enhancements'] as Map? ?? {},
+    );
+    meetingEnhancing =
+        meetingEnhancementStarting ||
+        meetingEnhancements.values.any(
+          (value) => (value as Map)['active'] == true,
+        );
+    recording = state['active'] == true
+        ? RemoteRecording(Map<String, dynamic>.from(state))
+        : null;
+    recordingMeeting = state['meeting_id'] as int?;
+    recordingState = state['state'] as String? ?? 'idle';
+    final began = state['began'] as int?;
+    recordingBegan = began == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(began);
+    recordingElapsedAt = DateTime.now();
+    recordingElapsed = Duration(
+      milliseconds:
+          state['elapsed_ms'] as int? ??
+          (recordingBegan == null
+              ? 0
+              : recordingElapsedAt.difference(recordingBegan!).inMilliseconds),
+    );
+    provisionalTranscript
+      ..clear()
+      ..addAll(Map<String, String>.from(state['provisional'] as Map? ?? {}));
+  }
+
+  Future<void> startRecording({bool accessReviewed = false}) async {
+    if (!accessReviewed && !await integrationFeature.ensureRecordingAccess())
+      return;
+    if (!mounted) return;
+    await d.command(Operation.meetingsStart, {'id': meetingId!});
+    syncCapture();
+    if (mounted) setState(() {});
+  }
+
+  Future<void> stopRecording() async {
+    await d.command(Operation.meetingsStop);
+    syncCapture();
+    if (mounted) setState(() {});
+    await integrationFeature.notify('Meeting transcription completed');
+  }
+
+  Future<void> indexMeeting(int id) async {
+    await d.command(Operation.meetingsIndex, {'id': id});
+  }
+
+  Future<void> generateMeeting(String kind, {int? id}) async {
+    await d.command(Operation.meetingsGenerate, {
+      'id': id ?? meetingId!,
+      'kind': kind,
+    });
+  }
+
+  void editArtifact(Map<String, Object?> a) async {
+    final controller = TextEditingController(
+      text: (a['edited'] ?? a['generated']) as String,
+    );
+    final original = controller.text;
+    int? lastManualEdit;
+    final saved = await shell.showInputDialog<bool>(
+      builder: (context) => ServiceEditDialog(
+        title: 'Edit generated artifact',
+        controller: controller,
+        saveLabel: 'Save edit',
+        onChanged: (text) {
+          if (a['kind'] == 'enhanced_notes' &&
+              (text != original ||
+                  (loadedMeetingNotes == a['meeting_id'] &&
+                      meetingNotesController.text !=
+                          loadedMeetingNoteSnapshot?.body))) {
+            lastManualEdit = DateTime.now().millisecondsSinceEpoch;
+          }
+        },
+        onSave: () async {
+          await d.command(Operation.artifactsEdit, {
+            'id': a['id'],
+            'text': controller.text,
+            if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+          });
+        },
+      ),
+    );
+    if (saved == true && mounted) setState(() {});
+    controller.dispose();
+  }
+
+  String get echoCancellationDescription {
+    final capture = d.capture;
+    final echo = capture['echo_cancellation'] as Map? ?? {};
+    if (capture['active'] != true)
+      return 'Reduce system playback picked up by your microphone.';
+    if (capture['paused'] == true)
+      return 'The selected setting will apply when recording resumes.';
+    if (echo['pending'] == true) return 'Applying echo cancellation…';
+    if ((echo['fallback_status'] as num? ?? 0) != 0)
+      return 'Echo cancellation is unavailable; microphone recording continues.';
+    if (echo['restart_required'] == true)
+      return 'Restart recording to enable echo cancellation.';
+    return echo['active'] == true
+        ? 'Echo cancellation is active for this microphone.'
+        : 'Echo cancellation is off.';
+  }
+
+  Future<void> quickStart() async {
+    if (!mounted || quickStarting || shell.busy || recording != null) return;
+    shell.update(() => quickStarting = true);
+    try {
+      if (speechSetupProblem(d.store) != null) {
+        await settingsFeature.chooseSpeech();
+        if (!mounted || speechSetupProblem(d.store) != null) return;
+      }
+      if (!await integrationFeature.ensureRecordingAccess() || !mounted) return;
+      await shell.run(() async {
+        final created =
+            await d.command(Operation.meetingsCreate, {
+                  'title': '[New Meeting]',
+                })
+                as Map;
+        if (!mounted) return;
+        shell.update(() {
+          shell.tab = 3;
+          meetingId = created['id'] as int;
+        });
+        await startRecording(accessReviewed: true);
+      });
+    } catch (failure, stack) {
+      if (mounted) await shell.run(() => Future<void>.error(failure, stack));
+    } finally {
+      if (mounted) shell.update(() => quickStarting = false);
+    }
+  }
+
+  String meetingClock(int milliseconds) {
+    final date = DateTime.fromMillisecondsSinceEpoch(milliseconds).toLocal();
+    return '${date.hour % 12 == 0 ? 12 : date.hour % 12}:${date.minute.toString().padLeft(2, '0')} ${date.hour < 12 ? 'AM' : 'PM'}';
+  }
+
+  int meetingStart(Map<String, Object?> meeting) =>
+      (meeting['calendar_starts'] ?? meeting['created'] ?? 0) as int;
+
+  int meetingEnd(Map<String, Object?> meeting) =>
+      (meeting['calendar_ends'] ??
+              meetingStart(meeting) +
+                  ((meeting['duration_ms'] as int?) ??
+                      const Duration(minutes: 30).inMilliseconds))
+          as int;
+
+  String meetingDay(int timestamp) {
+    if (timestamp == 0) return 'Saved meetings';
+    final date = DateTime.fromMillisecondsSinceEpoch(timestamp).toLocal();
+    final now = DateTime.now();
+    if (date.year == now.year && date.month == now.month && date.day == now.day)
+      return 'Today';
+    return '${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][date.weekday - 1]}, ${['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'][date.month - 1]} ${date.day}';
+  }
+
+  Widget meetingListHeading() => heading(
+    'Meetings',
+    actions: [
+      if (!integrationFeature.googleAuth.connected)
+        OutlinedButton.icon(
+          onPressed: shell.busy
+              ? null
+              : () => shell.run(integrationFeature.connectGoogle),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: const Text('Connect Calendar'),
+        ),
+      if (integrationFeature.googleAuth.connected)
+        OutlinedButton.icon(
+          onPressed: shell.busy || integrationFeature.googleSyncing
+              ? null
+              : () => shell.run(integrationFeature.google.syncCalendar),
+          icon: const Icon(Icons.calendar_today, size: 18),
+          label: Text(
+            integrationFeature.google.lastCompletedRefreshMs == 0
+                ? 'Import Calendar'
+                : 'Last imported: ${timeLabel(integrationFeature.google.lastCompletedRefreshMs)}',
+          ),
+        ),
+      OutlinedButton.icon(
+        onPressed: shell.busy ? null : () => shell.run(exportMeetings),
+        icon: const Icon(Icons.ios_share, size: 18),
+        label: const Text('Export meeting notes'),
+      ),
+      pill(
+        'New meeting',
+        shell.busy || recording != null
+            ? null
+            : () => shell.run(() async {
+                final created =
+                    await d.command(Operation.meetingsCreate, {
+                          'title': '[New Meeting]',
+                        })
+                        as Map;
+                if (mounted)
+                  shell.update(() => meetingId = created['id'] as int);
+              }),
+        icon: Icons.add,
+      ),
+    ],
+  );
+
+  Widget meetingList({bool showHeading = true}) {
+    final rows = d.store
+        .meetingCollection()
+        .where(
+          (m) => (m['title'] as String).toLowerCase().contains(
+            meetingQuery.toLowerCase(),
+          ),
+        )
+        .toList();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    var insertedNow = false;
+    Widget nowMarker() => Padding(
+      key: meetingNowKey,
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Row(
+        children: [
+          const Expanded(child: Divider(color: Color(0xff8cb2c9))),
+          const SizedBox(width: 12),
+          Chip(
+            backgroundColor: _blue,
+            label: Text(
+              '●  Now · ${meetingClock(now)}',
+              style: const TextStyle(color: _ink, fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 12),
+          const Expanded(child: Divider(color: Color(0xff8cb2c9))),
+        ],
+      ),
+    );
+    final entries = <Widget>[];
+    String? previousDay;
+    for (final meeting in rows) {
+      if (!insertedNow && meetingStart(meeting) > now) {
+        entries.add(nowMarker());
+        insertedNow = true;
+      }
+      final day = meetingDay(meetingStart(meeting));
+      if (day != previousDay) {
+        entries.add(
+          Padding(
+            padding: const EdgeInsets.only(top: 12, bottom: 16),
+            child: Text(day, style: MeetingVisuals.dateHeading),
+          ),
+        );
+        previousDay = day;
+      }
+      entries.add(
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16),
+          child: meetingListTile(meeting),
+        ),
+      );
+    }
+    if (!insertedNow && rows.isNotEmpty) entries.add(nowMarker());
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (showHeading) meetingListHeading(),
+        searchBox(
+          'Search meetings',
+          (value) => meetingQuery = value,
+          controller: meetingSearchController,
+        ),
+        const SizedBox(height: 16),
+        OutlinedButton.icon(
+          onPressed: () {
+            meetingSearchController.clear();
+            shell.update(() => meetingQuery = '');
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              final target = meetingNowKey.currentContext;
+              if (target != null)
+                Scrollable.ensureVisible(
+                  target,
+                  duration: const Duration(milliseconds: 250),
+                  alignment: .5,
+                );
+            });
+          },
+          icon: const Icon(Icons.schedule, size: 18),
+          label: const Text('Now'),
+        ),
+        const SizedBox(height: 24),
+        Expanded(
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (rows.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(40),
+                    child: Text(
+                      'No meetings yet. Start transcribing or create a new meeting.',
+                    ),
+                  ),
+                ...entries,
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget meetingListTile(Map<String, Object?> meeting) {
+    final id = meeting['id'] as int;
+    final start = meetingStart(meeting);
+    final end = meetingEnd(meeting);
+    final attachmentCount = integrationFeature.google.attachments(id).length;
+    final state = meeting['state'] as String;
+    final active = state == 'recording' || state == 'transcribing';
+    void open() => shell.update(() => meetingPreviewId = id);
+    return Card(
+      margin: EdgeInsets.zero,
+      shape: const RoundedRectangleBorder(
+        borderRadius: MeetingVisuals.previewRadius,
+      ),
+      color: meetingPreviewId == id ? const Color(0xffd2deee) : Colors.white,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final narrow = constraints.maxWidth < 650;
+          final details = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                meeting['title'] as String,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: MeetingVisuals.listTitle,
+              ),
+              if (narrow && start > 0)
+                Text(
+                  '${meetingClock(start)} – ${meetingClock(end)}',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              if (meeting['has_transcript'] == 1)
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xfff3e5f9),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.graphic_eq,
+                          size: 12,
+                          color: Color(0xff7b2cbf),
+                        ),
+                        SizedBox(width: 4),
+                        Text(
+                          'Transcript',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Color(0xff7b2cbf),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              if (meeting['calendar_status'] != null &&
+                  meeting['calendar_status'] != 'confirmed')
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Calendar ${meeting['calendar_status']}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              if (active || state == 'failed' || state == 'interrupted')
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    state,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+            ],
+          );
+          return InkWell(
+            onTap: open,
+            borderRadius: BorderRadius.circular(16),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+              child: Row(
+                children: [
+                  if (!narrow && start > 0)
+                    SizedBox(
+                      width: 155,
+                      child: Text(
+                        '${meetingClock(start)} – ${meetingClock(end)}',
+                        style: MeetingVisuals.metadata,
+                      ),
+                    ),
+                  Expanded(child: details),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    onPressed: open,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 10),
+                      minimumSize: const Size(40, 28),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.attach_file, size: 14),
+                        Text(
+                          '$attachmentCount',
+                          style: MeetingVisuals.metadata,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: shell.busy || recording != null || quickStarting
+                        ? null
+                        : () => recordExistingMeeting(id),
+                    icon: const Icon(Icons.graphic_eq, size: 18),
+                    label: const Text('Start'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> recordExistingMeeting(int id) async {
+    if (shell.busy || recording != null || quickStarting) return;
+    shell.update(() => quickStarting = true);
+    try {
+      if (speechSetupProblem(d.store) != null)
+        await settingsFeature.chooseSpeech();
+      if (!mounted || speechSetupProblem(d.store) != null) return;
+      shell.update(() => meetingId = id);
+      await shell.run(startRecording);
+    } finally {
+      if (mounted) shell.update(() => quickStarting = false);
+    }
+  }
+
+  Future<void> exportMeetings() async {
+    await saveMeetingNotes();
+    if (!mounted || !context.mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (_) => MeetingExportDialog(
+        store: d.store,
+        save: (markdown) async {
+          final location = await getSaveLocation(
+            suggestedName: 'meeting_notes.md',
+            acceptedTypeGroups: [
+              const XTypeGroup(label: 'Markdown', extensions: ['md']),
+            ],
+          );
+          if (location == null) return false;
+          await writePrivateTextFile(File(location.path), markdown);
+          return true;
+        },
+      ),
+    );
+  }
+
+  String meetingMarkdown() => composeMeetingExport(d.store).markdown;
+
   Widget immersiveMeetingWorkspace() => CallbackShortcuts(
     bindings: {
       const SingleActivator(LogicalKeyboardKey.escape): () =>
-          update(() => meetingImmersive = false),
+          shell.update(() => meetingImmersive = false),
     },
     child: Focus(
       autofocus: true,
@@ -23,7 +633,8 @@ extension _MeetingWorkspace on _WorkspaceState {
                     runSpacing: 8,
                     children: [
                       TextButton.icon(
-                        onPressed: () => update(() => meetingImmersive = false),
+                        onPressed: () =>
+                            shell.update(() => meetingImmersive = false),
                         icon: const Icon(Icons.fullscreen_exit),
                         label: const Text('Exit Immersive View'),
                       ),
@@ -49,15 +660,22 @@ extension _MeetingWorkspace on _WorkspaceState {
       meetingNotesController.text,
       lastManualEdit: meetingNoteManualEdit,
     );
-    await flushMeetingNotesDraft();
+    try {
+      await flushMeetingNotesDraft();
+    } catch (_) {
+      // flushMeetingNotesDraft already presented this failed save.
+    }
   }
 
   Future<void> flushMeetingNotesDraft() async {
     try {
       await meetingNoteSaves.flush();
     } catch (failure) {
-      if (mounted)
-        update(() => error = 'Unable to save meeting notes: $failure');
+      if (mounted) {
+        shell.update(
+          () => shell.error = 'Unable to save meeting notes: $failure',
+        );
+      }
       rethrow;
     }
   }
@@ -92,19 +710,19 @@ extension _MeetingWorkspace on _WorkspaceState {
 
   Future<void> enhanceMeetingNotes(int id) async {
     if (meetingEnhancing) return;
-    update(() {
+    shell.update(() {
       meetingEnhancementStarting = true;
       meetingEnhancing = true;
       meetingEnhanceStatus = '';
     });
     try {
       await flushMeetingNotesDraft();
-      await d.command('meetings.enhance', {'id': id});
+      await d.command(Operation.meetingsEnhance, {'id': id});
     } catch (e) {
-      if (mounted) update(() => meetingEnhanceStatus = e.toString());
+      if (mounted) shell.update(() => meetingEnhanceStatus = e.toString());
     } finally {
       if (mounted)
-        update(() {
+        shell.update(() {
           meetingEnhancementStarting = false;
           syncCapture();
         });
@@ -112,9 +730,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   void loadMeetingNotes(int id, {bool acceptedSave = false}) {
-    final row = d.store.rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [
-      id,
-    ]).firstOrNull;
+    final row = d.store.meetingNoteRows(id).firstOrNull;
     final enhanced = d.store.meetingEnhancedNotes(id);
     final stored = MeetingNoteSnapshot(
       body: row?['body'] as String? ?? '',
@@ -176,13 +792,7 @@ extension _MeetingWorkspace on _WorkspaceState {
 
   Widget meetingPreview(int id) {
     loadMeetingNotes(id);
-    final meeting = d.store.rows(
-      'SELECT meetings.*,meeting_details.created,calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
-      '(SELECT MAX(end_ms) FROM transcript WHERE meeting_id=meetings.id AND final=1) AS duration_ms FROM meetings '
-      'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
-      'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
-      [id],
-    ).single;
+    final meeting = d.store.meetingPreviewRows(id).single;
     final start = meetingStart(meeting);
     final end = meetingEnd(meeting);
     return Container(
@@ -210,7 +820,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                     ),
                     IconButton(
                       tooltip: 'Expand meeting',
-                      onPressed: () => update(() => meetingId = id),
+                      onPressed: () => shell.update(() => meetingId = id),
                       icon: const Icon(Icons.open_in_full, size: 18),
                     ),
                     IconButton(
@@ -221,7 +831,8 @@ extension _MeetingWorkspace on _WorkspaceState {
                         } catch (_) {
                           return;
                         }
-                        if (mounted) update(() => meetingPreviewId = null);
+                        if (mounted)
+                          shell.update(() => meetingPreviewId = null);
                       },
                       icon: const Icon(Icons.close, size: 18),
                     ),
@@ -241,7 +852,8 @@ extension _MeetingWorkspace on _WorkspaceState {
               children: [
                 for (final tab in ['Notes', 'AI summary', 'Transcript'])
                   TextButton(
-                    onPressed: () => update(() => meetingPreviewTab = tab),
+                    onPressed: () =>
+                        shell.update(() => meetingPreviewTab = tab),
                     style: TextButton.styleFrom(
                       backgroundColor: meetingPreviewTab == tab
                           ? _blue
@@ -270,12 +882,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   Widget meetingWorkspace() {
     final id = meetingId!;
     loadMeetingNotes(id);
-    final meeting = d.store.rows(
-      'SELECT meetings.*,meeting_details.created,calendar_events.starts,calendar_events.ends FROM meetings '
-      'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
-      'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
-      [id],
-    ).single;
+    final meeting = d.store.meetingWorkspaceRows(id).single;
     final start = (meeting['starts'] ?? meeting['created'] ?? 0) as int;
     final end =
         (meeting['ends'] ?? start + const Duration(minutes: 30).inMilliseconds)
@@ -297,7 +904,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                   return;
                 }
                 if (mounted)
-                  update(() {
+                  shell.update(() {
                     meetingId = null;
                     meetingImmersive = false;
                   });
@@ -332,13 +939,14 @@ extension _MeetingWorkspace on _WorkspaceState {
             if (!meetingSidecarVisible)
               IconButton(
                 tooltip: 'Open assistant',
-                onPressed: () => update(() => meetingSidecarVisible = true),
+                onPressed: () =>
+                    shell.update(() => meetingSidecarVisible = true),
                 icon: const Icon(Icons.chat_bubble_outline),
               ),
             IconButton(
               tooltip: meetingImmersive ? 'Exit Immersive View' : 'Full screen',
               onPressed: () =>
-                  update(() => meetingImmersive = !meetingImmersive),
+                  shell.update(() => meetingImmersive = !meetingImmersive),
               icon: Icon(
                 meetingImmersive ? Icons.fullscreen_exit : Icons.fullscreen,
               ),
@@ -346,21 +954,26 @@ extension _MeetingWorkspace on _WorkspaceState {
             PopupMenuButton<String>(
               tooltip: 'Meeting options',
               onSelected: (action) {
-                if (action == 'record') unawaited(run(startRecording));
+                if (action == 'record') unawaited(shell.run(startRecording));
                 if (action == 'transcript')
-                  update(() {
+                  shell.update(() {
                     meetingPanel = 'Transcript';
                     meetingSidecarVisible = true;
                   });
-                if (action == 'import') unawaited(run(importMeetingTranscript));
+                if (action == 'import')
+                  unawaited(shell.run(importMeetingTranscript));
                 if (action == 'attachments')
-                  unawaited(run(() => google.importAttachments(id)));
+                  unawaited(
+                    shell.run(
+                      () => integrationFeature.google.importAttachments(id),
+                    ),
+                  );
               },
               itemBuilder: (_) => [
                 PopupMenuItem(
                   value: 'record',
                   enabled:
-                      !busy &&
+                      !shell.busy &&
                       recording == null &&
                       speechSetupProblem(d.store) == null,
                   child: const Text('Record microphone + playback'),
@@ -373,10 +986,10 @@ extension _MeetingWorkspace on _WorkspaceState {
                   value: 'import',
                   child: Text('Import transcript'),
                 ),
-                if (google.attachments(id).isNotEmpty)
+                if (integrationFeature.google.attachments(id).isNotEmpty)
                   PopupMenuItem(
                     value: 'attachments',
-                    enabled: googleAuth.connected,
+                    enabled: integrationFeature.googleAuth.connected,
                     child: const Text('Import meeting attachments'),
                   ),
               ],
@@ -389,9 +1002,9 @@ extension _MeetingWorkspace on _WorkspaceState {
             leading: const Icon(Icons.info_outline),
             title: Text(speechSetupProblem(d.store)!),
             trailing: TextButton(
-              onPressed: () => update(() {
-                tab = 4;
-                modelKind = 'speech';
+              onPressed: () => shell.update(() {
+                shell.tab = 4;
+                settingsFeature.modelKind = 'speech';
               }),
               child: const Text('Set up speech'),
             ),
@@ -414,13 +1027,15 @@ extension _MeetingWorkspace on _WorkspaceState {
                     Row(
                       children: [
                         TextButton(
-                          onPressed: () =>
-                              update(() => meetingCompactAssistant = false),
+                          onPressed: () => shell.update(
+                            () => meetingCompactAssistant = false,
+                          ),
                           child: const Text('Notes'),
                         ),
                         TextButton(
-                          onPressed: () =>
-                              update(() => meetingCompactAssistant = true),
+                          onPressed: () => shell.update(
+                            () => meetingCompactAssistant = true,
+                          ),
                           child: const Text('Assistant'),
                         ),
                       ],
@@ -443,7 +1058,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                       child: GestureDetector(
                         key: const ValueKey('meeting-sidecar-resize'),
                         behavior: HitTestBehavior.opaque,
-                        onHorizontalDragUpdate: (drag) => update(
+                        onHorizontalDragUpdate: (drag) => shell.update(
                           () =>
                               meetingSidecarWidth = (sideWidth - drag.delta.dx)
                                   .clamp(
@@ -486,7 +1101,7 @@ extension _MeetingWorkspace on _WorkspaceState {
       ],
     );
     if (file == null) return;
-    await d.command('meetings.transcript', {
+    await d.command(Operation.meetingsTranscript, {
       'id': id,
       'text': await File(file.path).readAsString(),
       'source': 'imported transcript',
@@ -494,10 +1109,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   Widget meetingNotesEditor(int id, bool wide, {bool preview = false}) {
-    final enhanced = d.store.rows(
-      "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
-      [id],
-    ).firstOrNull;
+    final enhanced = d.store.enhancedNoteArtifacts(id).firstOrNull;
     final progress = meetingEnhancements['$id'] as Map?;
     final enhancedText =
         progress?['body'] as String? ?? d.store.meetingEnhancedNotes(id);
@@ -582,7 +1194,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                       IconButton(
                         tooltip: 'Hide enhanced notes',
                         onPressed: () =>
-                            update(() => meetingEnhancedVisible = false),
+                            shell.update(() => meetingEnhancedVisible = false),
                         icon: const Icon(Icons.keyboard_arrow_down, size: 20),
                       ),
                     ],
@@ -595,7 +1207,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                     onPressed: progress?['cancel_requested'] == true
                         ? null
                         : () async {
-                            await d.command('meetings.cancel_enhance', {
+                            await d.command(Operation.meetingsCancelEnhance, {
                               'id': id,
                               'request_id': progress?['request_id'],
                             });
@@ -650,7 +1262,8 @@ extension _MeetingWorkspace on _WorkspaceState {
                 ),
                 if (meetingNotesController.text.isNotEmpty)
                   TextButton.icon(
-                    onPressed: meetingEnhancing || busy || asking
+                    onPressed:
+                        meetingEnhancing || shell.busy || chatFeature.asking
                         ? null
                         : () => enhanceMeetingNotes(id),
                     icon: const Icon(Icons.auto_awesome, size: 16),
@@ -749,8 +1362,10 @@ extension _MeetingWorkspace on _WorkspaceState {
                             (s) => DropdownMenuItem(value: s, child: Text(s)),
                           )
                           .toList(),
-                      onChanged: (style) => update(
-                        () => unawaited(preference('noteStyle', style!)),
+                      onChanged: (style) => shell.update(
+                        () => unawaited(
+                          settingsFeature.preference('noteStyle', style!),
+                        ),
                       ),
                     ),
                     const SizedBox(width: 18),
@@ -758,8 +1373,8 @@ extension _MeetingWorkspace on _WorkspaceState {
                       FilledButton.tonalIcon(
                         onPressed:
                             meetingEnhancing ||
-                                busy ||
-                                asking ||
+                                shell.busy ||
+                                chatFeature.asking ||
                                 meetingNotesController.text.trim().isEmpty
                             ? null
                             : () => enhanceMeetingNotes(id),
@@ -770,12 +1385,15 @@ extension _MeetingWorkspace on _WorkspaceState {
                       )
                     else
                       FilledButton.tonalIcon(
-                        onPressed: () => update(() {
+                        onPressed: () => shell.update(() {
                           unawaited(
-                            preference('liveEnhance', (!live).toString()),
+                            settingsFeature.preference(
+                              'liveEnhance',
+                              (!live).toString(),
+                            ),
                           );
                           meetingEnhancedVisible = !live;
-                          if (!live) saveMeetingNotes();
+                          if (!live) unawaited(saveMeetingNotes());
                         }),
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xffdce9ff),
@@ -788,7 +1406,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                       IconButton(
                         tooltip: 'Show enhanced notes',
                         onPressed: () =>
-                            update(() => meetingEnhancedVisible = true),
+                            shell.update(() => meetingEnhancedVisible = true),
                         icon: const Icon(Icons.vertical_split),
                       ),
                   ],
@@ -864,7 +1482,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                         ? _ink
                         : const Color(0xff4d5358),
                   ),
-                  onPressed: () => update(() => meetingPanel = panel),
+                  onPressed: () => shell.update(() => meetingPanel = panel),
                   child: Text(
                     panel,
                     maxLines: 1,
@@ -875,7 +1493,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                 tooltip: 'More meeting panels',
                 padding: EdgeInsets.zero,
                 icon: const Icon(Icons.keyboard_arrow_down, size: 20),
-                onSelected: (panel) => update(() => meetingPanel = panel),
+                onSelected: (panel) => shell.update(() => meetingPanel = panel),
                 itemBuilder: (_) => [
                   const PopupMenuItem(
                     value: 'Transcript',
@@ -895,11 +1513,9 @@ extension _MeetingWorkspace on _WorkspaceState {
                       padding: EdgeInsets.zero,
                       minimumSize: const Size(24, 32),
                     ),
-                    onPressed: () => update(
-                      () => answerFontSize = (answerFontSize + delta).clamp(
-                        12,
-                        24,
-                      ),
+                    onPressed: () => shell.update(
+                      () => chatFeature.answerFontSize =
+                          (chatFeature.answerFontSize + delta).clamp(12, 24),
                     ),
                     child: Text(
                       delta < 0 ? 'A−' : 'A+',
@@ -911,7 +1527,8 @@ extension _MeetingWorkspace on _WorkspaceState {
                 tooltip: 'Close assistant',
                 constraints: const BoxConstraints(minWidth: 28),
                 padding: EdgeInsets.zero,
-                onPressed: () => update(() => meetingSidecarVisible = false),
+                onPressed: () =>
+                    shell.update(() => meetingSidecarVisible = false),
                 icon: const Icon(Icons.close),
               ),
             ],
@@ -927,7 +1544,7 @@ extension _MeetingWorkspace on _WorkspaceState {
               'Action items',
             ].indexOf(meetingPanel),
             children: [
-              chat(meetingScope: id, compact: true),
+              chatFeature.chat(meetingScope: id, compact: true),
               meetingQuestionsPanel(id),
               meetingSummaryPanel(id),
               meetingTranscriptPanel(id),
@@ -941,25 +1558,16 @@ extension _MeetingWorkspace on _WorkspaceState {
 
   Widget meetingQuestionsPanel(int id) {
     final automatic = d.store.preference('proactiveAnswers', 'true') == 'true';
-    final detected = d.store.rows(
-      'SELECT q.*,a.body,a.citations FROM meeting_questions q '
-      'LEFT JOIN answers a ON a.id=q.answer_id WHERE q.meeting_id=? ORDER BY q.id',
-      [id],
-    );
+    final detected = d.store.meetingQuestions(id);
     final manual = d.store
-        .rows(
-          'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
-          [id],
-        )
+        .finalTranscript(id)
         .where(
           (row) =>
               (row['text'] as String).contains(RegExp('[?？]')) &&
               !detected.any((question) => question['question'] == row['text']),
         )
         .toList();
-    final pipeline = d is RemoteDomain
-        ? (d as RemoteDomain).capture['proactive'] as Map? ?? const {}
-        : d.application.proactive.state;
+    final pipeline = d.capture['proactive'] as Map? ?? const {};
     final detectionError = (pipeline['errors'] as Map?)?['$id'] as String?;
     return Column(
       children: [
@@ -970,7 +1578,8 @@ extension _MeetingWorkspace on _WorkspaceState {
             'Detect questions and answer with your local model.',
           ),
           value: automatic,
-          onChanged: (enabled) => preference('proactiveAnswers', '$enabled'),
+          onChanged: (enabled) =>
+              settingsFeature.preference('proactiveAnswers', '$enabled'),
         ),
         if ((pipeline['running'] == true && pipeline['active_meeting'] == id) ||
             (pipeline['pending_meetings'] as List? ?? []).contains(id))
@@ -986,8 +1595,8 @@ extension _MeetingWorkspace on _WorkspaceState {
           ListTile(
             title: Text(detectionError),
             trailing: TextButton(
-              onPressed: () => run(() async {
-                await d.command('meetings.retry_detection', {'id': id});
+              onPressed: () => shell.run(() async {
+                await d.command(Operation.meetingsRetryDetection, {'id': id});
               }),
               child: const Text('Retry detection'),
             ),
@@ -1036,7 +1645,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                               if (item['body'] != null)
                                 GeneratedContent(
                                   item['body'] as String,
-                                  fontSize: answerFontSize,
+                                  fontSize: chatFeature.answerFontSize,
                                 ),
                               if (item['body'] != null)
                                 IconButton(
@@ -1056,7 +1665,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                                             as List)
                                       TextButton(
                                         onPressed: () =>
-                                            citation(source as Map),
+                                            chatFeature.citation(source as Map),
                                         child: Text(
                                           '[${source['citation']}] source revision ${source['revision']}',
                                         ),
@@ -1069,10 +1678,11 @@ extension _MeetingWorkspace on _WorkspaceState {
                                 'cancelled',
                               ].contains(item['state']))
                                 TextButton(
-                                  onPressed: () => run(() async {
-                                    await d.command('meetings.retry_question', {
-                                      'id': item['id'],
-                                    });
+                                  onPressed: () => shell.run(() async {
+                                    await d.command(
+                                      Operation.meetingsRetryQuestion,
+                                      {'id': item['id']},
+                                    );
                                   }),
                                   child: const Text('Try again'),
                                 ),
@@ -1085,12 +1695,18 @@ extension _MeetingWorkspace on _WorkspaceState {
                         title: SelectableText(row['text'] as String),
                         trailing: IconButton(
                           tooltip: 'Answer this question',
-                          onPressed: busy || asking || meetingEnhancing
+                          onPressed:
+                              shell.busy ||
+                                  chatFeature.asking ||
+                                  meetingEnhancing
                               ? null
                               : () {
-                                  questionFor(id).text = row['text'] as String;
-                                  update(() => meetingPanel = 'Chat');
-                                  unawaited(askQuestion(meetingScope: id));
+                                  chatFeature.questionFor(id).text =
+                                      row['text'] as String;
+                                  shell.update(() => meetingPanel = 'Chat');
+                                  unawaited(
+                                    chatFeature.askQuestion(meetingScope: id),
+                                  );
                                 },
                           icon: const Icon(Icons.arrow_upward),
                         ),
@@ -1103,10 +1719,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 
   Widget meetingTranscriptPanel(int id, {bool questions = false}) {
-    final rows = d.store.rows(
-      'SELECT * FROM transcript WHERE meeting_id=? ORDER BY id',
-      [id],
-    );
+    final rows = d.store.meetingTranscript(id);
     final displayed = questions
         ? rows.where((t) => (t['text'] as String).contains('?')).toList()
         : rows;
@@ -1194,14 +1807,21 @@ extension _MeetingWorkspace on _WorkspaceState {
                           trailing: questions
                               ? IconButton(
                                   tooltip: 'Answer this question',
-                                  onPressed: busy || asking || meetingEnhancing
+                                  onPressed:
+                                      shell.busy ||
+                                          chatFeature.asking ||
+                                          meetingEnhancing
                                       ? null
                                       : () {
-                                          questionFor(id).text =
+                                          chatFeature.questionFor(id).text =
                                               t['text'] as String;
-                                          update(() => meetingPanel = 'Chat');
+                                          shell.update(
+                                            () => meetingPanel = 'Chat',
+                                          );
                                           unawaited(
-                                            askQuestion(meetingScope: id),
+                                            chatFeature.askQuestion(
+                                              meetingScope: id,
+                                            ),
                                           );
                                         },
                                   icon: const Icon(Icons.arrow_upward),
@@ -1232,10 +1852,7 @@ extension _MeetingWorkspace on _WorkspaceState {
   Widget meetingSummaryPanel(int id, {bool actions = false}) {
     final kind = actions ? 'actions' : 'summary';
     final title = actions ? 'Action items' : 'Summary';
-    final versions = d.store.rows(
-      'SELECT * FROM artifacts WHERE meeting_id=? AND kind=? ORDER BY id DESC',
-      [id, kind],
-    );
+    final versions = d.store.meetingArtifacts(id, kind);
     final artifact = versions.firstOrNull;
     return Column(
       children: [
@@ -1251,9 +1868,9 @@ extension _MeetingWorkspace on _WorkspaceState {
               ),
               IconButton(
                 tooltip: 'Generate $title',
-                onPressed: busy || asking || meetingEnhancing
+                onPressed: shell.busy || chatFeature.asking || meetingEnhancing
                     ? null
-                    : () => run(() => generateMeeting(kind, id: id)),
+                    : () => shell.run(() => generateMeeting(kind, id: id)),
                 icon: const Icon(Icons.auto_awesome),
               ),
               if (artifact != null)
@@ -1299,7 +1916,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                     children: [
                       GeneratedContent(
                         (artifact['edited'] ?? artifact['generated']) as String,
-                        fontSize: answerFontSize,
+                        fontSize: chatFeature.answerFontSize,
                       ),
                       if (versions.length > 1)
                         ExpansionTile(
@@ -1337,8 +1954,8 @@ extension _MeetingWorkspace on _WorkspaceState {
         '${elapsed.inMinutes.toString().padLeft(2, '0')}:${(elapsed.inSeconds % 60).toString().padLeft(2, '0')}';
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onDoubleTap: () => update(() {
-        tab = 3;
+      onDoubleTap: () => shell.update(() {
+        shell.tab = 3;
         meetingId = recordingMeeting;
         meetingSidecarVisible = true;
         meetingImmersive = !meetingImmersive;
@@ -1377,16 +1994,16 @@ extension _MeetingWorkspace on _WorkspaceState {
                   : 'Pause transcribing',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
-              onPressed: busy || recording!.finishing
+              onPressed: shell.busy || recording!.finishing
                   ? null
-                  : () => run(() async {
+                  : () => shell.run(() async {
                       await d.command(
                         recording!.paused
-                            ? 'meetings.resume'
-                            : 'meetings.pause',
+                            ? Operation.meetingsResume
+                            : Operation.meetingsPause,
                         {'id': recordingMeeting},
                       );
-                      if (mounted) update(syncCapture);
+                      if (mounted) shell.update(syncCapture);
                     }),
               icon: Icon(
                 recording!.paused ? Icons.play_arrow : Icons.pause,
@@ -1398,7 +2015,9 @@ extension _MeetingWorkspace on _WorkspaceState {
               tooltip: 'Stop transcribing',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
-              onPressed: recording!.finishing ? null : () => run(stopRecording),
+              onPressed: recording!.finishing
+                  ? null
+                  : () => shell.run(stopRecording),
               icon: const Icon(
                 Icons.stop_circle_outlined,
                 color: _ink,
@@ -1409,8 +2028,8 @@ extension _MeetingWorkspace on _WorkspaceState {
               tooltip: 'Open transcription workspace',
               constraints: const BoxConstraints.tightFor(width: 36, height: 36),
               padding: const EdgeInsets.all(6),
-              onPressed: () => update(() {
-                tab = 3;
+              onPressed: () => shell.update(() {
+                shell.tab = 3;
                 meetingId = recordingMeeting;
                 meetingSidecarVisible = true;
               }),
@@ -1423,28 +2042,9 @@ extension _MeetingWorkspace on _WorkspaceState {
   }
 }
 
-class _CaptureWaveform extends CustomPainter {
-  final List<double> volumes;
-  _CaptureWaveform(List<double> levels) : volumes = List.of(levels);
+class _MeetingsView extends StatelessWidget {
+  final _MeetingsController controller;
+  const _MeetingsView(this.controller);
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = _ink
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    final level = volumes.isEmpty ? 0.0 : volumes.reduce(math.max);
-    final count = math.max(1, (size.width / 10).floor());
-    for (var i = 0; i < count; i++) {
-      final x = (i + .5) * size.width / count;
-      final amplitude = math.max(0.0, (level * 60).clamp(0, 12).toDouble());
-      canvas.drawLine(
-        Offset(x, size.height / 2 - amplitude),
-        Offset(x + 1, size.height / 2 + amplitude),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_CaptureWaveform old) => true;
+  Widget build(BuildContext context) => controller.meetings();
 }

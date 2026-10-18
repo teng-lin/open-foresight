@@ -6,7 +6,32 @@ namespace foresight {
 
 inline std::string quote(const std::string &s) {
   std::string out = "\"";
-  for (unsigned char c : s) {
+  for (size_t i = 0; i < s.size();) {
+    const auto c = static_cast<unsigned char>(s[i]);
+    if (c >= 0x80) {
+      const size_t width = c >= 0xc2 && c <= 0xdf   ? 2
+                           : c >= 0xe0 && c <= 0xef ? 3
+                           : c >= 0xf0 && c <= 0xf4 ? 4
+                                                    : 0;
+      bool valid = width && i + width <= s.size();
+      for (size_t j = 1; valid && j < width; ++j)
+        valid = (static_cast<unsigned char>(s[i + j]) & 0xc0) == 0x80;
+      if (valid && width >= 3) {
+        const auto second = static_cast<unsigned char>(s[i + 1]);
+        valid = !(c == 0xe0 && second < 0xa0) &&
+                !(c == 0xed && second >= 0xa0) &&
+                !(c == 0xf0 && second < 0x90) && !(c == 0xf4 && second >= 0x90);
+      }
+      if (valid) {
+        out.append(s, i, width);
+        i += width;
+      } else {
+        out += "\\ufffd";
+        ++i;
+      }
+      continue;
+    }
+    ++i;
     if (c == '"' || c == '\\') {
       out += '\\';
       out += c;

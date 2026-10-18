@@ -1,14 +1,15 @@
+import 'package:foresight_core/src/operations.dart';
+import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/speech_setup_view.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
-class QuickStartDomain extends Domain {
+class QuickStartDomain extends CommandFixtureDomain {
   final operations = <String>[];
   bool denyMicrophone = false, failCreate = false, needsSystemSetup = false;
   Completer<Map<String, dynamic>>? systemGate;
@@ -16,20 +17,20 @@ class QuickStartDomain extends Domain {
   QuickStartDomain(super.store, super.helper);
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]) async {
-    operations.add(method);
-    if (method == 'audio.capabilities')
+    operations.add(operation.wire);
+    if (operation == Operation.audioCapabilities)
       return {
         'microphone': denyMicrophone ? 'not_determined' : 'authorized',
         'system_audio_request': needsSystemSetup
             ? 'not_requested'
             : 'completed',
       };
-    if (method == 'audio.request_microphone')
+    if (operation == Operation.audioRequestMicrophone)
       return {'granted': false, 'microphone': 'denied'};
-    if (method == 'audio.request_system')
+    if (operation == Operation.audioRequestSystem)
       return await (systemGate?.future ??
           Future.value({
             'system_audio': 'unknown',
@@ -39,14 +40,15 @@ class QuickStartDomain extends Domain {
             'settings_url':
                 'x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture',
           }));
-    if (method == 'notifications.capabilities') return {'available': false};
-    if (method == 'meetings.create') {
+    if (operation == Operation.notificationsCapabilities)
+      return {'available': false};
+    if (operation == Operation.meetingsCreate) {
       await createGate?.future;
       if (failCreate)
         throw StateError('Meeting creation failed. Please retry.');
     }
-    if (method == 'meetings.start') return {};
-    return super.command(method, args);
+    if (operation == Operation.meetingsStart) return {};
+    return super.command(operation, args);
   }
 }
 
@@ -73,7 +75,9 @@ void main() {
   }
 
   Future<void> show(WidgetTester tester) async {
-    await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+    await tester.pumpWidget(
+      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+    );
     await tester.pumpAndSettle();
   }
 
@@ -284,9 +288,18 @@ void main() {
       await tester.tap(find.text('Request access'));
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      expect(state.captureCapabilities['microphone'], 'authorized');
-      expect(state.captureCapabilities['system_audio_request'], 'completed');
-      expect(state.captureCapabilities['permission_verified'], false);
+      expect(
+        state.integrationFeature.captureCapabilities['microphone'],
+        'authorized',
+      );
+      expect(
+        state.integrationFeature.captureCapabilities['system_audio_request'],
+        'completed',
+      );
+      expect(
+        state.integrationFeature.captureCapabilities['permission_verified'],
+        false,
+      );
       expect(find.text('Open System Settings'), findsOneWidget);
       expect(store.rows('SELECT * FROM meetings'), isEmpty);
       await tester.tap(find.text('Continue recording'));

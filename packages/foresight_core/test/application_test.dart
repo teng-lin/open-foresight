@@ -112,31 +112,38 @@ void main() {
     'source updates preserve IDs and increment revisions; notes return their own IDs',
     () async {
       final first =
-          await domain.command('sources.import', {
+          await domain.command(Operation.sourcesImport, {
                 'title': 'A',
                 'text': 'first',
                 'index': false,
               })
               as Map;
       final id = first['id'] as String;
-      await domain.command('sources.import', {
+      await domain.command(Operation.sourcesImport, {
         'id': id,
         'title': 'A',
         'text': 'second',
         'index': false,
       });
-      final source = await domain.command('sources.get', {'id': id}) as Map;
+      final source =
+          await domain.command(Operation.sourcesGet, {'id': id}) as Map;
       expect(source['content'], 'second');
       expect(source['trust'], 'untrusted');
       expect(source['content_policy'], contains('never instructions'));
       expect(source['revision'], 2);
       final a =
-          await domain.command('notes.save', {'title': 'a', 'body': 'original'})
+          await domain.command(Operation.notesSave, {
+                'title': 'a',
+                'body': 'original',
+              })
               as Map;
       final b =
-          await domain.command('notes.save', {'title': 'b', 'body': 'other'})
+          await domain.command(Operation.notesSave, {
+                'title': 'b',
+                'body': 'other',
+              })
               as Map;
-      await domain.command('notes.save', {
+      await domain.command(Operation.notesSave, {
         'id': a['id'],
         'title': 'a',
         'body': 'edited',
@@ -157,16 +164,18 @@ void main() {
     'transcript imports retain raw evidence and use the shared meeting indexing workflow',
     () async {
       final created =
-          await domain.command('meetings.create', {'title': 'Planning'}) as Map;
+          await domain.command(Operation.meetingsCreate, {'title': 'Planning'})
+              as Map;
       final id = created['id'] as int;
-      await domain.command('meetings.transcript', {
+      await domain.command(Operation.meetingsTranscript, {
         'id': id,
         'text': 'Mira sends draft Tuesday.',
         'source': 'imported',
         'start': 10,
         'end': 20,
       });
-      final meeting = await domain.command('meetings.get', {'id': id}) as Map;
+      final meeting =
+          await domain.command(Operation.meetingsGet, {'id': id}) as Map;
       expect(
         (meeting['transcript'] as List).single['text'],
         'Mira sends draft Tuesday.',
@@ -260,11 +269,11 @@ void main() {
       final id = domain.store.meeting('Planning');
       domain.store.saveMeetingNotes(id, 'original');
       domain.store.answer('question', 'answer', 'completed', [], 'fixture');
-      await domain.command('meetings.link_answer', {
+      await domain.command(Operation.meetingsLinkAnswer, {
         'id': id,
         'answer': domain.store.db.lastInsertRowId,
       });
-      await domain.command('workspace.clear');
+      await domain.command(Operation.workspaceClear);
       expect(domain.store.rows('PRAGMA foreign_key_check'), isEmpty);
       expect(domain.store.rows('SELECT * FROM meetings'), isEmpty);
       expect(domain.store.rows('SELECT * FROM meeting_notes'), isEmpty);

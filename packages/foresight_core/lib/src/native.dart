@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -112,7 +114,7 @@ class _GenerationRequest {
   _GenerationRequest(this.id, this.handle, this.epoch);
 }
 
-class NativeRuntime {
+class NativeRuntime implements GenerationStatus {
   late final DynamicLibrary lib;
   Pointer<Void> engine = nullptr, conversation = nullptr;
   String template = 'raw';
@@ -120,12 +122,14 @@ class NativeRuntime {
   final String libraryPath;
   int _epoch = 0;
   _GenerationRequest? _active;
+  @override
   bool get generating => _active != null;
   bool get loaded => engine != nullptr && conversation != nullptr;
   String _phase = 'unconfigured', _lastError = '';
   NativeRuntime(String path) : libraryPath = path {
     lib = DynamicLibrary.open(path);
   }
+  @override
   Map<String, dynamic> get effectiveState {
     if (engine == nullptr) return {'state': _phase, 'error': _lastError};
     final p = lib
@@ -174,7 +178,10 @@ class NativeRuntime {
           Int32 Function(Pointer<Void>),
           int Function(Pointer<Void>)
         >('fs_engine_destroy')(loaded);
-        throw StateError('Model load cancelled before adoption');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Model load cancelled before adoption',
+        );
       }
       engine = loaded;
       conversation = lib
@@ -293,9 +300,11 @@ class NativeRuntime {
     int? maxOutputTokens = 256,
   }) async* {
     if (engine == nullptr || conversation == nullptr) {
-      throw StateError('Generation model unavailable');
+      throw RpcError(RpcErrorCode.unavailable, 'Generation model unavailable');
     }
-    if (_active != null) throw StateError('Generation already in progress');
+    if (_active != null) {
+      throw RpcError(RpcErrorCode.busy, 'Generation already in progress');
+    }
     if ((tools == null) != (toolDispatcher == null) ||
         (tools != null &&
             ((!plainConversation && tools.isEmpty) ||
@@ -332,8 +341,7 @@ class NativeRuntime {
           prompt = '$systemPrompt\n\n$prompt';
         }
       }
-      final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
-      final schema = tools != null
+      final encodedSchema = tools != null
           ? jsonEncode({
               'tools': tools,
               'system_message': systemPrompt,
@@ -342,10 +350,12 @@ class NativeRuntime {
               if (stopTokenIds.isNotEmpty) 'stop_token_ids': stopTokenIds,
               if (maxOutputTokens == null) 'use_default_output_limit': true,
               if (maxInputTokens != null) 'max_input_tokens': maxInputTokens,
-            }).toNativeUtf8()
+            })
           : responseSchema == null
-          ? nullptr.cast<Utf8>()
-          : jsonEncode(responseSchema).toNativeUtf8();
+          ? null
+          : jsonEncode(responseSchema);
+      final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
+      final schema = encodedSchema?.toNativeUtf8() ?? nullptr.cast<Utf8>();
       late int rc;
       try {
         if (tools != null) {
@@ -429,7 +439,10 @@ class NativeRuntime {
         // close/load may have destroyed this handle while awaiting the timer
         // or while a consumer was processing a yielded event.
         if (owner.released || owner.epoch != _epoch) {
-          throw StateError('Generation closed before completion');
+          throw RpcError(
+            RpcErrorCode.cancelled,
+            'Generation closed before completion',
+          );
         }
         if (clock.elapsed >= timeout) {
           throw TimeoutException('Native generation timed out', timeout);
@@ -501,7 +514,10 @@ class NativeRuntime {
               if (interrupted.isCompleted) return;
               if (owner.released || owner.epoch != _epoch || owner.cancelled) {
                 interrupted.completeError(
-                  StateError('Tool request is no longer current'),
+                  RpcError(
+                    RpcErrorCode.cancelled,
+                    'Tool request is no longer current',
+                  ),
                 );
               } else if (clock.elapsed >= timeout) {
                 interrupted.completeError(
@@ -520,13 +536,17 @@ class NativeRuntime {
             }
           }
           if (owner.released || owner.epoch != _epoch || owner.cancelled) {
-            throw StateError('Tool request is no longer current');
+            throw RpcError(
+              RpcErrorCode.cancelled,
+              'Tool request is no longer current',
+            );
           }
           if (clock.elapsed >= timeout) {
             throw TimeoutException('Native generation timed out', timeout);
           }
+          final encodedReply = jsonEncode(message);
           final request = id.toNativeUtf8();
-          final reply = jsonEncode(message).toNativeUtf8();
+          final reply = encodedReply.toNativeUtf8();
           try {
             final result = lib
                 .lookupFunction<
@@ -584,6 +604,7 @@ class NativeRuntime {
   }
 
   /// Supplying an ID prevents a stale UI/controller from cancelling a new task.
+  @override
   bool cancel({String? requestId}) {
     final owner = _active;
     if (owner == null ||
@@ -599,6 +620,7 @@ class NativeRuntime {
     return true;
   }
 
+  @override
   void close() {
     _epoch++;
     _phase = 'unconfigured';

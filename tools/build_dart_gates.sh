@@ -17,7 +17,7 @@ case "$task_gate" in
     export FORESIGHT_NATIVE_LIBRARY="$task_build/native/${task_native##*/}"
     export FORESIGHT_HELPER="$task_build/services/helper/ForesightHelper"
     cd "$task_root/packages/foresight_core"
-    dart pub get
+    dart pub get --enforce-lockfile
     dart analyze
     if [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
       "$task_root/tools/coverage_core.sh"
@@ -30,7 +30,7 @@ case "$task_gate" in
   dart compile exe "$task_root/packages/foresight_core/bin/mcp.dart" -o "$task_build/application/foresight-mcp"
     ;;
   desktop)
-    (cd "$task_root/apps/desktop" && flutter pub get && flutter analyze && flutter test && flutter build "$task_platform" --release)
+    (cd "$task_root/apps/desktop" && flutter pub get --enforce-lockfile && flutter analyze && flutter test && flutter build "$task_platform" --release)
     ;;
   *) echo 'Gate must be core or desktop' >&2; exit 2 ;;
 esac
