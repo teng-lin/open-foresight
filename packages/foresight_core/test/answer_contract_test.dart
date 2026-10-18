@@ -3,6 +3,21 @@ import 'package:test/test.dart';
 import 'package:foresight_core/src/answer_contract.dart';
 
 void main() {
+  test(
+    'validation failures count reasons without weakening citation grammar',
+    () {
+      final before = answerValidationFailures['citation_group'] ?? 0;
+      expect(() => citationIds('[see S3 manual]', 3), throwsFormatException);
+      expect(answerValidationFailures['citation_group'], before + 1);
+      expect(() => GroundedAnswer.parse('{', {'S1'}), throwsFormatException);
+      expect(answerValidationFailures['json'], greaterThan(0));
+      expect(
+        () => answerValidationFailures['forged'] = 4,
+        throwsUnsupportedError,
+      );
+    },
+  );
+
   test('all IDs in comma, space and inclusive ranges must be selected', () {
     for (final group in [
       'S1, S2',
