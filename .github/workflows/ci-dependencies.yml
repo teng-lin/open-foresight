@@ -277,6 +277,17 @@ jobs:
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish readable current alias
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        # An older queued producer must not move the alias behind main.
+        task_main=$(git ls-remote origin refs/heads/main | cut -f1)
+        test -n "$task_main"
+        if [[ "$task_main" == "$GITHUB_SHA" ]]; then
+          task_package="${SDK_IMAGE%@*}"
+          docker buildx imagetools create --prefer-index=false --tag "$task_package:current" "$SDK_IMAGE"
+        fi
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
@@ -403,6 +414,17 @@ jobs:
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish readable current alias
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        # An older queued producer must not move the alias behind main.
+        task_main=$(git ls-remote origin refs/heads/main | cut -f1)
+        test -n "$task_main"
+        if [[ "$task_main" == "$GITHUB_SHA" ]]; then
+          task_package="${SDK_IMAGE%@*}"
+          docker buildx imagetools create --prefer-index=false --tag "$task_package:current" "$SDK_IMAGE"
+        fi
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
@@ -529,6 +551,17 @@ jobs:
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish readable current alias
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        # An older queued producer must not move the alias behind main.
+        task_main=$(git ls-remote origin refs/heads/main | cut -f1)
+        test -n "$task_main"
+        if [[ "$task_main" == "$GITHUB_SHA" ]]; then
+          task_package="${SDK_IMAGE%@*}"
+          docker buildx imagetools create --prefer-index=false --tag "$task_package:current" "$SDK_IMAGE"
+        fi
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
@@ -660,6 +693,17 @@ jobs:
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
+    - name: Publish readable current alias
+      env:
+        SDK_IMAGE: ${{ steps.resolved.outputs.image }}
+      run: |-
+        # An older queued producer must not move the alias behind main.
+        task_main=$(git ls-remote origin refs/heads/main | cut -f1)
+        test -n "$task_main"
+        if [[ "$task_main" == "$GITHUB_SHA" ]]; then
+          task_package="${SDK_IMAGE%@*}"
+          docker buildx imagetools create --prefer-index=false --tag "$task_package:current" "$SDK_IMAGE"
+        fi
     - name: Publish qualified SDK descriptor
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}

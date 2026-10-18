@@ -114,6 +114,34 @@ The temporary archive is removed after loading to reduce disk usage. After merge
 main can load and publish approved retained components without recompilation.
 No distribution credentials or user configuration are added to dependency archives.
 
+## Linux package names and cleanup
+
+All four GHCR packages remain build dependencies. Use the `current` tag to find
+what the latest dependency producer published for main:
+
+| Package under `ghcr.io/teng-lin/open-foresight/` | Purpose |
+| --- | --- |
+| `linux-core:current` | Ubuntu baseline, compiler, protobuf/gRPC and Flutter |
+| `linux-litert:current` | LiteRT inference libraries and extensions |
+| `linux-whisper:current` | Whisper and Vulkan speech dependencies |
+| `linux-sdk:current` | Combined SDK, Python environments and speech worker |
+
+`current` is a readable, mutable alias; consumers still use qualified descriptors
+with immutable digests and full content-identity tags. Older queued producers
+skip alias publication when their commit is no longer main. Existing images get
+aliases on the next producer run. Keep each package's `buildcache`, plus
+`linux-sdk:app-buildcache-x86-64`, for incremental builds.
+
+To retire old tagged images, run `python3 tools/cleanup_linux_packages.py` to
+write a reviewable plan, then `python3 tools/cleanup_linux_packages.py --apply
+linux-package-cleanup.json`. The CLI needs `read:packages` and `delete:packages`
+as well as Actions write access. Cleanup keeps current identities, cache tags,
+`current`, and manifests reachable from those tags. It removes obsolete matching
+CI descriptor/receipt artifacts before deleting their image versions. Historical
+CI reruns using those images will need dependency production again. Untagged
+versions are left alone: they can be child manifests or digest-only references.
+The apply step rejects changed main, active CI runs, and changed package tags.
+
 ## Normal checks and release readiness
 
 Documentation-only changes run the change/whitespace classifier, workflow lint,
