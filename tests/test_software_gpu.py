@@ -1,6 +1,7 @@
 """Software GPU limitations cannot mask fallback or decoder regressions."""
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -70,6 +71,10 @@ def test_decode_executes_on_gpu_with_sixteen_token_bound(tmp_path):
             return next(frames)
 
         def send(self, command):
+            payload = json.loads(command.split(" ", 2)[2])
+            assert payload["tools"]["tools"] == []
+            assert payload["tools"]["system_message"]
+            assert payload["max_output_tokens"] == 16
             commands.append(command)
 
     with (
