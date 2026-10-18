@@ -175,7 +175,7 @@ class _SourcesController extends _FeatureController {
                 ? null
                 : () {
                     Navigator.pop(context);
-                    editSource(s);
+                    unawaited(editSource(s).catchError(shell.reportAsyncError));
                   },
             child: const Text('Edit source'),
           ),
@@ -188,7 +188,7 @@ class _SourcesController extends _FeatureController {
     );
   }
 
-  void editSource(Map<String, Object?> s) async {
+  Future<void> editSource(Map<String, Object?> s) async {
     final text = TextEditingController(text: s['content'] as String);
     final saved = await shell.showInputDialog<bool>(
       builder: (context) => ServiceEditDialog(

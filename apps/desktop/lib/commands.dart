@@ -18,7 +18,14 @@ class AppCommands {
   bool get isClosed => _released;
   void Function(Object error)? onError;
   AppCommands._(this.server, this.path, this._lock) {
-    server.listen(_accept);
+    server.listen(
+      (socket) => unawaited(
+        _accept(socket).catchError((Object error) {
+          socket.destroy();
+          onError?.call(error);
+        }),
+      ),
+    );
   }
   void setHandler(CommandAction action) {
     if (!_handler.isCompleted) _handler.complete(action);
@@ -87,7 +94,7 @@ class AppCommands {
     }
   }
 
-  void _accept(Socket socket) async {
+  Future<void> _accept(Socket socket) async {
     try {
       var bytes = 0;
       final line = await socket
