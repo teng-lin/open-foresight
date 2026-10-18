@@ -62,6 +62,7 @@ int main(int argc, char **argv) {
   pid_t helpers[2] = {-1, -1};
   try {
     REQUIRE(argc == 3);
+    setenv("FORESIGHT_HELPER", argv[1], 1);
     fs::remove_all(root);
     const fs::path model_path = root / "model.litertlm";
     private_dir(root);
