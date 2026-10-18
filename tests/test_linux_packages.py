@@ -11,6 +11,8 @@ import tarfile
 import tempfile
 import unittest
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
     "linux_packages", ROOT / "packaging/package_linux.py"
@@ -828,6 +830,10 @@ def test_nlohmann_notice_is_in_shared_deb_rpm_arch_payload(tmp_path):
     assert "/usr/share/doc/open-foresight" in packages.PAYLOAD_PATHS
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="Linux maintainer scripts require GNU stat and Linux LP64 record locks",
+)
 def test_install_lock_rejects_untrusted_directories_and_preserves_legitimate_lock(
     tmp_path,
 ):
@@ -862,9 +868,6 @@ def test_install_lock_rejects_untrusted_directories_and_preserves_legitimate_loc
         assert ("Ignoring untrusted" in result.stderr) != refused
         (directory / "lock").unlink()
         directory.rmdir()
-
-
-import pytest  # noqa: E402
 
 
 @pytest.mark.parametrize(
