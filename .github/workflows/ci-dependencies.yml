@@ -195,6 +195,8 @@ jobs:
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Free hosted-runner space for retained image promotion
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
@@ -304,6 +306,8 @@ jobs:
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Free hosted-runner space for retained image promotion
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
@@ -413,6 +417,8 @@ jobs:
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Free hosted-runner space for retained image promotion
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
@@ -524,6 +530,8 @@ jobs:
       with:
         python-version: '3.13'
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    - name: Free hosted-runner space for retained image promotion
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
