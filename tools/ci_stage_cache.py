@@ -388,15 +388,40 @@ def find(
 
 
 def compilation_environment(environment):
-    """Compilation compatibility deliberately excludes only validation's date.
+    """Bind actual native compiler inputs, separately from validation metadata.
 
-    All actual compiler, SDK bytes, workspace, system packages, flags, locale,
-    tool/runtime versions and unknown settings remain bound. This is a warm
-    build input, never a successful validation result.
+    The former all-role collector recorded Dart/Flutter in native jobs although
+    native configure/build/CTest never invokes them. Their versions and locator
+    are irrelevant to compiler work. A verified SDK's complete extracted bytes
+    bind compatibility more precisely than its bookkeeping identity, which can
+    change solely because the SDK fingerprint algorithm migrated.
+
+    All actual compiler, SDK bytes/prefix, workspace, system packages, flags,
+    locale, and unknown settings remain bound. This is a warm build input, never
+    a successful validation result. Original receipts retain every field.
     """
-    return {
-        key: value for key, value in environment.items() if key != "utc_validation_date"
+    result = {
+        key: value
+        for key, value in environment.items()
+        if key not in ("utc_validation_date", "dart", "flutter")
     }
+    sdk = result.get("sdk")
+    if (
+        isinstance(sdk, dict)
+        and isinstance(sdk.get("content_sha256"), str)
+        and re.fullmatch(HEX, sdk["content_sha256"])
+        and isinstance(sdk.get("prefix"), str)
+        and Path(sdk["prefix"]).is_absolute()
+    ):
+        result["sdk"] = {key: value for key, value in sdk.items() if key != "identity"}
+    flags = result.get("validation_environment_sha256")
+    if isinstance(flags, dict):
+        result["validation_environment_sha256"] = {
+            key: value
+            for key, value in flags.items()
+            if key != "FORESIGHT_FLUTTER_EXECUTABLE"
+        }
+    return result
 
 
 def changed_configuration(root, producer):
