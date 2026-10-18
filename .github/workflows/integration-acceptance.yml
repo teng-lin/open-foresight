@@ -146,21 +146,26 @@ jobs:
           mkdir -p artifacts
           cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
           docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
+      # Package, CPU, GPU and audio checks share the image but report failures
+      # independently, so an installer failure does not hide later diagnostics.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
         id: models
         with:
           path: build/acceptance-models
           key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare checksum-pinned public model fixtures
+        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
         id: fixtures
         run: |
           python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output test-results/model-download
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-        if: steps.models.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.fixtures.outcome == 'success' && steps.models.outputs.cache-hit != 'true' }}
         with:
           path: build/acceptance-models
           key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Real CPU model, helper, citation and cancellation gates
+        if: ${{ !cancelled() && steps.image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
         run: |
           mkdir -p test-results/models test-results/virtual-audio
           chmod 0777 test-results/models test-results/virtual-audio
