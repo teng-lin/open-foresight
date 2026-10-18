@@ -197,7 +197,7 @@
         "Platform.isWindows ? 'Unix native fixture compiler' : false"
       ],
       "gate": "platform",
-      "reason": "Build platforms provide the C++ compiler; cache contract tests compile small owned fixtures without native models."
+      "reason": "Unix executable fixture compiler protocol uses Python and chmod; unsupported Windows hosts skip it while Linux/macOS platform jobs run it."
     }
   ]
 }
