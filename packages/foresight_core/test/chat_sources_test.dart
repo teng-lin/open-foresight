@@ -10,6 +10,11 @@ void expectResolved(
 }
 
 void main() {
+  test('tool text truncation preserves emoji and CJK scalar boundaries', () {
+    expect(truncateChatToolResult('甲🧪乙', 2), startsWith('甲🧪\n'));
+    expect(truncateChatToolResult('甲🧪', 2), '甲🧪');
+    expect(truncateChatToolResult('😀😀', 1).contains('�'), isFalse);
+  });
   test(
     'chat search shares a source table and deduplicates exact title/URL pairs',
     () {

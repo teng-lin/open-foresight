@@ -7,6 +7,16 @@ void main() {
     expect(isContextualFollowUp('What about that?'), isTrue);
     expect(isContextualFollowUp('这' * 121), isFalse);
     expect(isContextualFollowUp('An independent new topic'), isFalse);
+    for (final question in [
+      '这家公司的收入是多少？',
+      '那年发生了什么？',
+      '他是一位科学家吗？',
+      '再生能源有哪些？',
+      '더위의 원인은 무엇인가요?',
+    ]) {
+      expect(isContextualFollowUp(question), isFalse, reason: question);
+    }
+    expect(isContextualFollowUp('더 자세히 설명해 주세요'), isTrue);
   });
   test('history truncation preserves supplementary Unicode scalars', () {
     expect(runePrefix('甲🧪乙', 2), '甲🧪');

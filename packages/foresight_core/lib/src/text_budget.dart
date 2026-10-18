@@ -10,7 +10,9 @@ bool isContextualFollowUp(String question) =>
           r'\b(it|its|that|those|this|they|them|more|again)\b',
           caseSensitive: false,
         ).hasMatch(question) ||
-        RegExp(r'它|这|那|他|她|再|更多|それ|これ|その|では|続|추가|그것|이것|더').hasMatch(question));
+        RegExp(
+          r'这个|那个|这些|那些|它们|他们|她们|之前|更多|再解释|再说|それ|これ|その|では|続|추가|그것|이것|더 자세히|더 설명|더 알려',
+        ).hasMatch(question));
 
 String sourceIdentity(Map<String, Object?> source) {
   final uri = source['source_uri'] as String?;
