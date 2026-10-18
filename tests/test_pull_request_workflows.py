@@ -617,3 +617,31 @@ def test_macos_consumer_uses_same_pr_head_as_dependency_producer():
     source = json.dumps(job)
     assert source.count("tools/ci_macos_dependencies.py") == 2
     assert "--wait 5400" not in source
+
+
+def test_every_non_reusable_job_has_a_finite_timeout():
+    for path in WORKFLOWS.glob("*.yml"):
+        for name, job in parse_workflow(path.read_text()).get("jobs", {}).items():
+            if "uses" not in job:
+                assert 0 < job.get("timeout-minutes", 0) <= 300, (path.name, name)
+
+
+def test_every_flutter_clone_verifies_the_reviewed_framework_commit():
+    pins = json.loads((ROOT / "tools/pins.json").read_text())
+    for path in WORKFLOWS.glob("*.yml"):
+        for job in parse_workflow(path.read_text()).get("jobs", {}).values():
+            for step in job.get("steps", []):
+                run = step.get("run", "")
+                if "flutter/flutter.git" in run:
+                    assert pins["flutter"]["version"] in run, path.name
+                    assert pins["flutter"]["commit"] in run, path.name
+                    assert run.index("flutter/flutter.git") < run.index(
+                        pins["flutter"]["commit"]
+                    ), path.name
+
+
+def test_protobuf_plugin_uses_a_locked_local_tool_package():
+    workflow = (WORKFLOWS / "rpc-contracts.yml").read_text()
+    assert "dart pub global activate" not in workflow
+    assert "cd tools/protoc_plugin && dart pub get --enforce-lockfile" in workflow
+    assert (ROOT / "tools/protoc_plugin/pubspec.lock").is_file()

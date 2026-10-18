@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1
 ARG CORE_IMAGE
 FROM ${CORE_IMAGE} AS whisper
+ARG UBUNTU_SNAPSHOT=20261001T000000Z
+ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
+LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
 ARG WHISPER_COMMIT=0c7be696371069e0baa2515ed7aa08d5a5473aa6
 RUN git init /opt/whisper && cd /opt/whisper && git remote add origin https://github.com/ggml-org/whisper.cpp.git && \
     git fetch --depth=1 origin "$WHISPER_COMMIT" && git checkout --detach FETCH_HEAD

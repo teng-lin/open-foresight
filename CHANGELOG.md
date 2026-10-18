@@ -6,6 +6,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Changed
+
+- Build tooling pins the Dart protobuf compiler and Ubuntu archive snapshot; monthly snapshot changes arrive as draft review PRs. Weekly dependency and vulnerability reports keep lockfile updates visible. Every CI job has a finite timeout.
+
 ### Security
 
 - Dependency artifact promotion binds output to the producing workflow and tools and accepts only the final reviewed PR head.

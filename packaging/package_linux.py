@@ -623,6 +623,7 @@ def main():
                 "format": args.format,
                 "sha256": digest(output),
                 "source_date_epoch": epoch,
+                "ubuntu_snapshot": manifest.get("ubuntu_snapshot"),
                 "license": METADATA["license"],
             },
             indent=2,

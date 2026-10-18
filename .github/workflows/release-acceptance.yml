@@ -22,6 +22,7 @@ concurrency:
 
 jobs:
   release:
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     permissions:
       contents: write # Read unpublished draft metadata before publication.
@@ -171,6 +172,7 @@ jobs:
           retention-days: 30
 
   acceptance:
+    timeout-minutes: 5
     if: always()
     needs: [release, linux, macos]
     runs-on: ubuntu-24.04

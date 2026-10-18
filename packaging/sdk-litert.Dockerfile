@@ -1,7 +1,10 @@
 # syntax=docker/dockerfile:1
 ARG CORE_IMAGE
 FROM ${CORE_IMAGE} AS litert-extensions
-RUN apt-get update && apt-get install -y --no-install-recommends git-lfs libc++-dev libc++abi-dev zip && \
+ARG UBUNTU_SNAPSHOT=20261001T000000Z
+ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
+LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
+RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends git-lfs libc++-dev libc++abi-dev zip && \
     rm -rf /var/lib/apt/lists/* && \
     curl -fL --retry 3 -o /usr/local/bin/bazel \
       https://github.com/bazelbuild/bazel/releases/download/7.6.1/bazel-7.6.1-linux-x86_64 && \

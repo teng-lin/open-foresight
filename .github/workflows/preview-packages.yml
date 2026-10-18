@@ -22,6 +22,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   plan:
+    timeout-minutes: 10
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
@@ -238,6 +239,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   publish:
+    timeout-minutes: 10
     needs: [plan, build, linux, macos]
     runs-on: ubuntu-24.04
     steps:

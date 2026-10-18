@@ -41,6 +41,7 @@ jobs:
     - name: Install pinned Dart for live release distribution acceptance
       run: |-
         git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
         echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
         "$RUNNER_TEMP/flutter/bin/dart" --version
     - name: Verify Google sign-in from the promoted bundle

@@ -25,7 +25,8 @@ jobs:
           echo '6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7  /tmp/protoc.zip' | sha256sum --check
           unzip -q /tmp/protoc.zip -d /tmp/protoc
           echo '/tmp/protoc/bin' >> "$GITHUB_PATH"
-          dart pub global activate protoc_plugin 24.0.0
+          (cd tools/protoc_plugin && dart pub get --enforce-lockfile)
+          echo "$PWD/tools/protoc_plugin/bin" >> "$GITHUB_PATH"
           python -m pip install --require-hashes -r requirements-dev.lock
       - name: Verify protobuf shape and generated Dart drift
         run: |

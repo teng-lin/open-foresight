@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ['*']
+  - package-ecosystem: docker
+    directory: /packaging
+    schedule:
+      interval: weekly
+    groups:
+      build-images:
+        patterns: ['*']
+  - package-ecosystem: pub
+    directories:
+      - /apps/desktop
+      - /packages/foresight_core
+      - /packages/foresight_test_support
+      - /tools/protoc_plugin
+    schedule:
+      interval: weekly
+    groups:
+      dart:
+        patterns: ['*']
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ['*']

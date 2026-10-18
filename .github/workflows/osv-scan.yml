@@ -1,0 +1,26 @@
+name: Weekly vulnerability report
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+permissions:
+  contents: read
+jobs:
+  scan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Report lockfile vulnerabilities without blocking publication
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@9a96bc4d2b09685b6142bcfe25a3dc17cb2d7347
+        with:
+          scan-args: |-
+            --lockfile=requirements.txt:requirements-dev.lock
+            --lockfile=requirements.txt:requirements-format.lock
+            --lockfile=requirements.txt:requirements-litert.lock
+            --lockfile=packages/foresight_core/pubspec.lock
+            --lockfile=apps/desktop/pubspec.lock

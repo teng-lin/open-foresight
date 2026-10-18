@@ -42,7 +42,7 @@ jobs:
         SOURCE: ${{ inputs.source || github.sha }}
       run: python tools/preview_packages.py stamp --version "$VERSION" --build-number "$BUILD_NUMBER" --label "$BUILD_LABEL" --source "$SOURCE"
     - name: Install build tools
-      run: brew install cmake ninja cocoapods protobuf git-lfs icu4c
+      run: brew install cmake ninja cocoapods git-lfs icu4c
     - name: Install Python development dependencies
       run: |
         python -m venv .venv
@@ -293,6 +293,7 @@ jobs:
         path: test-results/document-sandbox/
         if-no-files-found: error
   changes:
+    timeout-minutes: 5
     runs-on: ubuntu-24.04
     outputs:
       selection: ${{ steps.changes.outputs.selection }}
@@ -335,6 +336,7 @@ jobs:
     - name: Validate release version copies
       run: python tools/app_version.py --check
   distribution-number:
+    timeout-minutes: 5
     needs: changes
     if: >-
       github.ref == 'refs/heads/main' && !inputs.preview &&
@@ -488,6 +490,7 @@ jobs:
       !cancelled() && needs.changes.outputs.linux_bundle == 'true' && github.ref == 'refs/heads/main' &&
       (inputs.preview || needs.distribution-number.result == 'success')
   platform-checks:
+    timeout-minutes: 5
     if: always()
     needs:
     - changes

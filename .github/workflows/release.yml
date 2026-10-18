@@ -68,6 +68,7 @@ jobs:
     with:
       tag: ${{ needs.prepare.outputs.tag }}
   publish:
+    timeout-minutes: 10
     if: always()
     needs: [prepare, linux, macos, acceptance]
     runs-on: ubuntu-24.04

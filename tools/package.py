@@ -343,6 +343,7 @@ esac
     ]
     version, build_number = read_version()
     manifest = {
+        "ubuntu_snapshot": os.environ.get("FORESIGHT_UBUNTU_SNAPSHOT"),
         "build_id": f"open-foresight-{version}+{commit[:12]}",
         "revision": commit,
         "version": version,
