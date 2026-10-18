@@ -490,14 +490,19 @@ jobs:
     def test_linux_pull_request_runs_offline_pytest(self):
         workflow = self.workflow("macos.yml")
         self.assertIn("pull_request", workflow["on"])
-        found = []
-        for name, job in workflow["jobs"].items():
-            if not _linux_job(job):
-                continue
-            for step in job.get("steps") or []:
-                if re.search(r"(^|\s)pytest(\s|$)", step.get("run") or ""):
-                    found.append(name)
-        self.assertIn("linux-native", found)
+        caller = workflow["jobs"]["linux-native"]
+        self.assertEqual(
+            caller["uses"], "./.github/workflows/linux-platform-stages.yml"
+        )
+        child = self.workflow("linux-platform-stages.yml")
+        native = child["jobs"]["native-linux"]
+        self.assertTrue(_linux_job(native))
+        self.assertTrue(
+            any(
+                re.search(r"(^|\s)pytest(\s|$)", step.get("run") or "")
+                for step in native["steps"]
+            )
+        )
 
     def test_linux_sdk_consumers_forward_their_own_pull_request_context(self):
         consumers = set()
@@ -607,8 +612,18 @@ def test_macos_consumer_uses_same_pr_head_as_dependency_producer():
         == "${{ inputs.source || github.event.pull_request.head.sha || github.sha }}"
     )
     source = json.dumps(job)
-    assert source.count("tools/ci_macos_dependencies.py") == 2
+    setup = (ROOT / ".github/actions/setup-macos-stage/action.yml").read_text()
+    assert source.count("tools/ci_macos_dependencies.py") == 1
+    assert setup.count("tools/ci_macos_dependencies.py") == 1
     assert "--wait 5400" not in source
+    stages = parse_workflow((WORKFLOWS / "macos-platform-stages.yml").read_text())
+    for stage in stages["jobs"].values():
+        checkout = next(
+            step
+            for step in stage["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+        )
+        assert checkout["with"]["ref"] == "${{ inputs.source }}"
 
 
 def test_every_non_reusable_job_has_a_finite_timeout():
