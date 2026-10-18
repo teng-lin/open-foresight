@@ -25,7 +25,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
     args = parser.parse_args()
-    with urllib.request.urlopen(WHEEL_URL, timeout=120) as response:
+    if not WHEEL_URL.startswith("https://files.pythonhosted.org/"):
+        raise ValueError("Pinned LiteRT wheel must use the official HTTPS transport")
+    with urllib.request.urlopen(WHEEL_URL, timeout=120) as response:  # noqa: S310 - HTTPS host validated above.
         data = response.read()
     if hashlib.sha256(data).hexdigest() != WHEEL_SHA256:
         raise RuntimeError("LiteRT-LM archive checksum mismatch")
