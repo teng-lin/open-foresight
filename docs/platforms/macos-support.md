@@ -228,14 +228,15 @@ stable helper bundle and explicit authorization. Scheduling remains in the
 application service. Google sign-in is explicit; install application OAuth
 configuration with `--google-client`, never account credentials or tokens.
 
-The packager copies the full NumPy distribution license hierarchy and the
-SentencePiece upstream notice. NumPy extension linkage participates in the same
-Mach-O relocation, architecture, minimum-OS and signing checks as other nested
-binaries. `tools/test_packaged_query_worker.py --worker build/services/inference/foresight-query --model
-REGISTERED_MODEL` copies and relocates the actual prefix, runs from a moved path
-containing spaces with poisoned working-directory imports, and checks both a
-positive and empty detector result. Its output report belongs under ignored
-`test-results`; it does not copy the registered model into the test bundle.
+The packager includes the SentencePiece upstream notice. The native detector
+participates in the Mach-O dependency relocation, architecture, minimum-OS, and
+signing checks. `tools/test_packaged_query_worker.py --worker
+build/services/inference/foresight-query` copies and relocates the native worker,
+runs its math self-check from a moved path containing spaces without a usable PATH,
+and checks unavailable-model rejection. Supplying `--model REGISTERED_MODEL`
+also checks a positive and an empty detector result using an explicitly provided,
+authenticated decrypted fixture. Its output report belongs under ignored
+`test-results`; the test bundle contains no Python runtime or registered model.
 
 ## Capture
 

@@ -242,7 +242,10 @@ def main(argv=None):
         os.environ, FORESIGHT_LITERT_LIBRARY=str(values["FORESIGHT_LITERT_LIBRARY"])
     )
     subprocess.run(
-        [str(values["FORESIGHT_MODEL_WORKER"]), "--check"], env=environment, check=True, timeout=300
+        [str(values["FORESIGHT_MODEL_WORKER"]), "--check"],
+        env=environment,
+        check=True,
+        timeout=30,
     )
     notarized = False
     if args.notary_profile:

@@ -104,7 +104,7 @@ remain unverified.
 ## Persistent tool worker
 
 The shared generation worker advertises `{"worker_protocol":1}` from `--probe` and
-accept `--serve --model MODEL`. They retain one engine until `shutdown` or input
+accepts `--serve --model MODEL`. It retains one engine until `shutdown` or input
 EOF. The first protocol line is `ready 1`. Request IDs are positive monotonically
 increasing integers, with one request active at a time:
 
@@ -142,9 +142,8 @@ separate already-prefilled fixture confirmed that the native clone API copies
 KV state and isolates canceled/generated clones. No synthetic warmup message is
 sent. Both platforms use the same typed C API clone function.
 
-Validation includes routed-reply/cancellation/disconnect fixtures in
-`tests/inference/tool_conversation.cpp`, base replacement/history/summary and
-native cancellation fixtures in `tests/inference/tool_conversation.cpp`, and an
+Validation includes routed reply, cancellation, disconnect, base replacement,
+and history/summary fixtures in `tests/inference/tool_conversation.cpp`, and an
 ignored real GPU report at
 `test-results/reference-functions/streaming/persistent-worker-report.json`.
 The real report used one worker for two isolated requests, canceled a third

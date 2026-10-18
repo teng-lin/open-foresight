@@ -36,7 +36,9 @@ def verify(worker, model=None):
         app.rename(moved)
         worker = moved / "Contents/Resources/bin/foresight-query"
         environment = {"PATH": "/nonexistent", "HOME": str(root)}
-        subprocess.run([str(worker), "--check"], env=environment, cwd="/", check=True, timeout=300)
+        subprocess.run(
+            [str(worker), "--check"], env=environment, cwd="/", check=True, timeout=30
+        )
         requests = [
             {
                 "id": "positive",

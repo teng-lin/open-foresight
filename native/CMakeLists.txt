@@ -87,7 +87,7 @@ if(BUILD_TESTING)
   add_executable(native_raw_query_probe ../tests/inference/raw_query_probe.cpp)
   target_compile_features(native_raw_query_probe PRIVATE cxx_std_20)
   target_include_directories(native_raw_query_probe PRIVATE ../third_party/litert_lm)
-  target_link_libraries(native_raw_query_probe PRIVATE ${CMAKE_DL_LIBS})
+  target_link_libraries(native_raw_query_probe PRIVATE ${CMAKE_DL_LIBS} ${LITERT_HASH_LIBRARIES} nlohmann_json::nlohmann_json)
   add_test(NAME native_model_type COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_model_type.py $<TARGET_FILE:foresight_native>)
   add_test(NAME native_lifecycle COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native.py $<TARGET_FILE:foresight_native>)
