@@ -187,6 +187,7 @@ class Service : public rpc::RagService::Service,
     view = state;
   }
   void crash(const char *step) {
+#if FORESIGHT_ENABLE_TEST_HOOKS
     if (!allow_test)
       return;
     // Test-only publication barrier: prove active readers never wait on the
@@ -207,6 +208,9 @@ class Service : public rpc::RagService::Service,
     const char *env = getenv("FORESIGHT_CRASH_AT");
     if (value == step || (env && std::string(env) == step))
       _exit(86);
+#else
+    (void)step;
+#endif
   }
   uint64_t revision(const std::string &id) {
     Statement q(db, "SELECT revision FROM linux.source_revisions WHERE id=?");

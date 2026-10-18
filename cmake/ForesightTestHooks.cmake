@@ -1,0 +1,7 @@
+include_guard(GLOBAL)
+set(_foresight_test_hooks_default ON)
+if(CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+  set(_foresight_test_hooks_default OFF)
+endif()
+option(FORESIGHT_ENABLE_TEST_HOOKS "Compile development-only failure injection hooks" ${_foresight_test_hooks_default})
+unset(_foresight_test_hooks_default)

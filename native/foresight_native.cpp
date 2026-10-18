@@ -1593,16 +1593,16 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
               // PipeWire (including Ubuntu 24.04) has no --raw option. The
               // production path writes to an owned .raw FIFO so stdout
               // diagnostics cannot be PCM.
-              std::vector<std::string> args{c->runtime.empty() ? "pw-record"
-                                                               : c->runtime,
-                                            "--format",
-                                            "s16",
-                                            "--rate",
-                                            std::to_string(c->rate),
-                                            "--channels",
-                                            "1",
-                                            "--target",
-                                            c->target};
+              std::vector<std::string> args{
+                  c->runtime.empty() ? "/usr/bin/pw-record" : c->runtime,
+                  "--format",
+                  "s16",
+                  "--rate",
+                  std::to_string(c->rate),
+                  "--channels",
+                  "1",
+                  "--target",
+                  c->target};
               if (c->playback || c->target != "auto") {
                 args.push_back("--properties");
                 std::string properties = "{ ";

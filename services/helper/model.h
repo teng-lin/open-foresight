@@ -270,10 +270,12 @@ struct Model {
                                                         : "document"}})
               .get<std::vector<double>>();
     else {
+#if FORESIGHT_ENABLE_TEST_HOOKS
       const char *delay = getenv("FORESIGHT_TEST_DELAY_MS");
       if (delay)
         std::this_thread::sleep_for(
             std::chrono::milliseconds(std::min(100, atoi(delay))));
+#endif
       v.resize(dimensions);
       std::string word;
       auto add = [&] {
