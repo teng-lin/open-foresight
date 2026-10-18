@@ -313,10 +313,10 @@ class LinuxDocumentImportTest(unittest.TestCase):
         self.assertNotIn('unrtf', tool)
         missing = [name for name in ('pdftotext', 'unrtf', 'bwrap', 'dart') if shutil.which(name) is None]
         if missing:
-            print('PDF/RTF import was not executed; missing: ' + ', '.join(missing)
-                  + '. Package metadata declares poppler-utils (deb, rpm), poppler (arch), and unrtf. '
-                  + 'No successful import was fabricated.', flush=True)
-            return
+            diagnostic = 'PDF/RTF import prerequisites missing: ' + ', '.join(missing)
+            if os.environ.get('FORESIGHT_REQUIRE_DOCUMENT_SANDBOX') == '1':
+                self.fail(diagnostic)
+            self.skipTest(diagnostic)
         phrase = 'Foresight import fixture'
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

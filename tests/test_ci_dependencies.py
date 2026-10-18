@@ -151,6 +151,7 @@ class SelectionTests(unittest.TestCase):
             jobs = {name: {'result': value} for name, value in {
                 'changes': 'success', 'macos': 'success' if build else 'skipped',
                 'linux-native': 'success' if build else 'skipped',
+                'linux-document-imports': 'success' if build else 'skipped',
                 'linux-bundle': 'success' if build and main else 'skipped'}.items()}
             changes.check_gates(jobs, build, main)
             for name in jobs:

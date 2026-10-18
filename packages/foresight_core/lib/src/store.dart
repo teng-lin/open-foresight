@@ -899,56 +899,82 @@ class Parser {
     String tool,
     String path,
     List<String> options,
-  ) {
+  ) async {
     final file = File(path).resolveSymbolicLinksSync();
     final isolated = '/input/document${tool == 'pdftotext' ? '.pdf' : '.rtf'}';
     // A fresh user/PID/network/mount namespace exposes only system runtime
     // libraries and the one selected input. Profile files and credentials are
     // absent. Failure to establish the sandbox fails the import closed.
-    return _extractProcess('/usr/bin/bwrap', [
-      '--unshare-all',
-      '--die-with-parent',
-      '--new-session',
-      '--cap-drop',
-      'ALL',
-      '--ro-bind',
-      '/usr',
-      '/usr',
-      '--ro-bind-try',
-      '/lib',
-      '/lib',
-      '--ro-bind-try',
-      '/lib64',
-      '/lib64',
-      '--ro-bind-try',
-      '/etc/fonts',
-      '/etc/fonts',
-      '--proc',
-      '/proc',
-      '--dev',
-      '/dev',
-      '--tmpfs',
-      '/tmp',
-      '--dir',
-      '/input',
-      '--ro-bind',
-      file,
-      isolated,
-      '--chdir',
-      '/input',
-      '--clearenv',
-      '--setenv',
-      'HOME',
-      '/tmp',
-      '--setenv',
-      'PATH',
-      '/nonexistent',
-      '--',
-      '/usr/bin/$tool',
-      ...options,
-      isolated,
-      if (tool == 'pdftotext') '-',
-    ]);
+    ProcessResult result;
+    try {
+      result = await _extractProcess('/usr/bin/bwrap', [
+        '--unshare-all',
+        '--die-with-parent',
+        '--new-session',
+        '--cap-drop',
+        'ALL',
+        '--ro-bind',
+        '/usr',
+        '/usr',
+        '--ro-bind-try',
+        '/lib',
+        '/lib',
+        '--ro-bind-try',
+        '/lib64',
+        '/lib64',
+        '--ro-bind-try',
+        '/etc/fonts',
+        '/etc/fonts',
+        '--proc',
+        '/proc',
+        '--dev',
+        '/dev',
+        '--tmpfs',
+        '/tmp',
+        '--dir',
+        '/input',
+        '--ro-bind',
+        file,
+        isolated,
+        '--chdir',
+        '/input',
+        '--clearenv',
+        '--setenv',
+        'HOME',
+        '/tmp',
+        '--setenv',
+        'PATH',
+        '/nonexistent',
+        '--',
+        '/usr/bin/$tool',
+        ...options,
+        isolated,
+        if (tool == 'pdftotext') '-',
+      ]);
+    } on ProcessException catch (error) {
+      throw StateError(
+        'Cannot start the document sandbox at /usr/bin/bwrap. '
+        'Install the bubblewrap package and check executable permissions: '
+        '${error.message}',
+      );
+    }
+    final diagnostic = result.stderr.toString().trim();
+    final namespaceFailure =
+        diagnostic.startsWith('bwrap:') &&
+        !RegExp(r'^bwrap:\s*exec\w*\b').hasMatch(diagnostic) &&
+        RegExp(
+          r'namespace|unshare|userns|[ug]id map|capset',
+          caseSensitive: false,
+        ).hasMatch(diagnostic);
+    if (result.exitCode != 0 && namespaceFailure) {
+      throw StateError(
+        'The document sandbox could not start. Check the bubblewrap installation '
+        'and host user-namespace permissions. On Ubuntu 24.04, an administrator '
+        'may need to allow bubblewrap user namespaces in its AppArmor profile. '
+        '$diagnostic',
+      );
+    }
+    return result;
   }
 
   Future<(String, String)> extract(String path) async {

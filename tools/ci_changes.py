@@ -16,6 +16,7 @@ def check_gates(jobs, build, main):
     """A skipped selected job is a failure, including after dependency failures."""
     expected = {'changes': 'success', 'macos': 'success' if build else 'skipped',
                 'linux-native': 'success' if build else 'skipped',
+                'linux-document-imports': 'success' if build else 'skipped',
                 'linux-bundle': 'success' if build and main else 'skipped'}
     for name, result in expected.items():
         if jobs.get(name, {}).get('result') != result:
