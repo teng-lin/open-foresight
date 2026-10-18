@@ -11,7 +11,7 @@ def aggregate(directory, tag, evidence):
     installers = []
     suffixes = set()
     validation_artifacts = []
-    identities = {}
+    identities: dict[str, dict[str, str]] = {}
     for receipt in sorted(directory.glob("*/assets/installer.json")):
         identity = json.loads(receipt.read_text())
         artifact = receipt.parents[1]
