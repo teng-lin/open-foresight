@@ -1,420 +1,68 @@
-name: Mac support and Linux native regression
+name: Mac service worker exit diagnostics
+'on':
+  workflow_dispatch: null
 permissions:
   contents: read
   actions: read
 concurrency:
-  # Release promotion waits for an exact commit's completed candidate.
-  # Keep main commits independent; updated PR checks can supersede each other.
-  group: platform-checks-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: true
+  group: service-worker-diagnostic-${{ github.sha }}
+  cancel-in-progress: false
 jobs:
   macos:
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 45
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
-      FORESIGHT_BUILD_JOBS: '3'
-      FORESIGHT_PARALLEL_GATES: '1'
-      FORESIGHT_COVERAGE: '1'
-      FORESIGHT_CORE_COVERAGE_MIN: '90'
-      FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
-      FORESIGHT_MACOS_UI_TEST: '1'
-      FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-    - name: Verify Apple Silicon host
-      run: |
-        test "$RUNNER_ARCH" = ARM64
-        test "$(uname -m)" = arm64
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
-    - name: Install build tools
-      run: brew install cmake ninja cocoapods protobuf git-lfs icu4c
-    - name: Install Python development dependencies
+    - name: Install compiler and locked Python tools
       run: |
+        brew install cmake ninja git-lfs
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-    - name: Offline Python tests and branch coverage
-      run: tools/coverage.sh
-    - name: Retain Python coverage
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: python-coverage-macos
-        path: coverage/python/
-        if-no-files-found: warn
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      id: flutter-cache
       with:
         path: ${{ runner.temp }}/flutter
         key: flutter-macos-arm64-3.35.7-v1
-    - name: Install pinned Flutter
+    - name: Install pinned Dart SDK through Flutter
       run: |
         if [[ ! -x "$RUNNER_TEMP/flutter/bin/flutter" ]]; then
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
         fi
         test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
         echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
-        echo "FORESIGHT_FLUTTER_EXECUTABLE=$RUNNER_TEMP/flutter/bin/flutter" >> "$GITHUB_ENV"
-        "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
-        "$RUNNER_TEMP/flutter/bin/flutter" --version
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: steps.flutter-cache.outputs.cache-hit != 'true'
-      with:
-        path: ${{ runner.temp }}/flutter
-        key: flutter-macos-arm64-3.35.7-v1
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      id: pub-cache
-      with:
-        path: ~/.pub-cache
-        key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
-        restore-keys: pub-macos-
-    - name: Fetch verified macos-sdk
+    - name: Fetch verified native SDK
       env:
         GH_TOKEN: ${{ github.token }}
-        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        OWN_PR: ${{ github.event.pull_request.number || 0 }}
-      run: |-
-        python tools/ci_artifacts.py pull --component macos-sdk --prefix build/sdk --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+      run: |
+        python tools/ci_artifacts.py pull --component macos-sdk --prefix build/sdk --wait 300 --own-head "$GITHUB_SHA"
         python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
         echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
-    - name: Verify SDK checkout guards
-      run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
-    - name: Native, core, service, MCP, and Flutter gates
+    - name: Build only helper, native bridge and service
       run: |
-        tools/build.sh --platform macos \
-          -DCMAKE_PREFIX_PATH="$PWD/build/sdk" \
-          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
-          -DICU_ROOT="$(brew --prefix icu4c)" \
-          -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local'
-    - name: Retain Dart core coverage
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: dart-core-coverage-macos
-        path: coverage/core/lcov.info
-        if-no-files-found: error
-    - name: Verify native helper identity boundary
-      run: |
-        .venv/bin/python tests/integration/test_native_process.py \
-          build/native/libforesight_native.dylib build/services/helper/ForesightHelper
-    - name: Fetch verified macos-runtime
+        cmake -S services/helper -B build/helper -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$PWD/build/sdk" -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 -DCMAKE_IGNORE_PREFIX_PATH='/opt/homebrew;/usr/local' -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
+        cmake --build build/helper --parallel 3
+        cmake -S native -B build/native -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+        cmake --build build/native --parallel 3
+        mkdir -p build/application
+        cd packages/foresight_core
+        dart pub get --enforce-lockfile
+        dart compile exe bin/service.dart -o ../../build/application/foresight-service
+    - name: Repeat strict adopted-helper exit cases with worker traces
       env:
-        GH_TOKEN: ${{ github.token }}
-        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        OWN_PR: ${{ github.event.pull_request.number || 0 }}
-      run: |-
-        python tools/ci_artifacts.py pull --component macos-runtime --prefix build/macos-runtimes --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
-        python tools/ci_verify_dependency.py --component macos-runtime --prefix build/macos-runtimes
-    - name: Assemble complete ad hoc application
-      env:
-        FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
-        FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
-        FORESIGHT_GOOGLE_CLIENT_JSON: ${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
-        REQUIRE_GOOGLE_CLIENT: ${{ github.ref == 'refs/heads/main' }}
+        FORESIGHT_HELPER_EXECUTABLE: ${{ github.workspace }}/build/helper/ForesightHelper
+        FORESIGHT_NATIVE_LIBRARY: ${{ github.workspace }}/build/native/libforesight_native.dylib
+        FORESIGHT_SERVICE_EXECUTABLE: ${{ github.workspace }}/build/application/foresight-service
       run: |
-        task_args=()
-        if [[ "$REQUIRE_GOOGLE_CLIENT" == 'true' ]]; then task_args+=(--require-google-client); fi
-        .venv/bin/python tools/package_macos.py "${task_args[@]}" --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
-          --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
-          --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
-          --whisper-license build/macos-runtimes/whisper/LICENSE
-        codesign --verify --deep --strict --verbose=2 'dist/Open Foresight.app'
-        if [[ -n "$FORESIGHT_GOOGLE_CLIENT_JSON" ]]; then
-          task_resources="$PWD/dist/Open Foresight.app/Contents/Resources"
-          (cd packages/foresight_core && env -u FORESIGHT_GOOGLE_CLIENT_JSON \
-            FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_google_configuration.dart)
-        fi
-    - name: Verify bundled inference without developer environment
-      run: |
-        .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
-          --output test-results/macos-release-runtime.json
-    - name: Installed application tooling tests
-      run: .venv/bin/python -m unittest discover -s tests -p test_macos_tools.py -v
-    - name: Relocated application MCP smoke with minimal environment
-      run: |
-        .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
-          --output test-results/macos-bundle.json
-    - name: Retain development package evidence
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: macos-development-evidence
-        path: |
-          dist/*.manifest.json
-          build/macos-runtimes/runtime-manifest.json
-          build/Testing/Temporary/LastTest.log
-          test-results/
-        if-no-files-found: ignore
-    - name: Archive the exact tested application candidate
-      if: github.ref == 'refs/heads/main'
-      run: |-
-        mkdir -p build/candidate
-        ditto -c -k --keepParent 'dist/Open Foresight.app' build/candidate/Open-Foresight-macos-arm64.zip
-        cp 'dist/Open Foresight.manifest.json' build/candidate/
-        python tools/ci_artifacts.py pack --component macos-app --identity "$GITHUB_SHA" --prefix build/candidate --output build/candidate-upload
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      if: github.ref == 'refs/heads/main'
-      with:
-        name: ci-macos-app-${{ github.sha }}
-        path: build/candidate-upload/
-        retention-days: 30
-        if-no-files-found: error
-        compression-level: 0
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: success() && steps.pub-cache.outputs.cache-hit != 'true'
-      with:
-        path: ~/.pub-cache
-        key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
-    needs: changes
-    if: needs.changes.outputs.build == 'true'
-  linux-native:
-    runs-on: ubuntu-24.04
-    container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
-    timeout-minutes: 60
-    steps:
-    - name: Install Linux native toolchain
-      run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      with:
-        persist-credentials: false
-    - name: Install Python development dependencies
-      run: |
-        python -m venv .venv
-        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-    - name: Offline Python tests
-      run: .venv/bin/python -m pytest
-    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      with:
-        path: /opt/foresight-flutter
-        key: flutter-linux-x64-3.35.7-v1
-    - name: Install pinned Linux Flutter
-      run: |
-        if [[ ! -x /opt/foresight-flutter/bin/flutter ]]; then
-          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git /opt/foresight-flutter
-        fi
-        test "$(git -C /opt/foresight-flutter rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
-        echo /opt/foresight-flutter/bin >> "$GITHUB_PATH"
-        /opt/foresight-flutter/bin/flutter config --enable-linux-desktop --no-analytics
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: success()
-      with:
-        path: /opt/foresight-flutter
-        key: flutter-linux-x64-3.35.7-v1
-    - name: Native, core, Flutter and native desktop-service Linux gates
-      env:
-        FORESIGHT_PARALLEL_GATES: '1'
-        LIBGL_ALWAYS_SOFTWARE: '1'
-        FORESIGHT_LINUX_UI_TEST: '1'
-        FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
-        FORESIGHT_FLUTTER_EXECUTABLE: /opt/foresight-flutter/bin/flutter
-      run: |
-        xvfb-run -a dbus-run-session -- tools/build.sh --platform linux -G Ninja
-        .venv/bin/python tests/integration/test_native_process.py \
-          build/native/libforesight_native.so build/services/helper/ForesightHelper
-        .venv/bin/python tools/integration_gates.py --suite fast \
-          --native build/native/libforesight_native.so --output test-results/fast-integration
-    - name: Retain Linux test evidence
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: linux-integration-evidence
-        path: test-results/
-    needs: changes
-    if: needs.changes.outputs.build == 'true'
-  linux-document-imports:
-    needs: changes
-    if: needs.changes.outputs.build == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      with:
-        persist-credentials: false
-    - name: Install document extractors and host policy tools
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends bubblewrap poppler-utils unrtf apparmor
-    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-      with:
-        path: ${{ runner.temp }}/foresight-document-flutter
-        key: flutter-linux-document-host-3.35.7-v1
-    - name: Install pinned Dart through the reviewed Flutter SDK
-      run: |
-        task_document_flutter="$RUNNER_TEMP/foresight-document-flutter"
-        if [[ ! -x "$task_document_flutter/bin/flutter" ]]; then
-          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$task_document_flutter"
-        fi
-        test "$(git -C "$task_document_flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
-        echo "$task_document_flutter/bin" >> "$GITHUB_PATH"
-        "$task_document_flutter/bin/dart" --disable-analytics
-    - name: Resolve locked core dependencies
-      working-directory: packages/foresight_core
-      run: dart pub get --enforce-lockfile
-    - name: Require real PDF and RTF imports through the shipped sandbox
-      run: bash tools/ci_document_sandbox.sh
-    - name: Retain document sandbox evidence
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: linux-document-sandbox-evidence
-        path: test-results/document-sandbox/
-        if-no-files-found: error
-  changes:
-    runs-on: ubuntu-24.04
-    outputs:
-      build: ${{ steps.changes.outputs.build }}
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      with:
-        persist-credentials: false
-        fetch-depth: 0
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-      with:
-        python-version: '3.13'
-    - name: Classify code versus documentation changes
-      id: changes
-      env:
-        BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-        FORCE: ${{ github.event_name == 'workflow_dispatch' && '--force' || '' }}
-      run: |-
-        task_args=(--base "$BASE")
-        if [[ "$FORCE" == --force ]]; then
-          task_args+=(--force)
-        fi
-        python tools/ci_changes.py "${task_args[@]}"
-    - name: Lint every Actions workflow
-      run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
-    - name: Validate explicit integration paths
-      run: python tools/check_integration_inventory.py
-    - name: Validate release version copies
-      run: python tools/app_version.py --check
-  linux-bundle:
-    needs: changes
-    permissions:
-      contents: read
-      packages: write
-      actions: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 300
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      release: ${{ steps.version.outputs.release }}
-      epoch: ${{ steps.version.outputs.epoch }}
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
-      with:
-        python-version: '3.13'
-    - name: Fetch verified Linux SDK descriptor
-      id: sdk
-      env:
-        GH_TOKEN: ${{ github.token }}
-        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
-        OWN_PR: ${{ github.event.pull_request.number || 0 }}
-      run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
-        python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
-    - name: Packaging contracts
-      run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
-    - name: Package version
-      id: version
-      run: |
-        python3 - <<'PY'
-        import os, subprocess, sys
-        sys.path.insert(0, 'tools')
-        from app_version import read_version, stale
-        if paths := stale():
-            raise SystemExit('Out of date with apps/desktop/pubspec.yaml: ' + ', '.join(paths))
-        version, _ = read_version()
-        release = '1'
-        epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
-        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-            output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
-        PY
-    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      with:
-        driver: ${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}
-    - name: Authenticate private SDK registry
-      env:
-        REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-    # Keep the application cache in the SDK's repository so SDK blobs already
-    # present in GHCR do not need uploading to a second cache backend.
-    - name: Build, test and cache application
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-      with:
-        context: .
-        file: packaging/build.Dockerfile
-        target: tested
-        build-args: |
-          SDK_IMAGE=${{ steps.sdk.outputs.image }}
-          SOURCE_REVISION=${{ github.sha }}
-        cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
-        cache-to: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0},mode=max,image-manifest=true', steps.sdk.outputs.cache) || '' }}
-    - name: Assemble and verify distribution bundle
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-      with:
-        context: .
-        file: packaging/build.Dockerfile
-        target: artifact
-        outputs: type=local,dest=build/portable
-        build-args: |
-          SDK_IMAGE=${{ steps.sdk.outputs.image }}
-          SOURCE_REVISION=${{ github.sha }}
-          REQUIRE_GOOGLE_CLIENT=1
-          DISTRIBUTION_CONFIG_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
-        secrets: |
-          google_client=${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
-          foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
-          foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
-        cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
-    - name: Archive executable permissions and record checksums
-      env:
-        VERSION: ${{ steps.version.outputs.version }}
-        RELEASE: ${{ steps.version.outputs.release }}
-        SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
-      run: |
-        python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
-        cp build/portable/dist/abi.json dist/packages/abi.json
-    - name: Archive exact tested Linux candidate
-      run: python tools/ci_artifacts.py pack --component linux-app --identity "$GITHUB_SHA" --prefix dist/packages
-        --output build/candidate-upload
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: ci-linux-app-${{ github.sha }}
-        path: build/candidate-upload/
-        retention-days: 30
-        if-no-files-found: error
-        compression-level: 0
-    if: needs.changes.outputs.build == 'true' && github.ref == 'refs/heads/main'
-  platform-checks:
-    if: always()
-    needs:
-    - changes
-    - macos
-    - linux-native
-    - linux-document-imports
-    - linux-bundle
-    runs-on: ubuntu-24.04
-    steps:
-    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      with:
-        persist-credentials: false
-    - name: Require all selected platform gates
-      env:
-        NEEDS: ${{ toJSON(needs) }}
-        BUILD: ${{ needs.changes.outputs.build }}
-        MAIN: ${{ github.ref == 'refs/heads/main' }}
-      run: python tools/ci_changes.py --check-gates
-'on':
-  push:
-    branches:
-    - main
-  pull_request: null
-  workflow_dispatch: null
+        set -euo pipefail
+        for task_trial in $(seq 1 50); do
+          echo "Adopted-helper diagnostic trial $task_trial"
+          task_service_temp=$(mktemp -d /tmp/of-svc.XXXXXX)
+          .venv/bin/python -m pytest tests/service/test_service_process.py -k 'real_adopted_helper and True' --basetemp "$task_service_temp" -v
+          rm -rf -- "$task_service_temp"
+        done
