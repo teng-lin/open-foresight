@@ -123,6 +123,15 @@ def name(component, identity):
 
 def pack(component, identity, prefix, output):
     """Archive verified outputs with executable modes, symlinks and a digest."""
+    source_commit = os.environ.get("GITHUB_SHA", "")
+    if component.endswith("-app"):
+        source_commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=30
+        ).strip()
+        if source_commit != identity:
+            raise ValueError(
+                "Application identity must match the actual built checkout"
+            )
     output.mkdir(parents=True, exist_ok=True)
     archive = output / "payload.tar.gz"
     with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -134,7 +143,7 @@ def pack(component, identity, prefix, output):
                 "component": component,
                 "identity": identity,
                 "sha256": digest(archive),
-                "source_commit": os.environ.get("GITHUB_SHA", ""),
+                "source_commit": source_commit,
                 "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
             },
             indent=2,
@@ -147,6 +156,8 @@ def unpack(component, identity, source, destination):
     """Reject mismatched or escaping archives before installing a fresh prefix."""
     record = json.loads((source / "identity.json").read_text())
     archive = source / "payload.tar.gz"
+    if component.endswith("-app") and record.get("source_commit") != identity:
+        raise ValueError("Application receipt does not match the requested source")
     if (record.get("schema"), record.get("component"), record.get("identity")) != (
         1,
         component,
@@ -431,7 +442,9 @@ def probe(repository, component, identity, own_head="", own_pr=0):
     return False
 
 
-def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0):
+def pull(
+    repository, component, identity, prefix, wait=0, own_head="", own_pr=0, source_run=0
+):
     artifact_name = name(component, identity)
     deadline = time.monotonic() + wait
     while True:
@@ -441,11 +454,15 @@ def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0)
         for artifact in artifacts:
             if artifact["expired"] or artifact["name"] != artifact_name:
                 continue
+            if source_run and artifact["workflow_run"]["id"] != source_run:
+                continue
             run = api(repository, f"actions/runs/{artifact['workflow_run']['id']}")
             if not eligible_run(repository, run, component, own_head, own_pr):
                 continue
             if component.endswith("-app"):
-                if run["head_sha"] != identity:
+                if run["head_sha"] != identity and not (
+                    source_run and run.get("event") == "workflow_dispatch"
+                ):
                     continue
             else:
                 jobs = dependency_jobs(repository, run["id"])
@@ -520,6 +537,12 @@ def main():
     parser.add_argument("--optional", action="store_true")
     parser.add_argument("--own-head", default="")
     parser.add_argument("--own-pr", type=int, default=0)
+    parser.add_argument(
+        "--run-id",
+        type=int,
+        default=0,
+        help="Require this exact candidate producer run",
+    )
     args = parser.parse_args()
     if args.command == "keys":
         keys = {key: fingerprint(key) for key in FILES}
@@ -578,6 +601,7 @@ def main():
         args.wait,
         args.own_head,
         args.own_pr,
+        source_run=args.run_id,
     ):
         if args.optional:
             raise SystemExit(4)

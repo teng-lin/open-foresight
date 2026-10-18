@@ -23,3 +23,6 @@ google-client*.json
 
 .coverage
 .coverage.*
+
+# Generated only in distribution build checkouts.
+.distribution-build.json

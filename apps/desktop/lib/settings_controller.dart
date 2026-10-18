@@ -1221,7 +1221,8 @@ class _SettingsController extends _FeatureController {
                 title: Text('Version'),
                 subtitle: Text(
                   'Open Foresight $openForesightVersion '
-                  '(build $openForesightBuildNumber)',
+                  '(build $openForesightBuildNumber)'
+                  '${openForesightBuildLabel == '' ? '' : ' · $openForesightBuildLabel'}',
                 ),
               ),
             ],

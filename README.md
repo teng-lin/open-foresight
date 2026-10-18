@@ -252,7 +252,9 @@ Tests that use real models, real capture, or the desktop integration are opt-in.
 
 ## Versioning and releases
 
-The version is written in one place, `apps/desktop/pubspec.yaml`, as `version: X.Y.Z+N`. `X.Y.Z` is the release version, following [SemVer](https://semver.org). `N` is a build number that must increase with every release, because macOS compares it between installs. CMake, the helper's build ID, the packaging scripts, the MCP server, and the app all read this value. The app shows it under **Settings → Version**.
+For installable builds before an official release, see [nightly and manual preview packages](docs/platforms/preview-packages.md).
+
+The version is written in one place, `apps/desktop/pubspec.yaml`, as `version: X.Y.Z+N`. `X.Y.Z` is the release version, following [SemVer](https://semver.org). `N` is the local build number and the lower bound for CI builds. Main distribution candidates and nightly previews reserve higher numbers from the shared `ci/build-sequence` counter before compilation, so official installers remain newer than earlier previews on macOS. CMake, the helper's build ID, the packaging scripts, the MCP server, and the app all read this value. The app shows it under **Settings → Version**.
 
 To cut a release:
 

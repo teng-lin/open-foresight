@@ -316,6 +316,8 @@ def main(argv=None):
         "app": str(app),
         "revision": run("git", "-C", ROOT, "rev-parse", "HEAD").strip(),
         "architecture": "arm64",
+        "version": read_version()[0],
+        "build_number": read_version()[1],
         "minimum_macos": "15.0",
         "signing": "ad-hoc-development" if args.identity == "-" else "developer-id",
         "notarized": notarized,

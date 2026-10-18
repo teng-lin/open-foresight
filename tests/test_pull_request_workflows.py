@@ -441,7 +441,12 @@ jobs:
             step["env"]["SELECTION"], "${{ needs.changes.outputs.selection }}"
         )
         self.assertIn("--check-gates", step["run"])
-        self.assertIn("--force", jobs["changes"]["steps"][2]["env"]["FORCE"])
+        self.assertIn(
+            "--force",
+            next(
+                step for step in jobs["changes"]["steps"] if step.get("id") == "changes"
+            )["env"]["FORCE"],
+        )
 
     def test_maintenance_has_offline_tests_without_a_platform_build(self):
         workflow = self.workflow("quality.yml")
