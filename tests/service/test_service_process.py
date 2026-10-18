@@ -204,7 +204,7 @@ class McpPeer:
                 pass
         sockets = {
             name: (self.runtime / name).exists()
-            for name in ("application.sock", "application-worker.sock")
+            for name in ("application.sock", "worker.sock")
         }
         diagnostic = {
             "request": identifier,
