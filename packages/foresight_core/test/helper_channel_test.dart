@@ -96,7 +96,10 @@ void main() {
         address,
         port: 0,
         options: ChannelOptions(
-          credentials: const ChannelCredentials.insecure(),
+          credentials: const ChannelCredentials.insecure(
+            authority: 'profile-helper',
+          ),
+          connectTimeout: const Duration(seconds: 2),
           codecRegistry: CodecRegistry(codecs: [GzipCodec()]),
         ),
       );
@@ -113,6 +116,7 @@ void main() {
         expect(reply.success, isTrue);
         expect(reply.version, 'after-half-close');
         expect(service.metadata?['x-probe'], 'owned-writer');
+        expect(service.metadata?[':authority'], 'profile-helper');
         expect(service.metadata?['grpc-encoding'], 'gzip');
         expect(service.deadline, isNotNull);
         expect(service.deadline!.isAfter(before), isTrue);
@@ -127,6 +131,85 @@ void main() {
       }
     },
   );
+  test('secure Unix channels reject an insecure server', () async {
+    final directory = Directory.systemTemp.createTempSync('helper-secure-');
+    final address = InternetAddress(
+      '${directory.path}/helper.sock',
+      type: InternetAddressType.unix,
+    );
+    final listener = await ServerSocket.bind(address, 0);
+    final server = ConnectionServer([_PingService()]);
+    final peers = <Socket>[];
+    final connections = <ServerTransportConnection>[];
+    final subscription = listener.listen((peer) {
+      peers.add(peer);
+      final connection = ServerTransportConnection.viaSocket(peer);
+      connections.add(connection);
+      unawaited(server.serveConnection(connection: connection));
+    });
+    final channel = HelperChannel(
+      address,
+      port: 0,
+      options: const ChannelOptions(connectTimeout: Duration(seconds: 1)),
+    );
+    try {
+      await expectLater(
+        RagServiceClient(channel).ping(
+          PingRequest(),
+          options: CallOptions(timeout: const Duration(seconds: 2)),
+        ),
+        throwsA(isA<GrpcError>()),
+      );
+    } finally {
+      await channel.terminate();
+      for (final peer in peers) {
+        peer.destroy();
+      }
+      for (final connection in connections) {
+        await connection.terminate();
+      }
+      await subscription.cancel();
+      await listener.close();
+      directory.deleteSync(recursive: true);
+    }
+  });
+
+  test('Unix channels respect an unavailable configured proxy', () async {
+    final directory = Directory.systemTemp.createTempSync('helper-proxy-');
+    final address = InternetAddress(
+      '${directory.path}/helper.sock',
+      type: InternetAddressType.unix,
+    );
+    final server = Server.create(services: [_PingService()]);
+    await server.serve(address: address, port: 0);
+    final proxy = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final port = proxy.port;
+    await proxy.close();
+    final channel = HelperChannel(
+      address,
+      port: 0,
+      options: ChannelOptions(
+        credentials: const ChannelCredentials.insecure(),
+        proxy: Proxy(host: '127.0.0.1', port: port),
+        connectTimeout: const Duration(seconds: 1),
+      ),
+    );
+    try {
+      // The plaintext Unix endpoint is healthy, but this explicit proxy is not.
+      await expectLater(
+        RagServiceClient(channel).ping(
+          PingRequest(),
+          options: CallOptions(timeout: const Duration(seconds: 2)),
+        ),
+        throwsA(isA<GrpcError>()),
+      );
+    } finally {
+      await channel.terminate();
+      await server.shutdown();
+      directory.deleteSync(recursive: true);
+    }
+  });
+
   test(
     'peer EOF before a queued request reports failure without escaping',
     () async {

@@ -14,19 +14,26 @@ typedef HelperSocketFactory =
 /// The helper's private, insecure Unix-domain transport.
 class HelperTransportConnector implements ClientTransportConnector {
   final String path;
+  final Duration? connectTimeout;
+  @override
+  final String authority;
   final HelperSocketFactory _connectSocket;
   Socket? _socket;
   late Future<void> _done;
 
-  HelperTransportConnector(this.path, {HelperSocketFactory? connectSocket})
-    : _connectSocket = connectSocket ?? Socket.connect;
+  HelperTransportConnector(
+    this.path, {
+    HelperSocketFactory? connectSocket,
+    this.connectTimeout = const Duration(seconds: 3),
+    this.authority = 'localhost',
+  }) : _connectSocket = connectSocket ?? Socket.connect;
 
   @override
   Future<ClientTransportConnection> connect() async {
     final socket = await _connectSocket(
       InternetAddress(path, type: InternetAddressType.unix),
       0,
-      timeout: const Duration(seconds: 3),
+      timeout: connectTimeout,
     );
     _socket = socket;
     final outgoing = _DisconnectSink(socket);
@@ -36,9 +43,6 @@ class HelperTransportConnector implements ClientTransportConnector {
 
   @override
   Future<void> get done => _done;
-
-  @override
-  String get authority => 'localhost';
 
   @override
   void shutdown() => _socket?.destroy();

@@ -171,6 +171,29 @@ void main() {
     );
   }
 
+  test(
+    'connector preserves explicit authority and connection timeout',
+    () async {
+      final socket = ControlledSocket();
+      const timeout = Duration(milliseconds: 17);
+      final connector = HelperTransportConnector(
+        '/configured-helper.sock',
+        authority: 'configured-helper',
+        connectTimeout: timeout,
+        connectSocket: (address, port, {timeout}) async {
+          expect(address.address, '/configured-helper.sock');
+          expect(timeout, const Duration(milliseconds: 17));
+          return socket;
+        },
+      );
+      final connection = await connector.connect();
+      expect(connector.authority, 'configured-helper');
+      await connection.terminate();
+      connector.shutdown();
+      await connector.done;
+    },
+  );
+
   test('connect errors remain errors', () async {
     const error = SocketException('missing helper socket');
     final connector = HelperTransportConnector(

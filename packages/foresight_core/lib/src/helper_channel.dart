@@ -30,8 +30,15 @@ class HelperChannel extends ClientChannel {
     final address = host;
     final connector =
         _transportConnector ??
-        (address is InternetAddress && address.type == InternetAddressType.unix
-            ? HelperTransportConnector(address.address)
+        (address is InternetAddress &&
+                address.type == InternetAddressType.unix &&
+                !options.credentials.isSecure &&
+                options.proxy == null
+            ? HelperTransportConnector(
+                address.address,
+                connectTimeout: options.connectTimeout,
+                authority: options.credentials.authority ?? 'localhost',
+              )
             : null);
     return connector == null
         ? _HelperConnection(host, port, options)
