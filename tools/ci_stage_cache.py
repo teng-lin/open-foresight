@@ -224,6 +224,73 @@ def trusted_run(run, repository, own_pr):
     )
 
 
+def trusted_native_work_run(run, repository, own_pr, root=ROOT):
+    """Qualify compiler objects from a source-equivalent approved merged PR.
+
+    This does not grant result reuse. Current configure/build/tests still run;
+    the payload's original source, recipe, attempt and checksums remain checked.
+    """
+    if trusted_run(run, repository, own_pr):
+        return True
+    producer = run.get("head_sha")
+    if (
+        run.get("path") != WORKFLOW
+        or run.get("event") != "pull_request"
+        or (run.get("head_repository") or {}).get("full_name") != repository
+        or not isinstance(producer, str)
+        or not re.fullmatch(COMMIT, producer)
+    ):
+        return False
+    references = run.get("pull_requests") or artifacts.api(
+        repository, f"commits/{producer}/pulls"
+    )
+    for reference in references:
+        number = reference.get("number")
+        if type(number) is not int or number <= 0:
+            continue
+        pull = artifacts.api(repository, f"pulls/{number}")
+        final = pull.get("head", {}).get("sha")
+        if (
+            not pull.get("merged_at")
+            or pull.get("base", {}).get("repo", {}).get("full_name") != repository
+            or pull.get("head", {}).get("repo", {}).get("full_name") != repository
+            or not isinstance(final, str)
+            or not re.fullmatch(COMMIT, final)
+        ):
+            continue
+        ancestor = producer == final
+        if not ancestor:
+            ancestor = artifacts.api(repository, f"compare/{producer}...{final}")[
+                "status"
+            ] in ("ahead", "identical")
+        if not ancestor:
+            page = 1
+            while True:
+                commits = artifacts.api(
+                    repository, f"pulls/{number}/commits?per_page=100&page={page}"
+                )
+                if any(commit.get("sha") == producer for commit in commits):
+                    ancestor = True
+                    break
+                if len(commits) < 100:
+                    break
+                page += 1
+        if not ancestor:
+            continue
+        approved = {**run, "head_sha": final, "pull_requests": [{"number": number}]}
+        if not artifacts.merged_source(repository, approved):
+            continue
+        ensure_commit(root, producer)
+        ensure_commit(root, final)
+        # Use the current approved conservative selector. Receipt verification
+        # separately recomputes the original producer's frozen identity recipe.
+        if source_inputs(root, "native", producer) == source_inputs(
+            root, "native", final
+        ):
+            return True
+    return False
+
+
 def ensure_commit(root, commit):
     if not re.fullmatch(COMMIT, commit):
         raise ValueError("Invalid producer source commit")
@@ -575,6 +642,7 @@ def find_native_work(
         if value[0] == "120000"
     }
     runs = {}
+    qualified_runs = {}
     jobs_by_run = {}
     mismatches: set[str] = set()
     rejected = 0
@@ -584,7 +652,11 @@ def find_native_work(
         if run_id not in runs:
             runs[run_id] = artifacts.api(repository, f"actions/runs/{run_id}")
         run = runs[run_id]
-        if not trusted_run(run, repository, own_pr):
+        if run_id not in qualified_runs:
+            qualified_runs[run_id] = trusted_native_work_run(
+                run, repository, own_pr, root
+            )
+        if not qualified_runs[run_id]:
             continue
         if run_id not in jobs_by_run:
             jobs_by_run[run_id] = artifacts.dependency_jobs(repository, run_id)

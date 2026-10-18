@@ -245,12 +245,20 @@ class ProducerTests(SourceTree):
         self.transfers = 0
         self.downloaded_ids = []
         self.additional_runs = {}
+        self.approval_routes = {}
         self.metadata = []
         self.metadata_receipts = {}
         self.payload_receipts = {}
 
     def api(self, repository, route):
         self.assertEqual(repository, REPOSITORY)
+        if route in self.approval_routes:
+            value = self.approval_routes[route]
+            if isinstance(value, Exception):
+                raise value
+            return value
+        if route.startswith("pulls/") and "/commits?" not in route:
+            return {"merged_at": None}
         if route.startswith("actions/artifacts?name=receipt-ci-stage-"):
             return {"artifacts": self.metadata}
         if route.startswith("actions/artifacts?"):
@@ -700,6 +708,155 @@ class ProducerTests(SourceTree):
     def test_native_work_rejects_changed_symlink_sources(self):
         (self.root / "native/header.h").symlink_to("first.h")
         self.assertFalse(self.find_work()["hit"])
+
+    def approved_other_pr(self, native_change=False, rebase=False):
+        self.run["pull_requests"] = [{"number": 112}]
+        self.write(
+            "packages/foresight_core/lib/app.dart", "reviewed Dart-only follow-up"
+        )
+        self.write("CHANGELOG.md", "editorial final fix")
+        if native_change:
+            self.write("native/main.cpp", "different reviewed native code")
+        final = self.save()
+        merge = self.git(
+            "commit-tree", final + "^{tree}", "-p", self.commit, "-m", "approved rebase"
+        )
+        pull = {
+            "number": 112,
+            "merged_at": "2026-01-02T00:00:00Z",
+            "merge_commit_sha": merge,
+            "head": {"sha": final, "repo": {"full_name": REPOSITORY}},
+            "base": {"repo": {"full_name": REPOSITORY}},
+        }
+        self.approval_routes.update(
+            {
+                "pulls/112": pull,
+                f"compare/{self.commit}...{final}": {"status": "ahead"},
+                f"compare/{final}...main": {
+                    "status": "diverged" if rebase else "ahead"
+                },
+                f"compare/{merge}...main": {"status": "ahead"},
+                f"git/commits/{final}": {
+                    "sha": final,
+                    "tree": {"sha": self.git("rev-parse", final + "^{tree}")},
+                },
+                f"git/commits/{merge}": {
+                    "sha": merge,
+                    "tree": {"sha": self.git("rev-parse", merge + "^{tree}")},
+                },
+            }
+        )
+        return final, merge, pull
+
+    def test_merged_pr_dart_only_final_fix_promotes_objects_not_test_results(self):
+        self.approved_other_pr(rebase=True)
+        result = self.find_work(own_pr=119)
+        self.assertTrue(result["hit"])
+        self.assertEqual(result["receipt"], self.receipt)
+        self.assertFalse(self.find(own_pr=119)["hit"])
+        # Main/release also builds and validates current inputs instead of
+        # inheriting the historical PR's successful test qualification.
+        self.assertTrue(
+            self.find_work(event="push", branch="main", own_pr=0, release=True)["hit"]
+        )
+        self.assertFalse(
+            self.find(event="push", branch="main", own_pr=0, release=True)["hit"]
+        )
+
+    def test_merged_pr_changed_native_source_does_not_promote(self):
+        self.approved_other_pr(native_change=True)
+        self.assertFalse(self.find_work(own_pr=119)["hit"])
+        self.assertEqual(self.transfers, 0)
+
+    def test_merged_pr_approval_rejects_unmerged_fork_and_nonfinal_tree(self):
+        final, merge, pull = self.approved_other_pr(rebase=True)
+        for change in (
+            "unmerged",
+            "fork-head",
+            "fork-base",
+            "nonfinal-tree",
+            "unreachable-merge",
+        ):
+            with self.subTest(change=change):
+                original = deepcopy(pull)
+                old_tree = deepcopy(self.approval_routes[f"git/commits/{merge}"])
+                old_comparison = deepcopy(
+                    self.approval_routes[f"compare/{merge}...main"]
+                )
+                if change == "unmerged":
+                    pull["merged_at"] = None
+                elif change == "fork-head":
+                    pull["head"]["repo"]["full_name"] = "fork/repository"
+                elif change == "fork-base":
+                    pull["base"]["repo"]["full_name"] = "fork/repository"
+                elif change == "nonfinal-tree":
+                    self.approval_routes[f"git/commits/{merge}"]["tree"]["sha"] = (
+                        self.git("rev-parse", self.commit + "^{tree}")
+                    )
+                else:
+                    self.approval_routes[f"compare/{merge}...main"]["status"] = "behind"
+                self.assertFalse(self.find_work(own_pr=119)["hit"])
+                self.assertEqual(self.transfers, 0)
+                pull.clear()
+                pull.update(original)
+                self.approval_routes[f"git/commits/{merge}"] = old_tree
+                self.approval_routes[f"compare/{merge}...main"] = old_comparison
+
+    def test_merged_pr_unrelated_producer_is_rejected_but_commit_membership_is_supported(
+        self,
+    ):
+        final, _, _ = self.approved_other_pr()
+        route = f"compare/{self.commit}...{final}"
+        self.approval_routes[route] = {"status": "diverged"}
+        self.approval_routes["pulls/112/commits?per_page=100&page=1"] = []
+        self.assertFalse(self.find_work(own_pr=119)["hit"])
+        self.assertEqual(self.transfers, 0)
+        self.approval_routes["pulls/112/commits?per_page=100&page=1"] = [
+            {"sha": self.commit}
+        ]
+        self.assertTrue(self.find_work(own_pr=119)["hit"])
+
+    def test_merged_pr_api_or_missing_git_proof_is_not_permission_to_compile(self):
+        _, _, pull = self.approved_other_pr()
+        self.approval_routes["pulls/112"] = subprocess.CalledProcessError(
+            1, ["gh", "api"], b"API unavailable"
+        )
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.find_work(own_pr=119)
+        self.approval_routes["pulls/112"] = pull
+        with patch.object(
+            cache,
+            "ensure_commit",
+            side_effect=subprocess.CalledProcessError(1, ["git", "fetch"]),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.find_work(own_pr=119)
+        self.assertEqual(self.transfers, 0)
+
+    def test_merged_approval_keeps_failed_attempt_and_derived_payload_rejection(self):
+        self.approved_other_pr()
+        self.job["conclusion"] = "failure"
+        self.assertFalse(self.find_work(own_pr=119)["hit"])
+        self.assertEqual(self.transfers, 0)
+        self.job["conclusion"] = "success"
+        self.receipt["source_run_attempt"] = 2
+        self.assertFalse(self.find_work(own_pr=119)["hit"])
+        self.receipt["source_run_attempt"] = 1
+        self.receipt["reusable"] = False
+        self.assertFalse(self.find_work(own_pr=119)["hit"])
+
+    def test_merged_source_qualification_is_computed_once_per_producer(self):
+        self.approved_other_pr()
+        self.receipt["reusable"] = False
+        with patch.object(
+            cache, "trusted_native_work_run", wraps=cache.trusted_native_work_run
+        ) as qualify:
+            self.assertFalse(
+                self.find_work(
+                    candidates=[(self.artifact, self.identity)] * 3, own_pr=119
+                )["hit"]
+            )
+        self.assertEqual(qualify.call_count, 1)
 
     def test_native_work_main_consumers_retain_verified_main_objects(self):
         self.run.update(event="push", head_branch="main")

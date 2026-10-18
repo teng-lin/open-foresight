@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.sdk_workflow_recipe import validate as validate_recipe_workflow  # noqa: E402
 from tools import sdk_producer_trust as producer_trust  # noqa: E402
 from tools import sdk_approval_bridge as approval_bridge  # noqa: E402
+from tools import sdk_final_approval as final_approval  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
@@ -391,6 +392,46 @@ def receipt_name(component, identity):
     return "receipt-" + name(component, identity)
 
 
+_APPROVED_FINAL_SDK_SOURCES: set[tuple] = set()
+
+
+def approved_final_sdk_source(repository, run, component):
+    references = tuple(
+        reference.get("number")
+        for reference in run.get("pull_requests", [])
+        if type(reference.get("number")) is int
+    )
+    key = (
+        repository,
+        component,
+        run.get("id"),
+        run.get("head_sha"),
+        references,
+        run.get("event"),
+        run.get("path"),
+        (run.get("head_repository") or {}).get("full_name"),
+    )
+    if key in _APPROVED_FINAL_SDK_SOURCES:
+        return True
+    approved = final_approval.approved_final_source(
+        repository,
+        run,
+        component,
+        api=api,
+        merged_source=merged_source,
+        fingerprint_at=source_fingerprint_at,
+        read_source=lambda repo, commit, **kwargs: producer_trust.read_source(
+            repo, commit, api=partial(immutable_source_api, api), **kwargs
+        ),
+        controls=(*producer_trust.PRODUCER_CONTROLS, WORKFLOW),
+    )
+    # Only cache positive immutable-source approvals: an unmerged PR may merge
+    # while a long-running consumer is waiting for compatible original bytes.
+    if approved:
+        _APPROVED_FINAL_SDK_SOURCES.add(key)
+    return approved
+
+
 def eligible_run(repository, run, component, own_head="", own_pr=0):
     if trusted_run(run, component, own_head, repository, own_pr):
         return True
@@ -399,7 +440,10 @@ def eligible_run(repository, run, component, own_head="", own_pr=0):
         and run.get("path") == ".github/workflows/ci-dependencies.yml"
         and run.get("event") in ("pull_request", "workflow_dispatch")
         and (run.get("head_repository") or {}).get("full_name") == repository
-        and merged_source(repository, run)
+        and (
+            merged_source(repository, run)
+            or approved_final_sdk_source(repository, run, component)
+        )
     )
 
 
@@ -510,8 +554,10 @@ def source_fingerprint_at(repository, commit, component):
     )
 
 
-def qualified_producer_control(repository, run):
+def qualified_producer_control(repository, run, component=None):
     if merged_source(repository, run):
+        return True
+    if component is not None and approved_final_sdk_source(repository, run, component):
         return True
     return producer_trust.producer_controls_match(
         repository,
@@ -554,7 +600,9 @@ def candidate_verified(
             job,
             payload,
             fingerprint_at=source_fingerprint_at,
-            qualified_control=qualified_producer_control,
+            qualified_control=lambda repo, producer: qualified_producer_control(
+                repo, producer, component
+            ),
         )
     except json.JSONDecodeError:
         # Invalid API JSON is a protocol failure, not an incompatible candidate.
@@ -591,7 +639,14 @@ def probe(repository, component, identity, own_head="", own_pr=0):
         ):
             continue
         run = api(repository, f"actions/runs/{sidecar['workflow_run']['id']}")
-        if not eligible_run(repository, run, component, own_head, own_pr):
+        try:
+            eligible = eligible_run(repository, run, component, own_head, own_pr)
+        except json.JSONDecodeError:
+            raise
+        except ValueError as error:
+            qualification_errors.append(error)
+            continue
+        if not eligible:
             continue
         jobs = dependency_jobs(repository, run["id"])
         with tempfile.TemporaryDirectory() as temporary:
@@ -723,7 +778,14 @@ def pull(
             if source_run and artifact["workflow_run"]["id"] != source_run:
                 continue
             run = api(repository, f"actions/runs/{artifact['workflow_run']['id']}")
-            if not eligible_run(repository, run, component, own_head, own_pr):
+            try:
+                eligible = eligible_run(repository, run, component, own_head, own_pr)
+            except json.JSONDecodeError:
+                raise
+            except ValueError as error:
+                qualification_errors.append(error)
+                continue
+            if not eligible:
                 continue
             if component.endswith("-app"):
                 if run["head_sha"] != identity and not (
