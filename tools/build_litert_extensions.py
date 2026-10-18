@@ -17,6 +17,9 @@ import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+LITERT_VERSION = json.loads(Path(__file__).with_name("pins.json").read_text())[
+    "litert_lm"
+]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 COMMIT = "b2f686e2ed4718fb84ec398a61dd59ca0f0aff27"
 PATCH = ROOT / "third_party/litert_lm/stop-token-sequences.patch"
@@ -301,7 +304,7 @@ def main():
         if len(metadata) != 1:
             raise RuntimeError("Expected exactly one wheel distribution metadata file")
         package = BytesParser().parsebytes(archive.read(metadata[0]))
-        if package["Name"] != "litert-lm-api" or package["Version"] != "0.18.0":
+        if package["Name"] != "litert-lm-api" or package["Version"] != LITERT_VERSION:
             raise RuntimeError("Built wheel must be litert-lm-api==0.18.0")
         vendor_libraries = wheel_vendor_hashes(archive, platform.system())
     args.output.mkdir(parents=True, exist_ok=True)

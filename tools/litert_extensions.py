@@ -14,6 +14,9 @@ import subprocess
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+LITERT_VERSION = json.loads(Path(__file__).with_name("pins.json").read_text())[
+    "litert_lm"
+]
 UPSTREAM_COMMIT = "b2f686e2ed4718fb84ec398a61dd59ca0f0aff27"
 PATCH = ROOT / "third_party/litert_lm/stop-token-sequences.patch"
 MACOS_ABI_PATCH = ROOT / "third_party/litert_lm/macos-trivial-abi.patch"
@@ -90,7 +93,7 @@ def _wheel_entries(archive):
             raise ValueError("Unsafe or duplicate LiteRT extension wheel entry")
         if not path.parts or path.parts[0] not in (
             "litert_lm",
-            "litert_lm_api-0.18.0.dist-info",
+            f"litert_lm_api-{LITERT_VERSION}.dist-info",
         ):
             raise ValueError("Unexpected LiteRT extension wheel destination")
         seen.add(entry.filename)
@@ -114,7 +117,7 @@ def verify_extensions_manifest(path, *, platform_name):
         manifest.get("upstream_commit") != UPSTREAM_COMMIT
         or manifest.get("patch_sha256") != file_sha256(PATCH)
         or manifest.get("distribution") != "litert-lm-api"
-        or manifest.get("version") != "0.18.0"
+        or manifest.get("version") != LITERT_VERSION
     ):
         raise ValueError("LiteRT extension source, patch or version is not pinned")
     if platform_name == "darwin":
@@ -192,15 +195,15 @@ def verify_extensions_manifest(path, *, platform_name):
     library_entry = "litert_lm/" + library_name
     with zipfile.ZipFile(wheel) as archive:
         entries = _wheel_entries(archive)
-        metadata_name = "litert_lm_api-0.18.0.dist-info/METADATA"
-        wheel_metadata = "litert_lm_api-0.18.0.dist-info/WHEEL"
+        metadata_name = f"litert_lm_api-{LITERT_VERSION}.dist-info/METADATA"
+        wheel_metadata = f"litert_lm_api-{LITERT_VERSION}.dist-info/WHEEL"
         if (
             not {metadata_name, wheel_metadata, library_entry, "litert_lm/engine.py"}
             <= entries
         ):
             raise ValueError("Incomplete LiteRT extension API wheel")
         metadata = BytesParser().parsebytes(archive.read(metadata_name))
-        if metadata["Name"] != "litert-lm-api" or metadata["Version"] != "0.18.0":
+        if metadata["Name"] != "litert-lm-api" or metadata["Version"] != LITERT_VERSION:
             raise ValueError("LiteRT extension wheel metadata does not match 0.18.0")
         tags = BytesParser().parsebytes(archive.read(wheel_metadata)).get_all("Tag", [])
         if tags != [tag]:

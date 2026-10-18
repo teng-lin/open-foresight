@@ -1,5 +1,5 @@
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 extend-exclude = ["build", "dist", "third_party"]
 
 [tool.ruff.lint]
@@ -14,7 +14,7 @@ ignore = ["S603", "S607"]
 "tools/original_query_oracle/test_*.py" = ["S101"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 files = ["tools", "native/setup_models.py", "packaging"]
 exclude = ["build/", "dist/", "third_party/"]
 # Check every production script, including script functions without annotations.

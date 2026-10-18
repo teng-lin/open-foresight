@@ -7,6 +7,8 @@ the current documentation.
 
 ## Architecture and platforms
 
+- [Schema migrations](architecture/schema-migrations.md)
+- [Credentials at rest](architecture/credentials-at-rest.md)
 - [Application service and MCP](architecture/application-service.md)
 - [Linux packaging and CI](platforms/linux-packaging.md)
 - [CI dependencies and release promotion](platforms/ci-performance.md)

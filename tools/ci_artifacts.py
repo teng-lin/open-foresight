@@ -66,6 +66,7 @@ PRODUCER_INPUTS = (
     ".github/workflows/ci-dependencies.yml",
     "tools/ci_artifacts.py",
     "tools/linux_sdk_artifacts.py",
+    "tools/pins.json",
 )
 for _component_inputs in FILES.values():
     _component_inputs.extend(PRODUCER_INPUTS)

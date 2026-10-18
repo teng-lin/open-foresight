@@ -7,12 +7,16 @@ application bundle. Google's wheel is a transport for its native C library.
 
 import argparse
 import hashlib
+import json
 import io
 from pathlib import Path
 import urllib.request
 import zipfile
 
-VERSION = "0.18.0"
+LITERT_VERSION = json.loads(Path(__file__).with_name("pins.json").read_text())[
+    "litert_lm"
+]
+VERSION = LITERT_VERSION
 WHEEL_URL = "https://files.pythonhosted.org/packages/c9/8f/eb7a5203be1d48440c6b8d6e6382c3f744dd6d338fe400555718b4d695a1/litert_lm_api-0.18.0-py3-none-manylinux_2_27_x86_64.whl"
 LIBRARY_SHA256 = "193a2d8581ff525a242334863f36b439e4ba8bd08f31a33d87c503be4fb61cff"
 WHEEL_SHA256 = "b64e2cf6d7dcb90ff094b74af595cc5d53faa07e0889f967d15df8d3e696b53c"

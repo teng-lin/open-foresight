@@ -27,6 +27,9 @@ from query_worker_packaging import (
 from web_search_release import release_web_search_keys, shell_web_search_keys
 
 ROOT = Path(__file__).resolve().parents[1]
+LITERT_VERSION = json.loads(Path(__file__).with_name("pins.json").read_text())[
+    "litert_lm"
+]
 
 
 def main():
@@ -163,7 +166,7 @@ def main():
         (args.output / "lib/litert-identity.json").write_text(
             json.dumps(
                 {
-                    "version": "0.18.0",
+                    "version": LITERT_VERSION,
                     "upstream_commit": extensions.manifest["upstream_commit"],
                     "library_sha256": extensions.manifest["library_sha256"],
                 }
@@ -230,7 +233,7 @@ def main():
         query_python.chmod(0o755)
     litert_runtime = {
         "kind": "native",
-        "version": "0.18.0",
+        "version": LITERT_VERSION,
         "runner": "bin/foresight-model",
         "library": "lib/liblitert-lm.so",
         "sha256": hashlib.sha256(args.litert_library.read_bytes()).hexdigest(),
