@@ -1,0 +1,11 @@
+# Keep the Ubuntu dependency layer and normal native builds on one recipe.
+include(FetchContent)
+set(SPM_ENABLE_SHARED OFF CACHE BOOL "" FORCE)
+set(SPM_ENABLE_TCMALLOC OFF CACHE BOOL "" FORCE)
+set(SPM_ENABLE_TEST OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(sentencepiece GIT_REPOSITORY https://github.com/google/sentencepiece.git GIT_TAG 31646a467d2051eb904e0b45de3a73e91fe1c1e3 GIT_SHALLOW FALSE)
+set(FLATBUFFERS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(FLATBUFFERS_BUILD_FLATLIB OFF CACHE BOOL "" FORCE)
+set(FLATBUFFERS_INSTALL OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(flatbuffers GIT_REPOSITORY https://github.com/google/flatbuffers.git GIT_TAG edbe17738352418245d7228e7fd9f12c3ddc34c4 GIT_SHALLOW FALSE)
+FetchContent_MakeAvailable(sentencepiece flatbuffers)

@@ -80,6 +80,19 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
+      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          driver: docker
+      - name: Authenticate application cache registry
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Validate shared-daemon application cache transport
+        id: app-cache
+        run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY"
       - name: Fetch verified Linux SDK descriptor
         id: sdk
         env:
@@ -96,27 +109,26 @@ jobs:
           fi
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-        with:
-          # Local SDK tags need Docker; registry caches use the container driver.
-          driver: ${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}
-      - name: Authenticate SDK registry
+      - name: Restore qualified application dependency outputs without compilation
         env:
-          REGISTRY_TOKEN: ${{ github.token }}
-        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          GH_TOKEN: ${{ github.token }}
+          SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+        run: python tools/ci_app_dependency_seed.py --sdk-image "$SDK_IMAGE" --output build/app-dependency-seed
       - name: Build the shared Ubuntu 24.04 application and acceptance image
         id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
           file: packaging/build.Dockerfile
+          build-contexts: appdeps_seed=./build/app-dependency-seed
+          builder: ${{ steps.app-cache.outputs.builder }}
           target: integration
           load: true
           tags: foresight-integration:local
           build-args: |
             SDK_IMAGE=${{ steps.sdk.outputs.image }}
             SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}
-          cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
+          cache-from: ${{ format('type=registry,ref={0}', steps.app-cache.outputs.cache) }}
       - name: Package version
         id: version
         run: |

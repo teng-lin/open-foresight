@@ -130,6 +130,28 @@ produce a successful platform or acceptance result.
 
 ## Distribution candidates and previews
 
+Ubuntu application builds keep FlatBuffers and SentencePiece in a separate layer
+before copying the application checkout. The normal native build and this layer
+share `cmake/ForesightInferenceDependencies.cmake`, including its exact source pins
+and options. Both use `/src/build/_deps`, so subsequent application configuration
+retains dependency objects, headers and licenses. A Dart edit or new source
+revision still runs the current application's build and tests.
+
+Application cache transport uses the current Docker context's Docker driver with
+the containerd image store. Provisioning happens before loading a qualified SDK
+archive; a separate container driver cannot see that archive's local tag. The
+fixed same-repository application cache is imported even when the SDK comes from
+an approved legacy archive. Registry errors stop the job instead of silently
+starting an uncached dependency build. PR acceptance reads the cache; the existing
+main-only Linux bundle job exports only its secret-free `tested` stage. Packaging
+stages containing distribution secrets never export caches.
+
+CI supplies the `appdeps_seed` named context with qualified existing dependency
+outputs. Their original provenance remains separate from the current build and
+its test result. Local developer Docker builds retain an empty default context
+and populate dependencies normally; they can provide a verified seed with
+`--build-context appdeps_seed=PATH`.
+
 Main builds allocate a monotonic distribution number and stamp that version
 before building the Linux and macOS candidates. Nightly/manual previews use the
 same bundle and installer paths and run installed-package validation. A release
