@@ -105,6 +105,8 @@ class CacheReceiptTests(unittest.TestCase):
         with (
             patch.object(artifacts, "api", side_effect=self.api),
             patch.object(artifacts, "merged_source", return_value=False),
+            patch.object(artifacts, "source_fingerprint_at", return_value=IDENTITY),
+            patch.object(artifacts, "qualified_producer_control", return_value=True),
             patch.object(artifacts.subprocess, "run", side_effect=self.download),
         ):
             return artifacts.probe(REPOSITORY, COMPONENT, IDENTITY, own_pr=104)
@@ -131,6 +133,7 @@ class CacheReceiptTests(unittest.TestCase):
             )
             with (
                 patch.object(artifacts, "api", side_effect=self.api),
+                patch.object(artifacts, "source_fingerprint_at", return_value=IDENTITY),
                 patch.object(artifacts.subprocess, "run", side_effect=self.download),
             ):
                 self.assertTrue(
