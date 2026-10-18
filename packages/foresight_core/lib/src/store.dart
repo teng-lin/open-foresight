@@ -41,6 +41,7 @@ class Store {
       _checkVersion();
       // Migrations populate the WAL before readers open the fresh profile.
       // Switching only after COMMIT leaves no WAL for macOS read-only clients.
+      db.execute('PRAGMA secure_delete=ON');
       db.execute('PRAGMA journal_mode=WAL');
       db.execute('PRAGMA foreign_keys=ON');
       db.execute('BEGIN IMMEDIATE');
@@ -60,6 +61,29 @@ class Store {
     } catch (_) {
       db.dispose();
       rethrow;
+    }
+  }
+
+  /// Erase freed pages after a committed workspace clear. Live readers can keep
+  /// a checkpoint busy, so maintenance failure must not undo the local clear.
+  void compactAfterClear() {
+    for (final statement in [
+      'PRAGMA wal_checkpoint(TRUNCATE)',
+      'VACUUM',
+      'PRAGMA wal_checkpoint(TRUNCATE)',
+    ]) {
+      try {
+        final result = db.select(statement);
+        if (statement.startsWith('PRAGMA wal_checkpoint') &&
+            result.isNotEmpty &&
+            result.first.values.first != 0) {
+          stderr.writeln(
+            'Workspace privacy maintenance deferred: checkpoint is busy',
+          );
+        }
+      } catch (error) {
+        stderr.writeln('Workspace privacy maintenance: $error');
+      }
     }
   }
 

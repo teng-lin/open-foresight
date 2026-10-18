@@ -85,6 +85,27 @@ void main() {
     });
   });
 
+  test(
+    'clear removes planted private bytes from the database and WAL',
+    () async {
+      const marker = 'PRIVATE_CLEAR_MARKER_7bb6cec7_';
+      store.importText('Secret', marker * 200, 'text/plain', 'fixture');
+      store.saveNote(null, 'Secret', marker * 200);
+      await app.call('workspace.clear', {});
+      expect(store.rows('PRAGMA secure_delete').single.values.single, 1);
+      for (final path in [store.path, '${store.path}-wal']) {
+        final file = File(path);
+        if (file.existsSync()) {
+          expect(
+            latin1.decode(file.readAsBytesSync()),
+            isNot(contains(marker)),
+            reason: path,
+          );
+        }
+      }
+    },
+  );
+
   test('every schema table is cleared or explicitly retained', () async {
     final cleared = Application.workspaceContentTables.toSet();
     const exemptions = {
