@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import time
+import uuid
 
 from app_version import PUBSPEC, SOURCE, read_version, stale
 from ci_artifacts import api, name, trusted_run
@@ -66,8 +67,9 @@ def require_candidates(repository, commit, wait, fresh=False):
         "--ref",
         "main",
     ]
+    request_id = uuid.uuid4().hex if fresh else ""
     if fresh:
-        command += ["-f", f"source={commit}"]
+        command += ["-f", f"source={commit}", "-f", f"request_id={request_id}"]
     subprocess.run(
         command,
         check=True,
@@ -77,11 +79,14 @@ def require_candidates(repository, commit, wait, fresh=False):
     while time.monotonic() < deadline:
         if fresh:
             for run in api(repository, route)["workflow_runs"]:
-                if run["id"] in previous:
+                if (
+                    run["id"] in previous
+                    or run.get("display_title") != f"Release candidate {request_id}"
+                ):
                     continue
                 if run.get("conclusion") in ("failure", "cancelled", "timed_out"):
                     raise RuntimeError(
-                        "Fresh distribution build failed; no release tag was created"
+                        "Fresh distribution build failed; release remains unpublished"
                     )
                 if run.get("conclusion") == "success" and candidates_ready(
                     repository, commit, run["id"]

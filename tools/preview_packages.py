@@ -118,13 +118,13 @@ def receipt(directory, kind, source):
         raise ValueError("Expected one installer and an immutable source SHA")
     installer = files[0]
     digest = verify_checksum(installer, Path(str(installer) + ".sha256"))
-    metadata = json.loads(
-        Path(
-            str(installer) + (".manifest.json" if kind == "dmg" else ".build.json")
-        ).read_text()
-    )
+    metadata = json.loads(Path(str(installer) + ".build.json").read_text())
     if metadata["revision"] != source:
         raise ValueError("Installer provenance does not match the pinned source")
+    if metadata.get("sha256") != digest or metadata.get("format") != kind:
+        raise ValueError("Installer provenance does not match its checksum or format")
+    if kind == "dmg" and metadata.get("arch") != "arm64":
+        raise ValueError("DMG provenance must describe an arm64 installer")
     result = {
         "asset": installer.name,
         "sha256": digest,

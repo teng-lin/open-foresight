@@ -8,7 +8,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
-- Release publication preserves Latest on the highest stable version. DMG build provenance binds the source revision and version to the installer bytes.
+- Release publication preserves Latest on the highest stable version and correlates fresh candidate builds to their own dispatch. Shared DMG provenance binds preview and release installer bytes to the source revision, version and build number.
 - Linux packages ship the nlohmann-json notice and complete copyright stanzas for bundled license files; unknown licenses stop packaging.
 - Installer workflows publish signed build provenance and SBOM attestations. Dependency artifact downloads verify GitHub ZIP digests.
 - Offline Python tests use directory discovery with an explicit inventory for build and device harnesses. Integration acceptance reports an always-running required check.

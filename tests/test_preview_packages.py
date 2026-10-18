@@ -185,14 +185,15 @@ def installers(root):
         file.write_bytes(kind.encode())
         checksum = hashlib.sha256(file.read_bytes()).hexdigest()
         Path(str(file) + ".sha256").write_text(f"{checksum}  {file.name}\n")
-        Path(
-            str(file) + (".manifest.json" if kind == "dmg" else ".build.json")
-        ).write_text(
+        Path(str(file) + ".build.json").write_text(
             json.dumps(
                 {
                     "revision": SHA,
                     "version": "0.1.2" if kind == "dmg" else "0.1.2~" + LABEL,
                     "build_number": 12,
+                    "sha256": checksum,
+                    "format": kind,
+                    "arch": "arm64" if kind == "dmg" else "x86_64",
                 }
             )
         )
@@ -237,7 +238,22 @@ def test_fresh_release_candidates_ignore_older_successful_runs():
     history = iter(
         (
             {"workflow_runs": [{"id": 1}]},
-            {"workflow_runs": [{"id": 2, "head_sha": SHA, "conclusion": "success"}]},
+            {
+                "workflow_runs": [
+                    {
+                        "id": 3,
+                        "head_sha": SHA,
+                        "conclusion": "failure",
+                        "display_title": "Release candidate unrelated",
+                    },
+                    {
+                        "id": 2,
+                        "head_sha": SHA,
+                        "conclusion": "success",
+                        "display_title": "Release candidate request-123",
+                    },
+                ]
+            },
         )
     )
 
@@ -248,11 +264,17 @@ def test_fresh_release_candidates_ignore_older_successful_runs():
 
     with (
         patch.object(release, "api", side_effect=api),
-        patch.object(release.subprocess, "run"),
+        patch.object(release.subprocess, "run") as dispatch,
+        patch.object(
+            release.uuid,
+            "uuid4",
+            return_value=type("Request", (), {"hex": "request-123"})(),
+        ),
         patch.object(release, "candidates_ready", return_value=True) as ready,
     ):
         assert release.require_candidates("owner/repo", SHA, 5, fresh=True) == 2
     ready.assert_called_once_with("owner/repo", SHA, 2)
+    assert "request_id=request-123" in dispatch.call_args.args[0]
 
 
 def test_preview_workflow_has_no_release_publication_and_gates_downloads():
@@ -316,3 +338,54 @@ def test_producer_pin_never_falls_back_to_another_successful_run(tmp_path):
             "owner/repo", "macos-app", SHA, tmp_path / "destination", source_run=2
         )
     assert api.call_count == 1
+
+
+def test_fresh_release_candidate_failure_is_correlated_to_its_own_dispatch():
+    from types import SimpleNamespace
+
+    history = iter(
+        [
+            {"workflow_runs": []},
+            {
+                "workflow_runs": [
+                    {
+                        "id": 2,
+                        "head_sha": SHA,
+                        "conclusion": "success",
+                        "display_title": "Release candidate unrelated",
+                    },
+                    {
+                        "id": 3,
+                        "head_sha": SHA,
+                        "conclusion": "failure",
+                        "display_title": "Release candidate own-request",
+                    },
+                ]
+            },
+        ]
+    )
+
+    def api(repository, route):
+        return {"sha": SHA} if route == "commits/main" else next(history)
+
+    with (
+        patch.object(release, "api", side_effect=api),
+        patch.object(
+            release.uuid, "uuid4", return_value=SimpleNamespace(hex="own-request")
+        ),
+        patch.object(release.subprocess, "run"),
+        patch.object(release, "candidates_ready") as ready,
+    ):
+        with pytest.raises(RuntimeError, match="Fresh distribution build failed"):
+            release.require_candidates("owner/repo", SHA, 5, fresh=True)
+        ready.assert_not_called()
+
+
+def test_preview_dmg_receipt_rejects_foreign_build_bytes(tmp_path):
+    installers(tmp_path)
+    path = tmp_path / "dmg/installer.dmg.build.json"
+    metadata = json.loads(path.read_text())
+    metadata["sha256"] = "b" * 64
+    path.write_text(json.dumps(metadata))
+    with pytest.raises(ValueError, match="checksum or format"):
+        preview.receipt(tmp_path / "dmg", "dmg", SHA)
