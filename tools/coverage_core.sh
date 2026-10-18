@@ -9,7 +9,7 @@ rm -f -- "$task_output/lcov.info"
 task_raw=$(mktemp -d "$task_output/raw.XXXXXX")
 trap 'rm -rf -- "$task_raw"' EXIT
 cd "$task_root/packages/foresight_core"
-"$task_dart" -DFORESIGHT_ENABLE_TEST_HOOKS=true test --coverage="$task_raw" "$@"
+"$task_dart" test --coverage="$task_raw" "$@"
 "$task_dart" run coverage:format_coverage --lcov --in="$task_raw" \
   --out="$task_output/lcov.info" --report-on=lib \
   --ignore-files='**/generated/**' --base-directory="$task_root"

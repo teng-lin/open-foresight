@@ -23,7 +23,7 @@ case "$task_gate" in
     if [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
       ci_timed "core tests and coverage" "$task_root/tools/coverage_core.sh"
     else
-      ci_timed "core tests" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test
+      ci_timed "core tests" dart test
     fi
   )
   mkdir -p "$task_build/application"
