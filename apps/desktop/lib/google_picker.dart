@@ -1,8 +1,9 @@
+import 'package:foresight_core/remote.dart' show ConnectedSources;
 import 'package:flutter/material.dart';
 import 'google_connections.dart';
 
 class GoogleDrivePicker extends StatefulWidget {
-  final GoogleConnections connection;
+  final ConnectedSources connection;
   final bool folder;
   const GoogleDrivePicker(this.connection, {super.key, this.folder = false});
   @override

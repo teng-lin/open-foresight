@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -10,6 +11,9 @@ void main() {
     'real model searches and persists a cited controlled answer',
     () async {
       final directory = Directory.systemTemp.createTempSync('web-model-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final helper = Helper(
         env['FORESIGHT_WEB_TOKENIZER_SOCKET'] ??

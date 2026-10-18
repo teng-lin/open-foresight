@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:io';
 import 'package:foresight_core/src/native.dart';
 import 'package:foresight_core/src/native_note_enhancement.dart';
@@ -114,6 +115,21 @@ void main() {
       throwsStateError,
     );
   });
+
+  test(
+    'a cancelled native terminal status preserves the cancellation code',
+    () async {
+      runtime.events = [
+        {'type': 'done', 'status': 'cancelled'},
+      ];
+      await expectLater(
+        create().sendMessageStream('prompt').toList(),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+    },
+  );
 
   test('reports failed terminal status and owns idempotent disposal', () async {
     runtime.events = [

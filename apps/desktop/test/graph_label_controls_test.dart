@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -63,6 +64,9 @@ void main() {
       final dir = Directory.systemTemp.createTempSync(
         'foresight-inline-label-',
       );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
       final store = Store('${dir.path}/app.db');
       final a = store.importText(
         'First',
@@ -78,7 +82,10 @@ void main() {
       );
       final helper = OfflineHelper('${dir.path}/socket', '${dir.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
@@ -98,7 +105,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('inspector-cancel-label')));
       await tester.pumpAndSettle();
       expect(store.documentLabels, isEmpty);
-      expect(state.graphLabelInput.text, isEmpty);
+      expect(state.sourceFeature.graphLabelInput.text, isEmpty);
       await tester.tap(find.byKey(const ValueKey('inspector-add-label')));
       await tester.pumpAndSettle();
       await tester.enterText(
@@ -107,15 +114,12 @@ void main() {
       );
       await tester.testTextInput.receiveAction(TextInputAction.done);
       for (
-        var i = 0;
-        i < 100 &&
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
             (state.busy ||
                 store.rows('SELECT * FROM document_clusters').isEmpty);
-        i++
       ) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump(const Duration(milliseconds: 100));
       }
       await tester.pumpAndSettle();
@@ -124,7 +128,7 @@ void main() {
       expect(store.documentLabels.single.name, 'Planning');
       expect(store.documentLabels.single.source, 'user_defined');
       expect(store.documentLabels.where((r) => r.documentId == b), isEmpty);
-      expect(state.graphLabelInput.text, isEmpty);
+      expect(state.sourceFeature.graphLabelInput.text, isEmpty);
       final chip = find.byKey(const ValueKey('inspector-label-Planning'));
       expect(tester.getSize(chip).height, 24);
       expect(

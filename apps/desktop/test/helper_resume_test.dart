@@ -5,7 +5,7 @@ import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/helper_control.pbgrpc.dart' as control;
-import '../../../packages/foresight_core/test/fixtures/delayed_index_service.dart'
+import 'package:foresight_test_support/delayed_index_service.dart'
     show DelayedIndexService;
 
 class ResumeStateService extends control.HelperControlServiceBase {
@@ -32,6 +32,9 @@ void main() {
     'reconnect reuses a matching ready model and waits out an existing rebuild',
     () async {
       final tmp = Directory.systemTemp.createTempSync('helper-resume-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/app.db');
       final model = File('${tmp.path}/model.litertlm')
         ..writeAsStringSync('fixture');

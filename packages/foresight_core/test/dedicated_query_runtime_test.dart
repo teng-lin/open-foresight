@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -71,7 +72,10 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
 
   Future<int> waitForPid() async {
     final file = File('${directory.path}/pid');
-    for (var i = 0; i < 500; i++) {
+    for (
+      final pollingClock = Stopwatch()..start();
+      pollingClock.elapsed < const Duration(seconds: 5);
+    ) {
       if (file.existsSync() && file.readAsStringSync().isNotEmpty) {
         return int.parse(file.readAsStringSync());
       }
@@ -94,10 +98,20 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
     'cancellation owns its request, kills the process, and permits restart',
     () async {
       final pending = runtime.complete('wait', 'owned');
-      final failure = expectLater(pending, throwsA(isA<StateError>()));
+      final failure = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
       final first = await waitForPid();
+      await expectLater(
+        runtime.complete('other', 'other'),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
       runtime.cancel('someone-else');
-      await Future<void>.delayed(const Duration(milliseconds: 20));
       expect((await Process.run('kill', ['-0', '$first'])).exitCode, 0);
       runtime.cancel('owned');
       await failure;
@@ -106,6 +120,44 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
       expect((await Process.run('kill', ['-0', '$first'])).exitCode, isNot(0));
     },
   );
+
+  for (final startupError in <Object>[
+    const ProcessException('missing-runtime', [], 'Fixture launch failure'),
+    RpcError(RpcErrorCode.unavailable, 'Fixture runtime disappeared'),
+  ]) {
+    test(
+      'owned cancellation wins over late startup ${startupError.runtimeType}',
+      () async {
+        await runtime.close();
+        final startup = Completer<Process>();
+        final starting = Completer<void>();
+        runtime = DedicatedQueryRuntime(
+          python: 'missing-runtime',
+          worker: worker,
+          model: '${directory.path}/pid',
+          startProcess: (_, _) {
+            starting.complete();
+            return startup.future;
+          },
+        );
+        final pending = runtime.complete('wait', 'owned');
+        final failed = expectLater(
+          pending,
+          throwsA(
+            isA<RpcError>().having(
+              (e) => e.code,
+              'code',
+              RpcErrorCode.cancelled,
+            ),
+          ),
+        );
+        await starting.future;
+        runtime.cancel('owned');
+        startup.completeError(startupError);
+        await failed;
+      },
+    );
+  }
 
   test(
     'bounded and malformed worker output fail only the owning process',
@@ -130,12 +182,22 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
 
   test('close during generation releases the owned process', () async {
     final pending = runtime.complete('wait', 'owned');
-    final failure = expectLater(pending, throwsA(isA<StateError>()));
+    final failure = expectLater(
+      pending,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
     final pid = await waitForPid();
     await runtime.close();
     await failure;
     expect((await Process.run('kill', ['-0', '$pid'])).exitCode, isNot(0));
-    await expectLater(runtime.complete('new', 'next'), throwsStateError);
+    await expectLater(
+      runtime.complete('new', 'next'),
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.unavailable),
+      ),
+    );
   });
 
   test('timeout kills an unresponsive owned worker', () async {

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -6,7 +7,7 @@ import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/helper_control.pb.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
-import '../../../packages/foresight_core/test/fixtures/google_connections.dart'
+import 'package:foresight_test_support/google_connections.dart'
     show AdapterDomain;
 
 void main() {
@@ -14,12 +15,17 @@ void main() {
     tester,
   ) async {
     final tmp = Directory.systemTemp.createTempSync('foresight-pause-ui-');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
     final folder = Directory('${tmp.path}/files')..createSync();
     File('${folder.path}/fixture.txt').writeAsStringSync('A retained import.');
     final store = Store('${tmp.path}/app.db');
     final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
     final domain = AdapterDomain(store, helper);
-    await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+    await tester.pumpWidget(
+      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+    );
     await tester.tap(find.text('Sources'));
     await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('Pause source imports and indexing'));
@@ -29,7 +35,7 @@ void main() {
     final dynamic state = tester.state(find.byType(Workspace));
     await tester.runAsync(() async {
       final importing = state.run(() async {
-        await state.importFolderPath(folder.path);
+        await state.sourceFeature.importFolderPath(folder.path);
       });
       expect(state.busy, true);
       expect(store.sources, isEmpty);
@@ -49,6 +55,9 @@ void main() {
     'source search, label editing, graph navigation and settings persist',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-screens-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final path = '${tmp.path}/app.db';
       final store = Store(path);
       final apollo = store.importText(
@@ -65,7 +74,10 @@ void main() {
       );
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
@@ -93,7 +105,8 @@ void main() {
       await tester.pumpAndSettle();
       final dynamic graphState = tester.state(find.byType(Workspace));
       final fittedScale =
-          graphState.graphTransform.value.getMaxScaleOnAxis() as double;
+          graphState.sourceFeature.graphTransform.value.getMaxScaleOnAxis()
+              as double;
       for (final id in [apollo, borealis]) {
         final panel = tester.getRect(
           find.byKey(const ValueKey('source-graph-canvas')),
@@ -104,26 +117,27 @@ void main() {
           ),
           true,
           reason:
-              'Node $id center=${tester.getCenter(find.byKey(ValueKey('graph-node-$id')))} panel=$panel viewport=${graphState.graphViewportSize} transform=${graphState.graphTransform.value}',
+              'Node $id center=${tester.getCenter(find.byKey(ValueKey('graph-node-$id')))} panel=$panel viewport=${graphState.sourceFeature.graphViewportSize} transform=${graphState.sourceFeature.graphTransform.value}',
         );
       }
       await tester.tap(find.byTooltip('Zoom out'));
       await tester.pumpAndSettle();
       expect(
-        graphState.graphTransform.value.getMaxScaleOnAxis(),
+        graphState.sourceFeature.graphTransform.value.getMaxScaleOnAxis(),
         closeTo(fittedScale / 1.3, 1e-8),
       );
       await tester.tap(find.byTooltip('Zoom in'));
       await tester.pumpAndSettle();
       expect(
-        graphState.graphTransform.value.getMaxScaleOnAxis(),
+        graphState.sourceFeature.graphTransform.value.getMaxScaleOnAxis(),
         closeTo(fittedScale, 1e-8),
       );
-      graphState.graphTransform.value = graphState.graphTransform.value.clone()
-        ..scaleByDouble(1.15, 1.15, 1.15, 1.0);
+      graphState.sourceFeature.graphTransform.value =
+          graphState.sourceFeature.graphTransform.value.clone()
+            ..scaleByDouble(1.15, 1.15, 1.15, 1.0);
       await tester.pumpAndSettle();
       expect(
-        graphState.graphTransform.value.getMaxScaleOnAxis(),
+        graphState.sourceFeature.graphTransform.value.getMaxScaleOnAxis(),
         closeTo(fittedScale * 1.15, 1e-8),
       );
       for (var i = 0; i < 25; i++) {
@@ -139,7 +153,7 @@ void main() {
       await tester.tap(find.byTooltip('Fit graph'));
       await tester.pumpAndSettle();
       expect(
-        graphState.graphTransform.value.getMaxScaleOnAxis(),
+        graphState.sourceFeature.graphTransform.value.getMaxScaleOnAxis(),
         closeTo(fittedScale, 1e-8),
       );
       await tester.tap(find.byTooltip('Apollo'));
@@ -173,19 +187,25 @@ void main() {
     'Start transcribing opens speech setup before creating a meeting; cancel preserves selection',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-quick-start-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/app.db');
       final existing = store.meeting('Existing meeting');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Existing meeting'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      expect(state.meetingPreviewId, existing);
-      expect(state.meetingId, isNull);
+      expect(state.meetingFeature.meetingPreviewId, existing);
+      expect(state.meetingFeature.meetingId, isNull);
       expect(store.rows('SELECT * FROM meetings').length, 1);
       expect(find.text('Transcription Model'), findsOneWidget);
       await tester.tap(find.text('Cancel'));
@@ -203,10 +223,16 @@ void main() {
     'Ask composer rejects blank input and submits through keyboard or send',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-composer-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/application.db');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Ask'));
       await tester.pumpAndSettle();
@@ -257,6 +283,9 @@ void main() {
       final tmp = Directory.systemTemp.createTempSync(
         'foresight-source-columns-',
       );
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/application.db');
       store.importText(
         'Apollo',
@@ -267,7 +296,10 @@ void main() {
       store.importText('Borealis', 'Review Monday.', 'text/plain', 'fixture');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       final status = find.byTooltip('Local helper status');
       expect(
@@ -336,6 +368,9 @@ void main() {
     'Local file import preserves file modification time and first import time',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-file-dates-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final file = File('${tmp.path}/Apollo.txt')
         ..writeAsStringSync('Review Friday.');
       final originalTime = DateTime.utc(2020, 1, 1);
@@ -343,11 +378,16 @@ void main() {
       final store = Store('${tmp.path}/application.db');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(AdapterDomain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(AdapterDomain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
-      await tester.runAsync(() async => await state.importFolderPath(tmp.path));
+      await tester.runAsync(
+        () async => await state.sourceFeature.importFolderPath(tmp.path),
+      );
       final initial = store.sources.single;
       expect(initial['changed'], originalTime.millisecondsSinceEpoch);
       expect(
@@ -357,7 +397,9 @@ void main() {
       file.writeAsStringSync('Review Monday.');
       final updatedTime = DateTime.utc(2021, 1, 1);
       file.setLastModifiedSync(updatedTime);
-      await tester.runAsync(() async => await state.importFolderPath(tmp.path));
+      await tester.runAsync(
+        () async => await state.sourceFeature.importFolderPath(tmp.path),
+      );
       expect(store.sources.single['id'], initial['id']);
       expect(store.sources.single['revision'], 2);
       expect(store.sources.single['imported'], initial['imported']);
@@ -381,11 +423,17 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final tmp = Directory.systemTemp.createTempSync('foresight-layout-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/app.db');
       store.importText('Apollo', 'Plan', 'text/plain', 'fixture');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       for (final name in ['Meetings', 'Ask', 'Sources', 'Stats', 'Settings']) {
         await tester.tap(find.text(name).first);
@@ -403,6 +451,9 @@ void main() {
       final root = Directory.systemTemp.createTempSync(
         'foresight-type-filter-',
       );
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final pdf = store.importText(
         'Apollo PDF',
@@ -424,7 +475,10 @@ void main() {
         '${root.path}/helper',
       );
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       store.db.execute('INSERT INTO google_sources VALUES(?,?,?,?,?)', [
         sheet,

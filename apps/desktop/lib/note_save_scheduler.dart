@@ -3,7 +3,13 @@ import 'dart:async';
 /// Original editor saves one second after the latest text change. Drafts are
 /// captured before switching notes or disposing controllers/command transport.
 class NoteSaveScheduler {
-  NoteSaveScheduler(this.write, {this.onError, this.onSaved});
+  NoteSaveScheduler(
+    this.write, {
+    this.onError,
+    this.onSaved,
+    this.createTimer = Timer.new,
+  });
+  final Timer Function(Duration, void Function()) createTimer;
   final Future<void> Function(int id, String body, int? lastManualEdit) write;
   final void Function(Object error, StackTrace stack)? onError;
   final void Function(int id)? onSaved;
@@ -27,7 +33,7 @@ class NoteSaveScheduler {
     _failed.remove(id);
     _pending = (id, body, _serial, lastManualEdit);
     _timer?.cancel();
-    _timer = Timer(const Duration(seconds: 1), _automaticFlush);
+    _timer = createTimer(const Duration(seconds: 1), _automaticFlush);
   }
 
   void _automaticFlush() {
