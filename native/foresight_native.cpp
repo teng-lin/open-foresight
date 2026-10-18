@@ -35,6 +35,7 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <system_error>
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
@@ -113,6 +114,18 @@ struct Worker : Events {
     join();
   }
 };
+template <class Fn>
+std::thread start_worker_thread(const char *operation, Fn run) {
+#if FORESIGHT_ENABLE_TEST_HOOKS
+  const char *failure = std::getenv("FORESIGHT_TEST_THREAD_FAILURE");
+  if (failure && std::string(failure) == operation)
+    throw std::system_error(EAGAIN, std::generic_category(),
+                            "Injected thread creation failure");
+#else
+  (void)operation;
+#endif
+  return std::thread(std::move(run));
+}
 // The probe is a synchronous FFI call. A separate timer must stop its owned
 // process even if stdout has closed and run() is waiting for the supervisor.
 struct ProbeDeadline {
@@ -847,10 +860,10 @@ void *fs_conversation_create(void *h) {
       return nullptr;
     auto *e = static_cast<Engine *>(h);
     std::lock_guard lock(e->mu);
-    ++e->refs;
-    auto *c = new Conversation;
+    auto c = std::make_unique<Conversation>();
     c->engine = e;
-    return c;
+    ++e->refs;
+    return c.release();
 
   } catch (const std::exception &barrier_error) {
     foresight::report_barrier_error(barrier_error.what());
@@ -878,11 +891,27 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
   auto &e = *c.engine;
   if (e.backend != 1 && (tools || (schema && *schema)))
     return -1;
+  std::string previous_state;
   {
     std::lock_guard lock(e.mu);
     if (e.busy)
       return -1;
+    previous_state = e.state;
     e.busy = true;
+  }
+  foresight::ScopeExit rollback([&] {
+    {
+      std::lock_guard lock(e.mu);
+      e.busy = false;
+      e.state.swap(previous_state);
+    }
+    c.active = false;
+    c.requests.erase(id);
+    c.request.clear();
+    c.finish_input = false;
+  });
+  {
+    std::lock_guard lock(e.mu);
     e.state = "loading";
   }
   c.requests.insert(id);
@@ -898,7 +927,8 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
   c.active = true;
   std::string text = prompt;
   std::string json_schema = schema ? schema : "";
-  c.thread = std::thread([&c, text, json_schema, max_output_tokens, tools] {
+  c.thread = start_worker_thread("generation", [&c, text, json_schema,
+                                                max_output_tokens, tools] {
     auto &e = *c.engine;
     bool settled = false;
     foresight::guarded_worker(
@@ -1125,6 +1155,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           c.active = false;
         });
   });
+  rollback.release();
   return 0;
 }
 int fs_generate(void *h, const char *id, const char *prompt) {
@@ -1344,16 +1375,34 @@ int fs_speech_finish(void *h, const char *id) {
     if (s.active)
       return -1;
     s.join();
+    auto previous_pending = s.pending;
+    const auto previous_phase = s.phase;
+    const auto previous_rate = s.input_rate;
+    std::shared_ptr<std::vector<int16_t>> samples;
+    bool finalized_tail = false;
+    foresight::ScopeExit rollback([&] {
+      s.active = false;
+      if (samples) {
+        s.samples = std::move(*samples);
+      }
+      if (finalized_tail && !s.samples.empty())
+        s.samples.pop_back();
+      s.pending = std::move(previous_pending);
+      s.phase = previous_phase;
+      s.input_rate = previous_rate;
+    });
     s.cancel = false;
     s.active = true;
     std::string request = id;
-    if (!s.pending.empty())
+    if (!s.pending.empty()) {
       s.samples.push_back(s.pending.back());
-    auto samples = std::move(s.samples);
+      finalized_tail = true;
+    }
+    samples = std::make_shared<std::vector<int16_t>>(std::move(s.samples));
     s.pending.clear();
     s.phase = 0;
     s.input_rate = 0;
-    s.thread = std::thread([&s, request, samples = std::move(samples)] {
+    s.thread = start_worker_thread("speech", [&s, request, samples] {
       bool settled = false;
       foresight::guarded_worker(
           [&] {
@@ -1373,7 +1422,7 @@ int fs_speech_finish(void *h, const char *id) {
                 close(audio.fd);
                 audio.fd = -1;
               }
-              wav(audio.path, samples);
+              wav(audio.path, *samples);
               const char *speech_backend =
                   std::getenv("FORESIGHT_WHISPER_BACKEND");
               const bool cpu =
@@ -1445,7 +1494,7 @@ int fs_speech_finish(void *h, const char *id) {
                         ",\"text\":" +
                             (s.worker_engine ? transcript : quote(transcript)) +
                             ",\"final\":true,\"start_ms\":0,\"end_ms\":" +
-                            std::to_string(samples.size() * 1000 / 16000) +
+                            std::to_string(samples->size() * 1000 / 16000) +
                             ",\"sample_rate\":16000"));
             if (terminal == "failed")
               failure(
@@ -1466,6 +1515,7 @@ int fs_speech_finish(void *h, const char *id) {
             s.active = false;
           });
     });
+    rollback.release();
     return 0;
 
   } catch (const std::exception &barrier_error) {
@@ -1553,24 +1603,23 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
     if (rate < 8000 || rate > 192000)
       return nullptr;
     foresight::seal_runtime_environment();
-    auto *c = new Capture;
+    auto owned_capture = std::make_unique<Capture>();
+    auto *c = owned_capture.get();
     c->target = target && *target ? target : "auto";
     if (const char *runtime = getenv("FORESIGHT_CAPTURE_RUNTIME");
         runtime && *runtime) {
       if (runtime[0] != '/' || access(runtime, X_OK) != 0) {
-        delete c;
         return nullptr;
       }
       c->runtime = runtime;
     }
     c->playback = playback != 0;
     if (echo && !fs_capture_set_echo_cancellation(c, echo)) {
-      delete c;
       return nullptr;
     }
     c->rate = rate;
     c->active = true;
-    c->thread = std::thread([c] {
+    c->thread = start_worker_thread("capture", [c] {
       foresight::guarded_worker(
           [&] {
 #ifdef __APPLE__
@@ -1676,7 +1725,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                     "\"Capture failed\"}");
           });
     });
-    return c;
+    return owned_capture.release();
 
   } catch (const std::exception &barrier_error) {
     foresight::report_barrier_error(barrier_error.what());
