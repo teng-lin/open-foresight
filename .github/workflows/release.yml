@@ -6,6 +6,10 @@ on:
         description: New stable tag matching main's application version
         type: string
         required: true
+      gpu_evidence:
+        description: JSON array of release-day Linux and macOS GPU evidence bound to installer SHA256
+        type: string
+        required: false
 permissions:
   contents: read
   actions: read
@@ -67,6 +71,7 @@ jobs:
     uses: ./.github/workflows/release-acceptance.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}
+      gpu_evidence: ${{ inputs.gpu_evidence }}
   publish:
     timeout-minutes: 10
     if: always()
@@ -79,6 +84,14 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-acceptance-summary
+          path: acceptance-summary
+      - name: Require installer-bound manual GPU evidence
+        env:
+          TAG: ${{ inputs.tag }}
+        run: python3 tools/release_acceptance_report.py --tag "$TAG" --require-publication acceptance-summary/release-acceptance.json
       - name: Require complete acceptance and publish the draft
         env:
           GH_TOKEN: ${{ github.token }}

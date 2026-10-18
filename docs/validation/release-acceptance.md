@@ -150,3 +150,9 @@ gh attestation verify ./open-foresight_VERSION_amd64.deb --repo teng-lin/open-fo
 Repeat for RPM, Arch and DMG installers. Provenance and SBOM attestations bind
 SHA-256 installer bytes to the release workflow; checksum and `.build.json`
 verification remain mandatory for installer acceptance.
+
+The installed functional report records `gpu_inference.status = manual_pending` and `automated_passed_manual_pending`. This requires the release-day physical GPU check above. Automated software Vulkan evidence does not complete it. Before dispatching publication, supply the `gpu_evidence` JSON input with one Linux and one macOS record, each containing `platform`, `installer_sha256`, `gpu`, `backend`, `tester`, `tested_at_utc` (UTC RFC3339 seconds) and `evidence` (the observed decode/speech result and evidence location). Use the SHA256 of an exact installer tested in this release; Linux may use any accepted native distribution installer. Download and manually check the draft candidates before dispatching the coordinator, or audit them with the separate acceptance workflow.
+
+The acceptance aggregate retains the installer identities and manual records in `release-acceptance-summary/release-acceptance.json`. Publication downloads and reads that report, checks the release tag and the GPU evidence's installer hashes, and refuses to publish while manual GPU evidence is pending. The release operator supplies the evidence; CI does not assert that it performed a physical GPU test.
+
+Disposable Linux installer containers allow nested namespaces through their outer Docker seccomp/AppArmor configuration so the installed application's bubblewrap sandbox can run. These allowances apply only to isolated CI installer containers; extraction still uses the shipped Parser and sandbox and fails if either is unavailable.
