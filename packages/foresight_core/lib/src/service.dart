@@ -897,10 +897,12 @@ class IsolatedApplicationService {
     );
     host._messages.listen(host._message);
     host._errors.listen((dynamic error) {
+      _traceServiceTransport('worker uncaught error $error');
       host._failure = StateError('Application worker failed: $error');
       if (!host._ready.isCompleted) host._ready.completeError(host._failure!);
     });
     host._exits.listen((_) {
+      _traceServiceTransport('worker exit failed=${host._failure != null}');
       if (!host._workerExited.isCompleted) host._workerExited.complete();
       if (!host._ready.isCompleted) {
         host._ready.completeError(
@@ -965,6 +967,7 @@ class IsolatedApplicationService {
         ),
       );
     } else if (value.first == 'failure') {
+      _traceServiceTransport('worker reported failure ${value[1]}');
       _failure = StateError(value[1] as String);
       if (!_ready.isCompleted) _ready.completeError(_failure!);
     }
@@ -1075,6 +1078,9 @@ class IsolatedApplicationService {
   }();
 
   Future<void> _removePublicSocket({bool workerOwnsLock = false}) async {
+    _traceServiceTransport(
+      'frontend remove public workerOwnsLock=$workerOwnsLock',
+    );
     await _listener?.close();
     if (_publicRemoved || _publicPath == null) return;
     RandomAccessFile? ownership;
@@ -1095,6 +1101,7 @@ class IsolatedApplicationService {
     try {
       final path = File(_publicPath!);
       if (await path.exists()) await path.delete();
+      _traceServiceTransport('frontend removed public ${path.path}');
       _publicRemoved = true;
     } finally {
       await ownership?.close();
