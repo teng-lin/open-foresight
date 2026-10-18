@@ -40,6 +40,21 @@ func fail(_ message: String, _ code: Int32 = 1) -> ExtractionFailure {
     ExtractionFailure(message: message, code: code)
 }
 
+func boundedDocumentData(limit: Int = 10 * 1024 * 1024,
+                         read: (Int) throws -> Data?) throws -> Data {
+    var data = Data()
+    while true {
+        let remaining = limit + 1 - data.count
+        let requested = min(64 * 1024, remaining)
+        guard let chunk = try read(requested), !chunk.isEmpty else { return data }
+        guard chunk.count <= requested else { throw fail("Invalid document read size.") }
+        data.append(chunk)
+        guard data.count <= limit else {
+            throw fail("The selected document must be at most 10 MiB.")
+        }
+    }
+}
+
 func extract(_ kind: String, _ path: String) throws -> String {
     let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
     guard descriptor >= 0 else {
@@ -53,10 +68,13 @@ func extract(_ kind: String, _ path: String) throws -> String {
         throw fail("The selected document must be a regular file of at most 10 MiB.")
     }
     let input = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    defer { try? input.close() }
     let data: Data
     do {
-        data = try input.readToEnd() ?? Data()
+        data = try boundedDocumentData { try input.read(upToCount: $0) }
         try input.close()
+    } catch let error as ExtractionFailure {
+        throw error
     } catch {
         throw fail("Cannot read the selected document: \(error.localizedDescription)")
     }
@@ -94,6 +112,28 @@ func extract(_ kind: String, _ path: String) throws -> String {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+if arguments == ["--bounded-reader-self-test"] {
+    do {
+        var calls = 0
+        do {
+            _ = try boundedDocumentData(limit: 8) { requested in
+                calls += 1
+                return Data(repeating: 65, count: min(3, requested))
+            }
+            throw fail("Growing document was not rejected.")
+        } catch let error as ExtractionFailure {
+            guard error.message.contains("at most"), calls == 3 else { throw error }
+        }
+        var pieces = [Data([65, 66]), Data([67]), Data()]
+        let data = try boundedDocumentData(limit: 3) { _ in pieces.removeFirst() }
+        guard data == Data([65, 66, 67]) else { throw fail("Short document reads lost bytes.") }
+        print("bounded reader passed")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("Bounded reader self-test failed: \(error)\n".utf8))
+        exit(1)
+    }
+}
 if arguments.count == 2 && arguments[0] == "--sandbox-probe" {
     do {
         try confineParser()
