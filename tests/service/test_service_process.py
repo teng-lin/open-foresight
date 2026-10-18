@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -237,6 +238,7 @@ def running(tmp_path, request):
         FORESIGHT_DATA=str(tmp_path / "data"),
         FORESIGHT_RUNTIME=str(tmp_path / "run"),
         FORESIGHT_SERVICE=str(SERVICE),
+        FORESIGHT_SERVICE_TRACE="1",
         FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
         FORESIGHT_CAPTURE_RUNTIME=str(capture),
@@ -955,6 +957,18 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
 
 @pytest.mark.parametrize("helper_exits_first", [False, True])
 def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_first):
+    for extra_status in (False, True, False, True):
+        print(f"Adopted-helper timing: extra_status={extra_status}")
+        assert_idle_shutdown_verifies_a_real_adopted_helper(
+            tmp_path, helper_exits_first, extra_status=extra_status
+        )
+        for name in ("data", "run"):
+            shutil.rmtree(tmp_path / name)
+
+
+def assert_idle_shutdown_verifies_a_real_adopted_helper(
+    tmp_path, helper_exits_first, *, extra_status
+):
     """A predecessor's surviving helper is stopped and positively acknowledged."""
     data, runtime = tmp_path / "data", tmp_path / "run"
     data.mkdir(mode=0o700)
@@ -972,6 +986,7 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
         FORESIGHT_RUNTIME=str(runtime),
         FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
+        FORESIGHT_SERVICE_TRACE="1",
     )
     with (tmp_path / "adopted-helper.log").open("w+") as log:
         helper = subprocess.Popen(
@@ -1006,6 +1021,8 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
                     break
                 assert time.monotonic() < deadline, state
                 poll_delay(deadline)
+            if extra_status:
+                peer.call("status")
             if helper_exits_first:
                 helper.terminate()
                 helper.wait(timeout=10)
@@ -1024,6 +1041,11 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
             assert service.wait(timeout=10) == 0
             assert helper.wait(timeout=10) == -signal.SIGTERM
             assert not (data / ".application-endpoint.json").exists()
+        except Exception:
+            print(f"Adopted helper: pid={helper.pid}, exit={helper.poll()}")
+            if service is not None:
+                profile_failure_diagnostics(service, log)
+            raise
         finally:
             if peer is not None:
                 peer.close()
@@ -1041,11 +1063,67 @@ def poll_delay(deadline):
     threading.Event().wait(min(0.02, remaining))
 
 
+def profile_failure_diagnostics(process, log):
+    """Preserve both sides of a stalled isolated-service connection."""
+    profile = Path(log.name).parent
+    print(f"Profile {profile}: pid={process.pid}, exit={process.poll()}")
+    for name in ("application.sock", "application-worker.sock", "helper.sock"):
+        path = profile / "run" / name
+        print(f"Endpoint {path}: exists={path.exists()}")
+    record = profile / "data/.application-endpoint.json"
+    print(f"Endpoint record: {record.read_text() if record.exists() else 'missing'}")
+    log.seek(0)
+    print(log.read())
+    try:
+        with socket.socket(socket.AF_UNIX) as probe:
+            probe.settimeout(2)
+            probe.connect(str(profile / "run/application-worker.sock"))
+            probe.sendall(b'{"id":1,"method":"status","args":{}}\n')
+            print(f"Direct worker response: {probe.recv(65536)!r}")
+    except OSError as error:
+        print(f"Direct worker probe failed: {error}")
+    if sys.platform == "darwin" and process.poll() is None:
+        try:
+            sample = subprocess.run(
+                ["/usr/bin/sample", str(process.pid), "1", "1"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            print(f"Service thread sample:\n{sample.stdout[:65536]}\n{sample.stderr}")
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"Service thread sample failed: {error}")
+
+
 def test_two_live_profiles_keep_notes_private(running, tmp_path):
+    for _ in range(2):
+        for poll_interval, eager_status in (
+            (0.02, False),
+            (0.001, True),
+            (0.001, False),
+            (0.02, True),
+        ):
+            print(
+                f"Two-profile timing: poll={poll_interval}, eager_status={eager_status}"
+            )
+            assert_two_live_profiles_keep_notes_private(
+                running,
+                tmp_path,
+                poll_interval=poll_interval,
+                eager_status=eager_status,
+            )
+            for name in ("first-profile", "second-profile"):
+                shutil.rmtree(tmp_path / name)
+
+
+def assert_two_live_profiles_keep_notes_private(
+    running, tmp_path, *, poll_interval, eager_status
+):
     """Separate owners and databases must isolate actual writes, not just paths."""
     processes = []
     peers = []
     logs = []
+    initial_requests = []
     try:
         for name in ("first-profile", "second-profile"):
             profile = tmp_path / name
@@ -1054,6 +1132,7 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path):
                 **running["env"],
                 "FORESIGHT_DATA": str(profile / "data"),
                 "FORESIGHT_RUNTIME": str(profile / "run"),
+                "FORESIGHT_SERVICE_TRACE": "1",
             }
             log = (profile / "service.log").open("w+")
             logs.append(log)
@@ -1064,14 +1143,22 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path):
                 try:
                     peer = Peer(profile / "run/application.sock")
                     peers.append(peer)
+                    if eager_status:
+                        initial_requests.append(peer.send("status"))
                     break
                 except (FileNotFoundError, ConnectionRefusedError):
                     if process.poll() is not None or time.monotonic() >= deadline:
                         log.seek(0)
                         pytest.fail("Profile failed to start: " + log.read())
-                    threading.Event().wait(min(0.02, deadline - time.monotonic()))
+                    threading.Event().wait(
+                        min(poll_interval, deadline - time.monotonic())
+                    )
         first, second = peers
-        first_status, second_status = first.call("status"), second.call("status")
+        if eager_status:
+            first_status = first.result(initial_requests[0])
+            second_status = second.result(initial_requests[1])
+        else:
+            first_status, second_status = first.call("status"), second.call("status")
         assert first_status["pid"] != second_status["pid"]
         assert first.call("notes.list") == second.call("notes.list") == []
         first.call(
@@ -1090,6 +1177,10 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path):
         assert [note["title"] for note in second.call("notes.list")] == [
             "Second private note"
         ]
+    except Exception:
+        for index, process in enumerate(processes):
+            profile_failure_diagnostics(process, logs[index])
+        raise
     finally:
         for peer in peers:
             peer.close()
