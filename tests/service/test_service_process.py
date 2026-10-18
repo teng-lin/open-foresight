@@ -133,6 +133,10 @@ class ApprovalDesktop:
 
 class McpPeer:
     def __init__(self, env):
+        self.runtime = Path(env["FORESIGHT_RUNTIME"])
+        self.service_pid = None
+        self.previous_reply = None
+        self.previous_error = None
         self.process = subprocess.Popen(
             [str(MCP)],
             env=env,
@@ -159,15 +163,60 @@ class McpPeer:
             ready, _, _ = select.select(
                 [self.process.stdout], [], [], max(0, deadline - time.monotonic())
             )
-            assert ready, "MCP response timeout"
+            assert ready, self.timeout_details(identifier)
             line = self.process.stdout.readline()
             assert line, f"MCP exited: {self.process.stderr.read().decode()}"
             value = json.loads(line)  # Any non-protocol stdout fails this test.
             if "method" in value:
                 self.notifications.append(value)
             if value.get("id") == identifier:
+                self.previous_reply = identifier
+                result = value.get("result")
+                self.previous_error = (
+                    json.dumps(result)[:2048]
+                    if isinstance(result, dict) and result.get("isError")
+                    else None
+                )
                 return value
         raise TimeoutError(identifier)
+
+    def timeout_details(self, identifier):
+        chunks = []
+        remaining = 16384
+        while remaining > 0:
+            ready, _, _ = select.select([self.process.stderr], [], [], 0)
+            if not ready:
+                break
+            data = os.read(self.process.stderr.fileno(), min(remaining, 4096))
+            if not data:
+                break
+            chunks.append(data)
+            remaining -= len(data)
+        owner_alive = None
+        if self.service_pid is not None:
+            try:
+                os.kill(self.service_pid, 0)
+                owner_alive = True
+            except ProcessLookupError:
+                owner_alive = False
+            except OSError:
+                pass
+        sockets = {
+            name: (self.runtime / name).exists()
+            for name in ("application.sock", "application-worker.sock")
+        }
+        diagnostic = {
+            "request": identifier,
+            "previous_reply": self.previous_reply,
+            "previous_error": self.previous_error,
+            "mcp_pid": self.process.pid,
+            "mcp_exit": self.process.poll(),
+            "owner_pid": self.service_pid,
+            "owner_alive": owner_alive,
+            "sockets": sockets,
+            "stderr": b"".join(chunks).decode(errors="replace"),
+        }
+        return "MCP response timeout: " + json.dumps(diagnostic)
 
     def call(self, method, params=None):
         response = self.result(self.send(method, params))
@@ -685,6 +734,7 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
         b = second.tool("get_status")["structuredContent"]["result"]
         assert a["pid"] == b["pid"] and a["pid"] != running["process"].pid
         owner = a["pid"]
+        first.service_pid = second.service_pid = owner
         first.tool("save_note", {"title": "Restart-safe", "body": "persisted"})
         os.kill(owner, signal.SIGTERM)
         # Shutdown may wait up to five seconds for the helper, and a new
