@@ -121,6 +121,28 @@ void main() {
     }
   });
 
+  test('Linux loopback setup denial gives host policy guidance', () async {
+    final source = File('${directory.path}/file.pdf')
+      ..writeAsStringSync('fixture');
+    const diagnostic =
+        'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted';
+    final helper = executable('echo "$diagnostic" >&2\nexit 1');
+    final parser = Parser(
+      macOS: false,
+      startProcess: (_, _) => Process.start(helper.path, []),
+    );
+    await expectLater(
+      parser.extract(source.path),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          allOf(contains('AppArmor'), contains(diagnostic)),
+        ),
+      ),
+    );
+  });
+
   test('Linux extractor errors retain the document diagnostic', () async {
     final source = File('${directory.path}/broken.pdf')
       ..writeAsStringSync('fixture');

@@ -1056,7 +1056,7 @@ class Parser {
         diagnostic.startsWith('bwrap:') &&
         !RegExp(r'^bwrap:\s*exec\w*\b').hasMatch(diagnostic) &&
         RegExp(
-          r'namespace|unshare|userns|[ug]id map|capset',
+          r'namespace|unshare|userns|[ug]id map|capset|^bwrap:\s*loopback:',
           caseSensitive: false,
         ).hasMatch(diagnostic);
     if (result.exitCode != 0 && namespaceFailure) {
