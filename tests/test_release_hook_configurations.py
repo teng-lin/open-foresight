@@ -1,6 +1,7 @@
 """Release binaries stay hook-free across generator and cached option changes."""
 
 from pathlib import Path
+import json
 import shutil
 import subprocess
 
@@ -13,14 +14,15 @@ MARKER = "FORESIGHT_CRASH_AT"
 
 @pytest.fixture
 def configuration_fixture(tmp_path):
-    if not shutil.which("cmake") or not shutil.which("c++"):
-        pytest.skip("CMake and C++ compiler required")
+    if not all(shutil.which(tool) for tool in ("cmake", "c++", "ninja")):
+        pytest.skip("CMake, Ninja and C++ compiler required")
     source = tmp_path / "source"
     source.mkdir()
     module = ROOT / "cmake/ForesightTestHooks.cmake"
     (source / "CMakeLists.txt").write_text(
         "cmake_minimum_required(VERSION 3.20)\n"
         "project(hook_configuration LANGUAGES CXX)\n"
+        "set(CMAKE_EXPORT_COMPILE_COMMANDS ON)\n"
         f'include("{module}")\n'
         "add_executable(production main.cpp)\n"
         "target_compile_definitions(production PRIVATE FORESIGHT_ENABLE_TEST_HOOKS=${FORESIGHT_PRODUCTION_TEST_HOOKS})\n"
@@ -50,6 +52,18 @@ def configure(source, build, *arguments):
 
 
 def verify(build, configuration, multi=False):
+    # Verify generated compiler inputs as well as executable behavior. A stale
+    # binary must not be mistaken for a generator-expression configuration bug.
+    commands = json.loads((build / "compile_commands.json").read_text())
+    for target, enabled in (("production", 0), ("instrumented", 1)):
+        selected = [
+            item["command"]
+            for item in commands
+            if f"/{target}.dir/" in item["command"]
+            and (not multi or f"/{configuration}/" in item["command"])
+        ]
+        assert len(selected) == 1, selected
+        assert f"-DFORESIGHT_ENABLE_TEST_HOOKS={enabled}" in selected[0]
     subprocess.run(
         ["cmake", "--build", str(build), "--config", configuration, "--parallel", "2"],
         capture_output=True,
@@ -69,7 +83,10 @@ def test_switching_debug_to_release_cannot_keep_cached_hooks(
     configuration_fixture, configuration
 ):
     source, build = configuration_fixture
-    configure(source, build, "-DCMAKE_BUILD_TYPE=Debug")
+    # The macOS system Make can miss same-second flags.make changes during this
+    # rapid reconfigure fixture. Ninja observes configuration changes directly,
+    # and is also the generator selected by the independent CI stage workflows.
+    configure(source, build, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Debug")
     subprocess.run(
         ["cmake", "--build", str(build)], capture_output=True, check=True, timeout=60
     )
