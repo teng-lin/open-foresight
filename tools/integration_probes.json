@@ -1,0 +1,162 @@
+{
+  "schema": 1,
+  "entries": [
+    {
+      "path": "tools/test_capture_device_recovery.py",
+      "mode": "manual",
+      "reason": "Verify private PipeWire device loss/return without physical recording.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_capture_terminal_state.py",
+      "mode": "manual",
+      "reason": "Exercise real native/Dart capture failure handling with a failing CLI fixture.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_default_model_startup.py",
+      "mode": "manual",
+      "reason": "Check ordinary bundle launch on an owned desktop without a model override.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_gemma_models.py",
+      "mode": "manual",
+      "reason": "Run real local Gemma native/helper acceptance without account data.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_global_shortcut.py",
+      "mode": "manual",
+      "reason": "Verify the real Hyprland global key through a private microphone/profile.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_global_shortcut_private.py",
+      "mode": "manual",
+      "reason": "Run global shortcut acceptance in a nested Hyprland on an owned headless desktop.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_helper_worker.py",
+      "mode": "manual",
+      "reason": "Check persistent worker health/ownership through the actual helper RPCs.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_installed_persistence.py",
+      "mode": "automated",
+      "reason": "Create/verify real application data on opposite sides of an installer rerun.",
+      "wiring": [
+        "packaging/ci/test-release-package.sh"
+      ]
+    },
+    {
+      "path": "tools/test_installed_release.py",
+      "mode": "automated",
+      "reason": "Functional acceptance through an installed app's own launchers and models.",
+      "wiring": [
+        ".github/workflows/integration-acceptance.yml",
+        ".github/workflows/preview-packages.yml",
+        ".github/workflows/release-acceptance.yml",
+        "packaging/ci/test-release-package.sh"
+      ]
+    },
+    {
+      "path": "tools/test_litert_status_abi.py",
+      "mode": "automated",
+      "reason": "Check the pinned accelerator C++ ABI boundary (STL layout and Status return).",
+      "wiring": [
+        ".github/workflows/ci-dependencies.yml",
+        "packaging/sdk-litert.Dockerfile"
+      ]
+    },
+    {
+      "path": "tools/test_litert_stop_sequences.py",
+      "mode": "manual",
+      "reason": "Check actual ordered-token stopping with the pinned SDK's test_lm fixture.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_live_transcription_gap.py",
+      "mode": "manual",
+      "reason": "Verify real Whisper transcription across an owned virtual microphone outage.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_macos_release_models.py",
+      "mode": "automated",
+      "reason": "Release-only real-model CPU acceptance; weights stay outside the shipped app.",
+      "wiring": [
+        ".github/workflows/ci-dependencies.yml",
+        ".github/workflows/integration-acceptance.yml",
+        ".github/workflows/macos-release.yml",
+        ".github/workflows/preview-packages.yml",
+        ".github/workflows/release-acceptance.yml"
+      ]
+    },
+    {
+      "path": "tools/test_meeting_workflow.py",
+      "mode": "manual",
+      "reason": "Exercise real meeting workflows on an owned headless desktop and private audio devices.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_native_inference.py",
+      "mode": "manual",
+      "reason": "Exercise the shared native inference path with an empty executable PATH.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_native_service.py",
+      "mode": "manual",
+      "reason": "Real-model acceptance through a packaged service and MCP in a private profile.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_packaged_model_runtime.py",
+      "mode": "manual",
+      "reason": "Exercise real models through a relocated package's own inference processes.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_packaged_note_enhancement.py",
+      "mode": "manual",
+      "reason": "Real packaged Application enhancement, including saved-transcript correction.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_packaged_query_worker.py",
+      "mode": "manual",
+      "reason": "Relocate the native dedicated detector and test its installed protocol.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_packaged_sentencepiece_coload.py",
+      "mode": "manual",
+      "reason": "Check both native/SentencePiece initialization orders in isolated children.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_release_dmg.py",
+      "mode": "automated",
+      "reason": "Mount verified release DMG bytes and test a newly installed application copy.",
+      "wiring": [
+        ".github/workflows/preview-packages.yml",
+        ".github/workflows/release-acceptance.yml"
+      ]
+    },
+    {
+      "path": "tools/test_vision_model_runtime.py",
+      "mode": "manual",
+      "reason": "Opt-in real-model check of recovered vision startup and native ownership.",
+      "wiring": []
+    },
+    {
+      "path": "tools/test_whisper_gpu.py",
+      "mode": "manual",
+      "reason": "Verify Vulkan Whisper and native speech events using a file, never a microphone.",
+      "wiring": []
+    }
+  ]
+}
