@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
@@ -127,7 +128,8 @@ void main() {
         find.textContaining('Unknown\n', findRichText: true),
         findsOneWidget,
       );
-      final snapshot = await domain.command('meetings.get', {'id': id}) as Map;
+      final snapshot =
+          await domain.command(Operation.meetings_get, {'id': id}) as Map;
       final transcript = snapshot['transcript'] as List;
       expect(transcript.map((t) => t['speaker_id']), [0, 1, null]);
       expect(transcript.map((t) => t['speaker_label']), [

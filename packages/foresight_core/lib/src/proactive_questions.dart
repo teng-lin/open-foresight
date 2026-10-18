@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'text_budget.dart';
 import 'store.dart';
@@ -137,7 +138,8 @@ class ProactiveQuestions {
     final question = store.rows('SELECT * FROM meeting_questions WHERE id=?', [
       questionId,
     ]).firstOrNull;
-    if (question == null) throw StateError('Question not found');
+    if (question == null)
+      throw RpcError(RpcErrorCode.notFound, 'Question not found');
     if (![
       'failed',
       'insufficient_context',

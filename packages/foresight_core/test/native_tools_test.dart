@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -102,6 +103,29 @@ print('answer '+json.dumps(answer),flush=True)
         runtime.close();
         await directory.delete(recursive: true);
       });
+
+      test(
+        'closing during model load reports cancellation before adoption',
+        () async {
+          final loading = runtime.load(
+            '${directory.path}/runner',
+            '${directory.path}/asset',
+            backend: 'litert_lm',
+          );
+          runtime.close();
+          await expectLater(
+            loading,
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          expect(runtime.engine.address, 0);
+        },
+      );
 
       test(
         'non-encodable payloads release the request before native string allocation',
@@ -421,11 +445,27 @@ print('answer '+json.dumps(answer),flush=True)
               )
               .toList();
           await entered.future;
+          await expectLater(
+            runtime.generate('blocked-owner', 'Question').toList(),
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.busy,
+              ),
+            ),
+          );
           expect(runtime.cancel(requestId: 'another-owner'), isFalse);
           expect(runtime.cancel(requestId: 'cancel-owner'), isTrue);
           await expectLater(
             pending.timeout(const Duration(seconds: 2)),
-            throwsStateError,
+            throwsA(
+              isA<RpcError>().having(
+                (e) => e.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
           );
           reply.complete('late reply');
           await Future<void>.delayed(const Duration(milliseconds: 40));
@@ -464,7 +504,13 @@ print('answer '+json.dumps(answer),flush=True)
           runtime.close();
           await expectLater(
             pending.timeout(const Duration(seconds: 2)),
-            throwsStateError,
+            throwsA(
+              isA<RpcError>().having(
+                (e) => e.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
           );
           reply.complete('late reply after close');
           await Future<void>.delayed(const Duration(milliseconds: 40));

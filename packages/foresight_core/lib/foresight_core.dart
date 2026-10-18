@@ -37,3 +37,4 @@ export 'src/reference_tool_parser.dart';
 export 'src/reference_chat_history.dart';
 export 'src/reference_tokenizer.dart';
 export 'src/desktop_connection.dart';
+export 'src/operations.dart' show Operation;

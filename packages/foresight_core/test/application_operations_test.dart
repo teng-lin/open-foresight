@@ -287,6 +287,16 @@ void main() {
     () async {
       final id =
           (await call('meetings.create', {'title': 'Planning'}))['id'] as int;
+      await expectLater(
+        app.call('meetings.start', {'id': id}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
+      );
       final note = await call('notes.save', {
         'title': 'Personal',
         'body': 'v1',
@@ -585,6 +595,61 @@ void main() {
       await app.call('models.register', {'kind': 'speech', 'path': model.path});
       expect(domain.store.model('speech'), isNotNull);
       await app.call('models.cancel_query_acquisition', {});
+    },
+  );
+
+  test('speech setup cancellation retains its typed RPC code', () async {
+    final model = File('${root.path}/cancelled-speech.bin')
+      ..writeAsStringSync('candidate speech');
+    var checks = 0;
+    await expectLater(
+      app.call('models.speech', {
+        'path': model.path,
+        'runtime': Platform.resolvedExecutable,
+        'digest': 'fixture',
+      }, current: () => ++checks == 1),
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    expect(domain.store.model('speech'), isNull);
+    expect(app.modelBusy, isFalse);
+  });
+
+  test('retrying a missing proactive question returns notFound', () async {
+    await expectLater(
+      app.call('meetings.retry_question', {'id': -1}),
+      throwsA(
+        isA<RpcError>()
+            .having((e) => e.code, 'code', RpcErrorCode.notFound)
+            .having((e) => e.message, 'message', 'Question not found'),
+      ),
+    );
+  });
+
+  test(
+    'cancelled model registration preserves configuration and returns a stable code',
+    () async {
+      final old = File('${root.path}/old-speech.bin')
+        ..writeAsStringSync('existing model');
+      final candidate = File('${root.path}/candidate-speech.bin')
+        ..writeAsStringSync('candidate model');
+      await app.call('models.register', {'kind': 'speech', 'path': old.path});
+      final before = Map.of(domain.store.model('speech')!);
+      var checks = 0;
+      await expectLater(
+        app.call('models.register', {
+          'kind': 'speech',
+          'path': candidate.path,
+        }, current: () => ++checks == 1),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e.message, 'message', 'Model setup cancelled'),
+        ),
+      );
+      expect(domain.store.model('speech'), before);
+      expect(app.modelBusy, isFalse);
     },
   );
 

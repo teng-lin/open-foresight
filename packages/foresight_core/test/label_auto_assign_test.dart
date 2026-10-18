@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -80,7 +81,16 @@ void main() {
             'name': 'Apollo',
           }, current: () => current);
           final checked = cancel
-              ? expectLater(pending, throwsStateError)
+              ? expectLater(
+                  pending,
+                  throwsA(
+                    isA<RpcError>().having(
+                      (e) => e.code,
+                      'code',
+                      RpcErrorCode.cancelled,
+                    ),
+                  ),
+                )
               : expectLater(pending, completion(2));
           await domain.entered.future;
           await Future<void>.delayed(Duration.zero);
@@ -120,7 +130,9 @@ void main() {
     store.importText('Apollo a', 'Updated', 'text/plain', 'fixture', id: 'a');
     expect(
       () => store.autoAssignLabel('Apollo', snapshot, {}),
-      throwsStateError,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
     );
     expect(store.documentLabels, isEmpty);
     expect(store.documentClusters(), isEmpty);

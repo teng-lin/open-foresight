@@ -94,8 +94,8 @@ void main() {
       helper.restarts = 5;
       helper.state = 'unavailable';
       await Future.wait([
-        domain.command('application.resume'),
-        domain.command('application.resume'),
+        domain.command(Operation.application_resume),
+        domain.command(Operation.application_resume),
       ]);
       expect(helper.launches, 1);
       expect(helper.restarts, 0);
@@ -106,7 +106,10 @@ void main() {
     () async {
       helper.incompatible = true;
       helper.restarts = 5;
-      await expectLater(domain.command('application.resume'), throwsStateError);
+      await expectLater(
+        domain.command(Operation.application_resume),
+        throwsStateError,
+      );
       expect(helper.launches, 0);
       expect(helper.restarts, 5);
     },

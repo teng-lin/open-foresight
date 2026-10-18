@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'model_integrity.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
@@ -621,7 +622,7 @@ class Store {
     if (!backends.contains(backend)) throw ArgumentError.value(backend);
     final digest = await modelAssetDigest(path);
     if (current != null && !current())
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     if (expectedDigest != null && digest != expectedDigest)
       throw StateError(
         'The $kind model does not match its installation digest',
@@ -910,7 +911,10 @@ class Store {
         rows.map((row) => [row['id'], row['revision'], row['state']]).toList(),
       );
       if (revisions(current) != revisions(expectedSources)) {
-        throw StateError('Sources changed while organizing labels; retry');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Sources changed while organizing labels; retry',
+        );
       }
       final plan = planLabelPropagation(
         name,

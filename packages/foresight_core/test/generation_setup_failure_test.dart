@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:io';
@@ -146,7 +147,11 @@ void fs_string_free(char *value) { strings--; free(value); }
             '/candidate/runtime',
             current: () => cancelAfterProbe ? ++checks == 1 : false,
           ),
-          throwsStateError,
+          throwsA(
+            isA<RpcError>()
+                .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+                .having((e) => e.message, 'message', 'Model setup cancelled'),
+          ),
         );
         expect(store.model('generation'), before);
         expect(engines(), 0);

@@ -1,3 +1,4 @@
+import 'operations.dart';
 import 'dart:io';
 import 'helper.dart';
 import 'store.dart';
@@ -69,11 +70,11 @@ abstract interface class DesktopConnection {
   bool get webSearchAvailable;
   bool get sourcesPaused;
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]);
   Future<Object?> commandCurrent(
-    String method,
+    Operation operation,
     Map<String, dynamic> args,
     bool Function() current,
   );

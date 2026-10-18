@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -97,11 +98,24 @@ void main() {
       addTearDown(auth.close);
       final signing = expectLater(
         auth.signIn(fixture.consent),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
       );
       await secrets.writeStarted!.future;
       final forgetting = auth.forget();
-      await expectLater(auth.signIn(fixture.consent), throwsStateError);
+      await expectLater(
+        auth.signIn(fixture.consent),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
+      await expectLater(
+        auth.configure(client),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
       secrets.releaseWrite!.complete();
       await signing;
       await forgetting;

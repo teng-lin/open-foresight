@@ -660,7 +660,8 @@ class ApplicationService {
           (args['runtime_revision'] != null &&
               args['runtime_revision'] !=
                   runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'])) {
-        throw StateError(
+        throw RpcError(
+          RpcErrorCode.cancelled,
           'Application service ownership changed before idle shutdown; retry without replacing the app.',
         );
       }
