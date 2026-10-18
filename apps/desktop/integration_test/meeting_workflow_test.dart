@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:foresight_test_support/capture_poll.dart';
+import 'package:foresight_test_support/capture_process.dart';
 import 'package:open_foresight/main.dart' as app;
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/graph_layout.dart';
@@ -97,6 +98,7 @@ Future<void> captureWindow(
   if (Platform.environment['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') return;
   await tester.runAsync(() async {
     final target = File(path);
+    final pending = File('$path.capture.png');
     target.parent.createSync(recursive: true);
     final session =
         Platform.environment['FORESIGHT_AGENT_DESKTOP_SESSION'] ?? '';
@@ -111,88 +113,112 @@ Future<void> captureWindow(
     // A completed Flutter frame can precede its compositor presentation. Read
     // actual captures until their asserted pixels are visible, retaining the
     // latest image and measurements even when the monotonic deadline expires.
-    final observation = await waitForCapture(
-      () async {
-        final screenshot = await Process.run('grim', [path]);
-        if (screenshot.exitCode != 0) {
-          throw StateError(
-            'Cannot capture the test window: ${screenshot.stderr}',
+    ({List<int> gutter, int goldPixels})? lastSnapshot;
+    var attempts = 0;
+    try {
+      final observation = await waitForCapture(
+        () async {
+          attempts++;
+          final screenshot = await runCaptureProcess('grim', [pending.path]);
+          if (screenshot.exitCode != 0) {
+            throw StateError(
+              'Cannot capture the test window: ${screenshot.stderr}',
+            );
+          }
+          final codec = await ui.instantiateImageCodec(
+            await pending.readAsBytes(),
           );
-        }
-        final codec = await ui.instantiateImageCodec(
-          await target.readAsBytes(),
-        );
-        late ui.Image image;
-        try {
-          image = (await codec.getNextFrame()).image;
-        } finally {
-          codec.dispose();
-        }
-        try {
-          final pixels = await image.toByteData(
-            format: ui.ImageByteFormat.rawRgba,
-          );
-          if (pixels == null) throw StateError('Cannot inspect capture pixels');
-          var goldPixels = 0;
-          if (expectGraphSelection) {
-            for (var y = 400; y < image.height; y++) {
-              for (var x = 128; x < image.width; x++) {
-                final i = (y * image.width + x) * 4;
-                if (pixels.getUint8(i) == 255 &&
-                    pixels.getUint8(i + 1) == 213 &&
-                    pixels.getUint8(i + 2) == 79) {
-                  goldPixels++;
+          late ui.Image image;
+          try {
+            image = (await codec.getNextFrame()).image;
+          } finally {
+            codec.dispose();
+          }
+          try {
+            final pixels = await image.toByteData(
+              format: ui.ImageByteFormat.rawRgba,
+            );
+            if (pixels == null)
+              throw StateError('Cannot inspect capture pixels');
+            var goldPixels = 0;
+            if (expectGraphSelection) {
+              for (var y = 400; y < image.height; y++) {
+                for (var x = 128; x < image.width; x++) {
+                  final i = (y * image.width + x) * 4;
+                  if (pixels.getUint8(i) == 255 &&
+                      pixels.getUint8(i + 1) == 213 &&
+                      pixels.getUint8(i + 2) == 79) {
+                    goldPixels++;
+                  }
                 }
               }
             }
+            // x=80 is the untouched gutter between the rail and the nearest card.
+            final offset = (400 * image.width + 80) * 4;
+            final snapshot = (
+              gutter: [
+                pixels.getUint8(offset),
+                pixels.getUint8(offset + 1),
+                pixels.getUint8(offset + 2),
+              ],
+              goldPixels: goldPixels,
+            );
+            // A stalled or corrupt next capture must not replace the last PNG.
+            await pending.rename(path);
+            lastSnapshot = snapshot;
+            return snapshot;
+          } finally {
+            image.dispose();
           }
-          // x=80 is the untouched gutter between the rail and the nearest card.
-          final offset = (400 * image.width + 80) * 4;
-          return (
-            gutter: [
-              pixels.getUint8(offset),
-              pixels.getUint8(offset + 1),
-              pixels.getUint8(offset + 2),
-            ],
-            goldPixels: goldPixels,
-          );
-        } finally {
-          image.dispose();
-        }
-      },
-      (snapshot) =>
-          snapshot.gutter.length == expectedGutter.length &&
-          List.generate(
-            expectedGutter.length,
-            (i) => i,
-          ).every((i) => snapshot.gutter[i] == expectedGutter[i]) &&
-          (!expectGraphSelection || snapshot.goldPixels > 0),
-    );
-    File('$path.diagnostics.json').writeAsStringSync(
-      jsonEncode({
-        'ready': observation.ready,
-        'attempts': observation.attempts,
-        'elapsed_ms': observation.elapsed.inMilliseconds,
-        'gutter': observation.snapshot.gutter,
-        'expected_gutter': expectedGutter,
-        'gold_pixels': observation.snapshot.goldPixels,
-        'graph_selection_required': expectGraphSelection,
-      }),
-    );
-    if (expectGraphSelection) {
-      expect(
-        observation.snapshot.goldPixels,
-        greaterThan(0),
-        reason:
-            'Selected graph screenshot must contain the rendered gold ring; widget state alone is insufficient. Capture: $path',
+        },
+        (snapshot) =>
+            snapshot.gutter.length == expectedGutter.length &&
+            List.generate(
+              expectedGutter.length,
+              (i) => i,
+            ).every((i) => snapshot.gutter[i] == expectedGutter[i]) &&
+            (!expectGraphSelection || snapshot.goldPixels > 0),
       );
+      File('$path.diagnostics.json').writeAsStringSync(
+        jsonEncode({
+          'ready': observation.ready,
+          'attempts': observation.attempts,
+          'elapsed_ms': observation.elapsed.inMilliseconds,
+          'gutter': observation.snapshot.gutter,
+          'expected_gutter': expectedGutter,
+          'gold_pixels': observation.snapshot.goldPixels,
+          'graph_selection_required': expectGraphSelection,
+        }),
+      );
+      if (expectGraphSelection) {
+        expect(
+          observation.snapshot.goldPixels,
+          greaterThan(0),
+          reason:
+              'Selected graph screenshot must contain the rendered gold ring; widget state alone is insufficient. Capture: $path',
+        );
+      }
+      expect(
+        observation.snapshot.gutter,
+        expectedGutter,
+        reason:
+            'Native capture is not opaque at the background gutter. Capture: $path',
+      );
+    } catch (error) {
+      File('$path.diagnostics.json').writeAsStringSync(
+        jsonEncode({
+          'capture_error': error.toString(),
+          'attempts': attempts,
+          'last_image': target.existsSync() ? path : null,
+          'pending_image': pending.existsSync() ? pending.path : null,
+          'gutter': lastSnapshot?.gutter,
+          'expected_gutter': expectedGutter,
+          'gold_pixels': lastSnapshot?.goldPixels,
+          'graph_selection_required': expectGraphSelection,
+        }),
+      );
+      rethrow;
     }
-    expect(
-      observation.snapshot.gutter,
-      expectedGutter,
-      reason:
-          'Native capture is not opaque at the background gutter. Capture: $path',
-    );
   });
 }
 
