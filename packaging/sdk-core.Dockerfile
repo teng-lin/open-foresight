@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Ubuntu 24.04 / glibc 2.39 is the supported binary baseline. Build *all*
 # native components here, including Whisper and the isolated Python runtime.
-FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS core
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092 AS core
 ARG UBUNTU_SNAPSHOT=20261001T000000Z
 ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
 LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
