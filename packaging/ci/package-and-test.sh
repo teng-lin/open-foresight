@@ -4,17 +4,17 @@ set -euo pipefail
 task_format=${1:?Expected deb, rpm, or arch}
 task_version=${2:?Expected version}
 task_release=${3:?Expected release}
+bash /work/packaging/ci/prepare-document-sandbox.sh "$task_format" package-test
 case "$task_format" in
   deb)
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
     apt-get install -y --no-install-recommends python3 binutils xz-utils xvfb xauth dbus-x11 libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils
     ;;
   rpm)
     dnf install -y python3 python3-rpm rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
     ;;
   arch)
-    pacman -Syu --noconfirm --needed python binutils xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils
+    pacman -S --noconfirm --needed python binutils xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils
     ;;
   *) exit 2;;
 esac
@@ -23,7 +23,6 @@ python3 packaging/check_preview_version.py "$task_format" "$task_version"
 mkdir -p build/package-input dist/packages
 (cd artifacts && sha256sum --check ./*.tar.gz.sha256)
 tar -xzf artifacts/*.tar.gz -C build/package-input
-useradd --create-home package-test
 if [[ "$task_format" == arch ]]; then
   chown -R package-test:package-test build/package-input dist/packages
   runuser -u package-test -- python3 packaging/package_linux.py \

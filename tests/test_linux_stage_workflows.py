@@ -132,7 +132,7 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
         if "package-and-test.sh deb" in step.get("run", "")
     )
     assert "--security-opt seccomp=unconfined" in package_step["run"]
-    assert "--security-opt apparmor=unconfined" in package_step["run"]
+    assert "--security-opt apparmor=foresight-ci-document-sandbox" in package_step["run"]
     assert "--suite models" in commands and "--suite virtual-audio" in commands
     assert "--max-glibc 2.39" in (ROOT / "packaging/build.Dockerfile").read_text()
     assert "pull_request" not in workflow("linux-packages.yml")["on"]
@@ -345,7 +345,7 @@ def test_disposable_installed_document_containers_can_initialize_isolated_loopba
     assert commands
     for command in commands:
         assert "--cap-add NET_ADMIN" in command
-        assert "--security-opt apparmor=unconfined" in command
+        assert "--security-opt apparmor=foresight-ci-document-sandbox" in command
         assert "--privileged" not in command
     # This configures the disposable outer container; the real parser retains
     # its separate user/PID/network/mount namespaces and drops all capabilities.

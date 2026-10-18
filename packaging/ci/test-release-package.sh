@@ -5,10 +5,10 @@ set -euo pipefail
   echo 'Run only in an explicitly opted-in disposable container.' >&2; exit 2;
 }
 task_format=${1:?deb rpm or arch}
+bash /work/packaging/ci/prepare-document-sandbox.sh "$task_format" acceptance
 case "$task_format" in
   deb)
     export DEBIAN_FRONTEND=noninteractive
-    apt-get update
     apt-get install -y --no-install-recommends python3 xvfb xauth dbus-x11 libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils procps
     task_packages=(/assets/*.deb)
     [[ ${#task_packages[@]} == 1 && -f "${task_packages[0]}" ]]
@@ -19,7 +19,7 @@ case "$task_format" in
     [[ ${#task_packages[@]} == 1 && -f "${task_packages[0]}" ]]
     ;;
   arch)
-    pacman -Syu --noconfirm --needed python xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils procps-ng
+    pacman -S --noconfirm --needed python xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils procps-ng
     task_packages=(/assets/*.pkg.tar.zst)
     [[ ${#task_packages[@]} == 1 && -f "${task_packages[0]}" ]]
     ;;
@@ -39,7 +39,6 @@ case "$task_format" in
   arch) pacman -U --noconfirm "${task_packages[0]}";;
 esac
 desktop-file-validate /usr/share/applications/io.openforesight.App.desktop
-useradd --create-home acceptance
 install -d -o acceptance -g acceptance /home/acceptance/.local/share/open-foresight
 printf preserve > /home/acceptance/.local/share/open-foresight/release-sentinel
 chown acceptance:acceptance /home/acceptance/.local/share/open-foresight/release-sentinel

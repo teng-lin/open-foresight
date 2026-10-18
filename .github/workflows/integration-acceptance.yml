@@ -75,6 +75,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Allow isolated document namespaces in package-test containers
+        run: bash tools/ci_package_sandbox.sh
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
@@ -145,7 +147,7 @@ jobs:
           python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
           mkdir -p artifacts
           cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
-          docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=unconfined -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
+          docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
       # Package, CPU, GPU and audio checks share the image but report failures
       # independently, so an installer failure does not hide later diagnostics.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
