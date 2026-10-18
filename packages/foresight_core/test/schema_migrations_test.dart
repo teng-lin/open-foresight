@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -10,10 +11,12 @@ void main() {
   late Directory directory;
   late String path;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('foresight-migration-');
+    directory = createTestTempDirectorySync('foresight-migration-');
     path = '${directory.path}/application.db';
   });
-  tearDown(() => directory.deleteSync(recursive: true));
+  setUp(() {
+    addTearDown(() => directory.deleteSync(recursive: true));
+  });
 
   test('fresh and current profiles support concurrent read-only connections', () {
     var publication = 0;

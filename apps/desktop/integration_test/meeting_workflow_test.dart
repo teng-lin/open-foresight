@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'dart:convert';
@@ -748,9 +749,7 @@ void main() {
       });
       // Test the source controls against actual extraction and helper indexing.
       // Imports intentionally reject files inside the application profile.
-      final fixtures = Directory.systemTemp.createTempSync(
-        'of-meeting-imports-',
-      );
+      final fixtures = createTestTempDirectorySync('of-meeting-imports-');
       addTearDown(() => fixtures.delete(recursive: true));
       for (final name in [
         'Apollo planning',

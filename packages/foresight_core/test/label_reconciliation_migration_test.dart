@@ -1,12 +1,12 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
 
 void main() {
   test('legacy label repair runs once and tolerates malformed JSON', () {
-    final directory = Directory.systemTemp.createTempSync('label-repair-');
+    final directory = createTestTempDirectorySync('label-repair-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final path = '${directory.path}/app.db';
     var store = Store(path);

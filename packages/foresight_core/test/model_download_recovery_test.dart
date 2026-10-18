@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -12,7 +13,7 @@ void main() {
   late Uri uri;
   late HttpClient Function() client;
   setUp(() async {
-    root = await Directory.systemTemp.createTemp('model-recovery-');
+    root = await createTestTempDirectory('model-recovery-');
     bytes = List.generate(4096, (i) => i % 251);
     model = GemmaModel(
       'Fixture',
@@ -53,9 +54,11 @@ void main() {
           ..badCertificateCallback = (cert, host, port) =>
               host == '127.0.0.1' && port == server.port;
   });
-  tearDown(() async {
-    await server.close(force: true);
-    await root.delete(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await server.close(force: true);
+      await root.delete(recursive: true);
+    });
   });
 
   test(

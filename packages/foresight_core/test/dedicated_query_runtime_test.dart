@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -46,7 +47,7 @@ void main() {
   late String worker;
   late DedicatedQueryRuntime runtime;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('dedicated-query-');
+    directory = createTestTempDirectorySync('dedicated-query-');
     worker = '${directory.path}/worker.py';
     File(worker).writeAsStringSync('''
 import json, os, sys, time
@@ -69,9 +70,11 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
       timeout: const Duration(seconds: 5),
     );
   });
-  tearDown(() async {
-    await runtime.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await runtime.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   Future<int> waitForPid() async {

@@ -1,6 +1,6 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
@@ -34,7 +34,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final root = Directory.systemTemp.createTempSync('chat-navigation-');
+      final root = createTestTempDirectorySync('chat-navigation-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

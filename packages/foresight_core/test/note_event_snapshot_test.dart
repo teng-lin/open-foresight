@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/store.dart';
 import 'package:test/test.dart';
@@ -6,12 +7,14 @@ void main() {
   late Directory directory;
   late Store store;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('note-event-snapshot-');
+    directory = createTestTempDirectorySync('note-event-snapshot-');
     store = Store('${directory.path}/notes.db');
   });
-  tearDown(() {
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
   void event(int meeting, String title) => store.db.execute(
     "INSERT INTO calendar_events(event_key,meeting_id,metadata,account,calendar_id,google_id,source_id,starts,ends,status,synced) VALUES(?,?,?,'fixture','fixture','fixture','fixture',0,0,'confirmed',0)",

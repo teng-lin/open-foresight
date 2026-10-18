@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
@@ -122,7 +123,7 @@ void main() {
   late int id;
   setUp(() {
     time = FakeAsync();
-    directory = Directory.systemTemp.createTempSync('note-stream-');
+    directory = createTestTempDirectorySync('note-stream-');
     domain = Domain(
       Store('${directory.path}/app.db'),
       Helper('${directory.path}/sock', '${directory.path}/helper'),
@@ -141,14 +142,16 @@ void main() {
     generator = ControlledNoteGenerator();
     domain.generator = generator;
   });
-  tearDown(() async {
-    await domain.application.close();
-    domain.close();
-    generator.close();
-    await generator.events.close();
-    await domain.helper.close();
-    domain.store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await domain.application.close();
+      domain.close();
+      generator.close();
+      await generator.events.close();
+      await domain.helper.close();
+      domain.store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
   Map progress() =>
       (domain.application.captureState['note_enhancements'] as Map)['$id']

@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -8,9 +8,7 @@ void main() {
   test(
     'existing answer database migrates without changing old text or citations',
     () {
-      final directory = Directory.systemTemp.createTempSync(
-        'history-migration-',
-      );
+      final directory = createTestTempDirectorySync('history-migration-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

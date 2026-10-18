@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/model_pins.dart';
 import 'package:crypto/crypto.dart';
@@ -26,7 +27,7 @@ void main() {
   test(
     'download reuses verified speech .bin without creating a client',
     () async {
-      final root = Directory.systemTemp.createTempSync('speech-reuse-');
+      final root = createTestTempDirectorySync('speech-reuse-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -56,7 +57,7 @@ void main() {
   test(
     'registration follows load and preserves old on failure or cancellation',
     () async {
-      final root = Directory.systemTemp.createTempSync('speech-setup-test-');
+      final root = createTestTempDirectorySync('speech-setup-test-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

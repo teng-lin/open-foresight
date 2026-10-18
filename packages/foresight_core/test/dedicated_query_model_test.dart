@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -74,9 +75,7 @@ void main() {
   test(
     'lease cleanup failure rejects acquisition before replacing registration',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'query-cleanup-failure-',
-      );
+      final directory = createTestTempDirectorySync('query-cleanup-failure-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -138,9 +137,7 @@ void main() {
   test(
     'fixture acquisition registers encrypted storage and real detector reopens a private lease',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'query-acquisition-model-',
-      );
+      final directory = createTestTempDirectorySync('query-acquisition-model-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -257,7 +254,7 @@ void main() {
   test(
     'guided import authenticates the actual asset and selects bundled runtime',
     () async {
-      final directory = Directory.systemTemp.createTempSync('query-import-');
+      final directory = createTestTempDirectorySync('query-import-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

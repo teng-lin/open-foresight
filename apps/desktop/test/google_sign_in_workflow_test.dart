@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -53,7 +54,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final root = Directory.systemTemp.createTempSync('google-sign-in-ux-');
+      final root = createTestTempDirectorySync('google-sign-in-ux-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -143,7 +144,7 @@ void main() {
   testWidgets('browser failure closes sign-in with its actual error', (
     tester,
   ) async {
-    final root = Directory.systemTemp.createTempSync('google-browser-error-');
+    final root = createTestTempDirectorySync('google-browser-error-');
     addTearDown(() {
       if (root.existsSync()) root.deleteSync(recursive: true);
     });
@@ -188,9 +189,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final root = Directory.systemTemp.createTempSync(
-        'google-consent-success-',
-      );
+      final root = createTestTempDirectorySync('google-consent-success-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

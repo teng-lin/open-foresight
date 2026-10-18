@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -60,7 +61,7 @@ void main() {
   late Application app;
   late ToolRuntime runtime;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('workspace-clear-');
+    directory = createTestTempDirectorySync('workspace-clear-');
     store = Store('${directory.path}/app.db');
     helper = Helper(
       '${directory.path}/unused.sock',
@@ -72,13 +73,15 @@ void main() {
       ..generator = runtime;
     app = Application(domain);
   });
-  tearDown(() async {
-    await app.close();
-    domain.close();
-    runtime.close();
-    await helper.close();
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await app.close();
+      domain.close();
+      runtime.close();
+      await helper.close();
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   test('every schema table is cleared or explicitly retained', () async {

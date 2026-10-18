@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/gemma_download.dart';
@@ -16,7 +16,7 @@ void main() {
     testWidgets(
       '${model.name} terms require consent before first download and are remembered',
       (tester) async {
-        final root = Directory.systemTemp.createTempSync('model-terms-');
+        final root = createTestTempDirectorySync('model-terms-');
         final store = Store('${root.path}/app.db');
         bool? accepted;
         await tester.pumpWidget(
@@ -60,7 +60,7 @@ void main() {
   testWidgets('unknown device memory disables every generation download', (
     tester,
   ) async {
-    final root = Directory.systemTemp.createTempSync('model-unknown-memory-');
+    final root = createTestTempDirectorySync('model-unknown-memory-');
     final store = Store('${root.path}/app.db');
     await tester.pumpWidget(
       MaterialApp(

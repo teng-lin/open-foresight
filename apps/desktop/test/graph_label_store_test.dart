@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/graph_labels.dart';
@@ -52,9 +52,7 @@ void main() {
   test(
     'associations persist colors, metadata and removal without changing source revisions',
     () {
-      final dir = Directory.systemTemp.createTempSync(
-        'foresight-label-records-',
-      );
+      final dir = createTestTempDirectorySync('foresight-label-records-');
       addTearDown(() => dir.deleteSync(recursive: true));
       var store = Store('${dir.path}/app.db');
       final a = store.importText('Apollo', 'Body', 'text/plain', 'fixture:a');
@@ -110,9 +108,7 @@ void main() {
   test(
     'legacy JSON edits reconcile atomically while source data and existing colours survive',
     () {
-      final dir = Directory.systemTemp.createTempSync(
-        'foresight-label-migration-',
-      );
+      final dir = createTestTempDirectorySync('foresight-label-migration-');
       addTearDown(() => dir.deleteSync(recursive: true));
       var store = Store('${dir.path}/app.db');
       final id = store.importText(
@@ -147,9 +143,7 @@ void main() {
     },
   );
   test('failed association insert rolls back removals and JSON atomically', () {
-    final dir = Directory.systemTemp.createTempSync(
-      'foresight-label-rollback-',
-    );
+    final dir = createTestTempDirectorySync('foresight-label-rollback-');
     addTearDown(() => dir.deleteSync(recursive: true));
     final store = Store('${dir.path}/app.db');
     final id = store.importText(
@@ -175,9 +169,7 @@ void main() {
   test(
     'schema migration backfills a legacy database with no association table',
     () {
-      final dir = Directory.systemTemp.createTempSync(
-        'foresight-label-legacy-',
-      );
+      final dir = createTestTempDirectorySync('foresight-label-legacy-');
       addTearDown(() => dir.deleteSync(recursive: true));
       var store = Store('${dir.path}/app.db');
       final id = store.importText(

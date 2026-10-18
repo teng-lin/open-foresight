@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,9 +15,7 @@ void main() {
   test(
     'OAuth Drive and Calendar adapter feed real helper retrieval and remove canceled context',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'foresight-google-real-',
-      );
+      final directory = createTestTempDirectorySync('foresight-google-real-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

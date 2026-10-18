@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/store.dart';
 import 'package:test/test.dart';
@@ -6,12 +7,14 @@ void main() {
   late Directory directory;
   late Store store;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('note-edit-dates-');
+    directory = createTestTempDirectorySync('note-edit-dates-');
     store = Store('${directory.path}/app.db');
   });
-  tearDown(() {
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   test(

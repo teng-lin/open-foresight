@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -33,7 +34,7 @@ void main() {
   late GoogleFixture fixture;
   late File client;
   setUp(() async {
-    root = Directory.systemTemp.createTempSync('credentials-at-rest-');
+    root = createTestTempDirectorySync('credentials-at-rest-');
     addTearDown(() {
       if (root.existsSync()) root.deleteSync(recursive: true);
     });

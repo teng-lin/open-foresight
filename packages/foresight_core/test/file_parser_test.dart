@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -5,8 +6,10 @@ import 'package:foresight_core/foresight_core.dart';
 
 void main() {
   late Directory directory;
-  setUp(() => directory = Directory.systemTemp.createTempSync('of parser ; '));
-  tearDown(() => directory.deleteSync(recursive: true));
+  setUp(() => directory = createTestTempDirectorySync('of parser ; '));
+  setUp(() {
+    addTearDown(() => directory.deleteSync(recursive: true));
+  });
 
   File executable(String body) {
     final file = File('${directory.path}/parser helper')

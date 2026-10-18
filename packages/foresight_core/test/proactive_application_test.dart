@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
@@ -111,7 +112,7 @@ void main() {
   late _Detector detector;
   late _Rag rag;
   setUp(() async {
-    directory = Directory.systemTemp.createTempSync('proactive-app-');
+    directory = createTestTempDirectorySync('proactive-app-');
     store = Store('${directory.path}/app.db');
     final socket = '${directory.path}/helper.sock';
     rag = _Rag(store);

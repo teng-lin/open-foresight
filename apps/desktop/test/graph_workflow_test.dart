@@ -1,6 +1,6 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
@@ -51,7 +51,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final temp = Directory.systemTemp.createTempSync('graph-service-motion-');
+    final temp = createTestTempDirectorySync('graph-service-motion-');
     final store = Store('${temp.path}/app.db');
     final source = store.importText('First', 'Body', 'text/plain', 'fixture:a');
     final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
@@ -95,9 +95,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final temp = Directory.systemTemp.createTempSync(
-      'foresight-graph-source-reads-',
-    );
+    final temp = createTestTempDirectorySync('foresight-graph-source-reads-');
     addTearDown(() {
       if (temp.existsSync()) temp.deleteSync(recursive: true);
     });
@@ -169,9 +167,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final temp = Directory.systemTemp.createTempSync(
-        'foresight-graph-motion-',
-      );
+      final temp = createTestTempDirectorySync('foresight-graph-motion-');
       addTearDown(() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });
@@ -309,9 +305,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final temp = Directory.systemTemp.createTempSync(
-        'foresight-graph-workflow-',
-      );
+      final temp = createTestTempDirectorySync('foresight-graph-workflow-');
       addTearDown(() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });

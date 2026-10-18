@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_test_support/capture_poll.dart';
 import 'package:foresight_test_support/capture_process.dart';
@@ -5,7 +6,7 @@ import 'package:test/test.dart';
 
 void main() {
   test('capture child output drains both pipes without backpressure', () async {
-    final directory = Directory.systemTemp.createTempSync('capture-child-');
+    final directory = createTestTempDirectorySync('capture-child-');
     addTearDown(() => directory.deleteSync(recursive: true));
     final script = File('${directory.path}/capture.dart')
       ..writeAsStringSync('''

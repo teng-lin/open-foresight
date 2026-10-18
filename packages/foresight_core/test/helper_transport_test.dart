@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -206,7 +207,7 @@ void main() {
   });
 
   test('the same helper channel reconnects to a replacement owner', () async {
-    final root = Directory.systemTemp.createTempSync('helper-transport-');
+    final root = createTestTempDirectorySync('helper-transport-');
     final path = '${root.path}/helper.sock';
     final helper = Helper(path, root.path, manageProcess: false);
     var server = Server.create(services: [PingService()]);

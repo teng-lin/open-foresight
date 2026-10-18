@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/graph_layout.dart';
@@ -9,7 +9,7 @@ void main() {
   test(
     'layout and float32 embeddings survive reopen and reject incompatible cache',
     () {
-      final temp = Directory.systemTemp.createTempSync('graph-persistence-');
+      final temp = createTestTempDirectorySync('graph-persistence-');
       addTearDown(() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });
@@ -71,7 +71,7 @@ void main() {
   test(
     'source edits, deletions and additions invalidate stale publication',
     () {
-      final temp = Directory.systemTemp.createTempSync('graph-revisions-');
+      final temp = createTestTempDirectorySync('graph-revisions-');
       addTearDown(() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });
@@ -105,7 +105,7 @@ void main() {
   );
 
   test('failed cache publication preserves the previous valid scene', () {
-    final temp = Directory.systemTemp.createTempSync('graph-atomic-');
+    final temp = createTestTempDirectorySync('graph-atomic-');
     addTearDown(() {
       if (temp.existsSync()) temp.deleteSync(recursive: true);
     });

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -45,7 +46,7 @@ void main() {
   late Store store;
   late WebDomain domain;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('web-ui-');
+    directory = createTestTempDirectorySync('web-ui-');
     store = Store('${directory.path}/app.db');
     domain = WebDomain(
       store,
@@ -55,10 +56,12 @@ void main() {
       ),
     );
   });
-  tearDown(() {
-    domain.close();
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      domain.close();
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   Future<dynamic> mount(WidgetTester tester) async {

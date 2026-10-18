@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 // Opt-in integration: production Recording/native capture, private PipeWire
 // devices, synthetic tones, and an ASR waveform inspector (not a speech model).
@@ -28,9 +29,7 @@ void main() {
         anyOf(isNull, 'unix:$privateRuntime/pulse/native'),
       );
       final library = Platform.environment['FORESIGHT_NATIVE']!;
-      final directory = Directory.systemTemp.createTempSync(
-        'foresight-pipewire-',
-      );
+      final directory = createTestTempDirectorySync('foresight-pipewire-');
       final prefix = 'foresight-$pid';
       final modules = <String>[];
       final players = <Process>[];

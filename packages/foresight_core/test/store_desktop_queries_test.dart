@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/application.dart';
@@ -11,7 +12,7 @@ void main() {
   late Store store;
 
   setUp(() {
-    root = Directory.systemTemp.createTempSync('desktop-queries-');
+    root = createTestTempDirectorySync('desktop-queries-');
     addTearDown(() {
       if (root.existsSync()) root.deleteSync(recursive: true);
     });

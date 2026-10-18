@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -146,7 +147,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final directory = Directory.systemTemp.createTempSync('rich-meeting-');
+      final directory = createTestTempDirectorySync('rich-meeting-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

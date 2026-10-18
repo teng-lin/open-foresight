@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:test/test.dart';
@@ -7,9 +8,7 @@ void main() {
   test(
     'persistent worker isolates generations, survives cancellation and restarts after a bad frame',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'persistent-native-',
-      );
+      final directory = createTestTempDirectorySync('persistent-native-');
       final runner = File('${directory.path}/runner');
       final model = File('${directory.path}/model')
         ..writeAsStringSync('fixture');

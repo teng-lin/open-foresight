@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'web_answer_test.dart' show ToolRuntime, fixtureSearch;
@@ -63,7 +64,7 @@ class FailedWebRuntime extends ToolRuntime {
 
 void main() {
   test('failed web answers discard partial body and local citations', () async {
-    final directory = Directory.systemTemp.createTempSync('failed-web-answer-');
+    final directory = createTestTempDirectorySync('failed-web-answer-');
     final store = Store('${directory.path}/app.db');
     final helper = Helper(
       '/nonexistent.sock',
@@ -155,9 +156,7 @@ void main() {
     test(
       'unverified local answer never reaches persisted body or citations: $payload',
       () async {
-        final directory = Directory.systemTemp.createTempSync(
-          'answer-validation-',
-        );
+        final directory = createTestTempDirectorySync('answer-validation-');
         addTearDown(() {
           if (directory.existsSync()) directory.deleteSync(recursive: true);
         });

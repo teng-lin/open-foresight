@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/desktop_settings.dart';
@@ -6,7 +7,7 @@ void main() {
   test(
     'autostart uses quoted packaged launcher and removes only its own entry',
     () async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-autostart-');
+      final tmp = createTestTempDirectorySync('foresight-autostart-');
       final launcher = File('${tmp.path}/app with spaces/foresight');
       launcher.parent.createSync(recursive: true);
       launcher.writeAsStringSync('fixture');

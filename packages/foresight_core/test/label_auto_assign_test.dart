@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
@@ -25,7 +26,7 @@ void main() {
   late Directory root;
   late Store store;
   setUp(() {
-    root = Directory.systemTemp.createTempSync('auto-label-');
+    root = createTestTempDirectorySync('auto-label-');
     store = Store('${root.path}/app.db');
     for (final id in ['a', 'b']) {
       store.importText(
@@ -37,9 +38,11 @@ void main() {
       );
     }
   });
-  tearDown(() {
-    store.close();
-    root.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      root.deleteSync(recursive: true);
+    });
   });
 
   test('service operation publishes all labels and cluster together', () async {

@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/domain.dart';
@@ -13,7 +13,7 @@ void main() {
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(1280, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
-      final tmp = Directory.systemTemp.createTempSync('source-collection-');
+      final tmp = createTestTempDirectorySync('source-collection-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });

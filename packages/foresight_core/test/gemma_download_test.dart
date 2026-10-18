@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
@@ -7,7 +8,7 @@ void main() {
   test(
     'registered asset outside the cache is verified and reused without network access',
     () async {
-      final root = Directory.systemTemp.createTempSync('existing-model-');
+      final root = createTestTempDirectorySync('existing-model-');
       final bytes = List.generate(1024, (i) => i % 251);
       final model = GemmaModel(
         'fixture',
@@ -74,7 +75,7 @@ void main() {
         bytes.length,
         1,
       );
-      final root = Directory.systemTemp.createTempSync('gemma-download-');
+      final root = createTestTempDirectorySync('gemma-download-');
       final certificate = '${root.path}/certificate.pem';
       final key = '${root.path}/key.pem';
       final result = Process.runSync('openssl', [
@@ -159,7 +160,7 @@ void main() {
     },
   );
   test('cancelled downloader never replaces a completed asset', () async {
-    final root = Directory.systemTemp.createTempSync('gemma-cancel-');
+    final root = createTestTempDirectorySync('gemma-cancel-');
     final bytes = [1, 2, 3];
     final model = GemmaModel(
       'fixture',

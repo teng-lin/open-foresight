@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:convert';
@@ -33,7 +34,7 @@ void main() {
   testWidgets(
     'bundled Google setup goes directly to sign-in from Settings, Calendar and every Drive import',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync('google-bundled-ui-');
+      final root = createTestTempDirectorySync('google-bundled-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -111,7 +112,7 @@ void main() {
   testWidgets(
     'unconfigured Calendar connection opens actionable setup and cancellation leaves it disconnected',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync('google-setup-ui-');
+      final root = createTestTempDirectorySync('google-setup-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
@@ -15,7 +16,7 @@ void main() {
   late String library, model;
   late DynamicLibrary fixture;
   setUpAll(() async {
-    directory = Directory.systemTemp.createTempSync('recording-pause-');
+    directory = createTestTempDirectorySync('recording-pause-');
     library = '${directory.path}/fixture.${Platform.isMacOS ? 'dylib' : 'so'}';
     final build = await Process.run('c++', [
       '-std=c++17',
@@ -30,7 +31,9 @@ void main() {
     model = '${directory.path}/model';
     File(model).writeAsStringSync('ABI fixture only');
   });
-  tearDownAll(() => directory.deleteSync(recursive: true));
+  setUpAll(() {
+    addTearDown(() => directory.deleteSync(recursive: true));
+  });
   void fail(int channel) =>
       fixture.lookupFunction<Void Function(Int32), void Function(int)>(
         'fixture_fail_channel',

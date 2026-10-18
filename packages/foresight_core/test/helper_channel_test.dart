@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -81,7 +82,7 @@ void main() {
   test(
     'helper channel preserves Unix RPC metadata, deadlines and compression',
     () async {
-      final directory = Directory.systemTemp.createTempSync('helper-channel-');
+      final directory = createTestTempDirectorySync('helper-channel-');
       final address = InternetAddress(
         '${directory.path}/helper.sock',
         type: InternetAddressType.unix,
@@ -132,7 +133,7 @@ void main() {
     },
   );
   test('secure Unix channels reject an insecure server', () async {
-    final directory = Directory.systemTemp.createTempSync('helper-secure-');
+    final directory = createTestTempDirectorySync('helper-secure-');
     final address = InternetAddress(
       '${directory.path}/helper.sock',
       type: InternetAddressType.unix,
@@ -175,7 +176,7 @@ void main() {
   });
 
   test('Unix channels respect an unavailable configured proxy', () async {
-    final directory = Directory.systemTemp.createTempSync('helper-proxy-');
+    final directory = createTestTempDirectorySync('helper-proxy-');
     final address = InternetAddress(
       '${directory.path}/helper.sock',
       type: InternetAddressType.unix,

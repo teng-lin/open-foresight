@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:async';
 import 'package:foresight_core/foresight_core.dart';
@@ -42,7 +43,7 @@ class PurgeService extends RagServiceBase {
 
 void main() {
   test('failed helper deletes remain queued until an acknowledged retry', () async {
-    final directory = Directory.systemTemp.createTempSync('purge-retry-');
+    final directory = createTestTempDirectorySync('purge-retry-');
     final store = Store('${directory.path}/app.db');
     final service = PurgeService();
     final server = Server.create(services: [service]);
@@ -113,8 +114,8 @@ void main() {
     }
   });
   test('speech sweep refuses a symlinked speech root', () {
-    final directory = Directory.systemTemp.createTempSync('speech-link-');
-    final outside = Directory.systemTemp.createTempSync('speech-external-');
+    final directory = createTestTempDirectorySync('speech-link-');
+    final outside = createTestTempDirectorySync('speech-external-');
     try {
       final audio = File('${outside.path}/foresight-asr-external.wav')
         ..writeAsStringSync('external');
@@ -128,7 +129,7 @@ void main() {
   });
 
   test('speech sweep removes stale WAVs and preserves unrelated files', () {
-    final directory = Directory.systemTemp.createTempSync('speech-sweep-');
+    final directory = createTestTempDirectorySync('speech-sweep-');
     try {
       final speech = Directory('${directory.path}/speech')..createSync();
       final stale = File('${speech.path}/foresight-asr-old.wav')

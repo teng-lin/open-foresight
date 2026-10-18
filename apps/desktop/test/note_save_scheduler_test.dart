@@ -1,7 +1,7 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
-import 'dart:io';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -97,9 +97,7 @@ void main() {
   testWidgets(
     'manual enhancement dialog carries keypress time and unchanged saves preserve it',
     (tester) async {
-      final directory = Directory.systemTemp.createTempSync(
-        'note-enhanced-edit-',
-      );
+      final directory = createTestTempDirectorySync('note-enhanced-edit-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -165,9 +163,7 @@ void main() {
   testWidgets(
     'explicit Live Enhance note save reports failure without an uncaught error',
     (tester) async {
-      final directory = Directory.systemTemp.createTempSync(
-        'note-save-explicit-',
-      );
+      final directory = createTestTempDirectorySync('note-save-explicit-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final store = Store('${directory.path}/app.db');
       store.setPreference('liveEnhance', 'false');
@@ -225,9 +221,7 @@ void main() {
   testWidgets(
     'clean editor reloads external raw changes while pending and programmatic writes stay protected',
     (tester) async {
-      final directory = Directory.systemTemp.createTempSync(
-        'note-clean-reload-',
-      );
+      final directory = createTestTempDirectorySync('note-clean-reload-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -298,9 +292,7 @@ void main() {
   testWidgets(
     'failed in-flight save keeps explicit navigation on the editor until retry succeeds',
     (tester) async {
-      final directory = Directory.systemTemp.createTempSync(
-        'note-save-navigation-',
-      );
+      final directory = createTestTempDirectorySync('note-save-navigation-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -457,7 +449,7 @@ void main() {
   testWidgets('editor debounces edits and flushes note switch and disposal', (
     tester,
   ) async {
-    final directory = Directory.systemTemp.createTempSync('note-save-editor-');
+    final directory = createTestTempDirectorySync('note-save-editor-');
     addTearDown(() {
       if (directory.existsSync()) directory.deleteSync(recursive: true);
     });

@@ -172,7 +172,7 @@ void main() {
   late GoogleFixture google;
   late GoogleAuth auth;
   setUp(() async {
-    root = shortTestTempRoot.createTempSync('of-operations-');
+    root = createTestTempDirectorySync('of-operations-');
     rag = OperationsRag();
     server = Server.create(services: [rag]);
     final socket = '${root.path}/rag.sock';
@@ -194,15 +194,17 @@ void main() {
     );
     app = OperationsApplication(domain, auth: auth);
   });
-  tearDown(() async {
-    await app.close();
-    domain.close();
-    domain.generator?.close();
-    await domain.helper.close();
-    domain.store.close();
-    await server.shutdown();
-    await google.close();
-    root.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await app.close();
+      domain.close();
+      domain.generator?.close();
+      await domain.helper.close();
+      domain.store.close();
+      await server.shutdown();
+      await google.close();
+      root.deleteSync(recursive: true);
+    });
   });
 
   Future<Map> call(

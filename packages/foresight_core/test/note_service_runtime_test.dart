@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
@@ -114,19 +115,21 @@ void main() {
   }
 
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('note-service-');
+    directory = createTestTempDirectorySync('note-service-');
     store = Store('${directory.path}/app.db');
     helper = Helper('${directory.path}/sock', '${directory.path}/helper');
     domain = FixtureDomain(store, helper);
   });
 
-  tearDown(() async {
-    await domain.application.close();
-    domain.close();
-    domain.generator?.close();
-    await helper.close();
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await domain.application.close();
+      domain.close();
+      domain.generator?.close();
+      await helper.close();
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   test(

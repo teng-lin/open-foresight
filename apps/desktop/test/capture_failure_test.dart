@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/recording.dart';
@@ -7,7 +8,7 @@ void main() {
     'terminal capture failure survives stopped event and Stop',
     () async {
       final env = Platform.environment;
-      final directory = Directory.systemTemp.createTempSync('capture-state-');
+      final directory = createTestTempDirectorySync('capture-state-');
       final model = File('${directory.path}/model')
         ..writeAsStringSync('probe only');
       final states = <String>[];

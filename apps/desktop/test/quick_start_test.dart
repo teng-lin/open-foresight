@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
@@ -57,14 +58,16 @@ void main() {
   late Store store;
   late QuickStartDomain domain;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('quick-start-ui-');
+    directory = createTestTempDirectorySync('quick-start-ui-');
     store = Store('${directory.path}/app.db');
     domain = QuickStartDomain(
       store,
       OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
     );
   });
-  tearDown(() => directory.deleteSync(recursive: true));
+  setUp(() {
+    addTearDown(() => directory.deleteSync(recursive: true));
+  });
   Future<void> registerSpeech() async {
     final model = File('${directory.path}/speech.bin')
       ..writeAsStringSync('control flow fixture');

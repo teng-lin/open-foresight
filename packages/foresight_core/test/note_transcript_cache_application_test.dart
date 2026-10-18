@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
@@ -99,7 +100,7 @@ Future<void> withTranscriptFixture(
   )
   run,
 ) async {
-  final directory = Directory.systemTemp.createTempSync('note-cache-app-');
+  final directory = createTestTempDirectorySync('note-cache-app-');
   addTearDown(() {
     if (directory.existsSync()) directory.deleteSync(recursive: true);
   });
@@ -418,7 +419,7 @@ void main() {
   test(
     'saved transcript append refreshes complete embedded grounding cache',
     () async {
-      final directory = Directory.systemTemp.createTempSync('note-cache-app-');
+      final directory = createTestTempDirectorySync('note-cache-app-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

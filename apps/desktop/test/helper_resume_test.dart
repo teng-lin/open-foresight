@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:grpc/grpc.dart';
@@ -31,7 +32,7 @@ void main() {
   test(
     'reconnect reuses a matching ready model and waits out an existing rebuild',
     () async {
-      final tmp = Directory.systemTemp.createTempSync('helper-resume-');
+      final tmp = createTestTempDirectorySync('helper-resume-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -9,9 +10,7 @@ void main() {
   test(
     'verified embedding bundle installs GPU selection without replacing user models',
     () async {
-      final temporary = Directory.systemTemp.createTempSync(
-        'foresight-model-install-',
-      );
+      final temporary = createTestTempDirectorySync('foresight-model-install-');
       addTearDown(() {
         if (temporary.existsSync()) temporary.deleteSync(recursive: true);
       });

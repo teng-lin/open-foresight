@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/store.dart';
 
@@ -6,7 +6,7 @@ void main() {
   test(
     'original URI survives edits and reopen, including file punctuation',
     () {
-      final temp = Directory.systemTemp.createTempSync('source-uri-');
+      final temp = createTestTempDirectorySync('source-uri-');
       addTearDown(() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });
@@ -42,7 +42,7 @@ void main() {
   );
 
   test('legacy URI recovery preserves timestamps, revisions and labels', () {
-    final temp = Directory.systemTemp.createTempSync('source-uri-legacy-');
+    final temp = createTestTempDirectorySync('source-uri-legacy-');
     addTearDown(() {
       if (temp.existsSync()) temp.deleteSync(recursive: true);
     });

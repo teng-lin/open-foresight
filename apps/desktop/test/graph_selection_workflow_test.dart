@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -19,7 +19,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final temp = Directory.systemTemp.createTempSync('graph-selection-ui-');
+      final temp = createTestTempDirectorySync('graph-selection-ui-');
       addTearDown(() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });

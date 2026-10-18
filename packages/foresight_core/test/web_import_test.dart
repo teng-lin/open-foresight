@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -12,7 +13,7 @@ import 'package:test/test.dart';
 // Generate fresh, short-lived certificates so macOS TLS policy is exercised
 // without a checked-in server certificate expiring or exceeding lifetime limits.
 Future<({String ca, String cert, String key})> webImportTlsFixture() async {
-  final root = Directory.systemTemp.createTempSync('web-import-tls-');
+  final root = createTestTempDirectorySync('web-import-tls-');
   addTearDown(() => root.deleteSync(recursive: true));
   final ca = '${root.path}/ca.pem',
       cert = '${root.path}/server.pem',
@@ -659,7 +660,7 @@ void main() {
   test(
     'hostile page import cannot stall another application-service RPC',
     () async {
-      final root = Directory.systemTemp.createTempSync('web-import-service-');
+      final root = createTestTempDirectorySync('web-import-service-');
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
       final service = await ApplicationService.start(profile);
       final client = await ServiceClient.connect(

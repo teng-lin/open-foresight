@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/background_store.dart';
 import 'package:open_foresight/store.dart';
@@ -7,9 +7,7 @@ void main() {
   test(
     'background output stats ignore empty and surrounding whitespace',
     () async {
-      final temporary = Directory.systemTemp.createTempSync(
-        'background-words-',
-      );
+      final temporary = createTestTempDirectorySync('background-words-');
       final store = Store('${temporary.path}/application.db');
       try {
         for (final body in ['', ' \t ', '  one\ntwo  ']) {
@@ -33,9 +31,7 @@ void main() {
   test(
     'background source search finds body text and returns only IDs',
     () async {
-      final temporary = Directory.systemTemp.createTempSync(
-        'background-search-',
-      );
+      final temporary = createTestTempDirectorySync('background-search-');
       final store = Store('${temporary.path}/application.db');
       try {
         final match = store.importText(

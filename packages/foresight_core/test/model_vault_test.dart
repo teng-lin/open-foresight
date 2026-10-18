@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
@@ -28,15 +29,17 @@ void main() {
       );
 
   setUp(() async {
-    fixture = await Directory.systemTemp.createTemp('model-vault-test-');
+    fixture = await createTestTempDirectory('model-vault-test-');
     models = Directory('${fixture.path}/models');
     leases = await Directory('${fixture.path}/leases').create();
     input = await File(
       '${fixture.path}/source',
     ).writeAsString('fixture model bytes');
   });
-  tearDown(() async {
-    await fixture.delete(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await fixture.delete(recursive: true);
+    });
   });
 
   // This helper copies bytes; these tests exercise vault ownership and process

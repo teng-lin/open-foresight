@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -12,9 +13,7 @@ void main() {
     () async {
       // Separate OS processes are essential: POSIX advisory locks are per process.
       final scratch = Directory(
-        Directory.systemTemp
-            .createTempSync('of-owner-')
-            .resolveSymbolicLinksSync(),
+        createTestTempDirectorySync('of-owner-').resolveSymbolicLinksSync(),
       );
       final profile = ProfilePaths.resolve({
         'HOME': scratch.path,

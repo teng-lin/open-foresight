@@ -1,6 +1,6 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/domain.dart';
@@ -12,7 +12,7 @@ void main() {
   testWidgets(
     'cancelled Calendar meetings keep their status and saved transcript badge',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync('calendar-status-ui-');
+      final root = createTestTempDirectorySync('calendar-status-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -74,7 +74,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final root = Directory.systemTemp.createTempSync('meeting-collection-');
+      final root = createTestTempDirectorySync('meeting-collection-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

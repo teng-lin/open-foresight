@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/agent_access.dart';
 import 'package:test/test.dart';
@@ -7,12 +8,14 @@ void main() {
     late Directory temp, root, profile;
     late ImportPolicy policy;
     setUp(() {
-      temp = Directory.systemTemp.createTempSync('foresight-import-');
+      temp = createTestTempDirectorySync('foresight-import-');
       root = Directory('${temp.path}/allowed')..createSync();
       profile = Directory('${root.path}/profile')..createSync();
       policy = ImportPolicy(profile.path, () => [root.path]);
     });
-    tearDown(() => temp.deleteSync(recursive: true));
+    setUp(() {
+      addTearDown(() => temp.deleteSync(recursive: true));
+    });
     test(
       'allows selected files; denies outside roots, profile and symlink escapes',
       () {

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -30,9 +31,7 @@ void main() {
   test(
     'a missing model file reopens setup without discarding its registration',
     () async {
-      final root = Directory.systemTemp.createTempSync(
-        'foresight-model-missing-',
-      );
+      final root = createTestTempDirectorySync('foresight-model-missing-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -55,7 +54,7 @@ void main() {
   testWidgets(
     'embedding-only recovery loads before completion and preserves generation',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync('foresight-onboarding-');
+      final root = createTestTempDirectorySync('foresight-onboarding-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

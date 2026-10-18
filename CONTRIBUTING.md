@@ -85,3 +85,12 @@ The protobuf runtime and `types-protobuf` stubs use the same major version. The
 Dart protobuf compiler is resolved separately with
 `(cd tools/protoc_plugin && dart pub get --enforce-lockfile)`; put its `bin`
 directory on PATH before running `tools/check_dart_bindings.py`.
+
+Dart tests allocate disposable directories with `createTestTempDirectorySync`
+or `createTestTempDirectory` from
+`package:foresight_test_support/test_paths.dart`. Both honor
+`FORESIGHT_TEST_TEMP_ROOT` and register cleanup with `addTearDown`. Register
+resource cleanup after allocating its directory, using `addTearDown`, so database
+and process owners close before their files are removed. For fixtures allocated
+in `setUp` or `setUpAll`, register their resource cleanup in that same setup scope
+(or a later setup callback).

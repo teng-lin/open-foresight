@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -13,9 +14,7 @@ void main() {
       late Directory directory;
       late NativeRuntime runtime;
       setUp(() async {
-        directory = await Directory.systemTemp.createTemp(
-          'foresight-tool-test-',
-        );
+        directory = await createTestTempDirectory('foresight-tool-test-');
         final runner = File('${directory.path}/runner');
         await runner.writeAsString('''#!/usr/bin/env python3
 import hashlib,json,sys
@@ -99,9 +98,11 @@ print('answer '+json.dumps(answer),flush=True)
         await runtime.load(runner.path, model.path, backend: 'litert_lm');
         expect(runtime.effectiveState['tools'], isTrue);
       });
-      tearDown(() async {
-        runtime.close();
-        await directory.delete(recursive: true);
+      setUp(() {
+        addTearDown(() async {
+          runtime.close();
+          await directory.delete(recursive: true);
+        });
       });
 
       test(

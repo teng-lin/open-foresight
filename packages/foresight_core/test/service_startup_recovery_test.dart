@@ -45,7 +45,7 @@ void main() {
       ]) {
         runtimeConfiguration.environment.remove(key);
       }
-      final root = shortTestTempRoot.createTempSync('of-recovery-');
+      final root = createTestTempDirectorySync('of-recovery-');
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
       privateDirectory(profile.data);
       privateDirectory(profile.runtime);

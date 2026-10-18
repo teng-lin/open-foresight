@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
-import 'dart:io';
 import 'dart:convert';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/store.dart';
@@ -10,7 +10,7 @@ void main() {
   test(
     'revisions, tombstones, answer provenance and user edits survive restart',
     () async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-store-');
+      final tmp = createTestTempDirectorySync('foresight-store-');
       addTearDown(() => tmp.deleteSync(recursive: true));
       var store = Store('${tmp.path}/application.db');
       addTearDown(() => store.close());
@@ -81,7 +81,7 @@ void main() {
   test(
     'insufficient-context response persists without helper or generator',
     () async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-domain-');
+      final tmp = createTestTempDirectorySync('foresight-domain-');
       addTearDown(() => tmp.deleteSync(recursive: true));
       final store = Store('${tmp.path}/app.db');
       addTearDown(store.close);

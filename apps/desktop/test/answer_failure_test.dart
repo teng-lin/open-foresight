@@ -58,7 +58,7 @@ void main() {
   test(
     'failed generation replaces provisional insufficient text with an error',
     () async {
-      final tmp = shortTestTempRoot.createTempSync('answer-failure-');
+      final tmp = createTestTempDirectorySync('answer-failure-');
       final store = Store('${tmp.path}/app.db');
       final id = store.importText(
         'Atlas',
