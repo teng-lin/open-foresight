@@ -152,7 +152,7 @@ FORESIGHT_FLUTTER_EXECUTABLE=/absolute/path/to/flutter \
 python3 -m pytest tests/service/test_service_process.py::test_native_desktop_and_mcp_share_service -v
 ```
 
-This launches the actual Flutter app alongside MCP and checks visible meeting updates, shared capture, desktop teardown/restart, transcription, summary persistence, and the read-only desktop connection. Its evidence is written to `test-results/desktop-service-integration.json`. Controlled fixtures verify ownership and data flow; they do not measure real-model accuracy or physical microphone quality. The existing opt-in real meeting workflow remains available through `tools/test_meeting_workflow.py`.
+This launches the actual Flutter app alongside MCP and checks visible meeting updates, shared capture, desktop teardown/restart, transcription, summary persistence, and the read-only desktop connection. Its evidence is written to `test-results/desktop-service-integration.json`. Controlled fixtures verify ownership and data flow; they do not measure real-model accuracy or physical microphone quality. `tools/test_meeting_workflow.py` launches `apps/desktop/integration_test/meeting_workflow_test.dart` on an owned Agent Desktop display. The virtual-audio acceptance gate runs that same test in its private PipeWire session and skips window capture there.
 
 ## macOS runtime and profile ownership
 
