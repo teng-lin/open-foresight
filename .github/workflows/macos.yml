@@ -47,15 +47,6 @@ jobs:
       run: |
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
-    - name: Offline Python tests and branch coverage
-      run: tools/coverage.sh
-    - name: Retain Python coverage
-      if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      with:
-        name: python-coverage-macos
-        path: coverage/python/
-        if-no-files-found: warn
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       id: flutter-cache
       with:
@@ -91,6 +82,15 @@ jobs:
         python tools/ci_macos_dependencies.py --component macos-sdk --prefix build/sdk --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
         echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
+    - name: Offline Python tests and branch coverage
+      run: tools/coverage.sh
+    - name: Retain Python coverage
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: python-coverage-macos
+        path: coverage/python/
+        if-no-files-found: warn
     - name: Verify SDK checkout guards
       run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
     - name: Native, core, service, MCP, and Flutter gates

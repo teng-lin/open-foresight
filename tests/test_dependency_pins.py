@@ -92,3 +92,13 @@ def test_minimal_ubuntu_bootstraps_verified_ca_before_snapshot_https():
     assert instruction in text
     assert text.index(instruction) < text.index("RUN apt-get --snapshot")
     assert "Verify-Peer=false" not in text
+
+
+def test_macos_offline_contracts_run_after_the_pinned_sdk_protoc_is_available():
+    source = (ROOT / ".github/workflows/macos.yml").read_text()
+    sdk = source.index("name: Fetch verified macos-sdk")
+    path = source.index('echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"')
+    tests = source.index("name: Offline Python tests and branch coverage")
+    assert sdk < path < tests
+    install = source.split("name: Install build tools", 1)[1].split("    - ", 1)[0]
+    assert "protobuf" not in install
