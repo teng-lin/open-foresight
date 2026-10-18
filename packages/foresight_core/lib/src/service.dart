@@ -19,8 +19,11 @@ const maxServiceMessage = 16 * 1024 * 1024;
 
 void _traceServiceTransport(String message) {
   if (runtimeConfiguration['FORESIGHT_SERVICE_TRACE'] == '1') {
+    final bounded = message.length > 16384
+        ? message.substring(0, 16384)
+        : message;
     stderr.writeln(
-      'Service transport $pid ${DateTime.now().toIso8601String()} $message',
+      'Service transport $pid ${DateTime.now().toIso8601String()} $bounded',
     );
   }
 }
@@ -897,10 +900,12 @@ class IsolatedApplicationService {
     );
     host._messages.listen(host._message);
     host._errors.listen((dynamic error) {
+      _traceServiceTransport('worker uncaught error $error');
       host._failure = StateError('Application worker failed: $error');
       if (!host._ready.isCompleted) host._ready.completeError(host._failure!);
     });
     host._exits.listen((_) {
+      _traceServiceTransport('worker exit received');
       if (!host._workerExited.isCompleted) host._workerExited.complete();
       if (!host._ready.isCompleted) {
         host._ready.completeError(
@@ -955,6 +960,7 @@ class IsolatedApplicationService {
         ),
       );
     } else if (value.first == 'closing') {
+      _traceServiceTransport('worker ownership closing received');
       unawaited(
         _removePublicSocket(workerOwnsLock: true).then(
           (_) => _control?.send('frontend_closed'),
@@ -965,6 +971,7 @@ class IsolatedApplicationService {
         ),
       );
     } else if (value.first == 'failure') {
+      _traceServiceTransport('worker failure received ${value[1]}');
       _failure = StateError(value[1] as String);
       if (!_ready.isCompleted) _ready.completeError(_failure!);
     }
@@ -1075,7 +1082,9 @@ class IsolatedApplicationService {
   }();
 
   Future<void> _removePublicSocket({bool workerOwnsLock = false}) async {
+    _traceServiceTransport('frontend remove socket owns_lock=$workerOwnsLock');
     await _listener?.close();
+    _traceServiceTransport('frontend listener closed');
     if (_publicRemoved || _publicPath == null) return;
     RandomAccessFile? ownership;
     if (!workerOwnsLock) {
@@ -1083,10 +1092,12 @@ class IsolatedApplicationService {
       // processes the exit message. A new process can already own the profile.
       // Reacquire ownership before touching its public socket path.
       try {
+        _traceServiceTransport('frontend reacquiring ownership');
         ownership = await File(
           '$_dataPath/.application.lock',
         ).open(mode: FileMode.append);
         await ownership.lock(FileLock.exclusive);
+        _traceServiceTransport('frontend ownership reacquired');
       } on FileSystemException {
         await ownership?.close();
         return;
@@ -1096,6 +1107,7 @@ class IsolatedApplicationService {
       final path = File(_publicPath!);
       if (await path.exists()) await path.delete();
       _publicRemoved = true;
+      _traceServiceTransport('frontend socket removed');
     } finally {
       await ownership?.close();
     }
@@ -1103,6 +1115,7 @@ class IsolatedApplicationService {
 
   Future<void> _finish() => _finishing ??= _finishOnce();
   Future<void> _finishOnce() async {
+    _traceServiceTransport('frontend finish begin');
     if (_closed.isCompleted) return;
     _closing = true;
     try {
@@ -1164,15 +1177,19 @@ void _applicationServiceWorker(List<Object?> configuration) async {
     };
     parent.send(['ready', service.path, serviceEndpoint(profile)]);
     await Future.any([stop.future, service.closed]);
+    _traceServiceTransport('worker close begin');
     await service.close();
+    _traceServiceTransport('worker close complete');
     // Let an idle-stop request flush its final acknowledgement after close.
     await Future<void>.delayed(Duration.zero);
   } catch (error, stack) {
+    _traceServiceTransport('worker main failed $error\n$stack');
     parent.send(['failure', '$error\n$stack']);
     try {
       await service?.close();
     } catch (_) {}
   } finally {
+    _traceServiceTransport('worker main finally');
     control.close();
   }
 }
