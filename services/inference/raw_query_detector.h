@@ -20,16 +20,19 @@ inline std::string raw_query_detector(LiteRt &lm, LiteRtLmEngine *engine,
                         LM(session_delete));
   // Original CTextCacheInput uses strlen on its UTF-8 strings.
   const auto size = prompt.find('\0');
-  auto input = handle(LM(input_data_create)(kLiteRtLmInputDataTypeText,
-                    prompt.data(), size == std::string::npos ? prompt.size() : size),
-                    LM(input_data_delete));
+  auto input = handle(
+      LM(input_data_create)(kLiteRtLmInputDataTypeText, prompt.data(),
+                            size == std::string::npos ? prompt.size() : size),
+      LM(input_data_delete));
   const LiteRtLmInputData *inputs[] = {input.get()};
   if (LM(session_run_prefill)(session.get(), inputs, 1) != 0)
     throw std::runtime_error("Raw detector prefill failed");
-  auto response = handle(LM(session_run_decode)(session.get()), LM(responses_delete));
+  auto response =
+      handle(LM(session_run_decode)(session.get()), LM(responses_delete));
   if (LM(responses_get_num_candidates)(response.get()) < 1)
     throw std::runtime_error("Raw detector returned no candidates");
   const auto text = LM(responses_get_response_text_at)(response.get(), 0);
-  if (!text) throw std::runtime_error("Raw detector returned a null candidate");
+  if (!text)
+    throw std::runtime_error("Raw detector returned a null candidate");
   return text;
 }

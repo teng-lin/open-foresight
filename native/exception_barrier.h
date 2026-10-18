@@ -37,8 +37,7 @@ auto ffi_barrier(Fn fn, Fallback fallback) -> decltype(fn()) {
   }
 }
 
-template <class Fn>
-void ffi_barrier_void(Fn fn) {
+template <class Fn> void ffi_barrier_void(Fn fn) {
   try {
     fn();
   } catch (const std::exception &error) {
@@ -48,8 +47,7 @@ void ffi_barrier_void(Fn fn) {
   }
 }
 
-template <class Fn, class Report>
-bool guarded_worker(Fn fn, Report report) {
+template <class Fn, class Report> bool guarded_worker(Fn fn, Report report) {
   try {
     fn();
     return true;
