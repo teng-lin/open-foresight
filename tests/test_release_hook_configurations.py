@@ -73,7 +73,10 @@ def test_switching_debug_to_release_cannot_keep_cached_hooks(
     subprocess.run(
         ["cmake", "--build", str(build)], capture_output=True, check=True, timeout=60
     )
-    assert subprocess.check_output([str(build / "production")], text=True) == MARKER
+    assert (
+        subprocess.check_output([str(build / "production")], text=True, timeout=5)
+        == MARKER
+    )
     configure(source, build, f"-DCMAKE_BUILD_TYPE={configuration}")
     # The stale option deliberately remains ON; only the actual configuration
     # expression prevents this established release-build regression.
