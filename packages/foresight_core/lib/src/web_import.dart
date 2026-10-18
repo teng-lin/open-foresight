@@ -307,13 +307,49 @@ Future<String> parseWebPage(
   }
 }
 
+/// HTML encoding declarations are ASCII-compatible and only trusted in the
+/// initial bounded sniffing window. An HTTP charset always takes precedence.
+String? htmlDeclaredCharset(Uint8List bytes) {
+  final header = latin1.decode(bytes.take(1024).toList());
+  for (final tag in RegExp(
+    r'<meta\b[^>]*>',
+    caseSensitive: false,
+  ).allMatches(header)) {
+    final attributes = <String, String>{};
+    for (final attribute in RegExp(
+      r'''([a-zA-Z-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))''',
+    ).allMatches(tag[0]!)) {
+      attributes[attribute[1]!.toLowerCase()] =
+          attribute[2] ?? attribute[3] ?? attribute[4]!;
+    }
+    final direct = attributes['charset'];
+    if (direct != null && direct.isNotEmpty) return direct;
+    if (attributes['http-equiv']?.toLowerCase() == 'content-type') {
+      final content = attributes['content'] ?? '';
+      final match = RegExp(
+        r'charset\s*=\s*([a-zA-Z0-9_-]+)',
+        caseSensitive: false,
+      ).firstMatch(content);
+      if (match != null) return match[1];
+    }
+  }
+  return null;
+}
+
 void _parseWebPage(List<Object?> request) {
   final port = request[0] as SendPort;
   try {
     final bytes = (request[1] as TransferableTypedData)
         .materialize()
         .asUint8List();
-    final charset = ((request[3] as String?) ?? 'utf-8').trim().toLowerCase();
+    final charset =
+        ((request[3] as String?) ??
+                (request[2] == 'text/html'
+                    ? htmlDeclaredCharset(bytes)
+                    : null) ??
+                'utf-8')
+            .trim()
+            .toLowerCase();
     final Encoding? encoding;
     if (['big5', 'big-5', 'cn-big5', 'csbig5'].contains(charset)) {
       encoding = const Big5Codec();
