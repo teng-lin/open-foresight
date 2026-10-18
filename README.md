@@ -234,7 +234,7 @@ ctest --test-dir build --output-on-failure
 (cd apps/desktop && flutter test && flutter analyze)
 ```
 
-The default pytest run selects offline contracts, inference adapter tests, and Python tooling tests via `pytest.ini`. It requires `requirements-dev.txt` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands; standalone scripts under `tests/integration` take executable paths and are not collected by default.
+The default pytest run selects the offline allowlist in `pytest.ini`. That allowlist does not include `tests/integration` or `tests/service`, which need a native build, real models, physical devices, or an installed package. An explicit path such as `pytest tests/service` still selects those suites. It requires `requirements-dev.txt` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands.
 
 Run `tools/coverage.sh` after installing the development dependencies into `.venv` (or set `FORESIGHT_PYTHON`). It writes branch-aware Python coverage for `tools/` and `services/inference/macos/` to `coverage/python/`: HTML, Cobertura XML, LCOV, and JUnit results. Unexecuted Python source files are included; probe scripts named `test_*.py` are excluded. This baseline measures Python only, including on macOS PR CI, which retains the reports as an artifact. Python coverage is reported without a minimum percentage; its baseline is separate from the core Dart gate.
 
