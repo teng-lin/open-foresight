@@ -5,6 +5,9 @@ import 'package:fake_async/fake_async.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:test/test.dart';
 
+const priorEnhanced =
+    '# Heading  \n- Prior\n\n\nPlain prose with trailing spaces.  \n💡 Retained\n# Potential Important Topics Not In Notes\n- Excluded';
+
 class ControlledNoteGenerator extends NativeRuntime {
   @override
   bool get loaded => true;
@@ -131,12 +134,7 @@ void main() {
     id = domain.store.meeting('Meeting');
     domain.store.saveMeetingNotes(id, 'Raw notes', lastManualEdit: 200);
     domain.store.transcript(id, 'Transcript evidence', true, 0, 20, 'imported');
-    domain.store.artifact(
-      id,
-      'enhanced_notes',
-      '# Heading\n- Prior\n\nPlain prose\n💡 Retained\n# Potential Important Topics Not In Notes\n- Excluded',
-      'fixture',
-    );
+    domain.store.artifact(id, 'enhanced_notes', priorEnhanced, 'fixture');
     domain.store.db.execute(
       'UPDATE meeting_notes SET last_enhanced=100,timestamp=50',
     );
@@ -399,7 +397,7 @@ void main() {
       });
       await emit('unread event');
       await work;
-      expect(progress()['body'], '- Prior\n\n💡 Retained');
+      expect(progress()['body'], priorEnhanced);
     },
   );
 
@@ -436,7 +434,7 @@ void main() {
       });
       await emit('unread');
       await second;
-      expect(progress()['body'], '- Prior\n\n💡 Retained');
+      expect(progress()['body'], priorEnhanced);
     },
   );
 
@@ -535,21 +533,24 @@ void main() {
     },
   );
 
-  test('lease cancellation restores a draft after autosave', () async {
-    var current = true;
-    final work = domain.application.enhanceNotes(id, current: () => current);
-    await generator.entered.future;
-    await emit('- Partial');
-    time.elapse(const Duration(seconds: 1));
-    expect(domain.store.meetingEnhancedNotes(id), '- Partial');
-    current = false;
-    await emit(' ignored');
-    await work;
-    expect(domain.store.meetingEnhancedNotes(id), '- Prior\n\n💡 Retained');
-  });
+  test(
+    'lease cancellation after autosave restores exact headings, prose and spacing',
+    () async {
+      var current = true;
+      final work = domain.application.enhanceNotes(id, current: () => current);
+      await generator.entered.future;
+      await emit('- Partial');
+      time.elapse(const Duration(seconds: 1));
+      expect(domain.store.meetingEnhancedNotes(id), '- Partial');
+      current = false;
+      await emit(' ignored');
+      await work;
+      expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
+    },
+  );
 
   test(
-    'owned cancel restores extracted formatted prior notes on next event and saves after one second',
+    'owned cancel restores the exact previous body and retains it after autosave',
     () async {
       final work = domain.application.enhanceNotes(id);
       await generator.entered.future;
@@ -576,10 +577,10 @@ void main() {
       await work;
       expect(generator.cancelled, isTrue);
       expect(progress()['active'], isFalse);
-      expect(progress()['body'], '- Prior\n\n💡 Retained');
-      expect(domain.store.meetingEnhancedNotes(id), '- Prior\n\n💡 Retained');
+      expect(progress()['body'], priorEnhanced);
+      expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
       time.elapse(const Duration(seconds: 1));
-      expect(domain.store.meetingEnhancedNotes(id), '- Prior\n\n💡 Retained');
+      expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
       expect(
         domain.store
             .rows('SELECT last_enhanced,last_manual_edit FROM meeting_notes')
@@ -592,22 +593,27 @@ void main() {
   );
 
   test(
-    'close cancels pending programmatic saves without a final autosave',
+    'close synchronously restores an autosaved draft while the producer is stalled',
     () async {
       final work = domain.application.enhanceNotes(id);
       await generator.entered.future;
-      await emit('- Unsaved partial');
+      await emit('- Autosaved partial');
+      time.elapse(const Duration(seconds: 1));
+      expect(domain.store.meetingEnhancedNotes(id), '- Autosaved partial');
+      final savedTimestamp = domain.store
+          .rows('SELECT timestamp FROM meeting_notes')
+          .single['timestamp'];
       await domain.application.close();
-      expect(domain.store.meetingEnhancedNotes(id), contains('- Prior'));
+      expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
       generator.events.add({'type': 'delta', 'text': ' ignored after close'});
       await work;
       time.elapse(const Duration(seconds: 1));
-      expect(domain.store.meetingEnhancedNotes(id), contains('- Prior'));
+      expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
       expect(
         domain.store
             .rows('SELECT timestamp FROM meeting_notes')
             .single['timestamp'],
-        50,
+        savedTimestamp,
       );
       expect(domain.store.rows('SELECT * FROM artifacts'), hasLength(1));
     },

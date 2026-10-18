@@ -50,7 +50,7 @@ class WidgetNoteGenerator extends NativeRuntime {
 
 void main() {
   testWidgets(
-    'local editor streams content and cancel restores formatted prior notes',
+    'local editor streams content and cancel restores the exact previous notes',
     (tester) async {
       final directory = Directory.systemTemp.createTempSync(
         'note-stream-widget-',
@@ -170,13 +170,17 @@ void main() {
         find.byWidgetPredicate(
           (widget) =>
               widget is GeneratedContent &&
-              widget.markdown == '- Old\n\n💡 Retained',
+              widget.markdown ==
+                  '# Heading\n- Old\n💡 Retained\n# Potential Important Topics Not In Notes\n- Excluded',
         ),
         findsOneWidget,
       );
       time.elapse(const Duration(seconds: 1));
       await tester.pump();
-      expect(store.meetingEnhancedNotes(id), '- Old\n\n💡 Retained');
+      expect(
+        store.meetingEnhancedNotes(id),
+        '# Heading\n- Old\n💡 Retained\n# Potential Important Topics Not In Notes\n- Excluded',
+      );
       expect(store.rows('SELECT * FROM artifacts'), hasLength(1));
       await tester.runAsync(() => generator.events.close());
       await tester.pumpWidget(const SizedBox.shrink());
