@@ -6,6 +6,11 @@ on:
         description: New stable tag matching main's application version
         type: string
         required: true
+      publish_only:
+        description: Publish existing tested draft bytes after release-day GPU checks; do not rebuild installers
+        type: boolean
+        required: false
+        default: false
       gpu_evidence:
         description: JSON array of release-day Linux and macOS GPU evidence bound to installer SHA256
         type: string
@@ -18,6 +23,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   prepare:
+    if: ${{ !inputs.publish_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 190
     permissions:
@@ -64,13 +70,14 @@ jobs:
       tag: ${{ needs.prepare.outputs.tag }}
       candidate_run: ${{ needs.prepare.outputs.candidate_run }}
   acceptance:
+    if: ${{ !cancelled() && (inputs.publish_only || (needs.prepare.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success')) }}
     needs: [prepare, linux, macos]
     permissions:
       # Draft release metadata/assets are visible only with push access.
       contents: write
     uses: ./.github/workflows/release-acceptance.yml
     with:
-      tag: ${{ needs.prepare.outputs.tag }}
+      tag: ${{ inputs.tag }}
       gpu_evidence: ${{ inputs.gpu_evidence }}
   publish:
     timeout-minutes: 10
@@ -84,7 +91,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: release-acceptance-summary
           path: acceptance-summary
@@ -98,12 +105,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           TAG: ${{ inputs.tag }}
           RESULTS: ${{ toJSON(needs) }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
         run: |
           python3 - <<'PY'
-          import json, os
-          results = json.loads(os.environ['RESULTS'])
-          if any(results.get(job, {}).get('result') != 'success' for job in ('prepare', 'linux', 'macos', 'acceptance')):
-              raise SystemExit('Release remains unpublished: ' + str(results))
+          import json, os, sys
+          sys.path.insert(0, 'tools')
+          from release_acceptance_report import require_coordinator
+          require_coordinator(json.loads(os.environ['RESULTS']), os.environ['GITHUB_REF'], os.environ['PUBLISH_ONLY'] == 'true')
           PY
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
           gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/published-releases.json"

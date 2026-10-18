@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from tools.release_acceptance_report import aggregate, require_publication
+from tools.release_acceptance_report import (
+    aggregate,
+    require_publication,
+    require_coordinator,
+)
 
 
 def receipts(root):
@@ -81,3 +85,20 @@ def test_missing_installer_functional_report_fails_aggregation(tmp_path):
     (tmp_path / "2/reports/functional.json").unlink()
     with pytest.raises(ValueError, match="functional"):
         aggregate(tmp_path, "v1.2.3", "")
+
+
+@pytest.mark.parametrize("publish_only", [False, True])
+def test_publication_mode_requires_acceptance_and_exact_build_states(publish_only):
+    expected = "skipped" if publish_only else "success"
+    results = {job: {"result": expected} for job in ("prepare", "linux", "macos")}
+    results["acceptance"] = {"result": "success"}
+    require_coordinator(results, "refs/heads/main", publish_only)
+    with pytest.raises(ValueError, match="reviewed main"):
+        require_coordinator(results, "refs/heads/feature", publish_only)
+    for job in results:
+        for state in ("failure", "cancelled", "timed_out"):
+            failed = {**results, job: {"result": state}}
+            with pytest.raises(ValueError, match="unpublished"):
+                require_coordinator(failed, "refs/heads/main", publish_only)
+    with pytest.raises(ValueError):
+        require_coordinator(results, "refs/heads/main", not publish_only)
