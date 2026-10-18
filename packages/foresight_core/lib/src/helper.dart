@@ -10,6 +10,9 @@ import 'package:grpc/service_api.dart' as grpc_api;
 import 'generated/rag_service.pbgrpc.dart';
 import 'generated/helper_control.pbgrpc.dart' as control;
 
+/// The helper currently stores one local account; preserve this wire identity.
+const helperUserId = 'local_user';
+
 void validateHelperCompatibility(
   PingResponse ping,
   control.State value, {

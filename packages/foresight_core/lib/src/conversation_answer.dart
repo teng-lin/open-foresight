@@ -215,7 +215,7 @@ class ConversationAnswer {
               query: Query(textQuery: retrievalQuestion),
               maxResults: 24,
               minSimilarityScore: 0.0,
-              userId: 'local_user',
+              userId: helperUserId,
               allowedDocumentIds: scope.map((s) => s['id'] as String),
             ),
           );

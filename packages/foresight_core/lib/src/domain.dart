@@ -84,7 +84,7 @@ class Domain {
       final id = row['document_id'] as String;
       try {
         final result = await helper.client.deleteDocument(
-          DeleteRequest(documentId: id, userId: 'local_user'),
+          DeleteRequest(documentId: id, userId: helperUserId),
           options: CallOptions(timeout: const Duration(seconds: 5)),
         );
         if (result.success) {
@@ -213,7 +213,7 @@ class Domain {
       [id],
     ).isNotEmpty) {
       final deleted = await helper.client.deleteDocument(
-        DeleteRequest(documentId: id, userId: 'local_user'),
+        DeleteRequest(documentId: id, userId: helperUserId),
         options: CallOptions(timeout: const Duration(seconds: 5)),
       );
       checkWorkspace(generation);
@@ -230,7 +230,7 @@ class Domain {
           documentId: id,
           content: source['content'] as String,
           mimeType: source['mime'] as String,
-          userId: 'local_user',
+          userId: helperUserId,
           maxTokensPerChunk: 480,
           chunkOverlap: 5,
         ),
@@ -262,7 +262,7 @@ class Domain {
     final generation = workspaceGeneration;
     try {
       final r = await helper.client.deleteDocument(
-        DeleteRequest(documentId: id, userId: 'local_user'),
+        DeleteRequest(documentId: id, userId: helperUserId),
       );
       checkWorkspace(generation);
       if (!r.success) throw StateError(r.errorMessage);
