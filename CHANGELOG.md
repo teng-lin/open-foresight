@@ -9,6 +9,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 ### Changed
 
 - Desktop Start/Resume transcribing controls act directly without a second confirmation or duplicate red capture banner; waveform, pause and Stop controls remain visible, and external recording requests still require approval.
+- Linux RTF imports remove the converter's leading separator when quiet output omits its translation banner, preserving separators within the document body.
 - CI pins Python 3.13, Dart protobuf tooling, shared dependency versions and dated Ubuntu archives; monthly snapshot updates arrive as draft review PRs, with weekly dependency and vulnerability reports.
 - Native and helper tests have a separate ThreadSanitizer gate with a real race-detection probe and one-week reporting probation. Software Vulkan acceptance exercises shipped GPU runtimes; release publication requires installer-bound manual GPU evidence.
 - Offline Python and desktop tests enforce measured coverage baselines. Test fixtures share isolated disk-backed temporary paths and cached native stubs, and every optional integration probe has an explicit validation path.

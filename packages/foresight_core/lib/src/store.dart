@@ -1405,13 +1405,18 @@ class Parser {
       if (r.exitCode != 0) {
         throw StateError('RTF extraction failed: ${r.stderr}');
       }
-      // unrtf 0.21 emits metadata before this separator even in text mode.
+      // unrtf 0.21 emits this separator even when --quiet hides its metadata.
       var text = r.stdout as String;
-      const marker = '-----------------';
-      final banner = text.indexOf(marker);
-      if (banner >= 0 &&
-          text.substring(0, banner).contains('Translation from RTF')) {
-        text = text.substring(banner + marker.length).trimLeft();
+      final banner = RegExp(
+        r'^-----------------\r?$',
+        multiLine: true,
+      ).firstMatch(text);
+      if (banner != null) {
+        final prefix = text.substring(0, banner.start);
+        if (prefix.trim().isEmpty ||
+            prefix.trimLeft().startsWith('### Translation from RTF')) {
+          text = text.substring(banner.end).trimLeft();
+        }
       }
       return (text, 'unrtf --text (Linux adapter)');
     }
