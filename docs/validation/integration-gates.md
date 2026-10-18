@@ -13,6 +13,14 @@ capture and inference fixtures. The Mac job also explicitly enables that native
 UI fixture. A requested UI gate without a platform runner fails rather than
 skipping. Physical audio is not exercised by those fixtures.
 
+The separate `linux-document-imports` job requires one Python contract that
+imports both PDF and RTF fixtures through the production Dart parser on an
+Ubuntu host. It provisions the actual extractors, requires the sandbox to start,
+and fails on missing prerequisites. Its result is required by `platform-checks`;
+local runs missing required executables report a skip. See the
+[document sandbox](../platforms/linux-packaging.md#document-import-sandbox) for
+the host-policy setup and retained evidence.
+
 The generation-failure regression runs normally on both supported platforms.
 It uses a short private `/tmp` directory for Unix sockets. After the Linux build,
 `integration_gates.py --suite fast` runs that regression and the terminal capture
@@ -103,7 +111,7 @@ python tools/integration_gates.py --suite reference-tokenizer \
   --port-socket /path/to/port.sock --output /tmp/foresight-tokenizer-evidence
 ```
 
-`tools/integration_skips.json` records all 27 Dart skip registrations, including
+`tools/integration_skips.json` records all 28 Dart skip registrations, including
 platform-only cases and native-library checks already enabled by the regular
 core build. `check_integration_inventory.py` fails when a registration is added,
 removed or changed without reviewing its path/reason. The scanner checks named
@@ -120,6 +128,6 @@ these build-dependent groups ran.
 
 Use the retained Dart JSON reports and summaries for the source revision under
 review. They distinguish executed passes, skips, and failures. The skip inventory
-currently validates 27 registrations; rerun `python tools/check_integration_inventory.py`
+currently validates 28 registrations; rerun `python tools/check_integration_inventory.py`
 when changing tests, rather than copying an older local pass count into this guide.
 Reference groups require their authorized inputs and must be reported separately.
