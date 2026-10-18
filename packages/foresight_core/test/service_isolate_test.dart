@@ -8,6 +8,55 @@ import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test('private worker preserves the public Unix socket path limit', () async {
+    final saved = Map<String, String>.from(runtimeConfiguration.environment);
+    for (final key in [
+      'FORESIGHT_HELPER',
+      'FORESIGHT_NATIVE',
+      'FORESIGHT_INSTALL_ROOT',
+      'FORESIGHT_RUNTIME_REVISION',
+      'FORESIGHT_MODEL_MANIFEST',
+    ]) {
+      runtimeConfiguration.environment.remove(key);
+    }
+    final directory = shortTestTempRoot.createTempSync('of-path-');
+    IsolatedApplicationService? host;
+    ServiceClient? client;
+    try {
+      final prefix = '${directory.resolveSymbolicLinksSync()}/';
+      final padding = 86 - utf8.encode(prefix).length;
+      expect(padding, greaterThan(0), reason: 'Use a short test temp root');
+      final runtime = '$prefix${List.filled(padding, 'r').join()}';
+      final profile = ProfilePaths.resolve({
+        'HOME': directory.path,
+        'FORESIGHT_DATA': '${directory.path}/data',
+        'FORESIGHT_RUNTIME': runtime,
+      }, macOS: true);
+      expect(utf8.encode('${profile.runtime}/application.sock').length, 103);
+      host = await IsolatedApplicationService.start(profile);
+      expect(FileStat.statSync('$runtime/worker.sock').mode & 0x1ff, 0x180);
+      client = await ServiceClient.connect(serviceEndpoint(profile));
+      expect((await client.call('status') as Map)['pid'], pid);
+      expect(await client.call('notes.list'), isEmpty);
+      await host.close();
+      expect(
+        FileStat.statSync('$runtime/worker.sock').type,
+        FileSystemEntityType.notFound,
+      );
+      expect(
+        FileStat.statSync('$runtime/application.sock').type,
+        FileSystemEntityType.notFound,
+      );
+    } finally {
+      await client?.close();
+      await host?.close();
+      directory.deleteSync(recursive: true);
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(saved);
+    }
+  });
+
   test(
     'concurrent isolated startup protects both sockets before the first RPC',
     () async {
@@ -33,10 +82,7 @@ void main() {
             );
             final host = await IsolatedApplicationService.start(profile);
             hosts.add(host);
-            for (final name in [
-              'application.sock',
-              'application-worker.sock',
-            ]) {
+            for (final name in ['application.sock', 'worker.sock']) {
               final mode = FileStat.statSync('${profile.runtime}/$name').mode;
               expect(mode & 0x1ff, 0x180, reason: '$name must be private');
             }
@@ -83,7 +129,7 @@ void main() {
       final host = await IsolatedApplicationService.start(profile);
       ServiceClient? client;
       try {
-        for (final name in ['application.sock', 'application-worker.sock']) {
+        for (final name in ['application.sock', 'worker.sock']) {
           expect(
             File('${profile.runtime}/$name').statSync().mode & 0x1ff,
             0x180,
@@ -111,10 +157,7 @@ void main() {
         expect(stopped, {'stopped': true, 'shutdown_verified': true});
         await host.closed.timeout(const Duration(seconds: 10));
         expect(File('${profile.runtime}/application.sock').existsSync(), false);
-        expect(
-          File('${profile.runtime}/application-worker.sock').existsSync(),
-          false,
-        );
+        expect(File('${profile.runtime}/worker.sock').existsSync(), false);
         await subscription.cancel();
       } finally {
         await client?.close();

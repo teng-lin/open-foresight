@@ -363,7 +363,8 @@ class ApplicationService {
       // Reuse that runtime until a clean shutdown releases its workers.
       path = serviceEndpoint(profile);
       profile = ProfilePaths(profile.data, File(path).parent.path);
-      if (internalWorker) path = '${profile.runtime}/application-worker.sock';
+      // Every supported public socket path must also fit the private endpoint.
+      if (internalWorker) path = '${profile.runtime}/worker.sock';
       final stale = File(path);
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
         stale.deleteSync();
