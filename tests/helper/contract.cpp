@@ -388,6 +388,22 @@ int main(int argc, char **argv) {
             deleted.success());
     REQUIRE(retrieve("birds", "cats").chunks_size() == 0);
 
+    // Content is overwritten in every attached database when a purge commits.
+    const std::string private_marker = "FORESIGHT_PRIVATE_HELPER_ERASE_274965";
+    index("secure-delete", private_marker.c_str());
+    p::DeleteRequest erase;
+    erase.set_document_id("secure-delete");
+    p::DeleteResponse erased;
+    REQUIRE(call(erase, erased, [&](auto *ctx, auto &q, auto *r) {
+              return stub->DeleteDocument(ctx, q, r);
+            }).ok());
+    for (const auto *database :
+         {"agent_metadata.db", "linux_state.db", "rag_vector.db"}) {
+      std::ifstream file(dir + "/" + database, std::ios::binary);
+      const std::string bytes((std::istreambuf_iterator<char>(file)), {});
+      REQUIRE(bytes.find(private_marker) == std::string::npos);
+    }
+
     // Every committed delta is visible before its RPC returns. Exercise
     // repeated replacements, alias tombstones and reinsertion across several
     // forest compactions rather than only a single freshly built tree.
