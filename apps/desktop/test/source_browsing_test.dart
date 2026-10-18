@@ -9,6 +9,7 @@ import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
+import 'package:foresight_test_support/test_paths.dart';
 
 class BrowsingStore extends Store {
   int bodyReads = 0;
@@ -28,6 +29,54 @@ class BrowsingStore extends Store {
 }
 
 void main() {
+  testWidgets('discovery ignores nonlocal persisted file URIs', (tester) async {
+    final root = shortTestTempRoot.createTempSync('uri-discovery-');
+    addTearDown(() => root.deleteSync(recursive: true));
+    File('${root.path}/available.txt').writeAsStringSync('Available document');
+    final store = Store('${root.path}/app.db');
+    store.importText(
+      'Remote file',
+      'text',
+      'text/plain',
+      'fixture',
+      sourceUri: 'file://external.example/document.txt',
+    );
+    store.importText(
+      'Imported file',
+      'text',
+      'text/plain',
+      'fixture',
+      sourceUri: Uri.file('${root.path}/already-imported.txt').toString(),
+    );
+    File(
+      '${root.path}/already-imported.txt',
+    ).writeAsStringSync('Imported document');
+    final helper = OfflineHelper('${root.path}/socket', '${root.path}/helper');
+    try {
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
+      );
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(Workspace));
+      final pending =
+          state.sourceFeature.findFilesOnComputer(roots: <String>[root.path])
+              as Future<void>;
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      expect(find.text('Find files on this computer'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      await pending;
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await helper.close();
+    }
+  });
+
   testWidgets('large source browsing avoids bodies during scrolling and progress', (
     tester,
   ) async {
