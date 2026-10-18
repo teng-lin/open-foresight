@@ -12,6 +12,12 @@ func applySandbox(_ profile: UnsafePointer<CChar>, _ flags: UInt64,
 func freeSandboxError(_ error: UnsafeMutablePointer<CChar>)
 
 func confineParser() throws {
+    // PDFKit initializes AppKit/HIToolbox, which asks CFBundle for the process
+    // identifier. Resolve our own bundle before its executable directory becomes
+    // inaccessible: a first lookup inside the sandbox can return a null bundle
+    // that HIToolbox dereferences. No document parsing occurs before confinement,
+    // and the parser still cannot read unrelated files or access the network.
+    _ = Bundle.main.infoDictionary
     let profile = """
     (version 1)
     (deny default)
