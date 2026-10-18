@@ -21,7 +21,8 @@ def main():
     args = parser.parse_args()
     speech = json.loads(args.manifest.read_text())['speech']
     model = Path(speech['model'])
-    assert hashlib.sha256(model.read_bytes()).hexdigest() == speech['sha256']
+    if hashlib.sha256(model.read_bytes()).hexdigest() != speech['sha256']:
+        raise ValueError('Speech model checksum mismatch')
     library = args.bundle.resolve() / 'lib/libforesight_native.so'
     environment = dict(os.environ, FORESIGHT_LIVE_GAP_TEST='1',
                        FORESIGHT_NATIVE=str(library),

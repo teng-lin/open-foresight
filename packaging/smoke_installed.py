@@ -61,6 +61,13 @@ def validate_native_python_payload(root):
         raise ValueError('Unexpected Python payload in native package: ' + ', '.join(sorted(unexpected)))
 
 
+def verify_sha256(path, expected):
+    with path.open('rb') as stream:
+        actual = hashlib.file_digest(stream, 'sha256').hexdigest()
+    if actual != expected:
+        raise ValueError(f'SHA256 checksum mismatch: {path}')
+
+
 def main():
     root = Path('/opt/open-foresight')
     assert os.getuid() != 0, 'Run the application smoke test as a normal user'
@@ -71,8 +78,7 @@ def main():
     # catches host dependencies that an executable-only ldd check misses.
     manifest = json.loads((root / 'manifest.json').read_text())
     for entry in manifest['files']:
-        with (root / entry['path']).open('rb') as stream:
-            assert hashlib.file_digest(stream, 'sha256').hexdigest() == entry['sha256'], entry['path']
+        verify_sha256(root / entry['path'], entry['sha256'])
     count = 0
     for file in root.rglob('*'):
         if not file.is_file() or file.is_symlink():
@@ -99,8 +105,7 @@ def main():
         with urllib.request.urlopen(request, timeout=90) as response, model.open('wb') as output:
             while block := response.read(1024 * 1024):
                 output.write(block)
-        with model.open('rb') as stream:
-            assert hashlib.file_digest(stream, 'sha256').hexdigest() == 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21'
+        verify_sha256(model, 'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21')
         fixture = Path(__file__).resolve().parents[1] / 'tests/fixtures/audio/jfk.wav'
         decoded = subprocess.run([str(root / 'bin/whisper-cli-vulkan'), '-ng', '-t', '2',
                                   '-m', str(model), '-f', str(fixture), '-l', 'en', '-nt'],
