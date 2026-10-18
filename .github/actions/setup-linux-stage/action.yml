@@ -3,6 +3,11 @@ description: Install the shared Linux compiler, language SDKs and validation dep
 runs:
   using: composite
   steps:
+    - name: Trust only the checked out container workspace
+      shell: bash
+      run: |
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        git -C "$GITHUB_WORKSPACE" rev-parse --show-toplevel
     - name: Install Linux application toolchain
       shell: bash
       run: pacman -S --needed --noconfirm cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli

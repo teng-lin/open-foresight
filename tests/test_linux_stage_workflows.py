@@ -249,3 +249,43 @@ def test_stage_artifact_uploads_allow_reruns_and_do_not_recompress_gzip(platform
             assert upload["overwrite"] is True
             if "payload.tar.gz" in upload["path"]:
                 assert upload["compression-level"] == 0
+
+
+def test_container_git_access_is_configured_for_foreign_owned_checkout(tmp_path):
+    repository = tmp_path / "checkout"
+    subprocess.run(["git", "init", "-q", str(repository)], check=True, timeout=30)
+    environment = {
+        **os.environ,
+        "GITHUB_WORKSPACE": str(repository),
+        "GIT_TEST_ASSUME_DIFFERENT_OWNER": "1",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+    }
+    denied = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert denied.returncode != 0 and "dubious ownership" in denied.stderr
+    setup = yaml.safe_load(
+        (ROOT / ".github/actions/setup-linux-stage/action.yml").read_text()
+    )
+    step = next(
+        step
+        for step in setup["runs"]["steps"]
+        if "safe.directory" in step.get("run", "")
+    )
+    accepted = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=repository,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert accepted.stdout.strip() == str(repository)
+    assert "*" not in (tmp_path / "gitconfig").read_text()
