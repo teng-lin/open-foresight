@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/macos_integration_runtime.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/remote.dart' show RemoteDomain;
@@ -262,6 +263,9 @@ Future<void> captureWindow(
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    prepareMacosIntegrationRuntime(registerTearDown: addTearDown);
+  });
   WidgetController.hitTestWarningShouldBeFatal = true;
   final originalErrorHandler = FlutterError.onError;
   FlutterError.onError = (details) {

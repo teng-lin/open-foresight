@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/macos_integration_runtime.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -95,6 +96,9 @@ Future<void> closeDesktop(WidgetTester tester, dynamic workspace) async {
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  setUp(() {
+    prepareMacosIntegrationRuntime(registerTearDown: addTearDown);
+  });
   testWidgets(
     'desktop and MCP share content, capture, and service across desktop restart',
     (tester) async {
