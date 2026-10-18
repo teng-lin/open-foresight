@@ -68,7 +68,31 @@ permissions:
   contents: read
   actions: read
 jobs:
+  snapshot-update:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - name: Advance the reviewed Ubuntu snapshot proposal
+      run: python3 tools/update_ubuntu_snapshot.py --snapshot "$(date -u +%Y%m%dT000000Z)"
+    - uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676
+      with:
+        branch: maintenance/ubuntu-snapshot
+        title: Update the reviewed Ubuntu build snapshot
+        commit-message: Advance the Ubuntu build snapshot for review
+        body: Updates the Ubuntu SDK and application build snapshot; package and integration gates must pass before merge.
+        draft: true
+        add-paths: |
+          tools/pins.json
+          packaging/*.Dockerfile
   plan:
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     outputs:
       macos-sdk: ${{ steps.keys.outputs['macos-sdk'] }}
@@ -89,7 +113,7 @@ jobs:
     - name: Compute component identities
       id: keys
       run: python tools/ci_artifacts.py keys
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'schedule' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
   macos:
     name: Build macOS ${{ matrix.component }}
     needs: plan

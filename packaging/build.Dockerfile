@@ -2,9 +2,12 @@
 # Reusable SDK is built separately; pass its immutable registry digest in CI.
 ARG SDK_IMAGE=open-foresight-sdk:local
 FROM ${SDK_IMAGE} AS tested
+ARG UBUNTU_SNAPSHOT=20261001T000000Z
+ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
+LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Header-only application dependency, independent of the expensive SDK build.
-RUN apt-get update && apt-get install -y --no-install-recommends nlohmann-json3-dev libicu-dev && \
+RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends nlohmann-json3-dev libicu-dev && \
     rm -rf /var/lib/apt/lists/*
 # The cached SDK uses a shallow, commit-pinned Flutter checkout. Restore its
 # matching release tag before pub resolves packages, verifying the tag cannot
@@ -52,7 +55,7 @@ RUN --mount=type=secret,id=google_client \
 # Disposable acceptance runner; weights and reports are mounted at runtime.
 # No host audio devices or host session sockets are passed to this image.
 FROM builder AS integration
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
     pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 && \
     rm -rf /var/lib/apt/lists/*
 

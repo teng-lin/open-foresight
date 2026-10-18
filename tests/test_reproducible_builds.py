@@ -390,3 +390,49 @@ class BuildPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_ubuntu_build_images_pin_every_apt_transaction_to_the_reviewed_snapshot():
+    import json
+    import re
+
+    root = Path(__file__).resolve().parents[1]
+    snapshot = json.loads((root / "tools/pins.json").read_text())["ubuntu_snapshot"]
+    for name in (
+        "sdk-core.Dockerfile",
+        "sdk-litert.Dockerfile",
+        "sdk-whisper.Dockerfile",
+        "sdk.Dockerfile",
+        "build.Dockerfile",
+    ):
+        source = (root / "packaging" / name).read_text()
+        assert "ARG UBUNTU_SNAPSHOT=" + snapshot in source
+        for command in re.findall(r"apt-get[^;&\\\n]*", source):
+            assert '--snapshot "$UBUNTU_SNAPSHOT"' in command, (name, command)
+        assert "org.openforesight.ubuntu-snapshot" in source
+
+
+def test_monthly_snapshot_refresh_proposes_review_instead_of_silent_package_updates():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / ".github/workflows/ci-dependencies.yml").read_text()
+    assert "if: github.event_name == 'schedule'" in source
+    assert "tools/update_ubuntu_snapshot.py" in source
+    assert "peter-evans/create-pull-request@" in source
+    assert "draft: true" in source
+    assert "github.event_name != 'schedule' &&" in source
+
+
+def test_snapshot_updates_change_only_reviewed_pins_and_docker_defaults(tmp_path):
+    from tools.update_ubuntu_snapshot import update
+
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "packaging").mkdir()
+    (tmp_path / "tools/pins.json").write_text('{"ubuntu_snapshot":"20260101T000000Z"}')
+    dockerfile = tmp_path / "packaging/sdk-core.Dockerfile"
+    dockerfile.write_text("FROM pinned\nARG UBUNTU_SNAPSHOT=20260101T000000Z\n")
+    update("20260901T000000Z", tmp_path)
+    assert "20260901T000000Z" in dockerfile.read_text()
+    assert (
+        json.loads((tmp_path / "tools/pins.json").read_text())["ubuntu_snapshot"]
+        == "20260901T000000Z"
+    )

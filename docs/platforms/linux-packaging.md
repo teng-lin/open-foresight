@@ -256,3 +256,21 @@ References: [GitHub Actions artifacts](https://docs.github.com/en/actions/how-to
 [Release acceptance](../validation/release-acceptance.md) downloads the published packages and validates native installation, ordinary-user
 startup, real model workflows and saved-data persistence across reinstall.
 Hardware and normal desktop/Finder checks remain separate manual gates.
+
+## Reviewed Ubuntu archive snapshot
+
+Ubuntu SDK and application build images pass the reviewed `UBUNTU_SNAPSHOT`
+build argument to every apt transaction. The value is recorded in
+`tools/pins.json`, the image label `org.openforesight.ubuntu-snapshot`, bundle
+manifest and installer `.build.json` provenance. Ubuntu 24.04 apt supports dated
+archive selection through `--snapshot`; changing base-image digests alone does
+not choose newer archive packages.
+
+The monthly dependency schedule proposes a draft snapshot update PR. Review and
+merge it after dependency, package and integration checks pass; it does not write
+to main or silently republish an existing identity from the live archive.
+Debian, Fedora and Arch acceptance images deliberately install current distribution
+packages so compatibility checks can find changes on those supported systems.
+
+Dependabot updates Python requirement inputs weekly. Regenerate hash-pinned
+locks with the Python 3.13 commands in CONTRIBUTING before merging those updates.

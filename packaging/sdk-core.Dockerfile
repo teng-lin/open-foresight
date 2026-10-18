@@ -2,9 +2,12 @@
 # Ubuntu 24.04 / glibc 2.39 is the supported binary baseline. Build *all*
 # native components here, including Whisper and the isolated Python runtime.
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac AS core
+ARG UBUNTU_SNAPSHOT=20261001T000000Z
+ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
+LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive CI=true FLUTTER_SUPPRESS_ANALYTICS=true
-RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
+RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" upgrade -y && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
     build-essential clang cmake ninja-build git curl ca-certificates pkg-config \
     libgtk-3-dev libblkid-dev liblzma-dev libsqlite3-dev libssl-dev zlib1g-dev \
     python3-dev python3-venv libvulkan-dev glslc glslang-tools \

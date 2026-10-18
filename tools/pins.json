@@ -1,0 +1,10 @@
+{
+  "flutter": {
+    "version": "3.35.7",
+    "commit": "adc901062556672b4138e18a4dc62a4be8f4b3c2"
+  },
+  "dart": "3.9.2",
+  "litert_lm": "0.18.0",
+  "protoc": "35.1",
+  "ubuntu_snapshot": "20261001T000000Z"
+}

@@ -1,0 +1,6 @@
+name: foresight_protoc_tool
+publish_to: none
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+dependencies:
+  protoc_plugin: 24.0.0

@@ -106,7 +106,7 @@ The remaining macOS release gates are listed in [macOS development and release](
 
 ## Install
 
-Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI when a release is published. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
+Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI before a release is published. Nightly and manual [preview installers](docs/platforms/preview-packages.md) run their own installed-package validation. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
 
 The macOS CI DMG includes its inference and speech runtimes; users install model weights separately through setup. Runtime bundling is complete, and signed distribution is blocked on Developer ID signing and notarization. The artifact remains ad-hoc signed. See [Mac runtime packaging](docs/platforms/macos-support.md#local-assembly-and-signed-distribution) and the per-release [acceptance gates](docs/platforms/macos-support.md#release-gates).
 

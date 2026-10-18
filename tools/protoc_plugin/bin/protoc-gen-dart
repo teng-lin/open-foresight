@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+task_tool=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ ! -f "$task_tool/.dart_tool/package_config.json" ]; then
+  echo 'Resolve the locked compiler tool first: (cd tools/protoc_plugin && dart pub get --enforce-lockfile)' >&2
+  exit 1
+fi
+cd "$task_tool"
+exec dart run protoc_plugin:protoc_plugin -c "$@"
