@@ -189,3 +189,119 @@ def test_environment_does_not_require_unconsumed_tools(tmp_path, role):
     assert calls["ninja"] == (role == "native")
     assert ("dart" in calls) == (role != "native")
     assert ("flutter" in calls) == (role not in ("native", "core"))
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_language_caches_separate_roles_and_restore_compatible_legacy_entries(platform):
+    steps = action(platform)
+    select = step_named(platform, "Select the language cache role")
+    assert select["if"] == "inputs.stage != 'native'"
+    for cache in ("flutter", "pub"):
+        restore = next(step for step in steps if step.get("id") == cache)
+        save = next(
+            step
+            for step in steps
+            if "/save@" in step.get("uses", "")
+            and step["with"]["path"] == restore["with"]["path"]
+        )
+        assert restore["with"]["key"] == save["with"]["key"]
+        assert "${{ steps.language-cache.outputs.kind }}" in restore["with"]["key"]
+        assert "-v2" in restore["with"]["key"]
+        assert restore["if"] == "inputs.stage != 'native'"
+        assert "cache-hit != 'true'" in save["if"]
+    sdk = next(step for step in steps if step.get("id") == "flutter")
+    architecture = "x64" if platform == "linux" else "arm64"
+    assert f"flutter-{platform}-{architecture}-3.35.7-v1" in sdk["with"]["restore-keys"]
+    assert "3.35.7" in sdk["with"]["key"]
+    pub = next(step for step in steps if step.get("id") == "pub")
+    assert (
+        "hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock')"
+        in pub["with"]["key"]
+    )
+    assert "|| hashFiles('packages/foresight_core/pubspec.lock')" in pub["with"]["key"]
+    if platform == "macos":
+        assert (
+            "pub-macos-${{ hashFiles('**/pubspec.lock') }}"
+            in pub["with"]["restore-keys"]
+        )
+    else:
+        assert pub["with"]["path"] == "${{ github.workspace }}/.cache/foresight-pub"
+
+
+@pytest.mark.parametrize(
+    "platform,role",
+    [("linux", role) for role in ("core", "desktop", "service")]
+    + [("macos", role) for role in ("core", "desktop", "service", "packaging")],
+)
+def test_actual_engine_and_pub_commands_finish_before_their_caches_are_saved(
+    tmp_path, platform, role
+):
+    for package in ("packages/foresight_core", "apps/desktop"):
+        (tmp_path / package).mkdir(parents=True)
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    log = tmp_path / "commands.jsonl"
+    script = '#!/usr/bin/env python3\nimport json,os,sys\nwith open(os.environ["ROLE_TEST_LOG"],"a") as stream: stream.write(json.dumps([os.path.basename(sys.argv[0]),os.getcwd(),sys.argv[1:],os.environ.get("PUB_CACHE")])+"\\n")\n'
+    for name in ("dart", "flutter"):
+        executable = binary / name
+        executable.write_text(script)
+        executable.chmod(0o755)
+    output = tmp_path / "output"
+    exported = tmp_path / "environment"
+    env = {
+        **os.environ,
+        "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+        "ROLE_TEST_LOG": str(log),
+        "STAGE": role,
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "GITHUB_OUTPUT": str(output),
+        "GITHUB_ENV": str(exported),
+    }
+    steps = action(platform)
+    select = step_named(platform, "Select the language cache role")
+    subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", select["run"]],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        timeout=10,
+    )
+    kind = "ui" if role in ("desktop", "service") else "dart"
+    assert output.read_text() == f"kind={kind}\n"
+    if platform == "linux":
+        assert exported.read_text() == f"PUB_CACHE={tmp_path}/.cache/foresight-pub\n"
+        assert (tmp_path / ".cache/foresight-pub").is_dir()
+        env["PUB_CACHE"] = str(tmp_path / ".cache/foresight-pub")
+    warm = step_named(platform, "Warm the pinned desktop engine cache")
+    assert warm["if"] == "inputs.stage == 'desktop' || inputs.stage == 'service'"
+    assert warm["run"] == f"flutter precache --{platform}"
+    verify = step_named(platform, "Verify the pinned")
+    assert "adc901062556672b4138e18a4dc62a4be8f4b3c2" in verify["run"]
+    assert steps.index(verify) < steps.index(warm)
+    saved = []
+    for step in steps[steps.index(warm) :]:
+        if (
+            step == warm
+            and kind == "ui"
+            or "Resolve locked language prerequisites" in step.get("name", "")
+        ):
+            subprocess.run(
+                ["bash", "-euo", "pipefail", "-c", step["run"]],
+                cwd=tmp_path,
+                env=env,
+                check=True,
+                timeout=10,
+            )
+        if "/save@" not in step.get("uses", ""):
+            continue
+        commands = [json.loads(line) for line in log.read_text().splitlines()]
+        assert [command[0] for command in commands] == (
+            ["flutter", "dart", "flutter"] if kind == "ui" else ["dart"]
+        )
+        if kind == "ui":
+            assert commands[0][2] == ["precache", f"--{platform}"]
+            assert commands[-1][1] == str(tmp_path / "apps/desktop")
+        if platform == "linux":
+            assert all(command[3] == env["PUB_CACHE"] for command in commands)
+        saved.append(step["with"]["path"])
+    assert len(saved) == 2
