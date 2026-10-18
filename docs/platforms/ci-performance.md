@@ -25,6 +25,48 @@ merged final head; intermediate commits are rebuilt on main. Consumers verify
 repository, workflow, event, successful producer job, ZIP digest, component
 identity and archive contents before installing a prefix.
 
+## Application stages
+
+Linux native regression and macOS validation run four separate jobs: native,
+core, desktop and service. Core and desktop run in parallel after native;
+service consumes all three outputs. `tools/build.sh --stage` uses these same
+boundaries locally; its default still builds and tests the complete application.
+
+A PR stage may reuse a completed successful result from the same PR or main.
+The verifier independently checks the producing workflow, job, attempt, commit,
+artifact digest and content manifest. Its key includes the complete relevant
+source inventory, actual compiler/runtime/system packages, extracted SDK bytes,
+validation flags, locale, timezone and UTC date, plus prerequisite identities.
+Unknown paths invalidate every stage. Native code changes invalidate all four;
+core changes invalidate core, desktop and service; desktop tests/assets affect
+only desktop and service. Desktop library changes also invalidate core because
+its command-registry guard reads that source tree. Documentation edits do not
+invalidate application stages. Main, release and scheduled validation run fresh.
+
+The native key describes the implementation and validation inputs, rather than
+including the source commit in every compiled object. On a native hit, CMake
+always regenerates and relinks the small helper build-identity unit, then the
+runner checks the actual helper's `--build-id` against the current version and
+commit. Native process identity checks run again. Binary archives have their own
+SHA256 and exact-source receipt; downstream consumers validate both before
+unpacking. Unchanged source timestamps are restored only after their file hashes
+match, allowing Ninja to retain valid object files. Distribution stamping makes
+the input tree derived, so those results are not reusable as clean PR results.
+
+Ubuntu package lifecycle and model/audio acceptance share one application image
+and build. The package job extracts that exact bundle, creates the DEB and
+installs it in Ubuntu 24.04 to test dependencies, file layout, service lifecycle
+and installed document parsing. Those installation checks remain necessary for
+application or packaging changes, but no longer compile a duplicate application.
+The container permits the nested parser sandbox to create namespaces; the actual
+parser sandbox is still required and checked. Release package publication retains
+its separate main-only workflow and credentials.
+
+Stage payloads retain native test outputs, language logs and available coverage.
+Core and desktop diagnostics also upload coverage separately. These jobs preserve
+the existing required aggregate checks: missing or failed selected stages cannot
+produce a successful platform or acceptance result.
+
 ## Distribution candidates and previews
 
 Main builds allocate a monotonic distribution number and stamp that version

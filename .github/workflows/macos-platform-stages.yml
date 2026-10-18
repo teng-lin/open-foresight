@@ -64,7 +64,7 @@ jobs:
   native-macos:
     name: native-macos
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 180
     outputs:
       identity: ${{ steps.stage.outputs.identity }}
       artifact_name: ${{ steps.stage.outputs.artifact_name }}
@@ -129,7 +129,7 @@ jobs:
   core-macos:
     name: core-macos
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 180
     outputs:
       identity: ${{ steps.stage.outputs.identity }}
       artifact_name: ${{ steps.stage.outputs.artifact_name }}
@@ -195,7 +195,7 @@ jobs:
   desktop-macos:
     name: desktop-macos
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 180
     outputs:
       identity: ${{ steps.stage.outputs.identity }}
       artifact_name: ${{ steps.stage.outputs.artifact_name }}
@@ -253,6 +253,7 @@ jobs:
         name: macos-desktop-evidence
         path: |-
           test-results/
+          apps/desktop/coverage/lcov.info
           coverage/
           build/Testing/Temporary/LastTest.log
         if-no-files-found: ignore
@@ -261,7 +262,7 @@ jobs:
   service-macos:
     name: service-macos
     runs-on: macos-15
-    timeout-minutes: 90
+    timeout-minutes: 180
     outputs:
       identity: ${{ steps.stage.outputs.identity }}
       artifact_name: ${{ steps.stage.outputs.artifact_name }}

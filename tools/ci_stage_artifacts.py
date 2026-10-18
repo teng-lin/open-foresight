@@ -45,7 +45,11 @@ def roots(platform, stage):
             if platform == "macos"
             else "apps/desktop/build/linux/x64/release/bundle"
         )
-        return (product, "coverage/desktop", "test-results/build-gates/desktop.log")
+        return (
+            product,
+            "apps/desktop/coverage",
+            "test-results/build-gates/desktop.log",
+        )
     if stage == "service":
         return ("test-results/service", "test-results/desktop-service-integration.json")
     raise ValueError("Unknown build stage")

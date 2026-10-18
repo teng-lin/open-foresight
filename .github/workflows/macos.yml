@@ -157,7 +157,7 @@ jobs:
     - changes
     - distribution-number
     - macos-stages
-    if: '!cancelled() && needs.changes.outputs.macos == ''true'' && (inputs.preview || github.ref != ''refs/heads/main'' || needs.distribution-number.result == ''success'')'
+    if: '!cancelled() && needs.macos-stages.result == ''success'' && needs.changes.outputs.macos == ''true'' && (inputs.preview || github.ref != ''refs/heads/main'' || needs.distribution-number.result == ''success'')'
   linux-native:
     needs: changes
     if: needs.changes.outputs.linux_native == 'true'
@@ -404,6 +404,7 @@ jobs:
     needs:
     - changes
     - macos
+    - macos-stages
     - linux-native
     - linux-document-imports
     - linux-bundle

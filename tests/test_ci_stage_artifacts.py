@@ -139,3 +139,20 @@ def test_restore_refuses_existing_directory_symlink_before_touching_outputs(tmp_
         module.unpack(target, "linux", "native", output / "payload.tar.gz", manifest)
     assert not list(outside.iterdir())
     assert outside.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_desktop_artifact_preserves_flutter_coverage_at_actual_output_path(
+    tmp_path, platform
+):
+    root = tmp_path / "original"
+    repository(root)
+    coverage = root / "apps/desktop/coverage/lcov.info"
+    coverage.parent.mkdir(parents=True)
+    coverage.write_text("SF:lib/main.dart\nDA:1,1\nend_of_record\n")
+    output = tmp_path / "artifact"
+    manifest = module.pack(root, platform, "desktop", output)
+    target = tmp_path / "target"
+    repository(target)
+    module.unpack(target, platform, "desktop", output / "payload.tar.gz", manifest)
+    assert (target / coverage.relative_to(root)).read_bytes() == coverage.read_bytes()
