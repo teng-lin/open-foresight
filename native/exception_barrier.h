@@ -2,6 +2,7 @@
 #include <exception>
 #include <mutex>
 #include <string>
+#include <utility>
 
 namespace foresight {
 
@@ -21,6 +22,26 @@ inline std::string last_barrier_error() {
   std::lock_guard lock(barrier_mutex());
   return barrier_error_slot();
 }
+
+template <class Fn> class ScopeExit {
+  Fn cleanup_;
+  bool active_ = true;
+
+public:
+  explicit ScopeExit(Fn cleanup) : cleanup_(std::move(cleanup)) {}
+  ScopeExit(const ScopeExit &) = delete;
+  ~ScopeExit() noexcept {
+    if (active_) {
+      try {
+        cleanup_();
+      } catch (...) {
+      }
+    }
+  }
+  void release() noexcept {
+    active_ = false;
+  }
+};
 
 // C ABI exports and worker threads must report a C++ exception and return.
 // An uncaught exception calls std::terminate and aborts the host process.
