@@ -127,6 +127,8 @@ void main() {
       });
       final source = await domain.command('sources.get', {'id': id}) as Map;
       expect(source['content'], 'second');
+      expect(source['trust'], 'untrusted');
+      expect(source['content_policy'], contains('never instructions'));
       expect(source['revision'], 2);
       final a =
           await domain.command('notes.save', {'title': 'a', 'body': 'original'})

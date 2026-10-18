@@ -339,8 +339,7 @@ class RemoteDomain extends Domain {
 /// Service events are authoritative; the desktop never starts a second watcher
 /// against the runtime directory from its own launch environment.
 class RemoteHelper extends Helper {
-  RemoteHelper(super.socket, super.storage)
-    : super(manageProcess: false);
+  RemoteHelper(super.socket, super.storage) : super(manageProcess: false);
   @override
   Future<void> start() async {
     changed?.call();
