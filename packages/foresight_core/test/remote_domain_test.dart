@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -16,6 +17,20 @@ void main() {
     await f.start();
   });
   tearDown(() => f.close());
+
+  test('closing a paused workspace cancels its pending source wait', () async {
+    f.event({'sources_paused': true});
+    await eventually(() => f.remote.sourcesPaused);
+    final pending = f.remote.waitForSourceWork();
+    final cancelled = expectLater(
+      pending,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    f.remote.close();
+    await cancelled;
+  });
 
   test(
     'service snapshots update capture, model, Google and pause state together',

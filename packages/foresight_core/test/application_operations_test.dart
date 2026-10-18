@@ -576,6 +576,24 @@ void main() {
     },
   );
 
+  test('speech setup cancellation retains its typed RPC code', () async {
+    final model = File('${root.path}/cancelled-speech.bin')
+      ..writeAsStringSync('candidate speech');
+    var checks = 0;
+    await expectLater(
+      app.call('models.speech', {
+        'path': model.path,
+        'runtime': '/bin/true',
+        'digest': 'fixture',
+      }, current: () => ++checks == 1),
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    expect(domain.store.model('speech'), isNull);
+    expect(app.modelBusy, isFalse);
+  });
+
   test('retrying a missing proactive question returns notFound', () async {
     await expectLater(
       app.call('meetings.retry_question', {'id': -1}),

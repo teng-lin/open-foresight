@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'native.dart';
 import 'reference_note_enhancer.dart';
 
@@ -56,6 +57,9 @@ class NativeNoteEnhancementConversation implements NoteEnhancementConversation {
       }
       if (event['type'] == 'error') failure = event['message'].toString();
       if (event['type'] == 'done') status = event['status'] as String;
+    }
+    if (status == 'cancelled') {
+      throw RpcError(RpcErrorCode.cancelled, 'Generation $status: $failure');
     }
     if (status != 'completed') throw StateError('Generation $status: $failure');
   }

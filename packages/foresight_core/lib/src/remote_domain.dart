@@ -284,7 +284,7 @@ class RemoteDomain implements DesktopConnection {
   @override
   Future<void> waitForSourceWork() async {
     while (_paused) {
-      if (_disposed) throw StateError('Workspace closed');
+      if (_disposed) throw RpcError(RpcErrorCode.cancelled, 'Workspace closed');
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }

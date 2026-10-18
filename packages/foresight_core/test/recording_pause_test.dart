@@ -68,7 +68,17 @@ void main() {
     addTearDown(() => holdSpeech(false));
     final recording = Recording(library, (_) {}, (_, _, _, _) {});
     addTearDown(recording.dispose);
+    expect(
+      recording.pause,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.notFound),
+      ),
+    );
     recording.start('/usr/bin/true', model, playback: false);
+    expect(
+      () => recording.start('/usr/bin/true', model, playback: false),
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
     emit(0, 222, count: 20000);
     recording.drain();
     final pending = recording.stop();
@@ -80,6 +90,14 @@ void main() {
     );
     await expectLater(
       recording.stop(),
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
+    expect(
+      recording.pause,
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
+    expect(
+      recording.resume,
       throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
     );
     recording.dispose();
