@@ -33,21 +33,19 @@ The following remain deferred with PR 3, as authorized by the user:
 
 ## macOS changes and evidence still required
 
-macOS uses service-process Security.framework calls with a current-process
-Keychain ACL, a separate protected item namespace and verified legacy migration.
-Protected-store errors throw instead of enabling plaintext fallback. Background
-queries forbid Keychain authentication UI. This does not establish stable signing
-identity across ad-hoc updates; actual packaged update behavior must be recorded.
-Injected-store unit tests establish migration ordering, not macOS ACL security.
+The owner explicitly deferred service-process Keychain ACLs and their signing
+prerequisites. This PR therefore retains the existing `/usr/bin/security`
+credential store, original item namespace and existing private-file fallback
+behavior. It introduces no protected namespace or credential migration. The
+native Security.framework store and the disposable-Keychain principal fixture
+have been removed from the final change.
 
-Review also identified a runtime-integrity prerequisite for this credential
-boundary: the ad-hoc package disables library validation. A same-user writer
-can change a bundled library or resource without changing the service executable
-CDHash. Sealing ambient and private-handoff code-path overrides closes that
-injection route, but does not establish that mutable bundled code is trusted.
-The owner signing decision remains pending; a successful ACL fixture alone must
-not be presented as proof of packaged credential isolation. A signature precheck
-would also leave a verification-to-load race.
+A future credential-isolation change needs an agreed runtime-integrity boundary:
+the ad-hoc package disables library validation, allowing a same-user writer to
+change bundled code or resources without changing the service executable CDHash.
+Sealing ambient and private-handoff code-path overrides is retained as independent
+hardening, but does not establish trust in mutable bundled code. A signature
+precheck also leaves a verification-to-load race.
 
 The PDF/RTF helper reads one bounded regular input into memory before applying a
 fail-closed sandbox. Parsing then has access to required system resources, with
@@ -70,18 +68,12 @@ runtime manifest; development executables retain explicit overrides.
 
 The following manual evidence is **pending**, not passed:
 
-1. Use a disposable account/profile to sign in through the packaged service.
-   A Terminal `security find-generic-password` against the protected namespace
-   must not return the refresh token silently. Do not paste tokens into logs.
-2. Upgrade or re-sign the service and verify credential continuity, or a visible
-   fail-closed reauthorization requirement. Confirm there is no Keychain dialog
-   blocking the background domain indefinitely.
-3. Import a normal PDF and RTF through the installed app; run the packaged parser
+1. Import a normal PDF and RTF through the installed app; run the packaged parser
    sandbox probe on an unrelated fixture and verify file/network access denial.
-4. Reveal `.command` and `.terminal` source links and verify Finder shows the file
+2. Reveal `.command` and `.terminal` source links and verify Finder shows the file
    without executing it. Confirm normal document links also reveal files.
-5. Inspect service-launch argv for absence of configured API-key values and
+3. Inspect service-launch argv for absence of configured API-key values and
    confirm the private startup handoff disappears after consumption.
 
-Hosted Apple CI and the disposable-Keychain contract must also pass before this
-PR is ready to merge. Linux tests cannot establish these macOS properties.
+Hosted Apple CI and the retained parser/startup acceptance checks must pass
+before this PR is ready to merge. Linux tests cannot establish these macOS properties.

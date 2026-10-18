@@ -46,7 +46,7 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Security
 
-- macOS authorization uses a service-process Keychain principal with verified legacy migration and no plaintext fallback on protected-store failure. Parser confinement, private startup configuration and private temporary socket roots reduce exposure.
+- macOS parser confinement, sealed runtime code paths, private startup configuration and private temporary socket roots reduce exposure. Service-specific Keychain access controls remain deferred pending signing and runtime-integrity work.
 - Local source links reveal files instead of launching their default handlers. Approval dialogs highlight risky options and limit repeated identical prompts; verified peer identity and trusted gesture redesign remain deferred.
 - Automatic question-model downloads require configured genuine publisher terms and revision-specific acknowledgment. Missing terms configuration disables automatic acquisition.
 - Release builds disable crash and delay test hooks, and system integration commands use absolute paths.
