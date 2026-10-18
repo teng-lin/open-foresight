@@ -11,17 +11,18 @@ not the application test requirements.
 | --- | --- | --- |
 | macOS static SDK | SDK builder and its pinned sources/flags | Actions artifact, 90 days |
 | macOS native LiteRT/Whisper prefix | runtime builders, pinned wheel hashes, sources and patches | Actions artifact, 90 days |
-| Linux core | core Dockerfile, CMake hook, Python locks | GHCR image by digest |
-| Linux LiteRT | its Dockerfile, builder, patch, core identity | GHCR image by digest |
-| Linux Whisper | its Dockerfile, builder, core identity | GHCR image by digest |
-| Linux assembled SDK | assembly Dockerfile and all component identities | GHCR image by digest |
+| Linux core | core Dockerfile, CMake hook, Python locks | PR Actions artifact, 14 days; reviewed GHCR image by digest |
+| Linux LiteRT | its Dockerfile, builder, patch, core identity | PR Actions artifact, 14 days; reviewed GHCR image by digest |
+| Linux Whisper | its Dockerfile, builder, speech sources, core identity | PR Actions artifact, 14 days; reviewed GHCR image by digest |
+| Linux assembled SDK | assembly Dockerfile and all component identities | PR Actions artifact, 14 days; reviewed GHCR image by digest |
 | Tested macOS/Linux applications | exact successful main commit | Actions artifact, 30 days |
 
 The producer runs when dependency inputs change on main or a same-repository
-PR, on manual dispatch, and monthly to refresh expiring artifacts. Same-repository
-PRs can produce scoped macOS archives. Linux registry publication runs only on
-main; PR dependency checks build the complete Linux SDK locally with read-only
-credentials. Fork PRs do not get dependency producer jobs. Dependency jobs have
+PR, when PR changes can launch Linux SDK consumers, on manual dispatch, and monthly
+to refresh expiring artifacts. Same-repository PRs can produce scoped macOS and
+Linux archives. Linux registry publication runs only on main; PR dependency jobs
+retain Docker images with read-only credentials. Fork PRs keep local consumer
+builds and cannot supply shared dependency artifacts. Dependency jobs have
 their own concurrency groups with cancellation disabled. Application/docs pushes cannot cancel compilation.
 Linux LiteRT and Whisper run in separate jobs after core, then assembly copies
 their outputs. Registry layer caches are separate per component. A LiteRT recipe
@@ -39,16 +40,26 @@ digests deliberately when advancing the OS baseline.
 Consumers verify the artifact's repository, workflow path, event, completed
 producer job, identity and archive checksum. Shared dependencies come from main
 or source commits reachable from main. A macOS dependency PR may also consume its
-own completed producer; another unmerged PR cannot. Linux PR model acceptance
-reuses a qualified shared descriptor when available and otherwise builds its SDK
-locally without publishing. An explicit manual build can be consumed by that
+own completed producer; another unmerged PR cannot. Linux PR model acceptance and
+packaging wait for the qualified SDK instead of independently compiling it in
+same-repository PRs. Their checkout uses the producer's exact PR head, so a newer
+main recipe cannot make the consumer wait for a different dependency key. Core,
+LiteRT, Whisper and SDK assembly each upload immediately from separate successful
+jobs. A later failed component leaves completed parent artifacts reusable. Receipts
+bind artifacts to their producer attempt, so rerunning failed jobs retains earlier
+successful components without qualifying a failed attempt by an earlier success.
+An explicit manual build can be consumed by that
 same source head. Merged dependency PR outputs can be reused
 without compiling again; squash/rebase merges may require a fresh producer if
 the original source commit is no longer reachable. Application candidates require
 a successful main workflow and the exact release commit. Archive extraction
 rejects traversal and external links and preserves executable bits. macOS prefix
 verification checks source manifests and executable/runtime capabilities without
-starting a compiler. Linux consumers use an immutable digest, never a moving tag.
+starting a compiler. Linux registry references use immutable manifest digests.
+Saved Docker images record their configuration ID, platform and archive checksum;
+consumers check the loaded ID and architecture before applying a local job tag.
+The temporary archive is removed after loading to reduce disk usage. After merge,
+main can load and publish approved retained components without recompilation.
 No distribution credentials or user configuration are added to dependency archives.
 
 ## Normal checks and release readiness
@@ -101,9 +112,11 @@ v0.1.0 release.
 
 For missing dependencies, inspect or run **Reusable CI dependencies** on main
 (or the dependency PR). Consumers wait a bounded time and fail clearly if the
-qualified producer is unavailable. The Linux PR model-acceptance path instead
-performs a local SDK build when no qualified descriptor exists; this fallback
-applies only to an ordinary cache miss, not authentication or network errors.
+qualified producer is unavailable. Linux consumers wait up to three and a half
+hours for a cold producer and do not launch a second SDK build on a cache miss.
+Fork PRs retain independent local validation because their artifacts are untrusted.
+PR component artifacts expire after 14 days; reviewed published image descriptors
+are retained for 90 days. Rerun failed dependency jobs before retrying consumers.
 A registry digest deleted after qualification is also an error. Restore the
 producer output deliberately. Authentication/network errors must be fixed
 rather than treated as cache misses. Before a cold registry build, a tiny image

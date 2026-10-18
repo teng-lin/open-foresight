@@ -299,7 +299,7 @@ jobs:
       packages: write
       actions: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 300
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
@@ -318,13 +318,8 @@ jobs:
         OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
-        python - <<'PY'
-        import json,os,re
-        image=json.load(open('build/sdk-descriptor/image.json'))['image']
-        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK image')
-        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, 'cache='+image.split('@')[0]+':app-buildcache-x86-64', sep=chr(10), file=output)
-        PY
+        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
     - name: Packaging contracts
       run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
     - name: Package version
@@ -343,6 +338,8 @@ jobs:
             output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
         PY
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        driver: ${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}
     - name: Authenticate private SDK registry
       env:
         REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -358,8 +355,8 @@ jobs:
         build-args: |
           SDK_IMAGE=${{ steps.sdk.outputs.image }}
           SOURCE_REVISION=${{ github.sha }}
-        cache-from: type=registry,ref=${{ steps.sdk.outputs.cache }}
-        cache-to: type=registry,ref=${{ steps.sdk.outputs.cache }},mode=max,image-manifest=true
+        cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
+        cache-to: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0},mode=max,image-manifest=true', steps.sdk.outputs.cache) || '' }}
     - name: Assemble and verify distribution bundle
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:
@@ -376,7 +373,7 @@ jobs:
           google_client=${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
           foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
           foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
-        cache-from: type=registry,ref=${{ steps.sdk.outputs.cache }}
+        cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
     - name: Archive executable permissions and record checksums
       env:
         VERSION: ${{ steps.version.outputs.version }}
