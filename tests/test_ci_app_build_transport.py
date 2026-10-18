@@ -17,7 +17,8 @@ def cli(arguments, **_kwargs):
         return "setup-docker-action\n"
     if arguments[:3] == ["docker", "buildx", "inspect"]:
         assert arguments[3] == "setup-docker-action"
-        return '{"Driver":"docker"}'
+        assert arguments == ["docker", "buildx", "inspect", "setup-docker-action"]
+        return (ROOT / "tests/fixtures/buildx/docker-inspect.txt").read_text()
     if arguments[:2] == ["docker", "info"]:
         return '[["driver-type","io.containerd.snapshotter.v1"]]'
     assert arguments[:4] == ["docker", "buildx", "imagetools", "inspect"]
@@ -53,7 +54,7 @@ def test_current_context_docker_builder_keeps_sdk_archive_visible():
 def test_missing_registry_support_never_silently_disables_reuse(wrong):
     def request(arguments, **kwargs):
         if wrong == "builder" and arguments[:3] == ["docker", "buildx", "inspect"]:
-            return '{"Driver":"docker-container"}'
+            return "Name: setup-docker-action\nDriver: docker-container\n"
         if wrong == "storage" and arguments[:2] == ["docker", "info"]:
             return '[["Backing Filesystem","extfs"]]'
         return cli(arguments, **kwargs)

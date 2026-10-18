@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.sdk_build_transport import inspect_registry_cache  # noqa: E402
+from tools.sdk_build_transport import inspect_builder_driver, inspect_registry_cache  # noqa: E402
 
 
 def reference(repository, *, legacy=False):
@@ -37,13 +37,7 @@ def prepare(repository, *, request=subprocess.check_output):
     context = request(["docker", "context", "show"], text=True, timeout=60).strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", context):
         raise RuntimeError("Invalid current Docker context")
-    builder = json.loads(
-        request(
-            ["docker", "buildx", "inspect", context, "--format", "{{json .}}"],
-            text=True,
-            timeout=60,
-        )
-    )
+    driver = inspect_builder_driver(context, request)
     storage = json.loads(
         request(
             ["docker", "info", "--format", "{{json .DriverStatus}}"],
@@ -52,7 +46,7 @@ def prepare(repository, *, request=subprocess.check_output):
         )
     )
     if (
-        builder.get("Driver") != "docker"
+        driver != "docker"
         or ["driver-type", "io.containerd.snapshotter.v1"] not in storage
     ):
         raise RuntimeError(

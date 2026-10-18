@@ -332,9 +332,15 @@ def test_sdk_inspection_never_starts_or_executes_container(tmp_path):
             )  # Inspect immutable image, not a mutable tag.
             return "d" * 64
         if command[1] == "cp":
-            Path(command[-1]).write_text(
-                status if command[-2].endswith("/status") else release
-            )
+            destination = Path(command[-1])
+            if command[-2].endswith("/status"):
+                destination.write_text(status)
+            elif "-L" in command:
+                destination.write_text(release)
+            else:
+                # The pinned Ubuntu base contains this exact relative symlink.
+                # Docker cp preserves it unless --follow-link is requested.
+                destination.symlink_to("../usr/lib/os-release")
         return b""
 
     with (

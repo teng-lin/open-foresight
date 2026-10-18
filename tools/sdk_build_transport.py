@@ -136,6 +136,19 @@ def cache_reference(repository, component, *, expected_repository):
     return f"ghcr.io/{repository}/{component}:buildcache"
 
 
+def inspect_builder_driver(context, request):
+    """Read Buildx's supported plain output; inspect has no --format option."""
+    raw = request(["docker", "buildx", "inspect", context], text=True, timeout=60)
+    fields = [line for line in raw.splitlines() if line.startswith("Driver:")]
+    if len(fields) != 1 or not (
+        match := re.fullmatch(r"Driver:[ \t]+([a-z][a-z0-9-]*)[ \t]*", fields[0])
+    ):
+        raise RuntimeError(
+            "Buildx inspect must report exactly one valid anchored Driver field"
+        )
+    return match[1]
+
+
 def prepare(repository, component, *, expected_repository, check_output=None):
     """Validate registry-cache support before parent loads or SDK compilation.
 
@@ -153,14 +166,12 @@ def prepare(repository, component, *, expected_repository, check_output=None):
     context = output(["docker", "context", "show"]).strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", context):
         raise RuntimeError("Invalid Docker context for SDK layer reuse")
-    builder = json.loads(
-        output(["docker", "buildx", "inspect", context, "--format", "{{json .}}"])
-    )
+    driver = inspect_builder_driver(context, request)
     storage = json.loads(
         output(["docker", "info", "--format", "{{json .DriverStatus}}"])
     )
     if (
-        builder.get("Driver") != "docker"
+        driver != "docker"
         or ["driver-type", "io.containerd.snapshotter.v1"] not in storage
     ):
         raise RuntimeError(
