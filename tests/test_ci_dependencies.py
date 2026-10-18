@@ -289,11 +289,21 @@ class ProvenanceTests(unittest.TestCase):
                 prefix.mkdir()
                 with patch.dict("os.environ", {"GITHUB_RUN_ATTEMPT": "1"}):
                     artifacts.pack("macos-sdk", "a" * 64, prefix, root / "upload")
+                fixture_zip = io.BytesIO()
+                with zipfile.ZipFile(fixture_zip, "w") as archive:
+                    for member in ("identity.json", "payload.tar.gz"):
+                        archive.write(root / "upload" / member, member)
+                import hashlib
+
+                zip_digest = (
+                    "sha256:" + hashlib.sha256(fixture_zip.getvalue()).hexdigest()
+                )
                 run = self.run_record()
                 listed = {
                     "artifacts": [
                         {
                             "id": 5,
+                            "digest": zip_digest,
                             "name": artifacts.name("macos-sdk", "a" * 64),
                             "expired": False,
                             "workflow_run": {"id": 123},
@@ -346,6 +356,15 @@ class ProvenanceTests(unittest.TestCase):
                 (prefix / "retained.txt").write_text("first successful component")
                 with patch.dict("os.environ", {"GITHUB_RUN_ATTEMPT": str(attempt)}):
                     artifacts.pack("linux-core", "a" * 64, prefix, root / "upload")
+                fixture_zip = io.BytesIO()
+                with zipfile.ZipFile(fixture_zip, "w") as archive:
+                    for member in ("identity.json", "payload.tar.gz"):
+                        archive.write(root / "upload" / member, member)
+                import hashlib
+
+                zip_digest = (
+                    "sha256:" + hashlib.sha256(fixture_zip.getvalue()).hexdigest()
+                )
                 run = self.run_record(conclusion="failure", run_attempt=2)
                 jobs = [
                     {
@@ -365,12 +384,19 @@ class ProvenanceTests(unittest.TestCase):
                     },
                 ]
 
-                def api(repository, route, job_records=jobs, run_record=run):
+                def api(
+                    repository,
+                    route,
+                    job_records=jobs,
+                    run_record=run,
+                    zip_digest=zip_digest,
+                ):
                     if route.startswith("actions/artifacts?"):
                         return {
                             "artifacts": [
                                 {
                                     "id": 5,
+                                    "digest": zip_digest,
                                     "name": artifacts.name("linux-core", "a" * 64),
                                     "expired": False,
                                     "workflow_run": {"id": 123},
@@ -634,3 +660,23 @@ class RegistryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_release_latest_tool_is_maintenance_only():
+    assert not any(changes.select_gates(["tools/release_latest.py"]).values())
+    assert not any(changes.select_gates(["tests/test_release_latest.py"]).values())
+
+
+def test_zip_download_checks_github_digest_before_unpacking(tmp_path):
+    import pytest
+
+    destination = tmp_path / "artifact.zip"
+
+    def download(command, *, stdout, **kwargs):
+        stdout.write(b"tampered ZIP bytes")
+
+    with patch.object(artifacts.subprocess, "run", side_effect=download):
+        with pytest.raises(ValueError, match="ZIP digest mismatch"):
+            artifacts.download_zip(
+                "owner/repo", {"id": 1, "digest": "sha256:" + "a" * 64}, destination
+            )

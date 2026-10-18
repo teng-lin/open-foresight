@@ -275,3 +275,15 @@ class PrepareReleaseTest(unittest.TestCase):
                     release.create_draft("owner/repo", "v0.1.1", commit)
                 self.assertEqual(command.call_count, 1)
                 self.assertEqual(command.call_args.args[0][3], "PATCH")
+
+
+def test_missing_protected_release_tag_requires_admin_before_writes():
+    import pytest
+
+    with (
+        patch.object(release, "api", return_value=[]),
+        patch.object(release.subprocess, "run") as command,
+    ):
+        with pytest.raises(ValueError, match="administrator must create"):
+            release.create_draft("owner/repo", "v0.1.1", "a" * 40)
+        command.assert_not_called()

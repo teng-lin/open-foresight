@@ -12,6 +12,8 @@ GATES = ("macos", "linux-native", "linux-document-imports", "linux-bundle")
 
 # Explicit maintenance paths only: shared tools and unknown files select all gates.
 MAINTENANCE = {
+    "tools/release_latest.py",
+    "tests/test_release_latest.py",
     "tools/cleanup_linux_packages.py",
     "tests/test_cleanup_linux_packages.py",
     "tools/publish_linux_package_aliases.py",

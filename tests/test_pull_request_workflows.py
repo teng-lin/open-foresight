@@ -380,18 +380,19 @@ jobs:
 
     def test_acceptance_paths_include_product_sources_and_meeting_workflow(self):
         workflow = self.workflow("integration-acceptance.yml")
-        paths = workflow["on"]["pull_request"]["paths"]
-        for required in (
-            "apps/desktop/**",
-            "packages/foresight_core/**",
-            "packages/foresight_core/lib/src/answer_contract.dart",
-            "packages/foresight_core/lib/src/store.dart",
+        self.assertNotIn("paths", workflow["on"].get("pull_request") or {})
+        from tools.ci_changes import select_gates
+
+        self.assertEqual(workflow["jobs"]["linux"]["needs"], "changes")
+        self.assertEqual(workflow["jobs"]["acceptance-checks"]["if"], "always()")
+        for path in (
+            "apps/desktop/lib/main.dart",
             "packages/foresight_core/lib/src/application.dart",
-            "packaging/**",
+            "packaging/build.Dockerfile",
+            "native/foresight_native.cpp",
         ):
-            self.assertIn(required, paths)
-            if required.endswith(".dart"):
-                self.assertTrue((ROOT / required).is_file(), required)
+            self.assertTrue(select_gates([path])["linux-bundle"])
+        self.assertFalse(select_gates(["docs/README.md"])["linux-bundle"])
         runs = [
             step.get("run")
             for step in workflow["jobs"]["linux"]["steps"]
@@ -541,3 +542,51 @@ jobs:
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_release_latest_and_push_concurrency_are_explicit():
+    release = (WORKFLOWS / "release.yml").read_text()
+    assert 'tools/release_latest.py --tag "$TAG"' in release
+    assert '--latest="$latest"' in release
+    assert not re.search(r"--latest(?:\s|$)", release)
+    for name in ("quality.yml", "integration-acceptance.yml"):
+        assert (
+            "github.event_name == 'pull_request' && github.ref || github.sha"
+            in (WORKFLOWS / name).read_text()
+        )
+    package = (WORKFLOWS / "linux-packages.yml").read_text()
+    for required in (
+        "native/**",
+        "services/**",
+        "proto/**",
+        "cmake/**",
+        "CMakeLists.txt",
+        "third_party/**",
+        "tools/package.py",
+        "tools/build.sh",
+        "requirements-*.lock",
+    ):
+        assert required in package
+
+
+def test_installers_have_pinned_attestations_and_job_scoped_permissions():
+    for name, job in (("linux-packages.yml", "packages"), ("macos-release.yml", "dmg")):
+        workflow = parse_workflow((WORKFLOWS / name).read_text())
+        permissions = workflow["jobs"][job]["permissions"]
+        assert permissions["id-token"] == "write"
+        assert permissions["attestations"] == "write"
+        assert "id-token" not in workflow.get("permissions", {})
+        steps = workflow["jobs"][job]["steps"]
+        for action in (
+            "anchore/sbom-action",
+            "actions/attest-build-provenance",
+            "actions/attest-sbom",
+        ):
+            uses = [
+                step["uses"]
+                for step in steps
+                if step.get("uses", "").startswith(action + "@")
+            ]
+            assert len(uses) == 1 and re.fullmatch(
+                re.escape(action) + r"@[0-9a-f]{40}", uses[0]
+            )
