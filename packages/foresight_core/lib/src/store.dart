@@ -1072,6 +1072,10 @@ class Store {
   ]);
   List<Map<String, Object?>> notes() =>
       rows('SELECT * FROM notes ORDER BY id DESC');
+  List<Map<String, Object?>> noteSummaries() =>
+      rows('SELECT id,title,revision FROM notes ORDER BY id DESC');
+  String noteBody(int id) =>
+      rows('SELECT body FROM notes WHERE id=?', [id]).single['body'] as String;
   List<Map<String, Object?>> completedAnswerBodies() =>
       rows('SELECT body FROM answers WHERE status=\'completed\'');
   List<Map<String, Object?>> artifactBodies() =>

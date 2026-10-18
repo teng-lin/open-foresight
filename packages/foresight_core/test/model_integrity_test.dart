@@ -66,16 +66,16 @@ void main() {
     },
   );
 
-  test('directory query model manifest is rehashed at startup', () async {
+  test('directory model manifest is rehashed at startup', () async {
     final model = Directory('${directory.path}/model')..createSync();
     final file = File('${model.path}/weights')..writeAsStringSync('trusted');
     final store = Store(database);
     addTearDown(store.close);
     await store.register(
-      'query-detection',
+      'generation',
       model.path,
-      '',
-      backend: 'legacy_query_cpu',
+      '/bin/true',
+      backend: 'llama_cpp',
     );
     await store.verifyRegisteredModels();
     file.writeAsStringSync('changed');

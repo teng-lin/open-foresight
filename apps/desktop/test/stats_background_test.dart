@@ -49,14 +49,12 @@ void main() {
       final dynamic state = tester.state(find.byType(Workspace));
       Future<void> waitForCount(int expected) async {
         for (
-          var i = 0;
-          i < 100 && state.settingsFeature.localOutputCount != expected;
-          i++
+          final elapsed = Stopwatch()..start();
+          elapsed.elapsed < const Duration(seconds: 5) &&
+              state.settingsFeature.localOutputCount != expected;
         ) {
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
-          await tester.pump();
+          await tester.runAsync(() => Future<void>(() {}));
+          await tester.pump(const Duration(milliseconds: 20));
         }
         expect(state.settingsFeature.localOutputCount, expected);
       }
