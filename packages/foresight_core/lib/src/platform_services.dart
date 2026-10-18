@@ -204,7 +204,6 @@ Future<void> platformNotification(String title, String message) async {
 
 const _nativeEnvironmentKeys = {
   'FORESIGHT_LITERT_LIBRARY',
-  'FORESIGHT_ONNX_LIBRARY',
   'FORESIGHT_LITERT_BACKEND',
   'FORESIGHT_WHISPER_BACKEND',
   'FORESIGHT_WHISPER_DEVICE',

@@ -70,10 +70,10 @@ void main() {
     final store = Store(database);
     addTearDown(store.close);
     await store.register(
-      'embedding',
+      'generation',
       model.path,
-      '',
-      backend: 'sentence_transformers_cpu',
+      '/bin/true',
+      backend: 'llama_cpp',
     );
     await store.verifyRegisteredModels();
     file.writeAsStringSync('changed');

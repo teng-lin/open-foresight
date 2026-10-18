@@ -20,7 +20,7 @@ stop-sequence extension required by note enhancement. The SDK retains its wheel,
 native library, passing native regression log and checksum manifest; the application
 packager verifies those artifacts and copies the wheel's Linux vendor dependencies.
 The stock 0.18.0 library lacks that setter and is not selected by release CI.
-ONNX uses a pinned, SHA-verified upstream archive. The build pins
+The build pins
 Flutter, gRPC (including its protobuf submodule) and Whisper to full source
 commits. The modern protobuf toolchain is intentional: our authoritative
 descriptor uses Edition 2024, which older distro protoc packages cannot generate.

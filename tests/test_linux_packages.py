@@ -361,7 +361,7 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 "-shared",
                 "-fPIC",
             )
-            for name in ("native/libforesight_native.so", "lib/libonnxruntime.so"):
+            for name in ("native/libforesight_native.so",):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(library, target)
@@ -386,8 +386,6 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 str(output),
                 "--litert-library",
                 str(library),
-                "--onnx-library",
-                str(build / "lib/libonnxruntime.so"),
                 "--litert-extensions-manifest",
                 str(root / "fixture-manifest.json"),
                 "--revision",
@@ -407,7 +405,6 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                     return_value=[output / "lib/liblitert-lm.so"],
                 ),
                 patch.object(package, "probe_native_extensions"),
-                patch.object(package, "ONNX_LIBRARY_SHA256", digest),
             ):
                 package.main()
             manifest = json.loads((output / "manifest.json").read_text())

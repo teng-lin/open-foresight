@@ -206,11 +206,8 @@ def running(tmp_path):
     )
     fixtures = tmp_path / "fixtures"
     fixtures.mkdir(mode=0o700)
-    model = fixtures / "model"
-    model.mkdir()
-    (model / "config.json").write_text("{}")
-    (model / "onnx").mkdir()
-    (model / "onnx/model.onnx").write_bytes(b"controlled native model fixture")
+    model = fixtures / "model.litertlm"
+    model.write_bytes(b"controlled embedding fixture")
     asset = fixtures / "asset.bin"
     asset.write_bytes(b"controlled model fixture")
     runner = fixtures / "runner"

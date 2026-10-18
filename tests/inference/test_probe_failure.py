@@ -24,6 +24,20 @@ def run(worker):
         assert missing in error["error"], error
         assert "Cannot load native LiteRT-LM" in error["error"], error
         assert "native_stop_token_sequences" not in error, error
+        directory = Path(temporary) / "embedding.litertlm"
+        directory.mkdir()
+        for asset in (directory, Path(temporary) / "unsupported.bin"):
+            result = subprocess.run(
+                [worker, "--embedding", str(asset)],
+                env={**os.environ, "FORESIGHT_LITERT_LIBRARY": missing},
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            assert result.returncode == 1, result
+            assert "Unsupported model format" in json.loads(result.stdout)["error"], (
+                result
+            )
     print("Failed native probe publishes its loader error on the protocol stream")
 
 

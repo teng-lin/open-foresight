@@ -9,6 +9,14 @@ import 'graph_labels.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+void requireEmbeddingBundle(String path) {
+  if (!path.endsWith('.litertlm') || Directory(path).existsSync()) {
+    throw StateError(
+      'Unsupported model format: embedding requires a .litertlm file',
+    );
+  }
+}
+
 /// Linux application schema, independently versioned from helper databases.
 class Store {
   final Database db;
@@ -461,7 +469,7 @@ class Store {
     String kind,
     String path,
     String runtime, {
-    String backend = 'llama_cpp',
+    String? backend,
     String? expectedDigest,
     int? modelType,
     bool Function()? current,
@@ -469,15 +477,15 @@ class Store {
     if (modelType != null && (modelType < 0 || modelType > 17)) {
       throw ArgumentError.value(modelType, 'modelType');
     }
+    if (kind == 'embedding') requireEmbeddingBundle(path);
+    backend ??= kind == 'embedding' ? 'litert_lm_embedding_cpu' : 'llama_cpp';
     final backends = [
-      'llama_cpp',
-      'litert_lm',
+      if (kind != 'embedding') ...['llama_cpp', 'litert_lm'],
       if (kind == 'query-detection') ...[
         'legacy_query_cpu',
         'legacy_query_cpu_encrypted',
       ],
       if (kind == 'embedding') ...[
-        'sentence_transformers_cpu',
         'litert_lm_embedding_cpu',
         'litert_lm_embedding_gpu',
       ],
