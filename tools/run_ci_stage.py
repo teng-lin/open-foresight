@@ -175,7 +175,7 @@ def run(
             root,
             own_pr,
             event,
-            os.environ.get("GITHUB_HEAD_REF", ""),
+            os.environ.get("GITHUB_HEAD_REF") or os.environ.get("GITHUB_REF_NAME", ""),
             release,
             Path(temporary) / "restored",
         )
@@ -204,7 +204,8 @@ def run(
                     root,
                     own_pr,
                     event,
-                    os.environ.get("GITHUB_HEAD_REF", ""),
+                    os.environ.get("GITHUB_HEAD_REF")
+                    or os.environ.get("GITHUB_REF_NAME", ""),
                     release,
                     Path(temporary) / "compilation",
                 )

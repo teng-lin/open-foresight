@@ -169,7 +169,15 @@ def test_runner_does_not_expose_validation_environment_in_receipt(
     assert environment["validation_flags"]["CFLAGS"] == digest
 
 
-def test_native_runner_publishes_distinct_runtime_and_compilation_archives(tmp_path):
+@pytest.mark.parametrize(
+    "event,own_pr,branch,release",
+    [("pull_request", 1, "topic", False), ("push", 0, "main", True)],
+)
+def test_native_runner_publishes_distinct_runtime_and_compilation_archives(
+    tmp_path, monkeypatch, event, own_pr, branch, release
+):
+    monkeypatch.setenv("GITHUB_HEAD_REF", branch if own_pr else "")
+    monkeypatch.setenv("GITHUB_REF_NAME", "unused-merge-ref" if own_pr else branch)
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=30)
     (tmp_path / ".gitignore").write_text("build/\n")
     (tmp_path / "native.cpp").write_text("implementation")
@@ -202,8 +210,10 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(tmp_p
 
     with (
         patch.object(runner.cache, "find", return_value={"hit": False}),
-        patch.object(runner.cache, "find_native_work", return_value={"hit": False}),
-        patch.object(runner, "execute", side_effect=build),
+        patch.object(
+            runner.cache, "find_native_work", return_value={"hit": False}
+        ) as work,
+        patch.object(runner, "execute", side_effect=build) as execute,
     ):
         result = runner.run(
             tmp_path,
@@ -213,11 +223,13 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(tmp_p
             {},
             {},
             "repo",
-            1,
-            "pull_request",
-            False,
+            own_pr,
+            event,
+            release,
             [],
         )
+    assert work.call_args.args[4:8] == (own_pr, event, branch, release)
+    assert execute.call_args.args[3] is False
     assert result["runtime_artifact_name"] == result["artifact_name"] + "-runtime"
     full = json.loads(
         (tmp_path / "build/ci-stage/linux-native/identity.json").read_text()
