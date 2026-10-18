@@ -117,6 +117,19 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
                     : action,
               ),
               const SizedBox(height: 16),
+              Text(
+                event['requester'] as String? ??
+                    'Requester identity unavailable',
+              ),
+              for (final flag in (event['risk_flags'] as List? ?? const []))
+                Text(
+                  flag.toString(),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              const SizedBox(height: 8),
               SelectableText(
                 details.length > 4000
                     ? '${details.substring(0, 4000)}\n…'
