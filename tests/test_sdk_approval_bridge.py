@@ -1,0 +1,399 @@
+"""Exercise original bytes through approval, probing, pulling and Linux loading."""
+
+import copy
+import hashlib
+import io
+import json
+import zipfile
+
+import pytest
+
+from tools import ci_artifacts as artifacts
+from tools import linux_sdk_artifacts as linux
+from tools import sdk_approval_bridge as bridge
+
+REPOSITORY = "owner/repo"
+PRODUCER = "a" * 40
+FINAL = "b" * 40
+MERGE = "c" * 40
+SEMANTIC = "d" * 64
+IMAGE = "sha256:" + "e" * 64
+
+
+@pytest.fixture
+def original(tmp_path, monkeypatch):
+    definition = (
+        "FILES = {'linux-core': ['packaging/sdk-core.Dockerfile']}\n"
+        "PRODUCER_INPUTS = ('tools/ci_artifacts.py', 'tools/pins.json')\n"
+        "PARENTS = {}\n"
+        "raise RuntimeError('producer source must never execute')\n"
+    ).encode()
+    source = {
+        "tools/ci_artifacts.py": ("100644", definition),
+        "tools/pins.json": ("100644", b'{"dart":"old"}'),
+        "packaging/sdk-core.Dockerfile": ("100644", b"FROM pinned@sha256:abc\n"),
+    }
+    legacy, proof = bridge.legacy_proof("linux-core", lambda path: source[path][1])
+    prefix = tmp_path / "original"
+    prefix.mkdir()
+    (prefix / "image.tar").write_bytes(b"original Docker image bytes")
+    (prefix / "image.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "component": "linux-core",
+                "identity": legacy,
+                "transport": "docker-archive",
+                "image_id": IMAGE,
+                "platform": "linux/amd64",
+                "archive_sha256": artifacts.digest(prefix / "image.tar"),
+            }
+        )
+    )
+    artifacts.pack("linux-core", legacy, prefix, tmp_path / "packed")
+    receipt = json.loads((tmp_path / "packed/identity.json").read_text())
+    receipt["source_commit"] = "f" * 40  # Historical synthetic merge event SHA.
+    (tmp_path / "packed/identity.json").write_text(json.dumps(receipt))
+    reference = {
+        "schema": 1,
+        "component": "linux-core",
+        "identity": legacy,
+        "artifact_id": 5,
+        "source_receipt": receipt,
+    }
+
+    def archive(members):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as output:
+            for name, content in members.items():
+                output.writestr(name, content)
+        return stream.getvalue()
+
+    payload_zip = archive(
+        {
+            name: (tmp_path / "packed" / name).read_bytes()
+            for name in ("identity.json", "payload.tar.gz")
+        }
+    )
+    reference["artifact_digest"] = "sha256:" + hashlib.sha256(payload_zip).hexdigest()
+    sidecar_zip = archive({"receipt.json": json.dumps(reference).encode()})
+    common = {
+        "expired": False,
+        "workflow_run": {"id": 99},
+        "created_at": "2026-10-18T01:00:10Z",
+        "expires_at": "2099-01-01T00:00:00Z",
+    }
+    payload = {
+        **common,
+        "id": 5,
+        "name": artifacts.name("linux-core", legacy),
+        "digest": reference["artifact_digest"],
+    }
+    sidecar = {
+        **common,
+        "id": 6,
+        "name": artifacts.receipt_name("linux-core", legacy),
+        "digest": "sha256:" + hashlib.sha256(sidecar_zip).hexdigest(),
+        "size_in_bytes": len(sidecar_zip),
+    }
+    entry = {
+        "repository": REPOSITORY,
+        "component": "linux-core",
+        "semantic_identity": SEMANTIC,
+        "legacy_identity": legacy,
+        "legacy_inputs": proof,
+        "approved_pr": 111,
+        "approved_source": FINAL,
+        "producer_source": PRODUCER,
+        "producer_run": 99,
+        "artifact_id": 5,
+        "artifact_digest": payload["digest"],
+        "sidecar_id": 6,
+        "sidecar_digest": sidecar["digest"],
+        "source_receipt": receipt,
+    }
+    run = {
+        "id": 99,
+        "head_sha": PRODUCER,
+        "event": "pull_request",
+        "head_branch": "feature",
+        "path": ".github/workflows/ci-dependencies.yml",
+        "head_repository": {"full_name": REPOSITORY},
+        "pull_requests": [{"number": 111}],
+    }
+    job = {
+        "name": "Build Linux core",
+        "conclusion": "success",
+        "run_attempt": 1,
+        "started_at": "2026-10-18T01:00:00Z",
+        "completed_at": "2026-10-18T01:01:00Z",
+    }
+    records = {
+        "pulls/111": {
+            "merged_at": "2026-10-18",
+            "head": {"sha": FINAL},
+            "base": {"repo": {"full_name": REPOSITORY}},
+            "merge_commit_sha": MERGE,
+        },
+        f"compare/{PRODUCER}...{FINAL}": {"status": "ahead"},
+        "pulls/111/commits?per_page=100&page=1": [{"sha": PRODUCER}],
+        f"compare/{FINAL}...main": {"status": "diverged"},
+        f"compare/{MERGE}...main": {"status": "ahead"},
+        f"git/commits/{FINAL}": {"sha": FINAL, "tree": {"sha": "0" * 40}},
+        f"git/commits/{MERGE}": {"sha": MERGE, "tree": {"sha": "0" * 40}},
+        "actions/runs/99": run,
+        "actions/artifacts/5": payload,
+        "actions/artifacts/6": sidecar,
+        "actions/runs/99/jobs?filter=all&per_page=100&page=1": {"jobs": [job]},
+    }
+    manifest = tmp_path / "bridge.json"
+    monkeypatch.setattr(bridge, "MANIFEST", manifest)
+
+    def save():
+        manifest.write_text(json.dumps({"schema": 1, "entries": [entry]}))
+
+    save()
+    monkeypatch.setattr(
+        artifacts, "api", lambda repo, route: records.get(route, {"artifacts": []})
+    )
+    sources = {PRODUCER: source, FINAL: copy.deepcopy(source)}
+    monkeypatch.setattr(
+        artifacts.producer_trust,
+        "read_source",
+        lambda repo, sha, **kwargs: sources[sha],
+    )
+    monkeypatch.setattr(artifacts, "fingerprint", lambda *args: SEMANTIC)
+    downloads = []
+    payloads = {5: payload_zip, 6: sidecar_zip}
+
+    def download(arguments, *, stdout, check, timeout, **kwargs):
+        artifact_id = int(arguments[-1].split("/")[-2])
+        downloads.append(artifact_id)
+        stdout.write(payloads[artifact_id])
+
+    monkeypatch.setattr(artifacts.subprocess, "run", download)
+    return {
+        "entry": entry,
+        "records": records,
+        "source": sources,
+        "save": save,
+        "downloads": downloads,
+        "root": tmp_path,
+        "job": job,
+        "payloads": payloads,
+    }
+
+
+def test_exact_original_reuses_through_probe_pull_and_linux_resolve(
+    original, monkeypatch
+):
+    assert artifacts.probe(REPOSITORY, "linux-core", SEMANTIC)
+    assert original["downloads"] == [6]  # Probe never transfers the SDK image.
+    destination = original["root"] / "restored"
+    assert artifacts.pull(REPOSITORY, "linux-core", SEMANTIC, destination)
+    assert (
+        json.loads((destination / "image.json").read_text())["identity"]
+        == original["entry"]["legacy_identity"]
+    )
+    qualification = json.loads((destination / "approved-source.json").read_text())
+    assert (
+        qualification["original_source_receipt"] == original["entry"]["source_receipt"]
+    )
+    assert qualification["approved_source"] == FINAL
+    assert linux.record(destination, "linux-core")["image_id"] == IMAGE
+    commands = []
+    monkeypatch.setattr(
+        linux, "run", lambda arguments, **kwargs: commands.append(arguments)
+    )
+    monkeypatch.setattr(linux, "inspect", lambda image: IMAGE)
+    assert linux.resolve(destination, "linux-core") == "foresight-core:pr"
+    assert commands[0] == [
+        "docker",
+        "image",
+        "load",
+        "--input",
+        str(destination / "image.tar"),
+    ]
+    assert not any("build" in command for command in commands)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("approved_source", "0" * 40),
+        ("producer_source", "0" * 40),
+        ("semantic_identity", "0" * 64),
+        ("legacy_identity", "0" * 64),
+        ("artifact_digest", "sha256:" + "0" * 64),
+        ("producer_run", 88),
+    ],
+)
+def test_manifest_mismatch_cannot_authorize_original(original, field, value):
+    original["entry"][field] = value
+    original["save"]()
+    assert not artifacts.probe(REPOSITORY, "linux-core", SEMANTIC)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "unmerged",
+        "intermediate",
+        "nonancestor",
+        "unequal_tree",
+        "fork",
+        "workflow",
+        "attempt",
+        "late_upload",
+        "sidecar_digest",
+        "recipe",
+        "mode",
+    ],
+)
+def test_each_approval_and_original_provenance_boundary_is_required(original, mutation):
+    records = original["records"]
+    if mutation == "unmerged":
+        records["pulls/111"]["merged_at"] = None
+    elif mutation == "intermediate":
+        records["pulls/111"]["head"]["sha"] = "1" * 40
+    elif mutation == "nonancestor":
+        records[f"compare/{MERGE}...main"]["status"] = "diverged"
+    elif mutation == "unequal_tree":
+        records[f"git/commits/{MERGE}"]["tree"]["sha"] = "1" * 40
+    elif mutation == "fork":
+        records["actions/runs/99"]["head_repository"]["full_name"] = "fork/repo"
+    elif mutation == "workflow":
+        records["actions/runs/99"]["path"] = ".github/workflows/other.yml"
+    elif mutation == "attempt":
+        original["job"]["run_attempt"] = 2
+    elif mutation == "late_upload":
+        records["actions/artifacts/5"]["created_at"] = "2026-10-18T02:00:00Z"
+    elif mutation == "sidecar_digest":
+        records["actions/artifacts/6"]["digest"] = "sha256:" + "0" * 64
+    elif mutation == "recipe":
+        original["source"][FINAL]["packaging/sdk-core.Dockerfile"] = (
+            "100644",
+            b"changed recipe",
+        )
+    elif mutation == "mode":
+        original["source"][FINAL]["packaging/sdk-core.Dockerfile"] = (
+            "100755",
+            b"FROM pinned@sha256:abc\n",
+        )
+    assert not artifacts.probe(REPOSITORY, "linux-core", SEMANTIC)
+
+
+def test_unmapped_intermediate_head_is_still_rejected(original):
+    assert not artifacts.eligible_run(
+        REPOSITORY, original["records"]["actions/runs/99"], "linux-core"
+    )
+
+
+def test_descriptor_without_consumer_qualification_is_not_relabelled(original):
+    prefix = original["root"] / "original"
+    with pytest.raises(ValueError, match="identity or platform"):
+        linux.record(prefix, "linux-core")
+
+
+def test_stacked_original_survives_current_producer_pr_rebase(original):
+    entry = original["entry"]
+    entry["producer_pr"] = 112
+    original["records"]["actions/runs/99"]["pull_requests"] = [
+        {"number": 112, "head": {"sha": "9" * 40}}
+    ]
+    # The original source is no longer in the rebased PR112 history. Its full
+    # compiler/control input proof equals the approved final PR111 source.
+    original["records"].pop(f"compare/{PRODUCER}...{FINAL}")
+    original["records"].pop("pulls/111/commits?per_page=100&page=1")
+    original["save"]()
+    assert artifacts.probe(REPOSITORY, "linux-core", SEMANTIC)
+    original["records"]["actions/runs/99"]["pull_requests"] = []
+    assert artifacts.probe(REPOSITORY, "linux-core", SEMANTIC)
+
+
+def test_reused_bridge_never_relabels_or_reuploads_the_original(original, monkeypatch):
+    monkeypatch.setattr(
+        artifacts, "pack", lambda *args: pytest.fail("must retain original receipt")
+    )
+    monkeypatch.setattr(
+        linux.sdk_build_transport,
+        "prepare",
+        lambda *args, **kwargs: pytest.fail("must not provision a compiler"),
+    )
+    output = original["root"] / "should-not-upload"
+    assert linux.produce("linux-core", output, REPOSITORY) == "approved-original"
+    assert not output.exists()
+
+
+def test_ordinary_payload_cannot_import_legacy_approval(original, monkeypatch):
+    prefix = original["root"] / "original"
+    entry = original["entry"]
+    (prefix / "approved-source.json").write_text(
+        json.dumps(bridge.qualification(entry, prefix, artifacts.digest))
+    )
+    monkeypatch.setattr(
+        artifacts.subprocess, "check_output", lambda *args, **kwargs: PRODUCER
+    )
+    packed = original["root"] / "forged"
+    artifacts.pack("linux-core", SEMANTIC, prefix, packed)
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as output:
+        for name in ("identity.json", "payload.tar.gz"):
+            output.write(packed / name, name)
+    payload = original["records"]["actions/artifacts/5"]
+    payload["name"] = artifacts.name("linux-core", SEMANTIC)
+    payload["digest"] = "sha256:" + hashlib.sha256(stream.getvalue()).hexdigest()
+    original["payloads"][5] = stream.getvalue()
+    original["records"][f"actions/artifacts?name={payload['name']}&per_page=100"] = {
+        "artifacts": [payload]
+    }
+    monkeypatch.setattr(bridge, "entries", lambda *args: [])
+    monkeypatch.setattr(artifacts, "source_fingerprint_at", lambda *args: SEMANTIC)
+    monkeypatch.setattr(artifacts, "qualified_producer_control", lambda *args: True)
+    with pytest.raises(ValueError, match="imported approval"):
+        artifacts.pull(
+            REPOSITORY,
+            "linux-core",
+            SEMANTIC,
+            original["root"] / "ordinary",
+            own_pr=111,
+        )
+
+
+def test_pack_binds_actual_checkout_and_retains_qualification_receipt(
+    tmp_path, monkeypatch
+):
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    original_receipt = {
+        "source_receipt": {"source_commit": "e" * 40},
+        "artifact_id": 123,
+    }
+    (prefix / "source-qualification.json").write_text(json.dumps(original_receipt))
+    monkeypatch.setenv("GITHUB_SHA", "f" * 40)
+    monkeypatch.setattr(
+        artifacts.subprocess, "check_output", lambda *args, **kwargs: PRODUCER
+    )
+    artifacts.pack("linux-core", SEMANTIC, prefix, tmp_path / "output")
+    receipt = json.loads((tmp_path / "output/identity.json").read_text())
+    assert receipt["source_commit"] == PRODUCER
+    assert receipt["reused_from"] == original_receipt
+
+
+def test_cli_reports_original_without_requesting_payload_upload(tmp_path, monkeypatch):
+    monkeypatch.setattr(linux, "produce", lambda *args, **kwargs: "approved-original")
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "linux_sdk_artifacts.py",
+            "produce",
+            "--component",
+            "linux-core",
+            "--output",
+            str(tmp_path / "unused"),
+        ],
+    )
+    linux.main()
+    assert output.read_text() == "original=true\n"

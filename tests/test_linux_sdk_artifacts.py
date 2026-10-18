@@ -35,6 +35,8 @@ def write_archive(prefix, component="linux-sdk", **changes):
 
 
 def docker_output(arguments, **kwargs):
+    if arguments == ["git", "rev-parse", "HEAD"]:
+        return "a" * 40 + "\n"
     if arguments[:3] == ["docker", "image", "inspect"]:
         return json.dumps({"Id": IMAGE_ID, "Os": "linux", "Architecture": "amd64"})
     if arguments[-2:] == ["/opt/toolchain/bin/protoc", "--version"]:
@@ -248,6 +250,11 @@ class ImageProductionTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+        preflight = patch.object(
+            sdk.sdk_build_transport, "prepare", return_value=["docker", "build"]
+        )
+        self.preflight = preflight.start()
+        self.addCleanup(preflight.stop)
 
     def test_valid_cache_hit_is_verified_and_repacked_without_docker(self):
         for component in sdk.COMPONENTS:
@@ -440,3 +447,53 @@ class ImageProductionTests(unittest.TestCase):
         self.assertEqual(len(run.call_args_list), 1)
         self.assertEqual(run.call_args.args[0][:2], ["docker", "build"])
         self.assertFalse((self.root / "upload").exists())
+
+
+def test_registry_cache_preflight_precedes_parent_loads(tmp_path):
+    from tools.sdk_build_transport import command
+
+    events = []
+
+    def pull(repository, component, identity, prefix, **kwargs):
+        if component == "linux-litert":
+            return False
+        write_archive(prefix, component)
+        return True
+
+    def prepare(*args, **kwargs):
+        events.append("cache-preflight")
+        return [
+            "docker",
+            "buildx",
+            "build",
+            "--builder",
+            "default",
+            "--load",
+            "--cache-from",
+            "type=registry,ref=ghcr.io/owner/repo/linux-litert:buildcache",
+        ]
+
+    def load(*args):
+        events.append("parent-load")
+        return "foresight-core:pr"
+
+    def run(arguments, **kwargs):
+        if arguments[:3] == ["docker", "buildx", "build"]:
+            events.append("build-with-readonly-layers")
+            assert "--cache-from" in arguments
+            assert "--cache-to" not in arguments
+            assert "CORE_IMAGE=foresight-core:pr" in arguments
+        elif arguments[:3] == ["docker", "image", "save"]:
+            Path(arguments[arguments.index("--output") + 1]).write_bytes(b"image")
+
+    with (
+        patch.object(artifacts, "pull", side_effect=pull),
+        patch.object(sdk.sdk_build_transport, "prepare", side_effect=prepare),
+        patch.object(sdk.sdk_build_transport, "command", wraps=command),
+        patch.object(sdk, "load", side_effect=load),
+        patch.object(sdk, "run", side_effect=run),
+        patch.object(sdk, "qualify"),
+        patch.object(sdk, "inspect", return_value=IMAGE_ID),
+    ):
+        sdk.produce("linux-litert", tmp_path / "output", REPOSITORY)
+    assert events == ["cache-preflight", "parent-load", "build-with-readonly-layers"]

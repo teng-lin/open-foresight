@@ -327,7 +327,11 @@ class ProvenanceTests(unittest.TestCase):
                 zip_digest = (
                     "sha256:" + hashlib.sha256(fixture_zip.getvalue()).hexdigest()
                 )
-                run = self.run_record()
+                run = self.run_record(
+                    head_sha=json.loads((root / "upload/identity.json").read_text())[
+                        "source_commit"
+                    ]
+                )
                 listed = {
                     "artifacts": [
                         {
@@ -336,17 +340,23 @@ class ProvenanceTests(unittest.TestCase):
                             "name": artifacts.name("macos-sdk", "a" * 64),
                             "expired": False,
                             "workflow_run": {"id": 123},
+                            "created_at": "2026-10-18T01:00:10Z",
                         }
                     ]
                 }
 
-                def api(repo, route):
+                def api(repo, route, conclusion=conclusion):
                     if route.startswith("actions/artifacts?"):
                         return listed  # noqa: B023 - Fixture callbacks are consumed within this iteration.
                     if "/jobs?" in route:
                         return {
                             "jobs": [
-                                {"name": "Build macOS sdk", "conclusion": conclusion}  # noqa: B023 - Fixture callbacks are consumed within this iteration.
+                                {
+                                    "name": "Build macOS sdk",
+                                    "conclusion": conclusion,
+                                    "started_at": "2026-10-18T01:00:00Z",
+                                    "completed_at": "2026-10-18T01:01:00Z",
+                                }  # noqa: B023 - Fixture callbacks are consumed within this iteration.
                             ]
                         }
                     return run  # noqa: B023 - Fixture callbacks are consumed within this iteration.
@@ -358,6 +368,12 @@ class ProvenanceTests(unittest.TestCase):
 
                 with (
                     patch.object(artifacts, "api", side_effect=api),
+                    patch.object(
+                        artifacts, "source_fingerprint_at", return_value="a" * 64
+                    ),
+                    patch.object(
+                        artifacts, "qualified_producer_control", return_value=True
+                    ),
                     patch.object(artifacts.subprocess, "run", side_effect=download),
                 ):
                     self.assertEqual(
@@ -394,12 +410,20 @@ class ProvenanceTests(unittest.TestCase):
                 zip_digest = (
                     "sha256:" + hashlib.sha256(fixture_zip.getvalue()).hexdigest()
                 )
-                run = self.run_record(conclusion="failure", run_attempt=2)
+                run = self.run_record(
+                    conclusion="failure",
+                    run_attempt=2,
+                    head_sha=json.loads((root / "upload/identity.json").read_text())[
+                        "source_commit"
+                    ],
+                )
                 jobs = [
                     {
                         "name": "Build Linux core",
                         "conclusion": "success",
                         "run_attempt": 1,
+                        "started_at": "2026-10-18T01:00:00Z",
+                        "completed_at": "2026-10-18T01:01:00Z",
                     },
                     {
                         "name": "Build Linux core",
@@ -429,6 +453,7 @@ class ProvenanceTests(unittest.TestCase):
                                     "name": artifacts.name("linux-core", "a" * 64),
                                     "expired": False,
                                     "workflow_run": {"id": 123},
+                                    "created_at": "2026-10-18T01:00:10Z",
                                 }
                             ]
                         }
@@ -444,6 +469,12 @@ class ProvenanceTests(unittest.TestCase):
 
                 with (
                     patch.object(artifacts, "api", side_effect=api),
+                    patch.object(
+                        artifacts, "source_fingerprint_at", return_value="a" * 64
+                    ),
+                    patch.object(
+                        artifacts, "qualified_producer_control", return_value=True
+                    ),
                     patch.object(artifacts.subprocess, "run", side_effect=download),
                 ):
                     self.assertEqual(
@@ -473,6 +504,7 @@ class ProvenanceTests(unittest.TestCase):
                     "name": artifacts.name("macos-app", "a" * 40),
                     "expired": False,
                     "workflow_run": {"id": 123},
+                    "created_at": "2026-10-18T01:00:10Z",
                 }
             ]
         }
