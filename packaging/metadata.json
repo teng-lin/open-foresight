@@ -28,6 +28,7 @@
     "ca-certificates",
     "libgl1",
     "libegl1",
+    "libsecret-tools",
     "bubblewrap"
   ],
   "rpm_dependencies": [
@@ -55,6 +56,7 @@
     "ca-certificates",
     "libglvnd-glx",
     "libglvnd-egl",
+    "libsecret",
     "bubblewrap"
   ],
   "arch_dependencies": [
@@ -80,6 +82,7 @@
     "vulkan-icd-loader",
     "ca-certificates",
     "libglvnd",
+    "libsecret",
     "bubblewrap"
   ]
 }

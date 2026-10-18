@@ -146,6 +146,9 @@ class LinuxPackagesTest(unittest.TestCase):
 
     def test_packages_declare_poppler_and_unrtf_and_ship_notices(self):
         metadata = json.loads((ROOT / 'packaging/metadata.json').read_text())
+        self.assertIn('libsecret-tools', metadata['deb_dependencies'])
+        self.assertIn('libsecret', metadata['rpm_dependencies'])
+        self.assertIn('libsecret', metadata['arch_dependencies'])
         self.assertIn('poppler-utils', metadata['deb_dependencies'])
         self.assertIn('poppler-utils', metadata['rpm_dependencies'])
         self.assertIn('poppler', metadata['arch_dependencies'])
