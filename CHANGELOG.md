@@ -16,6 +16,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 ### Fixed
 
 - Package upgrades ignore installation locks with invalid ownership, permissions or symlinks, preventing other local users from blocking updates.
+- Clearing a workspace works offline, discards pending meeting drafts and retries helper deletion after reconnect. Stale speech audio is removed on startup.
+- Calendar refresh preserves local edits and deletions and bounds untrusted invitation HTML parsing.
+- Failed answers discard partial text and citations; cancelled note enhancements restore the previous notes.
+- Background credential and recording failures no longer escape the service worker. Interrupted meetings are indexed after restart.
+- Native adapter writes and model probes have deadlines, and worker output replaces invalid UTF-8. New generation registrations default to LiteRT-LM.
 
 ## [0.1.1] - 2026-10-17
 

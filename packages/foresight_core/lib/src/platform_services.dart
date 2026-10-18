@@ -439,3 +439,18 @@ Future<void> writePrivateTextFile(File destination, String text) async {
     await staging.delete(recursive: true);
   }
 }
+
+/// Called only while the service owns the profile lock.
+void sweepStaleSpeechAudio(String profile) {
+  final directory = Directory('$profile/speech');
+  if (FileSystemEntity.typeSync(directory.path, followLinks: false) !=
+      FileSystemEntityType.directory) {
+    return;
+  }
+  for (final entry in directory.listSync(followLinks: false)) {
+    if (entry.uri.pathSegments.last.startsWith('foresight-asr-') &&
+        entry is File) {
+      entry.deleteSync();
+    }
+  }
+}

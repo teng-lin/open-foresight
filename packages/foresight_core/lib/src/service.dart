@@ -274,6 +274,7 @@ class ApplicationService {
   final _leases = <Socket, Map<int, _RequestLease>>{};
   final _subscriptions = <Socket, Map<int, StreamSubscription<Object?>>>{};
   StreamSubscription<void>? _changes;
+  StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
   bool _closing = false;
   Future<void>? _shutdown;
@@ -310,6 +311,15 @@ class ApplicationService {
     );
     binding.publish(_accept);
     _changes = application.changes.stream.listen((_) => _broadcast());
+    _captureLevels = application.captureLevelChanges.stream.listen((_) {
+      if (_closing) return;
+      for (final client in _clients) {
+        _send(client, {
+          'event': 'capture_levels',
+          'volumes': application.recording?.currentVolumes ?? <double>[],
+        });
+      }
+    });
     _heartbeat = Timer.periodic(
       const Duration(seconds: 1),
       (_) => _broadcast(),
@@ -379,8 +389,15 @@ class ApplicationService {
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         stale.deleteSync();
       }
+      sweepStaleSpeechAudio(profile.data);
       store = Store('${profile.data}/application.db');
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
+      final interrupted = store
+          .rows(
+            "SELECT id FROM meetings WHERE state IN ('recording','transcribing','paused')",
+          )
+          .map((row) => row['id'] as int)
+          .toList();
       store.db.execute(
         "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing','paused')",
       );
@@ -421,7 +438,17 @@ class ApplicationService {
         );
       }
       helper.changed = service._broadcast;
-      helper.onReady = domain.resume;
+      helper.onReady = () async {
+        await domain.resume();
+        for (final id in interrupted.toList()) {
+          try {
+            await application.indexMeeting(id);
+            interrupted.remove(id);
+          } catch (error) {
+            stderr.writeln('Interrupted meeting indexing: $error');
+          }
+        }
+      };
       service._ready = helper.start().catchError((Object e) {
         stderr.writeln('Helper startup: $e');
         service._broadcast();
@@ -533,7 +560,13 @@ class ApplicationService {
                       );
                     }
                     access.detach(client);
-                    unawaited(application.stopRecording());
+                    unawaited(
+                      application.stopRecording().catchError((Object error) {
+                        stderr.writeln(
+                          'Stop recording on desktop detach: $error',
+                        );
+                      }),
+                    );
                   } else if (method == Operation.securityDecide.wire) {
                     access.decide(
                       client,
@@ -827,6 +860,7 @@ class ApplicationService {
     await attempt(application.close);
     await attempt(() async {
       await _changes?.cancel();
+      await _captureLevels?.cancel();
     });
     await attempt(domain.close);
     await attempt(() => domain.generator?.close());
@@ -928,6 +962,7 @@ class IsolatedApplicationService {
           profile.data,
           profile.runtime,
           Map<String, String>.from(runtimeConfiguration.environment),
+          host._errors.sendPort,
         ],
         onError: host._errors.sendPort,
         onExit: host._exits.sendPort,
@@ -1155,7 +1190,19 @@ class IsolatedApplicationService {
   }
 }
 
-void _applicationServiceWorker(List<Object?> configuration) async {
+void _applicationServiceWorker(List<Object?> configuration) {
+  // The guarded zone reports all asynchronous failures through the error port.
+  // ignore: discarded_futures
+  runZonedGuarded(() => _runApplicationServiceWorker(configuration), (
+    error,
+    stack,
+  ) {
+    stderr.writeln('Application worker asynchronous error: $error\n$stack');
+    (configuration[4] as SendPort).send(['$error', '$stack']);
+  });
+}
+
+Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
   final parent = configuration[0] as SendPort;
   runtimeConfiguration.environment
     ..clear()

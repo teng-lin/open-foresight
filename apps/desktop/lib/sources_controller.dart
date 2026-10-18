@@ -103,6 +103,8 @@ class _SourcesController extends _FeatureController {
         !MediaQuery.disableAnimationsOf(context);
     if (enabled && !graphMotionTicker.isActive) {
       graphLastTick = null;
+      // The callback intentionally schedules work owned by its controller.
+      // ignore: discarded_futures
       graphMotionTicker.start();
     } else if (!enabled && graphMotionTicker.isActive) {
       graphMotionTicker.stop();
@@ -1748,6 +1750,8 @@ class _SourcesController extends _FeatureController {
     graphCameraController.duration = Duration(
       milliseconds: zoomButton ? 250 : 350,
     );
+    // The callback intentionally schedules work owned by its controller.
+    // ignore: discarded_futures
     graphCameraController.forward(from: 0);
   }
 
@@ -1847,6 +1851,8 @@ class _SourcesController extends _FeatureController {
       graphRelatedError = '';
     });
     if (document != null) {
+      // The callback intentionally schedules work owned by its controller.
+      // ignore: discarded_futures
       completeGraphSelection(document, revision, vectors, whole);
     }
   }

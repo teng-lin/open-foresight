@@ -496,6 +496,8 @@ class Recording implements RecordingStatus {
     _workers[segment.channel] = future;
     unawaited(
       future.whenComplete(() {
+        // Removing the map entry returns the task already observed by this worker.
+        // ignore: discarded_futures
         if (epoch == _epoch) _workers.remove(segment.channel);
       }),
     );

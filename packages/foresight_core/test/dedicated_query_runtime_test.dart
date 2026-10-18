@@ -11,7 +11,11 @@ class DeferredExitProcess implements Process {
   final exited = Completer<int>();
   final requested = Completer<void>();
   final output = StreamController<List<int>>();
+  // Ownership transfers to the transport or test teardown.
+  // ignore: close_sinks
   final input = StreamController<List<int>>();
+  // Ownership transfers to the transport or test teardown.
+  // ignore: close_sinks
   late final IOSink sink = IOSink(input.sink);
   bool killed = false;
   DeferredExitProcess() {

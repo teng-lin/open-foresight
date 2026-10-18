@@ -55,7 +55,11 @@ void main() {
           env['FORESIGHT_LIVE_SINK']!,
           env['FORESIGHT_AUDIO_FIXTURE']!,
         ]);
+        // Completion is observed by the owning lifecycle or test fixture.
+        // ignore: unawaited_futures
         player.stdout.drain<void>();
+        // Completion is observed by the owning lifecycle or test fixture.
+        // ignore: unawaited_futures
         player.stderr.drain<void>();
         expect(await player.exitCode, 0);
         await waitFor(() => partialText.isNotEmpty && finalText.isNotEmpty);

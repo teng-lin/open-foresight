@@ -174,8 +174,16 @@ class Helper {
           socket,
           storage,
         ], environment: runtimeConfiguration.environment));
-        process!.stdout.drain<void>();
-        process!.stderr.drain<void>();
+        unawaited(
+          process!.stdout.drain<void>().catchError((Object error) {
+            stderr.writeln('Helper stdout drain: $error');
+          }),
+        );
+        unawaited(
+          process!.stderr.drain<void>().catchError((Object error) {
+            stderr.writeln('Helper stderr drain: $error');
+          }),
+        );
         if (stopping) {
           final late = process!;
           late.kill();
@@ -188,23 +196,29 @@ class Helper {
           process = null;
           return;
         }
-        process!.exitCode.then((code) async {
-          process = null;
-          state = 'helper exited ($code)';
-          snapshot = null;
-          changed?.call();
-          if (!stopping && restarts++ < 3) {
-            await Future<void>.delayed(Duration(seconds: restarts));
-            try {
-              final starting = _starting;
-              if (starting != null) await starting;
-              if (!stopping && process == null) await start();
-            } catch (e) {
-              state = 'app restore failed: $e';
-              changed?.call();
-            }
-          }
-        });
+        unawaited(
+          process!.exitCode
+              .then((code) async {
+                process = null;
+                state = 'helper exited ($code)';
+                snapshot = null;
+                changed?.call();
+                if (!stopping && restarts++ < 3) {
+                  await Future<void>.delayed(Duration(seconds: restarts));
+                  try {
+                    final starting = _starting;
+                    if (starting != null) await starting;
+                    if (!stopping && process == null) await start();
+                  } catch (e) {
+                    state = 'app restore failed: $e';
+                    changed?.call();
+                  }
+                }
+              })
+              .catchError((Object error) {
+                stderr.writeln('Helper exit handling: $error');
+              }),
+        );
       }
     }
     for (var n = 0; n < 20; n++) {

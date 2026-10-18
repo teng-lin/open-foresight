@@ -24,7 +24,7 @@ void requireEmbeddingBundle(String path) {
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 9;
+  static const schemaVersion = 10;
 
   Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly) {
     try {
@@ -127,6 +127,10 @@ class Store {
         _migrateGoogleTables();
       case 9:
         _reconcileLabelRecords();
+      case 10:
+        db.execute(
+          'CREATE TABLE IF NOT EXISTS pending_helper_deletes(document_id TEXT PRIMARY KEY, queued_at INTEGER NOT NULL)',
+        );
       default:
         throw StateError('Missing application database migration $version');
     }
@@ -831,6 +835,13 @@ class Store {
             [meeting, meeting],
           ).first['body']
           as String;
+
+  void restoreMeetingEnhancedDraft(int meeting, String body) {
+    db.execute('UPDATE meeting_notes SET enhanced_body=? WHERE meeting_id=?', [
+      body,
+      meeting,
+    ]);
+  }
 
   void saveMeetingEnhancedDraft(int meeting, String body) =>
       _writeEnhancedNote(meeting, () {}, body: body, completed: false);

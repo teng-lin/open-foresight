@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:foresight_core/remote.dart' show CaptureLevelEvents;
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:io';
@@ -16,6 +18,8 @@ class _Recording implements Recording {
   @override
   bool finishing = false;
   bool failResume = false;
+  @override
+  String lastError = '';
   @override
   Map<String, dynamic> get echoCancellationState => {
     'requested': false,
@@ -48,7 +52,75 @@ class _Recording implements Recording {
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
+class _LevelConnection extends TestDesktopConnection
+    implements CaptureLevelEvents {
+  _LevelConnection(super.domain);
+  final levels = StreamController<List<double>>.broadcast();
+  @override
+  Stream<List<double>> get captureLevels => levels.stream;
+  @override
+  void close() {
+    unawaited(levels.close());
+    super.close();
+  }
+}
+
 void main() {
+  testWidgets(
+    'audio levels repaint the waveform without rebuilding the recording header',
+    (tester) async {
+      final directory = Directory.systemTemp.createTempSync(
+        'recording-levels-',
+      );
+      final store = Store('${directory.path}/app.db');
+      final domain = Domain(
+        store,
+        OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
+      );
+      final connection = _LevelConnection(domain);
+      final id = store.meeting('Meter fixture');
+      domain.application
+        ..recording = _Recording()
+        ..recordingMeeting = id
+        ..recordingBegan = DateTime.now();
+      try {
+        await tester.pumpWidget(
+          Foresight(connection, deviceLoader: () async => []),
+        );
+        await tester.pumpAndSettle();
+        final header = tester.widget(
+          find.byKey(const ValueKey('recording-pill')),
+        );
+        final oldMeter = tester.widget<CustomPaint>(
+          find.byKey(const ValueKey('capture-waveform')),
+        );
+        for (var i = 0; i < 10; i++) {
+          connection.levels.add([i / 10, 0.0]);
+        }
+        await tester.pump();
+        await tester.pump();
+        final meter = tester.widget<CustomPaint>(
+          find.byKey(const ValueKey('capture-waveform')),
+        );
+        expect(meter.painter, isNot(same(oldMeter.painter)));
+        expect((meter.painter as dynamic).volumes, [0.9, 0.0]);
+        expect(
+          tester.widget(find.byKey(const ValueKey('recording-pill'))),
+          same(header),
+        );
+        await domain.application.stopRecording();
+        await domain.application.close();
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+        await connection.levels.close();
+      } finally {
+        await domain.application.close();
+        await domain.helper.close();
+        store.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+  );
   testWidgets(
     'recording pill pauses/resumes through service and immersive view exits without stopping',
     (tester) async {

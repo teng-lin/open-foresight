@@ -18,6 +18,8 @@ class WidgetNoteGenerator extends NativeRuntime {
   bool get loaded => true;
   WidgetNoteGenerator()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
+  // Ownership transfers to the transport or test teardown.
+  // ignore: close_sinks
   final events = StreamController<Map<String, dynamic>>();
   final entered = Completer<void>();
   @override

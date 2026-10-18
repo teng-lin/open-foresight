@@ -9,6 +9,8 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 
 class StreamingChatDomain extends AnswerFixtureDomain {
   StreamingChatDomain(super.store, super.helper);
+  // Ownership transfers to the transport or test teardown.
+  // ignore: close_sinks
   final response = StreamController<String>();
   final prompts = <String>[];
   @override

@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:grpc/grpc.dart';
+// Shared fixtures exercise internal wire protocol types.
+// ignore: implementation_imports
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 
 class DelayedIndexService extends RagServiceBase {

@@ -5,3 +5,7 @@ analyzer:
 linter:
   rules:
     curly_braces_in_flow_control_structures: false
+    unawaited_futures: true
+    discarded_futures: true
+    cancel_subscriptions: true
+    close_sinks: true

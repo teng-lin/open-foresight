@@ -1,4 +1,7 @@
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/helper.dart';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -133,6 +136,38 @@ void fs_string_free(char *value) { strings--; free(value); }
   }
 
   test(
+    'models.generation defaults to litert_lm and explicit llama_cpp remains available',
+    () async {
+      runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
+      final helper = Helper(
+        '${root.path}/unused.sock',
+        '${root.path}/helper',
+        manageProcess: false,
+      );
+      final domain = Domain(store, helper);
+      final app = Application(domain);
+      try {
+        await app.call('models.generation', {
+          'path': model.path,
+          'runtime': '/candidate/runtime',
+        });
+        expect(store.model('generation')!['backend'], 'litert_lm');
+        await app.call('models.generation', {
+          'path': model.path,
+          'runtime': '/candidate/runtime',
+          'backend': 'llama_cpp',
+        });
+        expect(store.model('generation')!['backend'], 'llama_cpp');
+      } finally {
+        await app.close();
+        domain.close();
+        domain.generator?.close();
+        await helper.close();
+      }
+    },
+  );
+
+  test(
     'successful configuration retains exactly one probed engine until its caller closes it',
     () async {
       var registered = false;
@@ -145,7 +180,7 @@ void fs_string_free(char *value) { strings--; free(value); }
       );
       expect(registered, isTrue);
       expect(runtime.loaded, isTrue);
-      expect(runtime.template, 'chatml');
+      expect(runtime.template, 'raw');
       expect(runtime.effectiveState['state'], 'ready');
       expect(engines(), 1);
       expect(conversations(), 1);

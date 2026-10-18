@@ -209,6 +209,8 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
                                   ? null
                                   : () {
                                       setState(() => selected = model);
+                                      // This task catches failures and publishes them in the view state.
+                                      // ignore: discarded_futures
                                       install();
                                     },
                               child: const Text('Click to download'),

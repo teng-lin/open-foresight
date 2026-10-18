@@ -26,6 +26,8 @@ class _FileDiscoverySheetState extends State<FileDiscoverySheet> {
   @override
   void initState() {
     super.initState();
+    // This task catches failures and publishes them in the view state.
+    // ignore: discarded_futures
     if (folders.isNotEmpty) scan();
   }
 
@@ -95,6 +97,8 @@ class _FileDiscoverySheetState extends State<FileDiscoverySheet> {
                     label: Text(folder),
                     onDeleted: () {
                       setState(() => folders.remove(folder));
+                      // This task catches failures and publishes them in the view state.
+                      // ignore: discarded_futures
                       scan();
                     },
                   ),
