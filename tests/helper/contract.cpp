@@ -349,6 +349,28 @@ int main(int argc, char **argv) {
             deleted.success());
     REQUIRE(retrieve("birds", "cats").chunks_size() == 0);
 
+    // Every committed delta is visible before its RPC returns. Exercise
+    // repeated replacements, alias tombstones and reinsertion across several
+    // forest compactions rather than only a single freshly built tree.
+    for (int n = 0; n < 18; ++n) {
+      auto id = "delta-" + std::to_string(n % 3);
+      index(id.c_str(), "birds revision");
+      REQUIRE(retrieve("birds", id.c_str()).chunks_size() == 1);
+      index(id.c_str(), "cats revision");
+      REQUIRE(retrieve("birds", id.c_str()).chunks_size() == 0);
+      REQUIRE(retrieve("cats", id.c_str()).chunks_size() == 1);
+      p::DeleteRequest q;
+      q.set_document_id("file://" + id);
+      p::DeleteResponse r;
+      REQUIRE(call(q, r,
+                   [&](auto *ctx, auto &x, auto *y) {
+                     return stub->DeleteDocument(ctx, x, y);
+                   })
+                  .ok() &&
+              r.success());
+      REQUIRE(retrieve("cats", id.c_str()).chunks_size() == 0);
+    }
+
     // Inject process death at every publication boundary; attached SQLite
     // rollback must preserve the old revision.
     index("stable", "original persistent source");
@@ -476,6 +498,7 @@ int main(int argc, char **argv) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     REQUIRE(observed);
+    REQUIRE(retrieve("persistent", "rebuild-0").chunks_size() == 1);
     std::thread updating(
         [&] { index("during-rebuild", "concurrent replacement survives"); });
     std::thread deleting([&] {
