@@ -1,8 +1,18 @@
 name: Set up the pinned Arch Linux application stage
 description: Install the shared Linux compiler, language SDKs and validation dependencies
+inputs:
+  stage:
+    required: true
+    description: Native, core, desktop or service role
 runs:
   using: composite
   steps:
+    - name: Validate setup role
+      shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
+      run: |
+        case "$STAGE" in native|core|desktop|service) ;; *) exit 2 ;; esac
     - name: Trust only the checked out container workspace
       shell: bash
       run: |
@@ -17,30 +27,43 @@ runs:
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: inputs.stage != 'native'
       id: flutter
       with:
         path: /opt/foresight-flutter
         key: flutter-linux-x64-3.35.7-v1
     - name: Verify the pinned Linux Flutter SDK
+      if: inputs.stage != 'native'
       shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
       run: |
         if [[ ! -x /opt/foresight-flutter/bin/flutter ]]; then
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git /opt/foresight-flutter
         fi
         test "$(git -C /opt/foresight-flutter rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
         echo /opt/foresight-flutter/bin >> "$GITHUB_PATH"
-        /opt/foresight-flutter/bin/flutter config --enable-linux-desktop --no-analytics
-        /opt/foresight-flutter/bin/flutter --version
+        if [[ "$STAGE" == desktop || "$STAGE" == service ]]; then
+          /opt/foresight-flutter/bin/flutter config --enable-linux-desktop --no-analytics
+        fi
+        /opt/foresight-flutter/bin/dart --version
     - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: steps.flutter.outputs.cache-hit != 'true'
+      if: inputs.stage != 'native' && steps.flutter.outputs.cache-hit != 'true'
       with:
         path: /opt/foresight-flutter
         key: flutter-linux-x64-3.35.7-v1
     - name: Resolve locked language prerequisites for isolated stages
+      if: inputs.stage != 'native'
       shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
       run: |
         (cd packages/foresight_core && dart pub get --enforce-lockfile)
-        (cd apps/desktop && flutter pub get --enforce-lockfile)
+        if [[ "$STAGE" == desktop || "$STAGE" == service ]]; then
+          (cd apps/desktop && flutter pub get --enforce-lockfile)
+        fi
     - name: Record compiler, runtime, package and workspace identity
       shell: bash
-      run: .venv/bin/python tools/ci_stage_environment.py --platform linux --output build/stage-environment.json
+      env:
+        STAGE: ${{ inputs.stage }}
+      run: .venv/bin/python tools/ci_stage_environment.py --platform linux --stage "$STAGE" --output build/stage-environment.json

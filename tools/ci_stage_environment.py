@@ -115,7 +115,7 @@ def version(command, required=False):
     ).strip()
 
 
-def collect(platform_name, root=ROOT, sdk_prefix=None):
+def collect(platform_name, root=ROOT, sdk_prefix=None, stage=None):
     if platform_name not in ("linux", "macos"):
         raise ValueError("Unknown stage platform")
     record = {
@@ -126,10 +126,14 @@ def collect(platform_name, root=ROOT, sdk_prefix=None):
         "workspace": str(root.resolve()),
         "python": sys.version,
         "compiler": version(["c++", "--version"], required=True),
-        "cmake": version(["cmake", "--version"], required=True),
-        "ninja": version(["ninja", "--version"], required=True),
-        "dart": version(["dart", "--version"]),
-        "flutter": version(["flutter", "--version", "--machine"]),
+        "cmake": version(["cmake", "--version"], required=stage in (None, "native")),
+        "ninja": version(["ninja", "--version"], required=stage in (None, "native")),
+        "dart": None
+        if stage == "native"
+        else version(["dart", "--version"], required=stage is not None),
+        "flutter": None
+        if stage in ("native", "core")
+        else version(["flutter", "--version", "--machine"]),
         "pins": json.loads((root / "tools/pins.json").read_text()),
         "base_image": os.environ.get("FORESIGHT_STAGE_BASE_IMAGE"),
         "packages": version(["pacman", "-Q"], required=True)
@@ -157,8 +161,9 @@ def main():
     parser.add_argument("--platform", choices=("linux", "macos"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sdk-prefix", type=Path)
+    parser.add_argument("--stage", choices=("native", "core", "desktop", "service"))
     args = parser.parse_args()
-    record = collect(args.platform, sdk_prefix=args.sdk_prefix)
+    record = collect(args.platform, sdk_prefix=args.sdk_prefix, stage=args.stage)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(record, sort_keys=True, indent=2) + "\n")
 
