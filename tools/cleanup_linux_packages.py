@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from typing import Any
 import urllib.parse
 import urllib.request
 
@@ -26,7 +27,9 @@ ACCEPT = ", ".join(
 
 
 def api(path, method="GET"):
-    output = subprocess.check_output(["gh", "api", "--method", method, path])
+    output = subprocess.check_output(
+        ["gh", "api", "--method", method, path], timeout=300
+    )
     return json.loads(output) if output.strip() else None
 
 
@@ -97,10 +100,17 @@ def obsolete_artifact(name, identities):
 
 
 def make_plan():
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    head = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], text=True, timeout=30
+    ).strip()
     if api(f"repos/{REPO}/commits/main")["sha"] != head:
         raise RuntimeError("Checkout must match current main")
-    plan = {"repository": REPO, "head": head, "packages": {}, "artifacts": []}
+    plan: dict[str, Any] = {
+        "repository": REPO,
+        "head": head,
+        "packages": {},
+        "artifacts": [],
+    }
     retired = {}
     for component in COMPONENTS:
         identity = fingerprint(component)
