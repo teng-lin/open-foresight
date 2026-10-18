@@ -338,7 +338,7 @@ class LinuxDocumentImportTest(unittest.TestCase):
         self.assertIn('Parser(macOS: false).extract', tool)
         self.assertNotIn('pdftotext', tool)
         self.assertNotIn('unrtf', tool)
-        missing = [name for name in ('pdftotext', 'unrtf', 'dart') if shutil.which(name) is None]
+        missing = [name for name in ('pdftotext', 'unrtf', 'bwrap', 'dart') if shutil.which(name) is None]
         if missing:
             print('PDF/RTF import was not executed; missing: ' + ', '.join(missing)
                   + '. Package metadata declares poppler-utils (deb, rpm), poppler (arch), and unrtf. '
