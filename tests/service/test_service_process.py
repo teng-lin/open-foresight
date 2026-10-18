@@ -278,7 +278,11 @@ def running(tmp_path, request):
         "#!/usr/bin/env python3\nimport os,sys,time,struct,math\n"
         'rate=int(sys.argv[sys.argv.index("--rate")+1]) if "--rate" in sys.argv else 48000\n'
         'block=b"".join(struct.pack("<h",int(12000*math.sin(i*.17))) for i in range(rate//25))\n'
-        "while True: os.write(1,block);time.sleep(.04)\n"
+        # Native pw-record capture owns a raw FIFO and reserves stdout for
+        # diagnostics. Follow its output argument instead of writing PCM there.
+        'output=1 if sys.argv[-1]=="-" else os.open(sys.argv[-1],os.O_WRONLY)\n'
+        'print("capture fixture connected",flush=True) if output!=1 else None\n'
+        "while True: os.write(output,block);time.sleep(.04)\n"
     )
     capture.chmod(0o700)
     env = os.environ.copy()

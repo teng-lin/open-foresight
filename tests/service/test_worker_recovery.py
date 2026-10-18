@@ -41,10 +41,11 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
     ready = running["root"] / "fixtures" / "capture-filled"
     gate = running["root"] / "fixtures" / "hold-capture-poll"
     capture.write_text(
-        '#!/usr/bin/env python3\nimport os,pathlib,time\nblock=b"A"*3840\n'
-        "for _ in range(2000):os.write(1,block)\n"
+        '#!/usr/bin/env python3\nimport os,pathlib,sys,time\nblock=b"A"*3840\n'
+        'output=1 if sys.argv[-1]=="-" else os.open(sys.argv[-1],os.O_WRONLY)\n'
+        "for _ in range(2000):os.write(output,block)\n"
         f"pathlib.Path({str(ready)!r}).touch()\n"
-        "while True:os.write(1,block);time.sleep(.04)\n"
+        "while True:os.write(output,block);time.sleep(.04)\n"
     )
     peer = running["peer"]
     peer.call(
