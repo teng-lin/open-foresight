@@ -152,9 +152,25 @@ void main() {
       db.execute('PRAGMA journal_mode=WAL');
       db.execute('CREATE TABLE future(value TEXT)');
       db.execute('PRAGMA user_version=${Store.schemaVersion + 1}');
+      expect(db.select('PRAGMA wal_checkpoint(TRUNCATE)').single['busy'], 0);
       db.dispose();
-      expect(File('$path-wal').existsSync(), isFalse);
       final bytes = File(path).readAsBytesSync();
+      expect(
+        ByteData.sublistView(bytes).getUint32(60),
+        Store.schemaVersion + 1,
+      );
+      // Apple SQLite can retain sidecars after the final connection closes.
+      // Build the sidecar-free fixture explicitly after proving its WAL is
+      // checkpointed; Store must subsequently leave this state unchanged.
+      final wal = File('$path-wal');
+      if (wal.existsSync()) {
+        expect(wal.lengthSync(), 0);
+        wal.deleteSync();
+      }
+      final shm = File('$path-shm');
+      if (shm.existsSync()) shm.deleteSync();
+      expect(wal.existsSync(), isFalse);
+      expect(shm.existsSync(), isFalse);
       expect(() => Store(path), throwsStateError);
       expect(File(path).readAsBytesSync(), bytes);
       expect(File('$path-wal').existsSync(), isFalse);
