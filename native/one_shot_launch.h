@@ -1,4 +1,5 @@
 #pragma once
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -64,12 +65,16 @@ struct OneShotLaunch {
 };
 
 // One-shot generation feeds the prompt on stdin. The prompt text is not an
-// argv element. Tool launches keep their own argv and are not built here.
+// argv element. LiteRT schema and tool payloads use the same stdin envelope.
 inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
                                      const std::string &model,
                                      const std::string &prompt,
                                      int max_output_tokens, int model_type,
-                                     const std::string &json_schema) {
+                                     const std::string &json_schema,
+                                     bool tools = false) {
+  if (backend != 1 && (!json_schema.empty() || tools))
+    throw std::invalid_argument(
+        "Runtime does not support structured stdin requests");
   OneShotLaunch launch;
   const auto budget = std::to_string(max_output_tokens);
   if (backend == 1) {
@@ -79,8 +84,12 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
       launch.arguments.push_back("--model-type");
       launch.arguments.push_back(std::to_string(model_type));
     }
-    launch.standard_input = "{\"prompt\":" + quote(prompt) +
-                            ",\"max_output_tokens\":" + budget + "}\n";
+    launch.standard_input =
+        "{\"prompt\":" + quote(prompt) + ",\"max_output_tokens\":" + budget +
+        (json_schema.empty()
+             ? ""
+             : (tools ? ",\"tools\":" : ",\"schema\":") + json_schema) +
+        "}\n";
   } else {
     launch.arguments = {runtime,       "-m",          model,
                         "-n",          budget,        "-c",
@@ -90,10 +99,6 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
     launch.standard_input = prompt;
     if (launch.standard_input.empty() || launch.standard_input.back() != '\n')
       launch.standard_input.push_back('\n');
-  }
-  if (!json_schema.empty()) {
-    launch.arguments.push_back("--json-schema");
-    launch.arguments.push_back(json_schema);
   }
   return launch;
 }

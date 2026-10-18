@@ -52,12 +52,28 @@ int main() {
     for (size_t i = 0; i < litert.arguments.size(); ++i) {
       if (litert.arguments[i] == "--json-schema" &&
           i + 1 < litert.arguments.size())
-        saw_schema = litert.arguments[i + 1] == schema;
+        saw_schema = true;
       if (litert.arguments[i] == "--model-type" &&
           i + 1 < litert.arguments.size())
         saw_type = litert.arguments[i + 1] == "3";
     }
-    REQUIRE(saw_schema);
+    REQUIRE(!saw_schema);
+    REQUIRE(litert.standard_input.find(schema) != std::string::npos);
+    const auto tool_launch = foresight::one_shot_launch(
+        1, "litert-runner", "model", prompt, 32, 0, schema, true);
+    REQUIRE(tool_launch.standard_input.find("\"tools\":" + schema) !=
+            std::string::npos);
+    for (const auto &argument : tool_launch.arguments) {
+      REQUIRE(argument.find(schema) == std::string::npos);
+      REQUIRE(argument.find(prompt) == std::string::npos);
+    }
+    bool refused = false;
+    try {
+      foresight::one_shot_launch(0, "llama", "model", prompt, 32, 0, schema);
+    } catch (const std::invalid_argument &) {
+      refused = true;
+    }
+    REQUIRE(refused);
     REQUIRE(saw_type);
     std::cout << "one-shot prompt stays off argv\n";
     return 0;

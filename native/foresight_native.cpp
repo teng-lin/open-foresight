@@ -870,7 +870,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     return -1;
   c.join();
   auto &e = *c.engine;
-  if (tools && e.backend != 1)
+  if (e.backend != 1 && (tools || (schema && *schema)))
     return -1;
   {
     std::lock_guard lock(e.mu);
@@ -938,48 +938,10 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           };
           std::vector<std::string> args;
           bool duplex = tools;
-          if (tools) {
-            args = {e.runtime,
-                    "-m",
-                    e.model,
-                    "-p",
-                    text,
-                    "-n",
-                    std::to_string(max_output_tokens),
-                    "-c",
-                    "4096",
-                    "--temp",
-                    "0",
-                    "-t",
-                    "4",
-                    "--no-display-prompt",
-                    "--simple-io",
-                    "--no-warmup",
-                    "-no-cnv"};
-            if (e.backend == 1)
-              args = {e.runtime,
-                      "--model",
-                      e.model,
-                      "--prompt",
-                      text,
-                      "--max-output-tokens",
-                      std::to_string(max_output_tokens)};
-            if (e.backend == 1 && e.model_type) {
-              args.push_back("--model-type");
-              args.push_back(std::to_string(e.model_type));
-            }
-            if (e.backend == 1 && e.cpu_fallback) {
-              args.push_back("--backend");
-              args.push_back("cpu");
-            }
-            if (!json_schema.empty()) {
-              args.push_back("--tools");
-              args.push_back(json_schema);
-            }
-          } else {
+          {
             auto launch = foresight::one_shot_launch(
                 e.backend, e.runtime, e.model, text, max_output_tokens,
-                e.model_type, json_schema);
+                e.model_type, json_schema, tools);
             args = std::move(launch.arguments);
             if (e.backend == 1 && e.cpu_fallback) {
               args.push_back("--backend");
