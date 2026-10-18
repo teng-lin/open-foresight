@@ -1,4 +1,5 @@
 import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -581,6 +582,43 @@ void main() {
           store.sources.any((row) => row['title'] == '[Calendar] Planning'),
           true,
         );
+        final calendar = store.sources.firstWhere(
+          (row) => row['title'] == '[Calendar] Planning',
+        );
+        final calendarId = calendar['id'] as String;
+        fixture.eventDescription = 'Changed upstream';
+        await connection.syncCalendar(preserveLocal: true);
+        expect(
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          contains('Changed upstream'),
+        );
+        fixture.eventDescription = '<a' * 40000;
+        final application = Application(domain, auth: auth);
+        final watch = Stopwatch()..start();
+        final sync = connection.syncCalendar(preserveLocal: true);
+        await application
+            .call('status', {})
+            .timeout(const Duration(milliseconds: 200));
+        await sync;
+        expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
+        fixture.eventDescription = 'Review Apollo.';
+        store.importText(
+          '[Calendar] Planning',
+          'MY LOCAL EDIT',
+          'text/plain',
+          'user edit; calendar',
+          id: calendarId,
+        );
+        await connection.syncCalendar(preserveLocal: true);
+        expect(
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          'MY LOCAL EDIT',
+        );
+        await domain.delete(calendarId);
+        await connection.syncCalendar(preserveLocal: true);
+        expect(store.sources.any((row) => row['id'] == calendarId), isFalse);
+        await connection.syncCalendar();
+        expect(store.sources.any((row) => row['id'] == calendarId), isTrue);
         final meeting =
             store.rows('SELECT * FROM meetings').single['id'] as int;
         expect(connection.attachments(meeting).single['fileId'], 'doc');
