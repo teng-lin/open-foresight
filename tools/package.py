@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Assemble a relocatable prototype; model assets remain separately registered."""
+
 import argparse
 import hashlib
 import json
@@ -9,129 +10,255 @@ import re
 import shutil
 import subprocess
 from prepare_litert import LIBRARY_SHA256
-from litert_extensions import (verify_extensions_manifest, file_sha256,
-    probe_native_extensions, write_extension_provenance,
-    copy_linux_extension_dependencies, validate_linux_extension_dependencies)
+from litert_extensions import (
+    verify_extensions_manifest,
+    file_sha256,
+    probe_native_extensions,
+    write_extension_provenance,
+    copy_linux_extension_dependencies,
+    validate_linux_extension_dependencies,
+)
 from google_client_release import release_google_client, write_google_client
 from app_version import read_version
-from query_worker_packaging import copy_worker as copy_query_worker, copy_runtime as copy_query_runtime
+from query_worker_packaging import (
+    copy_worker as copy_query_worker,
+    copy_runtime as copy_query_runtime,
+)
 from web_search_release import release_web_search_keys, shell_web_search_keys
 
 ROOT = Path(__file__).resolve().parents[1]
 
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--build', type=Path, default=ROOT / 'build')
-    parser.add_argument('--flutter-bundle', type=Path,
-                        default=ROOT / 'apps/desktop/build/linux/x64/release/bundle')
-    parser.add_argument('--output', type=Path, default=ROOT / 'dist/open-foresight')
-    parser.add_argument('--google-client', type=Path, help='Optional application OAuth configuration; never account tokens')
-    parser.add_argument('--require-google-client', action='store_true',
-                        help='Reject a release that would send users to Cloud Console setup')
-    parser.add_argument('--revision', help='Source commit for exported trees without .git')
-    parser.add_argument('--litert-library', type=Path, default=ROOT / 'build/lib/liblitert-lm.so', help='Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py')
-    parser.add_argument('--litert-extensions-manifest', type=Path,
-                        help='Explicit source-built runtime manifest; --litert-library must select its verified library')
-    parser.add_argument('--query-python-runtime', type=Path,
-                        help='Optional standalone Python >=3.12 prefix with NumPy2.5.1/SentencePiece0.2.1 for the dedicated CPU detector')
-    parser.add_argument('--generation-backend', choices=('cpu', 'gpu'), default='cpu')
-    parser.add_argument('--whisper-gpu-runtime', type=Path,
-                        help='Statically linked Vulkan whisper-cli to bundle (host Vulkan loader required)')
-    parser.add_argument('--whisper-gpu-device', type=int, default=0,
-                        help='Whisper Vulkan device index; override at launch with FORESIGHT_WHISPER_DEVICE')
+    parser.add_argument("--build", type=Path, default=ROOT / "build")
+    parser.add_argument(
+        "--flutter-bundle",
+        type=Path,
+        default=ROOT / "apps/desktop/build/linux/x64/release/bundle",
+    )
+    parser.add_argument("--output", type=Path, default=ROOT / "dist/open-foresight")
+    parser.add_argument(
+        "--google-client",
+        type=Path,
+        help="Optional application OAuth configuration; never account tokens",
+    )
+    parser.add_argument(
+        "--require-google-client",
+        action="store_true",
+        help="Reject a release that would send users to Cloud Console setup",
+    )
+    parser.add_argument(
+        "--revision", help="Source commit for exported trees without .git"
+    )
+    parser.add_argument(
+        "--litert-library",
+        type=Path,
+        default=ROOT / "build/lib/liblitert-lm.so",
+        help="Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py",
+    )
+    parser.add_argument(
+        "--litert-extensions-manifest",
+        type=Path,
+        help="Explicit source-built runtime manifest; --litert-library must select its verified library",
+    )
+    parser.add_argument(
+        "--query-python-runtime",
+        type=Path,
+        help="Optional standalone Python >=3.12 prefix with NumPy2.5.1/SentencePiece0.2.1 for the dedicated CPU detector",
+    )
+    parser.add_argument("--generation-backend", choices=("cpu", "gpu"), default="cpu")
+    parser.add_argument(
+        "--whisper-gpu-runtime",
+        type=Path,
+        help="Statically linked Vulkan whisper-cli to bundle (host Vulkan loader required)",
+    )
+    parser.add_argument(
+        "--whisper-gpu-device",
+        type=int,
+        default=0,
+        help="Whisper Vulkan device index; override at launch with FORESIGHT_WHISPER_DEVICE",
+    )
     args = parser.parse_args()
-    google_client = release_google_client(args.google_client, required=args.require_google_client)
-    commit = args.revision or subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
-    if not re.fullmatch(r'[0-9a-f]{40}', commit):
-        raise ValueError('Revision must be a full lowercase Git commit hash')
+    google_client = release_google_client(
+        args.google_client, required=args.require_google_client
+    )
+    commit = (
+        args.revision
+        or subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=300
+        ).strip()
+    )
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ValueError("Revision must be a full lowercase Git commit hash")
     web_search_keys = release_web_search_keys()
-    assert args.whisper_gpu_device >= 0
-    helper = args.build / 'services/helper/ForesightHelper'
-    native = args.build / 'native/libforesight_native.so'
-    service = args.build / 'application/foresight-service'
-    mcp = args.build / 'application/foresight-mcp'
-    assert service.is_file() and mcp.is_file(), 'Build the application service and MCP server first'
-    assert helper.is_file() and native.is_file() and args.flutter_bundle.is_dir(), 'Build all components first'
-    assert not args.output.exists(), 'Choose an empty output directory to avoid stale packaged libraries'
-    worker = args.build / 'services/inference/foresight-model'
-    assert worker.is_file() and args.litert_library.is_file(), 'Build native inference and prepare LiteRT-LM first'
+    if args.whisper_gpu_device < 0:
+        raise ValueError("Whisper GPU device must be nonnegative")
+    helper = args.build / "services/helper/ForesightHelper"
+    native = args.build / "native/libforesight_native.so"
+    service = args.build / "application/foresight-service"
+    mcp = args.build / "application/foresight-mcp"
+    if not (service.is_file() and mcp.is_file()):
+        raise ValueError("Build the application service and MCP server first")
+    if not (helper.is_file() and native.is_file() and args.flutter_bundle.is_dir()):
+        raise ValueError("Build all components first")
+    if args.output.exists():
+        raise ValueError(
+            "Choose an empty output directory to avoid stale packaged libraries"
+        )
+    worker = args.build / "services/inference/foresight-model"
+    if not (worker.is_file() and args.litert_library.is_file()):
+        raise ValueError("Build native inference and prepare LiteRT-LM first")
     extensions = None
     if args.litert_extensions_manifest:
-        extensions = verify_extensions_manifest(args.litert_extensions_manifest, platform_name='linux')
-        if file_sha256(args.litert_library) != extensions.manifest['library_sha256']:
-            raise ValueError('--litert-library does not match the verified extension artifact')
+        extensions = verify_extensions_manifest(
+            args.litert_extensions_manifest, platform_name="linux"
+        )
+        if file_sha256(args.litert_library) != extensions.manifest["library_sha256"]:
+            raise ValueError(
+                "--litert-library does not match the verified extension artifact"
+            )
     else:
-        assert hashlib.sha256(args.litert_library.read_bytes()).hexdigest() == LIBRARY_SHA256, 'Native LiteRT-LM library checksum mismatch'
+        if not (
+            hashlib.sha256(args.litert_library.read_bytes()).hexdigest()
+            == LIBRARY_SHA256
+        ):
+            raise ValueError("Native LiteRT-LM library checksum mismatch")
     # Refuse a Python extension or an incompatible/missing public C runtime.
-    environment = dict(os.environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve()))
+    environment = dict(
+        os.environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve())
+    )
     if extensions is None:
-        subprocess.run([str(worker), '--check'], env=environment, check=True)
-    shutil.copytree(args.flutter_bundle, args.output / 'app')
-    (args.output / 'bin').mkdir()
-    (args.output / 'lib').mkdir()
-    (args.output / 'share/open-foresight').mkdir(parents=True)
-    shutil.copy2(helper, args.output / 'bin/ForesightHelper')
-    shutil.copy2(service, args.output / 'bin/foresight-service')
-    shutil.copy2(mcp, args.output / 'bin/foresight-mcp')
-    shutil.copy2(native, args.output / 'lib/libforesight_native.so')
+        subprocess.run(
+            [str(worker), "--check"], env=environment, check=True, timeout=300
+        )
+    shutil.copytree(args.flutter_bundle, args.output / "app")
+    (args.output / "bin").mkdir()
+    (args.output / "lib").mkdir()
+    (args.output / "share/open-foresight").mkdir(parents=True)
+    shutil.copy2(helper, args.output / "bin/ForesightHelper")
+    shutil.copy2(service, args.output / "bin/foresight-service")
+    shutil.copy2(mcp, args.output / "bin/foresight-mcp")
+    shutil.copy2(native, args.output / "lib/libforesight_native.so")
     if args.whisper_gpu_runtime:
-        assert args.whisper_gpu_runtime.is_file(), 'Build the Vulkan Whisper runtime first'
-        shutil.copy2(args.whisper_gpu_runtime, args.output / 'bin/whisper-cli-vulkan')
-        for name in ('LICENSE', 'provenance.json'):
-            shutil.copy2(args.whisper_gpu_runtime.parent / name,
-                         args.output / 'share/open-foresight' / ('whisper-' + name))
-    shutil.copy2(worker, args.output / 'bin/foresight-model')
-    shutil.copy2(args.litert_library, args.output / 'lib/liblitert-lm.so')
+        if not (args.whisper_gpu_runtime.is_file()):
+            raise ValueError("Build the Vulkan Whisper runtime first")
+        shutil.copy2(args.whisper_gpu_runtime, args.output / "bin/whisper-cli-vulkan")
+        for name in ("LICENSE", "provenance.json"):
+            shutil.copy2(
+                args.whisper_gpu_runtime.parent / name,
+                args.output / "share/open-foresight" / ("whisper-" + name),
+            )
+    shutil.copy2(worker, args.output / "bin/foresight-model")
+    shutil.copy2(args.litert_library, args.output / "lib/liblitert-lm.so")
     if extensions is not None:
-        extension_libraries = copy_linux_extension_dependencies(extensions, args.output / 'lib')
-        extension_environment = validate_linux_extension_dependencies(extension_libraries, args.output / 'lib')
-        extension_environment['FORESIGHT_LITERT_LIBRARY'] = str((args.output / 'lib/liblitert-lm.so').resolve())
-        probe_native_extensions(args.output / 'lib/liblitert-lm.so')
-        subprocess.run([str(worker), '--check'], env=extension_environment, check=True)
+        extension_libraries = copy_linux_extension_dependencies(
+            extensions, args.output / "lib"
+        )
+        extension_environment = validate_linux_extension_dependencies(
+            extension_libraries, args.output / "lib"
+        )
+        extension_environment["FORESIGHT_LITERT_LIBRARY"] = str(
+            (args.output / "lib/liblitert-lm.so").resolve()
+        )
+        probe_native_extensions(args.output / "lib/liblitert-lm.so")
+        subprocess.run(
+            [str(worker), "--check"], env=extension_environment, check=True, timeout=300
+        )
         # The isolated vendor check must not discard SDK search paths needed by
         # the helper's transitive gRPC/Protobuf dependencies during collection.
-        environment['LD_LIBRARY_PATH'] = os.pathsep.join(filter(None, (
-            str((args.output / 'lib').resolve()), environment.get('LD_LIBRARY_PATH'))))
-    shutil.copy2(ROOT / 'third_party/litert_lm/LICENSE', args.output / 'share/open-foresight/LiteRT-LM-LICENSE')
+        environment["LD_LIBRARY_PATH"] = os.pathsep.join(
+            filter(
+                None,
+                (
+                    str((args.output / "lib").resolve()),
+                    environment.get("LD_LIBRARY_PATH"),
+                ),
+            )
+        )
+    shutil.copy2(
+        ROOT / "third_party/litert_lm/LICENSE",
+        args.output / "share/open-foresight/LiteRT-LM-LICENSE",
+    )
     if extensions is not None:
-        write_extension_provenance(extensions, args.output / 'share/open-foresight/LiteRT-LM-extension.json')
-    for dependency in ('sentencepiece', 'flatbuffers'):
-        shutil.copy2(args.build / '_deps' / (dependency + '-src') / 'LICENSE',
-                     args.output / 'share/open-foresight' / (dependency + '-LICENSE'))
-    for component in ('protobuf-lite', 'esaxx', 'darts_clone', 'absl'):
-        shutil.copy2(args.build / '_deps/sentencepiece-src/third_party' / component / 'LICENSE',
-                     args.output / 'share/open-foresight' / ('sentencepiece-' + component + '-LICENSE'))
-    copy_query_worker(args.output / 'share/open-foresight/adapters')
+        write_extension_provenance(
+            extensions, args.output / "share/open-foresight/LiteRT-LM-extension.json"
+        )
+    for dependency in ("sentencepiece", "flatbuffers"):
+        shutil.copy2(
+            args.build / "_deps" / (dependency + "-src") / "LICENSE",
+            args.output / "share/open-foresight" / (dependency + "-LICENSE"),
+        )
+    for component in ("protobuf-lite", "esaxx", "darts_clone", "absl"):
+        shutil.copy2(
+            args.build / "_deps/sentencepiece-src/third_party" / component / "LICENSE",
+            args.output
+            / "share/open-foresight"
+            / ("sentencepiece-" + component + "-LICENSE"),
+        )
+    copy_query_worker(args.output / "share/open-foresight/adapters")
     if args.query_python_runtime:
-        copy_query_runtime(args.query_python_runtime, args.output / 'lib/query-python',
-                           args.output / 'share/open-foresight/licenses')
-        query_python = args.output / 'bin/query-python'
-        query_python.write_text('#!/bin/bash\nset -euo pipefail\n'
+        copy_query_runtime(
+            args.query_python_runtime,
+            args.output / "lib/query-python",
+            args.output / "share/open-foresight/licenses",
+        )
+        query_python = args.output / "bin/query-python"
+        query_python.write_text(
+            "#!/bin/bash\nset -euo pipefail\n"
             'task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)\n'
-            'exec "$task_bundle/lib/query-python/bin/python3" -I -B "$@"\n')
+            'exec "$task_bundle/lib/query-python/bin/python3" -I -B "$@"\n'
+        )
         query_python.chmod(0o755)
-    litert_runtime = {'kind': 'native', 'version': '0.18.0', 'runner': 'bin/foresight-model',
-                      'library': 'lib/liblitert-lm.so', 'sha256': hashlib.sha256(args.litert_library.read_bytes()).hexdigest()}
+    litert_runtime = {
+        "kind": "native",
+        "version": "0.18.0",
+        "runner": "bin/foresight-model",
+        "library": "lib/liblitert-lm.so",
+        "sha256": hashlib.sha256(args.litert_library.read_bytes()).hexdigest(),
+    }
     if google_client is not None:
-        write_google_client(args.output / 'share/open-foresight/google-client.json', google_client)
+        write_google_client(
+            args.output / "share/open-foresight/google-client.json", google_client
+        )
     # Bundle helper inference/protocol dependencies, keep the Linux C ABI and desktop
     # GTK stack as explicit host prerequisites. ldd is run only on our built binaries.
-    dependencies = subprocess.check_output(['ldd', str(helper), str(native), str(worker), str(args.litert_library)], text=True, env=environment)
-    assert 'not found' not in dependencies, dependencies
+    dependencies = subprocess.check_output(
+        ["ldd", str(helper), str(native), str(worker), str(args.litert_library)],
+        text=True,
+        env=environment,
+        timeout=300,
+    )
+    if "not found" in dependencies:
+        raise ValueError(dependencies)
     bundled = []
-    for name, path in re.findall(r'\s*(\S+) => (/\S+)', dependencies):
-        if name.startswith(('libgrpc', 'libgpr', 'libprotobuf', 'libupb', 'libabsl',
-                            'libre2', 'libcares', 'libaddress_sorting', 'libutf8', 'libicu', 'libsqlite3.so')):
-            destination = args.output / 'lib' / name
+    for name, path in re.findall(r"\s*(\S+) => (/\S+)", dependencies):
+        if name.startswith(
+            (
+                "libgrpc",
+                "libgpr",
+                "libprotobuf",
+                "libupb",
+                "libabsl",
+                "libre2",
+                "libcares",
+                "libaddress_sorting",
+                "libutf8",
+                "libicu",
+                "libsqlite3.so",
+            )
+        ):
+            destination = args.output / "lib" / name
             if not destination.exists():
                 shutil.copy2(path, destination)
                 bundled.append(name)
     # Dart sqlite3 opens the unversioned name, absent from runtime-only distro
     # packages. Keep both names within the private bundle, without dev packages.
-    if (args.output / 'lib/libsqlite3.so.0').exists():
-        (args.output / 'lib/libsqlite3.so').symlink_to('libsqlite3.so.0')
-    launcher = args.output / 'open-foresight'
-    launcher.write_text('''#!/usr/bin/env bash
+    if (args.output / "lib/libsqlite3.so.0").exists():
+        (args.output / "lib/libsqlite3.so").symlink_to("libsqlite3.so.0")
+    launcher = args.output / "open-foresight"
+    launcher.write_text(
+        """#!/usr/bin/env bash
 set -euo pipefail
 @WEB_SEARCH_RELEASE_ENV@
 task_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -174,39 +301,71 @@ case "${FORESIGHT_ENTRYPOINT:-desktop}" in
   service) exec "$task_bundle/bin/foresight-service" "$@" ;;
   *) echo "Unknown Open Foresight entrypoint" >&2; exit 2 ;;
 esac
-'''.replace('@WEB_SEARCH_RELEASE_ENV@', shell_web_search_keys(web_search_keys))
-   .replace('@RUNTIME_REVISION@', commit)
-   .replace('@GENERATION_BACKEND@', args.generation_backend)
-   .replace('@WHISPER_DEVICE@', str(args.whisper_gpu_device)))
+""".replace("@WEB_SEARCH_RELEASE_ENV@", shell_web_search_keys(web_search_keys))
+        .replace("@RUNTIME_REVISION@", commit)
+        .replace("@GENERATION_BACKEND@", args.generation_backend)
+        .replace("@WHISPER_DEVICE@", str(args.whisper_gpu_device))
+    )
     launcher.chmod(0o755)
-    for entry in ('mcp', 'service'):
-        command = args.output / ('open-foresight-' + entry)
-        command.write_text('#!/usr/bin/env bash\nset -euo pipefail\ntask_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)\nexport FORESIGHT_ENTRYPOINT=' + entry + '\nexec "$task_bundle/open-foresight" "$@"\n')
+    for entry in ("mcp", "service"):
+        command = args.output / ("open-foresight-" + entry)
+        command.write_text(
+            '#!/usr/bin/env bash\nset -euo pipefail\ntask_bundle=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)\nexport FORESIGHT_ENTRYPOINT='
+            + entry
+            + '\nexec "$task_bundle/open-foresight" "$@"\n'
+        )
         command.chmod(0o755)
-    files = [{'path': str(file.relative_to(args.output)),
-              'sha256': hashlib.sha256(file.read_bytes()).hexdigest()}
-             for file in sorted(args.output.rglob('*')) if file.is_file()]
+    files = [
+        {
+            "path": str(file.relative_to(args.output)),
+            "sha256": hashlib.sha256(file.read_bytes()).hexdigest(),
+        }
+        for file in sorted(args.output.rglob("*"))
+        if file.is_file()
+    ]
     version, build_number = read_version()
-    manifest = {'build_id': f'open-foresight-{version}+{commit[:12]}', 'revision': commit,
-                'version': version, 'build_number': build_number,
-                'gemma_runtime': litert_runtime,
-                'query_detector_runtime': {'backend': 'legacy_query_cpu',
-                    'bundled': bool(args.query_python_runtime),
-                    'worker': 'share/open-foresight/adapters/legacy_query_worker.py',
-                    'python': 'bin/query-python' if args.query_python_runtime else None},
-                'generation_backend_default': args.generation_backend,
-                'whisper_runtime': 'vulkan' if args.whisper_gpu_runtime else 'registered',
-                'whisper_gpu_device_default': args.whisper_gpu_device if args.whisper_gpu_runtime else None,
-                'legacy_ping_version': '1.0.3', 'bundled_libraries': sorted(bundled),
-                'host_dependencies': ['Linux x86_64, compatible glibc/libstdc++',
-                    'GTK3 desktop stack', 'PipeWire and pw-record for capture',
-                    'registered local generation/speech executables and model assets'],
-                'files': files}
-    if args.generation_backend == 'gpu' or args.whisper_gpu_runtime:
-        manifest['host_dependencies'].append('Vulkan loader and a compatible GPU driver for GPU inference')
-    (args.output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    print(json.dumps({'bundle': str(args.output), 'build_id': manifest['build_id'],
-                      'files': len(files)}))
+    manifest = {
+        "build_id": f"open-foresight-{version}+{commit[:12]}",
+        "revision": commit,
+        "version": version,
+        "build_number": build_number,
+        "gemma_runtime": litert_runtime,
+        "query_detector_runtime": {
+            "backend": "legacy_query_cpu",
+            "bundled": bool(args.query_python_runtime),
+            "worker": "share/open-foresight/adapters/legacy_query_worker.py",
+            "python": "bin/query-python" if args.query_python_runtime else None,
+        },
+        "generation_backend_default": args.generation_backend,
+        "whisper_runtime": "vulkan" if args.whisper_gpu_runtime else "registered",
+        "whisper_gpu_device_default": args.whisper_gpu_device
+        if args.whisper_gpu_runtime
+        else None,
+        "legacy_ping_version": "1.0.3",
+        "bundled_libraries": sorted(bundled),
+        "host_dependencies": [
+            "Linux x86_64, compatible glibc/libstdc++",
+            "GTK3 desktop stack",
+            "PipeWire and pw-record for capture",
+            "registered local generation/speech executables and model assets",
+        ],
+        "files": files,
+    }
+    if args.generation_backend == "gpu" or args.whisper_gpu_runtime:
+        manifest["host_dependencies"].append(
+            "Vulkan loader and a compatible GPU driver for GPU inference"
+        )
+    (args.output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    print(
+        json.dumps(
+            {
+                "bundle": str(args.output),
+                "build_id": manifest["build_id"],
+                "files": len(files),
+            }
+        )
+    )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

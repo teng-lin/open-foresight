@@ -45,7 +45,7 @@ jobs:
     - name: Verify Google sign-in from the promoted bundle
       run: |-
         task_resources="$PWD/staging/Open Foresight.app/Contents/Resources"
-        (cd packages/foresight_core && dart pub get && env -u FORESIGHT_GOOGLE_CLIENT_JSON \
+        (cd packages/foresight_core && dart pub get --enforce-lockfile && env -u FORESIGHT_GOOGLE_CLIENT_JSON \
           FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_google_configuration.dart) > test-results/google-configuration.json
     - name: Validate cloud distribution from the promoted bundle
       run: |-
@@ -59,7 +59,7 @@ jobs:
         Path('test-results/cloud-enabled').write_text(str(all(present)))
         PY
         if [[ "$(cat test-results/cloud-enabled)" == True ]]; then
-          (cd packages/foresight_core && dart pub get && env -u FORESIGHT_SEARCH_API_KEY -u FORESIGHT_WEB_CONTENT_API_KEY FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_cloud_services.dart --download-query) > test-results/cloud-distribution.json
+          (cd packages/foresight_core && dart pub get --enforce-lockfile && env -u FORESIGHT_SEARCH_API_KEY -u FORESIGHT_WEB_CONTENT_API_KEY FORESIGHT_RESOURCES="$task_resources" dart run tool/verify_cloud_services.dart --download-query) > test-results/cloud-distribution.json
         fi
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

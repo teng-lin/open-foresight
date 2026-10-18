@@ -3,7 +3,7 @@
 Flutter desktop application; the current platform runner is Linux. See the root README for build prerequisites and model setup.
 
 ```sh
-flutter pub get
+flutter pub get --enforce-lockfile
 flutter analyze
 flutter test
 flutter build linux --release

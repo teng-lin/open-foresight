@@ -155,11 +155,11 @@ These commands target Linux. For macOS, see [Mac build, bundle, and MCP instruct
 - Python, for build and test tooling
 - Flutter, with the GTK3 Linux development dependencies
 
-Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 36.1, gRPC 1.83.1, and nlohmann-json 3.12.
+Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 35.1, gRPC 1.83.1, and nlohmann-json 3.12.
 
 ```sh
 uv venv .venv
-uv pip install --python .venv/bin/python -r requirements-dev.txt
+uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.lock
 python3 tools/prepare_litert.py build/lib/liblitert-lm.so
 ./tools/build.sh
 python3 tools/package.py
@@ -230,17 +230,17 @@ python3 tools/verify_descriptor.py
 python3 -m pytest
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
-(cd packages/foresight_core && dart pub get && dart test)
+(cd packages/foresight_core && dart pub get --enforce-lockfile && dart test)
 (cd apps/desktop && flutter test && flutter analyze)
 ```
 
-The default pytest run selects the offline allowlist in `pytest.ini`. That allowlist does not include `tests/integration` or `tests/service`, which need a native build, real models, physical devices, or an installed package. An explicit path such as `pytest tests/service` still selects those suites. It requires `requirements-dev.txt` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands.
+The default pytest run selects the offline allowlist in `pytest.ini`. That allowlist does not include `tests/integration` or `tests/service`, which need a native build, real models, physical devices, or an installed package. An explicit path such as `pytest tests/service` still selects those suites. It requires a hash-verified install of `requirements-dev.lock` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands.
 
 Run `tools/coverage.sh` after installing the development dependencies into `.venv` (or set `FORESIGHT_PYTHON`). It writes branch-aware Python coverage for the build and packaging tools to `coverage/python/`: HTML, Cobertura XML, LCOV, and JUnit results. Unexecuted Python source files are included; probe scripts named `test_*.py` are excluded. This baseline measures Python only, including on macOS PR CI, which retains the reports as an artifact. Python coverage is reported without a minimum percentage; its baseline is separate from the core Dart gate.
 
 Store, graph, Google adapter, and model installation suites now run in `packages/foresight_core/test` using pure Dart. Shared test helpers live under its `test/fixtures/` directory.
 
-Run `tools/coverage_core.sh` after `dart pub get` in `packages/foresight_core` to collect core Dart line coverage into `coverage/core/lcov.info` (or set `FORESIGHT_DART` to the Dart executable). Generated bindings are excluded. The Dart VM reports loaded libraries; this is not a whole-repository denominator. Set `FORESIGHT_COVERAGE=1` when using `tools/build.sh` to collect this report during the normal core gate; macOS PR CI enables it and uploads a separate artifact.
+Run `tools/coverage_core.sh` after `dart pub get --enforce-lockfile` in `packages/foresight_core` to collect core Dart line coverage into `coverage/core/lcov.info` (or set `FORESIGHT_DART` to the Dart executable). Generated bindings are excluded. The Dart VM reports loaded libraries; this is not a whole-repository denominator. Set `FORESIGHT_COVERAGE=1` when using `tools/build.sh` to collect this report during the normal core gate; macOS PR CI enables it and uploads a separate artifact.
 
 MCP protocol tests launch the real Dart entry point against an isolated fake Unix-socket service; subprocess execution is not included in the parent Dart coverage report.
 
@@ -292,3 +292,21 @@ Open Foresight is released under the [MIT License](LICENSE). Third-party compone
 ## Disclaimer
 
 Open Foresight is an independent project. It is not affiliated with, endorsed by, or supported by Google. "Foresight" refers to the reference application this project studied.
+
+### Quality checks
+
+CI runs `ruff check .`, `mypy`, and `python tools/check_subprocess_timeouts.py`.
+Install the pinned development requirements first. Mypy checks every production
+Python script, including unannotated function bodies; tests with dynamic native
+API doubles are covered by ruff and the runtime suites.
+
+Format all tracked Dart sources with Flutter 3.35.7's Dart formatter and C/C++
+sources with clang-format 22.1.8 (configuration in `.clang-format`). CI rejects
+format differences across all tracked project sources, including fixtures; vendored C/C++ under
+`third_party` remains upstream-owned. Generated
+files should be formatted after regeneration.
+
+Synchronous Python subprocesses must pass an explicit finite `timeout` in seconds.
+Quick commands and probes generally allow 300 seconds; dependency builds allow
+3600 seconds. Long-lived `Popen` protocols use operation deadlines and bounded
+shutdown waits. Callers of build wrappers may override their bounded default.
