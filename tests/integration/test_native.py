@@ -968,31 +968,33 @@ else:
             '#!/usr/bin/env python3\nimport os,time\nos.write(1,b"A"*18)\ntime.sleep(60)\n'
         )
         runner.chmod(0o755)
+        # Spawn reads the process environment on the capture worker. Restore
+        # the fixture override only after stop has joined that worker.
         with patch.dict(os.environ, {"FORESIGHT_CAPTURE_RUNTIME": str(runner)}):
             handle = self.lib.fs_capture_start(b"auto", 1, 48000)
-        self.assertTrue(handle)
-        try:
-            deadline = time.monotonic() + 3
-            while time.monotonic() < deadline:
-                event = owned_json(self.lib, self.lib.fs_event_poll(handle, 100))
-                if event and event.get("state") == "capturing":
-                    break
-            else:
-                self.fail("capture fixture did not start")
-            self.lib.fs_capture_finish(handle)
-            events = []
-            while True:
-                event = owned_json(self.lib, self.lib.fs_event_poll(handle, 0))
-                if not event:
-                    break
-                events.append(event)
-            frames = [event for event in events if event["type"] == "pcm"]
-            self.assertEqual(
-                [base64.b64decode(frame["data"]) for frame in frames], [b"A" * 18]
-            )
-            self.assertEqual(events[-1]["state"], "stopped")
-        finally:
-            self.lib.fs_capture_stop(handle)
+            self.assertTrue(handle)
+            try:
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    event = owned_json(self.lib, self.lib.fs_event_poll(handle, 100))
+                    if event and event.get("state") == "capturing":
+                        break
+                else:
+                    self.fail("capture fixture did not start")
+                self.lib.fs_capture_finish(handle)
+                events = []
+                while True:
+                    event = owned_json(self.lib, self.lib.fs_event_poll(handle, 0))
+                    if not event:
+                        break
+                    events.append(event)
+                frames = [event for event in events if event["type"] == "pcm"]
+                self.assertEqual(
+                    [base64.b64decode(frame["data"]) for frame in frames], [b"A" * 18]
+                )
+                self.assertEqual(events[-1]["state"], "stopped")
+            finally:
+                self.lib.fs_capture_stop(handle)
 
     def test_capture_device_loss_retries_discard_partial_playback_frame(self):
         import base64
