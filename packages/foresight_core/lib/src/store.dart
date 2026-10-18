@@ -34,7 +34,7 @@ class Store {
     }
   }
 
-  Store(this.path) : db = sqlite3.open(path) {
+  Store(this.path) : db = _openForMigrations(path) {
     try {
       // Refuse newer profiles before even changing their journal mode.
       _checkVersion();
@@ -62,9 +62,40 @@ class Store {
     }
   }
 
-  int _checkVersion() {
+  // Even opening and closing a writable connection can checkpoint a WAL.
+  // Refuse future profiles through a separate read-only connection first.
+  static Database _openForMigrations(String path) {
+    if (path != ':memory:' && File(path).existsSync()) {
+      final canonical = File(path).resolveSymbolicLinksSync();
+      final hasWal = File('$canonical-wal').existsSync();
+      // A closed WAL profile may have no sidecars. The short immutable probe
+      // reads its main file without asking macOS SQLite to create a WAL.
+      // An existing WAL must instead be read normally: it can hold a newer
+      // user_version than the main file. Never make a live reader immutable.
+      final probePath = hasWal
+          ? canonical
+          : Uri.file(
+              canonical,
+            ).replace(queryParameters: {'immutable': '1'}).toString();
+      final probe = sqlite3.open(
+        probePath,
+        mode: OpenMode.readOnly,
+        uri: !hasWal,
+      );
+      try {
+        _supportedVersion(probe);
+      } finally {
+        probe.dispose();
+      }
+    }
+    return sqlite3.open(path);
+  }
+
+  int _checkVersion() => _supportedVersion(db);
+
+  static int _supportedVersion(Database database) {
     final version =
-        db.select('PRAGMA user_version').single.values.single as int;
+        database.select('PRAGMA user_version').single.values.single as int;
     if (version > schemaVersion) {
       throw StateError(
         'Unsupported newer application database version $version '
