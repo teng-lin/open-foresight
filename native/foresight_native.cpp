@@ -201,6 +201,18 @@ int run(Worker &w, std::vector<std::string> args,
   if (foresight::cloexec_pipe(pipes) < 0)
     return -1;
   int input[2] = {-1, -1};
+  auto close_fd = [](int &fd) {
+    if (fd >= 0) {
+      close(fd);
+      fd = -1;
+    }
+  };
+  foresight::ScopeExit descriptors([&] {
+    close_fd(pipes[0]);
+    close_fd(pipes[1]);
+    close_fd(input[0]);
+    close_fd(input[1]);
+  });
   if (duplex) {
 #ifdef __APPLE__
     constexpr int input_type = SOCK_STREAM;
@@ -208,8 +220,8 @@ int run(Worker &w, std::vector<std::string> args,
     constexpr int input_type = SOCK_STREAM | SOCK_CLOEXEC;
 #endif
     if (socketpair(AF_UNIX, input_type, 0, input) < 0) {
-      close(pipes[0]);
-      close(pipes[1]);
+      close_fd(pipes[0]);
+      close_fd(pipes[1]);
       return -1;
     }
     // Keep descriptors away from stdio, including a host with closed stdin.
@@ -217,10 +229,10 @@ int run(Worker &w, std::vector<std::string> args,
       int moved = fcntl(*slot, F_DUPFD_CLOEXEC, 10);
       if (moved < 0) {
         int error = errno;
-        close(pipes[0]);
-        close(pipes[1]);
-        close(input[0]);
-        close(input[1]);
+        close_fd(pipes[0]);
+        close_fd(pipes[1]);
+        close_fd(input[0]);
+        close_fd(input[1]);
         return -error;
       }
       close(*slot);
@@ -231,19 +243,19 @@ int run(Worker &w, std::vector<std::string> args,
     if (setsockopt(input[1], SOL_SOCKET, SO_NOSIGPIPE, &enabled,
                    sizeof(enabled))) {
       int error = errno;
-      close(pipes[0]);
-      close(pipes[1]);
-      close(input[0]);
-      close(input[1]);
+      close_fd(pipes[0]);
+      close_fd(pipes[1]);
+      close_fd(input[0]);
+      close_fd(input[1]);
       return -error;
     }
 #endif
     if (fcntl(input[1], F_SETFL, O_NONBLOCK) < 0) {
       int error = errno;
-      close(pipes[0]);
-      close(pipes[1]);
-      close(input[0]);
-      close(input[1]);
+      close_fd(pipes[0]);
+      close_fd(pipes[1]);
+      close_fd(input[0]);
+      close_fd(input[1]);
       return -error;
     }
   }
@@ -279,16 +291,32 @@ int run(Worker &w, std::vector<std::string> args,
   int err = owned.spawn(&p, &actions, &attr, args);
   posix_spawn_file_actions_destroy(&actions);
   posix_spawnattr_destroy(&attr);
-  close(pipes[1]);
+  close_fd(pipes[1]);
   if (duplex)
-    close(input[0]);
+    close_fd(input[0]);
   if (err) {
-    close(pipes[0]);
+    close_fd(pipes[0]);
     if (duplex)
-      close(input[1]);
+      close_fd(input[1]);
     return -err;
   }
   launch.unlock();
+  bool collected = false;
+  foresight::ScopeExit process([&] {
+    {
+      std::lock_guard lock(w.process_mutex);
+      if (!collected)
+        owned.stop();
+      w.pid = -1;
+      w.owned_process = nullptr;
+    }
+    if (!collected)
+      (void)owned.result();
+    pid_t reaped;
+    do {
+      reaped = waitpid(p, nullptr, 0);
+    } while (reaped < 0 && errno == EINTR);
+  });
   {
     std::lock_guard lock(w.process_mutex);
     w.pid = owned.worker;
@@ -315,7 +343,7 @@ int run(Worker &w, std::vector<std::string> args,
         w.input.pop_front();
         sent = 0;
       } else if (w.finish_input) {
-        close(input[1]);
+        close_fd(input[1]);
         input[1] = -1;
       }
     }
@@ -361,21 +389,15 @@ int run(Worker &w, std::vector<std::string> args,
     owned.stop();
   }
   if (duplex && input[1] >= 0)
-    close(input[1]);
+    close_fd(input[1]);
   // Cancellation can still close the ownership pipe while this waits. The
   // supervisor reserves the worker PID and finishes all group cleanup before
   // reporting its result, independently of the host runtime's child reaper.
   const int worker_status = owned.result();
+  collected = true;
   if (raw_capture)
     drain_pcm();
-  close(pipes[0]);
-  std::lock_guard lock(w.process_mutex);
-  pid_t reaped;
-  do {
-    reaped = waitpid(p, nullptr, 0);
-  } while (reaped < 0 && errno == EINTR);
-  w.pid = -1;
-  w.owned_process = nullptr;
+  close_fd(pipes[0]);
   return worker_status;
 }
 bool valid_asset(const char *runtime, const char *model) {
