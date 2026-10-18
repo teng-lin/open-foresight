@@ -299,6 +299,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       serviceUiTimer = null;
       if (!mounted) return;
       meetingFeature.syncCapture();
+      sourceFeature.syncGraphMotion();
       serviceUiRevision.value++;
     });
   }
