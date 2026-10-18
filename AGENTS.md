@@ -75,6 +75,12 @@ does not add a separate user-approval step for work already authorized.
   library and helper so native integration tests actually run. When moving data
   between argv and stdin, update and exercise every runner fixture and consumer;
   checking only the C++ side is insufficient. Check test counts and skip reasons.
+  Compare the local CTest inventory against the repository-root CMake inventory;
+  standalone native/helper projects omit inference tests such as probe failures.
+  Run those omitted targets too, reusing verified dependency libraries and tools.
+  Run the CI coverage command and enforce its existing threshold; a plain test
+  pass does not establish coverage. Check both libc++ and libstdc++ behavior when
+  worker shutdown depends on stream errors or exception state.
 - For service, capture, native-launch, or desktop-boundary changes, also run the
   compiled service/MCP subprocess suite and the real desktop/service integration
   on an isolated display. Use the current service, MCP, helper, and native binaries.

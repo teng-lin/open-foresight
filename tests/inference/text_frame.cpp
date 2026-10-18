@@ -255,17 +255,21 @@ void worker_survives_throwing_handler() {
         lines.end());
 }
 
-void reader_joins_after_output_failure() {
+void reader_joins_after_output_failure(bool throw_failures) {
   foresight::ReplyBuffer commands;
   std::istream input(&commands);
+  size_t failed_frames = 0;
   foresight::FrameBuffer capture([&](const std::string &line) {
     if (line == "ready 1")
       commands.push("generate 1 {\"prompt\":\"throw\"}");
-    else
+    else {
+      ++failed_frames;
       throw std::runtime_error("Injected worker output failure");
+    }
   });
   std::ostream output(&capture);
-  output.exceptions(std::ios::badbit | std::ios::failbit);
+  if (throw_failures)
+    output.exceptions(std::ios::badbit | std::ios::failbit);
   bool caught = false;
   try {
     foresight::persistent_worker(
@@ -279,6 +283,8 @@ void reader_joins_after_output_failure() {
     caught = true;
   }
   check(caught);
+  check(!output);
+  check(failed_frames == 1);
 }
 
 int main() {
@@ -290,7 +296,8 @@ int main() {
     const auto error = foresight::frame_json(
         nlohmann::json({{"error", std::string("bad \xff")}}));
     check(nlohmann::json::parse(error).at("error") == "bad \xef\xbf\xbd");
-    reader_joins_after_output_failure();
+    reader_joins_after_output_failure(false);
+    reader_joins_after_output_failure(true);
     worker_survives_throwing_handler();
     valid_boundaries();
     invalid_input();

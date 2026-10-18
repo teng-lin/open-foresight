@@ -68,12 +68,64 @@ class FileParserTest(unittest.TestCase):
         cls.temporary.cleanup()
 
     def extract(self, flag, name):
-        return subprocess.run(
+        result = subprocess.run(
             [str(PARSER), flag, str(self.root / name)],
             capture_output=True,
             text=True,
             timeout=300,
         )
+        if result.returncode < 0 and not getattr(type(self), "crash_diagnosed", False):
+            type(self).crash_diagnosed = True
+            commands = [
+                [
+                    "lldb",
+                    "--batch",
+                    "--one-line",
+                    "run",
+                    "--one-line-on-crash",
+                    "thread backtrace all",
+                    "--",
+                    str(PARSER),
+                    flag,
+                    str(self.root / name),
+                ],
+                [
+                    "/usr/bin/log",
+                    "show",
+                    "--last",
+                    "2m",
+                    "--style",
+                    "compact",
+                    "--predicate",
+                    'process BEGINSWITH "foresight-file" OR '
+                    '((process == "sandboxd" OR process == "kernel") '
+                    'AND eventMessage CONTAINS "foresight-file")',
+                ],
+            ]
+            diagnostics = []
+            for command in commands:
+                try:
+                    diagnostic = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                    )
+                    diagnostics.append(
+                        f"{command[0]} exited {diagnostic.returncode}\n"
+                        + diagnostic.stdout[:30000]
+                        + diagnostic.stderr[:10000]
+                    )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    diagnostics.append(f"{command[0]} diagnostic unavailable: {error}")
+            report = (
+                Path(__file__).resolve().parents[2]
+                / "test-results/macos-file-parser-crash.txt"
+            )
+            report.parent.mkdir(parents=True, exist_ok=True)
+            report.write_text("\n".join(diagnostics))
+            result.stderr += "\n" + report.read_text()
+        return result
 
     def test_parser_sandbox_denies_other_files_and_network(self):
         forbidden = self.root / "forbidden.txt"

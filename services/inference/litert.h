@@ -6,6 +6,8 @@
 #include "c/error_reporter.h"
 #include "c/foresight_extensions.h"
 #include <array>
+#include <cerrno>
+#include <cstring>
 #include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
@@ -143,8 +145,12 @@ public:
     // Bind hashing and dlopen to one inode even if its installation path is
     // atomically replaced between verification and loading.
     const int descriptor = open(path.c_str(), O_RDONLY | O_CLOEXEC);
-    if (descriptor < 0)
-      throw std::runtime_error("Cannot open LiteRT-LM library");
+    if (descriptor < 0) {
+      const int open_error = errno;
+      throw std::runtime_error(
+          "Cannot load native LiteRT-LM 0.18.0: cannot open library: " +
+          path.string() + ": " + std::strerror(open_error));
+    }
     struct CloseLibrary {
       int descriptor;
       ~CloseLibrary() {
