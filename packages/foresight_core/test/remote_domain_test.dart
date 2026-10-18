@@ -323,14 +323,20 @@ void main() {
       await connection.importAttachments(19);
       expect(f.requests.last['args'], {'id': 19});
       expect(connection.attachments(19), isEmpty);
-      f.owner.db.execute('INSERT INTO calendar_events VALUES(?,?)', [
-        19,
-        jsonEncode({
-          'attachments': [
-            {'fileId': 'doc'},
-          ],
-        }),
-      ]);
+      f.owner.db.execute(
+        "INSERT INTO meetings(id,title,state) VALUES(19,'Fixture','ready')",
+      );
+      f.owner.db.execute(
+        "INSERT INTO calendar_events(event_key,meeting_id,metadata,account,calendar_id,google_id,source_id,starts,ends,status,synced) VALUES('fixture',?,?,'fixture','fixture','fixture','fixture',0,0,'confirmed',0)",
+        [
+          19,
+          jsonEncode({
+            'attachments': [
+              {'fileId': 'doc'},
+            ],
+          }),
+        ],
+      );
       expect(connection.attachments(19).single['fileId'], 'doc');
       await connection.reminders(DateTime.now(), (_) async {
         fail('Service owns reminders');

@@ -12,9 +12,9 @@ if(BUILD_TESTING)
     ${PROJECT_SOURCE_DIR}/tests/inference/test_grounding_parity.py $<TARGET_FILE:native_grounding_test>)
 endif()
 if(APPLE)
-  # The standalone native LiteRT/ONNX archives are currently Linux x86-64.
+  # The standalone native LiteRT archives are currently Linux x86-64.
   # Keep Mac's validated runtime and expose the same helper worker protocol.
-  foreach(name foresight-model model_adapter.py litert_embedding_adapter.py litert_runner.py grounded_generation.py)
+  foreach(name foresight-model litert_embedding_adapter.py litert_runner.py grounded_generation.py)
     configure_file("macos/${name}" "${CMAKE_CURRENT_BINARY_DIR}/${name}" COPYONLY)
   endforeach()
   file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/foresight-model"
@@ -39,7 +39,7 @@ set(SCHEMA ${PROJECT_SOURCE_DIR}/third_party/litert_lm/litertlm_header_schema.fb
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/litertlm_header_schema_generated.h
  COMMAND flatc --cpp -o ${CMAKE_CURRENT_BINARY_DIR} ${SCHEMA} DEPENDS flatc ${SCHEMA})
 add_executable(foresight-model main.cpp ${CMAKE_CURRENT_BINARY_DIR}/litertlm_header_schema_generated.h)
-target_include_directories(foresight-model PRIVATE ${PROJECT_SOURCE_DIR}/third_party/onnxruntime ${PROJECT_SOURCE_DIR}/third_party/litert_lm ${CMAKE_CURRENT_BINARY_DIR} ${flatbuffers_SOURCE_DIR}/include ${sentencepiece_SOURCE_DIR}/src)
+target_include_directories(foresight-model PRIVATE ${PROJECT_SOURCE_DIR}/third_party/litert_lm ${CMAKE_CURRENT_BINARY_DIR} ${flatbuffers_SOURCE_DIR}/include ${sentencepiece_SOURCE_DIR}/src)
 target_link_libraries(foresight-model PRIVATE sentencepiece-static OpenSSL::Crypto ICU::uc ICU::i18n nlohmann_json::nlohmann_json Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_options(foresight-model PRIVATE -Wall -Wextra -Wpedantic)
 install(TARGETS foresight-model RUNTIME DESTINATION bin)

@@ -31,16 +31,13 @@ def main():
     p.add_argument('--worker', type=Path, required=True)
     p.add_argument('--library', type=Path, required=True)
     p.add_argument('--embedding', type=Path, required=True)
-    p.add_argument('--onnx-library', type=Path)
     p.add_argument('--generation', type=Path)
     p.add_argument('--backend', choices=['cpu', 'gpu'], default='cpu')
     p.add_argument('--reference-python', type=Path)
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
     environment = dict(os.environ, FORESIGHT_LITERT_LIBRARY=str(args.library.resolve()), PATH='/nonexistent')
-    if args.onnx_library: environment['FORESIGHT_ONNX_LIBRARY'] = str(args.onnx_library.resolve())
     worker = str(args.worker.resolve())
-    directory = args.embedding.is_dir()
     subprocess.run([worker, '--check'], env=environment, check=True)
     texts = ['Mira sends the draft Tuesday.', 'Café 東京 — résumé.', '', 'A meeting about launch schedules. '*400]
     requests = [{'op': 'encode', 'text': text} for text in texts]
@@ -55,7 +52,7 @@ def main():
         assert abs(math.sqrt(sum(x*x for x in vector))-1) < .0001
     report = {'backend': args.backend, 'native_identity': native[0], 'requests': len(requests), 'empty_path': True}
     if args.reference_python:
-        reference = run_worker([str(args.reference_python.absolute()), '-I', str(ROOT/('tests/reference/inference/model_adapter.py' if directory else 'tests/reference/inference/litert_embedding_adapter.py')),
+        reference = run_worker([str(args.reference_python.absolute()), '-I', str(ROOT/'tests/reference/inference/litert_embedding_adapter.py'),
                                 str(args.embedding.resolve()), *options], requests, dict(os.environ))
         assert all(native[0][key] == value for key, value in reference[0].items()), (native[0], reference[0])
         assert native[1:6] == reference[1:6], 'Tokenizer mismatch'
