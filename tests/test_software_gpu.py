@@ -132,7 +132,7 @@ def test_absent_vulkan_device_is_skipped_only_by_explicit_ci_policy():
     unavailable.returncode = 0
     unavailable.stderr += "using Vulkan0 backend\n0 = llvmpipe"
     unavailable.stdout = ""
-    with pytest.raises(RuntimeError, match="no transcript"):
+    with pytest.raises(RuntimeError, match="no known speech"):
         gpu.whisper_result(unavailable, allow_unavailable=True)
 
 
