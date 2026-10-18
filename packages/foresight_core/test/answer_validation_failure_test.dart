@@ -93,9 +93,7 @@ void main() {
   test(
     'validated insufficient context remains an owned non-failure result',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'validated-insufficient-',
-      );
+      final directory = createTestTempDirectorySync('validated-insufficient-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
