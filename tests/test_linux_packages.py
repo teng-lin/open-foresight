@@ -280,6 +280,35 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                            env={**os.environ, 'LD_LIBRARY_PATH': str(output / 'lib')})
 
 
+class InstalledServiceShutdownTest(unittest.TestCase):
+    def test_idle_shutdown_releases_a_detached_service_before_upgrade(self):
+        spec = importlib.util.spec_from_file_location(
+            'smoke_installed', ROOT / 'packaging/smoke_installed.py')
+        smoke = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(smoke)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = root / 'foresight-service'
+            log = root / 'calls'
+            service.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$1" >> "$CALLS"\n'
+                'if [ "$1" = "--stop-if-idle" ]; then exit "$STOP_CODE"; fi\n'
+                'if [ "$1" = "--status" ]; then exit "$STATUS_CODE"; fi\n'
+                'exit 2\n')
+            service.chmod(0o755)
+            env = {'CALLS': str(log), 'STOP_CODE': '0', 'STATUS_CODE': '0'}
+            smoke.stop_installed_service(service, env)
+            self.assertEqual(log.read_text().splitlines(), ['--stop-if-idle'])
+            log.write_text('')
+            env['STOP_CODE'] = '1'
+            env['STATUS_CODE'] = '1'
+            smoke.stop_installed_service(service, env)
+            self.assertEqual(log.read_text().splitlines(), ['--stop-if-idle', '--status'])
+            env['STATUS_CODE'] = '0'
+            with self.assertRaisesRegex(RuntimeError, 'kept the install lock'):
+                smoke.stop_installed_service(service, env)
+
+
 class NativePythonPayloadTest(unittest.TestCase):
     def test_declared_worker_sources_are_allowed_but_runtime_and_extra_code_are_rejected(self):
         spec = importlib.util.spec_from_file_location('smoke_installed', ROOT / 'packaging/smoke_installed.py')
@@ -309,7 +338,7 @@ class LinuxDocumentImportTest(unittest.TestCase):
         self.assertIn('Parser(macOS: false).extract', tool)
         self.assertNotIn('pdftotext', tool)
         self.assertNotIn('unrtf', tool)
-        missing = [name for name in ('pdftotext', 'unrtf', 'dart') if shutil.which(name) is None]
+        missing = [name for name in ('pdftotext', 'unrtf', 'bwrap', 'dart') if shutil.which(name) is None]
         if missing:
             print('PDF/RTF import was not executed; missing: ' + ', '.join(missing)
                   + '. Package metadata declares poppler-utils (deb, rpm), poppler (arch), and unrtf. '

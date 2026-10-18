@@ -16,6 +16,12 @@ on:
   pull_request:
     paths:
       - '.github/workflows/integration-acceptance.yml'
+      - 'apps/desktop/**'
+      - 'packages/foresight_core/**'
+      - 'packages/foresight_core/lib/src/answer_contract.dart'
+      - 'packages/foresight_core/lib/src/store.dart'
+      - 'packages/foresight_core/lib/src/application.dart'
+      - 'packaging/**'
       - 'tools/integration_gates.py'
       - 'tools/build_linux_sdk_local.sh'
       - 'packaging/build.Dockerfile'

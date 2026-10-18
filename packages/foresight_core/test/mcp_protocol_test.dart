@@ -232,9 +232,10 @@ void main() {
         replies.singleWhere(
           (reply) => reply['id'] == id,
         )['result']['structuredContent'],
-        {
-          'result': ['fixture passage'],
-        },
+        allOf(
+          containsPair('result', ['fixture passage']),
+          containsPair('trust', 'untrusted'),
+        ),
       );
     },
   );
@@ -259,9 +260,13 @@ void main() {
       final request = await fixture.serviceRequest();
       fixture.reply(request, {'ready': true});
       final reply = await fixture.response(id);
-      expect(reply['result']['structuredContent'], {
-        'result': {'ready': true},
-      });
+      expect(
+        reply['result']['structuredContent'],
+        allOf(
+          containsPair('result', {'ready': true}),
+          containsPair('trust', 'untrusted'),
+        ),
+      );
       final progress = fixture.notifications
           .where((message) => message['method'] == 'notifications/progress')
           .map((message) => message['params'] as Map)
@@ -336,9 +341,13 @@ void main() {
       expect(request['method'], 'status');
       expect(fixture.sockets, hasLength(2));
       fixture.reply(request, {'reconnected': true});
-      expect((await fixture.response(next))['result']['structuredContent'], {
-        'result': {'reconnected': true},
-      });
+      expect(
+        (await fixture.response(next))['result']['structuredContent'],
+        allOf(
+          containsPair('result', {'reconnected': true}),
+          containsPair('trust', 'untrusted'),
+        ),
+      );
     },
   );
 

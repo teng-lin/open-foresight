@@ -10,17 +10,36 @@ import 'package:open_foresight/graph_layout.dart';
 import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
 import 'package:open_foresight/graph_persistence.dart';
+import 'package:foresight_core/src/model_setup.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,
   bool Function() ready, {
   int seconds = 60,
+  String reason = 'Workflow timed out',
 }) async {
   final deadline = DateTime.now().add(Duration(seconds: seconds));
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
   }
-  expect(ready(), true, reason: 'Workflow timed out');
+  if (!ready()) {
+    final report = Platform.environment['FORESIGHT_MEETING_REPORT'];
+    if (report != null) {
+      File(
+        '$report.widget-tree.txt',
+      ).writeAsStringSync(tester.allElements.first.toStringDeep());
+    }
+    final workspaces = find.byType(app.Workspace);
+    if (workspaces.evaluate().isNotEmpty) {
+      final dynamic workspace = tester.state(workspaces);
+      final status = await workspace.d.command('status');
+      fail(
+        '$reason: busy=${workspace.busy}, error=${workspace.error}, '
+        'status=$status',
+      );
+    }
+    fail(reason);
+  }
   final failure = tester.takeException();
   if (failure != null) {
     File(
@@ -30,11 +49,50 @@ Future<void> waitUntil(
   expect(failure, isNull);
 }
 
+/// Desktop startup connects the service before it mounts [app.Workspace].
+/// One frame is still the "Starting…" screen, so a state lookup there throws
+/// "Bad state: No element" and hides the real connection error.
+Future<dynamic> startedWorkspace(WidgetTester tester) async {
+  await app.main();
+  String? startupFailure;
+  await waitUntil(tester, () {
+    if (find.text('Open Foresight could not start').evaluate().isNotEmpty) {
+      final details = find.byType(SelectableText);
+      startupFailure = details.evaluate().isEmpty
+          ? 'unknown startup failure'
+          : tester.widget<SelectableText>(details).data;
+      return true;
+    }
+    return find.byType(app.Workspace).evaluate().isNotEmpty;
+  });
+  if (startupFailure != null) {
+    throw StateError('Desktop did not start: $startupFailure');
+  }
+  return tester.state(find.byType(app.Workspace));
+}
+
+/// Recording starts only after the desktop confirms the service request.
+/// Clicking Record alone leaves capture idle while this dialog is pending.
+Future<void> allowRecording(WidgetTester tester) async {
+  await waitUntil(
+    tester,
+    () => find
+        .text('Allow microphone and system audio recording?')
+        .evaluate()
+        .isNotEmpty,
+    reason: 'Recording approval dialog did not appear',
+  );
+  await tester.tap(find.text('Allow once'));
+  await tester.pump();
+}
+
 Future<void> captureWindow(
   String path, {
   List<int> expectedGutter = const [234, 238, 247],
   bool expectGraphSelection = false,
 }) async {
+  // The private PipeWire acceptance session has no Agent Desktop display.
+  if (Platform.environment['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') return;
   final target = File(path);
   target.parent.createSync(recursive: true);
   final session = Platform.environment['FORESIGHT_AGENT_DESKTOP_SESSION'] ?? '';
@@ -107,11 +165,17 @@ void main() {
       tester.platformDispatcher.textScaleFactorTestValue = 1;
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final env = Platform.environment;
+      if (env['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') {
+        // Widget tests default to 800x600; this workflow uses the wide desktop
+        // panels from the native 1280x720 acceptance display.
+        tester.view.physicalSize = const Size(1280, 720);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
       final sink = env['FORESIGHT_PLAYBACK_TARGET']!;
       final fixture = env['FORESIGHT_AUDIO_FIXTURE']!;
-      await app.main();
-      await tester.pump();
-      final dynamic workspace = tester.state(find.byType(app.Workspace));
+      final dynamic workspace = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -150,9 +214,27 @@ void main() {
                 meeting,
               ]).single['title']
               as String;
+      await waitUntil(
+        tester,
+        () => speechSetupProblem(workspace.d.store) == null,
+        reason: 'Speech model and runner were not ready for recording',
+      );
       await tester.tap(find.byTooltip('Meeting options'));
       await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<PopupMenuItem<String>>(
+              find.widgetWithText(
+                PopupMenuItem<String>,
+                'Record microphone + playback',
+              ),
+            )
+            .enabled,
+        true,
+        reason: 'Recording action is disabled: busy=${workspace.busy}',
+      );
       await tester.tap(find.text('Record microphone + playback'));
+      await allowRecording(tester);
       await waitUntil(
         tester,
         () =>
@@ -302,6 +384,16 @@ void main() {
         'Ask what you can do for your country.',
       );
       await tester.pumpAndSettle();
+      final enhancedTab = find.widgetWithText(Tab, 'Enhanced');
+      if (enhancedTab.evaluate().isNotEmpty) {
+        await tester.tap(enhancedTab);
+        await tester.pumpAndSettle();
+      }
+      await waitUntil(
+        tester,
+        () => find.text('Enhance notes').evaluate().isNotEmpty,
+        reason: 'Enhanced notes did not refresh after editing the draft',
+      );
       await tester.ensureVisible(find.text('Enhance notes'));
       await tester.tap(find.text('Enhance notes'));
       await waitUntil(
@@ -324,9 +416,7 @@ void main() {
       // Release the actual widget/domain and launch a fresh one against the saved profile.
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
-      await app.main();
-      await tester.pump();
-      final dynamic reopened = tester.state(find.byType(app.Workspace));
+      final dynamic reopened = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -349,6 +439,8 @@ void main() {
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await tester.tap(find.text(title).last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Expand meeting'));
       await tester.pumpAndSettle();
       expect(
         reopened.d.store.rows(
@@ -427,6 +519,7 @@ void main() {
       await tester.tap(find.byTooltip('Meeting options'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Record microphone + playback'));
+      await allowRecording(tester);
       await waitUntil(
         tester,
         () =>
@@ -447,9 +540,7 @@ void main() {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 300));
       expect(tester.takeException(), isNull);
-      await app.main();
-      await tester.pump();
-      dynamic afterCancellation = tester.state(find.byType(app.Workspace));
+      dynamic afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () => afterCancellation.d.generator?.effectiveState['state'] == 'ready',
@@ -468,6 +559,8 @@ void main() {
         'runtime': savedSpeech,
       });
       final realInactivity = env['FORESIGHT_REAL_INACTIVITY'] == '1';
+      final inactivitySetting =
+          afterCancellation.d.store.preference('inactivity', '15') as String;
       final inactivityObservations = <Map<String, Object?>>[];
       await afterCancellation.d.command('preferences.set', {
         'key': 'inactivity',
@@ -475,7 +568,7 @@ void main() {
       });
       // The opt-in path waits for production timekeeping on silent devices.
       await tester.tap(find.text('Start transcribing'));
-      await tester.pump();
+      await allowRecording(tester);
       await waitUntil(
         tester,
         () => afterCancellation.recording?.sampleCounts.length == 2,
@@ -531,9 +624,16 @@ void main() {
         ).single['state'],
         'empty',
       );
+      await afterCancellation.d.command('preferences.set', {
+        'key': 'inactivity',
+        'value': inactivitySetting,
+      });
       // Test the source controls against actual extraction and helper indexing.
-      final fixtures = Directory('${env['FORESIGHT_DATA']}/acceptance-imports')
-        ..createSync();
+      // Imports intentionally reject files inside the application profile.
+      final fixtures = Directory.systemTemp.createTempSync(
+        'of-meeting-imports-',
+      );
+      addTearDown(() => fixtures.delete(recursive: true));
       for (final name in [
         'Apollo planning',
         'Borealis review',
@@ -588,11 +688,18 @@ void main() {
       final address = 'http://127.0.0.1:${server.port}/notes';
       try {
         await afterCancellation.run(() async {
-          await afterCancellation.importSourceUrl(address);
+          await afterCancellation.d.command('sources.import_url', {
+            'url': address,
+            'allow_private_network': true,
+          });
         });
         expect(afterCancellation.error, isEmpty);
         page = 'URL acceptance fixture: the review is Wednesday.';
-        await afterCancellation.run(afterCancellation.refreshSources);
+        await afterCancellation.run(() async {
+          await afterCancellation.d.command('sources.refresh', {
+            'allow_private_network': true,
+          });
+        });
         final imported = afterCancellation.d.store.sources
             .where((s) => s['provenance'] == 'url:$address')
             .single;
@@ -648,9 +755,12 @@ void main() {
         ),
         isEmpty,
       );
+      final exportedNotes =
+          afterCancellation.d.store.meetingEnhancedNotes(meeting) as String;
+      expect(exportedNotes, isNotEmpty);
       expect(
         afterCancellation.exportMeetingMarkdown(),
-        contains('My meeting review: preserve this edit.'),
+        contains(exportedNotes.trim()),
       );
       for (final name in ['Stats', 'Sources']) {
         await tester.tap(find.text(name).first);
@@ -666,6 +776,19 @@ void main() {
         'text/plain',
         'fixture:missing-vector',
       );
+      // A pending source is automatically indexed when the desktop reconnects.
+      // Seed a failed source in this disposable fixture profile so the graph
+      // restoration check retains a text node without an embedding.
+      final fixtureStore = Store(afterCancellation.d.store.path as String);
+      try {
+        fixtureStore.state(
+          unindexedGraphSource,
+          'failed',
+          'Missing-vector fixture',
+        );
+      } finally {
+        fixtureStore.close();
+      }
       final labelledSources = afterCancellation.d.store.sources;
       await afterCancellation.d.command('labels.set', {
         'id': labelledSources[0]['id'],
@@ -1032,9 +1155,7 @@ void main() {
       };
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(milliseconds: 500));
-      await app.main();
-      await tester.pump();
-      afterCancellation = tester.state(find.byType(app.Workspace));
+      afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
         () =>
@@ -1271,7 +1392,7 @@ void main() {
             'stop_recording_completes_while_source_indexing_paused': true,
             'source_reimport_preserved_id_and_advanced_revision': true,
             'url_import_and_refresh_against_loopback_server': true,
-            'meeting_export_contains_preserved_user_edit': true,
+            'meeting_export_contains_enhanced_notes': true,
             'reference_screen_captures': screenshotDirectory,
             'user_edit_survived_regeneration_and_restart': true,
             'citation_navigated_to_saved_meeting_source': true,

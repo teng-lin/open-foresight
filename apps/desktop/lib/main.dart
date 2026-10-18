@@ -6,6 +6,7 @@ import 'package:foresight_core/foresight_core.dart'
         writePrivateTextFile,
         configureProfileRuntime,
         openPlatformUri,
+        allowedSourceUri,
         openForesightBuildNumber,
         openForesightVersion,
         MeetingSpeaker,
