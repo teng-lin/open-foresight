@@ -1,6 +1,14 @@
 #include "../../services/inference/litert.h"
 #include <iostream>
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 4 && std::string(argv[1]) == "--manifest-path") {
+    std::cout << foresight::runtime_manifest_path(
+                     argv[3], std::string(argv[2]) == "macos")
+                     .lexically_normal()
+                     .string()
+              << '\n';
+    return 0;
+  }
   try {
     LiteRt runtime;
     const auto first = runtime.symbol<int (*)()>("litert_lm_test");

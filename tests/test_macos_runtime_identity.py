@@ -49,8 +49,16 @@ class MacRuntimeIdentityTests(unittest.TestCase):
                     library.write_bytes(b"signed relocated library")
                     events.append("library signed")
                 elif target.is_dir():
+                    # Codesign treats files outside canonical bundle resource
+                    # directories as nested code, even when they contain JSON.
+                    self.assertFalse(list(app.rglob("Contents/manifest.json")))
                     for host in hosts:
-                        manifest = (host.parent / "../manifest.json").resolve()
+                        relative = (
+                            "../Resources/manifest.json"
+                            if host.parent.name == "MacOS"
+                            else "../manifest.json"
+                        )
+                        manifest = (host.parent / relative).resolve()
                         self.assertEqual(
                             json.loads(manifest.read_text())["gemma_runtime"],
                             {"version": "0.18.0", "sha256": expected},

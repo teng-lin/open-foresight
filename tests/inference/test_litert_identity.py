@@ -68,6 +68,28 @@ class RuntimeIdentityTest(unittest.TestCase):
         self.assertIn("checksum mismatch", result.stderr)
         self.assertFalse(self.marker.exists())
 
+    def test_manifest_paths_preserve_linux_and_canonical_mac_bundle_resources(self):
+        app = self.root / "Moved path/Example.app/Contents"
+        service = app / "Library/Services/Service.app/Contents"
+        cases = [
+            ("linux", self.loader, self.root / "manifest.json"),
+            ("macos", app / "MacOS/ui", app / "Resources/manifest.json"),
+            ("macos", app / "MacOS/mcp", app / "Resources/manifest.json"),
+            ("macos", app / "Resources/bin/model", app / "Resources/manifest.json"),
+            ("macos", app / "Resources/bin/helper", app / "Resources/manifest.json"),
+            ("macos", service / "MacOS/service", service / "Resources/manifest.json"),
+        ]
+        for platform, executable, manifest in cases:
+            with self.subTest(platform=platform, executable=executable):
+                result = subprocess.run(
+                    [str(self.loader), "--manifest-path", platform, str(executable)],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=10,
+                )
+                self.assertEqual(Path(result.stdout.strip()), manifest)
+
     def test_matching_bundle_identity_loads_and_resolves_cached_symbols(self):
         self.bundle()
         result = self.run_loader()

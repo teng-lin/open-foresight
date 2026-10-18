@@ -21,6 +21,18 @@
 #include <string>
 #include <unordered_map>
 
+namespace foresight {
+inline std::filesystem::path
+runtime_manifest_path(const std::filesystem::path &executable, bool macos) {
+  const auto directory = executable.parent_path();
+  // App bundle data belongs in Resources; Contents itself is reserved for
+  // code and signing metadata. Resource workers already live under bin/.
+  return directory / (macos && directory.filename() == "MacOS"
+                          ? "../Resources/manifest.json"
+                          : "../manifest.json");
+}
+} // namespace foresight
+
 // The runtime is loaded locally, never downloaded by the application. Keep it
 // resident until process exit: its background/global state outlives engines.
 class LiteRt {
@@ -80,7 +92,13 @@ class LiteRt {
     // Release metadata is anchored to this executable, so an environment
     // override cannot redirect the identity check to its own manifest.
     const auto manifest =
-        foresight::executable_path().parent_path() / "../manifest.json";
+        foresight::runtime_manifest_path(foresight::executable_path(),
+#ifdef __APPLE__
+                                         true
+#else
+                                         false
+#endif
+        );
     if (std::filesystem::is_regular_file(manifest)) {
       std::ifstream input(manifest);
       auto runtime = nlohmann::json::parse(input).at("gemma_runtime");

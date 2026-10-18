@@ -40,13 +40,13 @@ def write_litert_manifests(app, library, service):
             "version": "0.18.0",
             "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
         }
-    # LiteRt anchors release identity at executable.parent / ../manifest.json.
-    # Main UI/MCP, resource workers/helper, and the service have distinct hosts.
+    # All hosts resolve their enclosing bundle's canonical Resources directory.
+    # The nested service has its own bundle, while resource workers share UI/MCP.
     for manifest in (
-        app / "Contents/manifest.json",
         app / "Contents/Resources/manifest.json",
-        service.parent.parent / "manifest.json",
+        service.parent.parent / "Resources/manifest.json",
     ):
+        manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps({"gemma_runtime": runtime}, indent=2) + "\n")
 
 
