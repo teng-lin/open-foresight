@@ -129,8 +129,12 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsNothing);
         expect(domain.application.recording, same(recording));
-        await tester.tap(find.byTooltip('Full screen'));
+        expect(find.byTooltip('Full screen'), findsNothing);
+        await tester.tap(clock);
+        await tester.pump(const Duration(milliseconds: 250));
+        await tester.tap(clock);
         await tester.pumpAndSettle();
+        expect(find.text('Exit Immersive View'), findsOneWidget);
         await tester.sendKeyEvent(LogicalKeyboardKey.escape);
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsNothing);

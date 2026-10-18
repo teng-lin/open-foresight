@@ -15,6 +15,7 @@ import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
 import 'package:open_foresight/graph_persistence.dart';
 import 'package:foresight_core/src/model_setup.dart';
+import '../test_support/meeting_panel.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,
@@ -318,21 +319,7 @@ void main() {
         () => speechSetupProblem(workspace.d.store) == null,
         reason: 'Speech model and runner were not ready for recording',
       );
-      await tester.tap(find.byTooltip('Meeting options'));
-      await tester.pumpAndSettle();
-      expect(
-        tester
-            .widget<PopupMenuItem<String>>(
-              find.widgetWithText(
-                PopupMenuItem<String>,
-                'Record microphone + playback',
-              ),
-            )
-            .enabled,
-        true,
-        reason: 'Recording action is disabled: busy=${workspace.busy}',
-      );
-      await tester.tap(find.text('Record microphone + playback'));
+      await tester.tap(find.text('Start transcribing'));
       await allowRecording(tester);
       await waitUntil(
         tester,
@@ -449,8 +436,7 @@ void main() {
         ['meeting-$meeting'],
       ).single;
       expect(source['state'], 'indexed');
-      await tester.tap(find.text('Summary').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.byTooltip('Generate Summary'));
       await waitUntil(tester, () => workspace.busy == false);
       expect(workspace.error, isEmpty);
@@ -471,8 +457,7 @@ void main() {
       );
       await tester.tap(find.text('Save edit'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Summary').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.byTooltip('Generate Summary'));
       await waitUntil(tester, () => workspace.busy == false);
       expect(workspace.error, isEmpty);
@@ -561,8 +546,7 @@ void main() {
         ).single['body'],
         'Ask what you can do for your country.',
       );
-      await tester.tap(find.text('Summary').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.text('Previous versions'));
       await tester.pumpAndSettle();
       expect(
@@ -572,10 +556,9 @@ void main() {
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
       await captureWindow(tester, env['FORESIGHT_MEETING_SCREENSHOT']!);
-      await tester.tap(find.text('Ask').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Chat');
       await tester.enterText(
-        find.byType(TextField),
+        find.byKey(ValueKey('chat-input:meeting:$meeting')),
         'What does the speaker ask Americans to do? Cite [S1].',
       );
       await tester.pumpAndSettle();
@@ -599,8 +582,7 @@ void main() {
       final cited = jsonDecode(answer['citations'] as String) as List;
       expect(cited.single['document_id'], 'meeting-$meeting');
       final citedRevision = cited.single['revision'];
-      await tester.tap(find.text('[S1] source revision $citedRevision'));
-      await tester.pumpAndSettle();
+      await openMeetingCitation(tester, meeting, citedRevision);
       expect(
         find.text('${source['title']} · revision $citedRevision'),
         findsOneWidget,
@@ -628,9 +610,7 @@ void main() {
       });
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Meeting options'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Record microphone + playback'));
+      await tester.tap(find.text('Start transcribing'));
       await allowRecording(tester);
       await waitUntil(
         tester,
