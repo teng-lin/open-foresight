@@ -52,7 +52,7 @@ int main() {
       REQUIRE(!audio.path.empty());
       REQUIRE(!under_tmp(audio.path));
       REQUIRE(audio.path.find("/speech/foresight-asr-") != std::string::npos);
-      struct stat info {};
+      struct stat info{};
       const auto speech = std::filesystem::path(audio.path).parent_path();
       REQUIRE(stat(speech.c_str(), &info) == 0);
       REQUIRE((info.st_mode & 0777) == 0700);

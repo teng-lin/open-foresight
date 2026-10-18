@@ -21,8 +21,8 @@ static void require_prompt_absent(const foresight::OneShotLaunch &launch,
 int main() {
   try {
     const std::string prompt = "unique-one-shot-prompt-52";
-    const auto llama = foresight::one_shot_launch(
-        0, "llama-cli", "model.gguf", prompt, 32, 0, "");
+    const auto llama = foresight::one_shot_launch(0, "llama-cli", "model.gguf",
+                                                  prompt, 32, 0, "");
     require_prompt_absent(llama, prompt);
     REQUIRE(llama.standard_input == prompt + "\n");
 
