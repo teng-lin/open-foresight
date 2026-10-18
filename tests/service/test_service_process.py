@@ -237,6 +237,7 @@ def running(tmp_path, request):
         FORESIGHT_DATA=str(tmp_path / "data"),
         FORESIGHT_RUNTIME=str(tmp_path / "run"),
         FORESIGHT_SERVICE=str(SERVICE),
+        FORESIGHT_SERVICE_TRACE="1",
         FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
         FORESIGHT_CAPTURE_RUNTIME=str(capture),
@@ -1025,27 +1026,18 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
             assert service.wait(timeout=10) == 0
             assert helper.wait(timeout=10) == -signal.SIGTERM
             assert not (data / ".application-endpoint.json").exists()
+        except Exception:
+            print(f"Adopted helper: pid={helper.pid}, exit={helper.poll()}")
+            if service is not None:
+                profile_failure_diagnostics(service, log)
+            raise
         finally:
-            print(
-                json.dumps(
-                    {
-                        "service_pid": service.pid if service else None,
-                        "service_exit": service.poll() if service else None,
-                        "helper_pid": helper.pid,
-                        "helper_exit": helper.poll(),
-                        "public_socket": (runtime / "application.sock").exists(),
-                        "worker_socket": (runtime / "application-worker.sock").exists(),
-                    }
-                )
-            )
             if peer is not None:
                 peer.close()
             for process in (service, helper):
                 if process is not None and process.poll() is None:
                     process.kill()
                     process.wait(timeout=10)
-            log.seek(0)
-            print(log.read()[-16384:])
 
 
 def poll_delay(deadline):
@@ -1054,6 +1046,38 @@ def poll_delay(deadline):
     if remaining <= 0:
         raise TimeoutError("Service state was not observed before its deadline")
     threading.Event().wait(min(0.02, remaining))
+
+
+def profile_failure_diagnostics(process, log):
+    """Preserve both sides of a stalled isolated-service connection."""
+    profile = Path(log.name).parent
+    print(f"Profile {profile}: pid={process.pid}, exit={process.poll()}")
+    for name in ("application.sock", "application-worker.sock", "helper.sock"):
+        path = profile / "run" / name
+        print(f"Endpoint {path}: exists={path.exists()}")
+    record = profile / "data/.application-endpoint.json"
+    print(f"Endpoint record: {record.read_text() if record.exists() else 'missing'}")
+    log.seek(0)
+    print(log.read())
+    try:
+        with socket.socket(socket.AF_UNIX) as probe:
+            probe.settimeout(2)
+            probe.connect(str(profile / "run/application-worker.sock"))
+            probe.sendall(b'{"id":1,"method":"status","args":{}}\n')
+            print(f"Direct worker response: {probe.recv(65536)!r}")
+    except OSError as error:
+        print(f"Direct worker probe failed: {error}")
+    if sys.platform == "darwin" and process.poll() is None:
+        try:
+            sample = subprocess.run(
+                ["/usr/bin/sample", str(process.pid), "1", "1"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            print(f"Service thread sample:\n{sample.stdout[:65536]}\n{sample.stderr}")
+        except (OSError, subprocess.TimeoutExpired) as error:
+            print(f"Service thread sample failed: {error}")
 
 
 @pytest.mark.parametrize("_attempt", range(10))
@@ -1107,6 +1131,10 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path, _attempt):
         assert [note["title"] for note in second.call("notes.list")] == [
             "Second private note"
         ]
+    except Exception:
+        for index, process in enumerate(processes):
+            profile_failure_diagnostics(process, logs[index])
+        raise
     finally:
         for peer in peers:
             peer.close()
@@ -1119,6 +1147,4 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path, _attempt):
                     process.kill()
                     process.wait(timeout=5)
         for log in logs:
-            log.seek(0)
-            print(log.read()[-16384:])
             log.close()
