@@ -115,6 +115,97 @@ class _GenerationRequest {
 }
 
 class NativeRuntime implements GenerationStatus {
+  // Resolve each optional native symbol lazily once per loaded library.
+  late final _nativeFsEngineState = lib
+      .lookupFunction<
+        Pointer<Utf8> Function(Pointer<Void>),
+        Pointer<Utf8> Function(Pointer<Void>)
+      >('fs_engine_state');
+  late final _nativeFsStringFree = lib
+      .lookupFunction<
+        Void Function(Pointer<Utf8>),
+        void Function(Pointer<Utf8>)
+      >('fs_string_free');
+  late final _nativeFsEngineDestroy = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('fs_engine_destroy');
+  late final _nativeFsConversationCreate = lib
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Void>),
+        Pointer<Void> Function(Pointer<Void>)
+      >('fs_conversation_create');
+  late final _nativeFsGenerateTools = lib
+      .lookupFunction<
+        Int32 Function(
+          Pointer<Void>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          Int32,
+        ),
+        int Function(
+          Pointer<Void>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          int,
+        )
+      >('fs_generate_tools');
+  late final _nativeFsGenerateOptions = lib
+      .lookupFunction<
+        Int32 Function(
+          Pointer<Void>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          Int32,
+        ),
+        int Function(
+          Pointer<Void>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          int,
+        )
+      >('fs_generate_options');
+  late final _nativeFsGenerateJson = lib
+      .lookupFunction<
+        Int32 Function(
+          Pointer<Void>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+          Pointer<Utf8>,
+        ),
+        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
+      >('fs_generate_json');
+  late final _nativeFsGenerate = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
+        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      >('fs_generate');
+  late final _nativeFsEventPoll = lib
+      .lookupFunction<
+        Pointer<Utf8> Function(Pointer<Void>, Int32),
+        Pointer<Utf8> Function(Pointer<Void>, int)
+      >('fs_event_poll');
+  late final _nativeFsGenerationToolReply = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
+        int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
+      >('fs_generation_tool_reply');
+  late final _nativeFsConversationDestroy = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Int32),
+        int Function(Pointer<Void>, int)
+      >('fs_conversation_destroy');
+  late final _nativeFsGenerationCancel = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('fs_generation_cancel');
+
   late final DynamicLibrary lib;
   Pointer<Void> engine = nullptr, conversation = nullptr;
   String template = 'raw';
@@ -132,19 +223,12 @@ class NativeRuntime implements GenerationStatus {
   @override
   Map<String, dynamic> get effectiveState {
     if (engine == nullptr) return {'state': _phase, 'error': _lastError};
-    final p = lib
-        .lookupFunction<
-          Pointer<Utf8> Function(Pointer<Void>),
-          Pointer<Utf8> Function(Pointer<Void>)
-        >('fs_engine_state')(engine);
+    final p = _nativeFsEngineState(engine);
     if (p == nullptr) return {'state': 'failed'};
     try {
       return jsonDecode(p.toDartString()) as Map<String, dynamic>;
     } finally {
-      lib.lookupFunction<
-        Void Function(Pointer<Utf8>),
-        void Function(Pointer<Utf8>)
-      >('fs_string_free')(p);
+      _nativeFsStringFree(p);
     }
   }
 
@@ -174,21 +258,14 @@ class NativeRuntime implements GenerationStatus {
       );
       final loaded = Pointer<Void>.fromAddress(address);
       if (epoch != _epoch) {
-        lib.lookupFunction<
-          Int32 Function(Pointer<Void>),
-          int Function(Pointer<Void>)
-        >('fs_engine_destroy')(loaded);
+        _nativeFsEngineDestroy(loaded);
         throw RpcError(
           RpcErrorCode.cancelled,
           'Model load cancelled before adoption',
         );
       }
       engine = loaded;
-      conversation = lib
-          .lookupFunction<
-            Pointer<Void> Function(Pointer<Void>),
-            Pointer<Void> Function(Pointer<Void>)
-          >('fs_conversation_create')(engine);
+      conversation = _nativeFsConversationCreate(engine);
       if (conversation == nullptr) {
         close();
         throw StateError('Native conversation initialization failed');
@@ -321,11 +398,7 @@ class NativeRuntime implements GenerationStatus {
     final outputBudget = maxOutputTokens ?? 0;
     // Each request owns a conversation. Destroy joins the native worker, so
     // the done-event/active-flag race cannot leak into the next generation.
-    final handle = lib
-        .lookupFunction<
-          Pointer<Void> Function(Pointer<Void>),
-          Pointer<Void> Function(Pointer<Void>)
-        >('fs_conversation_create')(engine);
+    final handle = _nativeFsConversationCreate(engine);
     if (handle == nullptr) throw StateError('Native conversation unavailable');
     final owner = _GenerationRequest(id, handle, _epoch);
     _active = owner;
@@ -359,63 +432,13 @@ class NativeRuntime implements GenerationStatus {
       late int rc;
       try {
         if (tools != null) {
-          rc = lib
-              .lookupFunction<
-                Int32 Function(
-                  Pointer<Void>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Int32,
-                ),
-                int Function(
-                  Pointer<Void>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  int,
-                )
-              >('fs_generate_tools')(handle, a, b, schema, outputBudget);
+          rc = _nativeFsGenerateTools(handle, a, b, schema, outputBudget);
         } else if (maxOutputTokens != 256) {
-          rc = lib
-              .lookupFunction<
-                Int32 Function(
-                  Pointer<Void>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Int32,
-                ),
-                int Function(
-                  Pointer<Void>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  int,
-                )
-              >('fs_generate_options')(handle, a, b, schema, outputBudget);
+          rc = _nativeFsGenerateOptions(handle, a, b, schema, outputBudget);
         } else if (responseSchema != null) {
-          rc = lib
-              .lookupFunction<
-                Int32 Function(
-                  Pointer<Void>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                ),
-                int Function(
-                  Pointer<Void>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                  Pointer<Utf8>,
-                )
-              >('fs_generate_json')(handle, a, b, schema);
+          rc = _nativeFsGenerateJson(handle, a, b, schema);
         } else {
-          rc = lib
-              .lookupFunction<
-                Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
-                int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
-              >('fs_generate')(handle, a, b);
+          rc = _nativeFsGenerate(handle, a, b);
         }
       } finally {
         calloc.free(a);
@@ -423,16 +446,8 @@ class NativeRuntime implements GenerationStatus {
         if (schema != nullptr) calloc.free(schema);
       }
       if (rc != 0) throw StateError('Native generation start failed ($rc)');
-      final poll = lib
-          .lookupFunction<
-            Pointer<Utf8> Function(Pointer<Void>, Int32),
-            Pointer<Utf8> Function(Pointer<Void>, int)
-          >('fs_event_poll');
-      final free = lib
-          .lookupFunction<
-            Void Function(Pointer<Utf8>),
-            void Function(Pointer<Utf8>)
-          >('fs_string_free');
+      final poll = _nativeFsEventPoll;
+      final free = _nativeFsStringFree;
       var modelTurns = 0;
       var streamedText = '';
       while (true) {
@@ -548,11 +563,11 @@ class NativeRuntime implements GenerationStatus {
           final request = id.toNativeUtf8();
           final reply = encodedReply.toNativeUtf8();
           try {
-            final result = lib
-                .lookupFunction<
-                  Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
-                  int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
-                >('fs_generation_tool_reply')(handle, request, reply);
+            final result = _nativeFsGenerationToolReply(
+              handle,
+              request,
+              reply,
+            );
             if (result != 0) {
               throw StateError(
                 'Tool request was cancelled or already answered',
@@ -597,10 +612,7 @@ class NativeRuntime implements GenerationStatus {
   void _release(_GenerationRequest owner) {
     if (owner.released) return;
     owner.released = true;
-    lib.lookupFunction<
-      Int32 Function(Pointer<Void>, Int32),
-      int Function(Pointer<Void>, int)
-    >('fs_conversation_destroy')(owner.handle, 1);
+    _nativeFsConversationDestroy(owner.handle, 1);
   }
 
   /// Supplying an ID prevents a stale UI/controller from cancelling a new task.
@@ -613,10 +625,7 @@ class NativeRuntime implements GenerationStatus {
       return false;
     }
     owner.cancelled = true;
-    lib.lookupFunction<
-      Int32 Function(Pointer<Void>),
-      int Function(Pointer<Void>)
-    >('fs_generation_cancel')(owner.handle);
+    _nativeFsGenerationCancel(owner.handle);
     return true;
   }
 
@@ -628,17 +637,11 @@ class NativeRuntime implements GenerationStatus {
     if (owner != null) _release(owner);
     _active = null;
     if (conversation != nullptr) {
-      lib.lookupFunction<
-        Int32 Function(Pointer<Void>, Int32),
-        int Function(Pointer<Void>, int)
-      >('fs_conversation_destroy')(conversation, 1);
+      _nativeFsConversationDestroy(conversation, 1);
       conversation = nullptr;
     }
     if (engine != nullptr) {
-      lib.lookupFunction<
-        Int32 Function(Pointer<Void>),
-        int Function(Pointer<Void>)
-      >('fs_engine_destroy')(engine);
+      _nativeFsEngineDestroy(engine);
       engine = nullptr;
     }
   }
