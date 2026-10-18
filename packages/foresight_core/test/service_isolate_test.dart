@@ -8,6 +8,89 @@ import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'startup handoff reaches the real worker and custom profile controls',
+    () async {
+      final directory = shortTestTempRoot.createTempSync('of-handoff-');
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final profile = ProfilePaths(
+        '${directory.path}/data',
+        '${directory.path}/run',
+      );
+      final values = {
+        'FORESIGHT_DATA': profile.data,
+        'FORESIGHT_RUNTIME': profile.runtime,
+        'FORESIGHT_SERVICE_TRACE': '1',
+      };
+      final handoff = await writeServiceStartupEnvironment(
+        Directory(profile.runtime),
+        values,
+      );
+      final environment = {
+        for (final entry in Platform.environment.entries)
+          if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+        'HOME': directory.path,
+        'XDG_DATA_HOME': '${directory.path}/xdg-data',
+        'XDG_RUNTIME_DIR': '${directory.path}/xdg-run',
+        'FORESIGHT_STARTUP_ENV': handoff.path,
+      };
+      final command = [
+        '--packages=${File('.dart_tool/package_config.json').absolute.path}',
+        'bin/service.dart',
+      ];
+      final process = await Process.start(
+        Platform.resolvedExecutable,
+        command,
+        environment: environment,
+        includeParentEnvironment: false,
+      );
+      final output = utf8.decoder.bind(process.stdout).join();
+      final errors = utf8.decoder.bind(process.stderr).join();
+      ServiceClient? client;
+      try {
+        await eventually(
+          () => File('${profile.runtime}/application.sock').existsSync(),
+          timeout: const Duration(seconds: 30),
+        );
+        client = await ServiceClient.connect(serviceEndpoint(profile));
+        expect(await client.call('notes.list'), isEmpty);
+        expect(File('${profile.data}/application.db').existsSync(), isTrue);
+        expect(handoff.existsSync(), isFalse);
+        final statusHandoff = await writeServiceStartupEnvironment(
+          Directory(profile.runtime),
+          values,
+        );
+        final status = await Process.run(
+          Platform.resolvedExecutable,
+          [...command, '--status'],
+          environment: {
+            ...environment,
+            'FORESIGHT_STARTUP_ENV': statusHandoff.path,
+          },
+          includeParentEnvironment: false,
+        ).timeout(const Duration(seconds: 30));
+        expect(status.exitCode, 0, reason: '${status.stderr}');
+        expect(
+          (jsonDecode(status.stdout as String) as Map)['pid'],
+          process.pid,
+        );
+        expect(statusHandoff.existsSync(), isFalse);
+      } finally {
+        await client?.close();
+        process.kill(ProcessSignal.sigterm);
+        await process.exitCode.timeout(const Duration(seconds: 30));
+        await output;
+        final diagnostics = await errors;
+        expect(process.exitCode, completion(0), reason: diagnostics);
+        expect(diagnostics, contains('worker starting'));
+        expect(
+          diagnostics,
+          isNot(contains('Invalid service environment handoff')),
+        );
+      }
+    },
+  );
+
   test('private worker preserves the public Unix socket path limit', () async {
     final saved = Map<String, String>.from(runtimeConfiguration.environment);
     for (final key in [

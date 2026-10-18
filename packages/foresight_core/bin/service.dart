@@ -8,6 +8,7 @@ import 'package:foresight_core/src/service.dart';
 Future<void> main(List<String> args) async {
   IsolatedApplicationService? service;
   try {
+    final profile = ProfilePaths.resolve(runtimeConfiguration.environment);
     if (args.isNotEmpty) {
       if (args.length != 1) {
         throw ArgumentError(
@@ -28,7 +29,6 @@ Future<void> main(List<String> args) async {
           'Usage: foresight-service [--status|--stop|--stop-if-idle[=PID]]',
         );
       }
-      final profile = ProfilePaths.resolve(Platform.environment);
       final client = await ServiceClient.connect(serviceEndpoint(profile));
       try {
         if (mode == '--stop-if-idle') {
@@ -69,9 +69,7 @@ Future<void> main(List<String> args) async {
       }
       return;
     }
-    service = await IsolatedApplicationService.start(
-      ProfilePaths.resolve(Platform.environment),
-    );
+    service = await IsolatedApplicationService.start(profile);
     final done = Completer<void>();
     final signals = [
       ProcessSignal.sigterm.watch().listen((_) {
