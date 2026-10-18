@@ -106,7 +106,9 @@ else:
                 calls = [json.loads(line) for line in log.read_text().splitlines()]
                 self.assertEqual(len(calls), 2, calls)
                 self.assertIn("--probe", calls[0])
-                self.assertIn("--serve" if persistent else "--prompt", calls[1])
+                self.assertIn("--serve" if persistent else "--model", calls[1])
+                self.assertNotIn("--prompt", calls[1])
+                self.assertNotIn("--tools", calls[1])
                 self.assertTrue(
                     all(call[call.index("--model-type") + 1] == "14" for call in calls)
                 )
