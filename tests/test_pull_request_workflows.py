@@ -351,39 +351,34 @@ jobs:
         self.assertEqual(step["with"]["file"], "packaging/build.Dockerfile")
         self.assertEqual(sample["jobs"]["linux"]["runs-on"], "ubuntu-24.04")
 
-    def test_ubuntu_package_job_builds_and_installs_on_scoped_pull_requests(self):
-        workflow = self.workflow("linux-packages.yml")
-        paths = workflow["on"]["pull_request"]["paths"]
-        for required in (
-            "apps/desktop/**",
-            "packages/foresight_core/**",
-            "packaging/**",
-            ".github/workflows/linux-packages.yml",
-        ):
-            self.assertIn(required, paths)
-        matches = []
-        for name, job in workflow["jobs"].items():
-            if not _allows_pull_request(job) or job.get("runs-on") != "ubuntu-24.04":
-                continue
-            blob = json.dumps(job)
-            if (
-                "packaging/build.Dockerfile" in blob
-                and "packaging/ci/package-and-test.sh" in blob
-                and "ubuntu:24.04" in blob
-                and re.search(r"\bdeb\b", blob)
-            ):
-                for step in job["steps"]:
-                    self.assertIsNot(step.get("continue-on-error"), True)
-                matches.append(name)
-        self.assertEqual(matches, ["ubuntu-package"])
-        self.assertIn("pull_request", workflow["jobs"]["ubuntu-package"]["if"])
+    def test_ubuntu_package_job_shares_the_acceptance_build(self):
+        workflow = self.workflow("integration-acceptance.yml")
+        self.assertIn("pull_request", workflow["on"])
+        self.assertNotIn("pull_request", self.workflow("linux-packages.yml")["on"])
+        job = workflow["jobs"]["ubuntu-package"]
+        self.assertEqual(job["runs-on"], "ubuntu-24.04")
+        self.assertEqual(job["needs"], "changes")
+        builds = [
+            step
+            for step in job["steps"]
+            if "packaging/build.Dockerfile" in json.dumps(step)
+        ]
+        self.assertEqual(len(builds), 1)
+        self.assertEqual(builds[0]["with"]["target"], "integration")
+        blob = json.dumps(job)
+        self.assertIn("docker cp", blob)
+        self.assertIn("/src/dist/open-foresight", blob)
+        self.assertIn("packaging/ci/package-and-test.sh deb", blob)
+        self.assertIn("ubuntu:24.04@sha256:", blob)
+        for step in job["steps"]:
+            self.assertIsNot(step.get("continue-on-error"), True)
 
     def test_acceptance_paths_include_product_sources_and_meeting_workflow(self):
         workflow = self.workflow("integration-acceptance.yml")
         self.assertNotIn("paths", workflow["on"].get("pull_request") or {})
         from tools.ci_changes import select_gates
 
-        self.assertEqual(workflow["jobs"]["linux"]["needs"], "changes")
+        self.assertEqual(workflow["jobs"]["ubuntu-package"]["needs"], "changes")
         self.assertEqual(workflow["jobs"]["acceptance-checks"]["if"], "always()")
         for path in (
             "apps/desktop/lib/main.dart",
@@ -395,7 +390,7 @@ jobs:
         self.assertFalse(select_gates(["docs/README.md"])["linux-bundle"])
         runs = [
             step.get("run")
-            for step in workflow["jobs"]["linux"]["steps"]
+            for step in workflow["jobs"]["ubuntu-package"]["steps"]
             if isinstance(step.get("run"), str)
         ]
         combined = "\n".join(runs)
@@ -540,8 +535,7 @@ jobs:
         self.assertEqual(
             consumers,
             {
-                ("integration-acceptance.yml", "linux"),
-                ("linux-packages.yml", "ubuntu-package"),
+                ("integration-acceptance.yml", "ubuntu-package"),
                 ("macos.yml", "linux-bundle"),
             },
         )
@@ -562,18 +556,9 @@ def test_release_latest_and_push_concurrency_are_explicit():
             in (WORKFLOWS / name).read_text()
         )
     package = (WORKFLOWS / "linux-packages.yml").read_text()
-    for required in (
-        "native/**",
-        "services/**",
-        "proto/**",
-        "cmake/**",
-        "CMakeLists.txt",
-        "third_party/**",
-        "tools/package.py",
-        "tools/build.sh",
-        "requirements-*.lock",
-    ):
-        assert required in package
+    assert "workflow_call:" in package
+    assert "refs/tags/${{ inputs.tag }}" in package
+    assert '--run-id "$CANDIDATE_RUN"' in package
 
 
 def test_installers_have_pinned_attestations_and_job_scoped_permissions():

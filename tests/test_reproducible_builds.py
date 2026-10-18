@@ -329,10 +329,7 @@ class BuildPolicyTests(unittest.TestCase):
             self.assertIn("refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT", tag)
 
     def test_pr_consumers_can_use_unpublished_dependency_changes(self):
-        for name, job in (
-            ("integration-acceptance.yml", "linux"),
-            ("linux-packages.yml", "ubuntu-package"),
-        ):
+        for name, job in (("integration-acceptance.yml", "ubuntu-package"),):
             with self.subTest(workflow=name):
                 workflow = yaml.safe_load(
                     (ROOT / ".github/workflows" / name).read_text()

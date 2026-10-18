@@ -1,0 +1,36 @@
+name: Set up the pinned Arch Linux application stage
+description: Install the shared Linux compiler, language SDKs and validation dependencies
+runs:
+  using: composite
+  steps:
+    - name: Install Linux application toolchain
+      shell: bash
+      run: pacman -S --needed --noconfirm cmake ninja gcc grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which github-cli
+    - name: Install locked Python development dependencies
+      shell: bash
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: flutter
+      with:
+        path: /opt/foresight-flutter
+        key: flutter-linux-x64-3.35.7-v1
+    - name: Verify the pinned Linux Flutter SDK
+      shell: bash
+      run: |
+        if [[ ! -x /opt/foresight-flutter/bin/flutter ]]; then
+          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git /opt/foresight-flutter
+        fi
+        test "$(git -C /opt/foresight-flutter rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
+        echo /opt/foresight-flutter/bin >> "$GITHUB_PATH"
+        /opt/foresight-flutter/bin/flutter config --enable-linux-desktop --no-analytics
+        /opt/foresight-flutter/bin/flutter --version
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.flutter.outputs.cache-hit != 'true'
+      with:
+        path: /opt/foresight-flutter
+        key: flutter-linux-x64-3.35.7-v1
+    - name: Record compiler, runtime, package and workspace identity
+      shell: bash
+      run: .venv/bin/python tools/ci_stage_environment.py --platform linux --output build/stage-environment.json
