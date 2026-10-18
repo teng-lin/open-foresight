@@ -4,20 +4,22 @@
 import argparse
 from datetime import datetime, timedelta, timezone
 import hashlib
+from functools import lru_cache, partial
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
 import zipfile
 
-try:
-    from .sdk_workflow_recipe import validate as validate_recipe_workflow
-except ImportError:  # Direct bootstrap invocation, before installing dependencies.
-    from sdk_workflow_recipe import validate as validate_recipe_workflow
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.sdk_workflow_recipe import validate as validate_recipe_workflow  # noqa: E402
+from tools import sdk_producer_trust as producer_trust  # noqa: E402
+from tools import sdk_approval_bridge as approval_bridge  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
@@ -80,10 +82,10 @@ for _component, _inputs in FILES.items():
 
 def recipe_regions(path, component):
     """Read explicitly delimited build behavior using only the bootstrap stdlib."""
-    regions = []
+    regions: list[list[str]] = []
     active = None
     lines = path.read_text().splitlines(keepends=True)
-    coverage = []
+    coverage: list[set[str]] = []
     for line in lines:
         marker = re.fullmatch(r"\s*# sdk-recipe: ([a-z,-]+) (begin|end)\s*", line)
         coverage.append(set(active.split(",")) if active else set())
@@ -108,8 +110,16 @@ def recipe_regions(path, component):
 
 
 def component_input(component, name, root):
+    value: object
     if name == WORKFLOW:
-        value = recipe_regions(root / name, component)
+        value = [
+            "".join(
+                line
+                for line in region.splitlines(keepends=True)
+                if not re.match(r"      id:", line)
+            )
+            for region in recipe_regions(root / name, component)
+        ]
     elif name == "tools/pins.json":
         pins = json.loads((root / name).read_text())
         value = {key: pins[key] for key in PIN_KEYS[component]}
@@ -202,11 +212,10 @@ def name(component, identity):
 
 def pack(component, identity, prefix, output):
     """Archive verified outputs with executable modes, symlinks and a digest."""
-    source_commit = os.environ.get("GITHUB_SHA", "")
+    source_commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=30
+    ).strip()
     if component.endswith("-app"):
-        source_commit = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=30
-        ).strip()
         if source_commit != identity:
             raise ValueError(
                 "Application identity must match the actual built checkout"
@@ -215,6 +224,14 @@ def pack(component, identity, prefix, output):
     archive = output / "payload.tar.gz"
     with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
         stream.add(prefix, arcname="payload")
+    reused = None
+    for metadata in ("source-qualification.json", "approved-source.json"):
+        previous = prefix / metadata
+        if previous.is_symlink():
+            raise ValueError("SDK qualification metadata must be regular")
+        if previous.is_file():
+            reused = json.loads(previous.read_text())
+            break
     (output / "identity.json").write_text(
         json.dumps(
             {
@@ -224,6 +241,7 @@ def pack(component, identity, prefix, output):
                 "sha256": digest(archive),
                 "source_commit": source_commit,
                 "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+                **({"reused_from": reused} if reused is not None else {}),
             },
             indent=2,
         )
@@ -473,12 +491,68 @@ def publish_receipt(repository, component, identity, source, artifact_id, output
     )
 
 
+@lru_cache(maxsize=1024)
+def immutable_source_api(fetch, repository, route):
+    # This is exclusively for content-addressed Git objects, never mutable runs,
+    # approvals, jobs, artifact expiry or current main ancestry.
+    return fetch(repository, route)
+
+
+def source_fingerprint_at(repository, commit, component):
+    return producer_trust.source_fingerprint(
+        repository,
+        commit,
+        component,
+        api=partial(immutable_source_api, api),
+        fingerprint=fingerprint,
+        files=FILES,
+        parents=PARENTS,
+    )
+
+
+def qualified_producer_control(repository, run):
+    if merged_source(repository, run):
+        return True
+    return producer_trust.producer_controls_match(
+        repository,
+        run["head_sha"],
+        api=partial(immutable_source_api, api),
+        root=ROOT,
+    )
+
+
+def approved_original(repository, component, identity):
+    if component.endswith("-app"):
+        return None
+    return approval_bridge.find_original(
+        repository,
+        component,
+        identity,
+        api=api,
+        read_source=lambda repository, commit, **kwargs: producer_trust.read_source(
+            repository, commit, api=partial(immutable_source_api, api), **kwargs
+        ),
+        merged_source=merged_source,
+        dependency_jobs=dependency_jobs,
+        download_zip=download_zip,
+        verify_producer_source=producer_trust.verify_producer_source,
+    )
+
+
 def probe(repository, component, identity, own_head="", own_pr=0):
     """Find an original qualified payload without downloading its large bytes.
 
     Receipts never forward other receipts. Both uploads must belong to the same
     successful producer attempt. Consumers still verify the original full payload.
     """
+    original = approved_original(repository, component, identity)
+    if original:
+        entry, payload = original
+        print(
+            f"Reusing approved original {payload['id']} from run {entry['producer_run']}",
+            flush=True,
+        )
+        return True
     sidecar_name = receipt_name(component, identity)
     candidates = api(repository, f"actions/artifacts?name={sidecar_name}&per_page=100")[
         "artifacts"
@@ -550,6 +624,17 @@ def probe(repository, component, identity, own_head="", own_pr=0):
             and job.get("run_attempt", 1) == receipt["source_run_attempt"]
             and in_producer_attempt(payload, job)
             and in_producer_attempt(sidecar, job)
+            and producer_trust.verify_producer_source(
+                repository,
+                run,
+                component,
+                identity,
+                receipt,
+                job,
+                payload,
+                fingerprint_at=source_fingerprint_at,
+                qualified_control=qualified_producer_control,
+            )
             for job in jobs
         ):
             continue
@@ -564,6 +649,40 @@ def probe(repository, component, identity, own_head="", own_pr=0):
 def pull(
     repository, component, identity, prefix, wait=0, own_head="", own_pr=0, source_run=0
 ):
+    original = approved_original(repository, component, identity)
+    if original:
+        entry, artifact = original
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "original.zip"
+            download_zip(repository, artifact, archive)
+            source = Path(temporary) / "download"
+            source.mkdir()
+            with zipfile.ZipFile(archive) as stream:
+                if len(stream.namelist()) != 2 or set(stream.namelist()) != {
+                    "identity.json",
+                    "payload.tar.gz",
+                }:
+                    raise ValueError("Unexpected original SDK archive members")
+                stream.extractall(source)  # noqa: S202 - Exact member names validated above.
+            receipt = json.loads((source / "identity.json").read_text())
+            if receipt != entry["source_receipt"]:
+                raise ValueError("Original SDK receipt differs from approved receipt")
+            unpack(component, entry["legacy_identity"], source, prefix)
+            if (prefix / "approved-source.json").exists() or (
+                prefix / "approved-source.json"
+            ).is_symlink():
+                raise ValueError(
+                    "Original SDK contains unexpected imported qualification"
+                )
+            # Preserve original provenance alongside the downloaded image bytes.
+            if (prefix / "image.json").is_file():
+                (prefix / "approved-source.json").write_text(
+                    json.dumps(
+                        approval_bridge.qualification(entry, prefix, digest), indent=2
+                    )
+                    + "\n"
+                )
+        return True
     artifact_name = name(component, identity)
     deadline = time.monotonic() + wait
     while True:
@@ -613,10 +732,42 @@ def pull(
                         j["name"] == JOBS[component]
                         and j.get("conclusion") == "success"
                         and j.get("run_attempt", 1) == attempt
+                        and producer_trust.verify_producer_source(
+                            repository,
+                            run,
+                            component,
+                            identity,
+                            receipt,
+                            j,
+                            artifact,
+                            fingerprint_at=source_fingerprint_at,
+                            qualified_control=qualified_producer_control,
+                        )
                         for j in jobs
                     ):
                         continue
                 unpack(component, identity, source, prefix)
+                if (prefix / "approved-source.json").exists() or (
+                    prefix / "approved-source.json"
+                ).is_symlink():
+                    raise ValueError(
+                        "Ordinary SDK artifact contains imported approval; use the verified original bridge"
+                    )
+                if not component.endswith("-app"):
+                    if (prefix / "source-qualification.json").is_symlink():
+                        raise ValueError("SDK qualification metadata must be regular")
+                    (prefix / "source-qualification.json").write_text(
+                        json.dumps(
+                            {
+                                "source_receipt": receipt,
+                                "producer_run": run["id"],
+                                "artifact_id": artifact["id"],
+                                "artifact_digest": artifact["digest"],
+                            },
+                            indent=2,
+                        )
+                        + "\n"
+                    )
             print(
                 f"Using {artifact_name} from verified workflow run {run['id']}",
                 flush=True,

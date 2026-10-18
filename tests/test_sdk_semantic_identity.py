@@ -226,14 +226,14 @@ def test_new_consumed_speech_header_and_mode_are_bound(source):
 
 
 def test_matrix_build_settings_cannot_escape_recipe(source):
-    before = identities(source)
     path = source / artifacts.WORKFLOW
     path.write_text(
         path.read_text().replace(
             "        - sdk\n", "        - sdk\n        compiler: [clang]\n", 1
         )
     )
-    assert identities(source)["macos-sdk"] != before["macos-sdk"]
+    with pytest.raises(ValueError, match="matrix"):
+        identities(source)
 
 
 def test_bootstrap_cache_uses_the_same_semantic_identity():
@@ -244,3 +244,80 @@ def test_bootstrap_cache_uses_the_same_semantic_identity():
         if step.get("name") == "Bootstrap from existing sdk cache"
     )
     assert bootstrap["with"]["key"] == "macos15-arm64-sdk-${{ env.IDENTITY }}"
+
+
+@pytest.mark.parametrize(
+    "key", ["name", "timeout-minutes", "retention-days", "compression-level"]
+)
+def test_shell_functions_that_look_like_yaml_fields_are_never_normalized(source, key):
+    path = source / artifacts.WORKFLOW
+    command = (
+        f"        {key}:(){{ printf altered > tools/build_macos_sdk.py; }}; {key}:\n"
+    )
+    path.write_text(
+        path.read_text().replace(
+            "        echo 'hit=true' >> \"$GITHUB_OUTPUT\"\n",
+            "        echo 'hit=true' >> \"$GITHUB_OUTPUT\"\n" + command,
+            1,
+        )
+    )
+    with pytest.raises(ValueError, match="Unaccounted SDK build step"):
+        identities(source)
+
+
+def test_sdk_retry_uploads_and_original_forwarding_are_explicit():
+    jobs = yaml.safe_load((artifacts.ROOT / artifacts.WORKFLOW).read_text())["jobs"]
+    for job in JOBS:
+        payload = next(
+            step for step in jobs[job]["steps"] if step.get("id") == "payload"
+        )
+        assert payload["with"]["overwrite"] is True
+    for job in ("linux-pr-core", "linux-pr-runtime", "linux-pr"):
+        steps = jobs[job]["steps"]
+        setup = next(
+            i
+            for i, step in enumerate(steps)
+            if step.get("name") == "Enable read-only registry layer reuse"
+        )
+        produce = next(
+            i for i, step in enumerate(steps) if step.get("id") == "component"
+        )
+        assert setup < produce
+        assert steps[setup]["if"] == "steps.probe.outputs.hit != 'true'"
+        assert (
+            steps[setup]["with"]["daemon-config"].strip()
+            == '{"features":{"containerd-snapshotter":true}}'
+        )
+        for step in steps[produce + 1 :]:
+            assert "steps.component.outputs.original != 'true'" in step["if"]
+
+
+@pytest.mark.parametrize(
+    "addition",
+    [
+        "  extra-sdk-job:\n    name: Build Linux litert\n    runs-on: ubuntu-24.04\n    steps:\n    - run: printf altered > build/fake-sdk\n",
+        '  extra-sdk-job: {name: Build Linux litert, runs-on: ubuntu-24.04, steps: [{run: "printf altered"}]}\n',
+    ],
+)
+def test_unaccounted_producer_jobs_fail_closed(source, addition):
+    path = source / artifacts.WORKFLOW
+    path.write_text(path.read_text() + addition)
+    with pytest.raises(ValueError, match="job"):
+        identities(source)
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("  plan:\n", "  plan:\n    name: Build Linux litert\n"),
+        ("name: Build Linux litert", "name: ${{ 'Build Linux litert' }}"),
+        ("        - whisper\n", "        - core\n"),
+    ],
+)
+def test_auxiliary_display_and_matrix_aliases_cannot_spoof_component_jobs(
+    source, old, new
+):
+    path = source / artifacts.WORKFLOW
+    path.write_text(path.read_text().replace(old, new, 1))
+    with pytest.raises(ValueError):
+        identities(source)

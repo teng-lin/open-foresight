@@ -210,6 +210,7 @@ jobs:
         path: build/published/
         retention-days: 90
         if-no-files-found: error
+        overwrite: true
         compression-level: 0
       id: payload
       if: steps.probe.outputs.hit != 'true'
@@ -350,6 +351,7 @@ jobs:
         path: build/published/
         retention-days: 90
         if-no-files-found: error
+        overwrite: true
         compression-level: 0
       id: payload
     - name: Bind the original payload upload to a small cache receipt
@@ -488,6 +490,7 @@ jobs:
         path: build/published/
         retention-days: 90
         if-no-files-found: error
+        overwrite: true
         compression-level: 0
       id: payload
     - name: Bind the original payload upload to a small cache receipt
@@ -626,6 +629,7 @@ jobs:
         path: build/published/
         retention-days: 90
         if-no-files-found: error
+        overwrite: true
         compression-level: 0
       id: payload
     - name: Bind the original payload upload to a small cache receipt
@@ -769,6 +773,7 @@ jobs:
         path: build/published/
         retention-days: 90
         if-no-files-found: error
+        overwrite: true
         compression-level: 0
       id: payload
     - name: Bind the original payload upload to a small cache receipt
@@ -830,6 +835,12 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: python tools/ci_artifacts.py probe --component "${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
+    - name: Enable read-only registry layer reuse
+      if: steps.probe.outputs.hit != 'true'
+      uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      with:
+        daemon-config: |
+          {"features":{"containerd-snapshotter":true}}
     - name: Free hosted-runner space for native dependency builds
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
       if: steps.probe.outputs.hit != 'true'
@@ -840,6 +851,7 @@ jobs:
       if: steps.probe.outputs.hit != 'true'
     # sdk-recipe: linux-core begin
     - name: Reuse or build and qualify the component
+      id: component
       run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
@@ -854,13 +866,13 @@ jobs:
         if-no-files-found: error
         compression-level: 0
       id: payload
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
     - name: Bind the original payload upload to a small cache receipt
       env:
         GH_TOKEN: ${{ github.token }}
       run: python tools/ci_artifacts.py publish-receipt --component "${COMPONENT}" --identity "$IDENTITY" --prefix build/published
         --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
     - name: Retain small cache receipt
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -870,7 +882,7 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
   linux-pr-runtime:
     name: Build Linux ${{ matrix.component }}
     if: github.event_name == 'pull_request'
@@ -926,6 +938,12 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: python tools/ci_artifacts.py probe --component "${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
+    - name: Enable read-only registry layer reuse
+      if: steps.probe.outputs.hit != 'true'
+      uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      with:
+        daemon-config: |
+          {"features":{"containerd-snapshotter":true}}
     - name: Free hosted-runner space for native dependency builds
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
       if: steps.probe.outputs.hit != 'true'
@@ -936,6 +954,7 @@ jobs:
       if: steps.probe.outputs.hit != 'true'
     # sdk-recipe: linux-litert,linux-whisper begin
     - name: Reuse or build and qualify the component
+      id: component
       run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
@@ -950,13 +969,13 @@ jobs:
         if-no-files-found: error
         compression-level: 0
       id: payload
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
     - name: Bind the original payload upload to a small cache receipt
       env:
         GH_TOKEN: ${{ github.token }}
       run: python tools/ci_artifacts.py publish-receipt --component "${COMPONENT}" --identity "$IDENTITY" --prefix build/published
         --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
     - name: Retain small cache receipt
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -966,7 +985,7 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
   linux-pr:
     name: Assemble Linux SDK
     if: github.event_name == 'pull_request'
@@ -1014,6 +1033,12 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: python tools/ci_artifacts.py probe --component "${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
+    - name: Enable read-only registry layer reuse
+      if: steps.probe.outputs.hit != 'true'
+      uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      with:
+        daemon-config: |
+          {"features":{"containerd-snapshotter":true}}
     - name: Free hosted-runner space for native dependency builds
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
       if: steps.probe.outputs.hit != 'true'
@@ -1024,6 +1049,7 @@ jobs:
       if: steps.probe.outputs.hit != 'true'
     # sdk-recipe: linux-sdk begin
     - name: Reuse or build and qualify the component
+      id: component
       run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
@@ -1038,13 +1064,13 @@ jobs:
         if-no-files-found: error
         compression-level: 0
       id: payload
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
     - name: Bind the original payload upload to a small cache receipt
       env:
         GH_TOKEN: ${{ github.token }}
       run: python tools/ci_artifacts.py publish-receipt --component "${COMPONENT}" --identity "$IDENTITY" --prefix build/published
         --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
     - name: Retain small cache receipt
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -1054,7 +1080,7 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
-      if: steps.probe.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
   macos-vendor:
     name: Build macOS vendor
     needs: plan
@@ -1129,6 +1155,7 @@ jobs:
         path: build/published/
         retention-days: 90
         if-no-files-found: error
+        overwrite: true
         compression-level: 0
       id: payload
       if: steps.probe.outputs.hit != 'true'
@@ -1239,6 +1266,7 @@ jobs:
         path: build/published/
         retention-days: 90
         if-no-files-found: error
+        overwrite: true
         compression-level: 0
       id: payload
       if: steps.probe.outputs.hit != 'true'
