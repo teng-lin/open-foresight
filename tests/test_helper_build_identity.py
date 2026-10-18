@@ -116,7 +116,7 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
 
     import pytest
 
-    if not shutil.which("cmake") or not shutil.which("c++"):
+    if not shutil.which("cmake") or not shutil.which("c++") or not shutil.which("make"):
         pytest.skip("Native toolchain required for incremental revision test")
     source = tmp_path / "source"
     source.mkdir()
@@ -125,8 +125,9 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
         "cmake_minimum_required(VERSION 3.20)\n"
         "project(identity_fixture LANGUAGES CXX)\n"
         'set(OPEN_FORESIGHT_VERSION "1.0.0")\n'
-        f'configure_file("{template}" "${{CMAKE_BINARY_DIR}}/identity.cpp" @ONLY)\n'
-        'add_executable(probe main.cpp "${CMAKE_BINARY_DIR}/identity.cpp")\n'
+        f'include("{ROOT / "cmake/ForesightBuildIdentity.cmake"}")\n'
+        f'foresight_build_identity_source(identity_source "{template}" "${{CMAKE_BINARY_DIR}}")\n'
+        'add_executable(probe main.cpp "${identity_source}")\n'
     )
     (source / "main.cpp").write_text(
         "#include <iostream>\n"
@@ -137,11 +138,24 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
 
     def compile_revision(revision):
         subprocess.run(
-            ["cmake", "-S", str(source), "-B", str(build), f"-DBUILD_REV={revision}"],
+            [
+                "cmake",
+                "-G",
+                "Unix Makefiles",
+                "-S",
+                str(source),
+                "-B",
+                str(build),
+                f"-DBUILD_REV={revision}",
+            ],
             capture_output=True,
             check=True,
             timeout=60,
         )
+        # Reproduce a restored/coarse source timestamp on every host. Metadata
+        # changes must be detected without touching unrelated cached objects.
+        for generated in build.glob("build_identity*.cpp"):
+            os.utime(generated, (1, 1))
         subprocess.run(
             ["cmake", "--build", str(build)],
             capture_output=True,
@@ -155,4 +169,10 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
     assert len(objects) == 1
     original = objects[0].stat().st_mtime_ns
     assert compile_revision("abcdef123456") == "open-foresight-1.0.0-abcdef123456"
+    assert objects[0].stat().st_mtime_ns == original
+    identity_objects = list(build.rglob("build_identity_*.cpp.o"))
+    assert len(identity_objects) == 2
+    before = {path: path.stat().st_mtime_ns for path in identity_objects}
+    assert compile_revision("abcdef123456") == "open-foresight-1.0.0-abcdef123456"
+    assert {path: path.stat().st_mtime_ns for path in identity_objects} == before
     assert objects[0].stat().st_mtime_ns == original
