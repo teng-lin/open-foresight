@@ -338,12 +338,7 @@ jobs:
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
       run: |-
-        mkdir -p build/sdk-descriptor
-        python - <<'PY'
-        import json,os
-        from pathlib import Path
-        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
-        PY
+        python tools/linux_sdk_artifacts.py describe --component "linux-$COMPONENT" --prefix build/sdk-descriptor --tag "$SDK_IMAGE" --source-prefix build/shared-descriptor
         python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -477,12 +472,7 @@ jobs:
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
       run: |-
-        mkdir -p build/sdk-descriptor
-        python - <<'PY'
-        import json,os
-        from pathlib import Path
-        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
-        PY
+        python tools/linux_sdk_artifacts.py describe --component "linux-$COMPONENT" --prefix build/sdk-descriptor --tag "$SDK_IMAGE" --source-prefix build/shared-descriptor
         python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -616,12 +606,7 @@ jobs:
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
       run: |-
-        mkdir -p build/sdk-descriptor
-        python - <<'PY'
-        import json,os
-        from pathlib import Path
-        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
-        PY
+        python tools/linux_sdk_artifacts.py describe --component "linux-$COMPONENT" --prefix build/sdk-descriptor --tag "$SDK_IMAGE" --source-prefix build/shared-descriptor
         python tools/ci_artifacts.py pack --component "linux-$COMPONENT" --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -760,12 +745,7 @@ jobs:
       env:
         SDK_IMAGE: ${{ steps.resolved.outputs.image }}
       run: |-
-        mkdir -p build/sdk-descriptor
-        python - <<'PY'
-        import json,os
-        from pathlib import Path
-        Path('build/sdk-descriptor/image.json').write_text(json.dumps({'image': os.environ['SDK_IMAGE']}))
-        PY
+        python tools/linux_sdk_artifacts.py describe --component "linux-$COMPONENT" --prefix build/sdk-descriptor --tag "$SDK_IMAGE" --source-prefix build/shared-descriptor
         python tools/ci_artifacts.py pack --component linux-sdk --identity "$IDENTITY" --prefix build/sdk-descriptor --output build/published
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

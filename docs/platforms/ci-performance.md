@@ -235,10 +235,15 @@ Remaining efficiency limits need separate evidence before narrowing them:
   the same locked wheels in different jobs.
 - Fresh Ubuntu jobs materialize the immutable dependency seed even when a
   registry layer is reusable; its downloaded blobs are currently job-local.
-- GitHub SDK payloads and receipts expire. The existing 90-day retention is not
-  durable preservation: retain the original bytes and producer evidence in
-  verified immutable storage before expiry. An expired receipt alone does not
-  justify recompiling a still-compatible SDK or accepting an unqualified image.
+- GitHub SDK payloads and receipts expire. New publishers request 90 days, but
+  the four original Linux artifacts expire on November 1, 2026; the verifier's
+  24-hour reserve makes October 31 their reuse cutoff. The three macOS originals
+  expire on January 16, 2027. Verify main's Linux image promotion and descriptor
+  publication before that cutoff. Promoted descriptors preserve original
+  qualification history separately from their current receipt. Retain original
+  bytes and evidence in verified immutable storage before expiry; finite
+  retention is not durable preservation. Expiry alone does not justify
+  recompiling a compatible SDK or accepting an unqualified image.
 
 ## Monthly dependency maintenance
 
