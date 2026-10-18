@@ -563,11 +563,7 @@ class NativeRuntime implements GenerationStatus {
           final request = id.toNativeUtf8();
           final reply = encodedReply.toNativeUtf8();
           try {
-            final result = _nativeFsGenerationToolReply(
-              handle,
-              request,
-              reply,
-            );
+            final result = _nativeFsGenerationToolReply(handle, request, reply);
             if (result != 0) {
               throw StateError(
                 'Tool request was cancelled or already answered',
