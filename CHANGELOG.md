@@ -23,6 +23,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- CI software Vulkan explicitly selects lavapipe and records unavailable GPU support as skipped. Disposable installer-test containers permit the real document sandbox to initialize isolated networking.
+
 - macOS CI consumes the same PR source as dependency producers and waits only for matching trusted producers, with pinned source fallback when no eligible producer exists.
 - Stale CMake Python paths fail before native work. Workspace cleanup waits for observed completion under parallel load; speech GPU-to-CPU retry and cancellation cover both worker protocols.
 - Package upgrades ignore installation locks with invalid ownership, permissions or symlinks, preventing other local users from blocking updates.

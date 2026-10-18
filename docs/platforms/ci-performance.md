@@ -58,7 +58,7 @@ and build. The package job extracts that exact bundle, creates the DEB and
 installs it in Ubuntu 24.04 to test dependencies, file layout, service lifecycle
 and installed document parsing. Those installation checks remain necessary for
 application or packaging changes, but no longer compile a duplicate application.
-The container permits the nested parser sandbox to create namespaces; the actual
+The disposable installer-test container permits the nested parser sandbox to create namespaces and grants `NET_ADMIN` so bubblewrap can initialize its private loopback interface; the actual
 parser sandbox is still required and checked. Release package publication retains
 its separate main-only workflow and credentials.
 

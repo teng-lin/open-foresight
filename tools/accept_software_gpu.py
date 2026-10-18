@@ -22,7 +22,19 @@ UNSUPPORTED = re.compile(
 )
 
 
-def whisper_result(result):
+def whisper_result(result, allow_unavailable=False):
+    if (
+        allow_unavailable
+        and result.returncode == 0
+        and "using Vulkan0 backend" not in result.stderr
+        and "ggml_vulkan: No devices found." in result.stderr
+        and "whisper_backend_init_gpu: no GPU found" in result.stderr
+    ):
+        return {
+            "status": "skipped",
+            "reason": "The selected software Vulkan driver exposes no supported GPU device.",
+            "diagnostic": result.stderr,
+        }
     if result.returncode or "using Vulkan0 backend" not in result.stderr:
         raise RuntimeError(
             "Whisper failed to execute on software Vulkan: " + result.stderr
@@ -111,26 +123,53 @@ def litert_probe(runner, model, env, output):
         finish_peer(peer, output, "software-gpu", primary, "shutdown")
 
 
+def software_environment(icd, temporary, packaged):
+    return {
+        **packaged,
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(temporary),
+        "FORESIGHT_LITERT_CACHE": str(Path(temporary) / "litert-cache"),
+        "VK_ICD_FILENAMES": str(icd),
+        "VK_DRIVER_FILES": str(icd),
+        # ggml excludes CPU-type Vulkan devices by default. This explicit
+        # software-only runner opts in to lavapipe without changing the app.
+        "GGML_VK_VISIBLE_DEVICES": "0",
+    }
+
+
+def write_report(output, report):
+    (output / "software-gpu.json").write_text(json.dumps(report, indent=2) + "\n")
+    print(json.dumps(report))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
     parser.add_argument("--models", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--allow-unavailable",
+        action="store_true",
+        help="CI only: record absent GPU/driver support as skipped; runtime failures remain fatal.",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     icds = sorted(Path("/usr/share/vulkan/icd.d").glob("lvp_icd*.json"))
+    if not icds and args.allow_unavailable:
+        write_report(
+            args.output,
+            {
+                "status": "skipped",
+                "reason": "No Mesa lavapipe Vulkan ICD is installed on this CI instance.",
+                "physical_gpu_verified": False,
+            },
+        )
+        return
     if len(icds) != 1:
         raise RuntimeError("Exactly one installed Mesa lavapipe ICD is required")
     runner, _, environment = packaged_paths(args.bundle)
     with tempfile.TemporaryDirectory(prefix="software-gpu-") as temporary:
-        env = {
-            "PATH": "/usr/bin:/bin",
-            "HOME": temporary,
-            "FORESIGHT_LITERT_CACHE": str(Path(temporary) / "litert-cache"),
-            "VK_ICD_FILENAMES": str(icds[0]),
-            "VK_DRIVER_FILES": str(icds[0]),
-            **environment,
-        }
+        env = software_environment(icds[0], temporary, environment)
         audio = Path(temporary) / "two-seconds.wav"
         with (
             wave.open(str(ROOT / "tests/fixtures/audio/jfk.wav")) as source,
@@ -163,15 +202,20 @@ def main():
         report = {
             "driver": "Mesa lavapipe",
             "physical_gpu_verified": False,
-            "whisper": whisper_result(result),
+            "whisper": whisper_result(result, args.allow_unavailable),
         }
         report["litert"] = litert_probe(
             runner, model_file(args.models, "generation"), env, args.output
         )
-        (args.output / "software-gpu.json").write_text(
-            json.dumps(report, indent=2) + "\n"
-        )
-        print(json.dumps(report))
+        if (
+            args.allow_unavailable
+            and report["litert"]["status"] == "unsupported_software_driver"
+        ):
+            report["litert"]["status"] = "skipped"
+            report["litert"]["reason"] = (
+                "The software driver provides no supported LiteRT GPU API."
+            )
+        write_report(args.output, report)
 
 
 if __name__ == "__main__":
