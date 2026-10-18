@@ -111,7 +111,7 @@ python tools/integration_gates.py --suite reference-tokenizer \
   --port-socket /path/to/port.sock --output /tmp/foresight-tokenizer-evidence
 ```
 
-`tools/integration_skips.json` records all 28 Dart skip registrations, including
+`tools/integration_skips.json` records all Dart skip registrations, including
 platform-only cases and native-library checks already enabled by the regular
 core build. `check_integration_inventory.py` fails when a registration is added,
 removed or changed without reviewing its path/reason. The scanner checks named
@@ -119,15 +119,13 @@ removed or changed without reviewing its path/reason. The scanner checks named
 
 ## Reading validation evidence
 
-The table above mirrors the exact executed-test counts enforced by
-[`tools/integration_gates.py`](../../tools/integration_gates.py): Linux fast 2,
-models 6 (5 desktop and 1 core), virtual audio 3 (2 desktop and 1 core), authorized
-reference-model checks 5, and tokenizer equivalence 1. The workflow invokes the
-model and virtual-audio groups separately. A green offline suite does not prove
-these build-dependent groups ran.
+Executed-test counts for each group are enforced by
+[`tools/integration_gates.py`](../../tools/integration_gates.py). The workflow
+invokes model and virtual-audio groups separately. A green offline suite does
+not prove these build-dependent groups ran.
 
 Use the retained Dart JSON reports and summaries for the source revision under
 review. They distinguish executed passes, skips, and failures. The skip inventory
-currently validates 28 registrations; rerun `python tools/check_integration_inventory.py`
+validates registrations; rerun `python tools/check_integration_inventory.py`
 when changing tests, rather than copying an older local pass count into this guide.
 Reference groups require their authorized inputs and must be reported separately.

@@ -237,8 +237,9 @@ docker build --file packaging/build.Dockerfile --target artifact \
 This configuration is intentionally copied into the distributed app so every
 desktop user can read it. It is not an account token. The packager rejects a
 tokens/profile file, verifies the bundle manifest, and refuses escaping symlinks.
-CI does not currently inject application configuration; browser sign-in requires
-configuration through the app or a separately configured release build.
+CI supplies the Google application registration through
+`FORESIGHT_GOOGLE_CLIENT_JSON` and requires it for main release candidates with
+`REQUIRE_GOOGLE_CLIENT`. Browser sign-in uses that bundled configuration.
 
 The project uses the [MIT license](../../LICENSE), and
 `packaging/metadata.json` records the SPDX identifier `MIT`. Packages include the

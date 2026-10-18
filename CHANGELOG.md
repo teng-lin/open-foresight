@@ -6,10 +6,25 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Changed
+
+- Release publication preserves Latest on the highest stable version. DMG build provenance binds the source revision and version to the installer bytes.
+- Linux packages ship the nlohmann-json notice and complete copyright stanzas for bundled license files; unknown licenses stop packaging.
+- Installer workflows publish signed build provenance and SBOM attestations. Dependency artifact downloads verify GitHub ZIP digests.
+- Offline Python tests use directory discovery with an explicit inventory for build and device harnesses. Integration acceptance reports an always-running required check.
+
+### Fixed
+
+- Package upgrades ignore installation locks with invalid ownership, permissions or symlinks, preventing other local users from blocking updates.
+
 ## [0.1.1] - 2026-10-17
 
 ### Added
 
+- Native macOS inference replaces the bundled Python runtime; unused ONNX and MiniLM embedding backends have been removed.
+- Application profiles use ordered, atomic schema migrations.
+- A persistent Whisper worker handles successive speech segments without reloading the model.
+- The shared operation registry keeps desktop, RPC and MCP contracts aligned, with desktop approval for sensitive agent requests.
 - Published installer acceptance tests the packages downloaded from a GitHub release. Installer provenance must match the release tag; explicit recovery audits remain available for historical assets.
 - Model and virtual-audio checks run as explicit integration gates. A skipped test in the regular suite is not treated as acceptance.
 
@@ -28,7 +43,6 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Cancelled meeting generation does not save artifacts; search and refresh validate source revisions, preserve local edits, and follow the service's adopted helper state.
 - Meeting worker failures retain indexed transcript segments, paused meetings recover after a crash, Stop has a deadline, and explicit resume restores an exhausted helper. Speech retries on CPU; failed GPU generation prepares CPU for a retry.
 - Native capture overflow writes interruption rows, and global shortcut failures appear in the workspace.
-
 - Release builds check out their tag, reject mismatched source revisions, and assign increasing Linux package releases on draft rebuilds.
 - Drive and Calendar sign-in uses the Google application registration bundled in a release build. Sign-in can be cancelled from the import flows.
 - Linux CPU generation keeps modality executors on CPU.
@@ -38,9 +52,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Security
 
+- Refresh tokens are stored in macOS Keychain or Linux Secret Service instead of plaintext profile preferences.
+
 - Agent file imports require selected roots and bounded regular files, and cannot read the private profile. Sensitive actions require visible desktop approval; recording shows an indicator and stops when the desktop is hidden or closed.
 - URL imports pin validated public addresses, recheck redirects, refuse HTTPS downgrades, and parse bounded HTML outside the service isolate. Private network access requires an explicit opt-in; response charsets are decoded correctly.
-
 - Private temporary directories are created atomically with `mkdtemp` and mode 0700.
 
 ## [0.1.0] - 2026-10-17

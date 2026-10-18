@@ -151,7 +151,7 @@ upgrading; installers never fall back to an unverified signal/EOF shutdown.
 cd packages/foresight_core && dart analyze && dart test
 cd ../../apps/desktop && flutter analyze && flutter test
 cd ../..
-python3 -m pytest tests/contracts tests/models/test_grounded_generation.py tests/test_profile_migration.py
+.venv/bin/python -m pytest
 ctest --test-dir build --output-on-failure
 python3 -m pytest tests/service -v
 ```
