@@ -32,6 +32,7 @@ def line_counts(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
+    parser.add_argument("--label", default="Core")
     parser.add_argument("--minimum", type=float, required=True)
     args = parser.parse_args()
     if not math.isfinite(args.minimum) or not 0 <= args.minimum <= 100:
@@ -42,7 +43,7 @@ def main():
         parser.exit(2, f"Invalid coverage report: {error}\n")
     percentage = covered * 100 / total
     print(
-        f"Core line coverage: {percentage:.2f}% ({covered}/{total}); minimum {args.minimum:g}%"
+        f"{args.label} line coverage: {percentage:.2f}% ({covered}/{total}); minimum {args.minimum:g}%"
     )
     return 0 if covered * 100 >= args.minimum * total else 1
 

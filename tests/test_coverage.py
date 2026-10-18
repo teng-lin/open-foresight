@@ -67,3 +67,30 @@ def test_invalid_thresholds_are_rejected(tmp_path, minimum):
     )
     assert result.returncode == 2
     assert "--minimum must be between 0 and 100" in result.stderr
+
+
+@pytest.mark.parametrize("minimum,covered,expected", [(76.35, 77, 0), (76.35, 76, 1)])
+def test_desktop_baseline_accepts_and_rejects_regressions(
+    tmp_path, minimum, covered, expected
+):
+    report = tmp_path / "desktop.info"
+    report.write_text(
+        "SF:lib/app.dart\n"
+        + "".join(f"DA:{i + 1},{int(i < covered)}\n" for i in range(100))
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            str(report),
+            "--minimum",
+            str(minimum),
+            "--label",
+            "Desktop",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == expected
+    assert "Desktop line coverage" in result.stdout

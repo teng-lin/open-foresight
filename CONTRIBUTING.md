@@ -30,7 +30,7 @@ It builds native targets, runs CTest and Dart/Flutter checks, compiles service/M
 and builds the desktop application. `FORESIGHT_BUILD_DIR`, `FORESIGHT_PYTHON`, and
 `FORESIGHT_BUILD_JOBS` configure output, Python, and parallelism. Run
 `ctest --test-dir build --output-on-failure` to repeat native checks after a build.
-`tools/coverage.sh` and `tools/coverage_core.sh` collect Python and core coverage.
+`tools/coverage.sh` and `tools/coverage_core.sh` collect Python and core coverage. Python enforces 48.70% combined line/branch coverage; desktop Flutter tests collect LCOV and enforce 76.35% line coverage. Each baseline gate starts one percentage point below the measured baseline; lower it only with a reviewed explanation.
 
 Read [integration gates](docs/validation/integration-gates.md) for real model,
 virtual audio, service, and installed-package acceptance. A skipped test is not
