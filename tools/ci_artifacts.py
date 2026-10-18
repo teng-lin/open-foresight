@@ -244,6 +244,7 @@ def merged_source(repository, run):
     """Promote only reviewed main commits or the final head of a merged PR."""
     if not re.fullmatch(r"[a-f0-9]{40}", run.get("head_sha", "")):
         return False
+    merged_commits = []
     if run.get("event") == "pull_request" or run.get("head_branch") != "main":
         pulls = run.get("pull_requests") or api(
             repository, f"commits/{run['head_sha']}/pulls"
@@ -257,11 +258,34 @@ def merged_source(repository, run):
                 and pull.get("base", {}).get("repo", {}).get("full_name") == repository
             ):
                 final_head = True
-                break
+                merge = pull.get("merge_commit_sha")
+                if isinstance(merge, str) and re.fullmatch(r"[a-f0-9]{40}", merge):
+                    merged_commits.append(merge)
         if not final_head:
             return False
     comparison = api(repository, f"compare/{run['head_sha']}...main")
-    return comparison["status"] in ("ahead", "identical")
+    if comparison["status"] in ("ahead", "identical"):
+        return True
+    # Rebase merges rewrite the reviewed final commit. Require the authoritative
+    # merge commit to be on main and its entire tree to equal the producer tree.
+    for merge in merged_commits:
+        if api(repository, f"compare/{merge}...main")["status"] not in (
+            "ahead",
+            "identical",
+        ):
+            continue
+        trees = []
+        for commit in (run["head_sha"], merge):
+            record = api(repository, f"git/commits/{commit}")
+            tree = record.get("tree", {}).get("sha")
+            if record.get("sha") != commit or not isinstance(tree, str):
+                break
+            if not re.fullmatch(r"[a-f0-9]{40}", tree):
+                break
+            trees.append(tree)
+        if len(trees) == 2 and trees[0] == trees[1]:
+            return True
+    return False
 
 
 def dependency_jobs(repository, run_id):
