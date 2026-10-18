@@ -188,6 +188,7 @@ void main() {
     await google.start();
     auth = GoogleAuth(
       Directory('${root.path}/google'),
+      secretStore: const UnavailableSecretStore(),
       endpoints: google.endpoints,
     );
     app = OperationsApplication(domain, auth: auth);
@@ -531,6 +532,27 @@ void main() {
       await expectLater(app.reimport(current: () => false), throwsStateError);
     },
   );
+
+  test('unsupported embedding format never reaches the helper', () async {
+    rag.entered = Completer<void>();
+    final directory = Directory('${root.path}/unsupported.litertlm')
+      ..createSync();
+    for (final path in [directory.path, '${root.path}/unsupported.bin']) {
+      await expectLater(
+        app.call('models.embedding', {'path': path}),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Unsupported model format'),
+          ),
+        ),
+      );
+      expect(rag.entered!.isCompleted, isFalse);
+      expect(domain.store.model('embedding'), isNull);
+      expect(app.modelBusy, isFalse);
+    }
+  });
 
   test(
     'model configuration serializes changes, preserves rejected registrations and clears busy state',

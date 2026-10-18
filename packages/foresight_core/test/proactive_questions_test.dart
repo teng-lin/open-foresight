@@ -469,6 +469,7 @@ void main() {
             123,
           ],
         );
+        store.db.execute('PRAGMA user_version=6');
         final before = store.rows('SELECT * FROM meeting_questions').single;
         await queue.close();
         store.close();
@@ -731,7 +732,7 @@ void main() {
       );
       await queue.close();
       store.db.execute(
-        'DROP TABLE meeting_questions; DROP TABLE meeting_question_cursors; DROP INDEX answer_request_id; ALTER TABLE answers DROP COLUMN request_id;',
+        'DROP TABLE meeting_questions; DROP TABLE meeting_question_cursors; DROP INDEX answer_request_id; ALTER TABLE answers DROP COLUMN request_id; PRAGMA user_version=1;',
       );
       store.close();
       store = Store('${directory.path}/app.db');

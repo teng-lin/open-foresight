@@ -101,7 +101,6 @@ def bundle_environment(bundle, inherited):
             "FORESIGHT_MODEL_WORKER",
             "FORESIGHT_MODEL_PYTHON",
             "FORESIGHT_LITERT_PYTHON",
-            "FORESIGHT_MODEL_ADAPTER",
             "FORESIGHT_LITERT_EMBEDDING_ADAPTER",
             "FORESIGHT_QUERY_WORKER",
         ]
@@ -115,7 +114,6 @@ def bundle_environment(bundle, inherited):
             FORESIGHT_LITERT_RUNNER=str(bundle / "bin/foresight-model"),
             FORESIGHT_MODEL_WORKER=str(bundle / "bin/foresight-model"),
             FORESIGHT_LITERT_LIBRARY=str(bundle / "lib/liblitert-lm.so"),
-            FORESIGHT_ONNX_LIBRARY=str(bundle / "lib/libonnxruntime.so"),
             FORESIGHT_QUERY_WORKER=str(
                 bundle / "share/open-foresight/adapters/legacy_query_worker.py"
             ),

@@ -59,6 +59,7 @@ void main() {
       "UPDATE source_details SET imported=123,changed=456,labels='[\"Team\"]'",
     );
     store.db.execute('ALTER TABLE source_details DROP COLUMN source_uri');
+    store.db.execute('PRAGMA user_version=4');
     store.db.dispose();
     store = Store('${temp.path}/app.db');
     final rows = {for (final row in store.sources) row['id']: row};
@@ -71,7 +72,10 @@ void main() {
       expect(row['labels'], '["Team"]');
     }
     expect(rows[file]!['content'], 'Local edit');
-    expect(store.rows('PRAGMA user_version').single.values.single, 2);
+    expect(
+      store.rows('PRAGMA user_version').single.values.single,
+      Store.schemaVersion,
+    );
     store.db.dispose();
     temp.deleteSync(recursive: true);
   });

@@ -39,7 +39,6 @@ def main():
     p.add_argument("--worker", type=Path, required=True)
     p.add_argument("--library", type=Path, required=True)
     p.add_argument("--embedding", type=Path, required=True)
-    p.add_argument("--onnx-library", type=Path)
     p.add_argument("--generation", type=Path)
     p.add_argument("--backend", choices=["cpu", "gpu"], default="cpu")
     p.add_argument("--reference-python", type=Path)
@@ -50,10 +49,7 @@ def main():
         FORESIGHT_LITERT_LIBRARY=str(args.library.resolve()),
         PATH="/nonexistent",
     )
-    if args.onnx_library:
-        environment["FORESIGHT_ONNX_LIBRARY"] = str(args.onnx_library.resolve())
     worker = str(args.worker.resolve())
-    directory = args.embedding.is_dir()
     subprocess.run([worker, "--check"], env=environment, check=True, timeout=300)
     texts = [
         "Mira sends the draft Tuesday.",
@@ -91,14 +87,7 @@ def main():
             [
                 str(args.reference_python.absolute()),
                 "-I",
-                str(
-                    ROOT
-                    / (
-                        "tests/reference/inference/model_adapter.py"
-                        if directory
-                        else "tests/reference/inference/litert_embedding_adapter.py"
-                    )
-                ),
+                str(ROOT / "tests/reference/inference/litert_embedding_adapter.py"),
                 str(args.embedding.resolve()),
                 *options,
             ],

@@ -207,31 +207,47 @@ void main() {
   );
 
   test(
-    'directory embeddings retain a deterministic manifest digest and preserve previous models on empty input',
+    'embedding directories are rejected without replacing the active model',
     () async {
-      final directory = Directory('${root.path}/embedding')..createSync();
-      final manifest = File('${root.path}/manifest.json')
-        ..writeAsStringSync(
-          jsonEncode({
-            'embedding': {'model': directory.path},
-          }),
-        );
-      await expectLater(
-        registerInstalledModels(store, manifest.path),
-        throwsStateError,
-      );
-      File('${directory.path}/config.json').writeAsStringSync('{}');
-      File('${directory.path}/weights.bin').writeAsStringSync('fixture');
-      expect(await registerInstalledModels(store, manifest.path), 1);
+      final bundle = File('${root.path}/embedding.litertlm')
+        ..writeAsStringSync('fixture');
+      await store.register('embedding', bundle.path, '');
       final prior = Map.of(store.model('embedding')!);
-      expect((prior['digest'] as String).length, 64);
-      expect(await registerInstalledModels(store, manifest.path), 0);
-      final empty = Directory('${root.path}/empty')..createSync();
-      await expectLater(
-        store.register('embedding', empty.path, ''),
-        throwsStateError,
-      );
-      expect(store.model('embedding'), prior);
+      for (final name in ['directory', 'directory.litertlm']) {
+        final directory = Directory('${root.path}/$name')..createSync();
+        final unsupported = isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          contains('Unsupported model format'),
+        );
+        await expectLater(
+          store.register('embedding', directory.path, ''),
+          throwsA(unsupported),
+        );
+        expect(store.model('embedding'), prior);
+        final fresh = Store('${root.path}/$name.db');
+        try {
+          final manifest = File('${root.path}/manifest.json')
+            ..writeAsStringSync(
+              jsonEncode({
+                'embedding': {
+                  'model': directory.path,
+                  'sha256': prior['digest'],
+                },
+              }),
+            );
+          await expectLater(
+            registerInstalledModels(fresh, manifest.path),
+            throwsA(unsupported),
+          );
+          expect(fresh.model('embedding'), isNull);
+        } finally {
+          fresh.close();
+        }
+        registration('embedding', directory.path, '', backend: 'unsupported');
+        expect(needsModel(store, 'embedding'), isTrue);
+        await store.register('embedding', bundle.path, '');
+      }
     },
   );
 }
