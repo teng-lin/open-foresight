@@ -423,6 +423,44 @@ jobs:
             )
         )
 
+    def test_platform_selection_is_wired_per_job_and_enforced_by_aggregate(self):
+        workflow = self.workflow("macos.yml")
+        jobs = workflow["jobs"]
+        for name in ("macos", "linux-native", "linux-document-imports", "linux-bundle"):
+            output = name.replace("-", "_")
+            self.assertEqual(
+                jobs["changes"]["outputs"][output],
+                "${{ steps.changes.outputs." + output + " }}",
+            )
+            self.assertIn(
+                "needs.changes.outputs." + output + " == 'true'", jobs[name]["if"]
+            )
+            self.assertIn(name, jobs["platform-checks"]["needs"])
+        step = jobs["platform-checks"]["steps"][-1]
+        self.assertEqual(
+            step["env"]["SELECTION"], "${{ needs.changes.outputs.selection }}"
+        )
+        self.assertIn("--check-gates", step["run"])
+        self.assertIn("--force", jobs["changes"]["steps"][2]["env"]["FORCE"])
+
+    def test_maintenance_has_offline_tests_without_a_platform_build(self):
+        workflow = self.workflow("quality.yml")
+        runs = [step.get("run", "") for step in workflow["jobs"]["python"]["steps"]]
+        self.assertIn("python -m pytest", runs)
+
+    def test_registry_aliases_are_isolated_from_dependency_builds(self):
+        workflow = self.workflow("linux-registry.yml")
+        self.assertNotIn("pull_request", workflow["on"])
+        self.assertEqual(workflow["on"]["workflow_run"]["branches"], ["main"])
+        job = workflow["jobs"]["aliases"]
+        self.assertEqual(job["runs-on"], "ubuntu-24.04")
+        self.assertIn("conclusion == 'success'", job["if"])
+        self.assertIn("head_repository.full_name == github.repository", job["if"])
+        self.assertEqual(job["steps"][0]["with"]["ref"], "main")
+        self.assertIn("publish_linux_package_aliases.py", job["steps"][-1]["run"])
+        dependency = self.workflow("ci-dependencies.yml")
+        self.assertNotIn("Publish readable current alias", json.dumps(dependency))
+
     def test_linux_pull_request_runs_offline_pytest(self):
         workflow = self.workflow("macos.yml")
         self.assertIn("pull_request", workflow["on"])

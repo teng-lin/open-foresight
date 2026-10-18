@@ -23,6 +23,8 @@ jobs:
       - run: ruff check .
       - run: mypy
       - run: python tools/check_subprocess_timeouts.py
+      - name: Offline Python unit tests
+        run: python -m pytest
   format:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

@@ -1,0 +1,50 @@
+name: Linux package aliases
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/linux-registry.yml
+      - tools/publish_linux_package_aliases.py
+  workflow_run:
+    workflows: [Reusable CI dependencies]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: linux-package-aliases
+  cancel-in-progress: false
+jobs:
+  aliases:
+    if: >-
+      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.event != 'pull_request'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    steps:
+      # A workflow_run can describe an older producer. Always publish for main now.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - name: Authenticate package registry
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Publish aliases from qualified current-main descriptors
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/publish_linux_package_aliases.py --repository "$GITHUB_REPOSITORY"

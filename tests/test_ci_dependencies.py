@@ -2,9 +2,11 @@
 
 import io
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -432,39 +434,161 @@ class ProvenanceTests(unittest.TestCase):
 
 
 class SelectionTests(unittest.TestCase):
-    def test_documentation_only_selection(self):
-        self.assertFalse(
-            changes.requires_build(["README.md", "docs/platforms/ci-performance.md"])
+    def assert_selection(self, paths, expected):
+        actual = changes.select_gates(paths)
+        self.assertEqual(
+            {name for name, required in actual.items() if required}, set(expected)
         )
-        self.assertFalse(changes.requires_build([]))
+
+    def test_docs_and_explicit_maintenance_skip_platforms(self):
+        self.assert_selection([], [])
+        self.assert_selection(["README.md", "docs/platforms/ci-performance.md"], [])
+        self.assert_selection(list(changes.MAINTENANCE), [])
+
+    def test_platform_specific_paths_select_only_affected_platform(self):
         for path in (
-            "tools/build_macos_sdk.py",
+            "apps/desktop/macos/Runner/MainFlutterWindow.swift",
+            "packaging/macos/entitlements.plist",
+            *changes.MACOS_FILES,
+        ):
+            with self.subTest(path=path):
+                self.assert_selection([path], ["macos"])
+        for path in (
+            "apps/desktop/linux/runner/my_application.cc",
+            "packaging/ci/test-debian.sh",
+            *changes.LINUX_FILES,
+        ):
+            with self.subTest(path=path):
+                self.assert_selection([path], changes.GATES[1:])
+
+    def test_shared_unknown_and_selector_changes_keep_full_validation(self):
+        for path in (
+            "packages/foresight_core/lib/src/application.dart",
+            "apps/desktop/lib/main.dart",
+            "native/foresight_native.cpp",
+            "services/helper/main.cpp",
+            "tools/build.sh",
+            "tools/build_litert_extensions.py",
+            "tools/ci_changes.py",
             ".github/workflows/macos.yml",
+            ".github/workflows/ci-dependencies.yml",
             "requirements-dev.lock",
             "LICENSE",
+            "new/unknown.py",
         ):
-            self.assertTrue(changes.requires_build(["README.md", path]))
+            with self.subTest(path=path):
+                self.assert_selection(
+                    ["tools/cleanup_linux_packages.py", path], changes.GATES
+                )
 
-    def test_selected_skipped_or_failed_jobs_cannot_pass(self):
-        for build, main in ((False, True), (True, False), (True, True)):
-            jobs = {
-                name: {"result": value}
-                for name, value in {
-                    "changes": "success",
-                    "macos": "success" if build else "skipped",
-                    "linux-native": "success" if build else "skipped",
-                    "linux-document-imports": "success" if build else "skipped",
-                    "linux-bundle": "success" if build and main else "skipped",
-                }.items()
-            }
-            changes.check_gates(jobs, build, main)
-            for name in jobs:
-                for result in ("cancelled", "failure", "skipped"):
-                    if result != jobs[name]["result"]:
-                        with self.assertRaises(ValueError):
-                            changes.check_gates(
-                                {**jobs, name: {"result": result}}, build, main
-                            )
+    def test_mixed_paths_union_and_force_overrides_empty_or_docs(self):
+        self.assert_selection(
+            [
+                "apps/desktop/macos/Runner/file.swift",
+                "apps/desktop/linux/runner/file.cc",
+            ],
+            changes.GATES,
+        )
+        for paths in ([], ["README.md"], list(changes.MAINTENANCE)):
+            self.assertTrue(all(changes.select_gates(paths, force=True).values()))
+
+    def test_selected_skipped_failed_or_unexpected_jobs_cannot_pass(self):
+        for paths in (
+            [],
+            ["apps/desktop/macos/a.swift"],
+            ["apps/desktop/linux/a.cc"],
+            ["native/a.cpp"],
+        ):
+            for main in (False, True):
+                selected = changes.select_gates(paths)
+                jobs = {
+                    "changes": {"result": "success"},
+                    **{
+                        name: {
+                            "result": "success"
+                            if required and (name != "linux-bundle" or main)
+                            else "skipped"
+                        }
+                        for name, required in selected.items()
+                    },
+                }
+                changes.check_gates(jobs, selected, main)
+                for name in jobs:
+                    for result in ("success", "cancelled", "failure", "skipped"):
+                        if result != jobs[name]["result"]:
+                            with self.assertRaises(ValueError):
+                                changes.check_gates(
+                                    {**jobs, name: {"result": result}}, selected, main
+                                )
+
+    def test_cli_rename_considers_removed_shared_path_and_force_selects_all(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ["git", *args], cwd=root, text=True, timeout=30
+                ).strip()
+
+            git("init", "-q")
+            (root / "native").mkdir()
+            (root / "tools").mkdir()
+            (root / "native/shared.py").write_text("shared runtime source\n")
+            git("add", ".")
+            git(
+                "-c",
+                "user.name=CI",
+                "-c",
+                "user.email=ci@example.test",
+                "commit",
+                "-qm",
+                "base",
+            )
+            base = git("rev-parse", "HEAD")
+            git("mv", "native/shared.py", "tools/cleanup_linux_packages.py")
+            git(
+                "-c",
+                "user.name=CI",
+                "-c",
+                "user.email=ci@example.test",
+                "commit",
+                "-qm",
+                "rename",
+            )
+            for args in (("--base", base), ("--base", "HEAD", "--force")):
+                output = root / "outputs"
+                output.write_text("")
+                subprocess.run(
+                    [
+                        sys.executable,
+                        str(artifacts.ROOT / "tools/ci_changes.py"),
+                        *args,
+                    ],
+                    cwd=root,
+                    env={**os.environ, "GITHUB_OUTPUT": str(output)},
+                    check=True,
+                    timeout=30,
+                    capture_output=True,
+                )
+                values = dict(
+                    line.split("=", 1) for line in output.read_text().splitlines()
+                )
+                self.assertEqual(
+                    json.loads(values["selection"]), dict.fromkeys(changes.GATES, True)
+                )
+                self.assertTrue(
+                    all(
+                        values[name.replace("-", "_")] == "true"
+                        for name in changes.GATES
+                    )
+                )
+
+    def test_missing_selection_or_job_fails_closed(self):
+        for selected in ({}, {"macos": True}, dict.fromkeys(changes.GATES, "false")):
+            with self.assertRaises(ValueError):
+                changes.check_gates({}, selected, False)
+        with self.assertRaises(ValueError):
+            changes.check_gates({}, changes.select_gates([]), False)
 
 
 class RegistryTests(unittest.TestCase):

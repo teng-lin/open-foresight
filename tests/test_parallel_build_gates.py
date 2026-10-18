@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -15,6 +16,20 @@ spec.loader.exec_module(gates)
 
 
 class ParallelBuildGatesTest(unittest.TestCase):
+    def test_command_timings_preserve_failed_status_and_stop_following_work(self):
+        helper = Path(__file__).resolve().parents[1] / "tools/ci_timing.sh"
+        for code in (0, 7):
+            script = 'source "$1"; ci_timed fixture bash -c "exit $2"; echo continued'
+            result = subprocess.run(
+                ["bash", "-e", "-c", script, "timing", str(helper), str(code)],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            self.assertEqual(result.returncode, code)
+            self.assertIn(f"(exit {code})", result.stdout)
+            self.assertEqual("continued" in result.stdout, code == 0)
+
     def test_tasks_overlap_and_logs_remain_separate(self):
         """Each child must observe the other child before either can exit."""
         with tempfile.TemporaryDirectory() as directory:
