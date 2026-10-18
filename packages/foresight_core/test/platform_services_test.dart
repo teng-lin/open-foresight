@@ -355,6 +355,19 @@ void main() {
     },
   );
 
+  test('explicit Mac runtime does not depend on an unused temporary root', () {
+    final runtime = Directory('${scratch.path}/run')..createSync();
+    expect(
+      ProfilePaths.resolve({
+        'HOME': scratch.path,
+        'TMPDIR': '/does-not-exist',
+        'FORESIGHT_DATA': '${scratch.path}/data',
+        'FORESIGHT_RUNTIME': runtime.path,
+      }, macOS: true).runtime,
+      runtime.path,
+    );
+  });
+
   test('Mac rejects overflowing explicit Unix socket path', () {
     expect(
       () => ProfilePaths.resolve({

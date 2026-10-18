@@ -59,7 +59,7 @@ class ProfilePaths {
         ? (environment['TMPDIR'] ??
               (Platform.isMacOS ? Directory.systemTemp.path : '/tmp'))
         : '';
-    if (mac && Platform.isMacOS) {
+    if (mac && Platform.isMacOS && environment['FORESIGHT_RUNTIME'] == null) {
       final parent = Directory(temporary);
       final owner = Process.runSync('/usr/bin/stat', ['-f', '%u', parent.path]);
       final user = Process.runSync('/usr/bin/id', ['-u']);
