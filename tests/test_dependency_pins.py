@@ -51,3 +51,9 @@ def test_python_locks_target_313_and_protobuf_stubs_match_runtime_major():
     stubs = re.search(r"^types-protobuf==(\d+)", requirements, re.M)[1]
     assert runtime == stubs
     assert 'python_version = "3.13"' in (ROOT / "pyproject.toml").read_text()
+
+
+def test_litert_transport_pin_matches_the_shared_version():
+    wheel = PINS["litert_linux_wheel"]
+    assert f"litert_lm_api-{PINS['litert_lm']}-" in wheel["url"]
+    assert len(wheel["sha256"]) == len(wheel["library_sha256"]) == 64
