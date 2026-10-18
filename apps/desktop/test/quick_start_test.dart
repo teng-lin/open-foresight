@@ -143,6 +143,29 @@ void main() {
   );
 
   testWidgets(
+    'Start transcribing in a meeting records that meeting without creating another',
+    (tester) async {
+      await tester.runAsync(registerSpeech);
+      final meeting = store.meeting('Existing meeting');
+      await show(tester);
+      final dynamic state = tester.state(find.byType(Workspace));
+      state.update(() => state.meetingId = meeting);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Start transcribing'));
+      await tester.pumpAndSettle();
+      expect(domain.operations, isNot(contains('meetings.create')));
+      expect(
+        domain.operations.where((method) => method == 'meetings.start'),
+        hasLength(1),
+      );
+      expect(store.rows('SELECT id FROM meetings').single['id'], meeting);
+      expect(state.meetingId, meeting);
+      expect(tester.takeException(), isNull);
+      await dispose(tester);
+    },
+  );
+
+  testWidgets(
     'creation failure is visible and a pending creation ignores reentry',
     (tester) async {
       await tester.runAsync(registerSpeech);

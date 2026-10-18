@@ -1,5 +1,7 @@
 part of 'main.dart';
 
+const _meetingAssistantMinWidth = 760.0;
+
 extension _MeetingWorkspace on _WorkspaceState {
   Widget immersiveMeetingWorkspace() => CallbackShortcuts(
     bindings: {
@@ -283,203 +285,193 @@ extension _MeetingWorkspace on _WorkspaceState {
     final date = DateTime.fromMillisecondsSinceEpoch(start).toLocal();
     final dateText =
         '${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][date.weekday - 1]}, ${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][date.month - 1]} ${date.day}, ${date.year}';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Row(
+    return LayoutBuilder(
+      builder: (workspaceContext, constraints) {
+        final wide = constraints.maxWidth >= _meetingAssistantMinWidth;
+        final showAssistant =
+            meetingSidecarVisible && (wide || meetingAssistantFallback);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            IconButton.filledTonal(
-              tooltip: 'All meetings',
-              onPressed: () async {
-                try {
-                  await flushMeetingNotesDraft();
-                } catch (_) {
-                  return;
-                }
-                if (mounted)
-                  update(() {
-                    meetingId = null;
-                    meetingImmersive = false;
-                  });
-              },
-              style: IconButton.styleFrom(backgroundColor: Colors.white),
-              icon: const Icon(Icons.arrow_back),
-            ),
-            const SizedBox(width: 8),
-            const CircleAvatar(
-              backgroundColor: Color(0xffdce1ea),
-              child: Icon(Icons.calendar_today, color: Color(0xff555b62)),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(meeting['title'] as String, style: MeetingVisuals.title),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
+            Row(
+              children: [
+                IconButton.filledTonal(
+                  tooltip: 'All meetings',
+                  onPressed: () async {
+                    try {
+                      await flushMeetingNotesDraft();
+                    } catch (_) {
+                      return;
+                    }
+                    if (mounted)
+                      update(() {
+                        meetingId = null;
+                        meetingImmersive = false;
+                      });
+                  },
+                  style: IconButton.styleFrom(backgroundColor: Colors.white),
+                  icon: const Icon(Icons.arrow_back),
+                ),
+                const SizedBox(width: 8),
+                const CircleAvatar(
+                  backgroundColor: Color(0xffdce1ea),
+                  child: Icon(Icons.calendar_today, color: Color(0xff555b62)),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      MeetingMetadataBadge(dateText),
-                      MeetingMetadataBadge(
-                        '${meetingClock(start)} - ${meetingClock(end)}',
+                      Text(
+                        meeting['title'] as String,
+                        style: MeetingVisuals.title,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          MeetingMetadataBadge(dateText),
+                          MeetingMetadataBadge(
+                            '${meetingClock(start)} - ${meetingClock(end)}',
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
-            ),
-            if (!meetingSidecarVisible)
-              IconButton(
-                tooltip: 'Open assistant',
-                onPressed: () => update(() => meetingSidecarVisible = true),
-                icon: const Icon(Icons.chat_bubble_outline),
-              ),
-            IconButton(
-              tooltip: meetingImmersive ? 'Exit Immersive View' : 'Full screen',
-              onPressed: () =>
-                  update(() => meetingImmersive = !meetingImmersive),
-              icon: Icon(
-                meetingImmersive ? Icons.fullscreen_exit : Icons.fullscreen,
-              ),
-            ),
-            PopupMenuButton<String>(
-              tooltip: 'Meeting options',
-              onSelected: (action) {
-                if (action == 'record') unawaited(run(startRecording));
-                if (action == 'transcript')
-                  update(() {
-                    meetingPanel = 'Transcript';
-                    meetingSidecarVisible = true;
-                  });
-                if (action == 'import') unawaited(run(importMeetingTranscript));
-                if (action == 'attachments')
-                  unawaited(run(() => google.importAttachments(id)));
-              },
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                  value: 'record',
-                  enabled:
-                      !busy &&
-                      recording == null &&
-                      speechSetupProblem(d.store) == null,
-                  child: const Text('Record microphone + playback'),
                 ),
-                const PopupMenuItem(
-                  value: 'transcript',
-                  child: Text('Transcript'),
-                ),
-                const PopupMenuItem(
-                  value: 'import',
-                  child: Text('Import transcript'),
-                ),
-                if (google.attachments(id).isNotEmpty)
-                  PopupMenuItem(
-                    value: 'attachments',
-                    enabled: googleAuth.connected,
-                    child: const Text('Import meeting attachments'),
-                  ),
               ],
             ),
-          ],
-        ),
-        if (speechSetupProblem(d.store) != null)
-          ListTile(
-            dense: true,
-            leading: const Icon(Icons.info_outline),
-            title: Text(speechSetupProblem(d.store)!),
-            trailing: TextButton(
-              onPressed: () => update(() {
-                tab = 4;
-                modelKind = 'speech';
-              }),
-              child: const Text('Set up speech'),
-            ),
-          ),
-        const SizedBox(height: 16),
-        Expanded(
-          child: LayoutBuilder(
-            builder: (_, size) {
-              final showSidecar = meetingSidecarVisible;
-              final sideWidth = meetingSidecarWidth
-                  .clamp(280.0, math.max(280.0, size.maxWidth / 2))
-                  .toDouble();
-              final notesWidth = showSidecar && size.maxWidth >= 760
-                  ? size.maxWidth - sideWidth - 16
-                  : size.maxWidth;
-              final editor = meetingNotesEditor(id, notesWidth >= 640);
-              if (size.maxWidth < 760 && showSidecar) {
-                return Column(
-                  children: [
-                    Row(
-                      children: [
-                        TextButton(
-                          onPressed: () =>
-                              update(() => meetingCompactAssistant = false),
-                          child: const Text('Notes'),
+            if (speechSetupProblem(d.store) != null)
+              ListTile(
+                dense: true,
+                leading: const Icon(Icons.info_outline),
+                title: Text(speechSetupProblem(d.store)!),
+                trailing: TextButton(
+                  onPressed: () => update(() {
+                    tab = 4;
+                    modelKind = 'speech';
+                  }),
+                  child: const Text('Set up speech'),
+                ),
+              ),
+            const SizedBox(height: 16),
+            Expanded(
+              child: LayoutBuilder(
+                builder: (_, size) {
+                  final showSidecar = showAssistant && wide;
+                  final sideWidth = meetingSidecarWidth
+                      .clamp(280.0, math.max(280.0, size.maxWidth / 2))
+                      .toDouble();
+                  final notesWidth = showSidecar
+                      ? size.maxWidth - sideWidth - 16
+                      : size.maxWidth;
+                  final editor = meetingNotesEditor(
+                    id,
+                    notesWidth >= 640,
+                    assistantToggle: SizedBox(
+                      width: 40,
+                      child: IconButton(
+                        key: const ValueKey('meeting-assistant-toggle'),
+                        tooltip: showAssistant
+                            ? 'Hide assistant'
+                            : 'Open assistant',
+                        isSelected: showAssistant,
+                        style: IconButton.styleFrom(
+                          backgroundColor: showAssistant ? _blue : null,
+                          foregroundColor: _ink,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
                         ),
-                        TextButton(
-                          onPressed: () =>
-                              update(() => meetingCompactAssistant = true),
-                          child: const Text('Assistant'),
-                        ),
-                      ],
+                        onPressed: showAssistant
+                            ? () => update(() => meetingSidecarVisible = false)
+                            : () => openMeetingAssistant(workspaceContext),
+                        icon: const Icon(Icons.view_sidebar_outlined),
+                      ),
                     ),
-                    Expanded(
-                      child: meetingCompactAssistant
-                          ? meetingAssistant(id)
-                          : editor,
-                    ),
-                  ],
-                );
-              }
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Expanded(flex: 7, child: editor),
-                  if (showSidecar) ...[
-                    MouseRegion(
-                      cursor: SystemMouseCursors.resizeColumn,
-                      child: GestureDetector(
-                        key: const ValueKey('meeting-sidecar-resize'),
-                        behavior: HitTestBehavior.opaque,
-                        onHorizontalDragUpdate: (drag) => update(
-                          () =>
-                              meetingSidecarWidth = (sideWidth - drag.delta.dx)
-                                  .clamp(
-                                    280.0,
-                                    math.max(280.0, size.maxWidth / 2),
-                                  )
-                                  .toDouble(),
-                        ),
-                        child: SizedBox(
-                          width: 16,
-                          child: Center(
-                            child: Container(
-                              width: 4,
-                              height: 48,
-                              decoration: BoxDecoration(
-                                color: const Color(0xffd6dae1),
-                                borderRadius: BorderRadius.circular(2),
+                  );
+                  if (showAssistant && !wide) return meetingAssistant(id);
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 7, child: editor),
+                      if (showSidecar) ...[
+                        MouseRegion(
+                          cursor: SystemMouseCursors.resizeColumn,
+                          child: GestureDetector(
+                            key: const ValueKey('meeting-sidecar-resize'),
+                            behavior: HitTestBehavior.opaque,
+                            onHorizontalDragUpdate: (drag) => update(
+                              () => meetingSidecarWidth =
+                                  (sideWidth - drag.delta.dx)
+                                      .clamp(
+                                        280.0,
+                                        math.max(280.0, size.maxWidth / 2),
+                                      )
+                                      .toDouble(),
+                            ),
+                            child: SizedBox(
+                              width: 16,
+                              child: Center(
+                                child: Container(
+                                  width: 4,
+                                  height: 48,
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xffd6dae1),
+                                    borderRadius: BorderRadius.circular(2),
+                                  ),
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                    SizedBox(width: sideWidth, child: meetingAssistant(id)),
-                  ],
-                ],
-              );
-            },
-          ),
-        ),
-      ],
+                        SizedBox(width: sideWidth, child: meetingAssistant(id)),
+                      ],
+                    ],
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 
-  Future<void> importMeetingTranscript() async {
-    final id = meetingId!;
+  Future<void> openMeetingAssistant(BuildContext workspaceContext) async {
+    final id = meetingId;
+    final availableWidth = workspaceContext.size!.width;
+    update(() {
+      meetingSidecarVisible = true;
+      meetingAssistantFallback = false;
+    });
+    if (availableWidth >= _meetingAssistantMinWidth) return;
+    try {
+      await const MethodChannel('foresight/window').invokeMethod<void>(
+        'ensureWidth',
+        {
+          // The app adds 24px more right padding above 1000px window width.
+          'width':
+              MediaQuery.sizeOf(context).width +
+              _meetingAssistantMinWidth -
+              availableWidth +
+              24,
+        },
+      );
+      // Native resize requests are asynchronous, especially on Wayland.
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    } on MissingPluginException {
+      // Hosts without native window control can still open the assistant.
+    } on PlatformException {
+      // A compositor may decline application-requested window resizing.
+    }
+    if (!mounted || !workspaceContext.mounted || meetingId != id) return;
+    if (workspaceContext.size!.width < _meetingAssistantMinWidth &&
+        meetingSidecarVisible)
+      update(() => meetingAssistantFallback = true);
+  }
+
+  Future<void> importMeetingTranscript(int id) async {
     final file = await openFile(
       acceptedTypeGroups: [
         const XTypeGroup(label: 'Transcript text', extensions: ['txt']),
@@ -493,7 +485,12 @@ extension _MeetingWorkspace on _WorkspaceState {
     });
   }
 
-  Widget meetingNotesEditor(int id, bool wide, {bool preview = false}) {
+  Widget meetingNotesEditor(
+    int id,
+    bool wide, {
+    bool preview = false,
+    Widget? assistantToggle,
+  }) {
     final enhanced = d.store.rows(
       "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
       [id],
@@ -708,35 +705,43 @@ extension _MeetingWorkspace on _WorkspaceState {
                     ],
                   )
                 else
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        tooltip: 'Bold',
-                        onPressed: () => formatMeetingNotes('**', '**'),
-                        icon: const Icon(Icons.format_bold),
+                  IconButtonTheme(
+                    data: IconButtonThemeData(
+                      style: IconButton.styleFrom(
+                        fixedSize: const Size(40, 40),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                      IconButton(
-                        tooltip: 'Italic',
-                        onPressed: () => formatMeetingNotes('*', '*'),
-                        icon: const Icon(Icons.format_italic),
-                      ),
-                      IconButton(
-                        tooltip: 'Bullet list',
-                        onPressed: () => formatMeetingNotes('\n- '),
-                        icon: const Icon(Icons.format_list_bulleted),
-                      ),
-                      IconButton(
-                        tooltip: 'Numbered list',
-                        onPressed: () => formatMeetingNotes('\n1. '),
-                        icon: const Icon(Icons.format_list_numbered),
-                      ),
-                      IconButton(
-                        tooltip: 'Heading',
-                        onPressed: () => formatMeetingNotes('\n# '),
-                        icon: const Icon(Icons.title),
-                      ),
-                    ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'Bold',
+                          onPressed: () => formatMeetingNotes('**', '**'),
+                          icon: const Icon(Icons.format_bold),
+                        ),
+                        IconButton(
+                          tooltip: 'Italic',
+                          onPressed: () => formatMeetingNotes('*', '*'),
+                          icon: const Icon(Icons.format_italic),
+                        ),
+                        IconButton(
+                          tooltip: 'Bullet list',
+                          onPressed: () => formatMeetingNotes('\n- '),
+                          icon: const Icon(Icons.format_list_bulleted),
+                        ),
+                        IconButton(
+                          tooltip: 'Numbered list',
+                          onPressed: () => formatMeetingNotes('\n1. '),
+                          icon: const Icon(Icons.format_list_numbered),
+                        ),
+                        IconButton(
+                          tooltip: 'Heading',
+                          onPressed: () => formatMeetingNotes('\n# '),
+                          icon: const Icon(Icons.title),
+                        ),
+                      ],
+                    ),
                   ),
                 Row(
                   mainAxisSize: MainAxisSize.min,
@@ -770,6 +775,7 @@ extension _MeetingWorkspace on _WorkspaceState {
                       )
                     else
                       FilledButton.tonalIcon(
+                        key: const ValueKey('meeting-live-enhance'),
                         onPressed: () => update(() {
                           unawaited(
                             preference('liveEnhance', (!live).toString()),
@@ -784,6 +790,10 @@ extension _MeetingWorkspace on _WorkspaceState {
                         icon: const Icon(Icons.auto_awesome, size: 18),
                         label: Text('Live Enhance ${live ? 'ON' : 'OFF'}'),
                       ),
+                    if (assistantToggle != null) ...[
+                      const SizedBox(width: 8),
+                      assistantToggle,
+                    ],
                     if (!meetingEnhancedVisible)
                       IconButton(
                         tooltip: 'Show enhanced notes',
@@ -846,86 +856,17 @@ extension _MeetingWorkspace on _WorkspaceState {
     clipBehavior: Clip.antiAlias,
     child: Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(12, 12, 8, 4),
-          child: Wrap(
-            crossAxisAlignment: WrapCrossAlignment.center,
-            runSpacing: 4,
-            children: [
-              for (final panel in ['Chat', 'Live Q&A', 'Summary'])
-                TextButton(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 12,
-                    ),
-                    backgroundColor: meetingPanel == panel ? _blue : null,
-                    foregroundColor: meetingPanel == panel
-                        ? _ink
-                        : const Color(0xff4d5358),
-                  ),
-                  onPressed: () => update(() => meetingPanel = panel),
-                  child: Text(
-                    panel,
-                    maxLines: 1,
-                    style: MeetingVisuals.control,
-                  ),
-                ),
-              PopupMenuButton<String>(
-                tooltip: 'More meeting panels',
-                padding: EdgeInsets.zero,
-                icon: const Icon(Icons.keyboard_arrow_down, size: 20),
-                onSelected: (panel) => update(() => meetingPanel = panel),
-                itemBuilder: (_) => [
-                  const PopupMenuItem(
-                    value: 'Transcript',
-                    child: Text('Transcript'),
-                  ),
-                  const PopupMenuItem(
-                    value: 'Action items',
-                    child: Text('Action items'),
-                  ),
-                ],
-              ),
-              for (final delta in [-1, 1])
-                SizedBox(
-                  width: 24,
-                  child: TextButton(
-                    style: TextButton.styleFrom(
-                      padding: EdgeInsets.zero,
-                      minimumSize: const Size(24, 32),
-                    ),
-                    onPressed: () => update(
-                      () => answerFontSize = (answerFontSize + delta).clamp(
-                        12,
-                        24,
-                      ),
-                    ),
-                    child: Text(
-                      delta < 0 ? 'A−' : 'A+',
-                      style: MeetingVisuals.metadata,
-                    ),
-                  ),
-                ),
-              IconButton(
-                tooltip: 'Close assistant',
-                constraints: const BoxConstraints(minWidth: 28),
-                padding: EdgeInsets.zero,
-                onPressed: () => update(() => meetingSidecarVisible = false),
-                icon: const Icon(Icons.close),
-              ),
-            ],
+        MeetingAssistantHeader(
+          selectedPanel: meetingPanel,
+          onPanelSelected: (panel) => update(() => meetingPanel = panel),
+          onFontSizeChanged: (delta) => update(
+            () => answerFontSize = (answerFontSize + delta).clamp(12, 24),
           ),
+          onClose: () => update(() => meetingSidecarVisible = false),
         ),
         Expanded(
           child: IndexedStack(
-            index: const [
-              'Chat',
-              'Live Q&A',
-              'Summary',
-              'Transcript',
-              'Action items',
-            ].indexOf(meetingPanel),
+            index: MeetingAssistantHeader.panels.indexOf(meetingPanel),
             children: [
               chat(meetingScope: id, compact: true),
               meetingQuestionsPanel(id),
@@ -1123,6 +1064,21 @@ extension _MeetingWorkspace on _WorkspaceState {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
+                IconButton(
+                  tooltip: 'Import transcript',
+                  onPressed: busy
+                      ? null
+                      : () => run(() => importMeetingTranscript(id)),
+                  icon: const Icon(Icons.file_upload_outlined),
+                ),
+                if (google.attachments(id).isNotEmpty)
+                  IconButton(
+                    tooltip: 'Import meeting attachments',
+                    onPressed: busy || !googleAuth.connected
+                        ? null
+                        : () => run(() => google.importAttachments(id)),
+                    icon: const Icon(Icons.attach_file),
+                  ),
                 IconButton(
                   tooltip: 'Copy full transcript',
                   onPressed: rows.isEmpty

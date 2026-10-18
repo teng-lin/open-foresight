@@ -120,7 +120,7 @@ void main() {
       );
       expect(find.text('Live enhanced notes'), findsOneWidget);
       expect(tester.takeException(), isNull);
-      for (final tab in ['Chat', 'Live Q&A', 'Summary']) {
+      for (final tab in ['Chat', 'Live Q&A', 'Transcript']) {
         final label = find.widgetWithText(TextButton, tab).first;
         final paragraph = tester.renderObject<RenderParagraph>(
           find.descendant(of: label, matching: find.text(tab)),

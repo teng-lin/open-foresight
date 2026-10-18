@@ -58,7 +58,7 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
 
   Live Q&A can detect questions in finalized speech and queue grounded answers automatically using the local model. Its Automatic answers switch pauses processing while retaining queued questions; failed answers can be retried.
 
-  Recording can be paused and resumed, and stops itself after a period of inactivity that you choose. Double-click its waveform or use Full screen to open the immersive meeting workspace. Generated notes, summaries, action items and answers render as formatted, selectable Markdown, with original Markdown retained for editing and copying. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
+  Recording can be paused and resumed, and stops itself after a period of inactivity that you choose. Double-click its waveform to open the immersive meeting workspace. Generated notes, summaries, action items and answers render as formatted, selectable Markdown, with original Markdown retained for editing and copying. You can export your meeting notes as Markdown. Original notes and raw transcripts are never overwritten by generated text.
 - **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
 - **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
 - **MCP server.** Agents can import, search, ask, take notes, and record through the same application service the desktop uses.

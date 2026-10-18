@@ -79,6 +79,150 @@ class MeetingMetadataBadge extends StatelessWidget {
   );
 }
 
+/// Keeps assistant actions at the right edge and the active panel in the tab
+/// strip. Transcript gets a direct tab whenever space permits.
+class MeetingAssistantHeader extends StatelessWidget {
+  const MeetingAssistantHeader({
+    super.key,
+    required this.selectedPanel,
+    required this.onPanelSelected,
+    required this.onFontSizeChanged,
+    required this.onClose,
+  });
+
+  final String selectedPanel;
+  final ValueChanged<String> onPanelSelected;
+  final ValueChanged<int> onFontSizeChanged;
+  final VoidCallback onClose;
+
+  static const panels = [
+    'Chat',
+    'Live Q&A',
+    'Summary',
+    'Transcript',
+    'Action items',
+  ];
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.fromLTRB(12, 12, 8, 4),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        final style = Theme.of(
+          context,
+        ).textTheme.labelLarge!.merge(MeetingVisuals.control);
+        final widths = <String, double>{};
+        for (final panel in panels) {
+          final painter = TextPainter(
+            text: TextSpan(text: panel, style: style),
+            textDirection: Directionality.of(context),
+            textScaler: MediaQuery.textScalerOf(context),
+          )..layout();
+          widths[panel] = (painter.width + 20).ceilToDouble().clamp(
+            64.0,
+            double.infinity,
+          );
+          painter.dispose();
+        }
+
+        // Reserve the font controls, close button and overflow menu before
+        // choosing tabs, so resizing cannot push actions onto another line.
+        final tabWidth = constraints.maxWidth - 80;
+        final allFit = widths.values.fold(0.0, (a, b) => a + b) <= tabWidth;
+        var remaining = tabWidth - (allFit ? 0 : 32);
+        final visible = <String>{};
+        for (final panel in {selectedPanel, 'Transcript', ...panels}) {
+          if (visible.isEmpty || widths[panel]! <= remaining) {
+            visible.add(panel);
+            remaining -= widths[panel]!;
+          }
+        }
+        final overflow = panels.where((panel) => !visible.contains(panel));
+        return Row(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  for (final panel in panels.where(visible.contains))
+                    SizedBox(
+                      width: widths[panel]!.clamp(
+                        0,
+                        tabWidth - (overflow.isEmpty ? 0 : 32),
+                      ),
+                      child: TextButton(
+                        style: TextButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 12,
+                          ),
+                          minimumSize: const Size(64, 48),
+                          textStyle: style,
+                          backgroundColor: selectedPanel == panel
+                              ? const Color(0xffbfe8ff)
+                              : null,
+                          foregroundColor: selectedPanel == panel
+                              ? const Color(0xff07577b)
+                              : const Color(0xff4d5358),
+                        ),
+                        onPressed: () => onPanelSelected(panel),
+                        child: Semantics(
+                          selected: selectedPanel == panel,
+                          child: Text(
+                            panel,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (overflow.isNotEmpty)
+                    SizedBox(
+                      width: 32,
+                      child: PopupMenuButton<String>(
+                        tooltip: 'More meeting panels',
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.keyboard_arrow_down, size: 20),
+                        onSelected: onPanelSelected,
+                        itemBuilder: (_) => [
+                          for (final panel in overflow)
+                            PopupMenuItem(value: panel, child: Text(panel)),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            for (final delta in [-1, 1])
+              SizedBox(
+                width: 24,
+                child: TextButton(
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(24, 32),
+                  ),
+                  onPressed: () => onFontSizeChanged(delta),
+                  child: Text(
+                    delta < 0 ? 'A−' : 'A+',
+                    style: MeetingVisuals.metadata,
+                  ),
+                ),
+              ),
+            SizedBox(
+              width: 32,
+              child: IconButton(
+                tooltip: 'Close assistant',
+                padding: EdgeInsets.zero,
+                onPressed: onClose,
+                icon: const Icon(Icons.close),
+              ),
+            ),
+          ],
+        );
+      },
+    ),
+  );
+}
+
 /// Keeps the heading readable when a narrow pane or larger text needs another
 /// row for actions. Buttons retain their normal focus and pointer targets.
 class MeetingPanelHeading extends StatelessWidget {

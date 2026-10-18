@@ -276,7 +276,8 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
+class _WorkspaceState extends State<Workspace>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   Domain get d => widget.domain;
   void update(VoidCallback action) => setState(action);
   int tab = 3;
@@ -432,7 +433,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   bool meetingSidecarVisible = true,
       meetingEnhancedVisible = true,
       meetingEnhancing = false,
-      meetingCompactAssistant = false;
+      meetingAssistantFallback = false;
   String meetingPanel = 'Chat', meetingEnhanceStatus = '';
   double meetingSidecarWidth = 400;
   DateTime? recordingBegan;
@@ -475,6 +476,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     graphMotionTicker = createTicker(tickGraphMotion);
     graphCameraController = AnimationController(vsync: this);
     graphCameraController.addListener(() {
@@ -561,7 +563,14 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeMetrics() {
+    if (meetingAssistantFallback)
+      update(() => meetingAssistantFallback = false);
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     unawaited(noteEnhancementChanges?.cancel());
     if (d is! RemoteDomain) google.close();
     void releaseDomain() {

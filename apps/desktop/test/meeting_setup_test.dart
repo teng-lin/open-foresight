@@ -6,6 +6,7 @@ import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/model_setup.dart';
 import 'package:open_foresight/store.dart';
+import 'package:open_foresight/speech_setup_view.dart';
 
 class OfflineHelper extends Helper {
   OfflineHelper(super.socket, super.storage);
@@ -32,16 +33,11 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('New meeting'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Meeting options'));
+      expect(find.byTooltip('Meeting options'), findsNothing);
+      await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
-      final record = tester.widget<PopupMenuItem<String>>(
-        find.widgetWithText(
-          PopupMenuItem<String>,
-          'Record microphone + playback',
-        ),
-      );
-      expect(record.enabled, false);
-      await tester.tapAt(const Offset(0, 0));
+      expect(find.byType(SpeechSetupDialog), findsOneWidget);
+      await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       expect(
         find.text('Set up a speech model and runner before recording.'),

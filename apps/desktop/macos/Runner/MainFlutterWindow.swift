@@ -38,9 +38,19 @@ private class DesktopIntegration {
     channel = FlutterMethodChannel(name: "foresight/desktop", binaryMessenger: messenger)
     activation = FlutterMethodChannel(name: "foresight/window", binaryMessenger: messenger)
     activation.setMethodCallHandler { [weak self] call, result in
-      guard call.method == "activate" else { result(FlutterMethodNotImplemented); return }
-      self?.activate()
-      result(nil)
+      switch call.method {
+      case "activate": self?.activate(); result(nil)
+      case "ensureWidth":
+        let arguments = call.arguments as? [String: Any]
+        guard let width = arguments?["width"] as? NSNumber,
+              width.doubleValue.isFinite, width.doubleValue > 0 else {
+          result(FlutterError(code: "invalid_width", message: "Expected a positive window width", details: nil))
+          return
+        }
+        self?.ensureWidth(CGFloat(width.doubleValue))
+        result(nil)
+      default: result(FlutterMethodNotImplemented)
+      }
     }
     channel.setMethodCallHandler { [weak self] call, result in
       guard let self = self else { return }
@@ -73,6 +83,20 @@ private class DesktopIntegration {
   private func activate() {
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
+  }
+
+  private func ensureWidth(_ width: CGFloat) {
+    guard let window = window, let content = window.contentView else { return }
+    let extra = max(0, width - content.bounds.width)
+    guard extra > 0 else { return }
+    var frame = window.frame
+    frame.size.width += extra
+    if let screen = window.screen {
+      let visible = screen.visibleFrame
+      frame.size.width = min(frame.width, max(window.frame.width, visible.width))
+      frame.origin.x = max(visible.minX, min(frame.minX, visible.maxX - frame.width))
+    }
+    window.setFrame(frame, display: true, animate: false)
   }
 
   private func unregisterShortcut() {

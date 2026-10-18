@@ -150,9 +150,7 @@ void main() {
                 meeting,
               ]).single['title']
               as String;
-      await tester.tap(find.byTooltip('Meeting options'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Record microphone + playback'));
+      await tester.tap(find.text('Start transcribing'));
       await waitUntil(
         tester,
         () =>
@@ -424,9 +422,7 @@ void main() {
       });
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('Meeting options'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Record microphone + playback'));
+      await tester.tap(find.text('Start transcribing'));
       await waitUntil(
         tester,
         () =>

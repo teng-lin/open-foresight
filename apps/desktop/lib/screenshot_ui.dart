@@ -370,6 +370,8 @@ extension _ScreenshotScreens on _WorkspaceState {
                         FilledButton.icon(
                           onPressed: busy || quickStarting || meetingEnhancing
                               ? null
+                              : tab == 3 && meetingId != null
+                              ? () => recordExistingMeeting(meetingId!)
                               : quickStart,
                           icon: Icon(
                             recording != null ? Icons.stop : Icons.graphic_eq,
