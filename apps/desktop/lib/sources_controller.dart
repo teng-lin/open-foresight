@@ -301,7 +301,15 @@ class _SourcesController extends _FeatureController {
     final excluded = <String>{};
     for (final row in d.store.sourceSummaries) {
       final uri = Uri.tryParse(row['source_uri'] as String? ?? '');
-      if (uri?.scheme == 'file') excluded.add(uri!.toFilePath());
+      if (uri == null || uri.scheme != 'file' || !allowedSourceUri(uri))
+        continue;
+      try {
+        excluded.add(uri.toFilePath());
+      } on UnsupportedError {
+        // Persisted source URIs can originate from arbitrary imports.
+      } on ArgumentError {
+        // A malformed URI must not prevent discovery of other local files.
+      }
     }
     final selected = await showDialog<List<String>>(
       context: context,
