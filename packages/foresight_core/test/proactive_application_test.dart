@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:async';
@@ -129,14 +130,16 @@ void main() {
       detector,
     )..generator = runtime;
   });
-  tearDown(() async {
-    await domain.application.close();
-    domain.close();
-    runtime.close();
-    await domain.helper.close();
-    await server.shutdown();
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await domain.application.close();
+      domain.close();
+      runtime.close();
+      await domain.helper.close();
+      await server.shutdown();
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   test(
@@ -328,15 +331,10 @@ void main() {
       () async {
         final library =
             '${directory.path}/capture.${Platform.isMacOS ? 'dylib' : 'so'}';
-        final build = await Process.run('c++', [
-          '-std=c++17',
-          '-shared',
-          '-fPIC',
-          'test/fixtures/recording_native_stub.cpp',
-          '-o',
-          library,
-        ]);
-        expect(build.exitCode, 0, reason: '${build.stderr}');
+        await buildCachedNativeFixture(
+          source: 'test/fixtures/recording_native_stub.cpp',
+          output: library,
+        );
         final fixture = DynamicLibrary.open(library);
         final transcript = jsonEncode({
           'type': 'transcript',

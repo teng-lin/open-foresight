@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
@@ -358,15 +359,10 @@ void main() {
       ) async {
         final library =
             '${directory.path}/recording.${Platform.isMacOS ? "dylib" : "so"}';
-        final build = await Process.run('c++', [
-          '-std=c++17',
-          '-shared',
-          '-fPIC',
-          'test/fixtures/recording_native_stub.cpp',
-          '-o',
-          library,
-        ]);
-        expect(build.exitCode, 0, reason: '${build.stdout}\n${build.stderr}');
+        await buildCachedNativeFixture(
+          source: 'test/fixtures/recording_native_stub.cpp',
+          output: library,
+        );
         final previous = runtimeConfiguration.environment['FORESIGHT_NATIVE'];
         runtimeConfiguration.environment['FORESIGHT_NATIVE'] = library;
         final store = domain.store;
