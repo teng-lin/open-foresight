@@ -394,9 +394,7 @@ class ApplicationService {
         InternetAddress(path, type: InternetAddressType.unix),
         0,
       );
-      if ((await Process.run('chmod', ['600', path])).exitCode != 0) {
-        throw StateError('Cannot protect application socket');
-      }
+      protectPrivateFile(path);
       final endpoint = File('${profile.data}/.application-endpoint.json');
       final temporary = File('${endpoint.path}.$pid');
       temporary.writeAsStringSync(
@@ -983,9 +981,7 @@ class IsolatedApplicationService {
       0,
     );
     _traceServiceTransport('frontend bound; setting permissions');
-    if ((await Process.run('/bin/chmod', ['600', path])).exitCode != 0) {
-      throw StateError('Cannot protect application socket');
-    }
+    protectPrivateFile(path);
     _listener!.listen((client) {
       final bridge = _bridge(client);
       _bridges.add(bridge);
