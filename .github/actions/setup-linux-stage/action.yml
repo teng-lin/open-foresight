@@ -31,6 +31,11 @@ runs:
       with:
         path: /opt/foresight-flutter
         key: flutter-linux-x64-3.35.7-v1
+    - name: Resolve locked language prerequisites for isolated stages
+      shell: bash
+      run: |
+        (cd packages/foresight_core && dart pub get --enforce-lockfile)
+        (cd apps/desktop && flutter pub get --enforce-lockfile)
     - name: Record compiler, runtime, package and workspace identity
       shell: bash
       run: .venv/bin/python tools/ci_stage_environment.py --platform linux --output build/stage-environment.json

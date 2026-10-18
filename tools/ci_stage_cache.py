@@ -49,12 +49,19 @@ def git(root, *args):
 def selected(path, stage):
     if path in EDITORIAL or path.startswith("docs/"):
         return False
+    if path == "apps/desktop/pubspec.yaml":
+        return True  # Native build and helper identity consume application version.
+    if path == "packages/foresight_core/lib/src/model_pins.dart":
+        return True  # Shared native/runtime fixtures consume these model pins.
     if path.startswith("apps/desktop/"):
-        return stage in ("desktop", "service")
+        # Core's registry guard validates desktop command literals as well.
+        return stage in ("desktop", "service") or (
+            stage == "core" and path.startswith("apps/desktop/lib/")
+        )
     if path.startswith("packages/foresight_core/"):
         return stage != "native"
     if path.startswith("tests/service/"):
-        return stage == "service"
+        return stage in ("core", "service")
     return True
 
 
@@ -198,6 +205,8 @@ def validate_receipt(
         or receipt["source_run_attempt"] < 1
     ):
         raise ValueError("Invalid producer attempt")
+    if receipt.get("reusable", True) is not True:
+        raise ValueError("Derived distribution outputs are not reusable stage proofs")
     commit = receipt.get("source_commit")
     if not isinstance(commit, str) or commit != run.get("head_sha"):
         raise ValueError("Receipt source differs from actual workflow producer")
@@ -212,7 +221,7 @@ def read_zip(path, destination=None):
         if sorted(stream.namelist()) != ["identity.json", "payload.tar.gz"]:
             raise ValueError("Unexpected stage artifact members")
         receipt_info = stream.getinfo("identity.json")
-        if receipt_info.file_size > 65536:
+        if receipt_info.file_size > 16 * 1024 * 1024:
             raise ValueError("Stage receipt too large")
         for entry in stream.infolist():
             kind = stat.S_IFMT(entry.external_attr >> 16)
@@ -276,7 +285,7 @@ def find(
         candidates_jobs = [
             job
             for job in jobs
-            if job.get("name") == f"{stage}-{platform}"
+            if job.get("name", "").split(" / ")[-1] == f"{stage}-{platform}"
             and job.get("conclusion") == "success"
             and artifacts.in_producer_attempt(artifact, job)
         ]
@@ -317,13 +326,26 @@ def find(
     return result
 
 
-def publish(platform, stage, root, environment, parents, archive, output, content=None):
+def publish(
+    platform,
+    stage,
+    root,
+    environment,
+    parents,
+    archive,
+    output,
+    content=None,
+    reusable_result=True,
+):
     identity = fingerprint(
         platform, stage, root, environment=environment, parents=parents
     )
     commit = git(root, "rev-parse", "HEAD").decode().strip()
     # Only a clean committed input tree has a verifiable producer counterpart.
-    if fingerprint(platform, stage, root, commit, environment, parents) != identity:
+    if (
+        reusable_result
+        and fingerprint(platform, stage, root, commit, environment, parents) != identity
+    ):
         raise ValueError("Cannot publish outputs with uncommitted stage inputs")
     receipt = {
         "schema": 1,
@@ -332,6 +354,7 @@ def publish(platform, stage, root, environment, parents, archive, output, conten
         "identity": identity,
         "source_commit": commit,
         "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+        "reusable": reusable_result,
         "environment": environment,
         "parents": parents,
         "sha256": artifacts.digest(archive),

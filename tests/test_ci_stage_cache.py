@@ -101,7 +101,8 @@ class FingerprintTests(SourceTree):
         baseline = {stage: self.key(stage) for stage in cache.STAGES}
         self.write("apps/desktop/lib/main.dart", "desktop changed")
         self.assertEqual(baseline["native"], self.key("native"))
-        self.assertEqual(baseline["core"], self.key("core"))
+        # Core's operation registry also validates desktop command literals.
+        self.assertNotEqual(baseline["core"], self.key("core"))
         self.assertNotEqual(baseline["desktop"], self.key("desktop"))
         self.assertNotEqual(baseline["service"], self.key("service"))
         self.write("apps/desktop/lib/main.dart", "initial\n")
@@ -109,6 +110,21 @@ class FingerprintTests(SourceTree):
         self.assertEqual(baseline["native"], self.key("native"))
         for stage in ("core", "desktop", "service"):
             self.assertNotEqual(baseline[stage], self.key(stage))
+
+    def test_registry_and_native_metadata_inputs_are_not_missed(self):
+        for path, affected in [
+            ("tests/service/contract.dart", {"core", "service"}),
+            ("apps/desktop/pubspec.yaml", set(cache.STAGES)),
+            ("packages/foresight_core/lib/src/model_pins.dart", set(cache.STAGES)),
+            ("apps/desktop/test/widget_test.dart", {"desktop", "service"}),
+        ]:
+            baseline = {stage: self.key(stage) for stage in cache.STAGES}
+            self.write(path, "changed")
+            for stage in cache.STAGES:
+                with self.subTest(path=path, stage=stage):
+                    self.assertEqual(
+                        baseline[stage] != self.key(stage), stage in affected
+                    )
 
     def test_tools_workflows_locks_pins_and_shared_support_are_common_inputs(self):
         for path in (
@@ -238,6 +254,15 @@ class ProducerTests(SourceTree):
             patch.object(cache.artifacts, "download_zip", side_effect=self.download),
         ):
             return cache.find(**args)
+
+    def test_realistic_large_content_manifest_and_nested_reusable_job(self):
+        self.receipt["content"] = {"files": {"native-output": {"data": "x" * 70000}}}
+        self.job["name"] = "linux-native / native-linux"
+        self.assertTrue(self.find()["hit"])
+
+    def test_derived_distribution_payload_cannot_be_reused(self):
+        self.receipt["reusable"] = False
+        self.assertFalse(self.find()["hit"])
 
     def test_verified_restore_returns_payload_without_executing_producer(self):
         output = self.root / "download"

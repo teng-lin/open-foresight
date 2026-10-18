@@ -17,8 +17,9 @@ done
 # Short sockets work on macOS too. Honor disk-backed local test storage.
 task_service_temp=$(mktemp -d "${FORESIGHT_TEST_TEMP_ROOT:-/tmp}/of-svc.XXXXXX")
 trap 'rm -rf -- "$task_service_temp"' EXIT
+mkdir -p "$task_root/test-results/service"
 FORESIGHT_SERVICE_EXECUTABLE="$task_build/application/foresight-service" \
 FORESIGHT_MCP_EXECUTABLE="$task_build/application/foresight-mcp" \
 FORESIGHT_HELPER_EXECUTABLE="$task_build/services/helper/ForesightHelper" \
 FORESIGHT_NATIVE_LIBRARY="$task_native" \
-  ci_timed "service and MCP integration" "$task_python" -m pytest "$task_root/tests/service" --basetemp "$task_service_temp" -v
+  ci_timed "service and MCP integration" "$task_python" -m pytest "$task_root/tests/service" --basetemp "$task_service_temp" --junitxml="$task_root/test-results/service/results.xml" -v
