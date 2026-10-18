@@ -17,7 +17,7 @@ RUN python3 -m venv /opt/dev-python && /opt/dev-python/bin/pip install --no-cach
     python3 -m venv /opt/litert-python && /opt/litert-python/bin/pip install --no-cache-dir --require-hashes -r requirements-litert.lock
 COPY --from=whisper /opt/whisper-sdk /opt/whisper-sdk
 COPY services/speech /opt/services/speech
-COPY services/inference/persistent_worker.h services/inference/output_budget.h /opt/services/inference/
+COPY services/inference/persistent_worker.h services/inference/output_budget.h services/inference/worker_frame.h /opt/services/inference/
 RUN cmake -S /opt/services/speech -B /tmp/speech-build -G Ninja \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=/opt/whisper-sdk && \
     cmake --build /tmp/speech-build --parallel 2 && \
