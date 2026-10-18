@@ -114,24 +114,80 @@ The temporary archive is removed after loading to reduce disk usage. After merge
 main can load and publish approved retained components without recompilation.
 No distribution credentials or user configuration are added to dependency archives.
 
+## Linux package names and cleanup
+
+All four GHCR packages remain build dependencies. Use the `current` tag to find
+what the latest dependency producer published for main:
+
+| Package under `ghcr.io/teng-lin/open-foresight/` | Purpose |
+| --- | --- |
+| `linux-core:current` | Ubuntu baseline, compiler, protobuf/gRPC and Flutter |
+| `linux-litert:current` | LiteRT inference libraries and extensions |
+| `linux-whisper:current` | Whisper and Vulkan speech dependencies |
+| `linux-sdk:current` | Combined SDK, Python environments and speech worker |
+
+`current` is a readable, mutable alias; consumers still use qualified descriptors
+with immutable digests and full content-identity tags. The Ubuntu-only
+`linux-registry.yml` workflow publishes aliases after a successful
+main dependency run, on alias-tool changes, or on manual dispatch. It checks out
+current main, consumes qualified immutable registry descriptors, checks main again
+before each publication, and verifies the resulting digests. Missing descriptors
+fail publication and require dependency CI; alias maintenance never builds an SDK.
+Shared dependency orchestration does not contain registry alias logic. Keep each
+package's `buildcache`, plus
+`linux-sdk:app-buildcache-x86-64`, for incremental builds.
+
+To retire old tagged images, run `python3 tools/cleanup_linux_packages.py` to
+write a reviewable plan, then `python3 tools/cleanup_linux_packages.py --apply
+linux-package-cleanup.json`. The CLI needs `read:packages` and `delete:packages`
+as well as Actions write access. Cleanup keeps current identities, cache tags,
+`current`, and manifests reachable from those tags. It removes obsolete matching
+CI descriptor/receipt artifacts before deleting their image versions. Historical
+CI reruns using those images will need dependency production again. Untagged
+versions are left alone: they can be child manifests or digest-only references.
+The apply step rejects changed main, active CI runs, and changed package tags.
+
 ## Normal checks and release readiness
 
-Documentation-only changes run the change/whitespace classifier, workflow lint,
-version checks and stable `platform-checks` aggregate without allocating macOS
-or Linux build runners. Code changes run both platform gates and a separate
-Ubuntu document-import check. The Linux gate runs the offline pytest suite;
-the document check requires actual PDF and RTF imports through the shipped
-sandbox and retains its evidence. Main also builds the complete Linux portable
-candidate. Pull requests that change the desktop, application service, or
-packaging additionally build and install the Ubuntu 24.04 package. The aggregate
-rejects failures,
-cancellations, and unexpectedly skipped selected jobs. If branch protection is
-introduced, require `platform-checks`; individual platform jobs intentionally
-skip on documentation changes. Classification errors fail that check.
+The Ubuntu `changes` job always checks whitespace, workflow syntax, integration
+inventory and version copies. It emits separate selections for `macos`,
+`linux-native`, `linux-document-imports` and `linux-bundle`:
+
+| Changed paths | Selected platform checks |
+| --- | --- |
+| Documentation and explicitly listed registry-maintenance tools/tests | None |
+| Mac runner, Mac packaging directory and listed Mac build/package tools | Mac |
+| Linux runner, Linux packaging CI and listed Linux build/SDK/package tools | Linux native, document imports, and main bundle |
+| Shared application/native code, shared workflows, selector, or unknown paths | All |
+
+Selections are unioned across the complete diff. The exceptions live in
+`tools/ci_changes.py`; new files are conservative by default. Shared workflow files
+such as `macos.yml` and `ci-dependencies.yml` remain full-validation inputs. The
+selector and workflow change itself therefore requires a complete platform run.
+The separate Ubuntu quality job runs offline Python tests, lint, types and timeout
+checks even when platform jobs skip. The `pytest.ini` inventory includes registry
+cleanup and publication regression tests.
+
+The Linux gate runs the offline pytest suite; the document check requires actual
+PDF and RTF imports through the shipped sandbox and retains its evidence. Main
+builds the complete Linux portable candidate when Linux checks are selected.
+Pull requests that change the desktop, application service, or packaging
+additionally build and install the Ubuntu 24.04 package. The stable
+`platform-checks` aggregate checks each selection independently and rejects
+failures, cancellations, malformed/missing selections and unexpectedly skipped
+selected jobs. Unselected jobs must actually skip. If branch protection is
+introduced, require `platform-checks` rather than every individual platform job.
+Manual dispatch forces every platform gate, including after documentation or
+maintenance-only commits; release coordination uses that path when exact-commit
+candidates are missing.
 
 Flutter is cached by pinned version/platform and its git revision is verified.
 Pub dependencies are cached by lockfile. Native/test gates retain the existing
-parallel core/desktop execution.
+parallel core/desktop execution. Build logs now record `CI timing:` entries for
+native configure/compile/tests, core analysis/tests/coverage, service and MCP
+compilation/integration, and desktop analysis/tests/release compilation. Core and
+desktop phase timings remain in their separate retained gate logs. Measure these
+phases before adding compilation caches; dependency downloads are already reused.
 
 Use `release.yml` on reviewed main to prepare a release. Before creating a tag,
 the coordinator requires successful candidates for that exact commit: the macOS

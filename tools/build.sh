@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source "$task_root/tools/ci_timing.sh"
 task_build=${FORESIGHT_BUILD_DIR:-"$task_root/build"}
 task_python=${FORESIGHT_PYTHON:-"$task_root/.venv/bin/python"}
 task_platform=${FORESIGHT_PLATFORM:-}
@@ -40,10 +41,10 @@ if [[ ! -x "$task_python" ]]; then
   exit 1
 fi
 "$task_python" "$task_root/tools/verify_descriptor.py"
-cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" "${task_cmake_platform[@]}" "$@"
-cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
+ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" "${task_cmake_platform[@]}" "$@"
+ci_timed "native compile" cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
 task_build=$(cd -- "$task_build" && pwd)
-ctest --test-dir "$task_build" --output-on-failure
+ci_timed "native tests" ctest --test-dir "$task_build" --output-on-failure
 if [[ "${FORESIGHT_PARALLEL_GATES:-0}" == 1 ]] && command -v dart >/dev/null && command -v flutter >/dev/null; then
   "$task_python" "$task_root/tools/parallel_build_gates.py" \
     --platform "$task_platform" --build "$task_build" --python "$task_python"
@@ -67,6 +68,6 @@ if [[ -x "$task_build/application/foresight-service" && -x "$task_build/applicat
   FORESIGHT_MCP_EXECUTABLE="$task_build/application/foresight-mcp" \
   FORESIGHT_HELPER_EXECUTABLE="$task_build/services/helper/ForesightHelper" \
   FORESIGHT_NATIVE_LIBRARY="$task_native" \
-    "$task_python" -m pytest "$task_root/tests/service" --basetemp "$task_service_temp" -v
+    ci_timed "service and MCP integration" "$task_python" -m pytest "$task_root/tests/service" --basetemp "$task_service_temp" -v
   rm -rf -- "$task_service_temp"
 fi

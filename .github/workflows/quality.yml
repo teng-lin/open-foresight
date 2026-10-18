@@ -23,6 +23,16 @@ jobs:
       - run: ruff check .
       - run: mypy
       - run: python tools/check_subprocess_timeouts.py
+      - name: Install pinned protobuf compiler for contract tests
+        run: |
+          task_protoc="$RUNNER_TEMP/quality-protoc"
+          curl --fail --location --retry 3 --max-time 120 -o "$task_protoc.zip" https://github.com/protocolbuffers/protobuf/releases/download/v35.1/protoc-35.1-linux-x86_64.zip
+          printf '%s  %s\n' '6930ebf62bd4ea607b98fff052596c6ee564b9835b4ce172c75a3f53ae9d91b7' "$task_protoc.zip" | sha256sum --check
+          unzip -q "$task_protoc.zip" -d "$task_protoc"
+          test "$("$task_protoc/bin/protoc" --version)" = 'libprotoc 35.1'
+          echo "$task_protoc/bin" >> "$GITHUB_PATH"
+      - name: Offline Python unit tests
+        run: python -m pytest
   format:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
