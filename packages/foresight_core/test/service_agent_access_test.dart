@@ -110,13 +110,14 @@ void main() {
     () async {
       await attach();
       final subscription = desktop.events.stream.listen((event) {
-        if (event['event'] == 'approval')
+        if (event['event'] == 'approval') {
           unawaited(
             desktop.call('security.decide', {
               'approval_id': event['approval_id'],
               'allow': true,
             }),
           );
+        }
       });
       addTearDown(subscription.cancel);
       final outside = File('${temp.path}/outside.txt')

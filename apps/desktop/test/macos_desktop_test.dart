@@ -20,16 +20,16 @@ class PermissionDomain extends CommandFixtureDomain {
     Map<String, dynamic> args = const {},
   ]) async {
     requests.add(operation.wire);
-    if (operation == Operation.audio_capabilities)
+    if (operation == Operation.audioCapabilities)
       return {
         'microphone': 'not_determined',
         'system_audio': 'permission_checked_on_capture',
       };
-    if (operation == Operation.audio_request_microphone)
+    if (operation == Operation.audioRequestMicrophone)
       return {'granted': false, 'microphone': 'denied'};
-    if (operation == Operation.notifications_request_permission)
+    if (operation == Operation.notificationsRequestPermission)
       return {'granted': false};
-    if (operation == Operation.notifications_capabilities)
+    if (operation == Operation.notificationsCapabilities)
       return {'available': false, 'authorization': 0};
     return super.command(operation, args);
   }

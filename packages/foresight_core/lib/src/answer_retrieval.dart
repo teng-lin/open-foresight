@@ -113,8 +113,9 @@ Map<String, Object?>? _completeProcedure(
       caseSensitive: false,
     ).allMatches(text).map((m) => int.parse(m[1]!)).toList();
     if (steps.length < 3 ||
-        steps.asMap().entries.any((e) => e.value != e.key + 1))
+        steps.asMap().entries.any((e) => e.value != e.key + 1)) {
       continue;
+    }
     final score = matched / terms.length;
     if (score <= bestScore) continue;
     bestScore = score;
@@ -144,8 +145,9 @@ bool _useful(String text) {
     'png',
     'jpg',
     'svg',
-  }.contains(normalized))
+  }.contains(normalized)) {
     return false;
+  }
   // Short real facts such as a date, name, or "Tuesday" remain usable.
   // Encoded URL tails and long hex hashes are not prose evidence.
   return RegExp(r"^[\p{L}\p{N}\s.,:'’\-–]+$", unicode: true).hasMatch(text) &&
@@ -254,8 +256,9 @@ List<Map<String, Object?>>? _completeExamples(
   for (final source in sources) {
     final title = ' ${_words(source['title'] as String)} ';
     if (!RegExp(r'\bexamples?\b').hasMatch(title) ||
-        !terms.every((t) => title.contains(' $t ')))
+        !terms.every((t) => title.contains(' $t '))) {
       continue;
+    }
     final text = cleanAnswerText(source['content'] as String);
     final headings = RegExp(
       r'^(#{1,6})\s+([^\n]+)',
@@ -276,8 +279,9 @@ List<Map<String, Object?>>? _completeExamples(
       final entry = text.substring(h.start, end).trim();
       // Reject a numbered index, short link list, or incomplete/oversized entry.
       if (entry.length < 400 ||
-          RegExp(r'^\|', multiLine: true).allMatches(entry).length < 4)
+          RegExp(r'^\|', multiLine: true).allMatches(entry).length < 4) {
         continue;
+      }
       bytes += utf8.encode(entry).length;
       if (bytes > 16000) break;
       entries.add({
@@ -365,13 +369,14 @@ List<Map<String, Object?>> rankAnswerPassages(
   for (var i = 0; i < semantic.length; i++) {
     final candidate = semantic[i];
     final source = current[candidate['document_id']];
-    if (source != null)
+    if (source != null) {
       add(
         source,
         candidate['text'] as String,
         .25 / (1 + i),
         similarity: (candidate['score'] as num?)?.toDouble(),
       );
+    }
   }
   if (terms.isNotEmpty) {
     RegExp patternFor(Iterable<String> terms) => RegExp(
@@ -425,8 +430,9 @@ List<Map<String, Object?>> rankAnswerPassages(
         );
         if (sections.add(excerpt)) add(source, excerpt, 0, expand: false);
       }
-      if (windows.isEmpty && _lexical(source['title'] as String, terms) > 0)
+      if (windows.isEmpty && _lexical(source['title'] as String, terms) > 0) {
         add(source, text.substring(0, math.min(text.length, 900)), 0);
+      }
     }
   }
   final ranked = candidates.values.toList()

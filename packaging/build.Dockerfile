@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends nlohmann-json3-
 RUN git -C /opt/flutter fetch --depth=1 origin refs/tags/3.35.7:refs/tags/3.35.7 && \
     test "$(git -C /opt/flutter rev-parse refs/tags/3.35.7)" = "$(git -C /opt/flutter rev-parse HEAD)" && \
     rm -f /opt/flutter/bin/cache/flutter.version.json && \
-    flutter --version --machine | python3 -c 'import json, sys; assert json.load(sys.stdin)["frameworkVersion"] == "3.35.7"'
+    flutter --version --machine | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin)["frameworkVersion"] == "3.35.7" else "Unexpected Flutter framework version")'
 WORKDIR /src
 # Fetch this pinned runtime independently of application/source-revision changes.
 COPY . .

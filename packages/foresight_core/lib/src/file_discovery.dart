@@ -37,8 +37,9 @@ class LocalFileDiscovery {
     int maxEntries = 50000,
     void Function(int examined, int found)? progress,
   }) async {
-    if (maxFiles < 1 || maxEntries < 1)
+    if (maxFiles < 1 || maxEntries < 1) {
       throw ArgumentError('Positive scan limits required');
+    }
     final files = <String, DiscoveredLocalFile>{};
     final unavailable = <String>{};
     final visited = <String>{};
@@ -72,8 +73,9 @@ class LocalFileDiscovery {
           final name = entry.path.split(Platform.pathSeparator).last;
           if (name.startsWith('.')) continue;
           if (entry is Directory) {
-            if (!['node_modules', 'build', 'target'].contains(name))
+            if (!['node_modules', 'build', 'target'].contains(name)) {
               pending.add(entry.absolute.path);
+            }
           } else if (entry is File &&
               RegExp(
                 r'\.(txt|md|pdf|rtf)$',
@@ -86,12 +88,13 @@ class LocalFileDiscovery {
             }
             try {
               final stat = await entry.stat();
-              if (stat.type == FileSystemEntityType.file)
+              if (stat.type == FileSystemEntityType.file) {
                 files[absolute] = DiscoveredLocalFile(
                   absolute,
                   stat.size,
                   stat.modified,
                 );
+              }
             } on FileSystemException {
               unavailable.add(path);
             }

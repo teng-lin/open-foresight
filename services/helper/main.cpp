@@ -196,9 +196,10 @@ class Service : public rpc::RagService::Service,
   std::vector<PreparedChunk>
   prepare_chunks(Model &m, const std::string &content, int size, int overlap,
                  const std::string &mime, grpc::ServerContext *context) {
-    if (mime.starts_with("image/"))
+    if (mime.starts_with("image/")) {
       throw std::runtime_error(
           "Image embedding unavailable in text-only model");
+    }
     auto texts = m.chunks(content, size, overlap);
     std::vector<PreparedChunk> prepared;
     prepared.reserve(texts.size());
@@ -332,8 +333,9 @@ class Service : public rpc::RagService::Service,
 public:
   Service(const std::string &root, bool allow)
       : allow_test(allow), storage_root(root) {
-    if (sqlite3_open((root + "/agent_metadata.db").c_str(), &db) != SQLITE_OK)
+    if (sqlite3_open((root + "/agent_metadata.db").c_str(), &db) != SQLITE_OK) {
       throw std::runtime_error("Cannot open metadata");
+    }
     sqlite3_busy_timeout(db, 5000);
     sql("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
     sql("CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,content "

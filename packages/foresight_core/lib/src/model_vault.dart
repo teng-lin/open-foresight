@@ -180,8 +180,9 @@ class MacModelVault {
   }
 
   static void _checkCurrent(bool Function()? current) {
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
+    }
   }
 }
 

@@ -35,8 +35,9 @@ class PlatformSecretStore implements SecretStore {
           : null;
 
   Future<ProcessResult> _run(List<String> args, {String? input}) async {
-    if (executable == null)
+    if (executable == null) {
       throw StateError('Platform secret store unavailable');
+    }
     final process = await Process.start(executable!, args);
     final output = utf8.decoder.bind(process.stdout).join();
     final error = utf8.decoder.bind(process.stderr).join();

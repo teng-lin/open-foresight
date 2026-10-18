@@ -85,7 +85,7 @@ class GoogleFixture {
             if (fields != null) fieldQueries.add(fields);
             final query = request.uri.queryParameters['q']!;
             queries.add(query);
-            if (query.contains("'nested' in parents"))
+            if (query.contains("'nested' in parents")) {
               response = {
                 'files': [
                   file(
@@ -95,7 +95,7 @@ class GoogleFixture {
                   ),
                 ],
               };
-            else if (query.contains("'folder' in parents"))
+            } else if (query.contains("'folder' in parents")) {
               response = {
                 'files': [
                   file('doc', 'Apollo', 'application/vnd.google-apps.document'),
@@ -112,7 +112,7 @@ class GoogleFixture {
                   ),
                 ],
               };
-            else if (request.uri.queryParameters['pageToken'] == 'page2')
+            } else if (request.uri.queryParameters['pageToken'] == 'page2') {
               response = {
                 'files': [
                   file(
@@ -122,7 +122,7 @@ class GoogleFixture {
                   ),
                 ],
               };
-            else
+            } else {
               response = {
                 'nextPageToken': 'page2',
                 'files': [
@@ -134,6 +134,7 @@ class GoogleFixture {
                   file('doc', 'Apollo', 'application/vnd.google-apps.document'),
                 ],
               };
+            }
           } else if (path.endsWith('/export')) {
             final mime = request.uri.queryParameters['mimeType']!;
             exports.add(mime);

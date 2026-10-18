@@ -305,7 +305,8 @@ void main() {
   );
 
   test('physical memory is detected on supported hosts', () {
-    if (Platform.isMacOS || Platform.isLinux)
+    if (Platform.isMacOS || Platform.isLinux) {
       expect(physicalMemoryGb(), greaterThan(0));
+    }
   });
 }

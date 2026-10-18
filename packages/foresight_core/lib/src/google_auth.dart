@@ -40,10 +40,11 @@ class GoogleClient {
         installed['client_id'] is! String ||
         !(installed['client_id'] as String).endsWith(
           '.apps.googleusercontent.com',
-        ))
+        )) {
       throw StateError(
         'Choose a Google OAuth Desktop app client JSON, not a web or Apple client.',
       );
+    }
     return GoogleClient(
       installed['client_id'] as String,
       installed['client_secret'] as String? ?? '',
@@ -73,7 +74,9 @@ class GoogleAuth implements GoogleAccount {
   late final String _secretKey = sha256
       .convert(utf8.encode(directory.absolute.path))
       .toString();
+  @override
   GoogleClient? client;
+  @override
   String loadError = '';
   Map<String, dynamic>? _tokens;
   HttpServer? _callback;
@@ -105,20 +108,21 @@ class GoogleAuth implements GoogleAccount {
     final config = File('${directory.path}/client.json'),
         tokens = File('${directory.path}/tokens.json');
     try {
-      if (config.existsSync())
+      if (config.existsSync()) {
         client = GoogleClient.parse(
           jsonDecode(config.readAsStringSync()) as Map<String, dynamic>,
         );
-      else {
+      } else {
         final bundled =
             defaultClient ??
             (runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT'] == null
                 ? null
                 : File(runtimeConfiguration['FORESIGHT_GOOGLE_CLIENT']!));
-        if (bundled?.existsSync() == true)
+        if (bundled?.existsSync() == true) {
           client = GoogleClient.parse(
             jsonDecode(bundled!.readAsStringSync()) as Map<String, dynamic>,
           );
+        }
       }
       if (tokens.existsSync()) {
         privateDirectory(directory.path);
@@ -133,8 +137,9 @@ class GoogleAuth implements GoogleAccount {
             (loaded['refresh_token'] is! String &&
                 loaded['refresh_token_store'] != 'platform') ||
             loaded['account_sub'] is! String ||
-            loaded['expires_at'] is! int)
+            loaded['expires_at'] is! int) {
           throw StateError('Incomplete saved Google authorization');
+        }
         _tokens = loaded;
       }
     } catch (_) {
@@ -143,13 +148,17 @@ class GoogleAuth implements GoogleAccount {
           'Saved Google setup could not be loaded. Import your Desktop client configuration and sign in again.';
     }
   }
+  @override
   bool get connected =>
       !_disconnecting &&
       (_tokens?['refresh_token'] is String ||
           _tokens?['refresh_token_store'] == 'platform') &&
       _tokens?['account_sub'] is String;
+  @override
   String get account => _tokens?['account_sub'] as String? ?? '';
+  @override
   String get email => _tokens?['email'] as String? ?? '';
+  @override
   bool get signingIn => _callback != null;
   String _random(int bytes) => base64UrlEncode(
     List.generate(bytes, (_) => Random.secure().nextInt(256)),
@@ -165,12 +174,14 @@ class GoogleAuth implements GoogleAccount {
     try {
       await temp.create();
       final mode = await Process.run('chmod', ['600', temp.path]);
-      if (mode.exitCode != 0 || _closed)
+      if (mode.exitCode != 0 || _closed) {
         throw StateError('Cannot protect Google connection data');
+      }
       await temp.writeAsString(jsonEncode(data), flush: true);
       if (authorizationGeneration != null &&
-          authorizationGeneration != _authorizationGeneration)
+          authorizationGeneration != _authorizationGeneration) {
         throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
+      }
       temp.renameSync('${directory.path}/$name');
     } finally {
       if (temp.existsSync()) await temp.delete();
@@ -182,10 +193,11 @@ class GoogleAuth implements GoogleAccount {
     if (token is String) return token;
     if (_tokens?['refresh_token_store'] == 'platform') {
       final token = await secretStore.read(_secretKey);
-      if (token == null)
+      if (token == null) {
         throw StateError(
           'Saved Google authorization is unavailable. Sign in again.',
         );
+      }
       return token;
     }
     return null;
@@ -224,13 +236,16 @@ class GoogleAuth implements GoogleAccount {
     }
   }
 
+  @override
   Future<void> configure(File file) async {
-    if (_disconnecting || _forgetting != null)
+    if (_disconnecting || _forgetting != null) {
       throw RpcError(RpcErrorCode.busy, 'Google disconnect is in progress');
-    if (connected)
+    }
+    if (connected) {
       throw StateError(
         'Disconnect the current Google account before changing its OAuth client.',
       );
+    }
     final candidate = GoogleClient.parse(
       jsonDecode(await file.readAsString()) as Map<String, dynamic>,
     );
@@ -250,8 +265,9 @@ class GoogleAuth implements GoogleAccount {
     final request = await http
         .openUrl(method, uri)
         .timeout(const Duration(seconds: 30));
-    if (bearer != null)
+    if (bearer != null) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearer');
+    }
     if (form != null) {
       request.headers.contentType = ContentType(
         'application',
@@ -270,8 +286,9 @@ class GoogleAuth implements GoogleAccount {
     final bytes = <int>[];
     await for (final chunk in response.timeout(const Duration(seconds: 30))) {
       bytes.addAll(chunk);
-      if (bytes.length > maximumBytes)
+      if (bytes.length > maximumBytes) {
         throw StateError('Google response exceeds the supported size limit.');
+      }
     }
     return Uint8ListResponse(response.statusCode, bytes);
   }
@@ -292,19 +309,24 @@ class GoogleAuth implements GoogleAccount {
     return json;
   }
 
+  @override
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
     if (_closed) throw StateError('Google connection closed');
-    if (_disconnecting || _forgetting != null)
+    if (_disconnecting || _forgetting != null) {
       throw RpcError(RpcErrorCode.busy, 'Google disconnect is in progress');
+    }
     final generation = _authorizationGeneration;
-    if (connected)
+    if (connected) {
       throw StateError(
         'Disconnect the current Google account before signing in again.',
       );
-    if (client == null)
+    }
+    if (client == null) {
       throw StateError('Import a Desktop OAuth client configuration first.');
-    if (signingIn)
+    }
+    if (signingIn) {
       throw RpcError(RpcErrorCode.busy, 'Google sign-in is already open.');
+    }
     final nonce = _random(32), verifier = _random(64);
     final authorization = Completer<String>();
     _authorization = authorization;
@@ -383,10 +405,11 @@ class GoogleAuth implements GoogleAccount {
         ),
       );
       final granted = (token['scope'] as String? ?? '').split(' ').toSet();
-      if (!scopes.skip(2).every(granted.contains))
+      if (!scopes.skip(2).every(granted.contains)) {
         throw StateError(
           'Drive and Calendar read access are both required. Reconnect and grant these permissions.',
         );
+      }
       final access = token['access_token'] as String;
       final identity = _json(await request(endpoints.userinfo, bearer: access));
       final saved = {
@@ -397,20 +420,24 @@ class GoogleAuth implements GoogleAccount {
         'account_sub': identity['sub'],
         'email': identity['email'],
       };
-      if (saved['refresh_token'] is! String || saved['account_sub'] is! String)
+      if (saved['refresh_token'] is! String ||
+          saved['account_sub'] is! String) {
         throw StateError(
           'Google did not return a persistent account authorization. Reconnect.',
         );
+      }
       await _saveTokens(saved, generation);
-      if (generation != _authorizationGeneration)
+      if (generation != _authorizationGeneration) {
         throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
+      }
       _tokens = saved;
       loadError = '';
     } finally {
-      if (!authorization.isCompleted)
+      if (!authorization.isCompleted) {
         authorization.completeError(
           RpcError(RpcErrorCode.cancelled, 'Google sign-in cancelled'),
         );
+      }
       await listener.cancel();
       await server.close(force: true);
       if (identical(_callback, server)) _callback = null;
@@ -418,20 +445,24 @@ class GoogleAuth implements GoogleAccount {
     }
   }
 
+  @override
   void cancelSignIn() {
-    if (_authorization?.isCompleted == false)
+    if (_authorization?.isCompleted == false) {
       _authorization!.completeError(
         RpcError(RpcErrorCode.cancelled, 'Google sign-in cancelled'),
       );
+    }
   }
 
   Future<String> accessToken({bool forceRefresh = false}) async {
-    if (!connected || client == null)
+    if (!connected || client == null) {
       throw StateError('Connect your Google account first.');
+    }
     if (!forceRefresh &&
         (_tokens!['expires_at'] as int) >
-            DateTime.now().millisecondsSinceEpoch + 60000)
+            DateTime.now().millisecondsSinceEpoch + 60000) {
       return _tokens!['access_token'] as String;
+    }
     return _refreshing ??= _refresh().whenComplete(() => _refreshing = null);
   }
 
@@ -449,11 +480,12 @@ class GoogleAuth implements GoogleAccount {
         },
       ),
     );
-    if (_disconnecting || _closed || generation != _authorizationGeneration)
+    if (_disconnecting || _closed || generation != _authorizationGeneration) {
       throw RpcError(
         RpcErrorCode.cancelled,
         'Google connection changed during refresh',
       );
+    }
     final saved = {
       ..._tokens!,
       ...token,
@@ -462,8 +494,9 @@ class GoogleAuth implements GoogleAccount {
           (token['expires_in'] as num).toInt() * 1000,
     };
     await _saveTokens(saved, generation);
-    if (generation != _authorizationGeneration)
+    if (generation != _authorizationGeneration) {
       throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
+    }
     _tokens = saved;
     return saved['access_token'] as String;
   }
@@ -477,12 +510,13 @@ class GoogleAuth implements GoogleAccount {
       bearer: await accessToken(),
       maximumBytes: maximumBytes,
     );
-    if (response.status == 401)
+    if (response.status == 401) {
       response = await request(
         uri,
         bearer: await accessToken(forceRefresh: true),
         maximumBytes: maximumBytes,
       );
+    }
     if (response.status < 200 || response.status >= 300) {
       _json(response);
     }
@@ -529,6 +563,7 @@ class GoogleAuth implements GoogleAccount {
     }
   }
 
+  @override
   Future<void> disconnect() async {
     _authorizationGeneration++;
     cancelSignIn();
@@ -547,10 +582,11 @@ class GoogleAuth implements GoogleAccount {
           method: 'POST',
           form: {'token': token},
         );
-        if (response.status != 200 && response.status != 400)
+        if (response.status != 200 && response.status != 400) {
           throw StateError(
             'Google could not revoke the connection. Retry disconnect.',
           );
+        }
       }
       await _changeCredential(() => secretStore.delete(_secretKey));
       _tokens = null;
@@ -561,6 +597,7 @@ class GoogleAuth implements GoogleAccount {
     }
   }
 
+  @override
   Future<void> close() async {
     _closed = true;
     cancelSignIn();

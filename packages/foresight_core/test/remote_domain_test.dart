@@ -151,11 +151,9 @@ void main() {
     'cancelled commands cancel only their outstanding service request',
     () async {
       var current = true;
-      final result = f.remote.commandCurrent(
-        Operation.sources_import_directory,
-        {'path': '/fixture'},
-        () => current,
-      );
+      final result = f.remote.commandCurrent(Operation.sourcesImportDirectory, {
+        'path': '/fixture',
+      }, () => current);
       final failure = expectLater(result, throwsStateError);
       await eventually(
         () => f.requests.any((r) => r['method'] == 'sources.import_directory'),
@@ -169,14 +167,14 @@ void main() {
       f.handler = (socket, request) =>
           f.reply(socket, request, {'saved': true});
       expect(
-        await f.remote.commandCurrent(Operation.notes_save, {}, () => true),
+        await f.remote.commandCurrent(Operation.notesSave, {}, () => true),
         {'saved': true},
       );
       f.handler = (socket, request) => socket.writeln(
         jsonEncode({'id': request['id'], 'error': 'rejected', 'done': true}),
       );
       await expectLater(
-        f.remote.commandCurrent(Operation.notes_save, {}, () => true),
+        f.remote.commandCurrent(Operation.notesSave, {}, () => true),
         throwsStateError,
       );
     },
@@ -367,7 +365,7 @@ void main() {
   test(
     'abrupt service loss reconnects and refreshes snapshots without replaying a write',
     () async {
-      final pending = f.remote.command(Operation.notes_save, {
+      final pending = f.remote.command(Operation.notesSave, {
         'title': 'uncertain',
         'body': 'body',
       });

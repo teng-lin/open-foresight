@@ -1,0 +1,118 @@
+name: Native address and undefined behavior sanitizers
+on:
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'native/**'
+      - 'proto/**'
+      - 'third_party/**'
+      - 'requirements-dev.lock'
+      - 'services/**'
+      - 'tests/native/**'
+      - 'tests/helper/**'
+      - 'tests/inference/**'
+      - 'tests/integration/**'
+      - 'tools/generate_bindings.py'
+      - 'tools/run_native_sanitizers.sh'
+      - 'tools/verify_native_sanitizers.py'
+      - 'tools/build_sanitizer_sdk.py'
+      - 'tools/sanitizer_runtime.py'
+      - 'tests/test_sanitizer_runtime.py'
+      - 'tools/build_macos_sdk.py'
+      - 'packaging/minimal-grpc.cmake'
+      - 'packaging/sanitizer-grpc.cmake'
+      - '.github/workflows/native-sanitizers.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/**'
+      - 'native/**'
+      - 'proto/**'
+      - 'third_party/**'
+      - 'requirements-dev.lock'
+      - 'services/**'
+      - 'tests/native/**'
+      - 'tests/helper/**'
+      - 'tests/inference/**'
+      - 'tests/integration/**'
+      - 'tools/generate_bindings.py'
+      - 'tools/run_native_sanitizers.sh'
+      - 'tools/verify_native_sanitizers.py'
+      - 'tools/build_sanitizer_sdk.py'
+      - 'tools/sanitizer_runtime.py'
+      - 'tests/test_sanitizer_runtime.py'
+      - 'tools/build_macos_sdk.py'
+      - 'packaging/minimal-grpc.cmake'
+      - 'packaging/sanitizer-grpc.cmake'
+      - '.github/workflows/native-sanitizers.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-sanitizers-${{ github.ref }}
+  # Finish and cache the instrumented SDK before validating newer PR heads.
+  # Only the newest pending head waits, then reuses the compiler/recipe cache.
+  cancel-in-progress: false
+jobs:
+  native-sanitizers:
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
+    timeout-minutes: 120
+    steps:
+      - name: Install the native compiler and test dependencies
+        run: pacman -Syu --noconfirm cmake ninja gcc clang compiler-rt git nlohmann-json sqlite icu openssl zlib python python-pip
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Install hash-verified Python test tools
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+          .venv/bin/python -m pytest tests/test_sanitizer_runtime.py -q
+      - name: Identify the compiler for the instrumented SDK cache
+        id: compiler
+        run: |
+          echo "version=$(clang++ -dumpversion)" >> "$GITHUB_OUTPUT"
+          echo "identity=$(clang++ --version | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          runtime_directory=$(python tools/sanitizer_runtime.py --directory)
+          echo "LD_LIBRARY_PATH=$runtime_directory:$PWD/build/sanitizer-sdk/lib" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        id: sdk-cache
+        with:
+          path: build/sanitizer-sdk
+          key: sanitizer-sdk-clang-${{ steps.compiler.outputs.version }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('tools/build_sanitizer_sdk.py', 'tools/build_macos_sdk.py', 'tools/sanitizer_runtime.py', 'packaging/minimal-grpc.cmake', 'packaging/sanitizer-grpc.cmake') }}
+      - name: Build the pinned instrumented gRPC and protobuf closure
+        run: python tools/build_sanitizer_sdk.py --jobs 2
+      - name: Save the validated SDK before application checks
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: build/sanitizer-sdk
+          key: ${{ steps.sdk-cache.outputs.cache-primary-key }}
+      - name: Configure and build instrumented native code and tests
+        env:
+          ASAN_OPTIONS: detect_leaks=0:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          cmake -S . -B build/sanitizers -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=ON -DFORESIGHT_SANITIZERS=ON \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_PREFIX_PATH="$PWD/build/sanitizer-sdk" \
+            -DPython3_EXECUTABLE="$PWD/.venv/bin/python"
+          cmake --build build/sanitizers --parallel 2
+      - name: Prove both sanitizer runtimes detect real faults
+        run: python tools/verify_native_sanitizers.py --compiler clang++ --output test-results/sanitizer-probes
+      - name: Run every native test with fatal ASan and UBSan reports
+        run: tools/run_native_sanitizers.sh build/sanitizers test-results/sanitizers
+      - name: Retain sanitizer diagnostics and native test evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: native-sanitizer-evidence
+          path: |
+            test-results/sanitizers/
+            test-results/sanitizer-probes/
+            build/sanitizers/Testing/
+          if-no-files-found: warn

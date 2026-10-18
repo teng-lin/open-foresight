@@ -63,8 +63,9 @@ class ServiceClient {
     socket
         .map((chunk) {
           bytes += chunk.length;
-          if (bytes > _maxMessageBytes)
+          if (bytes > _maxMessageBytes) {
             throw StateError('Service message too large');
+          }
           return chunk;
         })
         .cast<List<int>>()
@@ -108,8 +109,9 @@ class ServiceClient {
     String path, {
     int maxMessageBytes = maxServiceMessage,
   }) async {
-    if (maxMessageBytes < 1)
+    if (maxMessageBytes < 1) {
       throw ArgumentError.value(maxMessageBytes, 'maxMessageBytes');
+    }
     return ServiceClient._(
       await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
@@ -144,8 +146,9 @@ class ServiceClient {
       onCancel: () {
         _methods.remove(id);
         _requestIds.remove(id);
-        if (_pending.remove(id) != null && !_closed)
+        if (_pending.remove(id) != null && !_closed) {
           socket.writeln(jsonEncode({'cancel': id}));
+        }
       },
     );
     if (_closed) {
@@ -156,8 +159,9 @@ class ServiceClient {
     } else {
       _pending[id] = controller;
       _methods[id] = method;
-      if (args['requestId'] is String)
+      if (args['requestId'] is String) {
         _requestIds[id] = args['requestId'] as String;
+      }
       socket.writeln(jsonEncode({'id': id, 'method': method, 'args': args}));
     }
     return controller.stream
@@ -184,10 +188,10 @@ class ServiceClient {
         .where(
           (entry) =>
               {
-                Operation.answer_stream.wire,
+                Operation.answerStream.wire,
                 Operation.answer.wire,
-                Operation.meetings_generate.wire,
-                Operation.meetings_enhance.wire,
+                Operation.meetingsGenerate.wire,
+                Operation.meetingsEnhance.wire,
               }.contains(entry.value) &&
               (requestId == null || _requestIds[entry.key] == requestId),
         )
@@ -336,8 +340,9 @@ class ApplicationService {
     privateDirectory(profile.data);
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
-    if (runtimeConfiguration['FORESIGHT_NATIVE'] != null)
+    if (runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
       configureProfileRuntime(profile.data);
+    }
     privateDirectory(profile.runtime);
     var path = '${profile.runtime}/application.sock';
     final lock = File(
@@ -348,8 +353,9 @@ class ApplicationService {
             '600',
             '${profile.data}/.application.lock',
           ]).exitCode !=
-          0)
+          0) {
         throw StateError('Cannot protect profile ownership lock');
+      }
       lock.lockSync(FileLock.exclusive);
     } catch (_) {
       lock.closeSync();
@@ -366,8 +372,9 @@ class ApplicationService {
       // Every supported public socket path must also fit the private endpoint.
       if (internalWorker) path = '${profile.runtime}/worker.sock';
       final stale = File(path);
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         stale.deleteSync();
+      }
       store = Store('${profile.data}/application.db');
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
       store.db.execute(
@@ -493,8 +500,9 @@ class ApplicationService {
               final id = request['id'];
               if (id is! int ||
                   request['method'] is! String ||
-                  request['args'] is! Map)
+                  request['args'] is! Map) {
                 throw FormatException('Invalid request');
+              }
               if (_closing) {
                 _send(client, {
                   'id': id,
@@ -512,29 +520,30 @@ class ApplicationService {
               );
               if (method.startsWith('security.')) {
                 try {
-                  if (method == Operation.security_attach_desktop.wire) {
+                  if (method == Operation.securityAttachDesktop.wire) {
                     access.attach(client, securityArgs['token'] as String);
-                  } else if (method == Operation.security_detach_desktop.wire) {
-                    if (!access.isHost(client))
+                  } else if (method == Operation.securityDetachDesktop.wire) {
+                    if (!access.isHost(client)) {
                       throw RpcError(
                         RpcErrorCode.denied,
                         'Not the desktop approval connection',
                       );
+                    }
                     access.detach(client);
                     unawaited(application.stopRecording());
-                  } else if (method == Operation.security_decide.wire) {
+                  } else if (method == Operation.securityDecide.wire) {
                     access.decide(
                       client,
                       securityArgs['approval_id'] as String,
                       securityArgs['allow'] == true,
                     );
-                  } else if (method ==
-                      Operation.security_allow_import_root.wire) {
-                    if (!access.isHost(client))
+                  } else if (method == Operation.securityAllowImportRoot.wire) {
+                    if (!access.isHost(client)) {
                       throw RpcError(
                         RpcErrorCode.denied,
                         'Only the desktop can select import folders',
                       );
+                    }
                     final root = Directory(
                       securityArgs['path'] as String,
                     ).resolveSymbolicLinksSync();
@@ -561,7 +570,7 @@ class ApplicationService {
                 }
                 return;
               }
-              if (request['method'] == Operation.service_stop_if_idle.wire) {
+              if (request['method'] == Operation.serviceStopIfIdle.wire) {
                 unawaited(
                   _stopIfIdle(
                     client,
@@ -652,11 +661,12 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) {
-    if (lease.cancelled)
+    if (lease.cancelled) {
       return Stream.error(
         RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
       );
-    if (lease.method == Operation.answer_stream.wire) {
+    }
+    if (lease.method == Operation.answerStream.wire) {
       return Stream.fromFuture(_ready).asyncExpand(
         (_) =>
             (args['web_search'] == true
@@ -670,8 +680,9 @@ class ApplicationService {
             ),
       );
     }
-    if (lease.method == Operation.google_sign_in.wire)
+    if (lease.method == Operation.googleSignIn.wire) {
       return application.signIn(lease.id);
+    }
     return Stream.fromFuture(_execute(lease.method, args, lease));
   }
 
@@ -712,10 +723,11 @@ class ApplicationService {
         );
       }
       await close(acknowledgementClient: client);
-      if (!domain.helper.shutdownVerified)
+      if (!domain.helper.shutdownVerified) {
         throw StateError(
           'Helper shutdown could not be verified. The application was not cleared for upgrade.',
         );
+      }
       _send(client, {
         'id': id,
         'result': {'stopped': true, 'shutdown_verified': true},
@@ -741,19 +753,21 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) async {
-    if (_closing)
+    if (_closing) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Application service is shutting down',
       );
+    }
     if (Operation.parse(method).requiresHelper) await _ready;
-    if (_closing)
+    if (_closing) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Application service is shutting down',
       );
-    if ((method == Operation.meetings_start.wire ||
-            method == Operation.meetings_resume.wire) &&
+    }
+    if ((method == Operation.meetingsStart.wire ||
+            method == Operation.meetingsResume.wire) &&
         !access.hasHost) {
       throw RpcError(
         RpcErrorCode.denied,
@@ -767,8 +781,9 @@ class ApplicationService {
     final lease = _leases[client]?.remove(id);
     if (lease != null) {
       lease.cancelled = true;
-      if (lease.method == Operation.google_sign_in.wire)
+      if (lease.method == Operation.googleSignIn.wire) {
         application.cancelSignIn(lease.id);
+      }
       domain.generator?.cancel(requestId: lease.id);
     }
     final subscription = _subscriptions[client]?.remove(id);
@@ -819,23 +834,26 @@ class ApplicationService {
     await attempt(listener.close);
     await attempt(domain.store.close);
     await attempt(() {
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         File(path).deleteSync();
+      }
       final endpoint = File(
         '${File(domain.store.path).parent.path}/.application-endpoint.json',
       );
       if (domain.helper.shutdownVerified &&
           failure == null &&
-          endpoint.existsSync())
+          endpoint.existsSync()) {
         endpoint.deleteSync();
+      }
     });
     await attempt(() async {
       await _beforeReleaseOwnership?.call();
     });
     await attempt(lock.closeSync);
     await attempt(() => installationLock?.closeSync());
-    if (failure != null)
+    if (failure != null) {
       throw StateError('Application shutdown failed: $failure');
+    }
   }
 }
 
@@ -884,11 +902,12 @@ class IsolatedApplicationService {
     });
     host._exits.listen((_) {
       if (!host._workerExited.isCompleted) host._workerExited.complete();
-      if (!host._ready.isCompleted)
+      if (!host._ready.isCompleted) {
         host._ready.completeError(
           host._failure ??
               StateError('Application worker exited during startup'),
         );
+      }
       unawaited(host._finish());
     });
     var spawned = false;
@@ -1123,12 +1142,14 @@ void _applicationServiceWorker(List<Object?> configuration) async {
     if (message == 'frontend_closed') {
       if (!frontendClosed.isCompleted) frontendClosed.complete();
     } else if (message == 'frontend_failed') {
-      if (!frontendClosed.isCompleted)
+      if (!frontendClosed.isCompleted) {
         frontendClosed.completeError(
           StateError('Public service socket cleanup failed'),
         );
-    } else if (!stop.isCompleted)
+      }
+    } else if (!stop.isCompleted) {
       stop.complete();
+    }
   });
   try {
     final profile = ProfilePaths(
@@ -1223,10 +1244,11 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
   privateDirectory(profile.data);
   privateDirectory(profile.runtime);
   final executable = runtimeConfiguration['FORESIGHT_SERVICE'];
-  if (executable == null || !File(executable).existsSync())
+  if (executable == null || !File(executable).existsSync()) {
     throw StateError(
       'Set FORESIGHT_SERVICE to the application-service executable',
     );
+  }
   final environment = {
     ...runtimeConfiguration.environment,
     'FORESIGHT_DATA': profile.data,

@@ -142,7 +142,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
     _activeId = null;
     _route = null;
     if (!mounted || _closed.remove(id)) return;
-    await widget.domain.command(Operation.security_decide, {
+    await widget.domain.command(Operation.securityDecide, {
       'approval_id': id,
       'allow': allow,
     });
@@ -187,7 +187,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
                     if (active)
                       TextButton(
                         onPressed: () =>
-                            widget.domain.command(Operation.meetings_stop),
+                            widget.domain.command(Operation.meetingsStop),
                         child: const Text(
                           'Stop recording',
                           style: TextStyle(color: Colors.white),

@@ -221,8 +221,9 @@ Map<String, GraphPoint> pcaGraphLayout(
   // Nonfinite inputs are a Linux safety boundary; the reference does not
   // establish finite output for malformed vectors. Mixed lengths are valid.
   if (dimensions < 3 ||
-      eligible.any((id) => vectors[id]!.any((x) => !x.isFinite)))
+      eligible.any((id) => vectors[id]!.any((x) => !x.isFinite))) {
     return {};
+  }
   final mean = List<double>.filled(dimensions, 0);
   for (final id in eligible) {
     final vector = vectors[id]!;
@@ -365,8 +366,9 @@ GraphPoint projectGraphPoint(
   double pitch = 0,
   double distance = 3,
 }) {
-  if (!distance.isFinite || distance <= 0)
+  if (!distance.isFinite || distance <= 0) {
     throw ArgumentError.value(distance, 'distance');
+  }
   final u = point.x * math.cos(yaw) - point.z * math.sin(yaw);
   final w = point.x * math.sin(yaw) + point.z * math.cos(yaw);
   final v = point.y * math.cos(pitch) - w * math.sin(pitch);
