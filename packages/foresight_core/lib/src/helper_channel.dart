@@ -44,10 +44,8 @@ class _HelperConnection extends Http2ClientConnection {
 
   _HelperConnection(super.host, super.port, super.options);
 
-  _HelperConnection.fromConnector(
-    ClientTransportConnector connector,
-    ChannelOptions options,
-  ) : super.fromClientTransportConnector(connector, options);
+  _HelperConnection.fromConnector(super.connector, super.options)
+    : super.fromClientTransportConnector();
 
   @override
   Future<ClientTransportConnection> connectTransport() async =>
