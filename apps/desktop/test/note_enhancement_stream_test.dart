@@ -153,8 +153,7 @@ void main() {
       await tester.runAsync(() async {
         generator.events.add({'type': 'delta', 'text': ' ignored'});
       });
-      await pumpUntil(
-        tester,
+      await waitForUi(
         () => find
             .byKey(const ValueKey('cancel-note-enhancement'))
             .evaluate()

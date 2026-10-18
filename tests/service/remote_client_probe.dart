@@ -61,7 +61,7 @@ Future<void> main() async {
     };
     // Unchanged service heartbeats no longer rebuild the desktop. Observe an
     // actual committed mutation after subscribing to the change callback.
-    await domain.command('notes.save', {
+    await domain.command(Operation.notes_save, {
       'id': note['id'],
       'title': 'Desktop facade',
       'body': 'service-owned',

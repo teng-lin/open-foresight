@@ -237,9 +237,9 @@ class _SourcesController extends _FeatureController {
                         onTap: () => setState(() {
                           meetingFeature.noteId = n['id'] as int;
                           meetingFeature.noteTitle.text = n['title'] as String;
-                          meetingFeature.noteBody.text =
-                              d.store.note(n['id'] as int).single['body']
-                                  as String;
+                          meetingFeature.noteBody.text = d.store.noteBody(
+                            n['id'] as int,
+                          );
                         }),
                       ),
                     )

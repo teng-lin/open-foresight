@@ -65,7 +65,7 @@ void main() {
       final dynamic state = tester.state(find.byType(Workspace));
       Future<void> waitForSearch(int count) async {
         final deadline = DateTime.now().add(const Duration(seconds: 5));
-        while (state.sourceSearchMatches.length != count &&
+        while (state.sourceFeature.sourceSearchMatches.length != count &&
             DateTime.now().isBefore(deadline)) {
           await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 10)),
@@ -73,7 +73,7 @@ void main() {
           await tester.pump(const Duration(milliseconds: 100));
         }
         expect(
-          state.sourceSearchMatches.length,
+          state.sourceFeature.sourceSearchMatches.length,
           count,
           reason:
               'Background full-body search must finish and reflect committed edits',
@@ -121,7 +121,7 @@ void main() {
         0,
         reason: 'Body searches run on a separate reader isolate',
       );
-      final cachedMatches = state.sourceSearchMatches;
+      final cachedMatches = state.sourceFeature.sourceSearchMatches;
       for (var i = 0; i < 20; i++) {
         helper.changed?.call();
         await tester.pump();
@@ -131,7 +131,10 @@ void main() {
         0,
         reason: 'Unchanged searches reuse matching IDs without UI body reads',
       );
-      expect(identical(state.sourceSearchMatches, cachedMatches), isTrue);
+      expect(
+        identical(state.sourceFeature.sourceSearchMatches, cachedMatches),
+        isTrue,
+      );
       store.importText(
         'Source 0000',
         'Edited full body',
