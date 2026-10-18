@@ -6,6 +6,7 @@ Requires macOS and the SDK for fixture generation; installed-app smoke tests can
 reuse the retained fixtures without an SDK.
 """
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -72,6 +73,15 @@ class FileParserTest(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=300,
+        )
+
+    def test_parser_sandbox_denies_other_files_and_network(self):
+        forbidden = self.root / "forbidden.txt"
+        forbidden.write_text("private unrelated content")
+        result = self.extract("--sandbox-probe", forbidden.name)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            json.loads(result.stdout), {"file_denied": True, "network_denied": True}
         )
 
     def test_real_unicode_pdf_and_rtf_without_shell_path_interpretation(self):
