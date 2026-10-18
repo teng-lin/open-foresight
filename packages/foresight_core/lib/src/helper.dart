@@ -1,12 +1,12 @@
 import 'platform_services.dart';
 import 'version.dart';
+import 'helper_channel.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 import 'package:grpc/grpc.dart';
 import 'package:grpc/service_api.dart' as grpc_api;
-import 'helper_transport.dart';
 import 'generated/rag_service.pbgrpc.dart';
 import 'generated/helper_control.pbgrpc.dart' as control;
 
@@ -59,8 +59,9 @@ class Helper {
   Future<void> Function()? onReady;
   final bool manageProcess;
   Helper(this.socket, this.storage, {this.manageProcess = true}) {
-    channel = ClientTransportConnectorChannel(
-      HelperTransportConnector(socket),
+    channel = HelperChannel(
+      InternetAddress(socket, type: InternetAddressType.unix),
+      port: 0,
       options: const ChannelOptions(
         credentials: ChannelCredentials.insecure(),
         connectTimeout: Duration(seconds: 3),

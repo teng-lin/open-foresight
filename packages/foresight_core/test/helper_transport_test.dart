@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
 import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/helper_channel.dart';
 import 'package:foresight_core/src/helper_transport.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
@@ -98,8 +99,13 @@ void main() {
                 return socket;
               },
             );
-            final channel = ClientTransportConnectorChannel(
-              connector,
+            final channel = HelperChannel(
+              InternetAddress(
+                '/unused-helper.sock',
+                type: InternetAddressType.unix,
+              ),
+              port: 0,
+              transportConnector: connector,
               options: const ChannelOptions(
                 credentials: ChannelCredentials.insecure(),
               ),
