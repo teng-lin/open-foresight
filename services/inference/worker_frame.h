@@ -8,4 +8,11 @@ namespace foresight {
 inline std::string frame_json(const nlohmann::json &value) {
   return value.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
 }
+inline std::string error_frame_json(const char *message) noexcept {
+  try {
+    return frame_json(nlohmann::json(message));
+  } catch (...) {
+    return {}; // Default construction cannot allocate or throw.
+  }
+}
 } // namespace foresight

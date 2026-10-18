@@ -1,19 +1,23 @@
 #pragma once
 #include "output_budget.h"
 #include "worker_frame.h"
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <exception>
 #include <functional>
+#include <iostream>
 #include <istream>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <ostream>
+#include <poll.h>
 #include <stdexcept>
 #include <streambuf>
 #include <string>
 #include <thread>
+#include <unistd.h>
 
 namespace foresight {
 // Only the reader thread touches the process input. A request sees its own
@@ -204,49 +208,105 @@ void persistent_worker(std::istream &input, std::ostream &output,
       cancel(current->conversation);
   };
   write("ready 1");
+  std::atomic<bool> stop_reading{false};
+  std::string buffered_input;
+  auto read_line = [&](std::string &line) {
+    if (&input != &std::cin)
+      return bool(std::getline(input, line));
+    while (!stop_reading) {
+      const auto newline = buffered_input.find('\n');
+      if (newline != std::string::npos) {
+        line = buffered_input.substr(0, newline);
+        buffered_input.erase(0, newline + 1);
+        return true;
+      }
+      pollfd descriptor{STDIN_FILENO, POLLIN, 0};
+      const int ready = poll(&descriptor, 1, 50);
+      if (ready < 0 && errno == EINTR)
+        continue;
+      if (ready < 0)
+        return false;
+      if (!ready)
+        continue;
+      char bytes[4096];
+      const auto count = read(STDIN_FILENO, bytes, sizeof(bytes));
+      if (count > 0)
+        buffered_input.append(bytes, size_t(count));
+      else if (count < 0 && errno == EINTR)
+        continue;
+      else {
+        line = std::move(buffered_input);
+        buffered_input.clear();
+        return !line.empty();
+      }
+    }
+    return false;
+  };
   std::thread reader([&] {
-    std::string line;
-    while (std::getline(input, line)) {
-      if (line == "shutdown")
-        break;
-      auto first = line.find(' ');
-      if (first == std::string::npos)
-        continue;
-      auto second = line.find(' ', first + 1);
-      auto command = line.substr(0, first);
-      auto token = line.substr(
-          first + 1, second == std::string::npos ? second : second - first - 1);
-      if (token.empty() ||
-          token.find_first_not_of("0123456789") != std::string::npos)
-        continue;
-      uint64_t number;
-      try {
-        number = std::stoull(token);
-      } catch (...) {
-        continue;
-      }
-      std::lock_guard lock(mutex);
-      if (command == "generate") {
-        if (current || number <= last_token || second == std::string::npos)
+    try {
+      std::string line;
+      while (read_line(line)) {
+        if (line == "shutdown")
+          break;
+        auto first = line.find(' ');
+        if (first == std::string::npos)
           continue;
-        current = std::make_shared<Request>();
-        current->token = std::to_string(number);
-        current->payload = line.substr(second + 1);
-        last_token = number;
-        changed.notify_all();
-      } else if (current && std::to_string(number) == current->token) {
-        if (command == "cancel")
-          cancel_request();
-        else if (command == "reply" && second != std::string::npos &&
-                 !current->cancelled)
-          current->replies.push(line.substr(second + 1));
+        auto second = line.find(' ', first + 1);
+        auto command = line.substr(0, first);
+        auto token = line.substr(first + 1, second == std::string::npos
+                                                ? second
+                                                : second - first - 1);
+        if (token.empty() ||
+            token.find_first_not_of("0123456789") != std::string::npos)
+          continue;
+        uint64_t number;
+        try {
+          number = std::stoull(token);
+        } catch (...) {
+          continue;
+        }
+        std::lock_guard lock(mutex);
+        if (command == "generate") {
+          if (current || number <= last_token || second == std::string::npos)
+            continue;
+          current = std::make_shared<Request>();
+          current->token = std::to_string(number);
+          current->payload = line.substr(second + 1);
+          last_token = number;
+          changed.notify_all();
+        } else if (current && std::to_string(number) == current->token) {
+          if (command == "cancel")
+            cancel_request();
+          else if (command == "reply" && second != std::string::npos &&
+                   !current->cancelled)
+            current->replies.push(line.substr(second + 1));
+        }
       }
+    } catch (...) {
+      // Report the request as cancelled below; never unwind a reader thread.
     }
     std::lock_guard lock(mutex);
     closed = true;
-    cancel_request();
+    try {
+      cancel_request();
+    } catch (...) {
+    }
     changed.notify_all();
   });
+  struct JoinReader {
+    std::thread &reader;
+    std::atomic<bool> &stop_reading;
+    std::istream &input;
+    ~JoinReader() {
+      stop_reading = true;
+      // Production stdin is polled; in-memory fixture input is explicitly
+      // closed.
+      if (auto *buffer = dynamic_cast<ReplyBuffer *>(input.rdbuf()))
+        buffer->close();
+      if (reader.joinable())
+        reader.join();
+    }
+  } joining{reader, stop_reading, input};
   while (true) {
     std::shared_ptr<Request> request;
     {
@@ -287,8 +347,19 @@ void persistent_worker(std::istream &input, std::ostream &output,
         cancelled = request->cancelled;
       }
       status = cancelled ? "cancelled" : "failed";
-      if (!cancelled)
-        write(request->token + " error " + frame_json(json(error.what())));
+      if (!cancelled) {
+        try {
+          write(request->token + " error " + error_frame_json(error.what()));
+        } catch (...) {
+        }
+      }
+    } catch (...) {
+      status = "failed";
+      try {
+        write(request->token + " error " +
+              error_frame_json("Unknown worker exception"));
+      } catch (...) {
+      }
     }
     {
       std::lock_guard lock(mutex);
@@ -298,6 +369,5 @@ void persistent_worker(std::istream &input, std::ostream &output,
       write(request->token + " done " + status);
     }
   }
-  reader.join();
 }
 } // namespace foresight
