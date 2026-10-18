@@ -149,6 +149,11 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
+        expect(
+          find.text('Microphone and system audio recording'),
+          findsNothing,
+        );
+        expect(find.byTooltip('Stop transcribing'), findsOneWidget);
         await tester.tap(find.byTooltip('Pause transcribing'));
         // The outer double-tap recognizer holds single control taps until its
         // standard double-tap window expires.
@@ -187,6 +192,8 @@ void main() {
         await tester.tap(clock);
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsOneWidget);
+        expect(find.byKey(const ValueKey('capture-waveform')), findsOneWidget);
+        expect(find.byTooltip('Stop transcribing'), findsOneWidget);
         expect(find.text('Knowledge Sources'), findsNothing);
         for (final width in [640.0, 1280.0]) {
           tester.view.physicalSize = Size(width, 850);
@@ -207,6 +214,11 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('Exit Immersive View'), findsNothing);
         expect(domain.application.recording, same(recording));
+        await tester.tap(find.byTooltip('Stop transcribing'));
+        await tester.pump(const Duration(milliseconds: 300));
+        await tester.pumpAndSettle();
+        expect(domain.application.recording, isNull);
+        expect(find.byKey(const ValueKey('recording-pill')), findsNothing);
         expect(tester.takeException(), isNull);
       } finally {
         domain.application.recording = null;

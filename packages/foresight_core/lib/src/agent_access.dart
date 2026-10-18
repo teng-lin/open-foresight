@@ -141,11 +141,10 @@ class AgentAccessGate {
     Map<String, dynamic> args, {
     required bool Function() current,
   }) async {
-    final capture =
-        method == Operation.meetingsStart.wire ||
-        method == Operation.meetingsResume.wire;
     if (!needsApproval(method, args)) return;
-    if (isHost(client) && !capture) return;
+    // The authenticated desktop's Start/Resume controls are direct user
+    // consent. External clients still require a per-operation desktop decision.
+    if (isHost(client)) return;
     final host = _host;
     if (host == null) {
       throw RpcError(

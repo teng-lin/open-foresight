@@ -130,10 +130,14 @@ void main() {
       );
     });
     test(
-      'desktop capture needs confirmation; disconnect invalidates approval',
+      'direct desktop start and resume use click consent; agent approval remains scoped',
       () async {
         gate.attach(desktop, 'private-token');
-        final pending = gate.authorize(desktop, 'meetings.start', {
+        for (final method in ['meetings.start', 'meetings.resume']) {
+          await gate.authorize(desktop, method, {'id': 1}, current: () => true);
+        }
+        expect(events, isEmpty);
+        final pending = gate.authorize(agent, 'meetings.start', {
           'id': 1,
         }, current: () => true);
         expect(events.single['method'], 'meetings.start');

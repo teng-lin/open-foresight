@@ -113,7 +113,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
             children: [
               Text(
                 capture
-                    ? 'Audio will be captured while the desktop indicator is visible. Closing or hiding the app stops recording.'
+                    ? 'Audio will be captured while the desktop recording controls are visible. Closing or hiding the app stops recording.'
                     : action,
               ),
               const SizedBox(height: 16),
@@ -159,12 +159,11 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
 
   @override
   Widget build(BuildContext context) {
-    final active = widget.domain.capture['active'] == true;
     return Column(
       children: [
-        if (active || _failure != null)
+        if (_failure != null)
           Material(
-            color: active ? Colors.red.shade800 : Colors.orange.shade900,
+            color: Colors.orange.shade900,
             child: SafeArea(
               bottom: false,
               child: Padding(
@@ -174,25 +173,12 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
                 ),
                 child: Row(
                   children: [
-                    if (active) const Icon(Icons.mic, color: Colors.white),
-                    const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        active
-                            ? 'Microphone and system audio recording'
-                            : _failure!,
+                        _failure!,
                         style: const TextStyle(color: Colors.white),
                       ),
                     ),
-                    if (active)
-                      TextButton(
-                        onPressed: () =>
-                            widget.domain.command(Operation.meetingsStop),
-                        child: const Text(
-                          'Stop recording',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      ),
                   ],
                 ),
               ),

@@ -1,5 +1,6 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/src/agent_access.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -53,6 +54,39 @@ class QuickStartDomain extends CommandFixtureDomain {
   }
 }
 
+/// Exercise the same authenticated-connection gate as the service, without
+/// opening devices or running a speech model in a widget test.
+class ConsentDesktopConnection extends TestDesktopConnection {
+  ConsentDesktopConnection(super.domain);
+  void Function(Map<String, dynamic>)? events;
+  late final gate = AgentAccessGate('fixture-token', (_, event) {
+    events?.call(Map<String, dynamic>.from(event));
+  });
+
+  @override
+  Future<void> enableDesktopApprovals(
+    void Function(Map<String, dynamic>) events,
+  ) async {
+    this.events = events;
+    gate.attach(this, 'fixture-token');
+  }
+
+  @override
+  Future<void> disableDesktopApprovals() async => gate.detach(this);
+
+  @override
+  Future<Object?> command(
+    Operation operation, [
+    Map<String, dynamic> args = const {},
+  ]) async {
+    if (operation == Operation.meetingsStart ||
+        operation == Operation.meetingsResume) {
+      await gate.authorize(this, operation.wire, args, current: () => true);
+    }
+    return super.command(operation, args);
+  }
+}
+
 void main() {
   late Directory directory;
   late Store store;
@@ -86,6 +120,31 @@ void main() {
 
   Future<void> dispose(WidgetTester tester) =>
       tester.pumpWidget(const SizedBox.shrink());
+
+  testWidgets(
+    'direct Start transcribing authorizes once without a second dialog',
+    (tester) async {
+      await tester.runAsync(registerSpeech);
+      final connection = ConsentDesktopConnection(domain);
+      await tester.pumpWidget(
+        Foresight(connection, deviceLoader: () async => []),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Start transcribing'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Allow microphone and system audio recording?'),
+        findsNothing,
+      );
+      expect(
+        domain.operations.where((method) => method == 'meetings.start'),
+        hasLength(1),
+      );
+      expect(store.rows('SELECT id FROM meetings'), hasLength(1));
+      expect(tester.takeException(), isNull);
+      await dispose(tester);
+    },
+  );
 
   testWidgets(
     'missing speech setup opens immediately, repeated start does not stack dialogs, cancel creates nothing',

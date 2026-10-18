@@ -112,8 +112,7 @@ Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
   );
 }
 
-/// Recording starts only after the desktop confirms the service request.
-/// Clicking Record alone leaves capture idle while this dialog is pending.
+/// External recording requests still require a desktop approval decision.
 Future<void> allowRecording(WidgetTester tester) async {
   await waitUntil(
     tester,
@@ -330,7 +329,11 @@ void main() {
         reason: 'Speech model and runner were not ready for recording',
       );
       await tester.tap(find.text('Start transcribing'));
-      await allowRecording(tester);
+      await tester.pump();
+      expect(
+        find.text('Allow microphone and system audio recording?'),
+        findsNothing,
+      );
       await waitUntil(
         tester,
         () =>
@@ -625,7 +628,11 @@ void main() {
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('Start transcribing'));
-      await allowRecording(tester);
+      await tester.pump();
+      expect(
+        find.text('Allow microphone and system audio recording?'),
+        findsNothing,
+      );
       await waitUntil(
         tester,
         () =>
@@ -684,7 +691,11 @@ void main() {
       });
       // The opt-in path waits for production timekeeping on silent devices.
       await tester.tap(find.text('Start transcribing'));
-      await allowRecording(tester);
+      await tester.pump();
+      expect(
+        find.text('Allow microphone and system audio recording?'),
+        findsNothing,
+      );
       await waitUntil(
         tester,
         () =>

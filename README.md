@@ -129,7 +129,7 @@ flowchart LR
   Service --> Capture[PipeWire or Core Audio capture]
 ```
 
-There is one application service per profile. It owns every database write, the loaded models, imports, Google sync, and the recording session. The desktop and MCP clients attach to the service over a private Unix socket, and closing the MCP client does not unload a model. Recording requires desktop confirmation and an on-screen indicator; closing or hiding the desktop stops capture. See [Application service and MCP](docs/architecture/application-service.md).
+There is one application service per profile. It owns every database write, the loaded models, imports, Google sync, and the recording session. The desktop and MCP clients attach to the service over a private Unix socket, and closing the MCP client does not unload a model. Desktop recording controls start capture directly; external recording requests require desktop confirmation. The on-screen recording controls show capture status and Stop; closing or hiding the desktop stops capture. See [Application service and MCP](docs/architecture/application-service.md).
 
 | Path | Contents |
 | --- | --- |
