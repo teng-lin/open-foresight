@@ -116,8 +116,8 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
 
     import pytest
 
-    if not shutil.which("cmake") or not shutil.which("c++") or not shutil.which("make"):
-        pytest.skip("Native toolchain required for incremental revision test")
+    if not shutil.which("cmake") or not shutil.which("c++") or not shutil.which("ninja"):
+        pytest.skip("Native CMake/Ninja toolchain required for incremental revision test")
     source = tmp_path / "source"
     source.mkdir()
     template = ROOT / "services/helper/build_identity.cpp.in"
@@ -141,7 +141,10 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
             [
                 "cmake",
                 "-G",
-                "Unix Makefiles",
+                # Match the generator used by both independent native CI jobs.
+                # Apple Make's coarse link timestamps can retain an old binary
+                # in this forced-old-mtime fixture despite a new identity unit.
+                "Ninja",
                 "-S",
                 str(source),
                 "-B",
