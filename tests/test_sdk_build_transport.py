@@ -1,6 +1,7 @@
 """Transport uses published layers without losing verified local parents."""
 
 import json
+import subprocess
 
 import pytest
 
@@ -12,6 +13,9 @@ def docker_queries(*, driver="docker", containerd=True, context="setup-docker-ac
 
     def query(arguments, **kwargs):
         calls.append(arguments)
+        if arguments[:3] == ["docker", "buildx", "imagetools"]:
+            assert kwargs == {"text": True, "stderr": subprocess.PIPE, "timeout": 60}
+            return cache_manifest()
         assert kwargs == {"text": True, "timeout": 60}
         if arguments == ["docker", "context", "show"]:
             return context + "\n"
@@ -24,6 +28,105 @@ def docker_queries(*, driver="docker", containerd=True, context="setup-docker-ac
         )
 
     return query, calls
+
+
+def cache_manifest():
+    return json.dumps(
+        {
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "config": {
+                "mediaType": transport.CACHE_CONFIG,
+                "digest": "sha256:" + "a" * 64,
+                "size": 100,
+            },
+            "layers": [],
+        }
+    )
+
+
+def test_oci_cache_index_is_supported_without_downloading_layers():
+    manifest = json.loads(cache_manifest())
+    index = {
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [manifest["config"]],
+    }
+    assert transport.inspect_registry_cache(
+        "ghcr.io/example/foresight/linux-core:buildcache",
+        lambda *args, **kwargs: json.dumps(index),
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ERROR: ghcr.io/example/foresight/linux-core:buildcache: not found",
+        '{"errors":[{"code":"MANIFEST_UNKNOWN","message":"manifest unknown"}]}',
+        "ERROR: unexpected status from HEAD request to https://ghcr.io/v2/example/foresight/linux-core/manifests/buildcache: 404 Not Found",
+    ],
+)
+def test_confirmed_missing_registry_manifest_is_logged(message, capsys):
+    def request(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr=message)
+
+    assert not transport.inspect_registry_cache(
+        "ghcr.io/example/foresight/linux-core:buildcache", request
+    )
+    assert "registry layers can be reused" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "lookup ghcr.io: host not found",
+        "manifest not found: 401 Unauthorized",
+        "429 Too Many Requests",
+        "TLS handshake failed",
+        "connection refused",
+        "500 Internal Server Error",
+        "DNS lookup timed out",
+        "unknown error",
+    ],
+)
+def test_network_or_auth_failure_never_permits_uncached_compilation(message):
+    def request(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, args[0], stderr=message)
+
+    with pytest.raises(RuntimeError, match="do not start an uncached SDK build"):
+        transport.inspect_registry_cache(
+            "ghcr.io/example/foresight/linux-core:buildcache", request
+        )
+
+
+@pytest.mark.parametrize(
+    "error", [subprocess.TimeoutExpired("docker", 60), OSError("unavailable")]
+)
+def test_unavailable_registry_command_fails_closed(error):
+    def request(*args, **kwargs):
+        raise error
+
+    with pytest.raises(RuntimeError, match="instead of compiling uncached"):
+        transport.inspect_registry_cache(
+            "ghcr.io/example/foresight/linux-core:buildcache", request
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "{}",
+        "[]",
+        "not JSON",
+        '{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{},"layers":[]}',
+    ],
+)
+def test_invalid_registry_cache_manifest_does_not_become_cache_miss(raw):
+    with pytest.raises(RuntimeError, match="invalid cache manifest"):
+        transport.inspect_registry_cache(
+            "ghcr.io/example/foresight/linux-core:buildcache",
+            lambda *args, **kwargs: raw,
+        )
 
 
 def prepared(**changes):
