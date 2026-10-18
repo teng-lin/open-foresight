@@ -1,16 +1,22 @@
 # Agent instructions
 
-## Reuse SDKs before rebuilding
+## Reuse SDKs, libraries, and build caches before rebuilding
 
-Treat SDK reuse as the default. LiteRT and the other native SDK builds are
+Treat reuse as the default for SDKs, LiteRT, Whisper, gRPC/protobuf, and all other
+libraries, toolchains, dependency downloads, and build caches. These builds are
 expensive. Before changing CI, pushing a change that affects dependency jobs,
 dispatching a workflow, or rerunning a failed job, think carefully about whether
-an existing verified SDK can be reused.
+existing verified artifacts or compatible cached work can be reused.
 
 - Inspect the existing artifacts, receipts, producer jobs, and relevant build
   inputs first. Prefer a completed, compatible artifact. Preserve a running
   compatible producer instead of canceling it and starting again.
-- Rebuild only when a concrete dependency, source, recipe, toolchain,
+- Rebuilding is a last resort. First assess compatible artifacts, cache
+  restoration, incremental builds, and retrying only the failed step. Rebuild
+  only when those options cannot produce the required compatible, verified
+  output, and explain why. Recompile only the affected components; retain
+  unchanged libraries, downloaded dependencies, and valid compiler outputs.
+- A rebuild can be necessary when a concrete dependency, source, recipe, toolchain,
   architecture, ABI, or output-affecting build setting changed, or when a
   compatible verified artifact is genuinely unavailable or invalid.
 - Justify a necessary rebuild before triggering it. State the affected component,
@@ -18,6 +24,11 @@ an existing verified SDK can be reused.
   reused, and which dependent components actually need rebuilding. Record this
   in the work update and PR description where applicable. A cache miss alone
   does not establish that recompilation is necessary; investigate its cause.
+- Do not delete caches, clean dependency builds, disable cache restoration, or
+  restart successful library builds merely to troubleshoot an unrelated
+  failure. Identify the incompatible or corrupt entries and justify any cleanup;
+  preserve the rest. A test failure, upload failure, or transient network error
+  does not by itself justify recompiling already successful dependencies.
 - Application changes, Dart tests, documentation, logging, timeouts, upload
   settings, job organization, and receipt or promotion plumbing should reuse
   SDKs when their actual build inputs match. Commit IDs and rebase merges alone
