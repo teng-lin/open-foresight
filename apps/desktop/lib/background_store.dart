@@ -41,14 +41,14 @@ Future<LocalOutputStats> localOutputStats(String path, {int? nowMs}) =>
         for (final row in reader.rows(
           "SELECT body,created FROM answers WHERE status='completed'",
         )) {
-          final count = (row['body'] as String).split(RegExp(r'\s+')).length;
+          final count = RegExp(r'\S+').allMatches(row['body'] as String).length;
           words += count;
           final week =
               Duration(milliseconds: now - (row['created'] as int)).inDays ~/ 7;
           if (week >= 0 && week < 5) weekly[4 - week] += count;
         }
         for (final row in reader.rows('SELECT generated FROM artifacts')) {
-          words += (row['generated'] as String).split(RegExp(r'\s+')).length;
+          words += RegExp(r'\S+').allMatches(row['generated'] as String).length;
         }
         return LocalOutputStats(words, weekly);
       } finally {

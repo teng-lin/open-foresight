@@ -300,6 +300,7 @@ class _WorkspaceState extends State<Workspace>
       serviceUiTimer = null;
       if (!mounted) return;
       meetingFeature.syncCapture();
+      sourceFeature.syncGraphMotion();
       serviceUiRevision.value++;
     });
   }

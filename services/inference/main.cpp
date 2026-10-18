@@ -692,8 +692,10 @@ int main(int argc, char **argv) {
               } else {
                 foresight::TextFrameBuffer chunks(frames);
                 std::ostream text_stream(&chunks);
+                text_stream.exceptions(std::ios::badbit | std::ios::failbit);
                 generator.generate(request.at("prompt").get<std::string>(),
                                    budget, false, schema, &text_stream);
+                chunks.finish();
               }
             }
           },

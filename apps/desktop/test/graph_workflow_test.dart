@@ -44,6 +44,50 @@ class GraphDomain extends Domain {
 }
 
 void main() {
+  testWidgets('service-only source changes stop and restart graph motion', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1440, 1000);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final temp = Directory.systemTemp.createTempSync('graph-service-motion-');
+    final store = Store('${temp.path}/app.db');
+    final source = store.importText('First', 'Body', 'text/plain', 'fixture:a');
+    final helper = OfflineHelper('${temp.path}/socket', '${temp.path}/helper');
+    await tester.pumpWidget(
+      Foresight(
+        TestDesktopConnection(Domain(store, helper)),
+        deviceLoader: () async => [],
+      ),
+    );
+    await tester.tap(find.text('Sources'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Graph view'));
+    await tester.pump();
+    final dynamic state = tester.state(find.byType(Workspace));
+    for (
+      final elapsed = Stopwatch()..start();
+      elapsed.elapsed < const Duration(seconds: 5) &&
+          state.sourceFeature.graphOrganizing;
+    ) {
+      await tester.runAsync(() => Future<void>(() {}));
+      await tester.pump();
+    }
+    expect(state.sourceFeature.graphOrganizing, false);
+    expect(state.sourceFeature.graphMotionTicker.isActive, true);
+    store.tombstone(source);
+    helper.changed?.call();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(state.sourceFeature.graphMotionTicker.isActive, false);
+    store.importText('Second', 'Body', 'text/plain', 'fixture:b');
+    helper.changed?.call();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(state.sourceFeature.graphMotionTicker.isActive, true);
+    await tester.pumpWidget(const SizedBox.shrink());
+    temp.deleteSync(recursive: true);
+  });
+
   testWidgets('steady graph animation does not reread large source bodies', (
     tester,
   ) async {

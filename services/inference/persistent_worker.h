@@ -2,12 +2,14 @@
 #include "output_budget.h"
 #include <condition_variable>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <istream>
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <ostream>
+#include <stdexcept>
 #include <streambuf>
 #include <string>
 #include <thread>
@@ -69,17 +71,83 @@ public:
       : emit(std::move(writer)) {}
 };
 
-// Generator streaming writes complete chunks through xsputn. JSON quoting
-// keeps embedded newlines and partial Unicode chunks inside a single frame.
+// Runtime chunks may split UTF-8 code points. Emit complete, strictly valid
+// prefixes and retain at most three trailing bytes until the next write.
+// Flush is not end-of-input: callers must finish() after successful generation.
+// Invalid input and output errors are sticky, so finish() also reports failures
+// swallowed by an ostream whose exception mask was left at its default.
 class TextFrameBuffer : public std::streambuf {
   std::ostream &frames;
+  std::string pending;
+  std::exception_ptr failure;
+  bool finished = false;
+
+  size_t complete_prefix() const {
+    size_t position = 0;
+    while (position < pending.size()) {
+      const auto first = static_cast<unsigned char>(pending[position]);
+      const size_t width = first <= 0x7f                    ? 1
+                           : first >= 0xc2 && first <= 0xdf ? 2
+                           : first >= 0xe0 && first <= 0xef ? 3
+                           : first >= 0xf0 && first <= 0xf4 ? 4
+                                                            : 0;
+      if (!width)
+        throw std::runtime_error("Invalid UTF-8 generation text");
+      const auto remaining = pending.size() - position;
+      const auto available = remaining < width ? remaining : width;
+      for (size_t index = 1; index < available; ++index) {
+        const auto next = static_cast<unsigned char>(pending[position + index]);
+        if ((next & 0xc0) != 0x80 ||
+            (index == 1 && ((first == 0xe0 && next < 0xa0) ||
+                            (first == 0xed && next > 0x9f) ||
+                            (first == 0xf0 && next < 0x90) ||
+                            (first == 0xf4 && next > 0x8f))))
+          throw std::runtime_error("Invalid UTF-8 generation text");
+      }
+      if (available < width)
+        break;
+      position += width;
+    }
+    return position;
+  }
 
 protected:
   std::streamsize xsputn(const char *data, std::streamsize size) override {
-    if (size > 0)
-      frames << "text " << nlohmann::json(std::string(data, size)).dump()
-             << std::endl;
-    return frames ? size : 0;
+    try {
+      if (failure)
+        std::rethrow_exception(failure);
+      if (finished)
+        throw std::runtime_error("Generation text stream already finished");
+      if (size > 0) {
+        pending.append(data, static_cast<size_t>(size));
+        const auto complete = complete_prefix();
+        if (complete) {
+          const auto quoted =
+              nlohmann::json(pending.substr(0, complete)).dump();
+          frames << "text " << quoted << std::endl;
+          if (!frames)
+            throw std::runtime_error("Cannot write generation text frame");
+          pending.erase(0, complete);
+        }
+      }
+      return size;
+    } catch (...) {
+      failure = std::current_exception();
+      throw;
+    }
+  }
+  int sync() override {
+    try {
+      if (failure)
+        std::rethrow_exception(failure);
+      frames.flush();
+      if (!frames)
+        throw std::runtime_error("Cannot flush generation text frames");
+      return 0;
+    } catch (...) {
+      failure = std::current_exception();
+      return -1;
+    }
   }
   int_type overflow(int_type value) override {
     if (traits_type::eq_int_type(value, traits_type::eof()))
@@ -90,6 +158,18 @@ protected:
 
 public:
   explicit TextFrameBuffer(std::ostream &output) : frames(output) {}
+  void finish() {
+    if (failure)
+      std::rethrow_exception(failure);
+    if (!pending.empty()) {
+      failure = std::make_exception_ptr(
+          std::runtime_error("Incomplete UTF-8 generation text"));
+      std::rethrow_exception(failure);
+    }
+    if (sync() != 0)
+      std::rethrow_exception(failure);
+    finished = true;
+  }
 };
 
 // Generate receives request, routed control input, framed output, and a native

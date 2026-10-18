@@ -64,14 +64,14 @@ class Service : public rpc::RagService::Service,
                 public ctl::HelperControl::Service {
   struct SearchSnapshot {
     std::shared_ptr<Model> model;
-    foresight::VectorIndex index;
+    foresight::VectorIndexSnapshot index;
     SearchSnapshot(std::shared_ptr<Model> m,
-                   std::vector<foresight::IndexedChunk> chunks)
-        : model(std::move(m)), index(std::move(chunks)) {}
+                   foresight::VectorIndexSnapshot next)
+        : model(std::move(m)), index(std::move(next)) {}
   };
   std::shared_ptr<const SearchSnapshot> search_snapshot;
   std::mutex snapshot_mu;
-  void publish_index() {
+  void rebuild_index() {
     std::vector<foresight::IndexedChunk> chunks;
     Statement q(
         db, "SELECT c.text,c.document_id,c.mime,c.embedding FROM "
@@ -83,7 +83,23 @@ class Service : public rpc::RagService::Service,
       chunks.push_back(
           {q.str(0), q.str(1), q.str(2), foresight::read_vector(q.str(3))});
     std::shared_ptr<const SearchSnapshot> replacement =
-        std::make_shared<SearchSnapshot>(model, std::move(chunks));
+        std::make_shared<SearchSnapshot>(
+            model, foresight::VectorIndexSnapshot(std::move(chunks)));
+    publish_snapshot(std::move(replacement));
+  }
+  std::shared_ptr<const SearchSnapshot>
+  stage_index(std::set<std::string> ids,
+              std::vector<foresight::IndexedChunk> chunks) {
+    std::shared_ptr<const SearchSnapshot> previous;
+    {
+      std::lock_guard lock(snapshot_mu);
+      previous = search_snapshot;
+    }
+    auto index = previous ? previous->index : foresight::VectorIndexSnapshot{};
+    return std::make_shared<SearchSnapshot>(
+        model, index.replacing(std::move(ids), std::move(chunks)));
+  }
+  void publish_snapshot(std::shared_ptr<const SearchSnapshot> replacement) {
     {
       std::lock_guard lock(snapshot_mu);
       search_snapshot.swap(replacement);
@@ -301,7 +317,7 @@ class Service : public rpc::RagService::Service,
                                     : model->preprocessing);
     identity->set_backend(model->backend);
     identity->set_dimensions(model->dimensions);
-    publish_index();
+    rebuild_index();
     identity->set_path(path);
     identity->clear_modalities();
     identity->add_modalities("text");
@@ -604,6 +620,13 @@ public:
         throw std::runtime_error("Index operation cancelled");
       if (model != current)
         throw std::runtime_error("Embedding model changed; retry");
+      std::vector<foresight::IndexedChunk> indexed;
+      for (const auto &chunk : prepared)
+        indexed.push_back({chunk.text, id, mime, chunk.embedding});
+      // Allocate/build before committing. Publication after COMMIT is a
+      // pointer swap, so successful writes are immediately searchable without
+      // rereading unrelated SQLite rows or rebuilding the entire corpus.
+      auto replacement = stage_index({id}, std::move(indexed));
       uint64_t rev = revision(id);
       Tx tx(*this);
       {
@@ -642,7 +665,7 @@ public:
       if (context->IsCancelled())
         throw std::runtime_error("Index operation cancelled");
       tx.commit();
-      publish_index();
+      publish_snapshot(std::move(replacement));
       crash("replace_after_commit");
       state.set_index("ready");
       changed();
@@ -668,6 +691,7 @@ public:
         ids.push_back(req->document_id().substr(7));
       else
         ids.push_back("file://" + req->document_id());
+      auto replacement = stage_index({ids.begin(), ids.end()}, {});
       for (auto &id : ids) {
         auto rev = revision(id);
         for (auto sqltext :
@@ -686,7 +710,7 @@ public:
       }
       crash("delete_before_commit");
       tx.commit();
-      publish_index();
+      publish_snapshot(std::move(replacement));
       crash("delete_after_commit");
       changed();
       r->set_success(true);
@@ -725,7 +749,7 @@ public:
       for (auto match : snapshot->index.search(
                std::move(query), req->max_results(),
                static_cast<float>(req->min_similarity_score()), allowed)) {
-        const auto &value = snapshot->index.chunks[match.chunk];
+        const auto &value = *match.chunk;
         auto *chunk = r->add_chunks();
         chunk->set_text(value.text);
         chunk->set_document_id(value.id);

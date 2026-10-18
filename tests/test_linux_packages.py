@@ -284,6 +284,75 @@ class LinuxPackagesTest(unittest.TestCase):
         self.assertFalse((doc / "copyright").read_text().isspace())
 
 
+class PackagePreflightTest(unittest.TestCase):
+    def test_missing_speech_worker_leaves_output_available_for_retry(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        sys.path.insert(0, str(ROOT / "tools"))
+        import package
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build, flutter, runtime = root / "build", root / "flutter", root / "runtime"
+            flutter.mkdir()
+            runtime.mkdir()
+            for name in (
+                "services/helper/ForesightHelper",
+                "native/libforesight_native.so",
+                "application/foresight-service",
+                "application/foresight-mcp",
+                "services/inference/foresight-model",
+                "lib/liblitert-lm.so",
+            ):
+                target = build / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"fixture")
+            library = build / "lib/liblitert-lm.so"
+            (runtime / "whisper-cli").write_bytes(b"fixture")
+            output = root / "bundle"
+            arguments = [
+                "package.py",
+                "--build",
+                str(build),
+                "--flutter-bundle",
+                str(flutter),
+                "--output",
+                str(output),
+                "--litert-library",
+                str(library),
+                "--litert-extensions-manifest",
+                str(root / "manifest.json"),
+                "--whisper-gpu-runtime",
+                str(runtime / "whisper-cli"),
+                "--revision",
+                "a" * 40,
+            ]
+            extensions = SimpleNamespace(
+                manifest={
+                    "library_sha256": hashlib.sha256(library.read_bytes()).hexdigest()
+                }
+            )
+            with (
+                patch.object(sys, "argv", arguments),
+                patch.object(
+                    package, "verify_extensions_manifest", return_value=extensions
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "include foresight-whisper-worker"
+                ):
+                    package.main()
+                self.assertFalse(output.exists())
+                (runtime / "foresight-whisper-worker").write_bytes(b"fixture")
+                # The same output passes preflight on retry and reaches its first write.
+                with patch.object(
+                    package.shutil, "copytree", side_effect=RuntimeError("copy reached")
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "copy reached"):
+                        package.main()
+
+
 @unittest.skipUnless(
     sys.platform == "linux" and shutil.which("cc") and shutil.which("ldd"),
     "Linux ELF loader and C compiler required",

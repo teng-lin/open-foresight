@@ -132,6 +132,12 @@ def main():
         subprocess.run(
             [str(worker), "--check"], env=environment, check=True, timeout=300
         )
+    if args.whisper_gpu_runtime:
+        if not args.whisper_gpu_runtime.is_file():
+            raise ValueError("Build the Vulkan Whisper runtime first")
+        speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
+        if not speech_worker.is_file():
+            raise ValueError("Whisper runtime must include foresight-whisper-worker")
     shutil.copytree(args.flutter_bundle, args.output / "app")
     (args.output / "bin").mkdir()
     (args.output / "lib").mkdir()
@@ -141,12 +147,8 @@ def main():
     shutil.copy2(mcp, args.output / "bin/foresight-mcp")
     shutil.copy2(native, args.output / "lib/libforesight_native.so")
     if args.whisper_gpu_runtime:
-        if not (args.whisper_gpu_runtime.is_file()):
-            raise ValueError("Build the Vulkan Whisper runtime first")
         shutil.copy2(args.whisper_gpu_runtime, args.output / "bin/whisper-cli-vulkan")
         speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
-        if not speech_worker.is_file():
-            raise ValueError("Whisper runtime must include foresight-whisper-worker")
         shutil.copy2(speech_worker, args.output / "bin/foresight-whisper-worker")
         for name in ("LICENSE", "provenance.json"):
             shutil.copy2(

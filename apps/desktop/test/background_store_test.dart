@@ -5,6 +5,32 @@ import 'package:open_foresight/store.dart';
 
 void main() {
   test(
+    'background output stats ignore empty and surrounding whitespace',
+    () async {
+      final temporary = Directory.systemTemp.createTempSync(
+        'background-words-',
+      );
+      final store = Store('${temporary.path}/application.db');
+      try {
+        for (final body in ['', ' \t ', '  one\ntwo  ']) {
+          store.answer('Question', body, 'completed', [], 'fixture');
+        }
+        store.answer('Pending', 'not counted', 'streaming', [], 'fixture');
+        final meeting = store.meeting('Fixture');
+        store.artifact(meeting, 'summary', ' three\t four five ', 'fixture');
+        store.artifact(meeting, 'questions', '', 'fixture');
+        store.artifact(meeting, 'actions', ' \n ', 'fixture');
+        final stats = await localOutputStats(store.path);
+        expect(stats.words, 5);
+        expect(stats.weekly, [0, 0, 0, 0, 2]);
+      } finally {
+        store.close();
+        temporary.deleteSync(recursive: true);
+      }
+    },
+  );
+
+  test(
     'background source search finds body text and returns only IDs',
     () async {
       final temporary = Directory.systemTemp.createTempSync(
