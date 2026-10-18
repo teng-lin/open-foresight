@@ -117,3 +117,37 @@ def test_service_stage_fails_on_missing_compiled_prerequisites(build_tree):
     assert result.returncode != 0
     assert "Missing stage prerequisite" in result.stderr
     assert "cmake:" not in result.stdout
+
+
+@pytest.mark.parametrize("state", ["missing", "not-executable"])
+def test_service_stage_rejects_missing_or_non_executable_worker_before_tests(
+    build_tree, state
+):
+    root, environment = build_tree
+    binary = Path(environment["PATH"].split(":")[0])
+    dart = binary / "dart"
+    dart.write_text("#!/bin/bash\nexit 0\n")
+    dart.chmod(0o700)
+    for relative in (
+        "application/foresight-service",
+        "application/foresight-mcp",
+        "services/helper/ForesightHelper",
+    ):
+        executable = root / "build" / relative
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+    native = root / "build/native/libforesight_native.so"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"native-library")
+    worker = root / "build/services/helper/model_worker_fixture"
+    if state == "not-executable":
+        worker.write_text("#!/bin/sh\nexit 0\n")
+        worker.chmod(0o644)
+    result = run_stage(build_tree, "service")
+    assert result.returncode != 0
+    assert str(worker) in result.stderr
+    expected = "Missing stage prerequisite" if state == "missing" else "not executable"
+    assert expected in result.stderr
+    assert "service and MCP integration" not in result.stdout
+    assert not (root / "test-results").exists()

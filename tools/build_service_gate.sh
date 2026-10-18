@@ -11,9 +11,11 @@ case "$task_platform" in
   linux) task_native="$task_build/native/libforesight_native.so" ;;
   *) echo 'Platform must be linux or macos' >&2; exit 2 ;;
 esac
-for task_binary in "$task_build/application/foresight-service" "$task_build/application/foresight-mcp" "$task_build/services/helper/ForesightHelper" "$task_native"; do
+for task_binary in "$task_build/application/foresight-service" "$task_build/application/foresight-mcp" "$task_build/services/helper/ForesightHelper" "$task_build/services/helper/model_worker_fixture"; do
   [[ -f "$task_binary" ]] || { echo "Missing stage prerequisite: $task_binary" >&2; exit 1; }
+  [[ -x "$task_binary" ]] || { echo "Stage prerequisite is not executable: $task_binary" >&2; exit 1; }
 done
+[[ -f "$task_native" ]] || { echo "Missing stage prerequisite: $task_native" >&2; exit 1; }
 # Short sockets work on macOS too. Honor disk-backed local test storage.
 task_service_temp=$(mktemp -d "${FORESIGHT_TEST_TEMP_ROOT:-/tmp}/of-svc.XXXXXX")
 trap 'rm -rf -- "$task_service_temp"' EXIT
