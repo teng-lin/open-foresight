@@ -122,6 +122,17 @@ def require_publication(report, tag):
         )
 
 
+def require_coordinator(results, ref, publish_only):
+    if ref != "refs/heads/main":
+        raise ValueError("Publication requires reviewed main")
+    expected = "skipped" if publish_only else "success"
+    if results.get("acceptance", {}).get("result") != "success" or any(
+        results.get(job, {}).get("result") != expected
+        for job in ("prepare", "linux", "macos")
+    ):
+        raise ValueError("Release remains unpublished: " + str(results))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
