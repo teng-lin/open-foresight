@@ -52,6 +52,12 @@ inline std::string quote(const std::string &s) {
   return out + '"';
 }
 
+// Persistent protocol payloads occupy one physical line. JSON whitespace
+// containing line separators must be compacted by the caller before framing.
+inline bool single_line_json(const std::string &value) {
+  return value.find_first_of("\r\n") == std::string::npos;
+}
+
 struct OneShotLaunch {
   std::vector<std::string> arguments;
   std::string standard_input;
