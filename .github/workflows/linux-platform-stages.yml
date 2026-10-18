@@ -70,6 +70,8 @@ jobs:
             build/ci-stage/linux-native/payload.tar.gz
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
+          compression-level: 0
       - name: Retain native diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -80,6 +82,7 @@ jobs:
             coverage/
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
+          overwrite: true
   core-linux:
     name: core-linux
     needs: [native-linux]
@@ -127,6 +130,8 @@ jobs:
             build/ci-stage/linux-core/payload.tar.gz
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
+          compression-level: 0
       - name: Retain core diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -137,6 +142,7 @@ jobs:
             coverage/
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
+          overwrite: true
   desktop-linux:
     name: desktop-linux
     needs: [native-linux]
@@ -184,6 +190,8 @@ jobs:
             build/ci-stage/linux-desktop/payload.tar.gz
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
+          compression-level: 0
       - name: Retain desktop diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -195,6 +203,7 @@ jobs:
             apps/desktop/coverage/lcov.info
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
+          overwrite: true
   service-linux:
     name: service-linux
     needs: [native-linux, core-linux, desktop-linux]
@@ -254,6 +263,8 @@ jobs:
             build/ci-stage/linux-service/payload.tar.gz
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
+          compression-level: 0
       - name: Retain service diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -264,3 +275,4 @@ jobs:
             coverage/
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
+          overwrite: true
