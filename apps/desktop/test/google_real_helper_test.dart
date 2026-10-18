@@ -126,7 +126,7 @@ void main() {
           File(report).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert({
               'workflow':
-                  'Loopback OAuth/Drive/Calendar protocol fixtures -> actual MiniLM helper -> filtered retrieval',
+                  'Loopback OAuth/Drive/Calendar protocol fixtures -> actual EmbeddingGemma helper -> filtered retrieval',
               'drive_and_calendar_sources_indexed': true,
               'remote_edit_replaced_old_retrieval': true,
               'cancelled_calendar_context_removed': true,

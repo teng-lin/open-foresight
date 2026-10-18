@@ -1021,7 +1021,7 @@ class Application implements ModelGate {
             a['kind'] as String,
             a['path'] as String,
             a['runtime'] as String? ?? '',
-            backend: a['backend'] as String? ?? 'llama_cpp',
+            backend: a['backend'] as String?,
             expectedDigest: a['digest'] as String?,
             modelType: a['model_type'] as int?,
             current: () => !_closed && (current?.call() ?? true),
@@ -1041,6 +1041,7 @@ class Application implements ModelGate {
           domain.generator = candidate;
           return null;
         case Operation.models_embedding:
+          requireEmbeddingBundle(a['path'] as String);
           final result = await domain.helper.client.updateModelPaths(
             UpdateModelPathsRequest(
               embeddingModelPath: a['path'] as String,
@@ -1059,9 +1060,7 @@ class Application implements ModelGate {
             a['runtime'] as String? ?? '',
             backend: a['gpu'] == true
                 ? 'litert_lm_embedding_gpu'
-                : (a['path'] as String).endsWith('.litertlm')
-                ? 'litert_lm_embedding_cpu'
-                : 'sentence_transformers_cpu',
+                : 'litert_lm_embedding_cpu',
             expectedDigest: a['digest'] as String?,
             current: () => !_closed && (current?.call() ?? true),
           );

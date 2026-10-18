@@ -35,7 +35,7 @@ void main() {
     final temporary = Directory.systemTemp.createTempSync(
       'foresight-embedding-setup-',
     );
-    final original = File('${temporary.path}/old.model')
+    final original = File('${temporary.path}/old.litertlm')
       ..writeAsStringSync('old registration');
     final candidate = File('${temporary.path}/candidate.litertlm')
       ..writeAsStringSync('candidate registration');

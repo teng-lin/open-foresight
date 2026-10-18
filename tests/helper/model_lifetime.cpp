@@ -41,13 +41,28 @@ int main(int argc, char **argv) {
   std::string directory =
       (fs::temp_directory_path().string() + "/foresight-model-lifetime-") +
       std::to_string(getpid());
-  fs::create_directories(directory + "/stubborn");
+  fs::create_directories(directory);
+  const auto bundle = directory + "/model.litertlm";
+  std::ofstream(bundle) << "controlled embedding fixture";
+  std::ofstream(directory + "/stubborn.litertlm")
+      << "controlled embedding fixture";
   try {
     REQUIRE(argc == 2);
     setenv("FORESIGHT_MODEL_WORKER", argv[1], 1);
+    for (bool gpu : {false, true}) {
+      bool unsupported = false;
+      try {
+        Model invalid(directory, false, gpu);
+      } catch (const std::runtime_error &error) {
+        unsupported =
+            std::string(error.what()).find("Unsupported model format") !=
+            std::string::npos;
+      }
+      REQUIRE(unsupported);
+    }
     std::unique_ptr<Model> model;
     std::thread request(
-        [&] { model = std::make_unique<Model>(directory, false); });
+        [&] { model = std::make_unique<Model>(bundle, false); });
     request.join();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     REQUIRE(model->available());
@@ -62,7 +77,7 @@ int main(int argc, char **argv) {
     REQUIRE(saved >= 0);
     REQUIRE(dup2(broken[1], STDERR_FILENO) >= 0);
     close(broken[1]);
-    auto independent = std::make_unique<Model>(directory, false);
+    auto independent = std::make_unique<Model>(bundle, false);
     REQUIRE(dup2(saved, STDERR_FILENO) >= 0);
     close(saved);
     REQUIRE(independent->embed("former stderr reader is gone").size() == 4);
@@ -83,7 +98,8 @@ int main(int argc, char **argv) {
     REQUIRE(rejected);
     model.reset();
 
-    auto stubborn = std::make_unique<Model>(directory + "/stubborn", false);
+    auto stubborn =
+        std::make_unique<Model>(directory + "/stubborn.litertlm", false);
     pid_t stubborn_pid = stubborn->worker_pid();
     auto before = std::chrono::steady_clock::now();
     stubborn.reset();
@@ -101,7 +117,7 @@ int main(int argc, char **argv) {
       close(report[0]);
       std::unique_ptr<Model> child;
       std::thread create(
-          [&] { child = std::make_unique<Model>(directory, false); });
+          [&] { child = std::make_unique<Model>(bundle, false); });
       create.join();
       pid_t adapter = child->worker_pid();
       if (write(report[1], &adapter, sizeof(adapter)) != sizeof(adapter))
@@ -130,7 +146,7 @@ int main(int argc, char **argv) {
       REQUIRE(racing >= 0);
       if (racing == 0) {
         try {
-          Model launching(directory + "/stubborn", false);
+          Model launching(directory + "/stubborn.litertlm", false);
           for (;;)
             pause();
         } catch (...) {

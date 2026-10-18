@@ -135,7 +135,6 @@ def main():
             "lib/libforesight_native.so",
             "bin/foresight-model",
             "lib/liblitert-lm.so",
-            "lib/libonnxruntime.so",
             "app/open-foresight",
         ]:
             value = subprocess.check_output(

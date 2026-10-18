@@ -137,7 +137,6 @@ std::string tokenizer_bytes(const std::string &path) {
     throw std::runtime_error("Missing SentencePiece tokenizer");
   return tokenizer;
 }
-#include "minilm.h"
 
 constexpr const char *mac_digest =
     "0b4fe50337c5a45a8e4361bc5738b678f9ffa88c0d5908701226b8cd12dd1465";
@@ -605,10 +604,11 @@ int main(int argc, char **argv) {
          args.count("--serve")))
       throw std::runtime_error("Raw query detection cannot use embedding, "
                                "tools or a response schema");
-    if (embedding && fs::is_directory(args.at("--embedding"))) {
-      minilm_embeddings(args.at("--embedding"), gpu, protocol);
-      return 0;
-    }
+    if (embedding &&
+        (fs::path(args.at("--embedding")).extension() != ".litertlm" ||
+         fs::is_directory(args.at("--embedding"))))
+      throw std::runtime_error(
+          "Unsupported model format: embedding requires a .litertlm file");
     LiteRt lm;
     if (args.count("--check")) {
       (void)LM(engine_create);

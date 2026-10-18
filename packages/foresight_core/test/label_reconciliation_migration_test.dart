@@ -21,7 +21,10 @@ void main() {
     );
     legacy.dispose();
     store = Store(path);
-    expect(store.db.select('PRAGMA user_version').single.values.single, 2);
+    expect(
+      store.db.select('PRAGMA user_version').single.values.single,
+      Store.schemaVersion,
+    );
     expect(store.documentLabels.single.name, 'Keep me');
     expect(jsonDecode(store.sources.single['labels'] as String), ['Keep me']);
     store.db.execute(
