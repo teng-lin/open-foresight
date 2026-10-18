@@ -38,6 +38,20 @@ class FailingForgetAuth extends GoogleAuth {
   }
 }
 
+class RejectingDeleteSecretStore implements SecretStore {
+  final deleted = Completer<void>();
+  @override
+  Future<bool> write(String key, String value) async => true;
+  @override
+  Future<String?> read(String key) async => 'fixture-refresh-token';
+  @override
+  Future<void> delete(String key) async {
+    await Future<void>.delayed(Duration.zero);
+    deleted.complete();
+    throw FileSystemException('Platform credential deletion failed');
+  }
+}
+
 void main() {
   late Directory directory;
   late Store store;
@@ -368,6 +382,55 @@ void main() {
       }
     },
   );
+  test(
+    'asynchronous secret-store deletion failure is observed after local clear',
+    () async {
+      await app.close();
+      final authDirectory = Directory('${directory.path}/google');
+      privateDirectory(authDirectory.path);
+      final tokens = File('${authDirectory.path}/tokens.json')
+        ..writeAsStringSync(
+          jsonEncode({
+            'access_token': 'fixture-access',
+            'refresh_token_store': 'platform',
+            'account_sub': 'fixture-account',
+            'expires_at': 1,
+          }),
+        );
+      expect(Process.runSync('/bin/chmod', ['600', tokens.path]).exitCode, 0);
+      final secrets = RejectingDeleteSecretStore();
+      final auth = GoogleAuth(authDirectory, secretStore: secrets);
+      expect(auth.connected, isTrue);
+      app = Application(domain, auth: auth);
+      store.importText(
+        'Secret source',
+        'private content',
+        'text/plain',
+        'fixture',
+      );
+      final uncaught = <Object>[];
+      await runZonedGuarded<Future<void>>(
+        () async {
+          await app.call('workspace.clear', {});
+          await secrets.deleted.future;
+          await Future<void>.delayed(Duration.zero);
+        },
+        (error, stack) {
+          uncaught.add(error);
+        },
+      );
+      expect(store.sources, isEmpty);
+      expect(auth.connected, isFalse);
+      expect(tokens.existsSync(), isFalse);
+      expect(
+        app.googleState['loadError'],
+        contains('Google credential cleanup failed; disconnect again'),
+      );
+      expect(await app.call('notes.list', {}), isEmpty);
+      expect(uncaught, isEmpty);
+    },
+  );
+
   test(
     'credential deletion failure does not leave workspace commands gated',
     () async {
