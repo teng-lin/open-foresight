@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+import 'web_import.dart';
 import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:convert';
@@ -380,6 +382,7 @@ class GoogleConnections implements ConnectedSources {
   Future<void> syncCalendar({
     String calendarId = 'primary',
     DateTime? now,
+    bool preserveLocal = false,
   }) async {
     final account = auth.account;
     _check(account);
@@ -465,9 +468,8 @@ class GoogleConnections implements ConnectedSources {
           'Saturday',
           'Sunday',
         ][start.toLocal().weekday - 1];
-        final description = (event['description'] as String? ?? '').replaceAll(
-          RegExp(r'<[^>]+>'),
-          ' ',
+        final description = await calendarDescriptionText(
+          event['description'] as String? ?? '',
         );
         final attendees = (event['attendees'] as List? ?? [])
             .map((row) => (row as Map)['displayName'] ?? row['email'])
@@ -483,6 +485,7 @@ class GoogleConnections implements ConnectedSources {
           'google-calendar:$account:$calendarId:${event['id']}',
           modifiedAtMs: _modifiedTime(event['updated']),
           sourceUri: event['htmlLink'] as String?,
+          preserveDeleted: preserveLocal,
         );
         _check(account);
       }
@@ -553,7 +556,7 @@ class GoogleConnections implements ConnectedSources {
       }
     }
     try {
-      await syncCalendar();
+      await syncCalendar(preserveLocal: true);
     } catch (error) {
       failures.add('Calendar refresh: $error');
     }
@@ -632,4 +635,36 @@ class GoogleConnections implements ConnectedSources {
   void close() {
     _closed = true;
   }
+}
+
+/// A bounded linear scan avoids regex backtracking on untrusted invitations.
+Future<String> calendarDescriptionText(String description) async {
+  final text = description.length > 256 * 1024
+      ? description.substring(0, 256 * 1024)
+      : description;
+  try {
+    // A stricter invitation cap rejects pathological markup before parser startup.
+    if ('<'.allMatches(text).length > 4096) {
+      throw StateError('Too much invitation markup');
+    }
+    return await parseWebPage(
+      Uint8List.fromList(utf8.encode(text)),
+      mimeType: 'text/html',
+    );
+  } catch (_) {
+    // Fall back to a bounded linear scan, never an unbounded regular expression.
+  }
+  final output = StringBuffer();
+  var inTag = false;
+  for (final unit in text.codeUnits) {
+    if (unit == 60) {
+      if (!inTag) output.write(' ');
+      inTag = true;
+    } else if (unit == 62 && inTag) {
+      inTag = false;
+    } else if (!inTag) {
+      output.writeCharCode(unit);
+    }
+  }
+  return output.toString();
 }

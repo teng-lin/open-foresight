@@ -3,7 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:matcher/expect.dart';
+// Shared fixtures exercise internal wire protocol types.
+// ignore: implementation_imports
 import 'package:foresight_core/src/domain.dart';
+// Shared fixtures exercise internal wire protocol types.
+// ignore: implementation_imports
 import 'package:foresight_core/src/google_auth.dart';
 
 class GoogleFixture {
@@ -13,6 +17,7 @@ class GoogleFixture {
   bool denyDriveOnce = false, cancelledEvent = false;
   bool newFolderFile = false;
   String accountSub = 'fixture-account';
+  String eventDescription = 'Review Apollo.';
   String eventUpdated = '2020-01-01T00:00:00Z';
   String eventStart = '2026-10-16T15:00:00Z';
   String modified = 'v1', document = 'Apollo launches Friday.';
@@ -176,7 +181,7 @@ class GoogleFixture {
                         'summary': 'Planning',
                         'updated': eventUpdated,
                         'htmlLink': 'https://calendar.example.test/event-1',
-                        'description': 'Review Apollo.',
+                        'description': eventDescription,
                         'status': 'confirmed',
                         'start': {'dateTime': eventStart},
                         'end': {'dateTime': '2026-10-16T15:30:00Z'},
