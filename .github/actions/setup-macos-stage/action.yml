@@ -1,6 +1,9 @@
 name: Set up the macOS application stage
 description: Resolve the pinned compiler SDK and language prerequisites independently
 inputs:
+  stage:
+    required: true
+    description: Native, core, desktop, service or packaging role
   own-pr:
     default: '0'
     description: Same-repository pull request allowed to supply dependency artifacts
@@ -19,6 +22,12 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Validate setup role
+      shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
+      run: |
+        case "$STAGE" in native|core|desktop|service|packaging) ;; *) exit 2 ;; esac
     - name: Verify Apple Silicon host
       shell: bash
       run: |
@@ -38,19 +47,31 @@ runs:
       run: python tools/preview_packages.py stamp --version "$VERSION" --build-number "$BUILD_NUMBER" --label "$BUILD_LABEL" --source "$SOURCE"
     - name: Install build tools
       shell: bash
-      run: brew install cmake ninja cocoapods git-lfs icu4c
+      env:
+        STAGE: ${{ inputs.stage }}
+        HOMEBREW_NO_AUTO_UPDATE: '1'
+      run: |
+        case "$STAGE" in
+          native) brew install cmake ninja icu4c ;;
+          desktop|service) brew install cocoapods git-lfs icu4c ;;
+          core|packaging) brew install icu4c ;;
+        esac
     - name: Install locked Python development dependencies
       shell: bash
       run: |
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: inputs.stage != 'native'
       id: flutter
       with:
         path: ${{ runner.temp }}/flutter
         key: flutter-macos-arm64-3.35.7-v1
     - name: Verify the pinned macOS Flutter SDK
+      if: inputs.stage != 'native'
       shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
       run: |
         if [[ ! -x "$RUNNER_TEMP/flutter/bin/flutter" ]]; then
           git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
@@ -58,29 +79,39 @@ runs:
         test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
         echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
         echo "FORESIGHT_FLUTTER_EXECUTABLE=$RUNNER_TEMP/flutter/bin/flutter" >> "$GITHUB_ENV"
-        "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
+        if [[ "$STAGE" == desktop || "$STAGE" == service ]]; then
+          "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
+        fi
+        "$RUNNER_TEMP/flutter/bin/dart" --version
     - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: steps.flutter.outputs.cache-hit != 'true'
+      if: inputs.stage != 'native' && steps.flutter.outputs.cache-hit != 'true'
       with:
         path: ${{ runner.temp }}/flutter
         key: flutter-macos-arm64-3.35.7-v1
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: inputs.stage != 'native'
       id: pub
       with:
         path: ~/.pub-cache
         key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
         restore-keys: pub-macos-
     - name: Resolve locked language prerequisites
+      if: inputs.stage != 'native'
       shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
       run: |
         (cd packages/foresight_core && dart pub get --enforce-lockfile)
-        (cd apps/desktop && flutter pub get --enforce-lockfile)
+        if [[ "$STAGE" == desktop || "$STAGE" == service ]]; then
+          (cd apps/desktop && flutter pub get --enforce-lockfile)
+        fi
     - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: steps.pub.outputs.cache-hit != 'true'
+      if: inputs.stage != 'native' && steps.pub.outputs.cache-hit != 'true'
       with:
         path: ~/.pub-cache
         key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
     - name: Fetch the qualified compiler SDK or build pinned sources
+      if: inputs.stage == 'native'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
@@ -91,5 +122,11 @@ runs:
         python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
         echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
     - name: Record the compiler, runtime, package and SDK identity
+      if: inputs.stage != 'packaging'
       shell: bash
-      run: .venv/bin/python tools/ci_stage_environment.py --platform macos --sdk-prefix build/sdk --output build/stage-environment.json
+      env:
+        STAGE: ${{ inputs.stage }}
+      run: |
+        args=()
+        if [[ "$STAGE" == native ]]; then args+=(--sdk-prefix build/sdk); fi
+        .venv/bin/python tools/ci_stage_environment.py --platform macos --stage "$STAGE" "${args[@]}" --output build/stage-environment.json

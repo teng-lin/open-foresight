@@ -42,6 +42,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.source }}
       - uses: ./.github/actions/setup-linux-stage
+        with:
+          stage: native
       - name: Offline Python tests
         run: .venv/bin/python -m pytest
       - name: Validate or restore the native stage
@@ -58,10 +60,9 @@ jobs:
           xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage native --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja "${args[@]}"
-      - name: Validate current native process identity and fast integration
+      - name: Validate current native process identity
         run: |
           .venv/bin/python tests/integration/test_native_process.py build/native/libforesight_native.so build/services/helper/ForesightHelper
-          .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
       - name: Retain the independently qualified native stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -113,6 +114,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.source }}
       - uses: ./.github/actions/setup-linux-stage
+        with:
+          stage: core
       - name: Download the successful native prerequisite from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -173,6 +176,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.source }}
       - uses: ./.github/actions/setup-linux-stage
+        with:
+          stage: desktop
       - name: Download the successful native prerequisite from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -193,6 +198,8 @@ jobs:
             --platform linux --stage desktop --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native "${args[@]}"
+      - name: Fresh fast integration against the current native prerequisite
+        run: xvfb-run -a dbus-run-session -- .venv/bin/python tools/integration_gates.py --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration
       - name: Retain the independently qualified desktop stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -234,6 +241,8 @@ jobs:
           fetch-depth: 0
           ref: ${{ inputs.source }}
       - uses: ./.github/actions/setup-linux-stage
+        with:
+          stage: service
       - name: Download the successful native prerequisite from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:

@@ -41,6 +41,7 @@ jobs:
         fetch-depth: 0
     - uses: ./.github/actions/setup-macos-stage
       with:
+        stage: packaging
         source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         own-pr: ${{ github.event.pull_request.number || 0 }}
         version: ${{ inputs.version || needs.distribution-number.outputs.version }}
