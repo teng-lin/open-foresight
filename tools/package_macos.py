@@ -40,8 +40,9 @@ def write_litert_manifests(app, library, service):
             "version": "0.18.0",
             "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
         }
-    # All hosts resolve their enclosing bundle's canonical Resources directory.
-    # The nested service has its own bundle, while resource workers share UI/MCP.
+    # UI/MCP and the nested service resolve identity from Contents/Resources;
+    # resource-bin workers share the main app receipt. Keep JSON out of the
+    # Contents root, where codesign treats unknown files as code subcomponents.
     for manifest in (
         app / "Contents/Resources/manifest.json",
         service.parent.parent / "Resources/manifest.json",

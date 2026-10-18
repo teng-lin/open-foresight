@@ -68,33 +68,61 @@ class RuntimeIdentityTest(unittest.TestCase):
         self.assertIn("checksum mismatch", result.stderr)
         self.assertFalse(self.marker.exists())
 
-    def test_manifest_paths_preserve_linux_and_canonical_mac_bundle_resources(self):
-        app = self.root / "Moved path/Example.app/Contents"
-        service = app / "Library/Services/Service.app/Contents"
-        cases = [
-            ("linux", self.loader, self.root / "manifest.json"),
-            ("macos", app / "MacOS/ui", app / "Resources/manifest.json"),
-            ("macos", app / "MacOS/mcp", app / "Resources/manifest.json"),
-            ("macos", app / "Resources/bin/model", app / "Resources/manifest.json"),
-            ("macos", app / "Resources/bin/helper", app / "Resources/manifest.json"),
-            ("macos", service / "MacOS/service", service / "Resources/manifest.json"),
-        ]
-        for platform, executable, manifest in cases:
-            with self.subTest(platform=platform, executable=executable):
-                result = subprocess.run(
-                    [str(self.loader), "--manifest-path", platform, str(executable)],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=10,
-                )
-                self.assertEqual(Path(result.stdout.strip()), manifest)
-
     def test_matching_bundle_identity_loads_and_resolves_cached_symbols(self):
         self.bundle()
         result = self.run_loader()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.marker.exists())
+
+    def test_app_bundle_hosts_use_sealed_resource_identity(self):
+        app = self.root / "Relocated path with spaces/Example.app"
+        for relative in (
+            "Contents/MacOS/ui",
+            "Contents/MacOS/mcp",
+            "Contents/Resources/bin/model",
+            "Contents/Resources/bin/helper",
+            "Contents/Library/Services/Service.app/Contents/MacOS/loader",
+        ):
+            with self.subTest(host=relative):
+                self.loader = app / relative
+                self.loader.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(LOADER, self.loader)
+                contents = self.loader.parent.parent
+                manifest = (
+                    contents / "Resources/manifest.json"
+                    if self.loader.parent.name == "MacOS"
+                    else contents / "manifest.json"
+                )
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "gemma_runtime": {
+                                "version": "0.18.0",
+                                "sha256": self.sha,
+                            }
+                        }
+                    )
+                )
+                self.marker.unlink(missing_ok=True)
+                result = self.run_loader()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(self.marker.exists())
+                # Adjacent override metadata must not replace the bundle pin.
+                self.build_identity()
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "gemma_runtime": {
+                                "version": "0.18.0",
+                                "sha256": "0" * 64,
+                            }
+                        }
+                    )
+                )
+                self.marker.unlink()
+                self.assertNotEqual(self.run_loader().returncode, 0)
+                self.assertFalse(self.marker.exists())
 
     def test_bundle_pin_cannot_be_replaced_by_override_metadata(self):
         self.bundle("0" * 64)
