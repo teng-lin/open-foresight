@@ -50,7 +50,7 @@ void main() {
       try {
         await eventually(
           () => File('${profile.runtime}/application.sock').existsSync(),
-          timeout: const Duration(seconds: 30),
+          timeout: const Duration(seconds: 90),
         );
         client = await ServiceClient.connect(serviceEndpoint(profile));
         expect(await client.call('notes.list'), isEmpty);
@@ -68,7 +68,7 @@ void main() {
             'FORESIGHT_STARTUP_ENV': statusHandoff.path,
           },
           includeParentEnvironment: false,
-        ).timeout(const Duration(seconds: 30));
+        ).timeout(const Duration(seconds: 90));
         expect(status.exitCode, 0, reason: '${status.stderr}');
         expect(
           (jsonDecode(status.stdout as String) as Map)['pid'],
@@ -89,6 +89,8 @@ void main() {
         );
       }
     },
+    // Both subprocesses compile the service from source under parallel load.
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 
   test('private worker preserves the public Unix socket path limit', () async {

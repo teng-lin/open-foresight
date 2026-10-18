@@ -40,6 +40,15 @@ queries forbid Keychain authentication UI. This does not establish stable signin
 identity across ad-hoc updates; actual packaged update behavior must be recorded.
 Injected-store unit tests establish migration ordering, not macOS ACL security.
 
+Review also identified a runtime-integrity prerequisite for this credential
+boundary: the ad-hoc package disables library validation. A same-user writer
+can change a bundled library or resource without changing the service executable
+CDHash. Sealing ambient and private-handoff code-path overrides closes that
+injection route, but does not establish that mutable bundled code is trusted.
+The owner signing decision remains pending; a successful ACL fixture alone must
+not be presented as proof of packaged credential isolation. A signature precheck
+would also leave a verification-to-load race.
+
 The PDF/RTF helper reads one bounded regular input into memory before applying a
 fail-closed sandbox. Parsing then has access to required system resources, with
 user files and networking denied. The Apple integration fixture exercises real
@@ -52,6 +61,12 @@ Finder. Question-model acquisition requires configured genuine publisher terms
 and a digest-scoped acknowledgment before download. No publisher license has
 been inferred: absent `FORESIGHT_QUERY_TERMS_URL` intentionally disables this
 automatic download.
+
+The frontend consumes the launch handoff once and explicitly installs the
+resolved map in its worker. Startup and control commands resolve the same
+effective custom profile. A real service subprocess and worker regression
+checks this path. Packaged code paths always come from the executable's own
+runtime manifest; development executables retain explicit overrides.
 
 The following manual evidence is **pending**, not passed:
 
