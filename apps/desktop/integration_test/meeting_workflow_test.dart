@@ -582,8 +582,7 @@ void main() {
       final cited = jsonDecode(answer['citations'] as String) as List;
       expect(cited.single['document_id'], 'meeting-$meeting');
       final citedRevision = cited.single['revision'];
-      await tester.tap(find.text('[S1] source revision $citedRevision'));
-      await tester.pumpAndSettle();
+      await openMeetingCitation(tester, meeting, citedRevision);
       expect(
         find.text('${source['title']} · revision $citedRevision'),
         findsOneWidget,

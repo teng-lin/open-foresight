@@ -63,6 +63,37 @@ void main() {
             .text,
         isEmpty,
       );
+      store.answer(
+        'Question about the meeting',
+        List.filled(
+          30,
+          'A detailed answer about the recorded meeting.',
+        ).join('\n\n'),
+        'completed',
+        [
+          {
+            'citation': 'S1',
+            'document_id': 'archived-meeting-source',
+            'revision': 1,
+            'excerpt': 'Recorded source excerpt',
+          },
+        ],
+        'fixture',
+        conversation: 'meeting:$meeting',
+      );
+      store.db.execute(
+        'INSERT INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
+        [meeting, store.db.lastInsertRowId],
+      );
+      workspace.update(() {});
+      await tester.pumpAndSettle();
+      expect(find.text('[S1] source revision 1').hitTestable(), findsNothing);
+      await openMeetingCitation(tester, meeting, 1);
+      expect(
+        find.text('Archived citation: source changed or deleted'),
+        findsOneWidget,
+      );
+      expect(find.text('Recorded source excerpt'), findsOneWidget);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       await helper.close();
