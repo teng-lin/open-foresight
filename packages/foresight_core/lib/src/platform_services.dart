@@ -42,13 +42,35 @@ class RuntimeConfiguration {
     }
     final path = executable ?? Platform.resolvedExecutable;
     final marker = path.lastIndexOf('.app/Contents/');
+    final bundled = marker >= 0;
+    if (bundled) {
+      // Resource/code selection belongs to the signed application. A private
+      // handoff authenticates file ownership, not the supplied library paths.
+      values.removeWhere(
+        (key, _) =>
+            key.startsWith('FORESIGHT_') &&
+            !{
+              ..._scalarRuntimeKeys.where(
+                (key) => key != 'FORESIGHT_RUNTIME_REVISION',
+              ),
+              'FORESIGHT_DATA',
+              'FORESIGHT_RUNTIME',
+              'FORESIGHT_SERVICE_TRACE',
+            }.contains(key),
+      );
+    }
     final resources =
-        values['FORESIGHT_RESOURCES'] ??
+        (bundled ? null : values['FORESIGHT_RESOURCES']) ??
         (marker < 0
             ? null
             : '${path.substring(0, marker + 4)}/Contents/Resources');
     if (resources != null) {
       final file = File('$resources/runtime.json');
+      if (bundled && !file.existsSync()) {
+        throw StateError(
+          'The application runtime configuration is missing. Reinstall Open Foresight.',
+        );
+      }
       if (file.existsSync()) {
         final entries =
             jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
@@ -61,17 +83,25 @@ class RuntimeConfiguration {
             );
           }
           final relative = entry.value as String;
-          values.putIfAbsent(
-            entry.key,
-            () =>
-                _scalarRuntimeKeys.contains(entry.key) ||
-                    relative.startsWith('/')
-                ? relative
-                : '$resources/$relative',
-          );
+          final value =
+              _scalarRuntimeKeys.contains(entry.key) || relative.startsWith('/')
+              ? relative
+              : '$resources/$relative';
+          if (bundled &&
+              (!_scalarRuntimeKeys.contains(entry.key) ||
+                  entry.key == 'FORESIGHT_RUNTIME_REVISION')) {
+            values[entry.key] = value;
+          } else {
+            values.putIfAbsent(entry.key, () => value);
+          }
         }
       }
       values['FORESIGHT_RESOURCES'] = resources;
+      if (bundled && !values.containsKey('FORESIGHT_NATIVE')) {
+        throw StateError(
+          'The application native runtime is missing. Reinstall Open Foresight.',
+        );
+      }
     }
     if (!foresightTestHooksEnabled) {
       for (final key in _testHookKeys) {
