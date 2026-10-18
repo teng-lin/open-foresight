@@ -14,6 +14,7 @@ import 'helper.dart';
 import 'model_setup.dart';
 import 'profile_paths.dart';
 import 'store.dart';
+import 'service_socket.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
 
@@ -283,12 +284,12 @@ class ApplicationService {
   Future<void> _ready = Future<void>.value();
   ApplicationService._(
     this.domain,
-    this.listener,
+    ServiceSocketBinding binding,
     this.path,
     this.lock,
     this.installationLock,
     this.application,
-  ) {
+  ) : listener = binding.listener {
     final token = base64Url.encode(
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
     );
@@ -307,7 +308,7 @@ class ApplicationService {
       token,
       (host, event) => _send(host as Socket, event),
     );
-    listener.listen(_accept);
+    binding.publish(_accept);
     _changes = application.changes.stream.listen((_) => _broadcast());
     _heartbeat = Timer.periodic(
       const Duration(seconds: 1),
@@ -366,7 +367,7 @@ class ApplicationService {
     }
     Store? store;
     Helper? helper;
-    ServerSocket? listener;
+    ServiceSocketBinding? binding;
     try {
       // An unclean predecessor can leave a healthy helper at this endpoint.
       // Reuse that runtime until a clean shutdown releases its workers.
@@ -394,11 +395,7 @@ class ApplicationService {
         return (jsonDecode(saved) as List).cast<String>();
       });
       application.startBackground();
-      listener = await ServerSocket.bind(
-        InternetAddress(path, type: InternetAddressType.unix),
-        0,
-      );
-      protectPrivateFile(path);
+      binding = await ServiceSocketBinding.bind(path);
       final endpoint = File('${profile.data}/.application-endpoint.json');
       final temporary = File('${endpoint.path}.$pid');
       temporary.writeAsStringSync(
@@ -411,7 +408,7 @@ class ApplicationService {
       temporary.renameSync(endpoint.path);
       final service = ApplicationService._(
         domain,
-        listener,
+        binding,
         path,
         lock,
         installationLock,
@@ -431,7 +428,10 @@ class ApplicationService {
       });
       return service;
     } catch (_) {
-      await listener?.close();
+      await binding?.listener.close();
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
+        File(path).deleteSync();
+      }
       await helper?.close();
       store?.close();
       lock.closeSync();
@@ -874,7 +874,9 @@ class IsolatedApplicationService {
   final _peers = <Socket>{};
   final _bridges = <Future<void>>{};
   SendPort? _control;
-  ServerSocket? _listener;
+  ServiceSocketBinding? _binding;
+  Future<void>? _listening;
+  bool _publicClosing = false;
   String? _publicPath;
   String? _workerPath;
   Object? _failure;
@@ -949,8 +951,10 @@ class IsolatedApplicationService {
     if (value.first == 'ready') {
       _workerPath = value[1] as String;
       _publicPath = value[2] as String;
+      final listening = _listen();
+      _listening = listening;
       unawaited(
-        _listen().then(
+        listening.then(
           (_) {
             if (!_ready.isCompleted) _ready.complete();
           },
@@ -983,14 +987,16 @@ class IsolatedApplicationService {
     // The domain worker already holds both ownership locks. A competing
     // launcher cannot remove the live owner's socket or endpoint record.
     final stale = File(path);
-    if (await stale.exists()) await stale.delete();
-    _listener = await ServerSocket.bind(
-      InternetAddress(path, type: InternetAddressType.unix),
-      0,
-    );
-    _traceServiceTransport('frontend bound; setting permissions');
-    protectPrivateFile(path);
-    _listener!.listen((client) {
+    if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
+      stale.deleteSync();
+    }
+    final binding = await ServiceSocketBinding.bind(path);
+    _binding = binding;
+    if (_publicClosing) {
+      await binding.close();
+      throw StateError('Service closed before socket publication');
+    }
+    binding.publish((client) {
       final bridge = _bridge(client);
       _bridges.add(bridge);
       unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
@@ -1083,7 +1089,14 @@ class IsolatedApplicationService {
 
   Future<void> _removePublicSocket({bool workerOwnsLock = false}) async {
     _traceServiceTransport('frontend remove socket owns_lock=$workerOwnsLock');
-    await _listener?.close();
+    _publicClosing = true;
+    // Join startup before cleanup so a pending bind cannot publish afterwards.
+    try {
+      await _listening;
+    } catch (_) {
+      // Startup reports its original error through _ready.
+    }
+    await _binding?.close();
     _traceServiceTransport('frontend listener closed');
     if (_publicRemoved || _publicPath == null) return;
     RandomAccessFile? ownership;
