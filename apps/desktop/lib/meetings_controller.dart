@@ -600,7 +600,7 @@ class _MeetingsController extends _FeatureController {
             ],
           );
           if (location == null) return false;
-          await File(location.path).writeAsString(markdown);
+          await writePrivateTextFile(File(location.path), markdown);
           return true;
         },
       ),

@@ -47,7 +47,7 @@ void main() {
           '',
           backend: env['FORESIGHT_EMBEDDING_GPU'] == '1'
               ? 'litert_lm_embedding_gpu'
-              : 'llama_cpp',
+              : 'litert_lm_embedding_cpu',
         );
         helper.onReady = domain.resume;
         await helper.start();

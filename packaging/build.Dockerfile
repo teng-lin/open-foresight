@@ -16,8 +16,6 @@ RUN git -C /opt/flutter fetch --depth=1 origin refs/tags/3.35.7:refs/tags/3.35.7
     flutter --version --machine | python3 -c 'import json, sys; assert json.load(sys.stdin)["frameworkVersion"] == "3.35.7"'
 WORKDIR /src
 # Fetch this pinned runtime independently of application/source-revision changes.
-COPY tools/prepare_onnx.py tools/prepare_onnx.py
-RUN python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 COPY . .
 ARG SOURCE_REVISION
 ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python FORESIGHT_PARALLEL_GATES=1

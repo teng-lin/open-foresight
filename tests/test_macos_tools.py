@@ -49,7 +49,6 @@ class MacModelProbeTests(unittest.TestCase):
             "FORESIGHT_HELPER",
             "FORESIGHT_LITERT_RUNNER",
             "FORESIGHT_MODEL_WORKER",
-            "FORESIGHT_MODEL_ADAPTER",
             "FORESIGHT_LITERT_EMBEDDING_ADAPTER",
             "FORESIGHT_MODEL_PYTHON",
             "FORESIGHT_LITERT_PYTHON",
@@ -127,31 +126,39 @@ class MacModelWorkerTests(unittest.TestCase):
             python.chmod(0o755)
             model = root / "embedding model.litertlm"
             model.touch()
-            directory = root / "sentence transformer"
+            directory = root / "model directory"
             directory.mkdir()
-            for asset, adapter, option in (
-                (model, "litert_embedding_adapter.py", ["--gpu"]),
-                (directory, "model_adapter.py", []),
-            ):
-                env = {
-                    **os.environ,
-                    "FORESIGHT_MODEL_PYTHON": str(python),
-                    "FORESIGHT_LITERT_PYTHON": str(python),
-                }
-                env.pop("FORESIGHT_MODEL_ADAPTER", None)
-                env.pop("FORESIGHT_LITERT_EMBEDDING_ADAPTER", None)
-                actual = json.loads(
-                    subprocess.check_output(
-                        [str(worker), "--embedding", str(asset), *option],
-                        env=env,
-                        cwd="/",
-                        text=True,
-                        timeout=300,
-                    )
+            env = {**os.environ, "FORESIGHT_LITERT_PYTHON": str(python)}
+            env.pop("FORESIGHT_LITERT_EMBEDDING_ADAPTER", None)
+            actual = json.loads(
+                subprocess.check_output(
+                    [str(worker), "--embedding", str(model), "--gpu"],
+                    env=env,
+                    cwd="/",
+                    text=True,
+                    timeout=300,
                 )
-                self.assertEqual(
-                    actual, ["-I", "-B", str(root / adapter), str(asset), *option]
+            )
+            self.assertEqual(
+                actual,
+                [
+                    "-I",
+                    "-B",
+                    str(root / "litert_embedding_adapter.py"),
+                    str(model),
+                    "--gpu",
+                ],
+            )
+            for asset in (directory, root / "wrong-format.bin"):
+                result = subprocess.run(
+                    [str(worker), "--embedding", str(asset)],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
                 )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("Unsupported model format", result.stderr)
             invalid = subprocess.run(
                 [str(worker), "--invalid"], capture_output=True, timeout=300
             )

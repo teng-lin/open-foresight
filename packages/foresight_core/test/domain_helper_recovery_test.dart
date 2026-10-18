@@ -148,21 +148,19 @@ void main() {
         await helper.hasActiveModel('/model.litertlm', 'digest', true),
         isTrue,
       );
-      controlService.value.model
-        ..backend = 'onnx-bert-cpu'
-        ..path = '/directory';
-      expect(
-        await helper.hasActiveModel('/directory', 'digest', false),
-        isTrue,
-      );
-      controlService.reject = true;
+      controlService.value.model.path = '/directory';
       expect(
         await helper.hasActiveModel('/directory', 'digest', false),
         isFalse,
       );
+      controlService.reject = true;
+      expect(
+        await helper.hasActiveModel('/model.litertlm', 'digest', false),
+        isFalse,
+      );
       helper.stopping = true;
       expect(
-        await helper.hasActiveModel('/directory', 'digest', false),
+        await helper.hasActiveModel('/model.litertlm', 'digest', false),
         isFalse,
       );
     },

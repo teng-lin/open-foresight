@@ -350,6 +350,7 @@ class ApplicationService {
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
         stale.deleteSync();
       store = Store('${profile.data}/application.db');
+      await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
       store.db.execute(
         "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing','paused')",
       );

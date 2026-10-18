@@ -39,7 +39,7 @@ void main() {
     addTearDown(() {
       if (temporary.existsSync()) temporary.deleteSync(recursive: true);
     });
-    final original = File('${temporary.path}/old.model')
+    final original = File('${temporary.path}/old.litertlm')
       ..writeAsStringSync('old registration');
     final candidate = File('${temporary.path}/candidate.litertlm')
       ..writeAsStringSync('candidate registration');

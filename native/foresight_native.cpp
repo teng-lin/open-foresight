@@ -1756,11 +1756,10 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
     if (!key || !value)
       return -1;
     static const std::set<std::string> allowed{
-        "FORESIGHT_LITERT_LIBRARY", "FORESIGHT_ONNX_LIBRARY",
-        "FORESIGHT_LITERT_BACKEND", "FORESIGHT_WHISPER_BACKEND",
-        "FORESIGHT_WHISPER_DEVICE", "FORESIGHT_HELPER",
-        "FORESIGHT_LITERT_CACHE",   "FORESIGHT_WHISPER_RUNTIME",
-        "PYTHONPYCACHEPREFIX"};
+        "FORESIGHT_LITERT_LIBRARY",  "FORESIGHT_LITERT_BACKEND",
+        "FORESIGHT_WHISPER_BACKEND", "FORESIGHT_WHISPER_DEVICE",
+        "FORESIGHT_HELPER",          "FORESIGHT_LITERT_CACHE",
+        "FORESIGHT_WHISPER_RUNTIME", "PYTHONPYCACHEPREFIX"};
     if (!allowed.count(key))
       return -1;
     std::lock_guard lock(foresight::launch_mutex);
