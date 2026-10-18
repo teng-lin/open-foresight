@@ -447,6 +447,24 @@ jobs:
         workflow = self.workflow("quality.yml")
         runs = [step.get("run", "") for step in workflow["jobs"]["python"]["steps"]]
         self.assertIn("python -m pytest", runs)
+        install = next(run for run in runs if "protoc-35.1-linux-x86_64.zip" in run)
+        reference = next(
+            step["run"]
+            for step in self.workflow("rpc-contracts.yml")["jobs"]["contracts"]["steps"]
+            if step.get("name") == "Install pinned protobuf toolchain"
+        )
+        self.assertEqual(
+            re.findall(r"https://\S*protoc-35\.1-linux-x86_64\.zip", install),
+            re.findall(r"https://\S*protoc-35\.1-linux-x86_64\.zip", reference),
+        )
+        self.assertEqual(
+            re.findall(r"\b[a-f0-9]{64}\b", install),
+            re.findall(r"\b[a-f0-9]{64}\b", reference),
+        )
+        self.assertIn("sha256sum --check", install)
+        self.assertIn('>> "$GITHUB_PATH"', install)
+        self.assertIn("--version", install)
+        self.assertLess(runs.index(install), runs.index("python -m pytest"))
 
     def test_registry_aliases_are_isolated_from_dependency_builds(self):
         workflow = self.workflow("linux-registry.yml")
