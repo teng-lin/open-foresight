@@ -350,7 +350,30 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.sdk.outputs.image }}
       run: python tools/ci_app_dependency_seed.py --sdk-image "$SDK_IMAGE" --output build/app-dependency-seed
-    - name: Build, test and cache application
+    - name: Retain dependency reuse provenance
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ubuntu-dependency-qualification-${{ github.job }}
+        overwrite: true
+        path: build/app-dependency-seed/qualification.json
+        if-no-files-found: error
+        retention-days: 30
+    - name: Publish only the secret-free application dependency cache
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: .
+        file: packaging/build.Dockerfile
+        build-contexts: appdeps_seed=./build/app-dependency-seed
+        builder: ${{ steps.app-cache.outputs.builder }}
+        target: application-dependencies
+        build-args: |
+          SDK_IMAGE=${{ steps.sdk.outputs.image }}
+          REQUIRE_DEPENDENCY_REUSE=1
+        cache-from: |
+          type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
+          type=registry,ref=${{ steps.app-cache.outputs.cache }}
+        cache-to: ${{ format('type=registry,ref={0},mode=max,image-manifest=true', steps.app-cache.outputs.cache) }}
+    - name: Build and test the current application without exporting its layers
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:
         context: .
@@ -360,9 +383,11 @@ jobs:
         target: tested
         build-args: |
           SDK_IMAGE=${{ steps.sdk.outputs.image }}
+          REQUIRE_DEPENDENCY_REUSE=1
           SOURCE_REVISION=${{ inputs.source || github.sha }}
-        cache-from: ${{ format('type=registry,ref={0}', steps.app-cache.outputs.cache) }}
-        cache-to: ${{ format('type=registry,ref={0},mode=max,image-manifest=true', steps.app-cache.outputs.cache) }}
+        cache-from: |
+          type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
+          type=registry,ref=${{ steps.app-cache.outputs.cache }}
     - name: Assemble and verify distribution bundle
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:
@@ -374,6 +399,7 @@ jobs:
         outputs: type=local,dest=build/portable
         build-args: |
           SDK_IMAGE=${{ steps.sdk.outputs.image }}
+          REQUIRE_DEPENDENCY_REUSE=1
           SOURCE_REVISION=${{ inputs.source || github.sha }}
           REQUIRE_GOOGLE_CLIENT=1
           DISTRIBUTION_CONFIG_REVISION=${{ github.run_id }}-${{ github.run_attempt }}
@@ -381,7 +407,9 @@ jobs:
           google_client=${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
           foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
           foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
-        cache-from: ${{ format('type=registry,ref={0}', steps.app-cache.outputs.cache) }}
+        cache-from: |
+          type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
+          type=registry,ref=${{ steps.app-cache.outputs.cache }}
     - name: Archive executable permissions and record checksums
       env:
         VERSION: ${{ inputs.preview && format('{0}~{1}', inputs.version, inputs.label) || steps.version.outputs.version }}

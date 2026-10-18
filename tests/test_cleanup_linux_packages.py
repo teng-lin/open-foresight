@@ -29,6 +29,7 @@ class CleanupTests(unittest.TestCase):
             version(6, "old"),
             version(7, "child"),
             version(8, "old-alias", "current"),
+            version(9, "app-deps-buildcache-v1"),
         ]
         self.assertEqual(
             cleanup.candidates(versions, "new", {versions[6]["name"]}), [versions[5]]

@@ -20,14 +20,12 @@ def cli(arguments, **_kwargs):
         return '{"Driver":"docker"}'
     if arguments[:2] == ["docker", "info"]:
         return '[["driver-type","io.containerd.snapshotter.v1"]]'
-    assert arguments == [
-        "docker",
-        "buildx",
-        "imagetools",
-        "inspect",
+    assert arguments[:4] == ["docker", "buildx", "imagetools", "inspect"]
+    assert arguments[4] in (
         "ghcr.io/teng-lin/open-foresight/linux-sdk:app-buildcache-x86-64",
-        "--raw",
-    ]
+        "ghcr.io/teng-lin/open-foresight/linux-sdk:app-deps-buildcache-v1",
+    )
+    assert arguments[5] == "--raw"
     return json.dumps(
         {
             "schemaVersion": 2,
@@ -45,7 +43,8 @@ def cli(arguments, **_kwargs):
 def test_current_context_docker_builder_keeps_sdk_archive_visible():
     assert transport.prepare("teng-lin/open-foresight", request=cli) == {
         "builder": "setup-docker-action",
-        "cache": "ghcr.io/teng-lin/open-foresight/linux-sdk:app-buildcache-x86-64",
+        "cache": "ghcr.io/teng-lin/open-foresight/linux-sdk:app-deps-buildcache-v1",
+        "legacy_cache": "ghcr.io/teng-lin/open-foresight/linux-sdk:app-buildcache-x86-64",
         "cache_available": True,
     }
 
@@ -113,7 +112,9 @@ def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consume
     for build in builds:
         assert build["build-contexts"] == "appdeps_seed=./build/app-dependency-seed"
         assert "steps.app-cache.outputs.cache" in build["cache-from"]
+        assert "steps.app-cache.outputs.legacy_cache" in build["cache-from"]
         assert "steps.sdk.outputs.cache" not in build["cache-from"]
+        assert "REQUIRE_DEPENDENCY_REUSE=1" in build["build-args"]
     exporters = [build for build in builds if "cache-to" in build]
     if job == "ubuntu-package":
         assert not exporters
@@ -122,5 +123,47 @@ def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consume
         )
     else:
         assert "github.ref == 'refs/heads/main'" in selected["if"]
-        assert len(exporters) == 1 and exporters[0]["target"] == "tested"
+        assert (
+            len(exporters) == 1 and exporters[0]["target"] == "application-dependencies"
+        )
+        assert "legacy_cache" not in exporters[0]["cache-to"]
         assert selected["permissions"]["packages"] == "write"
+
+
+def test_new_cache_absence_retains_original_seed_and_does_not_republish_it(capsys):
+    def request(arguments, **kwargs):
+        if arguments[:3] == ["docker", "buildx", "imagetools"] and arguments[
+            4
+        ].endswith(":app-deps-buildcache-v1"):
+            raise subprocess.CalledProcessError(
+                1, arguments, stderr=arguments[4] + ": not found"
+            )
+        return cli(arguments, **kwargs)
+
+    result = transport.prepare("teng-lin/open-foresight", request=request)
+    assert result["cache_available"] is False
+    assert result["cache"].endswith(":app-deps-buildcache-v1")
+    assert result["legacy_cache"].endswith(":app-buildcache-x86-64")
+    message = capsys.readouterr().out
+    assert "qualified dependency objects remain required" in message
+    assert "artifact probe already missed" not in message
+
+
+def test_legacy_tag_disappearance_requires_recovery_not_dependency_rebuild():
+    def request(arguments, **kwargs):
+        if arguments[:3] == ["docker", "buildx", "imagetools"] and arguments[
+            4
+        ].endswith(":app-buildcache-x86-64"):
+            raise subprocess.CalledProcessError(
+                1, arguments, stderr=arguments[4] + ": not found"
+            )
+        return cli(arguments, **kwargs)
+
+    with pytest.raises(RuntimeError, match="restore its reviewed manifest"):
+        transport.prepare("teng-lin/open-foresight", request=request)
+
+
+def test_registry_namespace_normalizes_github_repository_case():
+    assert transport.reference("Teng-Lin/Open-Foresight") == transport.reference(
+        "teng-lin/open-foresight"
+    )

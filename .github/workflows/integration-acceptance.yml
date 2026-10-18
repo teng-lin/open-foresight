@@ -127,8 +127,11 @@ jobs:
           tags: foresight-integration:local
           build-args: |
             SDK_IMAGE=${{ steps.sdk.outputs.image }}
+            REQUIRE_DEPENDENCY_REUSE=1
             SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}
-          cache-from: ${{ format('type=registry,ref={0}', steps.app-cache.outputs.cache) }}
+          cache-from: |
+            type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
+            type=registry,ref=${{ steps.app-cache.outputs.cache }}
       - name: Package version
         id: version
         run: |
@@ -210,4 +213,6 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: integration-acceptance-evidence
-          path: test-results/
+          path: |
+            test-results/
+            build/app-dependency-seed/qualification.json
