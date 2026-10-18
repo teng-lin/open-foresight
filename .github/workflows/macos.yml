@@ -288,7 +288,11 @@ jobs:
         fi
         python tools/ci_changes.py "${task_args[@]}"
     - name: Lint every Actions workflow
-      run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+      run: |-
+        curl -fLsS https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_darwin_arm64.tar.gz -o "$RUNNER_TEMP/actionlint.tar.gz"
+        echo "2693315b9093aeacb4ebd91a993fea54fc215057bf0da2659056b4bc033873db  $RUNNER_TEMP/actionlint.tar.gz" | shasum -a 256 -c -
+        tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+        "$RUNNER_TEMP/actionlint"
     - name: Validate explicit integration paths
       run: python tools/check_integration_inventory.py
     - name: Validate release version copies
