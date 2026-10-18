@@ -228,7 +228,73 @@ void main() {
           environment: {'FORESIGHT_NATIVE': '/override'},
           executable: '$app/Contents/MacOS/app',
         ).nativeLibrary,
-        '/override',
+        '${resources.path}/lib/libforesight_native.dylib',
+      );
+    },
+  );
+
+  test(
+    'bundled runtime rejects ambient and private-handoff code overrides',
+    () async {
+      final app = '${scratch.path}/Trusted.app';
+      final resources = Directory('$app/Contents/Resources')
+        ..createSync(recursive: true);
+      File('${resources.path}/runtime.json').writeAsStringSync(
+        jsonEncode({
+          'FORESIGHT_NATIVE': 'lib/trusted.dylib',
+          'FORESIGHT_HELPER': 'bin/trusted-helper',
+          'FORESIGHT_RUNTIME_REVISION': 'trusted-revision',
+        }),
+      );
+      final untrusted = Directory('${scratch.path}/untrusted')..createSync();
+      File(
+        '${untrusted.path}/runtime.json',
+      ).writeAsStringSync(jsonEncode({'FORESIGHT_NATIVE': '/attacker.dylib'}));
+      final injected = {
+        'FORESIGHT_RESOURCES': untrusted.path,
+        'FORESIGHT_NATIVE': '/attacker.dylib',
+        'FORESIGHT_HELPER': '/attacker-helper',
+        'FORESIGHT_QUERY_WORKER': '/attacker-query',
+        'FORESIGHT_RUNTIME_REVISION': 'attacker-revision',
+        'FORESIGHT_DATA': '${scratch.path}/requested-profile',
+      };
+      for (final handoff in [false, true]) {
+        final file = handoff
+            ? await writeServiceStartupEnvironment(
+                Directory('${scratch.path}/runtime'),
+                injected,
+              )
+            : null;
+        final settings = RuntimeConfiguration.resolve(
+          environment: file == null
+              ? injected
+              : {'FORESIGHT_STARTUP_ENV': file.path},
+          executable: '$app/Contents/MacOS/service',
+        );
+        expect(settings.nativeLibrary, '${resources.path}/lib/trusted.dylib');
+        expect(
+          settings['FORESIGHT_HELPER'],
+          '${resources.path}/bin/trusted-helper',
+        );
+        expect(settings['FORESIGHT_RESOURCES'], resources.path);
+        expect(settings['FORESIGHT_QUERY_WORKER'], isNull);
+        expect(settings['FORESIGHT_RUNTIME_REVISION'], 'trusted-revision');
+        expect(settings['FORESIGHT_DATA'], injected['FORESIGHT_DATA']);
+      }
+      expect(
+        RuntimeConfiguration.resolve(
+          environment: injected,
+          executable: '/development/service',
+        ).nativeLibrary,
+        '/attacker.dylib',
+      );
+      File('${resources.path}/runtime.json').deleteSync();
+      expect(
+        () => RuntimeConfiguration.resolve(
+          environment: injected,
+          executable: '$app/Contents/MacOS/service',
+        ),
+        throwsStateError,
       );
     },
   );
