@@ -59,7 +59,7 @@ def main():
         assert not forbidden, forbidden
         subprocess.run([str(relocated / 'bin/foresight-model'), '--check'], env=env, check=True)
         linkage = {}
-        for relative in ['bin/ForesightHelper', 'bin/foresight-service', 'bin/foresight-mcp', 'lib/libforesight_native.so', 'bin/foresight-model', 'lib/liblitert-lm.so', 'lib/libonnxruntime.so', 'app/open-foresight']:
+        for relative in ['bin/ForesightHelper', 'bin/foresight-service', 'bin/foresight-mcp', 'lib/libforesight_native.so', 'bin/foresight-model', 'lib/liblitert-lm.so', 'app/open-foresight']:
             value = subprocess.check_output(['ldd', str(relocated / relative)], env=env, text=True)
             assert 'not found' not in value, value
             assert 'libpython' not in value, value

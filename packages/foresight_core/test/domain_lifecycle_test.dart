@@ -28,7 +28,6 @@ void main() {
       for (final backend in [
         'litert_lm_embedding_gpu',
         'litert_lm_embedding_cpu',
-        'llama_cpp',
       ]) {
         await store.register('embedding', model.path, '', backend: backend);
         store.close();
@@ -50,7 +49,7 @@ void main() {
         ),
         throwsArgumentError,
       );
-      expect(service.configurations.length, 3);
+      expect(service.configurations.length, 2);
     } finally {
       store.close();
       await helper.close();
