@@ -497,3 +497,114 @@ def test_registry_cache_preflight_precedes_parent_loads(tmp_path):
     ):
         sdk.produce("linux-litert", tmp_path / "output", REPOSITORY)
     assert events == ["cache-preflight", "parent-load", "build-with-readonly-layers"]
+
+
+class RegistryDescriptorProvenanceTests(unittest.TestCase):
+    def test_promoted_descriptor_preserves_original_receipts_and_nested_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = {
+                "component": "linux-sdk",
+                "source_commit": "1" * 40,
+                "source_run_attempt": 2,
+                "sha256": "2" * 64,
+            }
+            history = {
+                "producer_run": 123,
+                "artifact_id": 456,
+                "artifact_digest": "sha256:" + "3" * 64,
+                "source_receipt": original,
+            }
+            for metadata in ("approved-source.json", "source-qualification.json"):
+                with self.subTest(metadata=metadata):
+                    source = root / metadata.removesuffix(".json")
+                    source.mkdir()
+                    # Include existing qualification history exactly as received;
+                    # descriptor publication must not relabel it as a new build.
+                    qualification = {**history, "prior": {"reused_from": history}}
+                    encoded = json.dumps(qualification).encode()
+                    (source / metadata).write_bytes(encoded)
+                    (source / "image.json").write_text(
+                        '{"transport":"verified-original"}'
+                    )
+                    destination = root / (metadata + "-descriptor")
+                    sdk.describe(destination, "linux-sdk", REGISTRY_IMAGE, source)
+                    self.assertEqual(
+                        json.loads(
+                            (destination / "source-qualification.json").read_text()
+                        ),
+                        qualification,
+                    )
+                    self.assertFalse((destination / "approved-source.json").exists())
+                    self.assertEqual((source / metadata).read_bytes(), encoded)
+                    published = root / (metadata + "-published")
+                    artifacts.pack("linux-sdk", "f" * 64, destination, published)
+                    receipt = json.loads((published / "identity.json").read_text())
+                    self.assertEqual(receipt["reused_from"], qualification)
+                    self.assertNotEqual(
+                        receipt["source_commit"], original["source_commit"]
+                    )
+                    unpacked = root / (metadata + "-unpacked")
+                    artifacts.unpack("linux-sdk", "f" * 64, published, unpacked)
+                    self.assertEqual(
+                        json.loads(
+                            (unpacked / "source-qualification.json").read_text()
+                        )["source_receipt"],
+                        original,
+                    )
+                    self.assertFalse((unpacked / "approved-source.json").exists())
+
+    def test_fresh_registry_descriptor_has_no_fabricated_compile_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk.describe(
+                root / "descriptor",
+                "linux-core",
+                REGISTRY_IMAGE,
+                root / "absent-shared-prefix",
+            )
+            self.assertEqual(
+                json.loads((root / "descriptor/image.json").read_text()),
+                {"image": REGISTRY_IMAGE},
+            )
+            self.assertFalse((root / "descriptor/source-qualification.json").exists())
+
+    def test_present_shared_prefix_requires_regular_qualification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "shared"
+            source.mkdir()
+            destination = root / "descriptor"
+            with self.assertRaisesRegex(
+                ValueError, "missing its original qualification"
+            ):
+                sdk.describe(destination, "linux-sdk", REGISTRY_IMAGE, source)
+            self.assertFalse(destination.exists())
+            external = root / "original.json"
+            external.write_text('{"source_receipt":{}}')
+            (source / "approved-source.json").symlink_to(external)
+            with self.assertRaisesRegex(ValueError, "must be regular"):
+                sdk.describe(destination, "linux-sdk", REGISTRY_IMAGE, source)
+            self.assertFalse(destination.exists())
+
+    def test_all_main_linux_publishers_preserve_shared_source_qualification(self):
+        import yaml
+
+        workflow = yaml.safe_load(
+            (artifacts.ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        publishers = [
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("name") == "Publish qualified SDK descriptor"
+        ]
+        self.assertEqual(len(publishers), 4)
+        for step in publishers:
+            self.assertIn("linux_sdk_artifacts.py describe", step["run"])
+            self.assertIn("--source-prefix build/shared-descriptor", step["run"])
+            self.assertIn('--tag "$SDK_IMAGE"', step["run"])
+            self.assertLess(
+                step["run"].index("linux_sdk_artifacts.py describe"),
+                step["run"].index("ci_artifacts.py pack"),
+            )

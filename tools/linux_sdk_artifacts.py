@@ -116,6 +116,51 @@ def promote(prefix, component, tag):
     return tag
 
 
+def describe(prefix, component, image, source_prefix=None):
+    """Publish a fresh registry descriptor while preserving original provenance.
+
+    The current receipt qualifies the descriptor/promotion. Source qualification
+    remains separate data, including its untouched original source receipt and
+    any prior reused_from history; it is never imported as approval authority.
+    """
+    local_tag(component)
+    if not REGISTRY_IMAGE.fullmatch(image):
+        raise ValueError("Descriptor requires an immutable SDK registry image")
+    if prefix.exists() or prefix.is_symlink():
+        raise ValueError("Descriptor destination already exists; preserve its outputs")
+    qualification = None
+    if source_prefix is not None and (
+        source_prefix.exists() or source_prefix.is_symlink()
+    ):
+        if source_prefix.is_symlink() or not source_prefix.is_dir():
+            raise ValueError("Verified SDK source prefix must be a directory")
+        for name in ("source-qualification.json", "approved-source.json"):
+            source = source_prefix / name
+            if source.is_symlink():
+                raise ValueError("SDK source qualification must be regular")
+            if source.is_file():
+                qualification = json.loads(source.read_text())
+                if not isinstance(qualification, dict):
+                    raise ValueError("SDK source qualification must be an object")
+                receipt = qualification.get("source_receipt")
+                if (
+                    not isinstance(receipt, dict)
+                    or receipt.get("component") != component
+                ):
+                    raise ValueError("SDK source qualification component mismatch")
+                break
+        if qualification is None:
+            raise ValueError(
+                "Verified SDK promotion is missing its original qualification"
+            )
+    prefix.mkdir(parents=True)
+    (prefix / "image.json").write_text(json.dumps({"image": image}) + "\n")
+    if qualification is not None:
+        (prefix / "source-qualification.json").write_text(
+            json.dumps(qualification, indent=2) + "\n"
+        )
+
+
 def qualify(component, image):
     inspect(image)
     if component in ("linux-core", "linux-sdk"):
@@ -230,11 +275,14 @@ def write_outputs(image, application_cache=True):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("produce", "resolve", "promote"))
+    parser.add_argument(
+        "command", choices=("produce", "resolve", "promote", "describe")
+    )
     parser.add_argument("--component", choices=COMPONENTS, default="linux-sdk")
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--tag")
+    parser.add_argument("--source-prefix", type=Path)
     parser.add_argument("--discard-archive", action="store_true")
     parser.add_argument(
         "--repository",
@@ -243,6 +291,11 @@ def main():
     parser.add_argument("--own-head", default="")
     parser.add_argument("--own-pr", type=int, default=0)
     args = parser.parse_args()
+    if args.command == "describe":
+        if args.prefix is None or args.tag is None:
+            parser.error("describe requires --prefix and --tag")
+        describe(args.prefix, args.component, args.tag, args.source_prefix)
+        return
     if args.command == "produce":
         if args.output is None:
             parser.error("produce requires --output")
