@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
@@ -167,11 +168,13 @@ void main() {
       await expectLater(
         client.call('service.stop_if_idle', {'expected_pid': pid + 1}),
         throwsA(
-          isA<StateError>().having(
-            (error) => error.message,
-            'message',
-            contains('ownership changed'),
-          ),
+          isA<RpcError>()
+              .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+              .having(
+                (error) => error.message,
+                'message',
+                contains('ownership changed'),
+              ),
         ),
       );
       expect((await client.call('status') as Map)['pid'], pid);

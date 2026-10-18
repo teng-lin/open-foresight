@@ -437,7 +437,13 @@ print('answer '+json.dumps(answer),flush=True)
           expect(runtime.cancel(requestId: 'cancel-owner'), isTrue);
           await expectLater(
             pending.timeout(const Duration(seconds: 2)),
-            throwsStateError,
+            throwsA(
+              isA<RpcError>().having(
+                (e) => e.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
           );
           reply.complete('late reply');
           await Future<void>(() {});
@@ -476,7 +482,13 @@ print('answer '+json.dumps(answer),flush=True)
           runtime.close();
           await expectLater(
             pending.timeout(const Duration(seconds: 2)),
-            throwsStateError,
+            throwsA(
+              isA<RpcError>().having(
+                (e) => e.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
           );
           reply.complete('late reply after close');
           await Future<void>(() {});
