@@ -96,6 +96,8 @@ int main(int argc, char **argv) {
     std::vector<IndexedChunk> live;
     for (const auto &[key, values] : documents)
       live.insert(live.end(), values.begin(), values.end());
+    REQUIRE(snapshot.live_chunk_count() == live.size());
+    REQUIRE(snapshot.retained_chunk_count() >= live.size());
     VectorIndex expected(live);
     for (const auto &query :
          {std::vector<double>{0, 0}, std::vector<double>{1, 0},
@@ -178,6 +180,40 @@ int main(int argc, char **argv) {
       removed.replacing({"oversized"}, {{"zero", "oversized", "", {0, 0}}});
   REQUIRE(reinserted.search({0, 0}, 5, 0, {"oversized"}).front().chunk->text ==
           "zero");
+  // Tombstones are small writes but can hide many chunks. Repeated deletions
+  // must release obsolete trees rather than leave an empty corpus traversing
+  // every historical vector forever. Keep old reader snapshots unchanged.
+  std::vector<IndexedChunk> multichunk;
+  for (int doc = 0; doc < 256; ++doc)
+    for (int ordinal = 0; ordinal < 16; ++ordinal)
+      multichunk.push_back(
+          {std::to_string(ordinal), "doc-" + std::to_string(doc), "", {1, 0}});
+  VectorIndexSnapshot before_deletes(multichunk);
+  auto deleting = before_deletes;
+  for (int doc = 0; doc < 256; ++doc) {
+    auto id = "doc-" + std::to_string(doc);
+    deleting = deleting.replacing({id, "file://" + id}, {});
+    REQUIRE(deleting.live_chunk_count() == size_t(255 - doc) * 16);
+    REQUIRE(deleting.retained_chunk_count() <=
+            std::max(size_t(1024), 2 * deleting.live_chunk_count()));
+    REQUIRE(deleting.search({1, 0}, 16, .9, {id}).empty());
+    if (doc != 255) {
+      auto remaining_id = "doc-" + std::to_string(doc + 1);
+      auto matches = deleting.search({1, 0}, 16, .9, {remaining_id});
+      REQUIRE(matches.size() == 16);
+      for (size_t i = 0; i < matches.size(); ++i)
+        REQUIRE(matches[i].chunk->text == std::to_string(i));
+    }
+  }
+  REQUIRE(deleting.segment_count() == 0);
+  REQUIRE(deleting.retained_chunk_count() == 0);
+  REQUIRE(deleting.search({1, 0}, 1, .9).empty());
+  REQUIRE(before_deletes.search({1, 0}, 4096, .9).size() == 4096);
+  deleting = deleting.replacing({"doc-0"}, {{"new", "doc-0", "", {0, 1}}});
+  REQUIRE(deleting.live_chunk_count() == 1);
+  REQUIRE(deleting.retained_chunk_count() == 1);
+  REQUIRE(deleting.search({0, 1}, 1, .9).front().chunk->text == "new");
+  REQUIRE(tiny.retained_chunk_count() == tiny.live_chunk_count());
   // Switching embedding generations creates an independent forest: no old
   // dimension, document revision or tombstone can enter the replacement.
   VectorIndexSnapshot generation({{"fresh", "base-0", "", {0, 0, 1}}});

@@ -7,6 +7,7 @@
 #include <functional>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <queue>
 #include <set>
@@ -208,13 +209,18 @@ class VectorIndexSnapshot {
     VectorIndex index;
     std::set<std::string> replaced;
     uint64_t weight;
+    std::map<std::string, size_t> counts;
     Segment(std::vector<IndexedChunk> chunks, std::set<std::string> ids,
             uint64_t work)
-        : index(std::move(chunks)), replaced(std::move(ids)), weight(work) {}
+        : index(std::move(chunks)), replaced(std::move(ids)), weight(work) {
+      for (const auto &chunk : index.chunks)
+        ++counts[chunk.id];
+    }
   };
   // Newest first; weight classes strictly increase toward the oldest segment.
   std::vector<std::shared_ptr<const Segment>> segments;
   size_t constructed = 0;
+  size_t live = 0, retained = 0;
 
 public:
   explicit VectorIndexSnapshot(std::vector<IndexedChunk> chunks = {}) {
@@ -232,6 +238,43 @@ public:
         throw std::invalid_argument("Replacement chunk has no document ID");
     if (ids.empty())
       return *this;
+    size_t removed = 0;
+    for (const auto &id : ids) {
+      // The first segment mentioning this ID owns its current revision, even
+      // when that revision is an empty replacement (a tombstone).
+      for (const auto &segment : segments) {
+        if (!segment->replaced.count(id))
+          continue;
+        auto found = segment->counts.find(id);
+        if (found != segment->counts.end())
+          removed += found->second;
+        break;
+      }
+    }
+    if (chunks.size() > std::numeric_limits<size_t>::max() - retained)
+      throw std::overflow_error("Vector index chunk count overflow");
+    const auto next_live = live - removed + chunks.size();
+    if (!next_live)
+      return VectorIndexSnapshot{};
+    const auto prospective = retained + chunks.size();
+    // Weight classes amortize insertions, but a small tombstone can hide a
+    // large document without reaching that document's class. Reclaim those
+    // trees when obsolete chunks exceed the live corpus, retaining at most a
+    // small fixed allowance. All preparation still precedes DB commit.
+    if (prospective > 1024 && prospective - next_live > next_live) {
+      std::vector<IndexedChunk> compacted;
+      compacted.reserve(next_live);
+      auto hidden = ids;
+      for (const auto &segment : segments) {
+        for (const auto &chunk : segment->index.chunks)
+          if (!hidden.count(chunk.id))
+            compacted.push_back(chunk);
+        hidden.insert(segment->replaced.begin(), segment->replaced.end());
+      }
+      compacted.insert(compacted.end(), std::make_move_iterator(chunks.begin()),
+                       std::make_move_iterator(chunks.end()));
+      return VectorIndexSnapshot(std::move(compacted));
+    }
     uint64_t weight = chunks.size() + ids.size();
     size_t consumed = 0;
     while (consumed < segments.size() &&
@@ -255,10 +298,13 @@ public:
                      [](const auto &a, const auto &b) { return a.id < b.id; });
     VectorIndexSnapshot next;
     next.constructed = chunks.size();
+    next.live = next_live;
     next.segments.push_back(
         std::make_shared<Segment>(std::move(chunks), std::move(ids), weight));
     next.segments.insert(next.segments.end(), segments.begin() + consumed,
                          segments.end());
+    for (const auto &segment : next.segments)
+      next.retained += segment->index.chunks.size();
     return next;
   }
   struct Match {
@@ -300,6 +346,12 @@ public:
   // Deterministic publication-work metrics, independent of machine timing.
   size_t constructed_chunks() const {
     return constructed;
+  }
+  size_t live_chunk_count() const {
+    return live;
+  }
+  size_t retained_chunk_count() const {
+    return retained;
   }
   size_t segment_count() const {
     return segments.size();
