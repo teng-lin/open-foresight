@@ -93,6 +93,19 @@ def test_minimal_prerequisites_then_exact_ordinary_user_sandbox_preflight(
     ]
     assert probe[-2:] == ["--", "/usr/bin/true"]
     assert "--clearenv" in probe and "--ro-bind" in probe
+    for option, destination in (
+        ("--proc", "/proc"),
+        ("--dev", "/dev"),
+        ("--tmpfs", "/tmp"),
+    ):
+        index = probe.index(option)
+        assert probe[index + 1] == destination
+    if fail:
+        assert "refusing to continue package installation" in result.stderr
+        assert "systempaths=unconfined (for nested /proc mounts)" in result.stderr
+        assert "preflight passed" not in result.stdout
+    else:
+        assert "preflight passed" in result.stdout
     assert "--share-net" not in probe
     assert all(
         "xvfb" not in command and "python3" not in command for command in commands
@@ -139,7 +152,10 @@ def test_all_package_container_callers_select_the_loaded_named_policy():
                     continue
                 found = True
                 assert "apparmor=foresight-ci-document-sandbox" in command
+                assert "--security-opt systempaths=unconfined" in command
                 assert "apparmor=unconfined" not in command
+                assert "--cap-add SYS_ADMIN" not in command
+                assert "sysctl" not in command
                 assert "--privileged" not in command
                 assert any(
                     previous.get("run") == "bash tools/ci_package_sandbox.sh"

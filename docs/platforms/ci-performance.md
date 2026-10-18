@@ -93,10 +93,23 @@ manual and scheduled acceptance still run. Those installation checks remain nece
 application or packaging changes, but no longer compile a duplicate application.
 The disposable installer-test container explicitly selects the CI AppArmor
 profile that permits user namespaces; generic `apparmor=unconfined` still receives
-Ubuntu user-namespace capability restrictions. An ordinary-user bubblewrap probe
-runs before expensive installer prerequisites. The actual parser retains its
-restricted mount layout, isolated namespaces and dropped capabilities. Release package publication retains
-its separate main-only workflow and credentials.
+Ubuntu user-namespace capability restrictions. The same disposable containers
+use Docker's `--security-opt systempaths=unconfined`: Docker's default masked and
+read-only `/proc` child mounts prevent an ordinary user's nested `proc` mount.
+Linux rejects such mounts when they could reveal paths hidden by locked inherited
+mounts. This setting removes those outer system-path masks; it grants no extra
+capabilities. It applies only to these package-test containers, never to installed
+applications or host sysctls. The existing named AppArmor profile, seccomp setting
+and `NET_ADMIN` for isolated loopback remain necessary independently.
+See the [Docker option documentation](https://docs.docker.com/reference/cli/docker/container/run/#security-configuration),
+[Docker CLI implementation](https://github.com/docker/cli/blob/v27.5.1/cli/command/container/opts.go#L954-L973),
+[default system-path masks](https://github.com/moby/moby/blob/v27.5.1/oci/defaults.go#L104-L124),
+and [Linux mount visibility check](https://github.com/torvalds/linux/blob/v6.8/fs/namespace.c#L5272-L5357).
+An ordinary-user bubblewrap probe exercises `--proc /proc` before expensive
+installer prerequisites and stops immediately on failure. The actual parser
+retains its restricted mount layout, isolated namespaces and dropped capabilities;
+installed PDF/RTF parsing remains required. Release package publication retains its
+separate main-only workflow and credentials.
 
 Only the native job fetches and hashes the macOS compiler SDK. Native cache
 archives retain object files and dependency sources for incremental rebuilds;

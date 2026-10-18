@@ -116,11 +116,11 @@ jobs:
         RELEASE: ${{ needs.bundle.outputs.release }}
         SOURCE_DATE_EPOCH: ${{ needs.bundle.outputs.epoch }}
       run: |
-        docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH "$IMAGE" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" "$RELEASE"
+        docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH "$IMAGE" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" "$RELEASE"
     - name: Test Debian 13 with the Ubuntu-built DEB
       if: matrix.format == 'deb'
       run: |
-        docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work:ro" -v "$PWD/dist/packages:/packages:ro" debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 bash /work/packaging/ci/test-debian.sh
+        docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work:ro" -v "$PWD/dist/packages:/packages:ro" debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 bash /work/packaging/ci/test-debian.sh
     - name: Collect package artifacts
       if: always()
       run: |

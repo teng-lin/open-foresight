@@ -114,7 +114,7 @@ jobs:
           FORMAT: ${{ matrix.format }}
         run: |
           mkdir -p reports
-          docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt apparmor=foresight-ci-document-sandbox -e OPEN_FORESIGHT_ACCEPTANCE_DISPOSABLE=1 \
+          docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -e OPEN_FORESIGHT_ACCEPTANCE_DISPOSABLE=1 \
             -v "$PWD:/work:ro" -v "$PWD/assets:/assets:ro" \
             -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/reports:/reports" \
             "$IMAGE" bash /work/packaging/ci/test-release-package.sh "$FORMAT"
