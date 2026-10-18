@@ -26,6 +26,60 @@ class _AudioSegment {
 /// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
 /// ephemeral; completed speech segments are committed while capture continues.
 class Recording implements RecordingStatus {
+  // Resolve each optional native symbol lazily once per loaded library.
+  late final _nativeFsCaptureSetEchoCancellation = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Int32),
+        int Function(Pointer<Void>, int)
+      >('fs_capture_set_echo_cancellation');
+  late final _nativeFsEventPoll = lib
+      .lookupFunction<
+        Pointer<Utf8> Function(Pointer<Void>, Int32),
+        Pointer<Utf8> Function(Pointer<Void>, int)
+      >('fs_event_poll');
+  late final _nativeFsStringFree = lib
+      .lookupFunction<
+        Void Function(Pointer<Utf8>),
+        void Function(Pointer<Utf8>)
+      >('fs_string_free');
+  late final _nativeFsSpeechCreate = lib
+      .lookupFunction<CreateNative, CreateDart>('fs_speech_create');
+  late final _nativeFsSpeechDestroy = lib
+      .lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_speech_destroy');
+  late final _nativeFsCaptureStartWithOptions = lib
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Int32),
+        Pointer<Void> Function(Pointer<Utf8>, int, int, int)
+      >('fs_capture_start_with_options');
+  late final _nativeFsCaptureStart = lib
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
+        Pointer<Void> Function(Pointer<Utf8>, int, int)
+      >('fs_capture_start');
+  late final _nativeFsCaptureStop = lib
+      .lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_stop');
+  late final _nativeFsCaptureFinish = lib
+      .lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('fs_capture_finish');
+  late final _nativeFsSpeechPush = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Int16>, Size, Int32),
+        int Function(Pointer<Void>, Pointer<Int16>, int, int)
+      >('fs_speech_push');
+  late final _nativeFsSpeechFinish = lib
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Utf8>),
+        int Function(Pointer<Void>, Pointer<Utf8>)
+      >('fs_speech_finish');
+
   final DynamicLibrary lib;
   final Duration speechTimeout, stopTimeout;
   final void Function(String) state;
@@ -71,13 +125,10 @@ class Recording implements RecordingStatus {
         );
       }
     } else if (captures.isNotEmpty) {
-      final accepted = lib
-          .lookupFunction<
-            Int32 Function(Pointer<Void>, Int32),
-            int Function(Pointer<Void>, int)
-          >(
-            'fs_capture_set_echo_cancellation',
-          )(captures.first, enabled ? 1 : 0);
+      final accepted = _nativeFsCaptureSetEchoCancellation(
+        captures.first,
+        enabled ? 1 : 0,
+      );
       pending = accepted == 1;
       if (accepted == 0 && enabled) {
         throw StateError(
@@ -107,28 +158,19 @@ class Recording implements RecordingStatus {
   }) : lib = DynamicLibrary.open(path);
 
   Map<String, dynamic>? poll(Pointer<Void> handle) {
-    final result = lib
-        .lookupFunction<
-          Pointer<Utf8> Function(Pointer<Void>, Int32),
-          Pointer<Utf8> Function(Pointer<Void>, int)
-        >('fs_event_poll')(handle, 0);
+    final result = _nativeFsEventPoll(handle, 0);
     if (result == nullptr) return null;
     try {
       return jsonDecode(result.toDartString()) as Map<String, dynamic>;
     } finally {
-      lib.lookupFunction<
-        Void Function(Pointer<Utf8>),
-        void Function(Pointer<Utf8>)
-      >('fs_string_free')(result);
+      _nativeFsStringFree(result);
     }
   }
 
   Pointer<Void> _speech() {
     final runtime = _runtime.toNativeUtf8(), model = _model.toNativeUtf8();
     try {
-      final handle = lib.lookupFunction<CreateNative, CreateDart>(
-        'fs_speech_create',
-      )(runtime, model);
+      final handle = _nativeFsSpeechCreate(runtime, model);
       if (handle == nullptr) {
         throw StateError('Speech runtime/model unavailable');
       }
@@ -145,10 +187,7 @@ class Recording implements RecordingStatus {
     final idle = _idleSpeeches.values.contains(handle);
     _idleSpeeches.removeWhere((_, value) => value == handle);
     if (!active && !idle) return;
-    lib.lookupFunction<
-      Void Function(Pointer<Void>),
-      void Function(Pointer<Void>)
-    >('fs_speech_destroy')(handle);
+    _nativeFsSpeechDestroy(handle);
   }
 
   void start(
@@ -232,14 +271,8 @@ class Recording implements RecordingStatus {
         );
       }
       final capture = channel == 0 && _echoCancellation
-          ? lib.lookupFunction<
-              Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Int32),
-              Pointer<Void> Function(Pointer<Utf8>, int, int, int)
-            >('fs_capture_start_with_options')(target, channel, 48000, 1)
-          : lib.lookupFunction<
-              Pointer<Void> Function(Pointer<Utf8>, Int32, Int32),
-              Pointer<Void> Function(Pointer<Utf8>, int, int)
-            >('fs_capture_start')(target, channel, 48000);
+          ? _nativeFsCaptureStartWithOptions(target, channel, 48000, 1)
+          : _nativeFsCaptureStart(target, channel, 48000);
       if (capture == nullptr) {
         throw StateError(
           'Audio capture unavailable; check device and microphone/system-audio permissions.',
@@ -289,10 +322,7 @@ class Recording implements RecordingStatus {
       }
     } catch (_) {
       for (final capture in captures) {
-        lib.lookupFunction<
-          Void Function(Pointer<Void>),
-          void Function(Pointer<Void>)
-        >('fs_capture_stop')(capture);
+        _nativeFsCaptureStop(capture);
       }
       captures.clear();
       state('Resume failed; transcription remains paused');
@@ -306,17 +336,11 @@ class Recording implements RecordingStatus {
 
   void _finishCapture() {
     for (final capture in captures) {
-      lib.lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_finish')(capture);
+      _nativeFsCaptureFinish(capture);
     }
     drain(flushAll: true);
     for (final capture in captures) {
-      lib.lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_stop')(capture);
+      _nativeFsCaptureStop(capture);
     }
     captures.clear();
   }
@@ -482,10 +506,7 @@ class Recording implements RecordingStatus {
       // Preserve the new segment in memory; stop acquisition instead of losing speech.
       timer?.cancel();
       for (final capture in captures) {
-        lib.lookupFunction<
-          Void Function(Pointer<Void>),
-          void Function(Pointer<Void>)
-        >('fs_capture_stop')(capture);
+        _nativeFsCaptureStop(capture);
       }
       captures.clear();
     }
@@ -523,13 +544,12 @@ class Recording implements RecordingStatus {
           for (var i = 0; i < segment.pcm.length ~/ 2; i++) {
             samples[i] = bytes.getInt16(i * 2, Endian.little);
           }
-          final rc = lib
-              .lookupFunction<
-                Int32 Function(Pointer<Void>, Pointer<Int16>, Size, Int32),
-                int Function(Pointer<Void>, Pointer<Int16>, int, int)
-              >(
-                'fs_speech_push',
-              )(handle, samples, segment.pcm.length ~/ 2, segment.sampleRate);
+          final rc = _nativeFsSpeechPush(
+            handle,
+            samples,
+            segment.pcm.length ~/ 2,
+            segment.sampleRate,
+          );
           if (rc != 0) throw StateError('ASR buffer rejected');
         } finally {
           calloc.free(samples);
@@ -537,11 +557,7 @@ class Recording implements RecordingStatus {
         final request = 'live-$channel-${DateTime.now().microsecondsSinceEpoch}'
             .toNativeUtf8();
         try {
-          if (lib.lookupFunction<
-                Int32 Function(Pointer<Void>, Pointer<Utf8>),
-                int Function(Pointer<Void>, Pointer<Utf8>)
-              >('fs_speech_finish')(handle, request) !=
-              0) {
+          if (_nativeFsSpeechFinish(handle, request) != 0) {
             throw StateError('Speech request rejected');
           }
         } finally {
@@ -678,10 +694,7 @@ class Recording implements RecordingStatus {
     paused = false;
     timer?.cancel();
     for (final capture in captures) {
-      lib.lookupFunction<
-        Void Function(Pointer<Void>),
-        void Function(Pointer<Void>)
-      >('fs_capture_stop')(capture);
+      _nativeFsCaptureStop(capture);
     }
     captures.clear();
     for (final speech in {...speeches, ..._idleSpeeches.values}) {
