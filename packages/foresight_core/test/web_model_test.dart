@@ -66,7 +66,8 @@ void main() {
           File(reportPath).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert(report),
           );
-        expect(queries, isNotEmpty, reason: reason);
+        expect(queries, hasLength(1), reason: reason);
+        expect(queries.single, startsWith('Using Google search,'));
         expect(rows, hasLength(1));
         expect(rows.single['status'], 'completed', reason: reason);
         expect(rows.single['body'], contains('CEDAR-8492'), reason: reason);
@@ -92,7 +93,7 @@ void main() {
           );
         }
         expect(followup.last, contains('CEDAR-8492'), reason: reason);
-        expect(queries.length, searchCount, reason: reason);
+        expect(queries.length, searchCount + 1, reason: reason);
         expect(store.rows('SELECT id FROM answers'), hasLength(2));
         for (var i = 0; i < 6; i++) {
           final body = i < 3
@@ -106,6 +107,10 @@ void main() {
             [],
             'controlled fixture',
             conversation: 'controlled-compression-fixture',
+          );
+          store.setPreference(
+            'webAnswer.v1.${store.db.lastInsertRowId}',
+            'true',
           );
         }
         final compressedAnswer = await domain
@@ -126,7 +131,7 @@ void main() {
           );
         final checkpoint = store
             .rows(
-              "SELECT * FROM conversation_memory WHERE conversation='controlled-compression-fixture'",
+              "SELECT * FROM conversation_memory WHERE conversation='web-only-v1:controlled-compression-fixture'",
             )
             .single;
         final memory = List<Map<String, dynamic>>.from(
@@ -156,7 +161,7 @@ void main() {
           contains('violet'),
           reason: reason,
         );
-        expect(queries.length, searchCount, reason: reason);
+        expect(queries.length, searchCount + 2, reason: reason);
       } finally {
         domain.close();
         runtime.close();
