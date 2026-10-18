@@ -837,6 +837,9 @@ def test_macos_inflight_selection_rejects_fork_and_failed_producers(failed):
     with (
         patch.object(macos, "api", return_value={"workflow_runs": [base, fork]}),
         patch.object(
+            macos, "source_fingerprint", return_value=macos.fingerprint("macos-sdk")
+        ),
+        patch.object(
             macos,
             "dependency_jobs",
             return_value=[

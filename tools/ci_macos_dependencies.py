@@ -2,6 +2,7 @@
 """Use trusted dependency artifacts, or build the pinned sources locally."""
 
 import argparse
+from functools import lru_cache
 import os
 from pathlib import Path
 import subprocess
@@ -11,40 +12,68 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.ci_artifacts import (
     ROOT,
-    JOBS,
     api,
     dependency_jobs,
     fingerprint,
     pull,
     trusted_run,
+    FILES,
+    PARENTS,
 )  # noqa: E402
 from tools.ci_verify_dependency import verify  # noqa: E402
+from tools.sdk_producer_trust import compatible_producers, source_fingerprint  # noqa: E402
+
+
+@lru_cache(maxsize=256)
+def producer_identity(repository, commit, component, loader, recipe, request):
+    # Immutable source proofs need fetching only once during a long producer
+    # wait. Job/run status must still be refreshed on every poll.
+    return loader(
+        repository,
+        commit,
+        component,
+        api=request,
+        fingerprint=recipe,
+        files=FILES,
+        parents=PARENTS,
+    )
 
 
 def waiting_producers(repository, component, own_head, own_pr):
     if not own_head:
         return []
-    runs = api(
+    runs: dict[int, dict] = {}
+    for status in ("in_progress", "queued", "waiting", "pending", "requested"):
+        page = 1
+        while True:
+            batch = api(
+                repository,
+                f"actions/workflows/ci-dependencies.yml/runs?status={status}&per_page=100&page={page}",
+            )["workflow_runs"]
+            runs.update((run["id"], run) for run in batch)
+            if len(batch) < 100:
+                break
+            page += 1
+
+    def fingerprint_at(repo, commit, name):
+        return producer_identity(
+            repo,
+            commit,
+            name,
+            source_fingerprint,
+            fingerprint,
+            api,
+        )
+
+    return compatible_producers(
         repository,
-        f"actions/workflows/ci-dependencies.yml/runs?head_sha={own_head}&per_page=100",
-    )["workflow_runs"]
-    waiting = []
-    for run in runs:
-        if (
-            run.get("head_sha") != own_head
-            or run.get("status") == "completed"
-            or not trusted_run(run, component, own_head, repository, own_pr)
-        ):
-            continue
-        jobs = dependency_jobs(repository, run["id"])
-        component_jobs = [job for job in jobs if job["name"] == JOBS[component]]
-        if any(
-            job.get("conclusion") in ("failure", "cancelled", "timed_out", "skipped")
-            for job in component_jobs
-        ):
-            continue
-        waiting.append(run["id"])
-    return waiting
+        runs.values(),
+        component,
+        fingerprint(component),
+        eligible=lambda run: trusted_run(run, component, own_head, repository, own_pr),
+        jobs=dependency_jobs,
+        fingerprint_at=fingerprint_at,
+    )
 
 
 def ensure(component, prefix, repository, own_head="", own_pr=0, wait=5400):
@@ -60,11 +89,16 @@ def ensure(component, prefix, repository, own_head="", own_pr=0, wait=5400):
         ):
             verify(component, prefix)
             return "artifact"
-        if time.monotonic() >= deadline or not waiting_producers(
-            repository, component, own_head, own_pr
-        ):
+        waiting = waiting_producers(repository, component, own_head, own_pr)
+        if not waiting:
             break
-        time.sleep(min(20, max(0, deadline - time.monotonic())))
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Compatible {component} producer(s) {waiting} are still running; "
+                "preserving their work instead of starting a duplicate build. Retry retrieval later."
+            )
+        # Bound GitHub API traffic while a long-running dependency compiles.
+        time.sleep(min(60, max(0, deadline - time.monotonic())))
     if component == "macos-runtime":
         vendor = prefix.parent / "macos-vendor"
         ensure("macos-vendor", vendor, repository, own_head, own_pr, wait)
