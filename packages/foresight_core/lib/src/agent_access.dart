@@ -1,6 +1,7 @@
 import 'rpc_error.dart';
 import 'operations.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'profile_paths.dart';
 
@@ -81,6 +82,9 @@ class AgentAccessGate {
   final String desktopToken;
   final void Function(Object host, Map<String, Object?> event) send;
   final Duration timeout;
+  final DateTime Function() now;
+  final _recent =
+      Map<Object, List<({String fingerprint, DateTime at})>>.identity();
   Object? _host;
   int _next = 0;
   final _pending = <String, ({Object client, Completer<bool> done})>{};
@@ -88,7 +92,8 @@ class AgentAccessGate {
     this.desktopToken,
     this.send, {
     this.timeout = const Duration(minutes: 2),
-  });
+    DateTime Function()? now,
+  }) : now = now ?? DateTime.now;
 
   bool get hasHost => _host != null;
   bool isHost(Object client) => identical(client, _host);
@@ -106,6 +111,7 @@ class AgentAccessGate {
   }
 
   void detach(Object client) {
+    _recent.remove(client);
     if (isHost(client)) _host = null;
     for (final entry in _pending.entries.toList()) {
       if (_host == null || identical(entry.value.client, client)) {
@@ -152,9 +158,27 @@ class AgentAccessGate {
         'Open the desktop app to review this operation',
       );
     }
+    final time = now();
+    final recent = _recent.putIfAbsent(client, () => []);
+    recent.removeWhere(
+      (entry) => time.difference(entry.at) >= const Duration(minutes: 1),
+    );
+    final entries =
+        args.entries
+            .where((e) => e.key != 'requestId' && e.key != 'conversation')
+            .toList()
+          ..sort((a, b) => a.key.compareTo(b.key));
+    final fingerprint = '$method:${jsonEncode(Map.fromEntries(entries))}';
+    if (recent.where((entry) => entry.fingerprint == fingerprint).length >= 3) {
+      throw RpcError(
+        RpcErrorCode.busy,
+        'Repeated identical approval requests are rate limited. Retry in one minute.',
+      );
+    }
     if (_pending.length >= 8) {
       throw RpcError(RpcErrorCode.busy, 'Too many pending approval requests');
     }
+    recent.add((fingerprint: fingerprint, at: time));
     final id = 'approval-${++_next}';
     final done = Completer<bool>();
     _pending[id] = (client: client, done: done);
@@ -163,6 +187,15 @@ class AgentAccessGate {
       'approval_id': id,
       'method': method,
       'args': args,
+      'requester': isHost(client)
+          ? 'Desktop connection (identity unverified)'
+          : 'External client (identity unverified)',
+      'risk_flags': [
+        if (args['allow_private_network'] == true)
+          'Private network access requested',
+        if (method == Operation.sourcesImport.wire && args['id'] != null)
+          'Replaces source ${args['id']}',
+      ],
     });
     try {
       final allowed = await done.future.timeout(

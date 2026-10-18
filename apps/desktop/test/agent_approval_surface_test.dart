@@ -69,12 +69,19 @@ void main() {
         'approval_id': 'one',
         'method': 'meetings.start',
         'args': {'id': 7},
+        'requester': 'External client (identity unverified)',
+        'risk_flags': ['Private network access requested'],
       });
       await tester.pumpAndSettle();
       expect(
         find.text('Allow microphone and system audio recording?'),
         findsOneWidget,
       );
+      expect(
+        find.text('External client (identity unverified)'),
+        findsOneWidget,
+      );
+      expect(find.text('Private network access requested'), findsOneWidget);
       expect(domain.client.decisions, isEmpty);
       await workflow.allowRecording(tester);
       await tester.pumpAndSettle();

@@ -71,6 +71,50 @@ void main() {
       },
     );
   });
+  test(
+    'identical approval requests are limited per connection and expire',
+    () async {
+      var now = DateTime.utc(2026);
+      final events = <Map<String, Object?>>[];
+      final host = Object(), client = Object();
+      final gate = AgentAccessGate(
+        'token',
+        (_, event) => events.add(event),
+        now: () => now,
+      );
+      gate.attach(host, 'token');
+      for (var i = 0; i < 3; i++) {
+        final work = gate.authorize(client, 'sources.import_url', {
+          'url': 'https://example.test',
+          'allow_private_network': true,
+          'requestId': '$i',
+        }, current: () => true);
+        final approval = events.last;
+        expect(approval['requester'], contains('identity unverified'));
+        expect(
+          approval['risk_flags'],
+          contains('Private network access requested'),
+        );
+        gate.decide(host, approval['approval_id'] as String, true);
+        await work;
+      }
+      await expectLater(
+        gate.authorize(client, 'sources.import_url', {
+          'url': 'https://example.test',
+          'allow_private_network': true,
+        }, current: () => true),
+        throwsStateError,
+      );
+      now = now.add(const Duration(minutes: 1));
+      final next = gate.authorize(client, 'sources.import_url', {
+        'url': 'https://example.test',
+        'allow_private_network': true,
+      }, current: () => true);
+      gate.decide(host, events.last['approval_id'] as String, true);
+      await next;
+    },
+  );
+
   group('connection scoped visible approvals', () {
     late AgentAccessGate gate;
     late Object desktop, agent, stranger;
