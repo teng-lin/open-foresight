@@ -62,7 +62,17 @@ def litert_probe(runner, model, env, output):
             raise RuntimeError("LiteRT GPU model failed to become ready")
         peer.send(
             "generate 1 "
-            + json.dumps({"prompt": "Count from one to five.", "max_output_tokens": 16})
+            + json.dumps(
+                {
+                    "prompt": "Count from one to five.",
+                    "max_output_tokens": 16,
+                    "tools": {
+                        "tools": [],
+                        "system_message": "Answer briefly.",
+                        "stop_token_ids": [[1, 1]],
+                    },
+                }
+            )
         )
         answer = None
         while True:
@@ -83,11 +93,6 @@ def litert_probe(runner, model, env, output):
             "status": "passed",
             "backend": "gpu",
             "max_output_tokens": 16,
-            "tools": {
-                "tools": [],
-                "system_message": "Answer briefly.",
-                "stop_token_ids": [[1, 1]],
-            },
             "answer": answer,
         }
     except Exception as error:
