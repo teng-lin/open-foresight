@@ -21,6 +21,7 @@ void main() {
       ]) {
         runtimeConfiguration.environment.remove(key);
       }
+      runtimeConfiguration.environment['FORESIGHT_SERVICE_TRACE'] = '1';
       final directory = Directory.systemTemp.createTempSync(
         'isolated-service-',
       );
