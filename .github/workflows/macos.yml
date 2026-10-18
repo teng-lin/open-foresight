@@ -264,7 +264,8 @@ jobs:
         path: test-results/document-sandbox/
         if-no-files-found: error
   changes:
-    runs-on: ubuntu-24.04
+    # Diagnostic branch: avoid the saturated Linux SDK build queue.
+    runs-on: macos-15
     outputs:
       build: ${{ steps.changes.outputs.build }}
     steps:
