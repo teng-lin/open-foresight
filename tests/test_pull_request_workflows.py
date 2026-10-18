@@ -3,6 +3,7 @@
 import ast
 import json
 import re
+import shlex
 import unittest
 from pathlib import Path
 
@@ -433,6 +434,46 @@ jobs:
                 if re.search(r"(^|\s)pytest(\s|$)", step.get("run") or ""):
                     found.append(name)
         self.assertIn("linux-native", found)
+
+    def test_linux_sdk_consumers_forward_their_own_pull_request_context(self):
+        consumers = set()
+        for filename in (
+            "integration-acceptance.yml",
+            "linux-packages.yml",
+            "macos.yml",
+        ):
+            for name, job in self.workflow(filename)["jobs"].items():
+                for step in job.get("steps") or []:
+                    for line in step.get("run", "").splitlines():
+                        if "ci_artifacts.py pull --component linux-sdk" not in line:
+                            continue
+                        with self.subTest(workflow=filename, job=name):
+                            arguments = shlex.split(line)
+                            for flag, variable in (
+                                ("--own-head", "$OWN_HEAD"),
+                                ("--own-pr", "$OWN_PR"),
+                            ):
+                                self.assertIn(flag, arguments)
+                                self.assertEqual(
+                                    arguments[arguments.index(flag) + 1], variable
+                                )
+                            self.assertEqual(
+                                step["env"]["OWN_HEAD"],
+                                "${{ github.event.pull_request.head.sha || github.sha }}",
+                            )
+                            self.assertEqual(
+                                step["env"]["OWN_PR"],
+                                "${{ github.event.pull_request.number || 0 }}",
+                            )
+                            consumers.add((filename, name))
+        self.assertEqual(
+            consumers,
+            {
+                ("integration-acceptance.yml", "linux"),
+                ("linux-packages.yml", "ubuntu-package"),
+                ("macos.yml", "linux-bundle"),
+            },
+        )
 
 
 if __name__ == "__main__":
