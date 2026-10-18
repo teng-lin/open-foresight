@@ -72,7 +72,10 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
 
   Future<int> waitForPid() async {
     final file = File('${directory.path}/pid');
-    for (var i = 0; i < 500; i++) {
+    for (
+      final pollingClock = Stopwatch()..start();
+      pollingClock.elapsed < const Duration(seconds: 5);
+    ) {
       if (file.existsSync() && file.readAsStringSync().isNotEmpty) {
         return int.parse(file.readAsStringSync());
       }
@@ -109,7 +112,6 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
         ),
       );
       runtime.cancel('someone-else');
-      await Future<void>.delayed(const Duration(milliseconds: 20));
       expect((await Process.run('kill', ['-0', '$first'])).exitCode, 0);
       runtime.cancel('owned');
       await failure;

@@ -17,6 +17,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final root = Directory.systemTemp.createTempSync('transcript-selection-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final meeting = store.meeting('Selection fixture');
       final other = store.meeting('Other meeting');

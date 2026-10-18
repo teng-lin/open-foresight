@@ -62,6 +62,9 @@ void main() {
         final directory = Directory.systemTemp.createTempSync(
           'answer-validation-',
         );
+        addTearDown(() {
+          if (directory.existsSync()) directory.deleteSync(recursive: true);
+        });
         final store = Store('${directory.path}/app.db');
         final socket = '${directory.path}/helper.sock';
         final retrieval = Retrieval()

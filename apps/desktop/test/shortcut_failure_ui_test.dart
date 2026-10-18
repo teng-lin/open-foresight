@@ -16,6 +16,9 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final temp = Directory.systemTemp.createTempSync('shortcut-failure-ui-');
+    addTearDown(() {
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    });
     final store = Store('${temp.path}/app.db');
     final domain = Domain(
       store,

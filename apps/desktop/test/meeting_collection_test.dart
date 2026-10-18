@@ -13,6 +13,9 @@ void main() {
     'cancelled Calendar meetings keep their status and saved transcript badge',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('calendar-status-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final id = store.meeting('Cancelled review');
       store.transcript(
@@ -72,6 +75,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final root = Directory.systemTemp.createTempSync('meeting-collection-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final first = store.meeting('Product review');
       store.meeting('Planning session');

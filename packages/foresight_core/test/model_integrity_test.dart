@@ -21,6 +21,7 @@ void main() {
     final file = File('${directory.path}/model')
       ..writeAsStringSync('trusted bytes');
     var store = Store(database);
+    addTearDown(store.close);
     await store.register('generation', file.path, '/bin/true');
     await store.verifyRegisteredModels();
     store.close();
@@ -36,6 +37,7 @@ void main() {
       final file = File('${directory.path}/model')
         ..writeAsStringSync('trusted bytes');
       final store = Store('${directory.path}/application.db');
+      addTearDown(store.close);
       await store.register('generation', file.path, '/bin/true');
       store.close();
       file.writeAsStringSync('changed bytes');

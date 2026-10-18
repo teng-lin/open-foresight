@@ -37,6 +37,9 @@ void main() {
         tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
       );
       final temp = Directory.systemTemp.createTempSync('graph-restoration-ui-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       var store = Store('${temp.path}/app.db');
       final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture:a');
       final b = store.importText(
@@ -91,14 +94,15 @@ void main() {
       }
 
       Future<void> waitForPoints(int count) async {
-        for (var i = 0; i < 100; i++) {
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 5);
+        ) {
           final dynamic state = tester.state(find.byType(Workspace));
           if (!state.sourceFeature.graphOrganizing &&
               state.sourceFeature.graphPoints.length == count)
             return;
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
+          await tester.runAsync(() => Future<void>(() {}));
           await tester.pump();
         }
         fail('Graph layout did not finish');

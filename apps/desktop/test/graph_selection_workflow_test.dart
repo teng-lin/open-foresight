@@ -20,6 +20,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final temp = Directory.systemTemp.createTempSync('graph-selection-ui-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       final store = Store('${temp.path}/app.db');
       final center = store.importText(
         'Center',
@@ -82,10 +85,11 @@ void main() {
       });
       final dynamic state = tester.state(find.byType(Workspace));
       Future<void> waitUntil(bool Function() ready) async {
-        for (var i = 0; i < 100 && !ready(); i++) {
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 5) && !ready();
+        ) {
+          await tester.runAsync(() => Future<void>(() {}));
           await tester.pump();
         }
         expect(ready(), true);
@@ -151,6 +155,25 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
       await tester.pumpAndSettle();
       expect(opened, [Uri.parse('https://example.test/original')]);
+      for (final unsafe in [
+        'javascript:alert(1)',
+        'data:text/html,payload',
+        'file://attacker/share',
+      ]) {
+        store.db.execute(
+          'UPDATE source_details SET source_uri=? WHERE source_id=?',
+          [unsafe, center],
+        );
+        state.update(() {});
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
+        await tester.pumpAndSettle();
+        expect(
+          opened,
+          [Uri.parse('https://example.test/original')],
+          reason: 'The inspector must reject $unsafe before calling the opener',
+        );
+      }
       await tester.ensureVisible(
         find.byKey(ValueKey('graph-related-${leaves.first}')),
       );
@@ -194,9 +217,7 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('graph-inspector-close')));
       await tester.pump();
       await waitUntil(() => !state.sourceFeature.graphRelatedLoading);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
+      await tester.runAsync(() => Future<void>(() {}));
       await tester.pump();
       expect(state.sourceFeature.graphSelectedDocument, isNull);
       expect(visibleEdges(), isEmpty);

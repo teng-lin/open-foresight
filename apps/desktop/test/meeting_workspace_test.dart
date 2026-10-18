@@ -1,6 +1,7 @@
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
 import 'desktop_connection_fixture.dart';
+import 'pump_until.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -43,6 +44,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'meeting-workspace-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final id = store.meeting('[New Meeting]');
       store.transcript(
@@ -91,9 +95,13 @@ void main() {
         'Mira draft Tuesday',
       );
       await tester.pump(const Duration(seconds: 31));
-      await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      });
+      await pumpUntil(
+        tester,
+        () =>
+            generator.prompt.isNotEmpty &&
+            (domain.application.captureState['note_enhancements'] as Map).values
+                .every((value) => (value as Map)['active'] != true),
+      );
       await tester.pumpAndSettle();
       expect(
         store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
@@ -177,6 +185,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final directory = Directory.systemTemp.createTempSync('meeting-layout-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final id = store.meeting('[New Meeting]');
       final helper = OfflineHelper(

@@ -33,6 +33,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final root = Directory.systemTemp.createTempSync('chat-navigation-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final helper = OfflineHelper(
         '${root.path}/socket',

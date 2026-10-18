@@ -1,4 +1,5 @@
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -67,7 +68,7 @@ void main() {
   late RecoveryControl controlService;
   late Server server;
   setUp(() async {
-    root = Directory('/tmp').createTempSync('of-recovery-');
+    root = shortTestTempRoot.createTempSync('of-recovery-');
     store = Store('${root.path}/app.db');
     rag = RecoveryRag();
     controlService = RecoveryControl();

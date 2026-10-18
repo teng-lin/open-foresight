@@ -2,6 +2,7 @@ import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
@@ -30,12 +31,38 @@ class GatedNoteDomain extends CommandFixtureDomain {
 }
 
 void main() {
+  test(
+    'autosave uses virtual time and resets its deadline after each edit',
+    () {
+      fakeAsync((time) {
+        final writes = <String>[];
+        final scheduler = NoteSaveScheduler(
+          (_, body, __) async => writes.add(body),
+        );
+        scheduler.schedule(1, 'First');
+        time.elapse(const Duration(milliseconds: 500));
+        scheduler.schedule(1, 'Latest');
+        time.elapse(const Duration(milliseconds: 999));
+        expect(writes, isEmpty);
+        time.elapse(const Duration(milliseconds: 1));
+        time.flushMicrotasks();
+        expect(writes, ['Latest']);
+        scheduler.close();
+        time.flushMicrotasks();
+        expect(scheduler.hasWork, isFalse);
+      });
+    },
+  );
+
   testWidgets(
     'manual enhancement dialog carries keypress time and unchanged saves preserve it',
     (tester) async {
       final directory = Directory.systemTemp.createTempSync(
         'note-enhanced-edit-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       store.setPreference('liveEnhance', 'false');
       final id = store.meeting('Enhanced note');
@@ -161,6 +188,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'note-clean-reload-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       store.setPreference('liveEnhance', 'false');
       final id = store.meeting('Shared note');
@@ -231,6 +261,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'note-save-navigation-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       store.setPreference('liveEnhance', 'false');
       final id = store.meeting('Unsaved editor');
@@ -385,6 +418,9 @@ void main() {
     tester,
   ) async {
     final directory = Directory.systemTemp.createTempSync('note-save-editor-');
+    addTearDown(() {
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
     final path = '${directory.path}/app.db';
     final store = Store(path);
     store.setPreference('liveEnhance', 'false');

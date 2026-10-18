@@ -14,6 +14,9 @@ void main() {
       final temporary = Directory.systemTemp.createTempSync(
         'meeting-citation-',
       );
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
       Process.runSync('chmod', ['700', temporary.path]);
       final store = Store('${temporary.path}/app.db');
       final helper = Helper(

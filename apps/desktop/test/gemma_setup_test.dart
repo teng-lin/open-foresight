@@ -11,6 +11,9 @@ void main() {
     tester,
   ) async {
     final root = Directory.systemTemp.createTempSync('gemma-runner-repair-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     final store = Store('${root.path}/application.db');
     final model = gemmaModels.first;
     final file = File('${root.path}/custom.litertlm');
@@ -58,6 +61,9 @@ void main() {
     'cached embedding setup offers reuse instead of another download',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('embedding-cache-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final model = embeddingGemmaModel;
       final file = File(
@@ -107,6 +113,9 @@ void main() {
     tester,
   ) async {
     final root = Directory.systemTemp.createTempSync('gemma-chooser-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     final store = Store('${root.path}/app.db');
     try {
       await tester.pumpWidget(
@@ -162,6 +171,9 @@ void main() {
     'current E4B closes with Done without verification, loading or download',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('gemma-current-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final model = gemmaModels[1];
       final file = File('${root.path}/${model.filename}');
@@ -230,6 +242,9 @@ void main() {
     tester,
   ) async {
     final root = Directory.systemTemp.createTempSync('gemma-cached-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     final store = Store('${root.path}/app.db');
     final model = gemmaModels.last;
     final file = File('${root.path}/${model.directory}/${model.filename}');

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
@@ -63,9 +64,7 @@ void main() {
 
   Future<void> started() async {
     final marker = File('${encrypted.path}.started');
-    for (var attempt = 0; !marker.existsSync() && attempt < 200; attempt++) {
-      await Future<void>.delayed(const Duration(milliseconds: 5));
-    }
+    await eventually(marker.existsSync);
     expect(marker.existsSync(), isTrue);
   }
 
@@ -142,9 +141,7 @@ void main() {
       final worker = workers.single;
       worker.pending = Completer<String>();
       final pending = runtime.complete('active', 'owned');
-      while (!worker.calls.contains('owned')) {
-        await Future<void>.delayed(Duration.zero);
-      }
+      await eventually(() => worker.calls.contains('owned'));
       await expectLater(
         runtime.complete('other', 'other'),
         throwsA(
@@ -171,9 +168,7 @@ void main() {
           isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
         ),
       );
-      while (!worker.calls.contains('owned')) {
-        await Future<void>.delayed(Duration.zero);
-      }
+      await eventually(() => worker.calls.contains('owned'));
       runtime.cancel('owned');
       await failed;
       expect(worker.cancellations, ['owned']);
@@ -228,9 +223,7 @@ void main() {
           isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
         ),
       );
-      while (!worker.calls.contains('owned')) {
-        await Future<void>.delayed(Duration.zero);
-      }
+      await eventually(() => worker.calls.contains('owned'));
       worker.closeGate = Completer<void>();
       final closing = runtime.close();
       await worker.closing.future;

@@ -6,52 +6,15 @@ import 'store.dart';
 
 // Official whisper.cpp artifact metadata, verified against the Hugging Face
 // repository API on 2026-10-15. All choices are multilingual (not .en models).
-const speechModels = [
-  GemmaModel(
-    'Whisper Tiny',
-    'ggerganov/whisper.cpp',
-    '5359861c739e955e79d9a303bcbc70fb988958b1',
+final speechModels = [
+  for (final filename in [
     'ggml-tiny.bin',
-    'be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21',
-    77691713,
-    0,
-  ),
-  GemmaModel(
-    'Whisper Base',
-    'ggerganov/whisper.cpp',
-    '5359861c739e955e79d9a303bcbc70fb988958b1',
     'ggml-base.bin',
-    '60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe',
-    147951465,
-    0,
-  ),
-  GemmaModel(
-    'Whisper Small',
-    'ggerganov/whisper.cpp',
-    '5359861c739e955e79d9a303bcbc70fb988958b1',
     'ggml-small.bin',
-    '1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b',
-    487601967,
-    0,
-  ),
-  GemmaModel(
-    'Whisper Medium',
-    'ggerganov/whisper.cpp',
-    '5359861c739e955e79d9a303bcbc70fb988958b1',
     'ggml-medium.bin',
-    '6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208',
-    1533763059,
-    0,
-  ),
-  GemmaModel(
-    'Whisper Large v3 Turbo',
-    'ggerganov/whisper.cpp',
-    '5359861c739e955e79d9a303bcbc70fb988958b1',
     'ggml-large-v3-turbo.bin',
-    '1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69',
-    1624555275,
-    0,
-  ),
+  ])
+    modelFromPin(filename),
 ];
 
 /// Validates that the selected runner can actually load and decode the model.

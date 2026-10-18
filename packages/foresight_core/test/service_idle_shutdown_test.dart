@@ -1,5 +1,6 @@
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
@@ -31,7 +32,7 @@ void main() {
       ])
         key: runtimeConfiguration.environment.remove(key),
     };
-    directory = Directory('/tmp').createTempSync('of-idle-');
+    directory = shortTestTempRoot.createTempSync('of-idle-');
     profile = ProfilePaths('${directory.path}/data', '${directory.path}/run');
     service = await ApplicationService.start(profile);
     client = await ServiceClient.connect('${profile.runtime}/application.sock');

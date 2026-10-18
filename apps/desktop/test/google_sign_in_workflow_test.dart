@@ -54,6 +54,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final root = Directory.systemTemp.createTempSync('google-sign-in-ux-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final client = File('${root.path}/client.json')
         ..writeAsStringSync(
           jsonEncode({
@@ -141,6 +144,9 @@ void main() {
     tester,
   ) async {
     final root = Directory.systemTemp.createTempSync('google-browser-error-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     final auth = PendingGoogleAuth(root)..inviteBrowser = true;
     GoogleSignInOutcome? outcome;
     try {
@@ -185,6 +191,9 @@ void main() {
       final root = Directory.systemTemp.createTempSync(
         'google-consent-success-',
       );
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final auth = PendingGoogleAuth(root)..inviteBrowser = true;
       GoogleSignInOutcome? outcome;
       Uri? invitation;

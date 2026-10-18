@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/model_setup.dart';
 import 'package:foresight_core/src/store.dart';
@@ -8,7 +9,7 @@ void main() {
   test(
     'owned generation discovery prefers original type order and preserves explicit registrations',
     () async {
-      final root = await Directory('/tmp').createTemp('model-discovery-');
+      final root = await shortTestTempRoot.createTemp('model-discovery-');
       final store = Store('${root.path}/app.db');
       try {
         for (final type in [14, 16]) {
@@ -58,7 +59,7 @@ void main() {
   test(
     'no owned assets does not initialize a runtime or replace registrations',
     () async {
-      final root = await Directory('/tmp').createTemp('empty-model-discovery-');
+      final root = await shortTestTempRoot.createTemp('empty-model-discovery-');
       final store = Store('${root.path}/app.db');
       try {
         expect(await discoverGenerationRuntime(store, '/missing'), isNull);

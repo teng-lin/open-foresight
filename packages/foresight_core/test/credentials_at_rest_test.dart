@@ -5,7 +5,7 @@ import 'dart:io';
 import 'package:foresight_core/src/google_auth.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:test/test.dart';
-import 'fixtures/google_connections.dart';
+import 'package:foresight_test_support/google_connections.dart';
 
 class MemorySecrets implements SecretStore {
   final values = <String, String>{};
@@ -34,7 +34,11 @@ void main() {
   late File client;
   setUp(() async {
     root = Directory.systemTemp.createTempSync('credentials-at-rest-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     fixture = GoogleFixture();
+    addTearDown(fixture.close);
     await fixture.start();
     client = File('${root.path}/client.json')
       ..writeAsStringSync(
@@ -42,10 +46,6 @@ void main() {
           'installed': {'client_id': 'fixture.apps.googleusercontent.com'},
         }),
       );
-  });
-  tearDown(() async {
-    await fixture.close();
-    root.deleteSync(recursive: true);
   });
 
   test(

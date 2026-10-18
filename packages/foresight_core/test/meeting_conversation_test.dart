@@ -1,4 +1,5 @@
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
@@ -58,6 +59,9 @@ void main() {
     'meeting follow-up retrieval and generation use only that conversation history',
     () async {
       final directory = Directory.systemTemp.createTempSync('meeting-history-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final retrieval = _Retrieval();
       final server = Server.create(services: [retrieval]);
@@ -151,7 +155,7 @@ void main() {
   test(
     'remote streams and command answers retain exact meeting links across clients',
     () async {
-      final directory = Directory('/tmp').createTempSync('of-chat-');
+      final directory = shortTestTempRoot.createTempSync('of-chat-');
       final original = runtimeConfiguration.environment['FORESIGHT_HELPER'];
       runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
       final profile = ProfilePaths(

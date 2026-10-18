@@ -269,7 +269,7 @@ void main() {
       throwsStateError,
     );
     lookup.complete([InternetAddress('8.8.8.8')]);
-    await Future<void>.delayed(const Duration(milliseconds: 25));
+    await Future<void>(() {});
     expect(connected, false);
   });
 
@@ -684,7 +684,6 @@ void main() {
         });
         final rejected = expectLater(pending, throwsStateError);
         await sent.future;
-        await Future<void>.delayed(const Duration(milliseconds: 100));
         final elapsed = Stopwatch()..start();
         final status = await client
             .call('status')

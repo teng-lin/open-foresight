@@ -89,7 +89,7 @@ jobs:
         id: models-cache
         with:
           path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py') }}
+          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare authenticated public model fixtures
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
       - name: Cache authenticated model fixtures before application tests
@@ -97,7 +97,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py') }}
+          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Install and exercise the downloaded package as an ordinary user
         env:
           IMAGE: ${{ matrix.image }}
@@ -143,7 +143,7 @@ jobs:
         id: models-cache
         with:
           path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py') }}
+          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare authenticated public model fixtures
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
       - name: Cache authenticated model fixtures before application tests
@@ -151,7 +151,7 @@ jobs:
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py') }}
+          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Mount DMG, install, run functional tests, reinstall and remove owned copy
         run: |
           task_dmg=(assets/*.dmg)

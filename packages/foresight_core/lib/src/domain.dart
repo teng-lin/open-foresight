@@ -1,4 +1,5 @@
 import 'rpc_error.dart';
+import 'package:clock/clock.dart';
 import 'model_setup.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
@@ -18,13 +19,19 @@ class Domain {
   final Store store;
   final Helper helper;
   NativeRuntime? generator;
+  final Clock clock;
+  final Timer Function(Duration, void Function()) createTimer;
   Domain(
     this.store,
     this.helper, {
     SearchCallbacks? webSearch,
     ModelGate? modelGate,
+    Clock? clock,
+    Timer Function(Duration, void Function())? createTimer,
   }) : modelGate = modelGate ?? const IdleModelGate(),
-       _webSearch = webSearch;
+       _webSearch = webSearch,
+       clock = clock ?? const Clock(),
+       createTimer = createTimer ?? Timer.new;
   ModelGate modelGate;
   SearchCallbacks? _webSearch;
   WebContentService? _ownedWebContent;

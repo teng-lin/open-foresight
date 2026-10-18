@@ -1,6 +1,7 @@
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:fake_async/fake_async.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:test/test.dart';
 
@@ -111,13 +112,18 @@ class QueuedNoteGenerator extends ControlledNoteGenerator {
 void main() {
   late Directory directory;
   late Domain domain;
+  late FakeAsync time;
   late ControlledNoteGenerator generator;
   late int id;
   setUp(() {
+    time = FakeAsync();
     directory = Directory.systemTemp.createTempSync('note-stream-');
     domain = Domain(
       Store('${directory.path}/app.db'),
       Helper('${directory.path}/sock', '${directory.path}/helper'),
+      clock: time.getClock(DateTime.utc(2026)),
+      createTimer: (duration, callback) =>
+          time.run((_) => Timer(duration, callback)),
     );
     domain.store.setPreference('liveEnhance', 'false');
     id = domain.store.meeting('Meeting');
@@ -148,8 +154,9 @@ void main() {
       (domain.application.captureState['note_enhancements'] as Map)['$id']
           as Map;
   Future<void> emit(String text) async {
+    final changed = domain.application.changes.stream.first;
     generator.events.add({'type': 'delta', 'text': text});
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await changed;
   }
 
   test(
@@ -173,7 +180,7 @@ void main() {
         domain.store.meetingEnhancedNotes(id),
         '- First enhanced\n\n- Second enhanced',
       );
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       expect(
         domain.store.meetingEnhancedNotes(id),
         '- Second enhanced\n\n- First enhanced',
@@ -274,14 +281,15 @@ void main() {
       queued.releaseFirst.complete();
       await first;
       await queued.secondDone.future;
-      for (
-        var attempt = 0;
-        attempt < 100 &&
-            (domain.application.captureState['note_enhancements'] as Map)
-                .isNotEmpty;
-        attempt++
-      ) {
-        await Future<void>.delayed(const Duration(milliseconds: 5));
+      if ((domain.application.captureState['note_enhancements'] as Map)
+          .isNotEmpty) {
+        await domain.application.changes.stream
+            .firstWhere(
+              (_) =>
+                  (domain.application.captureState['note_enhancements'] as Map)
+                      .isEmpty,
+            )
+            .timeout(const Duration(seconds: 5));
       }
       expect(queued.prompts, hasLength(2));
       expect(queued.prompts.last, contains('Third raw'));
@@ -375,7 +383,7 @@ void main() {
       expect(progress()['body'], 'Raw notes');
       await generator.entered.future;
       expect(progress()['body'], '- Prior');
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), '- Prior');
       expect(
         domain.store
@@ -399,7 +407,7 @@ void main() {
       final first = domain.application.enhanceNotes(id);
       await generator.entered.future;
       await emit('- Persisted partial');
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       final firstRequest = progress()['request_id'];
       await domain.command(Operation.meetings_cancel_enhance, {
         'id': id,
@@ -446,7 +454,7 @@ void main() {
       expect(generator.outputLimits, [null]);
       expect(progress()['body'], '- First');
       expect(domain.store.meetingEnhancedNotes(id), contains('- Prior'));
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), '- First');
       expect(
         domain.store
@@ -504,7 +512,7 @@ void main() {
         'last_manual_edit': 777,
       });
       expect(progress()['body'], '- Manual');
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), '- Manual');
       expect(
         domain.store
@@ -531,7 +539,7 @@ void main() {
       final work = domain.application.enhanceNotes(id);
       await generator.entered.future;
       await emit('- Partial');
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       final request = progress()['request_id'];
       expect(
         await domain.command(Operation.meetings_cancel_enhance, {
@@ -555,7 +563,7 @@ void main() {
       expect(progress()['active'], isFalse);
       expect(progress()['body'], '- Prior\n\n💡 Retained');
       expect(domain.store.meetingEnhancedNotes(id), '- Partial');
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), '- Prior\n\n💡 Retained');
       expect(
         domain.store
@@ -575,9 +583,9 @@ void main() {
       await generator.entered.future;
       await emit('- Unsaved partial');
       await domain.application.close();
-      await emit(' ignored after close');
+      generator.events.add({'type': 'delta', 'text': ' ignored after close'});
       await work;
-      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), contains('- Prior'));
       expect(
         domain.store

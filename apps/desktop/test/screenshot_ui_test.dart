@@ -7,7 +7,7 @@ import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/helper_control.pb.dart' as control;
 import 'meeting_setup_test.dart' show OfflineHelper;
-import '../../../packages/foresight_core/test/fixtures/google_connections.dart'
+import 'package:foresight_test_support/google_connections.dart'
     show AdapterDomain;
 
 void main() {
@@ -15,6 +15,9 @@ void main() {
     tester,
   ) async {
     final tmp = Directory.systemTemp.createTempSync('foresight-pause-ui-');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
     final folder = Directory('${tmp.path}/files')..createSync();
     File('${folder.path}/fixture.txt').writeAsStringSync('A retained import.');
     final store = Store('${tmp.path}/app.db');
@@ -52,6 +55,9 @@ void main() {
     'source search, label editing, graph navigation and settings persist',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-screens-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final path = '${tmp.path}/app.db';
       final store = Store(path);
       final apollo = store.importText(
@@ -181,6 +187,9 @@ void main() {
     'Start transcribing opens speech setup before creating a meeting; cancel preserves selection',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-quick-start-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/app.db');
       final existing = store.meeting('Existing meeting');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
@@ -214,6 +223,9 @@ void main() {
     'Ask composer rejects blank input and submits through keyboard or send',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-composer-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/application.db');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
       await tester.pumpWidget(
@@ -271,6 +283,9 @@ void main() {
       final tmp = Directory.systemTemp.createTempSync(
         'foresight-source-columns-',
       );
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/application.db');
       store.importText(
         'Apollo',
@@ -353,6 +368,9 @@ void main() {
     'Local file import preserves file modification time and first import time',
     (tester) async {
       final tmp = Directory.systemTemp.createTempSync('foresight-file-dates-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final file = File('${tmp.path}/Apollo.txt')
         ..writeAsStringSync('Review Friday.');
       final originalTime = DateTime.utc(2020, 1, 1);
@@ -405,6 +423,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final tmp = Directory.systemTemp.createTempSync('foresight-layout-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/app.db');
       store.importText('Apollo', 'Plan', 'text/plain', 'fixture');
       final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
@@ -430,6 +451,9 @@ void main() {
       final root = Directory.systemTemp.createTempSync(
         'foresight-type-filter-',
       );
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final pdf = store.importText(
         'Apollo PDF',

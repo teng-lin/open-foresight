@@ -1,4 +1,5 @@
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -11,7 +12,7 @@ class RecoveryHelper extends Helper {
   @override
   Future<void> start() async {
     launches++;
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await Future<void>(() {});
   }
 }
 
@@ -43,7 +44,7 @@ void main() {
   late RecoveryHelper helper;
   late IndexingDomain domain;
   setUp(() {
-    temp = Directory('/tmp').createTempSync('of-meeting-recovery-');
+    temp = shortTestTempRoot.createTempSync('of-meeting-recovery-');
     store = Store('${temp.path}/application.db');
     helper = RecoveryHelper('${temp.path}/helper.sock', '${temp.path}/helper');
     domain = IndexingDomain(store, helper);

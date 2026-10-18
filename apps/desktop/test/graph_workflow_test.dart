@@ -47,6 +47,9 @@ void main() {
     final temp = Directory.systemTemp.createTempSync(
       'foresight-graph-source-reads-',
     );
+    addTearDown(() {
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    });
     final store = SourceReadCountingStore('${temp.path}/app.db');
     final body = 'Independent source body search needle. '.padRight(
       64 * 1024,
@@ -99,6 +102,9 @@ void main() {
       final temp = Directory.systemTemp.createTempSync(
         'foresight-graph-motion-',
       );
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       final store = Store('${temp.path}/app.db');
       store.importText('Apollo', 'Launch', 'text/plain', 'fixture:a');
       store.importText('Borealis', 'Budget', 'text/plain', 'fixture:b');
@@ -122,10 +128,12 @@ void main() {
       expect(state.sourceFeature.graphYaw, greaterThan(initial));
       await tester.tap(find.byTooltip('Pause graph animation'));
       await tester.pumpAndSettle();
-      for (var i = 0; i < 100 && state.sourceFeature.graphOrganizing; i++) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+      for (
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
+            state.sourceFeature.graphOrganizing;
+      ) {
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump();
       }
       await tester.pumpAndSettle();
@@ -234,6 +242,9 @@ void main() {
       final temp = Directory.systemTemp.createTempSync(
         'foresight-graph-workflow-',
       );
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       final store = SourceReadCountingStore('${temp.path}/app.db');
       final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture:a');
       final b = store.importText(
@@ -281,13 +292,11 @@ void main() {
         c: [0, 1, 0],
       });
       for (
-        var i = 0;
-        i < 100 && state.sourceFeature.graphPoints.length != 3;
-        i++
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
+            state.sourceFeature.graphPoints.length != 3;
       ) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump();
       }
       expect(

@@ -1,10 +1,13 @@
 import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:foresight_test_support/capture_poll.dart';
+import 'package:foresight_test_support/capture_process.dart';
 import 'package:open_foresight/main.dart' as app;
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/graph_layout.dart';
@@ -72,6 +75,32 @@ Future<dynamic> startedWorkspace(WidgetTester tester) async {
   return tester.state(find.byType(app.Workspace));
 }
 
+/// Unmount first so disposal owns the pending note save and recording stop.
+/// Join its existing cleanup work instead of guessing when the next launch is safe.
+Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
+  final saves = workspace.meetingFeature.meetingNoteSaves;
+  final connection = workspace.d as RemoteDomain;
+  final client = connection.client;
+  final helper = connection.helper;
+  final commands = workspace.integrationFeature.commands;
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.runAsync(() async {
+    try {
+      await saves.close().timeout(const Duration(seconds: 30));
+    } finally {
+      await Future.wait<void>([
+        client.close(),
+        helper.close(),
+      ]).timeout(const Duration(seconds: 30));
+    }
+  });
+  await waitUntil(
+    tester,
+    () => client.isClosed && (commands == null || commands.isClosed == true),
+    reason: 'Desktop disposal did not release the client and activation lock',
+  );
+}
+
 /// Recording starts only after the desktop confirms the service request.
 /// Clicking Record alone leaves capture idle while this dialog is pending.
 Future<void> allowRecording(WidgetTester tester) async {
@@ -88,68 +117,137 @@ Future<void> allowRecording(WidgetTester tester) async {
 }
 
 Future<void> captureWindow(
+  WidgetTester tester,
   String path, {
   List<int> expectedGutter = const [234, 238, 247],
   bool expectGraphSelection = false,
 }) async {
   // The private PipeWire acceptance session has no Agent Desktop display.
   if (Platform.environment['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') return;
-  final target = File(path);
-  target.parent.createSync(recursive: true);
-  final session = Platform.environment['FORESIGHT_AGENT_DESKTOP_SESSION'] ?? '';
-  final display = Platform.environment['WAYLAND_DISPLAY'] ?? '';
-  if (!RegExp(r'^[a-f0-9]{12}$').hasMatch(session) ||
-      !display.contains('/agent-desktop/$session/') ||
-      Platform.environment.containsKey('HYPRLAND_INSTANCE_SIGNATURE')) {
-    throw StateError(
-      'Acceptance requires the explicitly owned private display',
-    );
-  }
-  final screenshot = await Process.run('grim', [path]);
-  if (screenshot.exitCode != 0)
-    throw StateError('Cannot capture the test window');
-  // This untouched gutter must have the expected background (including any
-  // modal barrier). This detects
-  // compositor transparency exposing another window behind the screenshot.
-  final codec = await ui.instantiateImageCodec(await target.readAsBytes());
-  final image = (await codec.getNextFrame()).image;
-  codec.dispose();
-  try {
-    final pixels = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
-    if (pixels == null) throw StateError('Cannot inspect capture pixels');
-    if (expectGraphSelection) {
-      var goldPixels = 0;
-      for (var y = 400; y < image.height; y++) {
-        for (var x = 128; x < image.width; x++) {
-          final i = (y * image.width + x) * 4;
-          if (pixels.getUint8(i) == 255 &&
-              pixels.getUint8(i + 1) == 213 &&
-              pixels.getUint8(i + 2) == 79)
-            goldPixels++;
-        }
-      }
-      expect(
-        goldPixels,
-        greaterThan(0),
-        reason:
-            'Selected graph screenshot must contain the rendered gold ring; widget state alone is insufficient',
+  await tester.runAsync(() async {
+    final target = File(path);
+    final pending = File('$path.capture.png');
+    target.parent.createSync(recursive: true);
+    final session =
+        Platform.environment['FORESIGHT_AGENT_DESKTOP_SESSION'] ?? '';
+    final display = Platform.environment['WAYLAND_DISPLAY'] ?? '';
+    if (!RegExp(r'^[a-f0-9]{12}$').hasMatch(session) ||
+        !display.contains('/agent-desktop/$session/') ||
+        Platform.environment.containsKey('HYPRLAND_INSTANCE_SIGNATURE')) {
+      throw StateError(
+        'Acceptance requires the explicitly owned private display',
       );
     }
-    // x=80 stays between the 72-unit navigation rail and the nearest card,
-    // including the immersive meeting layout whose card begins at x=88.
-    final offset = (400 * image.width + 80) * 4;
-    expect(
-      [
-        pixels.getUint8(offset),
-        pixels.getUint8(offset + 1),
-        pixels.getUint8(offset + 2),
-      ],
-      expectedGutter,
-      reason: 'Native capture is not opaque at the background gutter',
-    );
-  } finally {
-    image.dispose();
-  }
+    // A completed Flutter frame can precede its compositor presentation. Read
+    // actual captures until their asserted pixels are visible, retaining the
+    // latest image and measurements even when the monotonic deadline expires.
+    ({List<int> gutter, int goldPixels})? lastSnapshot;
+    var attempts = 0;
+    try {
+      final observation = await waitForCapture(
+        () async {
+          attempts++;
+          final screenshot = await runCaptureProcess('grim', [pending.path]);
+          if (screenshot.exitCode != 0) {
+            throw StateError(
+              'Cannot capture the test window: ${screenshot.stderr}',
+            );
+          }
+          final codec = await ui.instantiateImageCodec(
+            await pending.readAsBytes(),
+          );
+          late ui.Image image;
+          try {
+            image = (await codec.getNextFrame()).image;
+          } finally {
+            codec.dispose();
+          }
+          try {
+            final pixels = await image.toByteData(
+              format: ui.ImageByteFormat.rawRgba,
+            );
+            if (pixels == null)
+              throw StateError('Cannot inspect capture pixels');
+            var goldPixels = 0;
+            if (expectGraphSelection) {
+              for (var y = 400; y < image.height; y++) {
+                for (var x = 128; x < image.width; x++) {
+                  final i = (y * image.width + x) * 4;
+                  if (pixels.getUint8(i) == 255 &&
+                      pixels.getUint8(i + 1) == 213 &&
+                      pixels.getUint8(i + 2) == 79) {
+                    goldPixels++;
+                  }
+                }
+              }
+            }
+            // x=80 is the untouched gutter between the rail and the nearest card.
+            final offset = (400 * image.width + 80) * 4;
+            final snapshot = (
+              gutter: [
+                pixels.getUint8(offset),
+                pixels.getUint8(offset + 1),
+                pixels.getUint8(offset + 2),
+              ],
+              goldPixels: goldPixels,
+            );
+            // A stalled or corrupt next capture must not replace the last PNG.
+            await pending.rename(path);
+            lastSnapshot = snapshot;
+            return snapshot;
+          } finally {
+            image.dispose();
+          }
+        },
+        (snapshot) =>
+            snapshot.gutter.length == expectedGutter.length &&
+            List.generate(
+              expectedGutter.length,
+              (i) => i,
+            ).every((i) => snapshot.gutter[i] == expectedGutter[i]) &&
+            (!expectGraphSelection || snapshot.goldPixels > 0),
+      );
+      File('$path.diagnostics.json').writeAsStringSync(
+        jsonEncode({
+          'ready': observation.ready,
+          'attempts': observation.attempts,
+          'elapsed_ms': observation.elapsed.inMilliseconds,
+          'gutter': observation.snapshot.gutter,
+          'expected_gutter': expectedGutter,
+          'gold_pixels': observation.snapshot.goldPixels,
+          'graph_selection_required': expectGraphSelection,
+        }),
+      );
+      if (expectGraphSelection) {
+        expect(
+          observation.snapshot.goldPixels,
+          greaterThan(0),
+          reason:
+              'Selected graph screenshot must contain the rendered gold ring; widget state alone is insufficient. Capture: $path',
+        );
+      }
+      expect(
+        observation.snapshot.gutter,
+        expectedGutter,
+        reason:
+            'Native capture is not opaque at the background gutter. Capture: $path',
+      );
+    } catch (error) {
+      File('$path.diagnostics.json').writeAsStringSync(
+        jsonEncode({
+          'capture_error': error.toString(),
+          'attempts': attempts,
+          'last_image': target.existsSync() ? path : null,
+          'pending_image': pending.existsSync() ? pending.path : null,
+          'gutter': lastSnapshot?.gutter,
+          'expected_gutter': expectedGutter,
+          'gold_pixels': lastSnapshot?.goldPixels,
+          'graph_selection_required': expectGraphSelection,
+        }),
+      );
+      rethrow;
+    }
+  });
 }
 
 void main() {
@@ -204,7 +302,7 @@ void main() {
       await tester.tap(find.text('Ask').first);
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
-      await captureWindow('$screenshotDirectory/06-ask.png');
+      await captureWindow(tester, '$screenshotDirectory/06-ask.png');
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
       await tester.tap(find.text('New meeting'));
@@ -289,7 +387,10 @@ void main() {
       );
       expect(workspace.meetingFeature.recording, isNotNull);
       await tester.pumpAndSettle();
-      await captureWindow('$screenshotDirectory/09-live-transcription.png');
+      await captureWindow(
+        tester,
+        '$screenshotDirectory/09-live-transcription.png',
+      );
       final counts = List<int>.from(
         workspace.meetingFeature.recording.sampleCounts,
       );
@@ -426,8 +527,7 @@ void main() {
               as String;
       expect(enhanced.toLowerCase(), contains('country'));
       // Release the actual widget/domain and launch a fresh one against the saved profile.
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeWorkspace(tester, workspace);
       final dynamic reopened = await startedWorkspace(tester);
       await waitUntil(
         tester,
@@ -471,7 +571,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
-      await captureWindow(env['FORESIGHT_MEETING_SCREENSHOT']!);
+      await captureWindow(tester, env['FORESIGHT_MEETING_SCREENSHOT']!);
       await tester.tap(find.text('Ask').first);
       await tester.pumpAndSettle();
       await tester.enterText(
@@ -495,7 +595,7 @@ void main() {
       expect((answer['body'] as String).toLowerCase(), isNot(contains('king')));
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
-      await captureWindow(env['FORESIGHT_COPILOT_SCREENSHOT']!);
+      await captureWindow(tester, env['FORESIGHT_COPILOT_SCREENSHOT']!);
       final cited = jsonDecode(answer['citations'] as String) as List;
       expect(cited.single['document_id'], 'meeting-$meeting');
       final citedRevision = cited.single['revision'];
@@ -548,14 +648,12 @@ void main() {
       secondPlayer.stdout.drain<void>();
       secondPlayer.stderr.drain<void>();
       expect(await secondPlayer.exitCode, 0);
-      await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.byTooltip('Stop transcribing'));
       await waitUntil(
         tester,
         () => reopened.meetingFeature.recording?.finishing == true,
       );
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 300));
+      await closeWorkspace(tester, reopened);
       expect(tester.takeException(), isNull);
       dynamic afterCancellation = await startedWorkspace(tester);
       await waitUntil(
@@ -680,7 +778,10 @@ void main() {
       await tester.pump();
       expect(afterCancellation.busy, true);
       expect(afterCancellation.d.store.sources.length, beforePauseImports);
-      await captureWindow('$screenshotDirectory/10-source-import-paused.png');
+      await captureWindow(
+        tester,
+        '$screenshotDirectory/10-source-import-paused.png',
+      );
       await tester.tap(find.byTooltip('Resume source imports and indexing'));
       await pausedImport;
       await tester.pumpAndSettle();
@@ -761,9 +862,11 @@ void main() {
       );
       expect(find.text('2 files found · 5 already imported'), findsOneWidget);
       await tester.tap(find.text('Discovered review.md'));
-      // The workspace's busy indicator keeps animating during this dialog.
-      await tester.pump(const Duration(milliseconds: 250));
+      // The busy indicator keeps animating; render one frame and let the
+      // screenshot pixel deadline observe compositor presentation.
+      await tester.pump();
       await captureWindow(
+        tester,
         '$screenshotDirectory/11-find-files-selection.png',
         expectedGutter: const [107, 109, 113],
       );
@@ -794,6 +897,7 @@ void main() {
         await tester.pumpAndSettle();
         await waitUntil(tester, () => true);
         await captureWindow(
+          tester,
           '$screenshotDirectory/${name == 'Stats' ? '01-stats' : '02-sources-list'}.png',
         );
       }
@@ -887,7 +991,7 @@ void main() {
               )
               as List;
       expect(persistedLayoutIdentity.first, graphLayoutAlgorithmVersion);
-      await captureWindow('$screenshotDirectory/03-sources-graph.png');
+      await captureWindow(tester, '$screenshotDirectory/03-sources-graph.png');
       final graphNodes = find.byWidgetPredicate(
         (widget) =>
             widget is SizedBox &&
@@ -1001,11 +1105,8 @@ void main() {
         );
       }
       await tester.pumpAndSettle();
-      // Widget frames can finish before the Wayland compositor presents them.
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 200)),
-      );
       await captureWindow(
+        tester,
         '$screenshotDirectory/13-selected-graph.png',
         expectGraphSelection: true,
       );
@@ -1021,10 +1122,8 @@ void main() {
         'Inspector fixture',
       );
       await tester.pumpAndSettle();
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 200)),
-      );
       await captureWindow(
+        tester,
         '$screenshotDirectory/14-inspector-label-editor.png',
         expectGraphSelection: true,
       );
@@ -1141,7 +1240,10 @@ void main() {
       await tester.tap(find.text('Add source'));
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
-      await captureWindow('$screenshotDirectory/04-add-source-menu.png');
+      await captureWindow(
+        tester,
+        '$screenshotDirectory/04-add-source-menu.png',
+      );
       await tester.tapAt(const Offset(200, 100));
       await tester.pumpAndSettle();
       final expectedClusters = afterCancellation.d.store.rows(
@@ -1191,8 +1293,7 @@ void main() {
         ))
           row['document_id']: [row['proj_x'], row['proj_y'], row['proj_z']],
       };
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeWorkspace(tester, afterCancellation);
       afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
@@ -1255,9 +1356,6 @@ void main() {
       expect(clusterPainter.clusters.length, expectedClusters.length);
       expect(clusterPainter.clusters, isNotEmpty);
       await tester.pumpAndSettle();
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 200)),
-      );
       final fittedPainter =
           tester
                   .widget<CustomPaint>(
@@ -1282,7 +1380,7 @@ void main() {
         expect(bottomRight.dx, lessThanOrEqualTo(fittedViewport.width));
         expect(bottomRight.dy, lessThanOrEqualTo(fittedViewport.height));
       }
-      await captureWindow('$screenshotDirectory/12-restored-graph.png');
+      await captureWindow(tester, '$screenshotDirectory/12-restored-graph.png');
       final organizationFilter = find.widgetWithText(FilterChip, 'Apollo');
       await tester.ensureVisible(organizationFilter);
       await tester.tap(organizationFilter);
@@ -1297,10 +1395,10 @@ void main() {
             .filter,
         'Apollo',
       );
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 200)),
+      await captureWindow(
+        tester,
+        '$screenshotDirectory/15-highlighted-clusters.png',
       );
-      await captureWindow('$screenshotDirectory/15-highlighted-clusters.png');
       await tester.tap(organizationFilter);
       await tester.pumpAndSettle();
 
@@ -1311,15 +1409,15 @@ void main() {
         await tester.pumpAndSettle();
       }
       await waitUntil(tester, () => true);
-      await captureWindow('$screenshotDirectory/05-meetings.png');
+      await captureWindow(tester, '$screenshotDirectory/05-meetings.png');
       await tester.tap(find.text('Settings'));
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
-      await captureWindow('$screenshotDirectory/07-settings.png');
+      await captureWindow(tester, '$screenshotDirectory/07-settings.png');
       await tester.ensureVisible(find.text('Version'));
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
-      await captureWindow('$screenshotDirectory/08-settings-lower.png');
+      await captureWindow(tester, '$screenshotDirectory/08-settings-lower.png');
       // The destructive action is exercised only in this disposable test profile.
       await tester.ensureVisible(find.text('Clear workspace data'));
       await tester.pumpAndSettle();
@@ -1449,8 +1547,7 @@ void main() {
           }),
         );
       }
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeWorkspace(tester, afterCancellation);
     },
     timeout: Timeout(
       Duration(

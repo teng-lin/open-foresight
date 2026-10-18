@@ -21,6 +21,9 @@ void main() {
     'meeting recording requires setup and opens speech setup instead of throwing',
     (tester) async {
       final directory = Directory.systemTemp.createTempSync('meeting-setup-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final helper = OfflineHelper(
         '${directory.path}/helper.sock',
@@ -69,6 +72,9 @@ void main() {
     'registered missing runner is reported as incomplete speech setup',
     () async {
       final directory = Directory.systemTemp.createTempSync('meeting-model-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final model = File('${directory.path}/speech.model')
         ..writeAsStringSync('control flow fixture');

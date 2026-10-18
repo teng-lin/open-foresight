@@ -33,6 +33,9 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final tmp = Directory.systemTemp.createTempSync('source-browse-');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
     final path = '${tmp.path}/app.db';
     final store = BrowsingStore(path);
     final text = 'needle ${'word ' * 8000}';
