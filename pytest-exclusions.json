@@ -10,5 +10,6 @@
   "tests/inference/test_grounding_corpus.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions.",
   "tests/inference/test_native_query.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions.",
   "tests/inference/test_probe_failure.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions.",
-  "tests/inference/test_raw_query_model.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions."
+  "tests/inference/test_raw_query_model.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions.",
+  "tests/integration/test_linux_documents.py": "Requires installed PDF/RTF tools and working bubblewrap namespaces; run explicitly through tools/ci_document_sandbox.sh, where CI missing prerequisites fail."
 }
