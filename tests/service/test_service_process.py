@@ -1117,7 +1117,7 @@ def profile_failure_diagnostics(process, log):
     """Preserve both sides of a stalled isolated-service connection."""
     profile = Path(log.name).parent
     print(f"Profile {profile}: pid={process.pid}, exit={process.poll()}")
-    for name in ("application.sock", "application-worker.sock", "helper.sock"):
+    for name in ("application.sock", "worker.sock", "helper.sock"):
         path = profile / "run" / name
         print(f"Endpoint {path}: exists={path.exists()}")
     record = profile / "data/.application-endpoint.json"
@@ -1127,7 +1127,7 @@ def profile_failure_diagnostics(process, log):
     try:
         with socket.socket(socket.AF_UNIX) as probe:
             probe.settimeout(2)
-            probe.connect(str(profile / "run/application-worker.sock"))
+            probe.connect(str(profile / "run/worker.sock"))
             probe.sendall(b'{"id":1,"method":"status","args":{}}\n')
             print(f"Direct worker response: {probe.recv(65536)!r}")
     except OSError as error:
