@@ -190,6 +190,14 @@
       ],
       "gate": "models",
       "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
+    },
+    {
+      "path": "packages/foresight_core/test/native_fixture_cache_test.dart",
+      "conditions": [
+        "Platform.isWindows ? 'Unix native fixture compiler' : false"
+      ],
+      "gate": "platform",
+      "reason": "Build platforms provide the C++ compiler; cache contract tests compile small owned fixtures without native models."
     }
   ]
 }

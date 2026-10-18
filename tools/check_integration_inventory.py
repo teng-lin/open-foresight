@@ -30,7 +30,43 @@ def conditions(text):
     return result
 
 
+def verify_probes(root=ROOT):
+    inventory = json.loads((root / "tools/integration_probes.json").read_text())
+    if inventory.get("schema") != 1:
+        raise ValueError("Unsupported probe inventory")
+    expected = {entry["path"]: entry for entry in inventory["entries"]}
+    actual = {
+        str(path.relative_to(root))
+        for pattern in ("test_*.py", "accept_*.py")
+        for path in (root / "tools").glob(pattern)
+    }
+    if len(expected) != len(inventory["entries"]) or actual != expected.keys():
+        raise ValueError(
+            "Unlisted or stale tooling probes: "
+            + ", ".join(sorted(actual ^ expected.keys()))
+        )
+    for path, entry in expected.items():
+        if not entry.get("reason", "").strip():
+            raise ValueError("Probe needs a reason: " + path)
+        if entry.get("mode") == "manual":
+            if (
+                f"`{path}`"
+                not in (root / "docs/validation/integration-gates.md").read_text()
+            ):
+                raise ValueError("Manual probe is absent from its index: " + path)
+        elif entry.get("mode") == "automated":
+            if not entry.get("wiring") or not any(
+                Path(path).name in (root / source).read_text()
+                for source in entry["wiring"]
+            ):
+                raise ValueError("Automated probe has no executable wiring: " + path)
+        else:
+            raise ValueError("Invalid probe mode: " + path)
+    return len(expected)
+
+
 def verify(root=ROOT):
+    verify_probes(root)
     inventory = json.loads((root / "tools/integration_skips.json").read_text())
     if inventory["schema"] != 1:
         raise ValueError("Unsupported integration inventory")
@@ -44,7 +80,11 @@ def verify(root=ROOT):
             raise ValueError("Invalid or duplicate integration inventory entry")
         expected[entry["path"]] = entry["conditions"]
     actual = {}
-    for folder in ["apps/desktop/test", "packages/foresight_core/test"]:
+    for folder in [
+        "apps/desktop/test",
+        "apps/desktop/integration_test",
+        "packages/foresight_core/test",
+    ]:
         for path in (root / folder).rglob("*.dart"):
             found = conditions(path.read_text())
             if found:

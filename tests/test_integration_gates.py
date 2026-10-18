@@ -91,6 +91,9 @@ def test_virtual_audio_refuses_host_devices(tmp_path):
 
 def test_inventory_catches_added_removed_or_changed_skips(tmp_path):
     (tmp_path / "tools").mkdir()
+    (tmp_path / "tools/integration_probes.json").write_text(
+        json.dumps({"schema": 1, "entries": []})
+    )
     directory = tmp_path / "apps/desktop/test"
     directory.mkdir(parents=True)
     source = directory / "fixture.dart"
@@ -250,3 +253,27 @@ def test_model_groups_both_execute_when_desktop_group_fails(tmp_path):
         with pytest.raises(RuntimeError, match="desktop fixture failed"):
             gates.models_gate(args, {"FORESIGHT_LITERT_RUNNER": "/runner"})
     assert observed == ["desktop", "core"]
+
+
+@pytest.mark.parametrize("name", ["test_new_probe.py", "accept_new_probe.py"])
+def test_probe_inventory_rejects_unlisted_harnesses(tmp_path, name):
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools/integration_probes.json").write_text(
+        json.dumps({"schema": 1, "entries": []})
+    )
+    (tmp_path / "tools" / name).write_text("# Unregistered probe")
+    with pytest.raises(ValueError, match="Unlisted or stale tooling probes"):
+        inventory.verify_probes(tmp_path)
+
+
+def test_skip_inventory_scans_desktop_integration_tests(tmp_path):
+    (tmp_path / "tools").mkdir()
+    for name in ("integration_probes", "integration_skips"):
+        (tmp_path / "tools" / (name + ".json")).write_text(
+            json.dumps({"schema": 1, "entries": []})
+        )
+    folder = tmp_path / "apps/desktop/integration_test"
+    folder.mkdir(parents=True)
+    (folder / "new.dart").write_text("test('x', () {}, skip: true,\n);")
+    with pytest.raises(ValueError, match="changed skip"):
+        inventory.verify(tmp_path)

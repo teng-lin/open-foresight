@@ -144,3 +144,34 @@ should require the `native-thread-sanitizer` context after reviewing that week's
 reports. Do not suppress a report without recording its cause and rationale.
 An unsupported runtime or missing evidence is a failed probe, not a clean TSan
 result.
+
+## Probe index
+
+`tools/integration_probes.json` records every `tools/test_*.py` and
+`tools/accept_*.py` harness. Automated entries name their workflow or build script.
+The manual probes below are diagnostics requiring the installed runtime, models,
+a private desktop session, or physical hardware described by each script; they
+are not release acceptance evidence unless actually run and recorded. Invoke a
+probe only with its documented fixtures and authorization. Pure Google-client
+and web-search release tests live under `tests/` and run in the offline suite.
+
+| Manual probe | Purpose |
+| --- | --- |
+| `tools/test_capture_device_recovery.py` | Verify private PipeWire device loss/return without physical recording. |
+| `tools/test_capture_terminal_state.py` | Exercise real native/Dart capture failure handling with a failing CLI fixture. |
+| `tools/test_default_model_startup.py` | Check ordinary bundle launch on an owned desktop without a model override. |
+| `tools/test_gemma_models.py` | Run real local Gemma native/helper acceptance without account data. |
+| `tools/test_global_shortcut.py` | Verify the real Hyprland global key through a private microphone/profile. |
+| `tools/test_global_shortcut_private.py` | Run global shortcut acceptance in a nested Hyprland on an owned headless desktop. |
+| `tools/test_helper_worker.py` | Check persistent worker health/ownership through the actual helper RPCs. |
+| `tools/test_litert_stop_sequences.py` | Check actual ordered-token stopping with the pinned SDK's test_lm fixture. |
+| `tools/test_live_transcription_gap.py` | Verify real Whisper transcription across an owned virtual microphone outage. |
+| `tools/test_meeting_workflow.py` | Exercise real meeting workflows on an owned headless desktop and private audio devices. |
+| `tools/test_native_inference.py` | Exercise the shared native inference path with an empty executable PATH. |
+| `tools/test_native_service.py` | Real-model acceptance through a packaged service and MCP in a private profile. |
+| `tools/test_packaged_model_runtime.py` | Exercise real models through a relocated package's own inference processes. |
+| `tools/test_packaged_note_enhancement.py` | Real packaged Application enhancement, including saved-transcript correction. |
+| `tools/test_packaged_query_worker.py` | Relocate the native dedicated detector and test its installed protocol. |
+| `tools/test_packaged_sentencepiece_coload.py` | Check both native/SentencePiece initialization orders in isolated children. |
+| `tools/test_vision_model_runtime.py` | Opt-in real-model check of recovered vision startup and native ownership. |
+| `tools/test_whisper_gpu.py` | Verify Vulkan Whisper and native speech events using a file, never a microphone. |
