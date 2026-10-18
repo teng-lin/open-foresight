@@ -1,0 +1,3 @@
+ggml_vulkan: Found 1 Vulkan devices:
+ggml_vulkan: 0 = llvmpipe (LLVM 20.1.2, 256 bits) (llvmpipe) | uma: 0 | fp16: 1 | bf16: 0 | fp4: 0 | warp size: 8 | shared memory: 32768 | int dot: 0 | matrix cores: none
+ggml_vulkan: Warning: Device type is CPU. This is probably not the device you want.
