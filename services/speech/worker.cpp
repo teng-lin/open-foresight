@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
           std::string text;
           for (int i = 0; i < whisper_full_n_segments(context.get()); ++i)
             text += whisper_full_get_segment_text(context.get(), i);
-          output << "text " << json(text).dump() << std::endl;
+          output << "text " << foresight::frame_json(json(text)) << std::endl;
         },
         [](void *value) {
           static_cast<std::atomic<bool> *>(value)->store(true);

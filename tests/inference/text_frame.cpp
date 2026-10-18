@@ -230,6 +230,13 @@ void worker_reports_failure() {
 
 int main() {
   try {
+    const auto repaired =
+        foresight::frame_json(nlohmann::json(std::string("ok \xff\xfe end")));
+    check(nlohmann::json::parse(repaired).get<std::string>() ==
+          "ok \xef\xbf\xbd\xef\xbf\xbd end");
+    const auto error = foresight::frame_json(
+        nlohmann::json({{"error", std::string("bad \xff")}}));
+    check(nlohmann::json::parse(error).at("error") == "bad \xef\xbf\xbd");
     valid_boundaries();
     invalid_input();
     failed_output();
