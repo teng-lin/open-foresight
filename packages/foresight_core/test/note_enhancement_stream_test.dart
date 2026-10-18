@@ -11,6 +11,8 @@ class ControlledNoteGenerator extends NativeRuntime {
   ControlledNoteGenerator()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   final entered = Completer<void>();
+  // Ownership transfers to the transport or test teardown.
+  // ignore: close_sinks
   final events = StreamController<Map<String, dynamic>>();
   final prompts = <String>[];
   final inputLimits = <int?>[];
@@ -533,6 +535,19 @@ void main() {
     },
   );
 
+  test('lease cancellation restores a draft after autosave', () async {
+    var current = true;
+    final work = domain.application.enhanceNotes(id, current: () => current);
+    await generator.entered.future;
+    await emit('- Partial');
+    time.elapse(const Duration(seconds: 1));
+    expect(domain.store.meetingEnhancedNotes(id), '- Partial');
+    current = false;
+    await emit(' ignored');
+    await work;
+    expect(domain.store.meetingEnhancedNotes(id), '- Prior\n\n💡 Retained');
+  });
+
   test(
     'owned cancel restores extracted formatted prior notes on next event and saves after one second',
     () async {
@@ -562,7 +577,7 @@ void main() {
       expect(generator.cancelled, isTrue);
       expect(progress()['active'], isFalse);
       expect(progress()['body'], '- Prior\n\n💡 Retained');
-      expect(domain.store.meetingEnhancedNotes(id), '- Partial');
+      expect(domain.store.meetingEnhancedNotes(id), '- Prior\n\n💡 Retained');
       time.elapse(const Duration(seconds: 1));
       expect(domain.store.meetingEnhancedNotes(id), '- Prior\n\n💡 Retained');
       expect(
@@ -583,6 +598,7 @@ void main() {
       await generator.entered.future;
       await emit('- Unsaved partial');
       await domain.application.close();
+      expect(domain.store.meetingEnhancedNotes(id), contains('- Prior'));
       generator.events.add({'type': 'delta', 'text': ' ignored after close'});
       await work;
       time.elapse(const Duration(seconds: 1));

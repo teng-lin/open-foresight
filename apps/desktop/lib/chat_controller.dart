@@ -48,6 +48,8 @@ class _ChatController extends _FeatureController {
     if (s.isEmpty ||
         s.first['deleted'] == 1 ||
         s.first['revision'] != c['revision']) {
+      // The callback intentionally schedules work owned by its controller.
+      // ignore: discarded_futures
       showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
@@ -62,6 +64,8 @@ class _ChatController extends _FeatureController {
         ),
       );
     } else {
+      // The callback intentionally schedules work owned by its controller.
+      // ignore: discarded_futures
       sourceFeature.source(s.first);
     }
   }

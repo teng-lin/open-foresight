@@ -50,10 +50,37 @@ typedef _MeetingIndexKey = ({
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
 class Application implements ModelGate {
+  /// User content erased atomically by workspace.clear.
+  static const workspaceContentTables = [
+    'google_sources',
+    'google_folders',
+    'calendar_events',
+    'meeting_questions',
+    'meeting_question_cursors',
+    'meeting_answers',
+    'meeting_note_events',
+    'meeting_notes',
+    'artifacts',
+    'transcript',
+    'meeting_details',
+    'meetings',
+    'answers',
+    'conversation_memory',
+    'notes',
+    'source_details',
+    'document_labels',
+    'document_clusters',
+    'graph_documents',
+    'graph_force_state',
+    'graph_layouts',
+    'sources',
+  ];
+
   final Domain domain;
   ImportPolicy? importPolicy;
   Store get store => domain.store;
   final changes = StreamController<void>.broadcast();
+  final captureLevelChanges = StreamController<void>.broadcast();
   Recording? recording;
   int? recordingMeeting;
   DateTime? recordingBegan;
@@ -820,36 +847,21 @@ class Application implements ModelGate {
           _noteTranscriptCache.clear();
           _clearingWorkspace = true;
           final sourceIds = [
-            for (final source in store.sources) source['id'] as String,
+            for (final source in store.rows('SELECT id FROM sources'))
+              source['id'] as String,
           ];
           domain.invalidateWorkspace();
           final reset = proactive.reset();
           try {
             store.db.execute('BEGIN IMMEDIATE');
             try {
-              for (final table in [
-                'google_sources',
-                'google_folders',
-                'calendar_events',
-                'meeting_questions',
-                'meeting_question_cursors',
-                'meeting_answers',
-                'meeting_notes',
-                'artifacts',
-                'transcript',
-                'meeting_details',
-                'meetings',
-                'answers',
-                'conversation_memory',
-                'notes',
-                'source_details',
-                'document_labels',
-                'document_clusters',
-                'graph_documents',
-                'graph_force_state',
-                'graph_layouts',
-                'sources',
-              ]) {
+              for (final id in sourceIds) {
+                store.db.execute(
+                  'INSERT OR IGNORE INTO pending_helper_deletes VALUES(?,?)',
+                  [id, DateTime.now().millisecondsSinceEpoch],
+                );
+              }
+              for (final table in workspaceContentTables) {
                 store.db.execute('DELETE FROM $table');
               }
               store.db.execute(
@@ -864,7 +876,15 @@ class Application implements ModelGate {
             google.close();
             _google = null;
             // Local data and credentials are gone before remote cleanup completes.
-            unawaited(googleAuth.forget());
+            unawaited(
+              Future<void>.sync(googleAuth.forget).catchError((Object error) {
+                stderr.writeln('Google credential cleanup: $error');
+                googleAuth.loadError =
+                    'Google credential cleanup failed; disconnect again';
+                changed();
+              }),
+            );
+            sweepStaleSpeechAudio(File(store.path).parent.path);
           } finally {
             // Wait for cancelled background work before allowing IDs to be reused.
             try {
@@ -1065,7 +1085,7 @@ class Application implements ModelGate {
             runtimeConfiguration.nativeLibrary,
             a['path'] as String,
             a['runtime'] as String,
-            backend: a['backend'] as String? ?? 'llama_cpp',
+            backend: a['backend'] as String? ?? 'litert_lm',
             modelType: a['model_type'] as int?,
             current: () => !_closed && (current?.call() ?? true),
           );
@@ -1461,6 +1481,8 @@ class Application implements ModelGate {
     try {
       await domain.index(source);
     } finally {
+      // Removing the map entry returns an already observed task; it starts no work.
+      // ignore: unawaited_futures
       _meetingIndexes.remove(key);
     }
   }
@@ -1687,6 +1709,9 @@ class Application implements ModelGate {
             (previousState.cancelRequested || previousState.status.isEmpty)
         ? previousState.body
         : store.meetingEnhancedNotes(id);
+    enhancement.restoreBody = formatEnhancedNotesWithSpacing(
+      extractEnhancedNoteBullets(previous),
+    );
     final mapping = _noteEditMapping(id);
     _noteEnhancements[id] = enhancement;
     _scheduleEnhancedDraft(id, enhancement);
@@ -1811,12 +1836,9 @@ class Application implements ModelGate {
         enhancement.saveTimer?.cancel();
         return;
       }
-      if (_closed || !(current?.call() ?? true)) {
-        enhancement.saveTimer?.cancel();
-        _noteEnhancements.remove(id);
-        return;
-      }
-      if (enhancement.cancelRequested) {
+      if (_closed ||
+          !(current?.call() ?? true) ||
+          enhancement.cancelRequested) {
         enhancement.body = formatEnhancedNotesWithSpacing(
           extractEnhancedNoteBullets(previous),
         );
@@ -1830,10 +1852,30 @@ class Application implements ModelGate {
               '',
           enhancement.body,
         );
-        _scheduleEnhancedDraft(id, enhancement);
-        changed();
+        enhancement.saveTimer?.cancel();
+        store.restoreMeetingEnhancedDraft(id, enhancement.body);
+        if (_closed || !(current?.call() ?? true)) {
+          _noteEnhancements.remove(id);
+        } else {
+          _scheduleEnhancedDraft(id, enhancement);
+        }
+        if (!_closed) changed();
         return;
       }
+      enhancement.saveTimer?.cancel();
+      enhancement.body = formatEnhancedNotesWithSpacing(
+        extractEnhancedNoteBullets(previous),
+      );
+      store.restoreMeetingEnhancedDraft(id, enhancement.body);
+      _restoreNoteMapping(
+        id,
+        store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+                  id,
+                ]).firstOrNull?['body']
+                as String? ??
+            '',
+        enhancement.body,
+      );
       enhancement.status = error.toString();
       changed();
       rethrow;
@@ -1955,7 +1997,9 @@ class Application implements ModelGate {
         );
         changed();
       },
-      levels: changed,
+      levels: () {
+        if (!_closed) captureLevelChanges.add(null);
+      },
       provisional: (text, start, end, source) {
         provisionalTranscript[source] = text;
         proactive.updateInterim(id, source, text);
@@ -2113,10 +2157,27 @@ class Application implements ModelGate {
       timer.cancel();
     }
     _enhance.clear();
-    for (final enhancement in _noteEnhancements.values) {
+    for (final entry in _noteEnhancements.entries) {
+      final enhancement = entry.value;
       enhancement.saveTimer?.cancel();
       enhancement.cancelRequested = true;
+      final previous = enhancement.restoreBody;
+      if (enhancement.active && previous != null) {
+        // Persist before the service closes SQLite, even if the producer never
+        // emits another event after cancellation.
+        store.restoreMeetingEnhancedDraft(entry.key, previous);
+        _restoreNoteMapping(
+          entry.key,
+          store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
+                    entry.key,
+                  ]).firstOrNull?['body']
+                  as String? ??
+              '',
+          previous,
+        );
+      }
     }
+    _noteEnhancements.clear();
     final acquisition = _queryAcquisition;
     await acquisition?.close();
     if (acquisition != null) {
@@ -2132,6 +2193,7 @@ class Application implements ModelGate {
       await googleAuth.close();
       if (recording != null) await stopRecording();
     } finally {
+      await captureLevelChanges.close();
       await changes.close();
     }
   }
@@ -2142,6 +2204,7 @@ class _NoteEnhancement {
   final bool Function()? current;
   final String requestId;
   String body, status = '';
+  String? restoreBody;
   bool active = true, cancelRequested = false;
   int? activeIndex;
   Timer? saveTimer;

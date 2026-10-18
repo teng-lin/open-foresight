@@ -131,6 +131,8 @@ void main() {
         await eventually(
           () => f.requests.any((r) => r['method'] == 'fixture.pending'),
         );
+        // Ownership transfers to the transport or test teardown.
+        // ignore: close_sinks
         final socket = f.sockets.last;
         if (malformed == 'json') {
           socket.writeln('{broken');

@@ -2,3 +2,9 @@ include: package:lints/recommended.yaml
 analyzer:
   exclude:
     - lib/src/generated/**
+linter:
+  rules:
+    unawaited_futures: true
+    discarded_futures: true
+    cancel_subscriptions: true
+    close_sinks: true

@@ -255,6 +255,25 @@ void main() {
     );
   });
 
+  test('v10 adds a durable helper purge queue without changing content', () {
+    var store = Store(path);
+    final id = store.importText('Retained', 'Body', 'text/plain', 'fixture');
+    store.db.execute('DROP TABLE pending_helper_deletes');
+    store.db.execute('PRAGMA user_version=9');
+    store.close();
+    store = Store(path);
+    addTearDown(store.close);
+    expect(store.sources.single['id'], id);
+    store.db.execute('INSERT INTO pending_helper_deletes VALUES(?,?)', [
+      'old-id',
+      123,
+    ]);
+    expect(store.rows('SELECT * FROM pending_helper_deletes').single, {
+      'document_id': 'old-id',
+      'queued_at': 123,
+    });
+  });
+
   test('legacy malformed labels repair once without repeating writes', () {
     var store = Store(path);
     final id = store.importText('Title', 'Body', 'text/plain', 'fixture');

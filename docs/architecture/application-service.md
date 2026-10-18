@@ -289,3 +289,5 @@ Committed transcript segments remain indexed when a later speech segment fails o
 Whisper retries a failed GPU invocation once with `-ng` on CPU, preserving the original audio and discarding the failed attempt's output. A LiteRT GPU failure rebuilds the generation worker on CPU for the next answer. The current answer fails visibly; tool calls are not replayed automatically. Native capture queue overflow emits an interruption with discarded-byte accounting, which is stored alongside the meeting transcript.
 
 `application.resume` explicitly resets an exhausted helper restart budget and starts the helper again. It preserves a healthy helper. An incompatible helper transport requires an application-service restart instead of retrying a terminated connection. Shortcut IPC acknowledges that a command was queued; failures appear in the desktop workspace and shortcut status.
+
+New `models.generation` registrations default to `litert_lm` when `backend` is omitted. Explicit `llama_cpp` registrations and previously stored registrations retain their selected backend.

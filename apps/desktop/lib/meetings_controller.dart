@@ -69,6 +69,8 @@ class _MeetingsController extends _FeatureController {
 
   Map<String, dynamic> meetingEnhancements = {};
 
+  // Cancelled by the controller dispose lifecycle.
+  // ignore: cancel_subscriptions
   StreamSubscription<void>? noteEnhancementChanges;
 
   bool meetingEnhancementStarting = false;
@@ -411,6 +413,8 @@ class _MeetingsController extends _FeatureController {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               final target = meetingNowKey.currentContext;
               if (target != null)
+                // The callback intentionally schedules work owned by its controller.
+                // ignore: discarded_futures
                 Scrollable.ensureVisible(
                   target,
                   duration: const Duration(milliseconds: 250),
@@ -1873,6 +1877,13 @@ class _MeetingsController extends _FeatureController {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      if ((artifact['input_revision'] as int? ?? 0) <
+                          (d.store.rows(
+                                'SELECT revision FROM meetings WHERE id=?',
+                                [id],
+                              ).first['revision']
+                              as int))
+                        const Text('Out of date — regenerate'),
                       GeneratedContent(
                         (artifact['edited'] ?? artifact['generated']) as String,
                         fontSize: chatFeature.answerFontSize,
@@ -1942,8 +1953,16 @@ class _MeetingsController extends _FeatureController {
             Expanded(
               child: SizedBox(
                 height: 30,
-                child: CustomPaint(
-                  painter: _CaptureWaveform(recording!.currentVolumes),
+                child: ValueListenableBuilder<List<double>>(
+                  valueListenable: shell.captureVolumes,
+                  builder: (context, volumes, child) => CustomPaint(
+                    key: const ValueKey('capture-waveform'),
+                    painter: _CaptureWaveform(
+                      d is CaptureLevelEvents
+                          ? volumes
+                          : recording!.currentVolumes,
+                    ),
+                  ),
                 ),
               ),
             ),

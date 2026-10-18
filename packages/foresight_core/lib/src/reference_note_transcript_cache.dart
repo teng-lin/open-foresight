@@ -55,6 +55,8 @@ class ReferenceNoteTranscriptCache {
     _drain(
       meetingId,
       entry,
+      // Both success and error are forwarded to completion.future returned below.
+      // ignore: discarded_futures
     ).then(completion.complete, onError: completion.completeError);
     return completion.future;
   }

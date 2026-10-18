@@ -392,6 +392,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                                       ? null
                                       : () {
                                           setState(() => selected = model);
+                                          // This task catches failures and publishes them in the view state.
+                                          // ignore: discarded_futures
                                           if (embeddingReady) install();
                                         },
                                   child: Text(

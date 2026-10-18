@@ -18,6 +18,34 @@ void main() {
   });
   tearDown(() => f.close());
 
+  test(
+    'capture telemetry updates only level listeners and preserves workspace state',
+    () async {
+      var changes = 0;
+      f.remote.helper.changed = () => changes++;
+      f.event({
+        'capture': {'meeting_id': 17, 'active': true},
+        'google': {'connected': true},
+      });
+      await eventually(() => changes == 1);
+      final received = <List<double>>[];
+      final subscription = f.remote.captureLevels.listen(received.add);
+      addTearDown(subscription.cancel);
+      for (var i = 0; i < 10; i++) {
+        f.event({
+          'event': 'capture_levels',
+          'volumes': [i / 10, 0],
+        });
+      }
+      await eventually(() => received.length == 10);
+      expect(changes, 1);
+      expect(received.last, [0.9, 0.0]);
+      expect(f.remote.capture['volumes'], [0.9, 0.0]);
+      expect(f.remote.capture['meeting_id'], 17);
+      expect(f.remote.googleStatus['connected'], isTrue);
+    },
+  );
+
   test('closing a paused workspace cancels its pending source wait', () async {
     f.event({'sources_paused': true});
     await eventually(() => f.remote.sourcesPaused);

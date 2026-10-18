@@ -19,7 +19,7 @@ Future<NativeRuntime> configureGeneration(
   String library,
   String model,
   String runner, {
-  String backend = 'llama_cpp',
+  String backend = 'litert_lm',
   int? modelType,
   bool Function()? current,
   void Function(NativeRuntime)? onCandidate,

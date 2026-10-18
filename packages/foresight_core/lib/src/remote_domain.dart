@@ -13,7 +13,7 @@ import 'generated/helper_control.pb.dart' as control;
 
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
-class RemoteDomain implements DesktopConnection {
+class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   @override
   final Store store;
   @override
@@ -69,8 +69,19 @@ class RemoteDomain implements DesktopConnection {
   ) {
     _listen();
   }
+  final _captureLevels = StreamController<List<double>>.broadcast();
+  @override
+  Stream<List<double>> get captureLevels => _captureLevels.stream;
   String? _eventSignature;
   void _apply(Map<String, dynamic> event) {
+    if (event['event'] == 'capture_levels') {
+      final volumes = (event['volumes'] as List)
+          .map((n) => (n as num).toDouble())
+          .toList();
+      capture = {...capture, 'volumes': volumes};
+      _captureLevels.add(volumes);
+      return;
+    }
     if (event['event'] == 'approval' || event['event'] == 'approval_closed') {
       _approvalEvents?.call(event);
       return;
@@ -175,7 +186,15 @@ class RemoteDomain implements DesktopConnection {
             : File(path).parent.path,
       });
     }
-    return client.call(operation.wire, args);
+    final result = await client.call(operation.wire, args);
+    if (operation == Operation.workspaceClear) {
+      _apply(
+        Map<String, dynamic>.from(
+          await client.call(Operation.status.wire) as Map,
+        ),
+      );
+    }
+    return result;
   }
 
   Stream<Object?> _streamCurrent(
@@ -367,6 +386,7 @@ class RemoteDomain implements DesktopConnection {
   @override
   void close() {
     _disposed = true;
+    unawaited(_captureLevels.close());
     unawaited(_events?.cancel());
     unawaited(client.close());
   }

@@ -32,8 +32,10 @@ class ClearRag extends RagServiceBase {
 class FailingForgetAuth extends GoogleAuth {
   FailingForgetAuth(super.directory);
   @override
-  Future<void> forget() =>
-      throw FileSystemException('Credential deletion failed');
+  Future<void> forget() async {
+    await Future<void>.delayed(Duration.zero);
+    throw FileSystemException('Credential deletion failed');
+  }
 }
 
 void main() {
@@ -63,6 +65,26 @@ void main() {
     await helper.close();
     store.close();
     directory.deleteSync(recursive: true);
+  });
+
+  test('every schema table is cleared or explicitly retained', () async {
+    final cleared = Application.workspaceContentTables.toSet();
+    const exemptions = {
+      'models', // Installed model configuration survives workspace clear.
+      'preferences', // Non-content settings survive; content preference keys are removed.
+      'pending_helper_deletes', // Durable cleanup queue must outlive the clear.
+    };
+    final tables = store
+        .rows(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        )
+        .map((row) => row['name'])
+        .toSet();
+    expect(tables, {...cleared, ...exemptions});
+    await app.call('workspace.clear', {});
+    for (final table in cleared) {
+      expect(store.rows('SELECT * FROM $table'), isEmpty, reason: table);
+    }
   });
 
   for (final online in [true, false]) {
@@ -354,10 +376,9 @@ void main() {
         domain,
         auth: FailingForgetAuth(Directory('${directory.path}/google')),
       );
-      await expectLater(
-        app.call('workspace.clear', {}),
-        throwsA(isA<FileSystemException>()),
-      );
+      await app.call('workspace.clear', {});
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(app.googleState['loadError'], contains('cleanup failed'));
       expect(await app.call('notes.list', {}), isEmpty);
     },
   );

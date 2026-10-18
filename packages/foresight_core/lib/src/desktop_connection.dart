@@ -58,6 +58,11 @@ abstract interface class ConnectedSources {
   List<Map<String, dynamic>> attachments(int meeting);
 }
 
+/// Optional high-frequency telemetry, independent of workspace changes.
+abstract interface class CaptureLevelEvents {
+  Stream<List<double>> get captureLevels;
+}
+
 abstract interface class DesktopConnection {
   Store get store;
   Helper get helper;

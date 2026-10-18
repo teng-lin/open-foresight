@@ -3,7 +3,21 @@ import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
+import 'package:foresight_core/src/application.dart';
 import 'package:test/test.dart';
+
+class FailingDetachRecording extends Recording {
+  FailingDetachRecording()
+    : super(
+        Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
+        (_) {},
+        (_, __, ___, ____) {},
+      );
+  @override
+  Future<void> stop() async => throw StateError('capture stop failed');
+  @override
+  void dispose() => throw StateError('capture cleanup failed');
+}
 
 void main() {
   late Directory temp;
@@ -41,6 +55,21 @@ void main() {
       '${temp.path}/profile/.desktop-capability',
     ).readAsStringSync(),
   });
+  test(
+    'desktop detach observes a failing stop and leaves service responsive',
+    () async {
+      await attach();
+      final app = service.domain.application;
+      final id = service.domain.store.meeting('Recording');
+      app.recording = FailingDetachRecording();
+      app.recordingMeeting = id;
+      await desktop.call('security.detach_desktop');
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect((await agent.call('status') as Map)['pid'], pid);
+      expect(app.recording, isNull);
+    },
+  );
+
   test(
     'raw socket cannot self-declare desktop or mutate without visible host',
     () async {

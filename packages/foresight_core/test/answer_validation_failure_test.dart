@@ -1,5 +1,6 @@
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
+import 'web_answer_test.dart' show ToolRuntime, fixtureSearch;
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/generated/rag_service.pbgrpc.dart';
@@ -45,7 +46,49 @@ class DraftRuntime extends NativeRuntime {
   }
 }
 
+class FailedWebRuntime extends ToolRuntime {
+  @override
+  Stream<Map<String, dynamic>> generateWebAnswer(
+    String id,
+    String prompt, {
+    List<Map<String, dynamic>> messages = const [],
+    String systemPrompt = '',
+    Duration timeout = const Duration(minutes: 5),
+    int maxOutputTokens = 256,
+  }) async* {
+    yield {'type': 'delta', 'text': 'PARTIAL SECRET ANSWER'};
+    yield {'type': 'done', 'status': 'failed'};
+  }
+}
+
 void main() {
+  test('failed web answers discard partial body and local citations', () async {
+    final directory = Directory.systemTemp.createTempSync('failed-web-answer-');
+    final store = Store('${directory.path}/app.db');
+    final helper = Helper(
+      '/nonexistent.sock',
+      '/nonexistent',
+      manageProcess: false,
+    );
+    final runtime = FailedWebRuntime();
+    final domain = Domain(store, helper, webSearch: fixtureSearch())
+      ..generator = runtime;
+    try {
+      await domain.askWithWebInConversation('Question', 'fixture').last;
+      final row = store.rows('SELECT * FROM answers').single;
+      expect(row['status'], 'failed');
+      expect(row['body'], 'Answer generation failed. Please retry.');
+      expect(jsonDecode(row['citations'] as String), isEmpty);
+    } finally {
+      await domain.application.close();
+      domain.close();
+      runtime.close();
+      await helper.close();
+      store.close();
+      directory.deleteSync(recursive: true);
+    }
+  });
+
   for (final payload in [
     ('{"answer":"Unverified draft [S1, S9]","citations":["S1"]}', 'completed'),
     ('{"answer":"Unverified draft","citations":[1]}', 'completed'),

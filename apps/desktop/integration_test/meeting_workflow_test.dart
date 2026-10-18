@@ -349,7 +349,11 @@ void main() {
         sink,
         fixture,
       ]);
+      // Completion is observed by the owning lifecycle or test fixture.
+      // ignore: unawaited_futures
       player.stdout.drain<void>();
+      // Completion is observed by the owning lifecycle or test fixture.
+      // ignore: unawaited_futures
       player.stderr.drain<void>();
       await waitUntil(
         tester,
@@ -634,7 +638,11 @@ void main() {
         sink,
         fixture,
       ]);
+      // Completion is observed by the owning lifecycle or test fixture.
+      // ignore: unawaited_futures
       secondPlayer.stdout.drain<void>();
+      // Completion is observed by the owning lifecycle or test fixture.
+      // ignore: unawaited_futures
       secondPlayer.stderr.drain<void>();
       expect(await secondPlayer.exitCode, 0);
       await tester.tap(find.byTooltip('Stop transcribing'));
@@ -798,6 +806,8 @@ void main() {
         request.response.write(
           '<html><script>hidden script</script><p>$page</p></html>',
         );
+        // The callback intentionally schedules work owned by its controller.
+        // ignore: discarded_futures
         request.response.close();
       });
       final address = 'http://127.0.0.1:${server.port}/notes';

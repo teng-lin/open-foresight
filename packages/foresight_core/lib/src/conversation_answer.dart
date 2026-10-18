@@ -610,8 +610,12 @@ class ConversationAnswer {
           ]);
         yield body;
       }
-      if (!useWeb && !verifiedLocalAnswer) {
-        if (status == 'insufficient_context') status = 'failed';
+      if (status != 'completed' || (!useWeb && !verifiedLocalAnswer)) {
+        if (!useWeb &&
+            !verifiedLocalAnswer &&
+            status == 'insufficient_context') {
+          status = 'failed';
+        }
         body = 'Answer generation failed. Please retry.';
         citations.clear();
         yield body;

@@ -64,7 +64,11 @@ void main() {
           sink,
           env['FORESIGHT_AUDIO_FIXTURE']!,
         ]);
+        // Completion is observed by the owning lifecycle or test fixture.
+        // ignore: unawaited_futures
         process.stdout.drain<void>();
+        // Completion is observed by the owning lifecycle or test fixture.
+        // ignore: unawaited_futures
         process.stderr.drain<void>();
         return process;
       }

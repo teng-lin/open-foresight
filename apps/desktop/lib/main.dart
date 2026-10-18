@@ -294,6 +294,9 @@ class _WorkspaceState extends State<Workspace>
   void update(VoidCallback action) => setState(action);
 
   final serviceUiRevision = ValueNotifier<int>(0);
+  final captureVolumes = ValueNotifier<List<double>>(const []);
+  StreamSubscription<List<double>>? captureLevels;
+
   Timer? serviceUiTimer;
   void serviceChanged() {
     if (!mounted || serviceUiTimer != null) return;
@@ -379,6 +382,14 @@ class _WorkspaceState extends State<Workspace>
         d.store.preference('notifications') == 'true';
     unawaited(integrationFeature.refreshNotifications());
     meetingFeature.syncCapture();
+    final connection = d;
+    if (connection is CaptureLevelEvents) {
+      captureLevels = (connection as CaptureLevelEvents).captureLevels.listen((
+        volumes,
+      ) {
+        if (mounted) captureVolumes.value = volumes;
+      });
+    }
     d.helper.changed = serviceChanged;
     d.helper.onReady = () async {
       try {
@@ -426,6 +437,8 @@ class _WorkspaceState extends State<Workspace>
     WidgetsBinding.instance.removeObserver(this);
     serviceUiTimer?.cancel();
     serviceUiRevision.dispose();
+    unawaited(captureLevels?.cancel());
+    captureVolumes.dispose();
     unawaited(meetingFeature.noteEnhancementChanges?.cancel());
     void releaseDomain() {
       d.close();

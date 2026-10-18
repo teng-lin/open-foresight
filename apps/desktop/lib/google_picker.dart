@@ -22,6 +22,8 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
   @override
   void initState() {
     super.initState();
+    // This task catches failures and publishes them in the view state.
+    // ignore: discarded_futures
     load();
   }
 
@@ -75,6 +77,8 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
                       ? null
                       : () {
                           parents.removeLast();
+                          // This task catches failures and publishes them in the view state.
+                          // ignore: discarded_futures
                           load();
                         },
                   icon: const Icon(Icons.arrow_back),
@@ -148,6 +152,8 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
                         ? () {
                             parents.add(file['id'] as String);
                             search.clear();
+                            // This task catches failures and publishes them in the view state.
+                            // ignore: discarded_futures
                             load();
                           }
                         : widget.folder || !supported

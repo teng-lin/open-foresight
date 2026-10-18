@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:foresight_core/foresight_core.dart';
+// Shared fixtures exercise internal wire protocol types.
+// ignore: implementation_imports
 import 'package:foresight_core/src/remote_domain.dart';
 
 export 'poll.dart';

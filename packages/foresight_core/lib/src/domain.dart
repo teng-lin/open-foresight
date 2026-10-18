@@ -76,22 +76,31 @@ class Domain {
   /// Invalidate work before deleting local data.
   void invalidateWorkspace() => _workspaceGeneration++;
 
-  /// Run after committing local deletion and any helper mutation in progress.
-  void cleanupClearedSources(List<String> sourceIds) {
-    unawaited(
-      _serialize(() async {
-        for (final id in sourceIds) {
-          try {
-            await helper.client.deleteDocument(
-              DeleteRequest(documentId: id, userId: 'local_user'),
-              options: CallOptions(timeout: const Duration(seconds: 5)),
-            );
-          } catch (_) {
-            // Offline helper data is excluded by the now-empty local source scope.
-          }
+  /// Durable deletes survive helper downtime and are retried on reconnect.
+  Future<void> retryPendingHelperDeletes() => _serialize(() async {
+    for (final row in store.rows(
+      'SELECT document_id FROM pending_helper_deletes',
+    )) {
+      final id = row['document_id'] as String;
+      try {
+        final result = await helper.client.deleteDocument(
+          DeleteRequest(documentId: id, userId: 'local_user'),
+          options: CallOptions(timeout: const Duration(seconds: 5)),
+        );
+        if (result.success) {
+          store.db.execute(
+            'DELETE FROM pending_helper_deletes WHERE document_id=?',
+            [id],
+          );
         }
-      }).catchError((Object _) {}),
-    );
+      } catch (_) {
+        // Keep the durable row until the helper acknowledges a retry.
+      }
+    }
+  });
+
+  void cleanupClearedSources(List<String> sourceIds) {
+    unawaited(retryPendingHelperDeletes().catchError((Object _) {}));
   }
 
   bool _sourcesPaused = false;
@@ -197,6 +206,23 @@ class Domain {
     );
     if (current.isEmpty) return;
     final source = current.first;
+    // A deterministic Calendar/meeting ID can be reused after clear. Delete the
+    // old helper copy before indexing its replacement, within the mutation queue.
+    if (store.rows(
+      'SELECT document_id FROM pending_helper_deletes WHERE document_id=?',
+      [id],
+    ).isNotEmpty) {
+      final deleted = await helper.client.deleteDocument(
+        DeleteRequest(documentId: id, userId: 'local_user'),
+        options: CallOptions(timeout: const Duration(seconds: 5)),
+      );
+      checkWorkspace(generation);
+      if (!deleted.success) throw StateError('Helper purge has not completed');
+      store.db.execute(
+        'DELETE FROM pending_helper_deletes WHERE document_id=?',
+        [id],
+      );
+    }
     store.state(id, 'indexing');
     try {
       final r = await helper.client.indexDocument(
@@ -348,6 +374,7 @@ class Domain {
       _resuming ??= _resume().whenComplete(() => _resuming = null);
   Future<void> _resume() async {
     _checkOpen();
+    await retryPendingHelperDeletes();
     final initialization = _initialization;
     if (initialization != null) {
       try {

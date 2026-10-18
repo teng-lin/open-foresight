@@ -19,6 +19,39 @@ class OfflineHelper extends Helper {
 }
 
 void main() {
+  testWidgets('summary labels artifacts from older meeting revisions', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(1600, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final root = Directory.systemTemp.createTempSync('stale-summary-ui-');
+    final store = Store('${root.path}/application.db');
+    final id = store.meeting('Meeting');
+    store.artifact(id, 'summary', 'Earlier summary', 'fixture');
+    store.transcript(id, 'New transcript', true, 0, 100, 'imported');
+    final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');
+    await tester.pumpWidget(
+      Foresight(
+        TestDesktopConnection(Domain(store, helper)),
+        deviceLoader: () async => [],
+      ),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(Workspace));
+    state.update(() {
+      state.tab = 3;
+      state.meetingFeature.meetingId = id;
+      state.meetingFeature.meetingPanel = 'Summary';
+    });
+    await tester.pumpAndSettle();
+    expect(find.text('Out of date — regenerate'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    if (root.existsSync()) root.deleteSync(recursive: true);
+  });
+
   testWidgets(
     'meeting workflow opens summary and targets its scoped chat input',
     (tester) async {

@@ -30,12 +30,16 @@ class HelperTransportConnector implements ClientTransportConnector {
 
   @override
   Future<ClientTransportConnection> connect() async {
+    // Ownership transfers to the transport or test teardown.
+    // ignore: close_sinks
     final socket = await _connectSocket(
       InternetAddress(path, type: InternetAddressType.unix),
       0,
       timeout: connectTimeout,
     );
     _socket = socket;
+    // Ownership transfers to the transport or test teardown.
+    // ignore: close_sinks
     final outgoing = _DisconnectSink(socket);
     _done = outgoing.done;
     return ClientTransportConnection.viaStreams(socket, outgoing);

@@ -87,6 +87,8 @@ void main() {
       () async {
         final uncaught = <Object>[];
         final finished = Completer<void>();
+        // Completion is observed by the owning lifecycle or test fixture.
+        // ignore: unawaited_futures
         runZonedGuarded(
           () async {
             final socket = ControlledSocket();
