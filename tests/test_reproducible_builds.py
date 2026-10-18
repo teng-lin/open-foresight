@@ -201,6 +201,22 @@ class BuildPolicyTests(unittest.TestCase):
                 installs, [f"python -m pip install --require-hashes -r {lock}"]
             )
 
+    def test_workflow_dependency_installs_enforce_their_locks(self):
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            workflow = yaml.safe_load(path.read_text())
+            for name, job in workflow.get("jobs", {}).items():
+                for step in job.get("steps", []):
+                    commands = re.sub(r"\\\n\s*", " ", step.get("run", ""))
+                    for command in commands.splitlines():
+                        with self.subTest(
+                            workflow=path.name, job=name, command=command
+                        ):
+                            if re.search(r"\bpip(?:3)?\s+install\b", command):
+                                self.assertIn("--require-hashes", command)
+                                self.assertRegex(command, r"-r\s+\S+\.lock\b")
+                            if re.search(r"\b(?:dart|flutter)\s+pub\s+get\b", command):
+                                self.assertIn("--enforce-lockfile", command)
+
     def test_publication_jobs_are_unreachable_from_pull_requests(self):
         for path in (ROOT / ".github/workflows").glob("*.yml"):
             workflow = yaml.safe_load(path.read_text())
