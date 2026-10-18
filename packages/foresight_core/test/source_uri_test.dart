@@ -1,8 +1,49 @@
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_test_support/google_connections.dart';
+import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/store.dart';
 
 void main() {
+  test('URL reimport deduplicates edited sources by source_uri', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.html;
+      request.response.write('<p>Refreshed text</p>');
+      await request.response.close();
+    });
+    final store = Store(':memory:');
+    final helper = Helper(
+      '/unused-helper.sock',
+      '/unused-helper',
+      manageProcess: false,
+    );
+    final domain = AdapterDomain(store, helper);
+    final app = Application(domain);
+    try {
+      final uri = 'http://127.0.0.1:${server.port}/document';
+      final id = store.importText(
+        'Edited',
+        'Local text',
+        'text/plain',
+        'edited legacy description',
+        sourceUri: uri,
+        locallyEdited: true,
+      );
+      expect(await app.importUrl(uri, allowPrivateNetwork: true), id);
+      expect(store.sources, hasLength(1));
+      expect(store.sources.single['content'], 'Refreshed text');
+    } finally {
+      await app.close();
+      domain.close();
+      await helper.close();
+      store.close();
+      await server.close(force: true);
+    }
+  });
+
   test(
     'original URI survives edits and reopen, including file punctuation',
     () {

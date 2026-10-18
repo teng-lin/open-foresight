@@ -18,6 +18,48 @@ void main() {
     addTearDown(() => directory.deleteSync(recursive: true));
   });
 
+  test('v11 backfills local edits and repeated edits never nest provenance', () {
+    var store = Store(path);
+    final id = store.importText(
+      'Document',
+      'original',
+      'text/plain',
+      'url:https://example.test/doc',
+    );
+    store.db.execute(
+      "UPDATE sources SET provenance='user edit; user edit; url:https://example.test/doc' WHERE id=?",
+      [id],
+    );
+    store.db.execute('PRAGMA user_version=10');
+    store.close();
+    store = Store(path);
+    try {
+      expect(store.sources.single['locally_edited'], 1);
+      expect(
+        store.sources.single['provenance'],
+        'url:https://example.test/doc',
+      );
+      for (var i = 0; i < 3; i++) {
+        store.importText(
+          'Document',
+          'edit $i',
+          'text/plain',
+          store.sources.single['provenance'] as String,
+          id: id,
+          locallyEdited: true,
+        );
+      }
+      expect(
+        store.sources.single['provenance'],
+        'url:https://example.test/doc',
+      );
+      expect(store.sources.single['locally_edited'], 1);
+      expect(store.sources.single['source_uri'], 'https://example.test/doc');
+    } finally {
+      store.close();
+    }
+  });
+
   test('fresh and current profiles support concurrent read-only connections', () {
     var publication = 0;
     void checkReader() {

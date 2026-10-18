@@ -197,13 +197,15 @@ class _SourcesController extends _FeatureController {
         height: 400,
         saveLabel: 'Save and index',
         onSave: () async {
-          await meetingFeature.importText(
-            s['title'] as String,
-            text.text,
-            s['mime'] as String,
-            'user edit; ${s['provenance']}',
-            id: s['id'] as String,
-          );
+          await d.command(Operation.sourcesImport, {
+            'title': s['title'],
+            'text': text.text,
+            'mime': s['mime'],
+            'provenance': s['provenance'],
+            'id': s['id'],
+            'locallyEdited': true,
+            'index': false,
+          });
           await d.index(s['id'] as String);
         },
       ),
@@ -298,17 +300,8 @@ class _SourcesController extends _FeatureController {
   Future<void> findFilesOnComputer({List<String>? roots}) async {
     final excluded = <String>{};
     for (final row in d.store.sourceSummaries) {
-      final provenance = row['provenance'] as String;
-      for (final prefix in [
-        'UTF-8 text; ',
-        'pdftotext -layout (Linux adapter); ',
-        'unrtf --text (Linux adapter); ',
-        'PDFKit (macOS adapter); ',
-        'NSAttributedString RTF (macOS adapter); ',
-      ]) {
-        if (provenance.startsWith(prefix))
-          excluded.add(provenance.substring(prefix.length));
-      }
+      final uri = Uri.tryParse(row['source_uri'] as String? ?? '');
+      if (uri?.scheme == 'file') excluded.add(uri!.toFilePath());
     }
     final selected = await showDialog<List<String>>(
       context: context,
