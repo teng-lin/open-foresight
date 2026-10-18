@@ -5,6 +5,8 @@ import 'dart:io';
 import 'dart:ffi';
 import 'package:ffi/ffi.dart';
 import 'package:grpc/grpc.dart';
+import 'package:grpc/service_api.dart' as grpc_api;
+import 'helper_transport.dart';
 import 'generated/rag_service.pbgrpc.dart';
 import 'generated/helper_control.pbgrpc.dart' as control;
 
@@ -39,7 +41,7 @@ void validateHelperCompatibility(
 
 class Helper {
   final String socket, storage;
-  late final ClientChannel channel;
+  late final grpc_api.ClientChannel channel;
   late final RagServiceClient client;
   Process? process;
   Future<Process>? _launching;
@@ -57,9 +59,8 @@ class Helper {
   Future<void> Function()? onReady;
   final bool manageProcess;
   Helper(this.socket, this.storage, {this.manageProcess = true}) {
-    channel = ClientChannel(
-      InternetAddress(socket, type: InternetAddressType.unix),
-      port: 0,
+    channel = ClientTransportConnectorChannel(
+      HelperTransportConnector(socket),
       options: const ChannelOptions(
         credentials: ChannelCredentials.insecure(),
         connectTimeout: Duration(seconds: 3),
