@@ -8,6 +8,7 @@ name: Reusable CI dependencies
     - tools/ci_artifacts.py
     - tools/ci_registry.py
     - tools/build_linux_sdk_local.sh
+    - tools/linux_sdk_artifacts.py
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
@@ -28,10 +29,22 @@ name: Reusable CI dependencies
   - cron: 19 3 1 * *
   pull_request:
     paths:
+    - native/**
+    - services/inference/**
+    - services/helper/**
+    - tools/integration_gates.py
+    - tools/test_macos_release_models.py
+    - tools/model_pins.py
+    - apps/desktop/**
+    - packages/foresight_core/**
+    - packaging/**
+    - .github/workflows/linux-packages.yml
+    - .github/workflows/integration-acceptance.yml
     - .github/workflows/ci-dependencies.yml
     - tools/ci_artifacts.py
     - tools/ci_registry.py
     - tools/build_linux_sdk_local.sh
+    - tools/linux_sdk_artifacts.py
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
@@ -212,12 +225,7 @@ jobs:
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
         if [[ -f build/shared-descriptor/image.json ]]; then
-          python - <<'PY'
-        import json,os,re
-        image=json.load(open('build/shared-descriptor/image.json'))['image']
-        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
-        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
-        PY
+          python tools/linux_sdk_artifacts.py promote --component "linux-$COMPONENT" --prefix build/shared-descriptor --tag "$task_namespace/linux-$COMPONENT:$IDENTITY" --discard-archive
         fi
       env:
         OWN_PR: ${{ github.event.pull_request.number || github.sha }}
@@ -326,12 +334,7 @@ jobs:
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
         if [[ -f build/shared-descriptor/image.json ]]; then
-          python - <<'PY'
-        import json,os,re
-        image=json.load(open('build/shared-descriptor/image.json'))['image']
-        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
-        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
-        PY
+          python tools/linux_sdk_artifacts.py promote --component "linux-$COMPONENT" --prefix build/shared-descriptor --tag "$task_namespace/linux-$COMPONENT:$IDENTITY" --discard-archive
         fi
       env:
         OWN_PR: ${{ github.event.pull_request.number || github.sha }}
@@ -440,12 +443,7 @@ jobs:
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
         if [[ -f build/shared-descriptor/image.json ]]; then
-          python - <<'PY'
-        import json,os,re
-        image=json.load(open('build/shared-descriptor/image.json'))['image']
-        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
-        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
-        PY
+          python tools/linux_sdk_artifacts.py promote --component "linux-$COMPONENT" --prefix build/shared-descriptor --tag "$task_namespace/linux-$COMPONENT:$IDENTITY" --discard-archive
         fi
       env:
         OWN_PR: ${{ github.event.pull_request.number || github.sha }}
@@ -556,12 +554,7 @@ jobs:
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
         if [[ -f build/shared-descriptor/image.json ]]; then
-          python - <<'PY'
-        import json,os,re
-        image=json.load(open('build/shared-descriptor/image.json'))['image']
-        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK component')
-        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, file=output)
-        PY
+          python tools/linux_sdk_artifacts.py promote --component "linux-$COMPONENT" --prefix build/shared-descriptor --tag "$task_namespace/linux-$COMPONENT:$IDENTITY" --discard-archive
         fi
       env:
         OWN_PR: ${{ github.event.pull_request.number || github.sha }}
@@ -613,20 +606,150 @@ jobs:
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
-  linux-pr:
-    name: Validate Linux dependency builds without publication
+  linux-pr-core:
+    name: Build Linux core
     if: github.event_name == 'pull_request'
-    needs: plan
+    needs:
+    - plan
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 240
     permissions:
       contents: read
+      actions: read
+      packages: read
+    concurrency:
+      group: dependency-linux-core-${{ needs.plan.outputs['linux-core'] }}-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      DOCKER_BUILDKIT: '1'
+      COMPONENT: linux-core
+      IDENTITY: ${{ needs.plan.outputs['linux-core'] }}
+      GH_TOKEN: ${{ github.token }}
+      OWN_HEAD: ${{ github.event.pull_request.head.sha }}
+      OWN_PR: ${{ github.event.pull_request.number }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
     - name: Free hosted-runner space for native dependency builds
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
-    - name: Build and verify the entire SDK locally
-      run: tools/build_linux_sdk_local.sh
+    - name: Authenticate read-only SDK registry access
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Reuse or build and qualify the component
+      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+    - name: Retain the verified component immediately
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 14
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+  linux-pr-runtime:
+    name: Build Linux ${{ matrix.component }}
+    if: github.event_name == 'pull_request'
+    needs:
+    - plan
+    - linux-pr-core
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+        - litert
+        - whisper
+    concurrency:
+      group: dependency-linux-${{ matrix.component }}-${{ needs.plan.outputs[format('linux-{0}', matrix.component)] }}-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      DOCKER_BUILDKIT: '1'
+      COMPONENT: linux-${{ matrix.component }}
+      IDENTITY: ${{ needs.plan.outputs[format('linux-{0}', matrix.component)] }}
+      GH_TOKEN: ${{ github.token }}
+      OWN_HEAD: ${{ github.event.pull_request.head.sha }}
+      OWN_PR: ${{ github.event.pull_request.number }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Free hosted-runner space for native dependency builds
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+    - name: Authenticate read-only SDK registry access
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Reuse or build and qualify the component
+      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+    - name: Retain the verified component immediately
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 14
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+  linux-pr:
+    name: Assemble Linux SDK
+    if: github.event_name == 'pull_request'
+    needs:
+    - plan
+    - linux-pr-core
+    - linux-pr-runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    concurrency:
+      group: dependency-linux-sdk-${{ needs.plan.outputs['linux-sdk'] }}-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      DOCKER_BUILDKIT: '1'
+      COMPONENT: linux-sdk
+      IDENTITY: ${{ needs.plan.outputs['linux-sdk'] }}
+      GH_TOKEN: ${{ github.token }}
+      OWN_HEAD: ${{ github.event.pull_request.head.sha }}
+      OWN_PR: ${{ github.event.pull_request.number }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Free hosted-runner space for native dependency builds
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+    - name: Authenticate read-only SDK registry access
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Reuse or build and qualify the component
+      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+    - name: Retain the verified component immediately
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 14
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0

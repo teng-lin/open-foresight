@@ -44,9 +44,13 @@ and dependency locks, independently of the native inference runtime.
 The SDK is assembled from separate content-addressed GHCR images: core
 (gRPC, Flutter, Python), LiteRT, and Whisper. `.github/workflows/ci-dependencies.yml`
 builds changed recipes, running LiteRT and Whisper concurrently after core.
+Read-only PR jobs retain each verified component as an Actions artifact for
+14 days. Same-repository application checks wait for those images rather than rebuilding an SDK;
+after review, main can publish the saved images without recompiling them.
 Application checks consume qualified image digests; release packaging consumes
-the exact-commit portable candidate from successful main CI. Neither consumer
-implicitly compiles a missing SDK. Registry authentication and transport errors
+the exact-commit portable candidate from successful main CI. Fork PR checks retain
+their local SDK build; same-repository consumers wait for verified artifacts.
+Registry authentication and transport errors
 fail before compilation. Component registry caches preserve completed layers.
 See [CI dependencies and promotion](ci-performance.md) for bootstrap, trust,
 artifact expiry, and release readiness. A local model probe does not stand in
