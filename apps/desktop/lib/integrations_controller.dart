@@ -62,7 +62,10 @@ class _IntegrationsController extends _FeatureController {
     }
     if (!Platform.isMacOS &&
         Platform.environment['HYPRLAND_INSTANCE_SIGNATURE'] != null) {
-      final active = await Process.run('/usr/bin/hyprctl', ['activewindow', '-j']);
+      final active = await Process.run('/usr/bin/hyprctl', [
+        'activewindow',
+        '-j',
+      ]);
       if (active.exitCode == 0 &&
           (jsonDecode(active.stdout as String) as Map)['pid'] != pid) {
         await Process.run('/usr/bin/hyprctl', [
