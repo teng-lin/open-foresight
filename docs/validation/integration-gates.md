@@ -13,6 +13,14 @@ capture and inference fixtures. The Mac job also explicitly enables that native
 UI fixture. A requested UI gate without a platform runner fails rather than
 skipping. Physical audio is not exercised by those fixtures.
 
+The separate `linux-document-imports` job requires one Python contract that
+imports both PDF and RTF fixtures through the production Dart parser on an
+Ubuntu host. It provisions the actual extractors, requires the sandbox to start,
+and fails on missing prerequisites. Its result is required by `platform-checks`;
+local runs without those prerequisites report a skip. See the
+[document sandbox](../platforms/linux-packaging.md#document-import-sandbox) for
+the host-policy setup and retained evidence.
+
 The generation-failure regression runs normally on both supported platforms.
 It uses a short private `/tmp` directory for Unix sockets. After the Linux build,
 `integration_gates.py --suite fast` runs that regression and the terminal capture
