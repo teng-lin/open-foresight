@@ -68,19 +68,21 @@ void main() {
     },
   );
 
-  test('desktop command callsites use the typed operation registry', () {
-    final files = Directory('../../apps/desktop/lib')
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((file) => file.path.endsWith('.dart'))
-        .toList();
-    expect(files, isNotEmpty);
-    for (final file in files) {
-      expect(
-        rawRpcCalls(file.readAsStringSync(), desktop: true),
-        isEmpty,
-        reason: '${file.path} contains a raw desktop RPC name',
-      );
+  test('desktop and repository service probes use typed operation names', () {
+    for (final path in ['../../apps/desktop/lib', '../../tests/service']) {
+      final files = Directory(path)
+          .listSync(recursive: true)
+          .whereType<File>()
+          .where((file) => file.path.endsWith('.dart'))
+          .toList();
+      expect(files, isNotEmpty, reason: path);
+      for (final file in files) {
+        expect(
+          rawRpcCalls(file.readAsStringSync(), desktop: true),
+          isEmpty,
+          reason: '${file.path} contains a raw desktop RPC name',
+        );
+      }
     }
   });
 
