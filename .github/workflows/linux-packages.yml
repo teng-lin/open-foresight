@@ -150,8 +150,7 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
         # PR dependency changes are built locally; no PR publishes an SDK image.
-        if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
-        then
+        if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
           :
         else
           task_result=$?
