@@ -9,11 +9,11 @@ def check_corpus(binary):
     cases = json.loads((Path(__file__).parent / 'grounding_cases.json').read_text())
     native = subprocess.run([binary, '--validate'],
         input=''.join(json.dumps(case) + '\n' for case in cases),
-        text=True, capture_output=True, check=True)
+        text=True, capture_output=True, check=True, timeout=300)
     rows = native.stdout.splitlines()
     if len(rows) != len(cases):
         raise AssertionError(native.stdout)
-    for case, row in zip(cases, rows):
+    for case, row in zip(cases, rows, strict=True):
         if (not json.loads(row)) != case['valid']:
             raise AssertionError((case, row))
     print(f"Native grounding corpus: {len(cases)} cases passed")

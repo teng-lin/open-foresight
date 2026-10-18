@@ -23,10 +23,10 @@ from pathlib import Path
 verify = runpy.run_path({str(ROOT / 'packaging/smoke_installed.py')!r})['verify_sha256']
 verify(Path({str(path)!r}), {hashlib.sha256(b'expected').hexdigest()!r})
 '''
-            accepted = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True)
+            accepted = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True, timeout=300)
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
             path.write_bytes(b'tampered')
-            result = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True, timeout=300)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('SHA256 checksum mismatch', result.stderr)
 
@@ -41,7 +41,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b'expected').hexdigest()!r})
             result = subprocess.run([sys.executable, '-O', str(ROOT / 'tools/test_live_transcription_gap.py'),
                 '--manifest', str(manifest), '--report', str(root / 'report.json'),
                 '--log', str(root / 'flutter.log'), '--flutter', 'must-not-execute-flutter'],
-                capture_output=True, text=True)
+                capture_output=True, text=True, timeout=300)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('Speech model checksum mismatch', result.stderr)
             self.assertFalse((root / 'flutter.log').exists())
@@ -66,7 +66,7 @@ package.main()
             result = subprocess.run([sys.executable, '-O', '-c', code,
                 '--build', str(build), '--flutter-bundle', str(flutter), '--output', str(root / 'dist'),
                 '--litert-library', str(build / 'lib/liblitert-lm.so'), '--revision', 'a' * 40],
-                capture_output=True, text=True)
+                capture_output=True, text=True, timeout=300)
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('Native LiteRT-LM library checksum mismatch', result.stderr)
             self.assertFalse((root / 'dist').exists())
@@ -78,7 +78,7 @@ import verify_descriptor
 verify_descriptor.PACKAGE = 'tampered.package'
 verify_descriptor.verify('must-not-execute-protoc')
 '''
-        result = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True, timeout=300)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Validation failed: recovered.package == PACKAGE', result.stderr)
         self.assertNotIn('FileNotFoundError', result.stderr)

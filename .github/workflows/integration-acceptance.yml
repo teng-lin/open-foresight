@@ -64,11 +64,13 @@ jobs:
         id: sdk
         env:
           GH_TOKEN: ${{ github.token }}
+          OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          OWN_PR: ${{ github.event.pull_request.number || 0 }}
         run: |
           if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
             # Reviewed dependencies may be reused read-only. Changed recipes are
             # built locally; PRs never wait for an unpublished registry image.
-            if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional; then
+            if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
               :
             else
               task_result=$?
@@ -78,7 +80,7 @@ jobs:
               exit 0
             fi
           else
-            python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400
+            python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           fi
           python - <<'PY'
           import json, os, re

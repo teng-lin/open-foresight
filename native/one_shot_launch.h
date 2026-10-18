@@ -42,7 +42,8 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
   OneShotLaunch launch;
   const auto budget = std::to_string(max_output_tokens);
   if (backend == 1) {
-    launch.arguments = {runtime, "--model", model, "--max-output-tokens", budget};
+    launch.arguments = {runtime, "--model", model, "--max-output-tokens",
+                        budget};
     if (model_type) {
       launch.arguments.push_back("--model-type");
       launch.arguments.push_back(std::to_string(model_type));
@@ -50,21 +51,11 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
     launch.standard_input = "{\"prompt\":" + quote(prompt) +
                             ",\"max_output_tokens\":" + budget + "}\n";
   } else {
-    launch.arguments = {runtime,
-                        "-m",
-                        model,
-                        "-n",
-                        budget,
-                        "-c",
-                        "4096",
-                        "--temp",
-                        "0",
-                        "-t",
-                        "4",
-                        "--no-display-prompt",
-                        "--simple-io",
-                        "--no-warmup",
-                        "-no-cnv"};
+    launch.arguments = {runtime,       "-m",          model,
+                        "-n",          budget,        "-c",
+                        "4096",        "--temp",      "0",
+                        "-t",          "4",           "--no-display-prompt",
+                        "--simple-io", "--no-warmup", "-no-cnv"};
     launch.standard_input = prompt;
     if (launch.standard_input.empty() || launch.standard_input.back() != '\n')
       launch.standard_input.push_back('\n');

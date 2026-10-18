@@ -9,8 +9,8 @@
 
 // Empty means the Linux x86-64 Whisper build may start. Otherwise the string
 // is reported on the speech-runtime error channel instead of executing it.
-inline std::optional<std::string> speech_cpu_blocker(bool has_avx2, bool has_fma,
-                                                     bool has_f16c) {
+inline std::optional<std::string>
+speech_cpu_blocker(bool has_avx2, bool has_fma, bool has_f16c) {
   if (has_avx2 && has_fma && has_f16c)
     return std::nullopt;
   std::string missing;
