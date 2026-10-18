@@ -204,6 +204,13 @@ def reusable(event, own_pr, branch="", release=False):
     )
 
 
+def reusable_native_work(event, own_pr, branch="", release=False):
+    """Fresh main validation may retain objects from existing trusted producers."""
+    return reusable(event, own_pr, branch, release) or (
+        event == "push" and branch == "main" and type(own_pr) is int and own_pr == 0
+    )
+
+
 def trusted_run(run, repository, own_pr):
     if (
         run.get("path") != WORKFLOW
@@ -559,7 +566,7 @@ def find_native_work(
     current inputs and CTest must run afterwards. The original successful
     producer and its full original receipt are independently verified first.
     """
-    if not reusable(event, own_pr, branch, release):
+    if not reusable_native_work(event, own_pr, branch, release):
         return {"hit": False}
     current_environment = compilation_environment(environment)
     current_links = {

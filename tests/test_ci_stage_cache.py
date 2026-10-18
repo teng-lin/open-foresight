@@ -701,12 +701,36 @@ class ProducerTests(SourceTree):
         (self.root / "native/header.h").symlink_to("first.h")
         self.assertFalse(self.find_work()["hit"])
 
-    def test_native_work_main_and_release_consumers_still_run_fresh(self):
+    def test_native_work_main_consumers_retain_verified_main_objects(self):
+        self.run.update(event="push", head_branch="main")
+        result = self.find_work(event="push", branch="main", own_pr=0, release=True)
+        self.assertTrue(result["hit"])
+        self.assertEqual(result["receipt"], self.receipt)
+        # A compiler-work hit is not permission to reuse successful test results.
+        self.assertFalse(
+            self.find(event="push", branch="main", own_pr=0, release=True)["hit"]
+        )
+
+    def test_native_work_main_cannot_take_another_pr_or_derived_payload(self):
+        self.assertFalse(
+            self.find_work(event="push", branch="main", own_pr=0, release=True)["hit"]
+        )
+        self.assertEqual(self.transfers, 0)
+        self.run.update(event="push", head_branch="main")
+        self.receipt["reusable"] = False
+        self.assertFalse(
+            self.find_work(event="push", branch="main", own_pr=0, release=True)["hit"]
+        )
+
+    def test_native_work_other_main_and_release_contexts_remain_restricted(self):
         for overrides in (
             {"event": "push"},
             {"release": True},
             {"branch": "main"},
             {"own_pr": 0},
+            {"event": "workflow_dispatch", "branch": "main", "own_pr": 0},
+            {"event": "push", "branch": "topic", "own_pr": 0},
+            {"event": "push", "branch": "main", "own_pr": 110},
         ):
             self.assertFalse(self.find_work(**overrides)["hit"])
         self.assertEqual(self.transfers, 0)

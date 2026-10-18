@@ -79,7 +79,17 @@ The native key describes the implementation and validation inputs, rather than
 including the source commit in every compiled object. On a native hit, CMake
 always regenerates and relinks the small helper build-identity unit, then the
 runner checks the actual helper's `--build-id` against the current version and
-commit. Native process identity checks run again. Binary archives have their own
+commit. Main pushes always run current validation. Their native compilation-only
+lookup can retain compatible objects from verified main producers; it never reuses a
+successful test result or admits another PR's artifacts. Before the first merge
+of this staged workflow, no main-produced native compilation archive exists, so
+that first main run has no compiler-work source under this trust policy. SDK,
+LiteRT and Whisper artifacts still reuse their independent approved originals.
+Waiting for a successful clean Linux main native producer gives later PRs a
+trusted compiler-work source when environments match. macOS distribution stamping
+changes the native version input; its derived receipts remain ineligible until a
+separately verified stamping recipe can describe those exact inputs.
+Native process identity checks run again. Binary archives have their own
 SHA256 and exact-source receipt; downstream consumers validate both before
 unpacking. Unchanged source timestamps are restored only after their file hashes
 match, allowing Ninja to retain valid object files. Distribution stamping makes
