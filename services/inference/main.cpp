@@ -56,7 +56,7 @@ struct ConversationStreamState {
           raw && *raw && state.error.empty()) {
         const auto value = foresight::parse_conversation_stream_chunk(raw);
         state.result.append(value);
-        state.output << "delta " << value.dump() << std::endl;
+        state.output << "delta " << foresight::frame_json(value) << std::endl;
       }
     } catch (const std::exception &error) {
       state.error = error.what();
@@ -169,18 +169,18 @@ void embeddings(LiteRt &lm, const std::string &path, bool gpu,
   std::string preprocessing = digest == mac_digest
                                   ? "mac-raw-all-tasks-v2"
                                   : "raw-rpc/search-query-document-none-v1";
-  protocol << json({{"ready", true},
-                    {"digest", digest},
-                    {"tokenizer_digest", sha256(serialized)},
-                    {"dimensions", 768},
-                    {"backend", gpu ? "litert-lm-embedding-gpu"
-                                    : "litert-lm-embedding-cpu"},
-                    {"preprocessing",
-                     "embeddinggemma2/" + preprocessing +
-                         "/l2-768/chunk-average-512/bos-eos/audio-cpu/" +
-                         (gpu ? "gpu" : "cpu")},
-                    {"modalities", {"text"}}})
-                  .dump()
+  protocol << foresight::frame_json(
+                  json({{"ready", true},
+                        {"digest", digest},
+                        {"tokenizer_digest", sha256(serialized)},
+                        {"dimensions", 768},
+                        {"backend", gpu ? "litert-lm-embedding-gpu"
+                                        : "litert-lm-embedding-cpu"},
+                        {"preprocessing",
+                         "embeddinggemma2/" + preprocessing +
+                             "/l2-768/chunk-average-512/bos-eos/audio-cpu/" +
+                             (gpu ? "gpu" : "cpu")},
+                        {"modalities", {"text"}}}))
            << std::endl;
   std::string line;
   while (std::getline(std::cin, line)) {
@@ -235,9 +235,11 @@ void embeddings(LiteRt &lm, const std::string &path, bool gpu,
         result = vector;
       } else
         throw std::runtime_error("Unknown adapter operation");
-      protocol << json({{"result", result}}).dump() << std::endl;
+      protocol << foresight::frame_json(json({{"result", result}}))
+               << std::endl;
     } catch (const std::exception &e) {
-      protocol << json({{"error", e.what()}}).dump() << std::endl;
+      protocol << foresight::frame_json(json({{"error", e.what()}}))
+               << std::endl;
     }
   }
 }
@@ -650,10 +652,10 @@ int main(int argc, char **argv) {
     Generator generator(lm, path, backend == "gpu", cache, query_detector,
                         model_type);
     if (args.count("--probe")) {
-      protocol << json({{"worker_protocol", 1},
-                        {"native_stop_token_sequences",
-                         lm.supports_native_stop_tokens()}})
-                      .dump()
+      protocol << foresight::frame_json(
+                      json({{"worker_protocol", 1},
+                            {"native_stop_token_sequences",
+                             lm.supports_native_stop_tokens()}}))
                << std::endl;
       return 0;
     }
@@ -682,12 +684,11 @@ int main(int argc, char **argv) {
               if (schema.contains("x-foresight-grounded-request")) {
                 // Verification must finish before exposing a grounded answer.
                 frames << "text "
-                       << json(grounded_answer(
-                                   generator,
-                                   schema.at("x-foresight-grounded-request"),
-                                   budget)
-                                   .dump())
-                              .dump()
+                       << foresight::frame_json(
+                              json(foresight::frame_json(grounded_answer(
+                                  generator,
+                                  schema.at("x-foresight-grounded-request"),
+                                  budget))))
                        << std::endl;
               } else {
                 foresight::TextFrameBuffer chunks(frames);
@@ -726,9 +727,9 @@ int main(int argc, char **argv) {
       generator.generate(prompt_from_arguments(args), budget, false, nullptr,
                          &protocol, json::parse(args.at("--tools")));
     else if (schema.contains("x-foresight-grounded-request"))
-      protocol << grounded_answer(
-                      generator, schema["x-foresight-grounded-request"], budget)
-                      .dump()
+      protocol << foresight::frame_json(grounded_answer(
+                      generator, schema["x-foresight-grounded-request"],
+                      budget))
                << std::flush;
     else
       generator.generate(prompt_from_arguments(args), budget, false, schema,
@@ -736,7 +737,8 @@ int main(int argc, char **argv) {
     return 0;
   } catch (const std::exception &e) {
     if (embedding || probing)
-      protocol << json({{"error", e.what()}}).dump() << std::endl;
+      protocol << foresight::frame_json(json({{"error", e.what()}}))
+               << std::endl;
     else
       std::cerr << "Native LiteRT-LM failed: " << e.what() << std::endl;
     return 1;

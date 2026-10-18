@@ -1,5 +1,6 @@
 #pragma once
 #include "output_budget.h"
+#include "worker_frame.h"
 #include <condition_variable>
 #include <deque>
 #include <exception>
@@ -287,7 +288,7 @@ void persistent_worker(std::istream &input, std::ostream &output,
       }
       status = cancelled ? "cancelled" : "failed";
       if (!cancelled)
-        write(request->token + " error " + json(error.what()).dump());
+        write(request->token + " error " + frame_json(json(error.what())));
     }
     {
       std::lock_guard lock(mutex);
