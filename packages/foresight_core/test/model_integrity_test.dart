@@ -69,12 +69,7 @@ void main() {
     final file = File('${model.path}/weights')..writeAsStringSync('trusted');
     final store = Store(database);
     addTearDown(store.close);
-    await store.register(
-      'embedding',
-      model.path,
-      '',
-      backend: 'sentence_transformers_cpu',
-    );
+    await store.register('generation', model.path, '/bin/true');
     await store.verifyRegisteredModels();
     file.writeAsStringSync('changed');
     await expectLater(store.verifyRegisteredModels(), throwsStateError);
