@@ -84,7 +84,17 @@ def original(tmp_path, monkeypatch):
             }
         )
     )
-    artifacts.pack("linux-core", legacy, prefix, tmp_path / "packed")
+
+    # Packing remains real; only this fixture's checkout revision is supplied.
+    # The archive/receipt tests must also work in source exports without .git.
+    def fixture_revision(command, **kwargs):
+        assert command == ["git", "rev-parse", "HEAD"]
+        assert kwargs == {"cwd": artifacts.ROOT, "text": True, "timeout": 30}
+        return PRODUCER
+
+    with monkeypatch.context() as packing:
+        packing.setattr(artifacts.subprocess, "check_output", fixture_revision)
+        artifacts.pack("linux-core", legacy, prefix, tmp_path / "packed")
     receipt = json.loads((tmp_path / "packed/identity.json").read_text())
     receipt["source_commit"] = "f" * 40  # Historical synthetic merge event SHA.
     (tmp_path / "packed/identity.json").write_text(json.dumps(receipt))

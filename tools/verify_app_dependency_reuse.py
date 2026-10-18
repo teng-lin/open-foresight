@@ -22,6 +22,11 @@ TOOLS = re.compile(
 MAKE_DIRECTORY_STATUS = re.compile(
     r"g?make(?:\[[0-9]+\])?: (?:Entering|Leaving) directory `/[^'`\r\n]*'"
 )
+# remake.c also uses this quoting for successful target/no-work diagnostics.
+MAKE_NOOP_STATUS = re.compile(
+    r"g?make(?:\[[0-9]+\])?: "
+    r"(?:Nothing to be done for `[^'`\r\n]+'\.|`[^'`\r\n]+' is up to date\.)"
+)
 
 
 def dependency(path):
@@ -30,7 +35,7 @@ def dependency(path):
 
 def planned_dependency_work(output):
     for line in output.splitlines():
-        if MAKE_DIRECTORY_STATUS.fullmatch(line):
+        if MAKE_DIRECTORY_STATUS.fullmatch(line) or MAKE_NOOP_STATUS.fullmatch(line):
             continue
         try:
             tokens = shlex.split(line)

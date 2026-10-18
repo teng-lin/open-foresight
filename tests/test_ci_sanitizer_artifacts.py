@@ -16,6 +16,15 @@ import yaml
 from tools import ci_sanitizer_artifacts as sdk
 
 REPOSITORY = "teng-lin/open-foresight"
+BOOTSTRAP = sdk.ROOT / "tests/fixtures/sanitizer-sdk-bootstrap-119"
+
+
+def bootstrap_workflow():
+    data = (BOOTSTRAP / "native-sanitizers.yml").read_bytes()
+    assert sdk.sha(data) == (
+        "329bf8bd60647babdad99cbc8008dd88b74693ace1322fba1c5752dfb489bbc9"
+    )
+    return data
 
 
 @pytest.fixture
@@ -26,6 +35,7 @@ def source(tmp_path):
         *sdk.FILES,
         "tools/build_macos_sdk.py",
         "tools/ci_sanitizer_artifacts.py",
+        "tools/sanitizer_toolchain_profiles.json",
         sdk.WORKFLOW,
     ):
         destination = root / name
@@ -398,11 +408,7 @@ def test_tampered_archive_cannot_escape_prefix(tmp_path):
 
 def test_workflow_retains_legacy_keys_and_publishes_before_application_checks():
     current = yaml.safe_load((sdk.ROOT / sdk.WORKFLOW).read_text())
-    old = yaml.safe_load(
-        subprocess.check_output(
-            ["git", "show", "HEAD:" + sdk.WORKFLOW], cwd=sdk.ROOT, timeout=30
-        )
-    )
+    old = yaml.safe_load(bootstrap_workflow())
     for kind, job in sdk.JOBS.items():
         steps = current["jobs"][job]["steps"]
         old_cache = next(
@@ -479,14 +485,123 @@ def test_container_workspace_trust_persists_for_provenance_checks(tmp_path):
     assert trusted == [str(workspace)]
 
 
-def test_actual_119_bootstrap_recipe_and_builder_bytes_are_unchanged():
-    original = "2c083383ae9fad6f016a90bc9aee1cd8284f19c0"
-    for kind in sdk.JOBS:
-        assert sdk.recipe(sdk.ROOT, kind, original) == sdk.recipe(sdk.ROOT, kind)
-    for name in (*sdk.FILES, "tools/build_macos_sdk.py"):
-        assert sdk.read_source(sdk.ROOT, name, original) == sdk.read_source(
-            sdk.ROOT, name
+def test_actual_119_bootstrap_recipe_and_builder_bytes_are_unchanged(tmp_path):
+    manifest = json.loads((BOOTSTRAP / "files.json").read_bytes())
+    assert manifest["source_commit"] == "2c083383ae9fad6f016a90bc9aee1cd8284f19c0"
+    assert manifest["workflow_sha256"] == sdk.sha(bootstrap_workflow())
+    assert set(manifest["files"]) == {*sdk.FILES, "tools/build_macos_sdk.py"}
+    original = tmp_path / "original-source-without-git"
+    for name, digest in manifest["files"].items():
+        data = (sdk.ROOT / name).read_bytes()
+        assert sdk.sha(data) == digest, name
+        destination = original / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+    workflow = original / sdk.WORKFLOW
+    workflow.parent.mkdir(parents=True, exist_ok=True)
+    workflow.write_bytes(bootstrap_workflow())
+    assert not (original / ".git").exists()
+    # The migration proof must work in shallow CI checkouts and Docker contexts
+    # without repository metadata; only the reviewed fixture supplies old bytes.
+    with patch.object(sdk.subprocess, "check_output", side_effect=AssertionError):
+        for kind in sdk.JOBS:
+            assert sdk.recipe(original, kind) == sdk.recipe(sdk.ROOT, kind)
+
+
+@pytest.mark.parametrize("kind", sdk.JOBS)
+def test_repository_snapshot_matches_full_published_environment_before_cache_restore(
+    kind,
+):
+    profiles = json.loads(
+        (sdk.ROOT / "tools/sanitizer_toolchain_profiles.json").read_text()
+    )
+    profile = profiles["profiles"][kind]
+    expected = profile["environment"]
+    # Original/current recipes are compared directly in the bootstrap test.
+    # Recomputing a foreign job's identity here would also change ast.dump's
+    # Python-version representation (Ubuntu 3.12 vs Arch 3.14), not SDK inputs.
+    with patch.object(sdk, "environment", return_value=expected):
+        result = sdk.verify_environment_profile(
+            sdk.ROOT, kind, sdk.Path(expected["prefix"])
         )
+    assert (
+        result["verified_environment_artifact"]
+        == profile["qualified_sdk"]["artifact_id"]
+    )
+    workflow = yaml.safe_load((sdk.ROOT / sdk.WORKFLOW).read_text())
+    steps = workflow["jobs"][sdk.JOBS[kind]]["steps"]
+    selection = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("run") == profile["repository_setup"]
+    )
+    install = next(
+        i for i, step in enumerate(steps) if step.get("name") == sdk.INSTALL[kind]
+    )
+    verification = next(
+        i
+        for i, step in enumerate(steps)
+        if " verify-environment " in step.get("run", "")
+    )
+    restoration = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("uses", "").startswith("actions/cache/restore@")
+    )
+    assert selection < install < verification < restoration
+
+
+def test_ubuntu_snapshot_excludes_rolling_and_third_party_feeds(tmp_path):
+    profiles = json.loads(
+        (sdk.ROOT / "tools/sanitizer_toolchain_profiles.json").read_text()
+    )
+    script = profiles["profiles"]["thread"]["repository_setup"]
+    sources, config = tmp_path / "snapshot.sources", tmp_path / "snapshot.conf"
+    script = script.replace(
+        "sudo tee /etc/apt/foresight-sanitizer.sources", f"tee '{sources}'"
+    )
+    script = script.replace(
+        "sudo tee /etc/apt/apt.conf.d/50foresight-sanitizer-snapshot", f"tee '{config}'"
+    )
+    subprocess.run(["sh", "-ec", script], check=True, capture_output=True, timeout=30)
+    assert sources.read_text() == (
+        "Types: deb\n"
+        "URIs: https://snapshot.ubuntu.com/ubuntu/20261018T210000Z/\n"
+        "Suites: noble noble-updates noble-security\n"
+        "Components: main universe\n"
+        "Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n"
+    )
+    assert config.read_text() == (
+        'Dir::Etc::sourcelist "/etc/apt/foresight-sanitizer.sources";\n'
+        'Dir::Etc::sourceparts "-";\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "field", ["compiler_sha256", "runtime_sha256", "packages", "target", "prefix"]
+)
+def test_repository_profile_rejects_runner_or_abi_drift(field):
+    profiles = json.loads(
+        (sdk.ROOT / "tools/sanitizer_toolchain_profiles.json").read_text()
+    )
+    changed = deepcopy(profiles["profiles"]["address"]["environment"])
+    changed[field] = [] if field == "packages" else "changed"
+    with patch.object(sdk, "environment", return_value=changed):
+        with pytest.raises(RuntimeError, match="does not authorize an SDK rebuild"):
+            sdk.verify_environment_profile(sdk.ROOT, "address", sdk.Path("prefix"))
+
+
+def test_changed_repository_provisioning_needs_its_own_profile_review(source):
+    original_identity = sdk.recipe(source, "thread")
+    workflow_path = source / sdk.WORKFLOW
+    workflow_path.write_text(
+        workflow_path.read_text().replace("20261018T210000Z", "20261019T210000Z")
+    )
+    assert sdk.recipe(source, "thread") == original_identity
+    with patch.object(sdk, "environment") as inspect:
+        with pytest.raises(ValueError, match="repository selection differs"):
+            sdk.verify_environment_profile(source, "thread", sdk.Path("prefix"))
+        inspect.assert_not_called()
 
 
 def cache_origin_fixture(source, abi):

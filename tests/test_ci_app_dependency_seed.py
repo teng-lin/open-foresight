@@ -421,3 +421,113 @@ def test_download_failure_never_becomes_a_compile_or_deletes_other_blobs(
     assert not (tmp_path / identity).exists()
     assert preserved.read_bytes() == b"preserve"
     assert sorted(path.name for path in tmp_path.iterdir()) == [preserved.name]
+
+
+def inspect_recorded_toolchain_changes(monkeypatch, changes):
+    """Exercise policy with previously verified file hashes, without Docker/ELF execution.
+
+    Tar decoding and byte hashing have separate real tar-stream regressions above.
+    This fixture represents the independent 489-file inspection, including the
+    exact three current archive hashes rather than a matching SONAME alone.
+    """
+    proof = seed.toolchain_proof()
+    actual = {**proof["files"], **changes}
+
+    def request(command, **kwargs):
+        assert command[:2] == ["docker", "cp"]
+        assert kwargs["timeout"] > 0
+        source = command[-2].split(":", 1)[1]
+        if source in ("/usr/include", "/usr/lib/gcc/x86_64-linux-gnu/13/include"):
+            values = {
+                path: digest
+                for path, digest in actual.items()
+                if path.startswith(source + "/")
+            }
+        else:
+            values = {source: actual[source]}
+        return json.dumps(values).encode()
+
+    monkeypatch.setattr(seed, "copied_hashes", lambda data, *args: json.loads(data))
+    return seed.verify_toolchain_files("a" * 64, proof, request)
+
+
+def test_exact_three_cmake_runtime_revisions_requalify_without_changing_compiler(
+    monkeypatch,
+):
+    compatibility = seed.tool_runtime_compatibility()
+    replacements = compatibility["replacements"]
+    actual = {path: record["consumer_sha256"] for path, record in replacements.items()}
+    result = inspect_recorded_toolchain_changes(monkeypatch, actual)
+    assert result["matched_files"] == 486
+    assert result["compatibility_proof_sha256"] == seed.TOOL_RUNTIME_COMPATIBILITY
+    assert set(result["compatible_cmake_runtime_files"]) == seed.CMAKE_RUNTIME_PATHS
+    assert (
+        seed.toolchain_proof()["files"]["/usr/bin/cmake"]
+        == compatibility["consumer"]["sha256"]
+    )
+    for path, record in replacements.items():
+        assert record["original_sha256"] == seed.toolchain_proof()["files"][path]
+        assert record["original_sha256"] != record["consumer_sha256"]
+        assert record["abi"]["soname"] == Path(path).name
+        assert record["abi"]["elf_class"] == "ELF64"
+        assert record["abi"]["export_count"] > 0
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"/usr/include/assert.h": "f" * 64},
+        {"/usr/bin/c++": "f" * 64},
+        {"/usr/bin/cmake": "f" * 64},
+        {"/usr/lib/x86_64-linux-gnu/libc.so.6": "f" * 64},
+        {"/usr/lib/x86_64-linux-gnu/libarchive.so.13": "f" * 64},
+    ],
+)
+def test_runtime_migration_never_authorizes_other_bytes_or_future_revisions(
+    monkeypatch, extra
+):
+    actual = {
+        path: record["consumer_sha256"]
+        for path, record in seed.tool_runtime_compatibility()["replacements"].items()
+    }
+    actual.update(extra)
+    with pytest.raises(ValueError, match="not permission to rebuild"):
+        inspect_recorded_toolchain_changes(monkeypatch, actual)
+
+
+def test_unchanged_toolchain_does_not_require_runtime_exception(monkeypatch):
+    result = inspect_recorded_toolchain_changes(monkeypatch, {})
+    assert result == {"proof_sha256": seed.TOOLCHAIN_PROOF, "matched_files": 489}
+
+
+def test_runtime_compatibility_record_keeps_verified_archive_and_original_receipt():
+    record = seed.tool_runtime_compatibility()
+    original = next(
+        entry
+        for entry in json.loads(
+            (seed.ROOT / "tools/sdk_approved_legacy.json").read_text()
+        )["entries"]
+        if entry["component"] == "linux-sdk"
+    )
+    provenance = record["provenance"]
+    assert provenance["artifact_id"] == original["artifact_id"]
+    assert provenance["artifact_digest"] == original["artifact_digest"]
+    assert provenance["original_source_receipt"] == original["source_receipt"]
+    assert provenance["producer_source"] == original["producer_source"]
+    assert (
+        provenance["archive_sha256"]
+        == "649516536799db378d232b3db260e50ddb449bf1d63a4f77945644b1a155c88b"
+    )
+    assert "flatc" in record["consumer"]["excluded_consumer_roots"]
+    assert record["original_toolchain_proof_sha256"] == seed.TOOLCHAIN_PROOF
+
+
+def test_runtime_compatibility_record_tampering_requires_review(tmp_path):
+    target = tmp_path / "tools/ubuntu_app_dependency_runtime_compatibility.json"
+    target.parent.mkdir()
+    original = (
+        seed.ROOT / "tools/ubuntu_app_dependency_runtime_compatibility.json"
+    ).read_bytes()
+    target.write_bytes(original + b" ")
+    with pytest.raises(ValueError, match="changed without review"):
+        seed.tool_runtime_compatibility(tmp_path)

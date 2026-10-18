@@ -21,6 +21,18 @@ from tools import ci_changes as changes
 from tools import ci_registry as registry
 
 
+def pack_fixture(*args):
+    """Pack real fixture bytes without depending on the source export's HEAD."""
+
+    def revision(command, **kwargs):
+        assert command == ["git", "rev-parse", "HEAD"]
+        assert kwargs == {"cwd": artifacts.ROOT, "text": True, "timeout": 30}
+        return "9" * 40 + "\n"
+
+    with patch.object(artifacts.subprocess, "check_output", side_effect=revision):
+        return artifacts.pack(*args)
+
+
 class FingerprintTests(unittest.TestCase):
     def test_all_linux_dockerfile_copy_sources_are_bound_to_component_identity(self):
         for component in ("linux-core", "linux-litert", "linux-whisper", "linux-sdk"):
@@ -203,7 +215,7 @@ class ArchiveTests(unittest.TestCase):
             executable.write_text("#!/bin/sh\necho relocated\n")
             executable.chmod(0o755)
             (source / "alias").symlink_to("tool")
-            artifacts.pack("macos-sdk", "a" * 64, source, root / "upload")
+            pack_fixture("macos-sdk", "a" * 64, source, root / "upload")
             artifacts.unpack("macos-sdk", "a" * 64, root / "upload", root / "restored")
             self.assertTrue((root / "restored/alias").is_symlink())
             self.assertEqual(
@@ -222,7 +234,7 @@ class ArchiveTests(unittest.TestCase):
             root = Path(directory)
             source = root / "source"
             source.mkdir()
-            artifacts.pack("macos-sdk", "a" * 64, source, root / "upload")
+            pack_fixture("macos-sdk", "a" * 64, source, root / "upload")
             with self.assertRaisesRegex(ValueError, "identity mismatch"):
                 artifacts.unpack(
                     "macos-sdk", "b" * 64, root / "upload", root / "destination"
@@ -317,7 +329,7 @@ class ProvenanceTests(unittest.TestCase):
                 prefix = root / "original"
                 prefix.mkdir()
                 with patch.dict("os.environ", {"GITHUB_RUN_ATTEMPT": "1"}):
-                    artifacts.pack("macos-sdk", "a" * 64, prefix, root / "upload")
+                    pack_fixture("macos-sdk", "a" * 64, prefix, root / "upload")
                 fixture_zip = io.BytesIO()
                 with zipfile.ZipFile(fixture_zip, "w") as archive:
                     for member in ("identity.json", "payload.tar.gz"):
@@ -400,7 +412,7 @@ class ProvenanceTests(unittest.TestCase):
                 prefix.mkdir()
                 (prefix / "retained.txt").write_text("first successful component")
                 with patch.dict("os.environ", {"GITHUB_RUN_ATTEMPT": str(attempt)}):
-                    artifacts.pack("linux-core", "a" * 64, prefix, root / "upload")
+                    pack_fixture("linux-core", "a" * 64, prefix, root / "upload")
                 fixture_zip = io.BytesIO()
                 with zipfile.ZipFile(fixture_zip, "w") as archive:
                     for member in ("identity.json", "payload.tar.gz"):

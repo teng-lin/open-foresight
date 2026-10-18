@@ -46,6 +46,13 @@ REQUIRED = {
     "src/build/_deps/sentencepiece-build/src/libsentencepiece.a": "0b5900bdffb0ecfcd4a89eea9118c925252d1de254ef055798fec0ab49d577d3",
 }
 TOOLCHAIN_PROOF = "3a1b2d3aebcf832dd2ab3524cf8b1ca494063a4063cba5111655f33664eab4d7"
+TOOL_RUNTIME_COMPATIBILITY = (
+    "b502908ff0f1a20361398018d374a35079b2d2b12b487593b0579e2b1df779d5"
+)
+CMAKE_RUNTIME_PATHS = frozenset(
+    "/usr/lib/x86_64-linux-gnu/" + name
+    for name in ("libarchive.so.13", "libcurl.so.4", "libxml2.so.2")
+)
 MAX_SELECTED_BYTES = 256 * 1024 * 1024
 
 
@@ -193,7 +200,24 @@ def copied_hashes(data, base, wanted=None):
     return result
 
 
-def verify_toolchain_files(container, proof, request=subprocess.check_output):
+def tool_runtime_compatibility(root=ROOT):
+    """Read the exact reviewed CMake-only ABI migration; never infer compatibility."""
+    path = root / "tools/ubuntu_app_dependency_runtime_compatibility.json"
+    if digest(path) != TOOL_RUNTIME_COMPATIBILITY:
+        raise ValueError("CMake runtime compatibility proof changed without review")
+    record = json.loads(path.read_text())
+    if (
+        record.get("schema") != 1
+        or record.get("original_toolchain_proof_sha256") != TOOLCHAIN_PROOF
+        or set(record.get("replacements", {})) != CMAKE_RUNTIME_PATHS
+    ):
+        raise ValueError("Invalid scoped CMake runtime compatibility proof")
+    return record
+
+
+def verify_toolchain_files(
+    container, proof, request=subprocess.check_output, root=ROOT
+):
     """Compare only consumed headers, executables and transitive ELF runtimes."""
     expected = proof["files"]
     actual = {}
@@ -215,13 +239,42 @@ def verify_toolchain_files(container, proof, request=subprocess.check_output):
     mismatches = [
         path for path, identity in expected.items() if actual.get(path) != identity
     ]
+    compatible = {}
     if mismatches:
+        migration = tool_runtime_compatibility(root)
+        # These libraries occur only in the unchanged CMake executable's ELF
+        # closure. Compiler/frontends/binutils/Make/flatc do not load them. Their
+        # exact old/new bytes and equal versioned ABI contracts were inspected
+        # in the recorded verified archive; no arbitrary SONAME match is enough.
+        if expected.get("/usr/bin/cmake") == migration["consumer"]["sha256"]:
+            for path in mismatches:
+                replacement = migration["replacements"].get(path)
+                if (
+                    replacement
+                    and expected[path] == replacement["original_sha256"]
+                    and actual.get(path) == replacement["consumer_sha256"]
+                ):
+                    compatible[path] = {
+                        "original_sha256": expected[path],
+                        "consumer_sha256": actual[path],
+                    }
+    incompatible = [path for path in mismatches if path not in compatible]
+    if incompatible:
         raise ValueError(
             "Consumed SDK compiler/header/runtime bytes differ: "
-            + ", ".join(mismatches[:20])
+            + ", ".join(incompatible[:20])
             + ". Preserved objects need a reviewed ABI-compatible migration; this is not permission to rebuild."
         )
-    return {"proof_sha256": TOOLCHAIN_PROOF, "matched_files": len(expected)}
+    result = {
+        "proof_sha256": TOOLCHAIN_PROOF,
+        "matched_files": len(expected) - len(compatible),
+    }
+    if compatible:
+        result.update(
+            compatibility_proof_sha256=TOOL_RUNTIME_COMPATIBILITY,
+            compatible_cmake_runtime_files=compatible,
+        )
+    return result
 
 
 def sdk_profile(image, request=subprocess.check_output, root=ROOT):
@@ -262,7 +315,9 @@ def sdk_profile(image, request=subprocess.check_output, root=ROOT):
             profile = validate_sdk_profile(
                 info, (path / "status").read_text(), (path / "os-release").read_text()
             )
-            closure = verify_toolchain_files(container, toolchain_proof(root), request)
+            closure = verify_toolchain_files(
+                container, toolchain_proof(root), request, root=root
+            )
     finally:
         request(["docker", "rm", container], timeout=60)
     return {**profile, **closure, "image_id": identifier, "requested_image": image}

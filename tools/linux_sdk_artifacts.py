@@ -263,12 +263,27 @@ def describe(prefix, component, image, source_prefix=None):
                 qualification = json.loads(source.read_text())
                 if not isinstance(qualification, dict):
                     raise ValueError("SDK source qualification must be an object")
-                receipt = qualification.get("source_receipt")
+                receipt = qualification.get(
+                    "original_source_receipt"
+                    if name == "approved-source.json"
+                    else "source_receipt"
+                )
                 if (
-                    not isinstance(receipt, dict)
+                    qualification.get("component", component) != component
+                    or not isinstance(receipt, dict)
                     or receipt.get("component") != component
                 ):
                     raise ValueError("SDK source qualification component mismatch")
+                if name == "approved-source.json":
+                    # Approval authority is not copied into an ordinary pull.
+                    # Preserve the exact original evidence as history inside a
+                    # stable envelope usable by every later promotion/repack.
+                    qualification = {
+                        "schema": 1,
+                        "component": component,
+                        "source_receipt": receipt,
+                        "approved_original": qualification,
+                    }
                 break
         if qualification is None:
             raise ValueError(

@@ -44,6 +44,11 @@ def docker_output(arguments, **kwargs):
     raise AssertionError(f"Unexpected Docker output request: {arguments}")
 
 
+def pack_fixture(*args):
+    with patch.object(artifacts.subprocess, "check_output", side_effect=docker_output):
+        return artifacts.pack(*args)
+
+
 class RetainedImageTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -494,6 +499,7 @@ def test_registry_cache_preflight_precedes_parent_loads(tmp_path):
         patch.object(sdk, "run", side_effect=run),
         patch.object(sdk, "qualify"),
         patch.object(sdk, "inspect", return_value=IMAGE_ID),
+        patch.object(artifacts.subprocess, "check_output", side_effect=docker_output),
     ):
         sdk.produce("linux-litert", tmp_path / "output", REPOSITORY)
     assert events == ["cache-preflight", "parent-load", "build-with-readonly-layers"]
@@ -515,7 +521,7 @@ class RegistryDescriptorProvenanceTests(unittest.TestCase):
                 "artifact_digest": "sha256:" + "3" * 64,
                 "source_receipt": original,
             }
-            for metadata in ("approved-source.json", "source-qualification.json"):
+            for metadata in ("source-qualification.json",):
                 with self.subTest(metadata=metadata):
                     source = root / metadata.removesuffix(".json")
                     source.mkdir()
@@ -538,7 +544,7 @@ class RegistryDescriptorProvenanceTests(unittest.TestCase):
                     self.assertFalse((destination / "approved-source.json").exists())
                     self.assertEqual((source / metadata).read_bytes(), encoded)
                     published = root / (metadata + "-published")
-                    artifacts.pack("linux-sdk", "f" * 64, destination, published)
+                    pack_fixture("linux-sdk", "f" * 64, destination, published)
                     receipt = json.loads((published / "identity.json").read_text())
                     self.assertEqual(receipt["reused_from"], qualification)
                     self.assertNotEqual(
@@ -553,6 +559,98 @@ class RegistryDescriptorProvenanceTests(unittest.TestCase):
                         original,
                     )
                     self.assertFalse((unpacked / "approved-source.json").exists())
+
+    def test_real_bridge_qualification_survives_two_promotions_and_repacks(self):
+        from tools.sdk_approval_bridge import qualification
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "original"
+            source.mkdir()
+            (source / "image.json").write_text('{"original":true}')
+            entries = json.loads(
+                (artifacts.ROOT / "tools/sdk_approved_legacy.json").read_text()
+            )
+            entry = next(
+                item for item in entries["entries"] if item["component"] == "linux-sdk"
+            )
+            original = qualification(entry, source, artifacts.digest)
+            encoded = json.dumps(original).encode()
+            (source / "approved-source.json").write_bytes(encoded)
+            expected = {
+                "schema": 1,
+                "component": "linux-sdk",
+                "source_receipt": original["original_source_receipt"],
+                "approved_original": original,
+            }
+            for promotion in range(2):
+                destination = root / f"descriptor-{promotion}"
+                sdk.describe(destination, "linux-sdk", REGISTRY_IMAGE, source)
+                self.assertEqual(
+                    json.loads((destination / "source-qualification.json").read_text()),
+                    expected,
+                )
+                self.assertFalse((destination / "approved-source.json").exists())
+                published = root / f"published-{promotion}"
+                pack_fixture("linux-sdk", "f" * 64, destination, published)
+                self.assertEqual(
+                    json.loads((published / "identity.json").read_text())[
+                        "reused_from"
+                    ],
+                    expected,
+                )
+                source = root / f"unpacked-{promotion}"
+                artifacts.unpack("linux-sdk", "f" * 64, published, source)
+                self.assertFalse((source / "approved-source.json").exists())
+            self.assertEqual(
+                (root / "original/approved-source.json").read_bytes(), encoded
+            )
+
+    def test_bridge_and_ordinary_qualification_components_must_agree(self):
+        from tools.sdk_approval_bridge import qualification
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "original"
+            source.mkdir()
+            (source / "image.json").write_text("{}")
+            entries = json.loads(
+                (artifacts.ROOT / "tools/sdk_approved_legacy.json").read_text()
+            )
+            entry = next(
+                item for item in entries["entries"] if item["component"] == "linux-sdk"
+            )
+            bridge = qualification(entry, source, artifacts.digest)
+            for name, evidence in (
+                ("approved-source.json", bridge),
+                (
+                    "source-qualification.json",
+                    {
+                        "component": "linux-sdk",
+                        "source_receipt": bridge["original_source_receipt"],
+                    },
+                ),
+            ):
+                receipt_key = (
+                    "original_source_receipt"
+                    if name == "approved-source.json"
+                    else "source_receipt"
+                )
+                for field in ("component", receipt_key):
+                    with self.subTest(name=name, field=field):
+                        changed = json.loads(json.dumps(evidence))
+                        if field == "component":
+                            changed[field] = "linux-core"
+                        else:
+                            changed[field]["component"] = "linux-core"
+                        (source / name).write_text(json.dumps(changed))
+                        destination = root / f"bad-{name}-{field}"
+                        with self.assertRaisesRegex(ValueError, "component mismatch"):
+                            sdk.describe(
+                                destination, "linux-sdk", REGISTRY_IMAGE, source
+                            )
+                        self.assertFalse(destination.exists())
+                        (source / name).unlink()
 
     def test_fresh_registry_descriptor_has_no_fabricated_compile_history(self):
         with tempfile.TemporaryDirectory() as directory:
