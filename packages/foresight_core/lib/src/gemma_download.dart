@@ -35,8 +35,9 @@ Future<bool> verifyModelFile(File file, String digest, int bytes) async {
   try {
     if (FileSystemEntity.typeSync(file.path, followLinks: false) !=
             FileSystemEntityType.file ||
-        file.lengthSync() != bytes)
+        file.lengthSync() != bytes) {
       return false;
+    }
     return (await sha256.bind(file.openRead()).first).toString() == digest;
   } on FileSystemException {
     return false;
@@ -147,16 +148,18 @@ class GemmaDownload {
     Uri? sourceForTesting,
     File? existingFile,
   }) async {
-    if (_active || _cancelled)
+    if (_active || _cancelled) {
       throw StateError('Download is active or cancelled');
+    }
     _active = true;
     RandomAccessFile? lock;
     String? ownedPath;
     bool locked = false;
     File? assembly;
     try {
-      if (parallelism < 1 || parallelism > 8 || rangeThreshold < 0)
+      if (parallelism < 1 || parallelism > 8 || rangeThreshold < 0) {
         throw ArgumentError('Invalid download parallelism');
+      }
       if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(model.digest) ||
           model.bytes <= 0 ||
           model.filename.contains('/') ||
@@ -193,8 +196,9 @@ class GemmaDownload {
       }
       await directory.create(recursive: true);
       final canonical = await directory.resolveSymbolicLinks();
-      if (!_activePaths.add(canonical))
+      if (!_activePaths.add(canonical)) {
         throw StateError('A download of this model is already active.');
+      }
       ownedPath = canonical;
       lock = await File(
         '${directory.path}/.download.lock',
@@ -203,8 +207,9 @@ class GemmaDownload {
       locked = true;
       _check();
       // A writer may have finished while this request waited for its lock.
-      if (await verifyModelFile(destination, model.digest, model.bytes))
+      if (await verifyModelFile(destination, model.digest, model.bytes)) {
         return destination;
+      }
       final temporary = Directory('${directory.path}/.download');
       await temporary.create();
       final metadata = File('${temporary.path}/identity.json');
@@ -247,8 +252,9 @@ class GemmaDownload {
             type != FileSystemEntityType.notFound) {
           throw StateError('Invalid download staging file.');
         }
-        if (part.existsSync() && part.lengthSync() > end - start + 1)
+        if (part.existsSync() && part.lengthSync() > end - start + 1) {
           await part.delete();
+        }
         retained += part.existsSync() ? part.lengthSync() : 0;
         parts.add(part);
         ranges.add((start, end));
@@ -261,10 +267,11 @@ class GemmaDownload {
           (count > 1 ? model.bytes : 0) +
           16 * 1024 * 1024;
       final available = await availableBytes(directory);
-      if (available < required)
+      if (available < required) {
         throw StateError(
           'Not enough free disk space. Model setup needs ${(required / 1e9).toStringAsFixed(2)} GB more free space.',
         );
+      }
       _check();
       phase?.call(ModelDownloadPhase.downloading);
       final client = _client = createClient();
@@ -406,8 +413,9 @@ class GemmaDownload {
       _client = null;
       // Assembled output is disposable; range parts remain available to retry.
       if (assembly?.path.endsWith('/assembled.part') == true &&
-          assembly!.existsSync())
+          assembly!.existsSync()) {
         await assembly.delete();
+      }
       try {
         if (lock != null) {
           if (locked) await lock.unlock();
@@ -427,19 +435,22 @@ class GemmaDownload {
   }) async {
     var uri = source;
     for (var redirects = 0; redirects <= 5; redirects++) {
-      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty)
+      if (uri.scheme != 'https' || uri.userInfo.isNotEmpty) {
         throw StateError('Model downloads require HTTPS');
+      }
       _check();
       final request = await client.getUrl(uri).timeout(timeout);
       request.headers.set(HttpHeaders.acceptEncodingHeader, 'identity');
       if (range != null) request.headers.set(HttpHeaders.rangeHeader, range);
       request.followRedirects = false;
       final response = await request.close().timeout(timeout);
-      if (![301, 302, 303, 307, 308].contains(response.statusCode))
+      if (![301, 302, 303, 307, 308].contains(response.statusCode)) {
         return response;
+      }
       final location = response.headers.value(HttpHeaders.locationHeader);
-      if (location == null || redirects == 5)
+      if (location == null || redirects == 5) {
         throw StateError('Model download redirect failed');
+      }
       uri = uri.resolve(location);
       await response.listen((_) {}).cancel();
     }
@@ -452,8 +463,9 @@ class GemmaDownload {
     int expected,
     void Function(int) progress,
   ) async {
-    if (response.contentLength >= 0 && response.contentLength != expected)
+    if (response.contentLength >= 0 && response.contentLength != expected) {
       throw StateError('Model download size does not match');
+    }
     var received = 0, pending = 0;
     await for (final chunk in response.timeout(timeout)) {
       _check();
@@ -467,8 +479,9 @@ class GemmaDownload {
       }
       progress(chunk.length);
     }
-    if (received != expected)
+    if (received != expected) {
       throw const HttpException('Model download was incomplete');
+    }
   }
 }
 

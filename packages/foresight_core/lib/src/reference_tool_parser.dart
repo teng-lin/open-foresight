@@ -50,8 +50,9 @@ List<dynamic>? parseReferenceToolCallsFromText(String text) {
   final trimmed = text.trim();
   if (!trimmed.contains('{') &&
       !trimmed.contains('```json') &&
-      !trimmed.contains('"name"'))
+      !trimmed.contains('"name"')) {
     return null;
+  }
   // Matching deliberately uses the original text, including leading spaces.
   final match = _jsonBlock.firstMatch(text) ?? _toolStart.firstMatch(text);
   if (match == null) return _regexToolCalls(text);

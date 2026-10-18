@@ -95,7 +95,7 @@ void main() {
       expect(rawRpcCalls(source, desktop: true), hasLength(1), reason: source);
     }
     expect(
-      rawRpcCalls('desktop.command(Operation.notes_save, {});', desktop: true),
+      rawRpcCalls('desktop.command(Operation.notesSave, {});', desktop: true),
       isEmpty,
     );
   });

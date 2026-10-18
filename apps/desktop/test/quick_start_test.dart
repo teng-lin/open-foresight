@@ -21,16 +21,16 @@ class QuickStartDomain extends CommandFixtureDomain {
     Map<String, dynamic> args = const {},
   ]) async {
     operations.add(operation.wire);
-    if (operation == Operation.audio_capabilities)
+    if (operation == Operation.audioCapabilities)
       return {
         'microphone': denyMicrophone ? 'not_determined' : 'authorized',
         'system_audio_request': needsSystemSetup
             ? 'not_requested'
             : 'completed',
       };
-    if (operation == Operation.audio_request_microphone)
+    if (operation == Operation.audioRequestMicrophone)
       return {'granted': false, 'microphone': 'denied'};
-    if (operation == Operation.audio_request_system)
+    if (operation == Operation.audioRequestSystem)
       return await (systemGate?.future ??
           Future.value({
             'system_audio': 'unknown',
@@ -40,14 +40,14 @@ class QuickStartDomain extends CommandFixtureDomain {
             'settings_url':
                 'x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture',
           }));
-    if (operation == Operation.notifications_capabilities)
+    if (operation == Operation.notificationsCapabilities)
       return {'available': false};
-    if (operation == Operation.meetings_create) {
+    if (operation == Operation.meetingsCreate) {
       await createGate?.future;
       if (failCreate)
         throw StateError('Meeting creation failed. Please retry.');
     }
-    if (operation == Operation.meetings_start) return {};
+    if (operation == Operation.meetingsStart) return {};
     return super.command(operation, args);
   }
 }

@@ -13,7 +13,7 @@ Future<void> main() async {
     final status = await domain.command(Operation.status) as Map;
     final firstPid = status['pid'] as int;
     final note =
-        await domain.command(Operation.notes_save, {
+        await domain.command(Operation.notesSave, {
               'title': 'Desktop facade',
               'body': 'service-owned',
             })
@@ -48,7 +48,7 @@ Future<void> main() async {
       await auth.signIn((uri) async {
         browserInvited =
             uri.scheme == 'https' && uri.host == 'accounts.google.com';
-        await domain.command(Operation.google_cancel_sign_in);
+        await domain.command(Operation.googleCancelSignIn);
       });
     } catch (error) {
       oauthCancelled = error.toString().toLowerCase().contains('cancel');
@@ -61,7 +61,7 @@ Future<void> main() async {
     };
     // Unchanged service heartbeats no longer rebuild the desktop. Observe an
     // actual committed mutation after subscribing to the change callback.
-    await domain.command(Operation.notes_save, {
+    await domain.command(Operation.notesSave, {
       'id': note['id'],
       'title': 'Desktop facade',
       'body': 'service-owned',

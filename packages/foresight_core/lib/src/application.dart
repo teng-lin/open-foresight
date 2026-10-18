@@ -40,6 +40,13 @@ import 'google_connections.dart';
 import 'generated/rag_service.pb.dart';
 import 'package:grpc/grpc.dart';
 
+typedef _MeetingIndexKey = ({
+  int meeting,
+  int revision,
+  int workspace,
+  String model,
+});
+
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
 class Application implements ModelGate {
@@ -59,6 +66,7 @@ class Application implements ModelGate {
   final _noteEnhancements = <int, _NoteEnhancement>{};
   final _noteEditMappings = <int, ReferenceNoteEditMapping>{};
   final _pendingNoteTargets = <int, Set<int>>{};
+  final _meetingIndexes = <_MeetingIndexKey, Future<void>>{};
   late final ReferenceNoteTranscriptCache _noteTranscriptCache =
       ReferenceNoteTranscriptCache(
         computeEmbedding: _computeNoteEmbedding,
@@ -179,7 +187,7 @@ class Application implements ModelGate {
     if (replacement != null) {
       _noteEnhancements[id]?.saveTimer?.cancel();
       final draft = _NoteEnhancement(
-        'note-edit-' + (++_noteEnhancementSerial).toString(),
+        'note-edit-${++_noteEnhancementSerial}',
         replacement,
       )..active = false;
       _noteEnhancements[id] = draft;
@@ -197,6 +205,7 @@ class Application implements ModelGate {
   bool _clearingWorkspace = false;
   bool _modelBusy = false;
   final _proactivePreparation = <String, Completer<void>>{};
+  @override
   bool get modelBusy => _modelBusy || domain.restoring;
   late final ProactiveQuestions proactive = ProactiveQuestions(
     store: store,
@@ -208,8 +217,9 @@ class Application implements ModelGate {
     changed: changed,
     cancel: (request) {
       final preparation = _proactivePreparation[request];
-      if (preparation != null && !preparation.isCompleted)
+      if (preparation != null && !preparation.isCompleted) {
         preparation.complete();
+      }
       _queryRuntime?.cancel(request);
       domain.generator?.cancel(requestId: request);
     },
@@ -229,8 +239,9 @@ class Application implements ModelGate {
             ),
           ),
         ]);
-        if (cancelled.isCompleted)
+        if (cancelled.isCompleted) {
           throw RpcError(RpcErrorCode.cancelled, 'Automatic answer cancelled');
+        }
         await Future.any<void>([
           domain
               .askInConversation(
@@ -248,8 +259,9 @@ class Application implements ModelGate {
             ),
           ),
         ]);
-        if (cancelled.isCompleted)
+        if (cancelled.isCompleted) {
           throw RpcError(RpcErrorCode.cancelled, 'Automatic answer cancelled');
+        }
         final saved = store.rows(
           'SELECT id FROM answers WHERE request_id=? ORDER BY id DESC LIMIT 1',
           [request],
@@ -350,8 +362,9 @@ class Application implements ModelGate {
     final missing = indexed
         .where((row) => !vectors.containsKey(row['id']))
         .toList();
-    if (missing.isNotEmpty)
+    if (missing.isNotEmpty) {
       vectors.addAll(await domain.graphEmbeddings(missing));
+    }
     domain.checkWorkspace(generation);
     if (!(current?.call() ?? true)) {
       throw RpcError(RpcErrorCode.cancelled, 'Label assignment cancelled');
@@ -451,8 +464,9 @@ class Application implements ModelGate {
       if (!domain.sourcesPaused &&
           domain.clock.now().millisecondsSinceEpoch -
                   google.lastCompletedRefreshMs >=
-              hours * 3600000)
+              hours * 3600000) {
         await google.refresh();
+      }
       changed();
     } catch (e) {
       stderr.writeln('Google maintenance: $e');
@@ -508,17 +522,19 @@ class Application implements ModelGate {
     bool Function()? current,
   }) async {
     if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
-    if (_clearingWorkspace)
+    if (_clearingWorkspace) {
       throw RpcError(RpcErrorCode.busy, 'Workspace is being cleared');
+    }
     final generation = domain.workspaceGeneration;
     final callerCurrent = current;
     current = () =>
         generation == domain.workspaceGeneration &&
         (callerCurrent?.call() ?? true);
-    if (!current())
+    if (!current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+    }
     if (method.startsWith('models.') &&
-        method != Operation.models_cancel_query_acquisition.wire &&
+        method != Operation.modelsCancelQueryAcquisition.wire &&
         (modelBusy ||
             domain.generator?.generating == true ||
             _noteEnhancements.values.any((state) => state.active) ||
@@ -530,19 +546,19 @@ class Application implements ModelGate {
     }
     final modelOperation =
         method.startsWith('models.') &&
-        method != Operation.models_cancel_query_acquisition.wire;
+        method != Operation.modelsCancelQueryAcquisition.wire;
     if (modelOperation) _modelBusy = true;
     try {
       switch (Operation.parse(method)) {
-        case Operation.notifications_capabilities:
+        case Operation.notificationsCapabilities:
           return await notificationCapabilities();
-        case Operation.notifications_request_permission:
+        case Operation.notificationsRequestPermission:
           return await notificationCapabilities(requestPermission: true);
-        case Operation.audio_capabilities:
+        case Operation.audioCapabilities:
           return audioCapabilities();
-        case Operation.audio_request_system:
+        case Operation.audioRequestSystem:
           return await requestSystemAudioPermission();
-        case Operation.audio_request_microphone:
+        case Operation.audioRequestMicrophone:
           return await requestMicrophonePermission();
         case Operation.status:
           return {
@@ -566,11 +582,11 @@ class Application implements ModelGate {
             'revision': store.dataRevision,
             'google': googleState,
           };
-        case Operation.sources_list:
+        case Operation.sourcesList:
           return store.sourceSummaries;
-        case Operation.sources_get:
+        case Operation.sourcesGet:
           return _source(a['id'] as String);
-        case Operation.sources_import:
+        case Operation.sourcesImport:
           final id = store.importText(
             a['title'] as String,
             a['text'] as String,
@@ -582,7 +598,7 @@ class Application implements ModelGate {
           );
           if (a['index'] != false) await domain.index(id);
           return {'id': id};
-        case Operation.sources_import_url:
+        case Operation.sourcesImportUrl:
           return {
             'id': await importUrl(
               a['url'] as String,
@@ -590,32 +606,32 @@ class Application implements ModelGate {
               allowPrivateNetwork: a['allow_private_network'] == true,
             ),
           };
-        case Operation.sources_import_directory:
+        case Operation.sourcesImportDirectory:
           await importDirectory(a['path'] as String, current: current);
           return null;
-        case Operation.sources_refresh:
+        case Operation.sourcesRefresh:
           await reimport(
             current: current,
             allowPrivateNetwork: a['allow_private_network'] == true,
           );
           return null;
-        case Operation.sources_import_file:
+        case Operation.sourcesImportFile:
           return {
             'id': await importFile(a['path'] as String, current: current),
           };
-        case Operation.sources_index:
+        case Operation.sourcesIndex:
           await domain.index(a['id'] as String);
           return null;
-        case Operation.sources_delete:
+        case Operation.sourcesDelete:
           await domain.delete(a['id'] as String);
           return null;
-        case Operation.sources_pause:
+        case Operation.sourcesPause:
           domain.pauseSources();
           return null;
-        case Operation.sources_resume:
+        case Operation.sourcesResume:
           domain.resumeSources();
           return null;
-        case Operation.sources_search:
+        case Operation.sourcesSearch:
           final allowed = {
             for (final source in store.sourceSummaries)
               if (source['state'] == 'indexed')
@@ -623,8 +639,9 @@ class Application implements ModelGate {
           };
           if (allowed.isEmpty) return <Object>[];
           final limit = a['limit'] as int? ?? 10;
-          if (limit < 1 || limit > 100)
+          if (limit < 1 || limit > 100) {
             throw ArgumentError('limit must be 1–100');
+          }
           final result = await domain.helper.client.retrieveContext(
             RetrieveRequest(
               query: Query(textQuery: a['query'] as String),
@@ -634,8 +651,9 @@ class Application implements ModelGate {
               allowedDocumentIds: allowed.keys,
             ),
           );
-          if (!current())
+          if (!current()) {
             throw RpcError(RpcErrorCode.cancelled, 'Search cancelled');
+          }
           return [
             for (final chunk in result.chunks)
               if (allowed.containsKey(chunk.documentId))
@@ -667,18 +685,18 @@ class Application implements ModelGate {
                     )
                     .last,
           };
-        case Operation.google_status:
+        case Operation.googleStatus:
           return googleState;
-        case Operation.google_configure:
+        case Operation.googleConfigure:
           await googleAuth.configure(File(a['path'] as String));
           return googleState;
-        case Operation.google_cancel_sign_in:
+        case Operation.googleCancelSignIn:
           googleAuth.cancelSignIn();
           return googleState;
-        case Operation.google_disconnect:
+        case Operation.googleDisconnect:
           await googleAuth.disconnect();
           return googleState;
-        case Operation.google_drive_files:
+        case Operation.googleDriveFiles:
           return google.driveFiles(
             parent: a['parent'] as String?,
             query: a['query'] as String? ?? '',
@@ -686,52 +704,53 @@ class Application implements ModelGate {
                 ? null
                 : DateTime.parse(a['modifiedAfter'] as String),
           );
-        case Operation.google_import_file:
+        case Operation.googleImportFile:
           await google.importDriveFile(a['id'] as String);
           return null;
-        case Operation.google_import_folder:
+        case Operation.googleImportFolder:
           await google.importDriveFolder(a['id'] as String);
           return null;
-        case Operation.google_import_year:
+        case Operation.googleImportYear:
           await google.importLastYear();
           return null;
-        case Operation.google_refresh:
+        case Operation.googleRefresh:
           await google.refresh();
           return googleState;
-        case Operation.google_calendar:
+        case Operation.googleCalendar:
           await google.syncCalendar();
           return null;
-        case Operation.google_attachments:
+        case Operation.googleAttachments:
           await google.importAttachments(a['id'] as int);
           return null;
-        case Operation.notes_list:
+        case Operation.notesList:
           return store.rows('SELECT * FROM notes ORDER BY id');
-        case Operation.notes_save:
+        case Operation.notesSave:
           store.saveNote(
             a['id'] as int?,
             a['title'] as String,
             a['body'] as String,
           );
           return {'id': a['id'] ?? store.db.lastInsertRowId};
-        case Operation.preferences_set:
+        case Operation.preferencesSet:
           if (a['key'] == 'echoCancellation') {
             final enabled = a['value'] == 'true';
-            if (enabled && !Platform.isMacOS)
+            if (enabled && !Platform.isMacOS) {
               throw StateError(
                 'Native echo cancellation is available on macOS',
               );
+            }
             recording?.setEchoCancellation(enabled);
           }
           store.setPreference(a['key'] as String, a['value'] as String);
           if (a['key'] == 'proactiveAnswers') proactive.wake();
           return null;
-        case Operation.meetings_list:
+        case Operation.meetingsList:
           return store.rows(
             'SELECT m.*,d.created,d.reminder FROM meetings m LEFT JOIN meeting_details d ON d.meeting_id=m.id ORDER BY m.id',
           );
-        case Operation.meetings_create:
+        case Operation.meetingsCreate:
           return {'id': store.meeting(a['title'] as String)};
-        case Operation.meetings_get:
+        case Operation.meetingsGet:
           final id = a['id'] as int;
           return {
             'meeting': _meeting(id),
@@ -765,27 +784,28 @@ class Application implements ModelGate {
               [id],
             ),
           };
-        case Operation.meetings_retry_question:
+        case Operation.meetingsRetryQuestion:
           proactive.retry(a['id'] as int);
           return null;
-        case Operation.meetings_retry_detection:
+        case Operation.meetingsRetryDetection:
           final id = a['id'] as int;
           _meeting(id);
           proactive.notify(id);
           return null;
-        case Operation.meetings_link_answer:
+        case Operation.meetingsLinkAnswer:
           store.db.execute(
             'INSERT OR IGNORE INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
             [a['id'], a['answer']],
           );
           return null;
-        case Operation.workspace_clear:
+        case Operation.workspaceClear:
           google;
-          if (recording != null)
+          if (recording != null) {
             throw RpcError(
               RpcErrorCode.busy,
               'Stop recording before clearing the workspace',
             );
+          }
           for (final timer in _enhance.values) {
             timer.cancel();
           }
@@ -854,7 +874,7 @@ class Application implements ModelGate {
             }
           }
           return null;
-        case Operation.meetings_notes:
+        case Operation.meetingsNotes:
           final noteId = a['id'] as int;
           _meeting(noteId);
           final oldNotes = store.rows(
@@ -879,7 +899,7 @@ class Application implements ModelGate {
             );
           }
           return null;
-        case Operation.meetings_transcript:
+        case Operation.meetingsTranscript:
           final id = a['id'] as int;
           _meeting(id);
           store.transcript(
@@ -897,10 +917,10 @@ class Application implements ModelGate {
           }
           await indexMeeting(id);
           return null;
-        case Operation.meetings_index:
+        case Operation.meetingsIndex:
           await indexMeeting(a['id'] as int);
           return null;
-        case Operation.meetings_generate:
+        case Operation.meetingsGenerate:
           await generateMeeting(
             a['id'] as int,
             a['kind'] as String,
@@ -908,7 +928,7 @@ class Application implements ModelGate {
             current: current,
           );
           return null;
-        case Operation.meetings_enhance:
+        case Operation.meetingsEnhance:
           await enhanceNotes(
             a['id'] as int,
             forceRegenerate: a['force_regenerate'] == true,
@@ -916,28 +936,29 @@ class Application implements ModelGate {
             current: current,
           );
           return null;
-        case Operation.meetings_cancel_enhance:
+        case Operation.meetingsCancelEnhance:
           final enhancement = _noteEnhancements[a['id'] as int];
           if (enhancement == null ||
               !enhancement.active ||
-              enhancement.requestId != a['request_id'])
+              enhancement.requestId != a['request_id']) {
             return false;
+          }
           enhancement.cancelRequested = true;
           changed();
           return true;
-        case Operation.meetings_start:
+        case Operation.meetingsStart:
           await startRecording(a['id'] as int);
           return captureState;
-        case Operation.meetings_stop:
+        case Operation.meetingsStop:
           await stopRecording();
           return captureState;
-        case Operation.meetings_pause:
+        case Operation.meetingsPause:
           pauseRecording(a['id'] as int?);
           return captureState;
-        case Operation.meetings_resume:
+        case Operation.meetingsResume:
           resumeRecording(a['id'] as int?);
           return captureState;
-        case Operation.artifacts_edit:
+        case Operation.artifactsEdit:
           final selectedBeforeEdit = store.rows(
             "SELECT selected.meeting_id,selected.edited,selected.generated FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id AND newer.kind=selected.kind AND newer.id>selected.id)",
             [a['id']],
@@ -979,10 +1000,10 @@ class Application implements ModelGate {
             }
           }
           return null;
-        case Operation.models_cancel_query_acquisition:
+        case Operation.modelsCancelQueryAcquisition:
           await _queryAcquisition?.close();
           return null;
-        case Operation.models_acquire_query:
+        case Operation.modelsAcquireQuery:
           final acquisition = DedicatedQueryAcquisition.distribution(store);
           _queryAcquisition = acquisition;
           _queryDownloadReceived = _queryDownloadTotal = 0;
@@ -1001,7 +1022,7 @@ class Application implements ModelGate {
             changed();
           }
           return null;
-        case Operation.models_speech:
+        case Operation.modelsSpeech:
           try {
             await configureSpeech(
               store,
@@ -1014,10 +1035,11 @@ class Application implements ModelGate {
             throw RpcError(RpcErrorCode.cancelled, error.toString());
           }
           return null;
-        case Operation.models_register:
+        case Operation.modelsRegister:
           if (a['kind'] == dedicatedQueryModelKind) {
-            if (a['backend'] != null && a['backend'] != dedicatedQueryBackend)
+            if (a['backend'] != null && a['backend'] != dedicatedQueryBackend) {
               throw StateError('Unsupported dedicated question model backend');
+            }
             await configureDedicatedQuery(
               store,
               a['path'] as String,
@@ -1037,7 +1059,7 @@ class Application implements ModelGate {
             current: () => !_closed && (current?.call() ?? true),
           );
           return null;
-        case Operation.models_generation:
+        case Operation.modelsGeneration:
           final candidate = await configureGeneration(
             store,
             runtimeConfiguration.nativeLibrary,
@@ -1050,7 +1072,7 @@ class Application implements ModelGate {
           domain.generator?.close();
           domain.generator = candidate;
           return null;
-        case Operation.models_embedding:
+        case Operation.modelsEmbedding:
           requireEmbeddingBundle(a['path'] as String);
           final result = await domain.helper.client.updateModelPaths(
             UpdateModelPathsRequest(
@@ -1075,19 +1097,19 @@ class Application implements ModelGate {
             current: () => !_closed && (current?.call() ?? true),
           );
           return null;
-        case Operation.application_resume:
+        case Operation.applicationResume:
           await domain.helper.recover();
           await domain.resume();
           return null;
-        case Operation.graph_embeddings:
+        case Operation.graphEmbeddings:
           return domain.graphEmbeddings(
             (a['sources'] as List)
                 .map((s) => Map<String, Object?>.from(s as Map))
                 .toList(),
           );
-        case Operation.labels_auto_assign:
+        case Operation.labelsAutoAssign:
           return await autoAssignLabel(a['name'] as String, current: current);
-        case Operation.labels_put:
+        case Operation.labelsPut:
           store.putDocumentLabel(
             DocumentLabel(
               a['id'] as String,
@@ -1098,22 +1120,22 @@ class Application implements ModelGate {
             ),
           );
           return null;
-        case Operation.labels_set:
+        case Operation.labelsSet:
           store.labels(a['id'] as String, (a['labels'] as List).cast<String>());
           return null;
-        case Operation.labels_cluster:
+        case Operation.labelsCluster:
           store.saveLabelCluster(a['name'] as String);
           return null;
-        case Operation.labels_delete:
+        case Operation.labelsDelete:
           store.deleteOrganizationLabel(a['name'] as String);
           return null;
-        case Operation.graph_invalidate:
+        case Operation.graphInvalidate:
           store.invalidateGraphOrganization();
           return null;
-        case Operation.graph_acknowledge:
+        case Operation.graphAcknowledge:
           store.acknowledgeGraphLabelRemoval();
           return null;
-        case Operation.graph_save:
+        case Operation.graphSave:
           return store.saveGraphLayout(
             a['identity'] as String,
             (a['sources'] as List)
@@ -1143,13 +1165,13 @@ class Application implements ModelGate {
                 )
                 .toList(),
           );
-        case Operation.answer_stream:
-        case Operation.google_sign_in:
-        case Operation.security_attach_desktop:
-        case Operation.security_detach_desktop:
-        case Operation.security_decide:
-        case Operation.security_allow_import_root:
-        case Operation.service_stop_if_idle:
+        case Operation.answerStream:
+        case Operation.googleSignIn:
+        case Operation.securityAttachDesktop:
+        case Operation.securityDetachDesktop:
+        case Operation.securityDecide:
+        case Operation.securityAllowImportRoot:
+        case Operation.serviceStopIfIdle:
           throw RpcError(
             RpcErrorCode.invalidArgument,
             'Operation requires service dispatch: $method',
@@ -1162,8 +1184,9 @@ class Application implements ModelGate {
   }
 
   Stream<Object?> signIn(String owner) async* {
-    if (_signInOwner != null)
+    if (_signInOwner != null) {
       throw RpcError(RpcErrorCode.busy, 'Google sign-in is already open');
+    }
     _signInOwner = owner;
     final invitation = Completer<Uri>();
     final signedIn = googleAuth.signIn((uri) async {
@@ -1195,8 +1218,9 @@ class Application implements ModelGate {
     final rows = store.rows('SELECT * FROM sources WHERE id=? AND deleted=0', [
       id,
     ]);
-    if (rows.isEmpty)
+    if (rows.isEmpty) {
       throw RpcError(RpcErrorCode.notFound, 'Source not found: $id');
+    }
     return {
       ...rows.single,
       'trust': 'untrusted',
@@ -1207,8 +1231,9 @@ class Application implements ModelGate {
 
   Map<String, Object?> _meeting(int id) {
     final rows = store.rows('SELECT * FROM meetings WHERE id=?', [id]);
-    if (rows.isEmpty)
+    if (rows.isEmpty) {
       throw RpcError(RpcErrorCode.notFound, 'Meeting not found: $id');
+    }
     return rows.single;
   }
 
@@ -1225,11 +1250,12 @@ class Application implements ModelGate {
     final (text, provenance) = await Parser().extract(file.path);
     final modified = (await file.stat()).modified.millisecondsSinceEpoch;
     domain.checkWorkspace(generation);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(
         RpcErrorCode.cancelled,
         'Import cancelled or source changed',
       );
+    }
 
     final uri = Uri.file(file.path).toString();
     final existing = store.sources
@@ -1263,8 +1289,9 @@ class Application implements ModelGate {
       current: current,
     );
     domain.checkWorkspace(generation);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+    }
     final existing = store.sources
         .where((s) => s['provenance'] == 'url:$uri')
         .firstOrNull;
@@ -1297,18 +1324,20 @@ class Application implements ModelGate {
     final failures = <String>[];
     for (final file in files) {
       domain.checkWorkspace(generation);
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
       try {
         await importFile(file.path, current: current);
       } catch (e) {
         failures.add('${file.path.split('/').last}: $e');
       }
     }
-    if (failures.isNotEmpty)
+    if (failures.isNotEmpty) {
       throw StateError(
         'Imported ${files.length - failures.length} files. ${failures.join('\n')}',
       );
+    }
   }
 
   Future<void> reimport({
@@ -1319,8 +1348,9 @@ class Application implements ModelGate {
     final failures = <String>[];
     for (final s in store.sources) {
       domain.checkWorkspace(generation);
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
       if ((s['provenance'] as String).startsWith('user edit; ')) continue;
       bool sourceCurrent() =>
           (current?.call() ?? true) &&
@@ -1390,7 +1420,31 @@ class Application implements ModelGate {
             'meeting:$id',
             id: 'meeting-$id',
           );
-    final indexing = domain.index(source);
+    final revision =
+        store.rows('SELECT revision FROM sources WHERE id=?', [
+              source,
+            ]).single['revision']
+            as int;
+    final snapshot = domain.helper.snapshot;
+    final key = (
+      meeting: id,
+      revision: revision,
+      workspace: domain.workspaceGeneration,
+      model: jsonEncode([
+        snapshot?.instanceId,
+        snapshot?.activeGeneration.toString(),
+        snapshot?.pendingGeneration.toString(),
+        snapshot?.model.writeToJson(),
+      ]),
+    );
+    // The live timer and Stop can queue the same finalized transcript while
+    // imports are paused. Share only identical in-flight work: otherwise Resume
+    // embeds it twice and immediately turns the first indexed result back into
+    // indexing. New source/model/workspace generations still get their own job.
+    final indexing = _meetingIndexes.putIfAbsent(
+      key,
+      () => _indexMeetingSource(key, source),
+    );
     if (domain.sourcesPaused) {
       unawaited(
         indexing.catchError((Object e) {
@@ -1403,6 +1457,14 @@ class Application implements ModelGate {
     }
   }
 
+  Future<void> _indexMeetingSource(_MeetingIndexKey key, String source) async {
+    try {
+      await domain.index(source);
+    } finally {
+      _meetingIndexes.remove(key);
+    }
+  }
+
   Future<void> generateMeeting(
     int id,
     String kind, {
@@ -1410,8 +1472,9 @@ class Application implements ModelGate {
     bool Function()? current,
   }) async {
     final generation = domain.workspaceGeneration;
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+    }
 
     if (![
       'summary',
@@ -1419,8 +1482,9 @@ class Application implements ModelGate {
       'action_items',
       'questions',
       'enhanced_notes',
-    ].contains(kind))
+    ].contains(kind)) {
       throw ArgumentError('Unsupported artifact kind');
+    }
     if (kind == 'enhanced_notes') {
       await enhanceNotes(id, requestId: requestId, current: current);
       return;
@@ -1441,8 +1505,9 @@ class Application implements ModelGate {
       current: current,
     );
     domain.checkWorkspace(generation);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+    }
 
     store.artifact(
       id,
@@ -1471,13 +1536,16 @@ class Application implements ModelGate {
     final generation = domain.workspaceGeneration;
     await Future<void>.value();
     domain.checkWorkspace(generation);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
-    if (modelBusy)
+    }
+    if (modelBusy) {
       throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
+    }
     final generator = domain.generator;
-    if (generator == null)
+    if (generator == null) {
       throw RpcError(RpcErrorCode.unavailable, 'Generation model unavailable');
+    }
     var result = '', status = 'failed', failure = '';
     await for (final event in generator.generate(
       requestId ?? '$prefix-${domain.clock.now().microsecondsSinceEpoch}',
@@ -1486,8 +1554,9 @@ class Application implements ModelGate {
       maxOutputTokens: maxTokens,
     )) {
       domain.checkWorkspace(generation);
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+      }
       if (event['type'] == 'delta') {
         result += event['text'] as String;
         onText?.call(result);
@@ -1496,14 +1565,16 @@ class Application implements ModelGate {
       if (event['type'] == 'error') failure = event['message'].toString();
     }
     domain.checkWorkspace(generation);
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+    }
 
-    if (status != 'completed')
+    if (status != 'completed') {
       throw RpcError(
         status == 'cancelled' ? RpcErrorCode.cancelled : RpcErrorCode.internal,
         'Generation $status: $failure',
       );
+    }
     return result;
   }
 
@@ -1559,8 +1630,9 @@ class Application implements ModelGate {
     String? requestId,
     bool Function()? current,
   }) async {
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+    }
     if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
     if (domain.generator?.generating == true ||
         _noteEnhancements.values.any((state) => state.active)) {
@@ -1586,8 +1658,9 @@ class Application implements ModelGate {
     ).firstOrNull;
     if (notes == null ||
         (notes['body'] as String).trim().isEmpty ||
-        (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String)))
+        (isLive && !hasEnhanceableNoteScribbles(notes['body'] as String))) {
       return;
+    }
     final transcript = isLive
         ? _liveNoteTranscriptSegments(id)
               .map(
@@ -1627,8 +1700,9 @@ class Application implements ModelGate {
       if (forceRegenerate) mapping.accepted.clear();
       final producer = ReferenceNoteEnhancer(
         ensureReady: () async {
-          if (modelBusy)
+          if (modelBusy) {
             throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
+          }
           generator = await acquireNoteEnhancementService<NativeRuntime>(
             getService: domain.noteEnhancementService,
             isReady: (service) => service.loaded,
@@ -1709,8 +1783,9 @@ class Application implements ModelGate {
       if (_closed ||
           enhancement.cancelRequested ||
           !(current?.call() ?? true) ||
-          !identical(_noteEnhancements[id], enhancement))
+          !identical(_noteEnhancements[id], enhancement)) {
         throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+      }
       enhancement.saveTimer?.cancel();
       store.artifact(
         id,
@@ -1794,12 +1869,14 @@ class Application implements ModelGate {
       enhancement.saveTimer = null;
       if (_closed ||
           !(enhancement.current?.call() ?? true) ||
-          !identical(_noteEnhancements[id], enhancement))
+          !identical(_noteEnhancements[id], enhancement)) {
         return;
+      }
       try {
         store.saveMeetingEnhancedDraft(id, enhancement.body);
-        if (!enhancement.active && enhancement.status.isEmpty)
+        if (!enhancement.active && enhancement.status.isEmpty) {
           _noteEnhancements.remove(id);
+        }
       } catch (error) {
         enhancement.status = 'Unable to save enhanced notes: $error';
       }
@@ -1831,17 +1908,20 @@ class Application implements ModelGate {
   }
 
   Future<void> startRecording(int id) async {
-    if (modelBusy)
+    if (modelBusy) {
       throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
+    }
     _meeting(id);
-    if (recording != null)
+    if (recording != null) {
       throw RpcError(RpcErrorCode.busy, 'A meeting is already recording');
+    }
     final speech = store.model('speech');
-    if (speech == null)
+    if (speech == null) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Register speech model and whisper.cpp runner first',
       );
+    }
     provisionalTranscript.clear();
     final active = Recording(
       runtimeConfiguration.nativeLibrary,

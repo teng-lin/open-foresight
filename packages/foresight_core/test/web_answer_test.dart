@@ -385,7 +385,7 @@ void main() {
         });
         expect(client.webSearchAvailable, isTrue);
         final id =
-            (await client.command(Operation.meetings_create, {
+            (await client.command(Operation.meetingsCreate, {
                       'title': 'Remote meeting',
                     })
                     as Map)['id']
@@ -825,8 +825,9 @@ void main() {
   test(
     'checkpoint writes keep the exact meeting answer ID and roll back with failed linking',
     () async {
-      for (var i = 0; i < 3; i++)
+      for (var i = 0; i < 3; i++) {
         store.answer('Old $i', 'Body', 'completed', [], 'legacy');
+      }
       final meeting = store.meeting('Checkpoint fixture');
       runtime.answer = (_) async => 'Meeting answer';
       await domain

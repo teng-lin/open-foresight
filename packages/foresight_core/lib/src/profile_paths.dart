@@ -45,8 +45,9 @@ class ProfilePaths {
     final mac = macOS ?? Platform.isMacOS;
     final home =
         environment['HOME'] ?? (Platform.isMacOS ? _macHomeDirectory() : null);
-    if (home == null || home.isEmpty)
+    if (home == null || home.isEmpty) {
       throw StateError('HOME must identify the user profile');
+    }
     final base = environment['XDG_DATA_HOME'] ?? '$home/.local/share';
     final data = canonicalProfilePath(
       environment['FORESIGHT_DATA'] ??

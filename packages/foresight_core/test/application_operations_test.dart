@@ -892,7 +892,9 @@ void main() {
         for (final title in ['changed', 'deleted', 'stable'])
           domain.store.importText(title, 'Old passage', 'text/plain', 'test'),
       ];
-      for (final id in ids) domain.store.state(id, 'indexed');
+      for (final id in ids) {
+        domain.store.state(id, 'indexed');
+      }
       rag.retrievalEntered = Completer<void>();
       rag.retrievalRelease = Completer<void>();
       final pending = app.call('sources.search', {'query': 'Old passage'});

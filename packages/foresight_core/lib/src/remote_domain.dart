@@ -18,6 +18,7 @@ class RemoteDomain implements DesktopConnection {
   final Store store;
   @override
   final Helper helper;
+  @override
   GenerationStatus? generator;
   @override
   late final GoogleAccount googleAuth = RemoteGoogleAuth(this);
@@ -27,26 +28,31 @@ class RemoteDomain implements DesktopConnection {
     googleAuth,
   );
   ServiceClient client;
+  @override
   final RemoteRuntime runtime;
   final ProfilePaths profile;
   void Function(Map<String, dynamic>)? _approvalEvents;
+  @override
   Future<void> enableDesktopApprovals(
     void Function(Map<String, dynamic>) events,
   ) async {
     _approvalEvents = events;
-    await client.call(Operation.security_attach_desktop.wire, {
+    await client.call(Operation.securityAttachDesktop.wire, {
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });
   }
 
+  @override
   Future<void> disableDesktopApprovals() async {
     _approvalEvents = null;
-    await client.call(Operation.security_detach_desktop.wire);
+    await client.call(Operation.securityDetachDesktop.wire);
   }
 
   bool _disposed = false;
   bool _reconnecting = false;
+  @override
   Map<String, dynamic> capture = {};
+  @override
   Map<String, dynamic> googleStatus = {};
   bool _paused = false;
   int _sourceControlRevision = 0;
@@ -160,11 +166,11 @@ class RemoteDomain implements DesktopConnection {
     Map<String, dynamic> args = const {},
   ]) async {
     if (_approvalEvents != null &&
-        (operation == Operation.sources_import_file ||
-            operation == Operation.sources_import_directory)) {
+        (operation == Operation.sourcesImportFile ||
+            operation == Operation.sourcesImportDirectory)) {
       final path = args['path'] as String;
-      await client.call(Operation.security_allow_import_root.wire, {
-        'path': operation == Operation.sources_import_directory
+      await client.call(Operation.securityAllowImportRoot.wire, {
+        'path': operation == Operation.sourcesImportDirectory
             ? path
             : File(path).parent.path,
       });
@@ -244,29 +250,29 @@ class RemoteDomain implements DesktopConnection {
 
   @override
   Future<void> index(String id) async {
-    await command(Operation.sources_index, {'id': id});
+    await command(Operation.sourcesIndex, {'id': id});
   }
 
   @override
   Future<void> delete(String id) async {
-    await command(Operation.sources_delete, {'id': id});
+    await command(Operation.sourcesDelete, {'id': id});
   }
 
   @override
   Future<void> resume() async {
-    await command(Operation.application_resume);
+    await command(Operation.applicationResume);
   }
 
   @override
   bool get sourcesPaused => _paused;
   @override
   void pauseSources() {
-    _sourceControl(Operation.sources_pause, true);
+    _sourceControl(Operation.sourcesPause, true);
   }
 
   @override
   void resumeSources() {
-    _sourceControl(Operation.sources_resume, false);
+    _sourceControl(Operation.sourcesResume, false);
   }
 
   void _sourceControl(Operation operation, bool paused) {
@@ -303,16 +309,18 @@ class RemoteDomain implements DesktopConnection {
     int? meetingId,
     bool Function()? current,
   }) async* {
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
-    await for (final value in _streamCurrent(Operation.answer_stream, {
+    }
+    await for (final value in _streamCurrent(Operation.answerStream, {
       'question': question,
       'conversation': conversation,
       if (requestId != null) 'requestId': requestId,
       if (meetingId != null) 'meeting_id': meetingId,
     }, current)) {
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+      }
       yield value as String;
     }
   }
@@ -325,17 +333,19 @@ class RemoteDomain implements DesktopConnection {
     int? meetingId,
     bool Function()? current,
   }) async* {
-    if (current != null && !current())
+    if (current != null && !current()) {
       throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
-    await for (final value in _streamCurrent(Operation.answer_stream, {
+    }
+    await for (final value in _streamCurrent(Operation.answerStream, {
       'question': question,
       'conversation': conversation,
       'web_search': true,
       if (requestId != null) 'requestId': requestId,
       if (meetingId != null) 'meeting_id': meetingId,
     }, current)) {
-      if (current != null && !current())
+      if (current != null && !current()) {
         throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+      }
       yield value as String;
     }
   }
@@ -345,7 +355,7 @@ class RemoteDomain implements DesktopConnection {
     List<Map<String, Object?>> sources,
   ) async {
     final result =
-        await command(Operation.graph_embeddings, {'sources': sources}) as Map;
+        await command(Operation.graphEmbeddings, {'sources': sources}) as Map;
     return result.map(
       (k, v) => MapEntry(
         k as String,
@@ -365,8 +375,7 @@ class RemoteDomain implements DesktopConnection {
 /// Service events are authoritative; the desktop never starts a second watcher
 /// against the runtime directory from its own launch environment.
 class RemoteHelper extends Helper {
-  RemoteHelper(String socket, String storage)
-    : super(socket, storage, manageProcess: false);
+  RemoteHelper(super.socket, super.storage) : super(manageProcess: false);
   @override
   Future<void> start() async {
     changed?.call();
@@ -447,12 +456,12 @@ class RemoteGoogleAuth implements GoogleAccount {
 
   @override
   Future<void> configure(File file) =>
-      _call(Operation.google_configure, {'path': file.path});
+      _call(Operation.googleConfigure, {'path': file.path});
   @override
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
     try {
       await for (final value in domain.client.stream(
-        Operation.google_sign_in.wire,
+        Operation.googleSignIn.wire,
       )) {
         final state = Map<String, dynamic>.from(value as Map);
         if (state['authorization_url'] is String) {
@@ -462,18 +471,18 @@ class RemoteGoogleAuth implements GoogleAccount {
         }
       }
     } catch (_) {
-      await _call(Operation.google_cancel_sign_in);
+      await _call(Operation.googleCancelSignIn);
       rethrow;
     }
   }
 
   @override
   void cancelSignIn() {
-    unawaited(_call(Operation.google_cancel_sign_in));
+    unawaited(_call(Operation.googleCancelSignIn));
   }
 
   @override
-  Future<void> disconnect() => _call(Operation.google_disconnect);
+  Future<void> disconnect() => _call(Operation.googleDisconnect);
   @override
   Future<void> close() async {}
 }
@@ -491,7 +500,7 @@ class RemoteGoogleConnections implements ConnectedSources {
     String query = '',
     DateTime? modifiedAfter,
   }) async =>
-      (await domain.command(Operation.google_drive_files, {
+      (await domain.command(Operation.googleDriveFiles, {
                 'parent': parent,
                 'query': query,
                 'modifiedAfter': modifiedAfter?.toIso8601String(),
@@ -505,7 +514,7 @@ class RemoteGoogleConnections implements ConnectedSources {
     Map<String, dynamic>? metadata,
     bool preserveDeleted = false,
   }) async {
-    await domain.command(Operation.google_import_file, {'id': fileId});
+    await domain.command(Operation.googleImportFile, {'id': fileId});
   }
 
   @override
@@ -513,12 +522,12 @@ class RemoteGoogleConnections implements ConnectedSources {
     String folderId, {
     bool refreshing = false,
   }) async {
-    await domain.command(Operation.google_import_folder, {'id': folderId});
+    await domain.command(Operation.googleImportFolder, {'id': folderId});
   }
 
   @override
   Future<void> importLastYear() async {
-    await domain.command(Operation.google_import_year);
+    await domain.command(Operation.googleImportYear);
   }
 
   @override
@@ -526,17 +535,17 @@ class RemoteGoogleConnections implements ConnectedSources {
     String calendarId = 'primary',
     DateTime? now,
   }) async {
-    await domain.command(Operation.google_calendar);
+    await domain.command(Operation.googleCalendar);
   }
 
   @override
   Future<void> refresh() async {
-    await domain.command(Operation.google_refresh);
+    await domain.command(Operation.googleRefresh);
   }
 
   @override
   Future<void> importAttachments(int meeting) async {
-    await domain.command(Operation.google_attachments, {'id': meeting});
+    await domain.command(Operation.googleAttachments, {'id': meeting});
   }
 
   @override

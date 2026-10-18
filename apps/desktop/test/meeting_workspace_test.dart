@@ -137,7 +137,7 @@ void main() {
         findsOneWidget,
       );
       final snapshot =
-          await domain.command(Operation.meetings_get, {'id': id}) as Map;
+          await domain.command(Operation.meetingsGet, {'id': id}) as Map;
       final transcript = snapshot['transcript'] as List;
       expect(transcript.map((t) => t['speaker_id']), [0, 1, null]);
       expect(transcript.map((t) => t['speaker_label']), [

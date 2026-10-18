@@ -59,8 +59,9 @@ int _createAndProbe(
     } else {
       throw ArgumentError.value(backend, 'backend');
     }
-    if (engine == nullptr)
+    if (engine == nullptr) {
       throw StateError('Native model initialization failed');
+    }
     final rc = lib
         .lookupFunction<
           Int32 Function(Pointer<Void>),
@@ -91,11 +92,12 @@ int _createAndProbe(
     }
     return engine.address;
   } catch (_) {
-    if (engine != nullptr)
+    if (engine != nullptr) {
       lib.lookupFunction<
         Int32 Function(Pointer<Void>),
         int Function(Pointer<Void>)
       >('fs_engine_destroy')(engine);
+    }
     rethrow;
   } finally {
     calloc.free(a);
@@ -120,12 +122,14 @@ class NativeRuntime implements GenerationStatus {
   final String libraryPath;
   int _epoch = 0;
   _GenerationRequest? _active;
+  @override
   bool get generating => _active != null;
   bool get loaded => engine != nullptr && conversation != nullptr;
   String _phase = 'unconfigured', _lastError = '';
   NativeRuntime(String path) : libraryPath = path {
     lib = DynamicLibrary.open(path);
   }
+  @override
   Map<String, dynamic> get effectiveState {
     if (engine == nullptr) return {'state': _phase, 'error': _lastError};
     final p = lib
@@ -150,8 +154,9 @@ class NativeRuntime implements GenerationStatus {
     String backend = 'llama_cpp',
   }) async {
     if (backend == 'litert_lm') runtime = liteRtRunner(runtime);
-    if (!['llama_cpp', 'litert_lm'].contains(backend))
+    if (!['llama_cpp', 'litert_lm'].contains(backend)) {
       throw ArgumentError.value(backend);
+    }
     close();
     final epoch = _epoch;
     _phase = 'loading';
@@ -297,8 +302,9 @@ class NativeRuntime implements GenerationStatus {
     if (engine == nullptr || conversation == nullptr) {
       throw RpcError(RpcErrorCode.unavailable, 'Generation model unavailable');
     }
-    if (_active != null)
+    if (_active != null) {
       throw RpcError(RpcErrorCode.busy, 'Generation already in progress');
+    }
     if ((tools == null) != (toolDispatcher == null) ||
         (tools != null &&
             ((!plainConversation && tools.isEmpty) ||
@@ -480,8 +486,9 @@ class NativeRuntime implements GenerationStatus {
         }
         if (event['type'] == 'tool_request' ||
             event['type'] == 'model_response') {
-          if (toolDispatcher == null)
+          if (toolDispatcher == null) {
             throw StateError('Unexpected tool request');
+          }
           final delegated = event['type'] == 'model_response';
           final payload = jsonDecode(event['text'] as String);
           final calls = delegated
@@ -534,8 +541,9 @@ class NativeRuntime implements GenerationStatus {
               'Tool request is no longer current',
             );
           }
-          if (clock.elapsed >= timeout)
+          if (clock.elapsed >= timeout) {
             throw TimeoutException('Native generation timed out', timeout);
+          }
           final encodedReply = jsonEncode(message);
           final request = id.toNativeUtf8();
           final reply = encodedReply.toNativeUtf8();
@@ -545,10 +553,11 @@ class NativeRuntime implements GenerationStatus {
                   Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
                   int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
                 >('fs_generation_tool_reply')(handle, request, reply);
-            if (result != 0)
+            if (result != 0) {
               throw StateError(
                 'Tool request was cancelled or already answered',
               );
+            }
           } finally {
             calloc.free(request);
             calloc.free(reply);
@@ -558,8 +567,9 @@ class NativeRuntime implements GenerationStatus {
         if (event['type'] == 'tool_answer') {
           final response =
               jsonDecode(event['text'] as String) as Map<String, dynamic>;
-          if (response['error'] != null)
+          if (response['error'] != null) {
             throw StateError(response['error'].toString());
+          }
           final content = response['content'];
           final String text;
           if (content is String) {
@@ -594,12 +604,14 @@ class NativeRuntime implements GenerationStatus {
   }
 
   /// Supplying an ID prevents a stale UI/controller from cancelling a new task.
+  @override
   bool cancel({String? requestId}) {
     final owner = _active;
     if (owner == null ||
         owner.released ||
-        (requestId != null && owner.id != requestId))
+        (requestId != null && owner.id != requestId)) {
       return false;
+    }
     owner.cancelled = true;
     lib.lookupFunction<
       Int32 Function(Pointer<Void>),
@@ -608,6 +620,7 @@ class NativeRuntime implements GenerationStatus {
     return true;
   }
 
+  @override
   void close() {
     _epoch++;
     _phase = 'unconfigured';

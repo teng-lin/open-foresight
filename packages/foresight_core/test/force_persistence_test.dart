@@ -17,7 +17,9 @@ void main() {
     try {
       final a = store.importText('A', 'body', 'text/plain', 'fixture');
       final b = store.importText('B', 'body', 'text/plain', 'fixture');
-      for (final id in [a, b]) store.state(id, 'indexed');
+      for (final id in [a, b]) {
+        store.state(id, 'indexed');
+      }
       store.db.execute(
         'INSERT INTO models(kind,path,digest,runtime) VALUES(?,?,?,?)',
         ['embedding', '/fixture', 'digest', '/fixture'],
@@ -64,7 +66,9 @@ void main() {
       var store = Store('${dir.path}/app.db');
       final a = store.importText('A', 'body', 'text/plain', 'fixture'),
           b = store.importText('B', 'body', 'text/plain', 'fixture');
-      for (final id in [a, b]) store.state(id, 'indexed');
+      for (final id in [a, b]) {
+        store.state(id, 'indexed');
+      }
       final identity = jsonEncode([
         graphLayoutAlgorithmVersion,
         'digest',
@@ -167,7 +171,9 @@ void main() {
       final store = Store('${dir.path}/app.db');
       final a = store.importText('A', 'body', 'text/plain', 'fixture'),
           b = store.importText('B', 'body', 'text/plain', 'fixture');
-      for (final id in [a, b]) store.state(id, 'indexed');
+      for (final id in [a, b]) {
+        store.state(id, 'indexed');
+      }
       final identity = jsonEncode([
         graphLayoutAlgorithmVersion,
         'digest',

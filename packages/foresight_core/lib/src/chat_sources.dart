@@ -54,8 +54,9 @@ ResolvedChatCitations resolveChatCitations(String text, int sourceCount) {
   for (final match in _citation.allMatches(text)) {
     for (final number in _numbers.allMatches(match[0]!)) {
       final index = int.tryParse(number[0]!);
-      if (index != null && index > 0 && index <= sourceCount)
+      if (index != null && index > 0 && index <= sourceCount) {
         selected.add(index);
+      }
     }
   }
   final indices = selected.toList();

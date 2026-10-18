@@ -64,8 +64,9 @@ void main() {
     test(
       'deferred service assignment publishes only after commit, cancelled=$cancel',
       () async {
-        for (final source in store.sources)
+        for (final source in store.sources) {
           store.state(source['id'] as String, 'indexed');
+        }
         final domain = DeferredEmbeddingDomain(
           store,
           Helper('${root.path}/socket', '${root.path}/helper'),

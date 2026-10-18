@@ -53,8 +53,9 @@ void main() {
       )(hold ? 1 : 0);
   int emit(int channel, int marker, {int count = 2000}) {
     final bytes = ByteData(count * 2);
-    for (var i = 0; i < count; i++)
+    for (var i = 0; i < count; i++) {
       bytes.setInt16(i * 2, marker, Endian.little);
+    }
     return emitEvent(channel, {
       'type': 'pcm',
       'sampleRate': 1000,
@@ -531,12 +532,12 @@ void main() {
         app.recordingMeeting = id;
         app.recordingBegan = now;
         await expectLater(
-          domain.command(Operation.meetings_pause, {'id': id + 1}),
+          domain.command(Operation.meetingsPause, {'id': id + 1}),
           throwsStateError,
         );
         expect(recording.paused, false);
         final paused =
-            await domain.command(Operation.meetings_pause, {'id': id}) as Map;
+            await domain.command(Operation.meetingsPause, {'id': id}) as Map;
         expect(paused['active'], true);
         expect(paused['paused'], true);
         now = now.add(const Duration(seconds: 20));
@@ -555,14 +556,14 @@ void main() {
           'paused',
         );
         await expectLater(
-          domain.command(Operation.models_speech, {
+          domain.command(Operation.modelsSpeech, {
             'path': 'unused',
             'runtime': 'unused',
           }),
           throwsStateError,
         );
         final resumed =
-            await domain.command(Operation.meetings_resume, {'id': id}) as Map;
+            await domain.command(Operation.meetingsResume, {'id': id}) as Map;
         expect(resumed['paused'], false);
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -570,8 +571,8 @@ void main() {
           ]).single['state'],
           'recording',
         );
-        await domain.command(Operation.meetings_pause);
-        final stopped = await domain.command(Operation.meetings_stop) as Map;
+        await domain.command(Operation.meetingsPause);
+        final stopped = await domain.command(Operation.meetingsStop) as Map;
         expect(stopped['active'], false);
         expect(stopped['meeting_id'], isNull);
         expect(stopped['began'], isNull);
@@ -585,7 +586,7 @@ void main() {
           'empty',
         );
         await expectLater(
-          domain.command(Operation.meetings_resume),
+          domain.command(Operation.meetingsResume),
           throwsStateError,
         );
       } finally {

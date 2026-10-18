@@ -77,8 +77,10 @@ class RuntimeIdentityTest(unittest.TestCase):
     def test_app_bundle_hosts_use_sealed_resource_identity(self):
         app = self.root / "Relocated path with spaces/Example.app"
         for relative in (
-            "Contents/MacOS/loader",
-            "Contents/Resources/bin/loader",
+            "Contents/MacOS/ui",
+            "Contents/MacOS/mcp",
+            "Contents/Resources/bin/model",
+            "Contents/Resources/bin/helper",
             "Contents/Library/Services/Service.app/Contents/MacOS/loader",
         ):
             with self.subTest(host=relative):

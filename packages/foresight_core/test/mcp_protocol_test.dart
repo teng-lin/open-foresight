@@ -186,7 +186,7 @@ void main() {
         final request = await fixture.serviceRequest();
         expect(request['method'], tool.operation.wire);
         expect(request['args'], arguments);
-        final result = tool.operation == Operation.answer_stream
+        final result = tool.operation == Operation.answerStream
             ? 'fixture answer'
             : {'forwarded': tool.name};
         fixture.reply(request, result);
@@ -196,7 +196,7 @@ void main() {
           reply['result']['structuredContent'],
           allOf(
             containsPair(
-              tool.operation == Operation.answer_stream ? 'answer' : 'result',
+              tool.operation == Operation.answerStream ? 'answer' : 'result',
               result,
             ),
             containsPair('trust', 'untrusted'),
@@ -269,16 +269,15 @@ void main() {
     () async {
       final id = ++fixture.sequence;
       final bytes = utf8.encode(
-        jsonEncode({
-              'jsonrpc': '2.0',
-              'id': id,
-              'method': 'tools/call',
-              'params': {
-                'name': 'search',
-                'arguments': {'query': 'café 日本語'},
-              },
-            }) +
-            '\n',
+        '${jsonEncode({
+          'jsonrpc': '2.0',
+          'id': id,
+          'method': 'tools/call',
+          'params': {
+            'name': 'search',
+            'arguments': {'query': 'café 日本語'},
+          },
+        })}\n',
       );
       final split = bytes.indexOf(0xc3) + 1;
       fixture.process.stdin.add(bytes.sublist(0, split));

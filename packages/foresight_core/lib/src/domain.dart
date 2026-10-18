@@ -42,11 +42,12 @@ class Domain {
               .isNotEmpty);
 
   SearchCallbacks searchCallbacks() {
-    if (!webSearchAvailable)
+    if (!webSearchAvailable) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Web search is unavailable in this build.',
       );
+    }
     return _webSearch ??= SearchCallbacks(
       search: SearchService(
         apiKey: runtimeConfiguration['FORESIGHT_SEARCH_API_KEY']!,
@@ -64,11 +65,12 @@ class Domain {
 
   void checkWorkspace(int generation) {
     _checkOpen();
-    if (generation != _workspaceGeneration)
+    if (generation != _workspaceGeneration) {
       throw RpcError(
         RpcErrorCode.cancelled,
         'Workspace was cleared; retry the operation',
       );
+    }
   }
 
   /// Invalidate work before deleting local data.

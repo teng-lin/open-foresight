@@ -215,8 +215,9 @@ Future<void> openPlatformUri(Uri uri) async {
     Platform.isMacOS ? '/usr/bin/open' : 'xdg-open',
     [uri.toString()],
   );
-  if (result.exitCode != 0)
+  if (result.exitCode != 0) {
     throw StateError('Could not open $uri: ${result.stderr}');
+  }
 }
 
 Future<void> platformNotification(String title, String message) async {
@@ -233,10 +234,11 @@ Future<void> platformNotification(String title, String message) async {
                 message,
               ])
       : await Process.run('notify-send', [title, message]);
-  if (result.exitCode != 0)
+  if (result.exitCode != 0) {
     throw StateError(
       'Notification delivery failed. ${_notificationFailure(result)}',
     );
+  }
 }
 
 const _nativeEnvironmentKeys = {
@@ -276,8 +278,9 @@ void configureNativeEnvironment() {
   for (final entry in values) {
     final key = entry.key.toNativeUtf8(), value = entry.value.toNativeUtf8();
     try {
-      if (configure(key, value) != 0)
+      if (configure(key, value) != 0) {
         throw StateError('Cannot configure native runtime ${entry.key}');
+      }
     } finally {
       calloc.free(key);
       calloc.free(value);
@@ -303,8 +306,9 @@ String _notificationFailure(ProcessResult result) {
     final body = jsonDecode(result.stdout.toString());
     if (body is Map &&
         body['error'] is String &&
-        (body['error'] as String).isNotEmpty)
+        (body['error'] as String).isNotEmpty) {
       return body['error'] as String;
+    }
   } on FormatException {
     /* Linux notify-send reports failures on stderr. */
   }
@@ -325,18 +329,20 @@ Future<Map<String, dynamic>> notificationCapabilities({
     return {'available': result.exitCode == 0, 'backend': 'freedesktop'};
   }
   final helper = runtimeConfiguration['FORESIGHT_NOTIFICATIONS'];
-  if (helper == null)
+  if (helper == null) {
     throw StateError(
       'The bundled notification adapter is unavailable. Reinstall Open Foresight.',
     );
+  }
   final result = await Process.run(helper, [
     requestPermission ? '--request-permission' : '--capabilities',
   ]);
   final body = Map<String, dynamic>.from(
     jsonDecode(result.stdout.toString()) as Map,
   );
-  if (result.exitCode != 0 && body['granted'] != false)
+  if (result.exitCode != 0 && body['granted'] != false) {
     throw StateError(_notificationFailure(result));
+  }
   return body;
 }
 
@@ -346,8 +352,9 @@ String installationLockPath(String appRoot) {
   final canonical = canonicalProfilePath(appRoot);
   final result = Process.runSync('/usr/bin/id', ['-u']);
   final uid = result.stdout.toString().trim();
-  if (result.exitCode != 0 || int.tryParse(uid) == null)
+  if (result.exitCode != 0 || int.tryParse(uid) == null) {
     throw StateError('Cannot determine installation lock owner');
+  }
   final identity = sha256
       .convert(utf8.encode(canonical))
       .toString()
@@ -361,12 +368,14 @@ RandomAccessFile? acquireInstallationLock() {
   final path = installationLockPath(root);
   privateDirectory(File(path).parent.path);
   if (FileSystemEntity.typeSync(path, followLinks: false) ==
-      FileSystemEntityType.link)
+      FileSystemEntityType.link) {
     throw StateError('Installation lock must not be a symbolic link');
+  }
   final lock = File(path).openSync(mode: FileMode.append);
   try {
-    if (Process.runSync('/bin/chmod', ['600', path]).exitCode != 0)
+    if (Process.runSync('/bin/chmod', ['600', path]).exitCode != 0) {
       throw StateError('Cannot protect installation lock');
+    }
     try {
       lock.lockSync(FileLock.shared);
     } on FileSystemException {
@@ -396,10 +405,11 @@ void validateServiceCompatibility(
   final revision = config['FORESIGHT_RUNTIME_REVISION'];
   if (revision == null) return;
   final root = config['FORESIGHT_INSTALL_ROOT'];
-  if (root == null)
+  if (root == null) {
     throw StateError(
       'The application runtime configuration is missing its installation root. Reinstall Open Foresight.',
     );
+  }
   if (status['application_api_version'] != 1 ||
       status['runtime_revision'] != revision ||
       status['installation_root'] != canonicalProfilePath(root)) {

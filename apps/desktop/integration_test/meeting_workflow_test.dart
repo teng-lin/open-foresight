@@ -497,7 +497,7 @@ void main() {
         ]).single['edited'],
         'My meeting review: preserve this edit.',
       );
-      await workspace.d.command(Operation.preferences_set, {
+      await workspace.d.command(Operation.preferencesSet, {
         'key': 'liveEnhance',
         'value': 'false',
       });
@@ -630,7 +630,7 @@ void main() {
       final speechAsset = reopened.d.store
           .rows("SELECT path FROM models WHERE kind='speech'")
           .single['path'];
-      await reopened.d.command(Operation.models_register, {
+      await reopened.d.command(Operation.modelsRegister, {
         'kind': 'speech',
         'path': speechAsset,
         'runtime': slowSpeech.path,
@@ -680,7 +680,7 @@ void main() {
         ).single['state'],
         'completed',
       );
-      await afterCancellation.d.command(Operation.models_register, {
+      await afterCancellation.d.command(Operation.modelsRegister, {
         'kind': 'speech',
         'path': speechAsset,
         'runtime': savedSpeech,
@@ -689,7 +689,7 @@ void main() {
       final inactivitySetting =
           afterCancellation.d.store.preference('inactivity', '15') as String;
       final inactivityObservations = <Map<String, Object?>>[];
-      await afterCancellation.d.command(Operation.preferences_set, {
+      await afterCancellation.d.command(Operation.preferencesSet, {
         'key': 'inactivity',
         'value': realInactivity ? '5' : '0.1',
       });
@@ -754,7 +754,7 @@ void main() {
         ).single['state'],
         'empty',
       );
-      await afterCancellation.d.command(Operation.preferences_set, {
+      await afterCancellation.d.command(Operation.preferencesSet, {
         'key': 'inactivity',
         'value': inactivitySetting,
       });
@@ -823,7 +823,7 @@ void main() {
       final address = 'http://127.0.0.1:${server.port}/notes';
       try {
         await afterCancellation.run(() async {
-          await afterCancellation.d.command(Operation.sources_import_url, {
+          await afterCancellation.d.command(Operation.sourcesImportUrl, {
             'url': address,
             'allow_private_network': true,
           });
@@ -831,7 +831,7 @@ void main() {
         expect(afterCancellation.error, isEmpty);
         page = 'URL acceptance fixture: the review is Wednesday.';
         await afterCancellation.run(() async {
-          await afterCancellation.d.command(Operation.sources_refresh, {
+          await afterCancellation.d.command(Operation.sourcesRefresh, {
             'allow_private_network': true,
           });
         });
@@ -931,11 +931,11 @@ void main() {
         fixtureStore.close();
       }
       final labelledSources = afterCancellation.d.store.sources;
-      await afterCancellation.d.command(Operation.labels_set, {
+      await afterCancellation.d.command(Operation.labelsSet, {
         'id': labelledSources[0]['id'],
         'labels': ['Planning'],
       });
-      await afterCancellation.d.command(Operation.labels_set, {
+      await afterCancellation.d.command(Operation.labelsSet, {
         'id': labelledSources[1]['id'],
         'labels': ['Planning', 'Local AI'],
       });
@@ -1286,7 +1286,7 @@ void main() {
         (k, v) => MapEntry(k, GraphPoint(v.x * .75, v.y, v.z)),
       );
       expect(
-        await afterCancellation.d.command(Operation.graph_save, {
+        await afterCancellation.d.command(Operation.graphSave, {
           'identity': snapshot.identity,
           'sources': graphSceneSources(snapshotStore.sources, snapshot.vectors),
           'vectors': snapshot.vectors,

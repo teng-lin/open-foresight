@@ -21,13 +21,15 @@ Future<List<AudioDevice>> audioDevices({
       ((executable, arguments) => Process.run(executable, arguments));
   if (macOS ?? Platform.isMacOS) {
     final helper = runtimeConfiguration['FORESIGHT_AUDIO_DEVICES'];
-    if (helper == null)
+    if (helper == null) {
       throw StateError('The bundled Mac audio device adapter is unavailable.');
+    }
     final result = await run(helper, [
       '--list-devices',
     ]).timeout(const Duration(seconds: 10));
-    if (result.exitCode != 0)
+    if (result.exitCode != 0) {
       throw StateError('Mac audio discovery failed: ${result.stderr}');
+    }
     final devices = (jsonDecode(result.stdout as String) as List).map((entry) {
       final item = entry as Map;
       return AudioDevice(
@@ -41,8 +43,9 @@ Future<List<AudioDevice>> audioDevices({
   }
 
   final result = await run('pw-dump', []).timeout(const Duration(seconds: 10));
-  if (result.exitCode != 0)
+  if (result.exitCode != 0) {
     throw StateError('PipeWire audio devices are unavailable.');
+  }
   final devices = <AudioDevice>[];
   for (final item in jsonDecode(result.stdout as String) as List) {
     final info = (item as Map)['info'];
@@ -123,8 +126,9 @@ Future<Map<String, dynamic>> requestSystemAudioPermission() async {
           Pointer<Utf8> Function(Int32),
           Pointer<Utf8> Function(int)
         >('fs_audio_request_system')(10000);
-    if (result == nullptr)
+    if (result == nullptr) {
       throw StateError('System audio permission request failed');
+    }
     try {
       return Map<String, dynamic>.from(
         jsonDecode(result.toDartString()) as Map,
