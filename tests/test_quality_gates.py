@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import patch
 
 from tools.check_subprocess_timeouts import missing_timeouts
+from tools import check_subprocess_timeouts as timeout_gate
 from tools.build_macos_sdk import run as build_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,30 @@ def test_timeout_gate_handles_aliases_and_rejects_unbounded_values():
     ) == [2]
     assert not missing_timeouts(
         'import subprocess\nsubprocess.run(["git"], timeout=30)'
+    )
+
+
+def test_timeout_gate_checks_new_untracked_sources_before_staging(tmp_path, capsys):
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=30)
+    (tmp_path / "tracked.py").write_text(
+        'import subprocess\nsubprocess.run(["git"], timeout=30)\n'
+    )
+    subprocess.run(["git", "add", "tracked.py"], cwd=tmp_path, check=True, timeout=30)
+    (tmp_path / ".gitignore").write_text("ignored.py\n")
+    (tmp_path / "ignored.py").write_text('import subprocess\nsubprocess.run(["git"])')
+    directory = tmp_path / "new tools"
+    directory.mkdir()
+    (directory / "untracked\nsource.py").write_text(
+        'import subprocess\nsubprocess.run(["git"])\n'
+    )
+    assert timeout_gate.source_files(tmp_path) == [
+        "new tools/untracked\nsource.py",
+        "tracked.py",
+    ]
+    assert timeout_gate.main(tmp_path) == 1
+    assert (
+        "source.py:2: subprocess call requires a finite timeout"
+        in capsys.readouterr().out
     )
 
 

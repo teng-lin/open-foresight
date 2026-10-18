@@ -17,6 +17,12 @@ TOOLS = re.compile(
     r"(?:c\+\+|g\+\+|gcc|cc|clang\+\+|clang|ar|gcc-ar|llvm-ar|ranlib|gcc-ranlib|llvm-ranlib|ld|ld.lld|lld)(?:-\d+(?:\.\d+)*)?$"
 )
 
+# GNU Make 3.81 prints a backtick/apostrophe pair, not shell quoting.
+# Only these complete status records may bypass command parsing.
+MAKE_DIRECTORY_STATUS = re.compile(
+    r"g?make(?:\[[0-9]+\])?: (?:Entering|Leaving) directory `/[^'`\r\n]*'"
+)
+
 
 def dependency(path):
     return "_deps" in Path(path).parts
@@ -24,10 +30,14 @@ def dependency(path):
 
 def planned_dependency_work(output):
     for line in output.splitlines():
+        if MAKE_DIRECTORY_STATUS.fullmatch(line):
+            continue
         try:
             tokens = shlex.split(line)
         except ValueError as error:
-            raise ValueError("Unparseable dependency dry-run output") from error
+            raise ValueError(
+                f"Unparseable dependency dry-run output: {line[:500]!r}"
+            ) from error
         if "cmake_link_script" in tokens:
             index = tokens.index("cmake_link_script")
             if index + 1 < len(tokens) and dependency(tokens[index + 1]):

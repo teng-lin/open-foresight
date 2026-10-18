@@ -85,6 +85,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Trust this checked-out workspace for container Git provenance checks
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install artifact transport without updating compiler packages
         run: pacman -S --needed --noconfirm github-cli
       - name: Install hash-verified Python test tools

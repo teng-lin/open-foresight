@@ -2,7 +2,11 @@
 
 import pytest
 
-from tools.verify_app_dependency_reuse import planned_dependency_work, verify
+from tools.verify_app_dependency_reuse import (
+    MAKE_DIRECTORY_STATUS,
+    planned_dependency_work,
+    verify,
+)
 
 
 @pytest.mark.parametrize(
@@ -44,3 +48,58 @@ def test_unknown_backend_fails_before_invoking_it(tmp_path):
 
     with pytest.raises(ValueError, match="reviewed Make or Ninja"):
         verify(tmp_path, request)
+
+
+@pytest.mark.parametrize("program", ["make", "make[1]", "gmake", "gmake[12]"])
+@pytest.mark.parametrize("action", ["Entering", "Leaving"])
+def test_gnu_make_381_directory_status_is_not_a_shell_command(program, action):
+    # GNU Make 3.81 main.c log_working_directory uses `%s', including levels.
+    # https://github.com/mirror/make/blob/776d8b7bc2ff83f8ebf5d357ec89e3bbe6d83962/main.c#L3098-L3125
+    directory = "/private/var/folders/test path/src/build/_deps/sentencepiece-build"
+    status = f"{program}: {action} directory `{directory}'"
+    assert planned_dependency_work(status) is None
+    forbidden = (
+        "cd /src/build/_deps/spm-build && /usr/bin/c++ -c source.cpp -o source.o"
+    )
+    assert planned_dependency_work(status + "\n" + forbidden) == forbidden
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "echo make[1]: Entering directory `/src/build'",
+        "make[1]: Entering directory `/src/build' && /usr/bin/c++ -c bad.cpp",
+        "make[1]: Entering directory `/src/build' trailing-command",
+        "make[1]: Entering directory '/src/build",
+        "make[1]: Unknown diagnostic `/src/build'",
+        "/usr/bin/c++ -c 'unclosed.cpp",
+    ],
+)
+def test_only_complete_known_make_status_bypasses_shell_parsing(line):
+    with pytest.raises(
+        ValueError, match="Unparseable dependency dry-run output"
+    ) as error:
+        planned_dependency_work(line)
+    assert repr(line) in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    [
+        "; gcc -c _deps/bad.c",
+        " && gcc -c _deps/bad.c",
+        " trailing-command",
+        "; gcc -c _deps/bad.c # '",
+    ],
+)
+def test_make_status_prefix_cannot_hide_trailing_commands(suffix):
+    line = "make[1]: Entering directory `/src/build'" + suffix
+    assert MAKE_DIRECTORY_STATUS.fullmatch(line) is None
+
+
+def test_parse_error_diagnostic_is_bounded():
+    line = "gcc -c '" + "x" * 1000
+    with pytest.raises(ValueError) as error:
+        planned_dependency_work(line)
+    assert repr(line[:500]) in str(error.value)
+    assert len(str(error.value)) < 600
