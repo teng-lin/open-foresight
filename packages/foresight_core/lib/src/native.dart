@@ -236,6 +236,26 @@ class NativeRuntime implements GenerationStatus {
     maxOutputTokens: maxOutputTokens,
   );
 
+  /// Web answers consume already-fetched results; model text has no tool path.
+  Stream<Map<String, dynamic>> generateWebAnswer(
+    String id,
+    String prompt, {
+    List<Map<String, dynamic>> messages = const [],
+    required String systemPrompt,
+    Duration timeout = const Duration(minutes: 5),
+    int maxOutputTokens = 1024,
+  }) => _generate(
+    id,
+    prompt,
+    tools: const [],
+    toolDispatcher: ReferenceToolDispatcher({}),
+    initialMessages: messages,
+    plainConversation: true,
+    systemPrompt: systemPrompt,
+    timeout: timeout,
+    maxOutputTokens: maxOutputTokens,
+  );
+
   /// A fresh local conversation without tools or an implicit system preface.
   /// A null output limit preserves the native default. The original serialized
   /// input setting is passed through without inventing a local token limit.

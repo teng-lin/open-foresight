@@ -129,23 +129,106 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     observed = []
 
     def run(package, files, expected, env, *rest):
-        observed.append((package, dict(env)))
+        observed.append((package, list(files), dict(env), expected))
         return {"passed": expected, "skipped": 0}
+
+    def pipewire(env, output):
+        return nullcontext(
+            dict(
+                env, FORESIGHT_LIVE_SINK="ci-sink", FORESIGHT_MICROPHONE_TARGET="ci-mic"
+            )
+        )
 
     with (
         patch.object(gates, "model_file", return_value="/fixture/model"),
-        patch.object(
-            gates, "private_pipewire", side_effect=lambda env, output: nullcontext(env)
-        ),
+        patch.object(gates, "private_pipewire", side_effect=pipewire),
         patch.object(gates, "run_tests", side_effect=run),
     ):
         gates.audio_gate(args, {"PATH": "/bin"})
-    assert observed[0][0] == "desktop" and observed[0][1][
+    assert observed[0][0] == "desktop" and observed[0][2][
         "FORESIGHT_WHISPER_RUNTIME"
     ] == str(runner)
     assert (
-        observed[1][0] == "core" and "FORESIGHT_WHISPER_RUNTIME" not in observed[1][1]
+        observed[1][0] == "core" and "FORESIGHT_WHISPER_RUNTIME" not in observed[1][2]
     )
+    assert observed[2][1] == ["integration_test/meeting_workflow_test.dart"]
+    assert observed[2][3] == 1
+    meeting = observed[2][2]
+    assert meeting["FORESIGHT_PLAYBACK_TARGET"] == "ci-sink"
+    assert meeting["FORESIGHT_PRIVATE_PIPEWIRE"] == "1"
+    assert meeting["FORESIGHT_AUDIO_FIXTURE"].endswith("tests/fixtures/audio/jfk.wav")
+    assert meeting["FORESIGHT_DATA"].endswith("/meeting-data")
+    assert meeting["FORESIGHT_REFERENCE_SCREENSHOTS"].endswith("/meeting-screenshots")
+    assert meeting["FORESIGHT_MEETING_REPORT"].endswith("/meeting-workflow.json")
+    assert "FORESIGHT_PLAYBACK_TARGET" not in observed[0][2]
+
+
+def test_private_profile_is_readable_after_the_suite(tmp_path):
+    private = tmp_path / "meeting-data" / "nested"
+    private.mkdir(parents=True)
+    (tmp_path / "meeting-data").chmod(0o700)
+    private.chmod(0o700)
+    secret = private / "profile.db"
+    secret.write_text("rows")
+    secret.chmod(0o600)
+    gates.publish_report_tree(tmp_path)
+    assert (tmp_path / "meeting-data").stat().st_mode & 0o007 == 0o005
+    assert private.stat().st_mode & 0o007 == 0o005
+    assert secret.stat().st_mode & 0o007 == 0o004
+    assert secret.read_text() == "rows"
+
+
+def test_report_tree_continues_when_the_mount_root_cannot_be_changed(tmp_path):
+    private = tmp_path / "meeting-data"
+    private.mkdir()
+    private.chmod(0o700)
+    secret = private / "profile.db"
+    secret.write_text("rows")
+    secret.chmod(0o600)
+    original = Path.chmod
+
+    def chmod(self, mode):
+        if self == tmp_path:
+            raise PermissionError(1, "Operation not permitted", str(self))
+        return original(self, mode)
+
+    with patch.object(Path, "chmod", chmod):
+        gates.publish_report_tree(tmp_path)
+    assert private.stat().st_mode & 0o007 == 0o005
+    assert secret.stat().st_mode & 0o007 == 0o004
+
+
+def test_meeting_workflow_waits_until_the_desktop_mounts():
+    source = (
+        ROOT / "apps/desktop/integration_test/meeting_workflow_test.dart"
+    ).read_text()
+    start = source.index("Future<dynamic> startedWorkspace")
+    helper = source[start : source.index("Future<void> captureWindow")]
+    assert "find.text('Open Foresight could not start')" in helper
+    assert "find.byType(app.Workspace)" in helper
+    assert "Desktop did not start:" in helper
+    assert source.count("await startedWorkspace(tester)") == 4
+    assert (
+        "await tester.pump();\n      final dynamic workspace = tester.state"
+        not in source
+    )
+
+
+def test_meeting_workflow_alias_is_outside_the_device_test_directory():
+    relative = gates.widget_test_alias("integration_test/meeting_workflow_test.dart")
+    alias = ROOT / "apps/desktop" / relative
+    try:
+        assert relative == "test/private_pipewire_meeting_workflow_test.dart"
+        assert alias.is_symlink()
+        assert (
+            alias.resolve()
+            == (
+                ROOT / "apps/desktop/integration_test/meeting_workflow_test.dart"
+            ).resolve()
+        )
+        assert not str(alias).startswith(str(ROOT / "apps/desktop/integration_test"))
+    finally:
+        alias.unlink(missing_ok=True)
 
 
 def test_model_groups_both_execute_when_desktop_group_fails(tmp_path):

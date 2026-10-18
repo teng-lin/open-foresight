@@ -605,7 +605,7 @@ void main() {
     await expectLater(
       app.call('models.speech', {
         'path': model.path,
-        'runtime': '/bin/true',
+        'runtime': Platform.resolvedExecutable,
         'digest': 'fixture',
       }, current: () => ++checks == 1),
       throwsA(
