@@ -127,3 +127,36 @@ def test_missing_parent_never_looks_up_cached_green_result(tmp_path):
                 [],
             )
     find.assert_not_called()
+
+
+def test_runner_does_not_expose_validation_environment_in_receipt(
+    tmp_path, monkeypatch
+):
+    secret = "private-build-setting"
+    monkeypatch.setenv("FORESIGHT_COVERAGE", secret)
+    monkeypatch.setenv("CFLAGS", secret)
+    with (
+        patch.object(runner.cache, "git", return_value=b"a" * 40),
+        patch.object(
+            runner.cache, "fingerprint", side_effect=RuntimeError("captured")
+        ) as fingerprint,
+    ):
+        with pytest.raises(RuntimeError, match="captured"):
+            runner.run(
+                tmp_path,
+                "linux",
+                "native",
+                {},
+                {},
+                {},
+                "repo",
+                1,
+                "pull_request",
+                False,
+                [],
+            )
+    environment = fingerprint.call_args.kwargs["environment"]
+    assert secret not in json.dumps(environment)
+    digest = hashlib.sha256(secret.encode()).hexdigest()
+    assert environment["validation_flags"]["FORESIGHT_COVERAGE"] == digest
+    assert environment["validation_flags"]["CFLAGS"] == digest
