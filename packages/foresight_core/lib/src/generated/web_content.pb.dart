@@ -57,19 +57,14 @@ class FetchExternalWebsiteRequest extends $pb.GeneratedMessage {
     ..aOS(1, _omitFieldNames ? '' : 'url')
     ..aOB(2, _omitFieldNames ? '' : 'useTrawler')
     ..aOB(4, _omitFieldNames ? '' : 'summarizeContent')
-    ..a<$core.int>(
-        5, _omitFieldNames ? '' : 'maxSummarizationWords', $pb.PbFieldType.O3,
-        defaultOrMaker: 100)
+    ..aI(5, _omitFieldNames ? '' : 'maxSummarizationWords', defaultOrMaker: 100)
     ..aOS(6, _omitFieldNames ? '' : 'modelId')
-    ..a<$core.int>(
-        8, _omitFieldNames ? '' : 'summaryTimeoutMillis', $pb.PbFieldType.O3)
-    ..a<$core.int>(
-        9, _omitFieldNames ? '' : 'maxInputTokens', $pb.PbFieldType.O3)
+    ..aI(8, _omitFieldNames ? '' : 'summaryTimeoutMillis')
+    ..aI(9, _omitFieldNames ? '' : 'maxInputTokens')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  FetchExternalWebsiteRequest clone() =>
-      FetchExternalWebsiteRequest()..mergeFromMessage(this);
+  FetchExternalWebsiteRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   FetchExternalWebsiteRequest copyWith(
           void Function(FetchExternalWebsiteRequest) updates) =>
@@ -85,8 +80,6 @@ class FetchExternalWebsiteRequest extends $pb.GeneratedMessage {
       FetchExternalWebsiteRequest._();
   @$core.override
   FetchExternalWebsiteRequest createEmptyInstance() => create();
-  static $pb.PbList<FetchExternalWebsiteRequest> createRepeated() =>
-      $pb.PbList<FetchExternalWebsiteRequest>();
   @$core.pragma('dart2js:noInline')
   static FetchExternalWebsiteRequest getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<FetchExternalWebsiteRequest>(create);
@@ -192,13 +185,11 @@ class FetchExternalWebsiteResponse extends $pb.GeneratedMessage {
     ..aOS(3, _omitFieldNames ? '' : 'content')
     ..aOS(5, _omitFieldNames ? '' : 'mimeType')
     ..aOS(7, _omitFieldNames ? '' : 'summary')
-    ..a<$core.double>(
-        8, _omitFieldNames ? '' : 'summaryConfidenceScore', $pb.PbFieldType.OD)
+    ..aD(8, _omitFieldNames ? '' : 'summaryConfidenceScore')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  FetchExternalWebsiteResponse clone() =>
-      FetchExternalWebsiteResponse()..mergeFromMessage(this);
+  FetchExternalWebsiteResponse clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   FetchExternalWebsiteResponse copyWith(
           void Function(FetchExternalWebsiteResponse) updates) =>
@@ -214,8 +205,6 @@ class FetchExternalWebsiteResponse extends $pb.GeneratedMessage {
       FetchExternalWebsiteResponse._();
   @$core.override
   FetchExternalWebsiteResponse createEmptyInstance() => create();
-  static $pb.PbList<FetchExternalWebsiteResponse> createRepeated() =>
-      $pb.PbList<FetchExternalWebsiteResponse>();
   @$core.pragma('dart2js:noInline')
   static FetchExternalWebsiteResponse getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<FetchExternalWebsiteResponse>(create);
@@ -296,12 +285,11 @@ class GetSharedConfigRequest extends $pb.GeneratedMessage {
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'appVersion')
     ..aOS(2, _omitFieldNames ? '' : 'platform')
-    ..a<$core.int>(3, _omitFieldNames ? '' : 'fallbackMode', $pb.PbFieldType.O3)
+    ..aI(3, _omitFieldNames ? '' : 'fallbackMode')
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  GetSharedConfigRequest clone() =>
-      GetSharedConfigRequest()..mergeFromMessage(this);
+  GetSharedConfigRequest clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   GetSharedConfigRequest copyWith(
           void Function(GetSharedConfigRequest) updates) =>
@@ -315,8 +303,6 @@ class GetSharedConfigRequest extends $pb.GeneratedMessage {
   static GetSharedConfigRequest create() => GetSharedConfigRequest._();
   @$core.override
   GetSharedConfigRequest createEmptyInstance() => create();
-  static $pb.PbList<GetSharedConfigRequest> createRepeated() =>
-      $pb.PbList<GetSharedConfigRequest>();
   @$core.pragma('dart2js:noInline')
   static GetSharedConfigRequest getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<GetSharedConfigRequest>(create);
@@ -382,7 +368,7 @@ class OnDeviceModelMetadata extends $pb.GeneratedMessage {
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'ai_edge.foresight.service'),
       createEmptyInstance: create)
-    ..a<$core.int>(1, _omitFieldNames ? '' : 'modelType', $pb.PbFieldType.O3)
+    ..aI(1, _omitFieldNames ? '' : 'modelType')
     ..aOS(2, _omitFieldNames ? '' : 'name')
     ..aOS(3, _omitFieldNames ? '' : 'version')
     ..aOS(6, _omitFieldNames ? '' : 'blobId')
@@ -390,8 +376,7 @@ class OnDeviceModelMetadata extends $pb.GeneratedMessage {
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  OnDeviceModelMetadata clone() =>
-      OnDeviceModelMetadata()..mergeFromMessage(this);
+  OnDeviceModelMetadata clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   OnDeviceModelMetadata copyWith(
           void Function(OnDeviceModelMetadata) updates) =>
@@ -405,8 +390,6 @@ class OnDeviceModelMetadata extends $pb.GeneratedMessage {
   static OnDeviceModelMetadata create() => OnDeviceModelMetadata._();
   @$core.override
   OnDeviceModelMetadata createEmptyInstance() => create();
-  static $pb.PbList<OnDeviceModelMetadata> createRepeated() =>
-      $pb.PbList<OnDeviceModelMetadata>();
   @$core.pragma('dart2js:noInline')
   static OnDeviceModelMetadata getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<OnDeviceModelMetadata>(create);
@@ -483,14 +466,13 @@ class ForesightSharedConfig extends $pb.GeneratedMessage {
       package: const $pb.PackageName(
           _omitMessageNames ? '' : 'ai_edge.foresight.service'),
       createEmptyInstance: create)
-    ..pc<OnDeviceModelMetadata>(
-        1, _omitFieldNames ? '' : 'onDeviceModelMetadatas', $pb.PbFieldType.PM,
+    ..pPM<OnDeviceModelMetadata>(
+        1, _omitFieldNames ? '' : 'onDeviceModelMetadatas',
         subBuilder: OnDeviceModelMetadata.create)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
-  ForesightSharedConfig clone() =>
-      ForesightSharedConfig()..mergeFromMessage(this);
+  ForesightSharedConfig clone() => deepCopy();
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
   ForesightSharedConfig copyWith(
           void Function(ForesightSharedConfig) updates) =>
@@ -504,8 +486,6 @@ class ForesightSharedConfig extends $pb.GeneratedMessage {
   static ForesightSharedConfig create() => ForesightSharedConfig._();
   @$core.override
   ForesightSharedConfig createEmptyInstance() => create();
-  static $pb.PbList<ForesightSharedConfig> createRepeated() =>
-      $pb.PbList<ForesightSharedConfig>();
   @$core.pragma('dart2js:noInline')
   static ForesightSharedConfig getDefault() => _defaultInstance ??=
       $pb.GeneratedMessage.$_defaultFor<ForesightSharedConfig>(create);

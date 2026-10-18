@@ -20,6 +20,7 @@ class GoogleFixture {
   final queries = <String>[], exports = <String>[];
   final fieldQueries = <String>[];
   void Function()? onExport;
+  Future<void> Function()? beforeUserInfo;
   late GoogleEndpoints endpoints;
   Future<void> start() async {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -60,6 +61,7 @@ class GoogleFixture {
             'scope': GoogleAuth.scopes.join(' '),
           };
         } else if (path == '/userinfo') {
+          await beforeUserInfo?.call();
           expect(
             request.headers.value('authorization'),
             startsWith('Bearer fixture-access'),

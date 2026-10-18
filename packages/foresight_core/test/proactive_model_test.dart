@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -9,6 +10,9 @@ void main() {
     'dedicated detector queues English and Chinese questions without a chat model',
     () async {
       final directory = Directory.systemTemp.createTempSync('proactive-model-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final helper = Helper(
         '${directory.path}/unused.sock',

@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -66,7 +68,7 @@ void main() {
   late RecoveryControl controlService;
   late Server server;
   setUp(() async {
-    root = Directory('/tmp').createTempSync('of-recovery-');
+    root = shortTestTempRoot.createTempSync('of-recovery-');
     store = Store('${root.path}/app.db');
     rag = RecoveryRag();
     controlService = RecoveryControl();
@@ -195,11 +197,13 @@ void main() {
       await failure;
       expect(domain.restoring, isFalse);
       final result =
-          await domain.command('meetings.create', {'title': 'Recovered'})
+          await domain.command(Operation.meetings_create, {
+                'title': 'Recovered',
+              })
               as Map;
       expect(result['id'], isA<int>());
       await expectLater(
-        domain.commandCurrent('notes.save', {}, () => false),
+        domain.commandCurrent(Operation.notes_save, {}, () => false),
         throwsStateError,
       );
       await domain.application.close();

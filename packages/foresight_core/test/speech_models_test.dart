@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:foresight_core/src/model_pins.dart';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/speech_models.dart';
@@ -14,7 +15,11 @@ void main() {
       contains('ggml-large-v3-turbo.bin'),
     );
     for (final model in speechModels) {
-      expect(model.digest, matches(RegExp(r'^[a-f0-9]{64}$')));
+      final pin = modelPin(model.filename);
+      expect(model.digest, pin['sha256']);
+      expect(model.repository, pin['repository']);
+      expect(model.revision, pin['revision']);
+      expect(model.bytes, pin['bytes']);
       expect(model.revision, matches(RegExp(r'^[a-f0-9]{40}$')));
     }
   });
@@ -22,6 +27,9 @@ void main() {
     'download reuses verified speech .bin without creating a client',
     () async {
       final root = Directory.systemTemp.createTempSync('speech-reuse-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final bytes = [1, 2, 3, 4];
       final model = GemmaModel(
         'fixture',
@@ -49,6 +57,9 @@ void main() {
     'registration follows load and preserves old on failure or cancellation',
     () async {
       final root = Directory.systemTemp.createTempSync('speech-setup-test-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final old = File('${root.path}/old.bin')..writeAsStringSync('old model');
       final asset = File('${root.path}/model.bin')

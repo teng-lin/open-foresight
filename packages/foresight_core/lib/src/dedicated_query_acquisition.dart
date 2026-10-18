@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -102,7 +103,8 @@ class DedicatedQueryAcquisition {
   }) async {
     bool valid() => !_closed && (current == null || current());
     void check() {
-      if (!valid()) throw StateError('Model setup cancelled');
+      if (!valid())
+        throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
 
     Directory? stage;
@@ -185,6 +187,9 @@ class DedicatedQueryAcquisition {
         await adopt(encrypted);
       }
       accepted = true;
+    } catch (_) {
+      check();
+      rethrow;
     } finally {
       try {
         await close();

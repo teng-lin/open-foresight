@@ -39,6 +39,8 @@ on:
       - 'packages/foresight_core/lib/src/domain.dart'
       - 'packages/foresight_core/lib/src/recording.dart'
       - 'tools/test_macos_release_models.py'
+      - 'tools/model_pins.py'
+      - 'packages/foresight_core/lib/src/model_pins.dart'
 permissions:
   contents: read
   actions: read
@@ -91,8 +93,8 @@ jobs:
           PY
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
         with:
-          # The Docker driver can consume a freshly built local PR SDK.
-          driver: docker
+          # Local SDK tags need Docker; registry caches use the container driver.
+          driver: ${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}
       - name: Authenticate SDK registry
         env:
           REGISTRY_TOKEN: ${{ github.token }}
@@ -114,7 +116,7 @@ jobs:
         id: models
         with:
           path: build/acceptance-models
-          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py') }}
+          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare checksum-pinned public model fixtures
         id: fixtures
         run: |
@@ -123,7 +125,7 @@ jobs:
         if: steps.models.outputs.cache-hit != 'true'
         with:
           path: build/acceptance-models
-          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py') }}
+          key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Real CPU model, helper, citation and cancellation gates
         run: |
           mkdir -p test-results/models test-results/virtual-audio

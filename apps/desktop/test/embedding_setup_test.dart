@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,6 +36,9 @@ void main() {
     final temporary = Directory.systemTemp.createTempSync(
       'foresight-embedding-setup-',
     );
+    addTearDown(() {
+      if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+    });
     final original = File('${temporary.path}/old.litertlm')
       ..writeAsStringSync('old registration');
     final candidate = File('${temporary.path}/candidate.litertlm')
@@ -55,7 +60,10 @@ void main() {
     final helper = OfflineHelper(socket, '${temporary.path}/helper');
     try {
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
       state.update(() {
@@ -68,9 +76,7 @@ void main() {
       Future<void> register() async {
         await tester.runAsync(() async {
           await tester.tap(find.text('Register and load'));
-          for (var i = 0; i < 100 && state.busy == true; i++) {
-            await Future<void>.delayed(const Duration(milliseconds: 20));
-          }
+          await eventually(() => state.busy != true);
           expect(state.busy, false);
         });
         await tester.pumpAndSettle();
