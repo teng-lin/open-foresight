@@ -143,26 +143,33 @@ class ExtensionArtifactsTest(unittest.TestCase):
         return self.path
 
     def test_macos_package_extracts_only_authenticated_arm64_native_libraries(self):
-        header = b'\xcf\xfa\xed\xfe\x0c\x00\x00\x01'
-        extra = [('litert_lm/' + name, header + name.encode())
-                 for name in extensions.MACOS_VENDOR_LIBRARIES]
-        manifest = self.fixture(native=header + b'native', extra=extra)
-        bundle = extensions.verify_extensions_manifest(manifest, platform_name='darwin')
-        output = self.root / 'lib'
+        header = b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01"
+        extra = [
+            ("litert_lm/" + name, header + name.encode())
+            for name in extensions.MACOS_VENDOR_LIBRARIES
+        ]
+        manifest = self.fixture(native=header + b"native", extra=extra)
+        bundle = extensions.verify_extensions_manifest(manifest, platform_name="darwin")
+        output = self.root / "lib"
         output.mkdir()
         copied = extensions.copy_macos_extension_dependencies(bundle, output)
-        self.assertEqual({path.name for path in copied}, {'liblitert-lm.dylib', *extensions.MACOS_VENDOR_LIBRARIES})
-        self.assertFalse(list(output.rglob('*.py')))
-        bundle.wheel.write_bytes(b'changed after verification')
-        with self.assertRaisesRegex(ValueError, 'changed after verification'):
+        self.assertEqual(
+            {path.name for path in copied},
+            {"liblitert-lm.dylib", *extensions.MACOS_VENDOR_LIBRARIES},
+        )
+        self.assertFalse(list(output.rglob("*.py")))
+        bundle.wheel.write_bytes(b"changed after verification")
+        with self.assertRaisesRegex(ValueError, "changed after verification"):
             extensions.copy_macos_extension_dependencies(bundle, output)
 
     def test_macos_package_rejects_non_arm64_vendor_payload(self):
-        header = b'\xcf\xfa\xed\xfe\x0c\x00\x00\x01'
-        bundle = extensions.verify_extensions_manifest(self.fixture(native=header), platform_name='darwin')
-        output = self.root / 'lib'
+        header = b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01"
+        bundle = extensions.verify_extensions_manifest(
+            self.fixture(native=header), platform_name="darwin"
+        )
+        output = self.root / "lib"
         output.mkdir()
-        with self.assertRaisesRegex(ValueError, 'macOS arm64 Mach-O'):
+        with self.assertRaisesRegex(ValueError, "macOS arm64 Mach-O"):
             extensions.copy_macos_extension_dependencies(bundle, output)
 
     def save(self):
