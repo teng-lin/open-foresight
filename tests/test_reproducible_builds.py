@@ -119,15 +119,21 @@ class BuildPolicyTests(unittest.TestCase):
             tag = next(step for step in job['steps'] if step.get('id') == 'tag')['run']
             self.assertIn('refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT', tag)
 
-    def test_pr_acceptance_can_use_unpublished_dependency_changes(self):
-        workflow = yaml.safe_load((ROOT / '.github/workflows/integration-acceptance.yml').read_text())
-        steps = workflow['jobs']['linux']['steps']
-        resolve = next(step for step in steps if step.get('id') == 'sdk')['run']
-        self.assertIn('tools/build_linux_sdk_local.sh', resolve)
-        self.assertIn('image=foresight-sdk:pr', resolve)
-        self.assertIn('--optional', resolve)
-        driver = next(step for step in steps if 'docker/setup-buildx-action@' in step.get('uses', ''))
-        self.assertEqual(driver['with']['driver'], 'docker')
+    def test_pr_consumers_can_use_unpublished_dependency_changes(self):
+        for name, job in (('integration-acceptance.yml', 'linux'),
+                          ('linux-packages.yml', 'ubuntu-package')):
+            with self.subTest(workflow=name):
+                workflow = yaml.safe_load((ROOT / '.github/workflows' / name).read_text())
+                steps = workflow['jobs'][job]['steps']
+                resolve = next(step for step in steps if step.get('id') == 'sdk')['run']
+                self.assertIn('tools/build_linux_sdk_local.sh', resolve)
+                self.assertIn('image=foresight-sdk:pr', resolve)
+                self.assertIn('--optional', resolve)
+                self.assertIn('test "$task_result" = 4', resolve)
+                driver = next(step for step in steps if 'docker/setup-buildx-action@' in step.get('uses', ''))
+                self.assertEqual(driver['with']['driver'], 'docker')
+                build = next(step for step in steps if 'docker/build-push-action@' in step.get('uses', ''))
+                self.assertIn("|| ''", build['with']['cache-from'])
 
     def test_dart_auth_and_model_revisions_are_pinned(self):
         auth = [yaml.safe_load((ROOT / name / 'pubspec.lock').read_text())['packages']['googleapis_auth']

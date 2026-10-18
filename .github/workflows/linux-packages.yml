@@ -146,9 +146,17 @@ jobs:
       id: sdk
       env:
         GH_TOKEN: ${{ github.token }}
-        OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400
+        # PR dependency changes are built locally; no PR publishes an SDK image.
+        if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional; then
+          :
+        else
+          task_result=$?
+          test "$task_result" = 4
+          tools/build_linux_sdk_local.sh
+          echo 'image=foresight-sdk:pr' >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         python - <<'PY'
         import json,os,re
         image=json.load(open('build/sdk-descriptor/image.json'))['image']
@@ -171,6 +179,8 @@ jobs:
             output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
         PY
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        driver: docker
     - name: Authenticate private SDK registry
       env:
         REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -185,7 +195,7 @@ jobs:
         build-args: |
           SDK_IMAGE=${{ steps.sdk.outputs.image }}
           SOURCE_REVISION=${{ github.sha }}
-        cache-from: type=registry,ref=${{ steps.sdk.outputs.cache }}
+        cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
     - name: Build and install the Ubuntu 24.04 package
       env:
         VERSION: ${{ steps.version.outputs.version }}
@@ -195,7 +205,7 @@ jobs:
         python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
         mkdir -p artifacts
         cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
-        docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04 bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
+        docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
 on:
   workflow_call:
     inputs:
