@@ -386,6 +386,18 @@ void main() {
   );
 
   test(
+    'automatic question acquisition denies missing revision terms before download',
+    () async {
+      await expectLater(
+        app.call('models.acquire_query', {}),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.denied),
+        ),
+      );
+    },
+  );
+
+  test(
     'long meeting generation includes final facts within the model context',
     () async {
       final id = domain.store.meeting('Long meeting');
