@@ -1,3 +1,4 @@
+#include "build_identity.h"
 #include "helper_control.grpc.pb.h"
 #include "model.h"
 #include "rag_service.grpc.pb.h"
@@ -405,7 +406,7 @@ public:
         "vectors.chunks WHERE generation IN(SELECT id FROM vectors.generations "
         "WHERE status!='active'); DELETE FROM vectors.generations WHERE "
         "status!='active'");
-    state.set_build_id(FORESIGHT_BUILD_ID);
+    state.set_build_id(foresight_helper_build_id());
     state.set_reference_version("1.0.3");
     state.set_instance_id(
         std::to_string(getpid()) + "-" +
@@ -956,7 +957,8 @@ int main(int argc, char **argv) {
     if (!server)
       throw std::runtime_error("Cannot listen on socket");
     chmod(socket.c_str(), 0600);
-    std::cout << FORESIGHT_BUILD_ID << " ready " << socket << std::endl;
+    std::cout << foresight_helper_build_id() << " ready " << socket
+              << std::endl;
     server->Wait();
     close(lock);
     return 0;

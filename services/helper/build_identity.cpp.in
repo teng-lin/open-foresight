@@ -1,0 +1,3 @@
+const char *foresight_helper_build_id() {
+  return "open-foresight-@OPEN_FORESIGHT_VERSION@-@BUILD_REV@";
+}
