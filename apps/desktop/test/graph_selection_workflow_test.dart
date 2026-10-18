@@ -155,6 +155,25 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
       await tester.pumpAndSettle();
       expect(opened, [Uri.parse('https://example.test/original')]);
+      for (final unsafe in [
+        'javascript:alert(1)',
+        'data:text/html,payload',
+        'file://attacker/share',
+      ]) {
+        store.db.execute(
+          'UPDATE source_details SET source_uri=? WHERE source_id=?',
+          [unsafe, center],
+        );
+        state.update(() {});
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
+        await tester.pumpAndSettle();
+        expect(
+          opened,
+          [Uri.parse('https://example.test/original')],
+          reason: 'The inspector must reject $unsafe before calling the opener',
+        );
+      }
       await tester.ensureVisible(
         find.byKey(ValueKey('graph-related-${leaves.first}')),
       );
