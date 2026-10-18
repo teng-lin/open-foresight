@@ -183,3 +183,5 @@ Readiness polling in Dart tests always checks a condition and has a deadline; it
 ### Software Vulkan
 
 The PR and weekly acceptance container installs Mesa lavapipe and selects only its ICD. `accept_software_gpu.py` checks the shipped Vulkan Whisper runtime on two seconds of the pinned speech fixture, and attempts the shipped LiteRT GPU backend/model plus a 16-token decode. A missing OpenCL GPU API on the software driver is recorded explicitly as `unsupported_software_driver`; unexpected capability failures and every decode failure fail the gate. Lavapipe implements Vulkan, so it cannot establish OpenCL delegate support or production GPU correctness. Physical GPU inference remains a release-day manual check. Full probe diagnostics are retained with integration evidence.
+
+Workspace clear stress validation on 2026-10-18: 50 invocations at concurrency four, each running both online and offline cleanup/reopen variants (100 passing cases), with native/helper fixtures and isolated disk-backed test roots. Logs were retained in the local audit scratch directory; hosted test runs remain authoritative for runner-specific behavior.
