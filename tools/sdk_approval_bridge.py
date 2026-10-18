@@ -239,6 +239,7 @@ def find_original(
     semantic_identity,
     *,
     api,
+    optional_api,
     read_source,
     merged_source,
     dependency_jobs,
@@ -250,9 +251,15 @@ def find_original(
     import zipfile
 
     for entry in entries(repository, component, semantic_identity):
-        run = api(repository, f"actions/runs/{entry['producer_run']}")
-        payload = api(repository, f"actions/artifacts/{entry['artifact_id']}")
-        sidecar = api(repository, f"actions/artifacts/{entry['sidecar_id']}")
+        run = optional_api(repository, f"actions/runs/{entry['producer_run']}")
+        if run is None:
+            continue
+        payload = optional_api(repository, f"actions/artifacts/{entry['artifact_id']}")
+        if payload is None:
+            continue
+        sidecar = optional_api(repository, f"actions/artifacts/{entry['sidecar_id']}")
+        if sidecar is None:
+            continue
         legacy = entry["legacy_identity"]
         if (
             payload.get("expired")

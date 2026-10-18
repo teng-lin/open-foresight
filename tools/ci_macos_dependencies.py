@@ -2,6 +2,7 @@
 """Use trusted dependency artifacts, or build the pinned sources locally."""
 
 import argparse
+import json
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -56,14 +57,21 @@ def waiting_producers(repository, component, own_head, own_pr):
             page += 1
 
     def fingerprint_at(repo, commit, name):
-        return producer_identity(
-            repo,
-            commit,
-            name,
-            source_fingerprint,
-            fingerprint,
-            api,
-        )
+        try:
+            return producer_identity(
+                repo,
+                commit,
+                name,
+                source_fingerprint,
+                fingerprint,
+                api,
+            )
+        except json.JSONDecodeError:
+            raise
+        except ValueError:
+            # An older source may predate the consumer's supported recipe.
+            # API/network failures still propagate rather than authorize builds.
+            return None
 
     return compatible_producers(
         repository,

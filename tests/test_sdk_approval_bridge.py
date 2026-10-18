@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import subprocess
 import zipfile
 
 import pytest
@@ -18,6 +19,39 @@ FINAL = "b" * 40
 MERGE = "c" * 40
 SEMANTIC = "d" * 64
 IMAGE = "sha256:" + "e" * 64
+
+
+@pytest.mark.parametrize(
+    "field,route",
+    [
+        ("producer_run", "actions/runs/700"),
+        ("artifact_id", "actions/artifacts/700"),
+        ("sidecar_id", "actions/artifacts/700"),
+    ],
+)
+@pytest.mark.parametrize("status", [404, 503])
+def test_deleted_original_is_skipped_but_api_failures_abort(
+    original, monkeypatch, field, route, status
+):
+    missing = {**original["entry"], field: 700}
+    monkeypatch.setattr(bridge, "entries", lambda *args: [missing, original["entry"]])
+    previous = artifacts.api
+
+    def api(repository, requested):
+        if requested == route:
+            raise subprocess.CalledProcessError(
+                1, "gh", output=json.dumps({"status": status})
+            )
+        return previous(repository, requested)
+
+    monkeypatch.setattr(artifacts, "api", api)
+    if status == 404:
+        assert artifacts.probe(REPOSITORY, "linux-core", SEMANTIC)
+        assert original["downloads"] == [6]
+    else:
+        with pytest.raises(subprocess.CalledProcessError):
+            artifacts.probe(REPOSITORY, "linux-core", SEMANTIC)
+        assert original["downloads"] == []
 
 
 @pytest.fixture

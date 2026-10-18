@@ -529,6 +529,7 @@ def approved_original(repository, component, identity):
         component,
         identity,
         api=api,
+        optional_api=optional_api,
         read_source=lambda repository, commit, **kwargs: producer_trust.read_source(
             repository, commit, api=partial(immutable_source_api, api), **kwargs
         ),
@@ -537,6 +538,30 @@ def approved_original(repository, component, identity):
         download_zip=download_zip,
         verify_producer_source=producer_trust.verify_producer_source,
     )
+
+
+def candidate_verified(
+    repository, run, component, identity, receipt, job, payload, errors
+):
+    """Try all eligible candidates, retaining qualification failures until exhausted."""
+    try:
+        return producer_trust.verify_producer_source(
+            repository,
+            run,
+            component,
+            identity,
+            receipt,
+            job,
+            payload,
+            fingerprint_at=source_fingerprint_at,
+            qualified_control=qualified_producer_control,
+        )
+    except json.JSONDecodeError:
+        # Invalid API JSON is a protocol failure, not an incompatible candidate.
+        raise
+    except ValueError as error:
+        errors.append(error)
+        return False
 
 
 def probe(repository, component, identity, own_head="", own_pr=0):
@@ -557,6 +582,7 @@ def probe(repository, component, identity, own_head="", own_pr=0):
     candidates = api(repository, f"actions/artifacts?name={sidecar_name}&per_page=100")[
         "artifacts"
     ]
+    qualification_errors: list[ValueError] = []
     for sidecar in candidates:
         if (
             sidecar.get("expired")
@@ -624,7 +650,7 @@ def probe(repository, component, identity, own_head="", own_pr=0):
             and job.get("run_attempt", 1) == receipt["source_run_attempt"]
             and in_producer_attempt(payload, job)
             and in_producer_attempt(sidecar, job)
-            and producer_trust.verify_producer_source(
+            and candidate_verified(
                 repository,
                 run,
                 component,
@@ -632,8 +658,7 @@ def probe(repository, component, identity, own_head="", own_pr=0):
                 receipt,
                 job,
                 payload,
-                fingerprint_at=source_fingerprint_at,
-                qualified_control=qualified_producer_control,
+                qualification_errors,
             )
             for job in jobs
         ):
@@ -643,6 +668,8 @@ def probe(repository, component, identity, own_head="", own_pr=0):
             flush=True,
         )
         return True
+    if qualification_errors:
+        raise qualification_errors[-1]
     return False
 
 
@@ -685,6 +712,7 @@ def pull(
         return True
     artifact_name = name(component, identity)
     deadline = time.monotonic() + wait
+    qualification_errors: list[ValueError] = []
     while True:
         artifacts = api(
             repository, f"actions/artifacts?name={artifact_name}&per_page=100"
@@ -732,7 +760,7 @@ def pull(
                         j["name"] == JOBS[component]
                         and j.get("conclusion") == "success"
                         and j.get("run_attempt", 1) == attempt
-                        and producer_trust.verify_producer_source(
+                        and candidate_verified(
                             repository,
                             run,
                             component,
@@ -740,8 +768,7 @@ def pull(
                             receipt,
                             j,
                             artifact,
-                            fingerprint_at=source_fingerprint_at,
-                            qualified_control=qualified_producer_control,
+                            qualification_errors,
                         )
                         for j in jobs
                     ):
@@ -774,6 +801,8 @@ def pull(
             )
             return True
         if time.monotonic() >= deadline:
+            if qualification_errors:
+                raise qualification_errors[-1]
             return False
         print(f"Waiting for verified dependency/candidate {artifact_name}", flush=True)
         time.sleep(min(20, max(0, deadline - time.monotonic())))
