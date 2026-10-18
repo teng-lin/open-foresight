@@ -330,6 +330,71 @@ class ProducerTests(SourceTree):
                     self.find_work(environment={**current, key: "different"})["hit"]
                 )
 
+    def test_native_work_sdk_key_migration_preserves_actual_content_binding(self):
+        sdk = {
+            "identity": "1" * 64,
+            "content_sha256": "2" * 64,
+            "prefix": "/workspace/build/sdk",
+        }
+        self.receipt["environment"] = {**ENVIRONMENT, "sdk": sdk}
+        self.identity = self.key(environment=self.receipt["environment"])
+        self.artifact["name"] = cache.name("linux", "native", self.identity)
+        self.receipt["identity"] = self.identity
+        current_sdk = {**sdk, "identity": "3" * 64}
+        current = {**ENVIRONMENT, "sdk": current_sdk}
+        self.assertTrue(self.find_work(environment=current)["hit"])
+        for change in (
+            {"content_sha256": "4" * 64},
+            {"content_sha256": "invalid"},
+            {"prefix": "/different/sdk"},
+            {"abi": "different"},
+        ):
+            with self.subTest(change=change):
+                self.assertFalse(
+                    self.find_work(
+                        environment={**current, "sdk": {**current_sdk, **change}}
+                    )["hit"]
+                )
+        # A legacy receipt without actual SDK bytes cannot waive its identity.
+        self.receipt["environment"]["sdk"] = {
+            "identity": "1" * 64,
+            "prefix": sdk["prefix"],
+        }
+        self.identity = self.key(environment=self.receipt["environment"])
+        self.receipt["identity"] = self.identity
+        self.artifact["name"] = cache.name("linux", "native", self.identity)
+        self.assertFalse(self.find_work(environment=current)["hit"])
+
+    def test_native_work_ignores_legacy_language_versions_and_flutter_locator_only(
+        self,
+    ):
+        old_flags = {"CI": "a" * 64, "FORESIGHT_FLUTTER_EXECUTABLE": "b" * 64}
+        old = {
+            **ENVIRONMENT,
+            "dart": "old Dart",
+            "flutter": "old Flutter",
+            "validation_environment_sha256": old_flags,
+        }
+        self.receipt["environment"] = old
+        self.identity = self.key(environment=old)
+        self.receipt["identity"] = self.identity
+        self.artifact["name"] = cache.name("linux", "native", self.identity)
+        current = {
+            **ENVIRONMENT,
+            "dart": None,
+            "flutter": None,
+            "validation_environment_sha256": {"CI": "a" * 64},
+        }
+        self.assertTrue(self.find_work(environment=current)["hit"])
+        changed_flags = {"CI": "a" * 64, "FORESIGHT_REAL_NATIVE_FLAG": "c" * 64}
+        self.assertFalse(
+            self.find_work(
+                environment={**current, "validation_environment_sha256": changed_flags}
+            )["hit"]
+        )
+        self.assertIn("FORESIGHT_FLUTTER_EXECUTABLE", old_flags)
+        self.assertEqual(self.receipt["environment"]["dart"], "old Dart")
+
     def test_native_work_verifies_frozen_legacy_recipe_independently(self):
         self.write("apps/desktop/pubspec.yaml", "version: 1.2.3+4\ndependencies: old\n")
         self.write("packages/foresight_test_support/lib/fixture.dart", "old support")
