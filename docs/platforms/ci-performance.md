@@ -13,17 +13,29 @@ aggregate result, including when selected expensive jobs are skipped.
 
 Dependency producers and macOS consumers check out the PR head. Advancing main
 therefore cannot make consumers request a merge-tree identity that no producer
-built. A trusted completed artifact is used when available. Otherwise macOS
-builds its pinned SDK and runtime sources locally; Linux has the corresponding
-local SDK fallback. Fork PRs validate locally rather than publishing artifacts
-with repository credentials. Same-repository PRs normally reuse their qualified
-producer artifacts. Source fallback preserves the artifact trust policy.
+built. A trusted completed artifact is used when available. Consumers wait for a
+compatible running producer across application-only commits instead of starting
+a duplicate build. A source build is a last resort when no compatible verified
+output can be obtained. Fork PRs retain local validation without publishing
+artifacts with repository credentials. Follow [AGENTS.md](../../AGENTS.md):
+identify the affected input or artifact problem and justify a rebuild before
+triggering it. A network error or cache-key migration alone does not justify
+recompilation.
 
-Component identities include the recipes, producing workflow and producing
-tools, plus parent identities. Promotion accepts a PR artifact only from its
-merged final head; intermediate commits are rebuilt on main. Consumers verify
-repository, workflow, event, successful producer job, ZIP digest, component
-identity and archive contents before installing a prefix.
+Component identities include consumed recipes, source trees, relevant pins,
+build settings and parent identities. Receipt handling, cache transport and
+unrelated shared pins do not invalidate compiler outputs. Producer-control
+qualification is checked separately from build compatibility. Consumers verify
+repository, workflow, event, actual producer source, successful job and attempt,
+upload times, ZIP digest, component identity and archive contents.
+
+The reviewed SDK approval manifest preserves compatible existing artifacts
+across the identity migration and stacked/rebased PRs. Each entry pins the
+original run, source, artifact, receipt and checksums, and proves that its full
+legacy build/control input closure equals an approved merged source. It retains
+the original provenance. Only this exact verified path may create local approval
+metadata for an old descriptor. Cleanup retains referenced original identities.
+These entries do not authorize arbitrary intermediate PR artifacts.
 
 ## Application stages
 
@@ -40,8 +52,19 @@ validation flags, locale, timezone and UTC date, plus prerequisite identities.
 Unknown paths invalidate every stage. Native code changes invalidate all four;
 core changes invalidate core, desktop and service; desktop tests/assets affect
 only desktop and service. Desktop library changes also invalidate core because
-its command-registry guard reads that source tree. Documentation edits do not
-invalidate application stages. Main, release and scheduled validation run fresh.
+its command-registry guard reads that source tree. Dart test-support changes
+invalidate their consuming Dart stages, without invalidating native compilation.
+Documentation edits do not invalidate application stages. Main, release and
+scheduled validation run fresh.
+
+A native validation miss can restore compatible compilation work from a
+successful producer while rerunning configure, build and CTest. This is separate
+from reusing a passed test result: the compiler, SDK, system packages and build
+settings must match, while a new validation date or changed test still requires
+fresh tests. Changed source bytes rebuild even when checkout timestamps are old;
+unchanged native/dependency objects retain their exact output timestamps.
+Legacy warm-cache lookup may transfer a candidate before checking its full
+environment. Failed producer jobs are not accepted as validated cache results.
 
 The native key describes the implementation and validation inputs, rather than
 including the source commit in every compiled object. On a native hit, CMake
@@ -56,7 +79,8 @@ the input tree derived, so those results are not reusable as clean PR results.
 Ubuntu package lifecycle and model/audio acceptance share one application image
 and build. The package job extracts that exact bundle, creates the DEB and
 installs it in Ubuntu 24.04 to test dependencies, file layout, service lifecycle
-and installed document parsing. Those installation checks remain necessary for
+and installed document parsing. Documentation-only main pushes skip this work;
+manual and scheduled acceptance still run. Those installation checks remain necessary for
 application or packaging changes, but no longer compile a duplicate application.
 The disposable installer-test container permits the nested parser sandbox to create namespaces and grants `NET_ADMIN` so bubblewrap can initialize its private loopback interface; the actual
 parser sandbox is still required and checked. Release package publication retains
