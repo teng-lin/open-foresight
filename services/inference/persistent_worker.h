@@ -198,6 +198,8 @@ void persistent_worker(std::istream &input, std::ostream &output,
   auto write = [&](const std::string &line) {
     std::lock_guard lock(output_mutex);
     output << line << std::endl;
+    if (!output)
+      throw std::runtime_error("Cannot write persistent worker frame");
   };
   auto cancel_request = [&] {
     if (!current)
