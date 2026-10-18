@@ -4,6 +4,14 @@
 helper database. Both writable and read-only opens refuse a newer version before
 changing journal settings. A failed constructor closes its SQLite handle.
 
+Before opening an existing profile for writing, Store checks its version through
+another read-only connection. Otherwise, closing a rejected writable connection
+could checkpoint a future database's WAL and rewrite the main file. The probe
+resolves symlinks and reads any existing WAL; when no WAL exists it uses a brief
+immutable URI connection to avoid creating sidecars. That probe closes before
+the writable connection opens. Live read-only Store connections remain ordinary
+SQLite readers so they observe subsequent commits.
+
 Writable opens hold `BEGIN IMMEDIATE` while re-reading the version and applying
 all pending steps. Each step advances `PRAGMA user_version` inside the same
 transaction. A failure or process exit before commit rolls back schema, backfills,
@@ -30,3 +38,5 @@ extend an already released step or create tables from feature constructors.
 `test/schema_migrations_test.dart` exercises old-profile upgrades, refusal of
 future profiles, rollback after DDL followed by a failed data backfill, successful
 retry, Google table ownership, and reopening without repeated conversion writes.
+It also kills a writer after a future-version commit and verifies that rejecting
+the profile preserves both its main file and uncheckpointed WAL byte for byte.
