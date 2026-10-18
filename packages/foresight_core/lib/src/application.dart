@@ -927,7 +927,7 @@ class Application {
             a['kind'] as String,
             a['path'] as String,
             a['runtime'] as String? ?? '',
-            backend: a['backend'] as String? ?? 'llama_cpp',
+            backend: a['backend'] as String?,
             expectedDigest: a['digest'] as String?,
             modelType: a['model_type'] as int?,
             current: () => !_closed && (current?.call() ?? true),
@@ -947,6 +947,7 @@ class Application {
           domain.generator = candidate;
           return null;
         case 'models.embedding':
+          requireEmbeddingBundle(a['path'] as String);
           final result = await domain.helper.client.updateModelPaths(
             UpdateModelPathsRequest(
               embeddingModelPath: a['path'] as String,
@@ -965,9 +966,7 @@ class Application {
             a['runtime'] as String? ?? '',
             backend: a['gpu'] == true
                 ? 'litert_lm_embedding_gpu'
-                : (a['path'] as String).endsWith('.litertlm')
-                ? 'litert_lm_embedding_cpu'
-                : 'sentence_transformers_cpu',
+                : 'litert_lm_embedding_cpu',
             expectedDigest: a['digest'] as String?,
             current: () => !_closed && (current?.call() ?? true),
           );

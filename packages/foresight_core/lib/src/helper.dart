@@ -71,6 +71,7 @@ class Helper {
     );
   }
   Future<bool> hasActiveModel(String path, String digest, bool useGpu) async {
+    if (!path.endsWith('.litertlm')) return false;
     final deadline = DateTime.now().add(const Duration(minutes: 30));
     try {
       while (!stopping) {
@@ -87,9 +88,7 @@ class Helper {
         }
         final backend = useGpu
             ? 'litert-lm-embedding-gpu'
-            : path.endsWith('.litertlm')
-            ? 'litert-lm-embedding-cpu'
-            : 'onnx-bert-cpu';
+            : 'litert-lm-embedding-cpu';
         return current.pipeline == 'ready' &&
             current.tokenizerReady &&
             current.lastError.isEmpty &&

@@ -52,7 +52,8 @@ def main():
         finally:
             staging.unlink(missing_ok=True)
     receipt = {'repository': REPOSITORY, 'revision': REVISION, 'file': FILENAME,
-               'sha256': SHA256, 'bytes': SIZE, 'license': 'Apache-2.0',
+               'sha256': SHA256, 'bytes': SIZE,
+               'license_source': f'https://huggingface.co/{REPOSITORY}/blob/{REVISION}/README.md',
                'source': 'Public LiteRT Community conversion linked by Google',
                'limitation': 'Exact Mac downloaded weight checksum is not established'}
     (args.destination / 'asset-provenance.json').write_text(json.dumps(receipt, indent=2) + '\n')

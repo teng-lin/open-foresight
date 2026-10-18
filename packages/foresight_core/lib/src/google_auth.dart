@@ -1,3 +1,5 @@
+import 'secret_store.dart';
+export 'secret_store.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -66,6 +68,10 @@ class GoogleAuth {
   final Directory directory;
   final GoogleEndpoints endpoints;
   final HttpClient http;
+  final SecretStore secretStore;
+  late final String _secretKey = sha256
+      .convert(utf8.encode(directory.absolute.path))
+      .toString();
   GoogleClient? client;
   String loadError = '';
   Map<String, dynamic>? _tokens;
@@ -74,13 +80,27 @@ class GoogleAuth {
   Future<String>? _refreshing;
   bool _closed = false, _disconnecting = false;
   int _authorizationGeneration = 0;
+  Future<void> _credentialBarrier = Future<void>.value();
+  Future<void>? _forgetting;
+
+  Future<T> _changeCredential<T>(Future<T> Function() action) {
+    final result = _credentialBarrier.then((_) => action());
+    _credentialBarrier = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace __) {},
+    );
+    return result;
+  }
+
   GoogleAuth(
     this.directory, {
     GoogleEndpoints? endpoints,
     HttpClient? http,
     File? defaultClient,
+    SecretStore? secretStore,
   }) : endpoints = endpoints ?? GoogleEndpoints(),
-       http = http ?? HttpClient() {
+       http = http ?? HttpClient(),
+       secretStore = secretStore ?? PlatformSecretStore() {
     final config = File('${directory.path}/client.json'),
         tokens = File('${directory.path}/tokens.json');
     try {
@@ -101,10 +121,17 @@ class GoogleAuth {
         }
       }
       if (tokens.existsSync()) {
+        privateDirectory(directory.path);
+        if (FileSystemEntity.typeSync(tokens.path, followLinks: false) !=
+                FileSystemEntityType.file ||
+            (tokens.statSync().mode & 0x3f) != 0) {
+          throw StateError('Saved Google authorization must be a private file');
+        }
         final loaded =
             jsonDecode(tokens.readAsStringSync()) as Map<String, dynamic>;
         if (loaded['access_token'] is! String ||
-            loaded['refresh_token'] is! String ||
+            (loaded['refresh_token'] is! String &&
+                loaded['refresh_token_store'] != 'platform') ||
             loaded['account_sub'] is! String ||
             loaded['expires_at'] is! int) {
           throw StateError('Incomplete saved Google authorization');
@@ -119,7 +146,8 @@ class GoogleAuth {
   }
   bool get connected =>
       !_disconnecting &&
-      _tokens?['refresh_token'] is String &&
+      (_tokens?['refresh_token'] is String ||
+          _tokens?['refresh_token_store'] == 'platform') &&
       _tokens?['account_sub'] is String;
   String get account => _tokens?['account_sub'] as String? ?? '';
   String get email => _tokens?['email'] as String? ?? '';
@@ -133,15 +161,15 @@ class GoogleAuth {
     int? authorizationGeneration,
   }) async {
     if (_closed) throw StateError('Google connection closed');
-    await directory.create(recursive: true);
-    await Process.run('chmod', ['700', directory.path]);
+    privateDirectory(directory.path);
     final temp = File('${directory.path}/.$name-${_random(8)}');
     try {
-      await temp.writeAsString(jsonEncode(data), flush: true);
+      await temp.create();
       final mode = await Process.run('chmod', ['600', temp.path]);
       if (mode.exitCode != 0 || _closed) {
         throw StateError('Cannot protect Google connection data');
       }
+      await temp.writeAsString(jsonEncode(data), flush: true);
       if (authorizationGeneration != null &&
           authorizationGeneration != _authorizationGeneration) {
         throw StateError('Google connection changed');
@@ -152,7 +180,58 @@ class GoogleAuth {
     }
   }
 
+  Future<String?> _refreshCredential() async {
+    final token = _tokens?['refresh_token'];
+    if (token is String) return token;
+    if (_tokens?['refresh_token_store'] == 'platform') {
+      final token = await secretStore.read(_secretKey);
+      if (token == null) {
+        throw StateError(
+          'Saved Google authorization is unavailable. Sign in again.',
+        );
+      }
+      return token;
+    }
+    return null;
+  }
+
+  Future<void> _saveTokens(Map<String, dynamic> data, int generation) =>
+      _changeCredential(() => _persistTokens(data, generation));
+
+  Future<void> _persistTokens(Map<String, dynamic> data, int generation) async {
+    if (_closed || generation != _authorizationGeneration) {
+      throw StateError('Google connection changed');
+    }
+    final token =
+        data['refresh_token'] as String? ?? await _refreshCredential();
+    if (token == null) throw StateError('Missing Google refresh authorization');
+    final secured = await secretStore.write(_secretKey, token);
+    try {
+      final persisted = Map<String, dynamic>.from(data);
+      if (secured) {
+        persisted.remove('refresh_token');
+        persisted['refresh_token_store'] = 'platform';
+      } else {
+        persisted.remove('refresh_token_store');
+        persisted['refresh_token'] = token;
+      }
+      await _save(
+        'tokens.json',
+        persisted,
+        authorizationGeneration: generation,
+      );
+    } catch (_) {
+      if (secured && generation != _authorizationGeneration) {
+        await secretStore.delete(_secretKey);
+      }
+      rethrow;
+    }
+  }
+
   Future<void> configure(File file) async {
+    if (_disconnecting || _forgetting != null) {
+      throw StateError('Google disconnect is in progress');
+    }
     if (connected) {
       throw StateError(
         'Disconnect the current Google account before changing its OAuth client.',
@@ -222,6 +301,10 @@ class GoogleAuth {
   }
 
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
+    if (_closed) throw StateError('Google connection closed');
+    if (_disconnecting || _forgetting != null) {
+      throw StateError('Google disconnect is in progress');
+    }
     final generation = _authorizationGeneration;
     if (connected) {
       throw StateError(
@@ -325,12 +408,13 @@ class GoogleAuth {
         'account_sub': identity['sub'],
         'email': identity['email'],
       };
-      if (saved['refresh_token'] is! String || saved['account_sub'] is! String) {
+      if (saved['refresh_token'] is! String ||
+          saved['account_sub'] is! String) {
         throw StateError(
           'Google did not return a persistent account authorization. Reconnect.',
         );
       }
-      await _save('tokens.json', saved, authorizationGeneration: generation);
+      await _saveTokens(saved, generation);
       if (generation != _authorizationGeneration) {
         throw StateError('Google connection changed');
       }
@@ -374,7 +458,7 @@ class GoogleAuth {
         form: {
           'client_id': client!.id,
           if (client!.secret.isNotEmpty) 'client_secret': client!.secret,
-          'refresh_token': _tokens!['refresh_token'] as String,
+          'refresh_token': (await _refreshCredential())!,
           'grant_type': 'refresh_token',
         },
       ),
@@ -389,7 +473,7 @@ class GoogleAuth {
           DateTime.now().millisecondsSinceEpoch +
           (token['expires_in'] as num).toInt() * 1000,
     };
-    await _save('tokens.json', saved, authorizationGeneration: generation);
+    await _saveTokens(saved, generation);
     if (generation != _authorizationGeneration) {
       throw StateError('Google connection changed');
     }
@@ -425,11 +509,25 @@ class GoogleAuth {
   Future<void> forget() {
     _authorizationGeneration++;
     cancelSignIn();
+    final existing = _forgetting;
+    if (existing != null) return existing;
     final token = _tokens?['refresh_token'] as String?;
+    final secured = _tokens?['refresh_token_store'] == 'platform';
     final file = File('${directory.path}/tokens.json');
     if (file.existsSync()) file.deleteSync();
     _tokens = null;
-    return _revokeBestEffort(token);
+    return _forgetting = _changeCredential(() async {
+      String? refresh = token;
+      if (refresh == null && secured) {
+        try {
+          refresh = await secretStore.read(_secretKey);
+        } catch (_) {
+          /* Still erase. */
+        }
+      }
+      await secretStore.delete(_secretKey);
+      await _revokeBestEffort(refresh);
+    }).whenComplete(() => _forgetting = null);
   }
 
   Future<void> _revokeBestEffort(String? token) async {
@@ -456,7 +554,7 @@ class GoogleAuth {
           await refresh;
         } catch (_) {}
       }
-      final token = _tokens?['refresh_token'] as String?;
+      final token = await _refreshCredential();
       if (token != null) {
         final response = await request(
           endpoints.revoke,
@@ -469,6 +567,7 @@ class GoogleAuth {
           );
         }
       }
+      await _changeCredential(() => secretStore.delete(_secretKey));
       _tokens = null;
       final file = File('${directory.path}/tokens.json');
       if (file.existsSync()) await file.delete();

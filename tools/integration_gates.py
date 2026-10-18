@@ -60,7 +60,7 @@ def bundle_environment(bundle, inherited):
         config = json.loads((resources / 'runtime.json').read_text())
         keys = ['FORESIGHT_NATIVE', 'FORESIGHT_HELPER', 'FORESIGHT_LITERT_RUNNER',
                 'FORESIGHT_MODEL_WORKER', 'FORESIGHT_MODEL_PYTHON', 'FORESIGHT_LITERT_PYTHON',
-                'FORESIGHT_MODEL_ADAPTER', 'FORESIGHT_LITERT_EMBEDDING_ADAPTER', 'FORESIGHT_QUERY_WORKER']
+                'FORESIGHT_LITERT_EMBEDDING_ADAPTER', 'FORESIGHT_QUERY_WORKER']
         for key in keys:
             if key in config:
                 env[key] = str((resources / config[key]).resolve(strict=True))
@@ -70,7 +70,6 @@ def bundle_environment(bundle, inherited):
                    FORESIGHT_LITERT_RUNNER=str(bundle / 'bin/foresight-model'),
                    FORESIGHT_MODEL_WORKER=str(bundle / 'bin/foresight-model'),
                    FORESIGHT_LITERT_LIBRARY=str(bundle / 'lib/liblitert-lm.so'),
-                   FORESIGHT_ONNX_LIBRARY=str(bundle / 'lib/libonnxruntime.so'),
                    FORESIGHT_QUERY_WORKER=str(bundle / 'share/open-foresight/adapters/legacy_query_worker.py'),
                    FORESIGHT_LITERT_PYTHON=str(bundle / 'bin/query-python'),
                    LD_LIBRARY_PATH=str(bundle / 'lib') + ':' + str(bundle / 'app/lib'))

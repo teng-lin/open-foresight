@@ -206,7 +206,6 @@ Future<void> platformNotification(String title, String message) async {
 
 const _nativeEnvironmentKeys = {
   'FORESIGHT_LITERT_LIBRARY',
-  'FORESIGHT_ONNX_LIBRARY',
   'FORESIGHT_LITERT_BACKEND',
   'FORESIGHT_WHISPER_BACKEND',
   'FORESIGHT_WHISPER_DEVICE',
@@ -379,5 +378,26 @@ void validateServiceCompatibility(
     throw StateError(
       'This profile is owned by a different Open Foresight installation or revision. Stop the existing application service explicitly, then launch this installation again. No requests have been replayed.',
     );
+  }
+}
+
+/// Publish sensitive text only after its temporary file has mode 0600.
+/// Rename replaces a selected symlink rather than following it.
+Future<void> writePrivateTextFile(File destination, String text) async {
+  final staging = await createPrivateTempDirectory(
+    destination.absolute.parent,
+    '.foresight-export-',
+  );
+  final file = File('${staging.path}/content');
+  try {
+    await file.create();
+    final protected = await Process.run('/bin/chmod', ['600', file.path]);
+    if (protected.exitCode != 0 || (file.statSync().mode & 0x1ff) != 0x180) {
+      throw StateError('Cannot protect export file');
+    }
+    await file.writeAsString(text, flush: true);
+    await file.rename(destination.absolute.path);
+  } finally {
+    await staging.delete(recursive: true);
   }
 }
