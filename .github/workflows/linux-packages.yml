@@ -146,9 +146,12 @@ jobs:
       id: sdk
       env:
         GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
         # PR dependency changes are built locally; no PR publishes an SDK image.
-        if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional; then
+        if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        then
           :
         else
           task_result=$?

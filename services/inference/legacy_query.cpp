@@ -192,7 +192,9 @@ struct Proto {
       fields[unsigned(tag >> 3)] = std::move(value);
     }
   }
-  const Bytes &data(unsigned key) const { return fields.at(key).data; }
+  const Bytes &data(unsigned key) const {
+    return fields.at(key).data;
+  }
   uint64_t number(unsigned key, uint64_t fallback = 0) const {
     const auto it = fields.find(key);
     return it == fields.end()

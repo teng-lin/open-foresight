@@ -58,88 +58,88 @@ public:
                             option = std::move(option)]() mutable {
       try {
 #ifdef __APPLE__
-      posix_spawn_file_actions_t actions;
-      posix_spawn_file_actions_init(&actions);
-      posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO);
-      posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO);
-      posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
-                                       O_WRONLY, 0);
-      posix_spawnattr_t attr;
-      posix_spawnattr_init(&attr);
-      posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP |
-                                          POSIX_SPAWN_CLOEXEC_DEFAULT);
-      posix_spawnattr_setpgroup(&attr, 0);
-      std::vector<std::string> args{executable, mode, model};
-      if (!option.empty())
-        args.push_back(option);
-      pid_t child = -1;
-      foresight::OwnedSpawn owned;
-      const int error = owned.spawn(&child, &actions, &attr, args);
-      posix_spawn_file_actions_destroy(&actions);
-      posix_spawnattr_destroy(&attr);
-      if (error)
-        child = -1;
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO);
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
+                                         O_WRONLY, 0);
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP |
+                                            POSIX_SPAWN_CLOEXEC_DEFAULT);
+        posix_spawnattr_setpgroup(&attr, 0);
+        std::vector<std::string> args{executable, mode, model};
+        if (!option.empty())
+          args.push_back(option);
+        pid_t child = -1;
+        foresight::OwnedSpawn owned;
+        const int error = owned.spawn(&child, &actions, &attr, args);
+        posix_spawn_file_actions_destroy(&actions);
+        posix_spawnattr_destroy(&attr);
+        if (error)
+          child = -1;
 #else
-      pid_t child = fork();
-      if (child == 0) {
-        if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != owner)
+        pid_t child = fork();
+        if (child == 0) {
+          if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != owner)
+            _exit(127);
+          if (dup2(input, STDIN_FILENO) < 0 || dup2(output, STDOUT_FILENO) < 0)
+            _exit(127);
+          if (fcntl(STDIN_FILENO, F_SETFD, 0) < 0 ||
+              fcntl(STDOUT_FILENO, F_SETFD, 0) < 0)
+            _exit(127);
+          // The frontend may close its helper stderr reader while this model
+          // remains alive. Structured adapter failures use stdout; third-party
+          // progress/warnings must not depend on that former reader.
+          int quiet = open("/dev/null", O_WRONLY | O_CLOEXEC);
+          if (quiet < 0 || dup2(quiet, STDERR_FILENO) < 0)
+            _exit(127);
+          if (quiet != STDERR_FILENO)
+            close(quiet);
+          if (fcntl(STDERR_FILENO, F_SETFD, 0) < 0)
+            _exit(127);
+          if (option.empty())
+            execlp(executable.c_str(), executable.c_str(), mode.c_str(),
+                   model.c_str(), static_cast<char *>(nullptr));
+          else
+            execlp(executable.c_str(), executable.c_str(), mode.c_str(),
+                   model.c_str(), option.c_str(), static_cast<char *>(nullptr));
           _exit(127);
-        if (dup2(input, STDIN_FILENO) < 0 || dup2(output, STDOUT_FILENO) < 0)
-          _exit(127);
-        if (fcntl(STDIN_FILENO, F_SETFD, 0) < 0 ||
-            fcntl(STDOUT_FILENO, F_SETFD, 0) < 0)
-          _exit(127);
-        // The frontend may close its helper stderr reader while this model
-        // remains alive. Structured adapter failures use stdout; third-party
-        // progress/warnings must not depend on that former reader.
-        int quiet = open("/dev/null", O_WRONLY | O_CLOEXEC);
-        if (quiet < 0 || dup2(quiet, STDERR_FILENO) < 0)
-          _exit(127);
-        if (quiet != STDERR_FILENO)
-          close(quiet);
-        if (fcntl(STDERR_FILENO, F_SETFD, 0) < 0)
-          _exit(127);
-        if (option.empty())
-          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
-                 model.c_str(), static_cast<char *>(nullptr));
-        else
-          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
-                 model.c_str(), option.c_str(), static_cast<char *>(nullptr));
-        _exit(127);
-      }
+        }
 
 #endif
 #ifdef __APPLE__
-      pid_.store(child > 0 ? owned.worker : -1);
+        pid_.store(child > 0 ? owned.worker : -1);
 #else
-      pid_.store(child);
+        pid_.store(child);
 #endif
-      alive_.store(child > 0);
-      started->set_value(child);
-      std::unique_lock lock(mutex_);
-      while (!stopping_) {
-        condition_.wait_for(lock, std::chrono::milliseconds(50),
-                            [this] { return stopping_; });
-        if (child > 0) {
-          const auto ended = waitpid(child, nullptr, WNOHANG);
-          if (ended == child || (ended < 0 && errno == ECHILD)) {
-            child = -1;
-            pid_.store(-1);
-            alive_.store(false);
+        alive_.store(child > 0);
+        started->set_value(child);
+        std::unique_lock lock(mutex_);
+        while (!stopping_) {
+          condition_.wait_for(lock, std::chrono::milliseconds(50),
+                              [this] { return stopping_; });
+          if (child > 0) {
+            const auto ended = waitpid(child, nullptr, WNOHANG);
+            if (ended == child || (ended < 0 && errno == ECHILD)) {
+              child = -1;
+              pid_.store(-1);
+              alive_.store(false);
+            }
           }
         }
-      }
 #ifdef __APPLE__
-      owned.stop();
-      // The supervisor owns worker reaping and exits after bounded cleanup.
-      if (child > 0)
-        while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
-        }
+        owned.stop();
+        // The supervisor owns worker reaping and exits after bounded cleanup.
+        if (child > 0)
+          while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+          }
 #else
-      terminate(child);
+        terminate(child);
 #endif
-      pid_.store(-1);
-      alive_.store(false);
+        pid_.store(-1);
+        alive_.store(false);
       } catch (...) {
         try {
           started->set_value(-1);
@@ -154,7 +154,9 @@ public:
   }
   ChildProcess(const ChildProcess &) = delete;
   ChildProcess &operator=(const ChildProcess &) = delete;
-  ~ChildProcess() { stop(); }
+  ~ChildProcess() {
+    stop();
+  }
   void stop() {
     {
       std::lock_guard lock(mutex_);
@@ -164,6 +166,10 @@ public:
     if (creator_.joinable())
       creator_.join();
   }
-  bool alive() const { return alive_.load(); }
-  pid_t pid() const { return pid_.load(); }
+  bool alive() const {
+    return alive_.load();
+  }
+  pid_t pid() const {
+    return pid_.load();
+  }
 };
