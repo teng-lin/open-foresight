@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +14,9 @@ void main() {
       final temporary = Directory.systemTemp.createTempSync(
         'meeting-citation-',
       );
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
       Process.runSync('chmod', ['700', temporary.path]);
       final store = Store('${temporary.path}/app.db');
       final helper = Helper(

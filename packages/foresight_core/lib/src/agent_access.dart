@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'operations.dart';
 import 'dart:async';
 import 'dart:io';
 import 'profile_paths.dart';
@@ -91,9 +93,12 @@ class AgentAccessGate {
   bool isHost(Object client) => identical(client, _host);
   void attach(Object client, String token) {
     if (token != desktopToken || token.isEmpty)
-      throw StateError('Invalid desktop capability');
+      throw RpcError(RpcErrorCode.denied, 'Invalid desktop capability');
     if (_host != null && !isHost(client))
-      throw StateError('A desktop approval window is already connected');
+      throw RpcError(
+        RpcErrorCode.busy,
+        'A desktop approval window is already connected',
+      );
     _host = client;
   }
 
@@ -109,44 +114,20 @@ class AgentAccessGate {
 
   void decide(Object client, String id, bool allow) {
     if (!isHost(client))
-      throw StateError('Only the visible desktop can approve requests');
+      throw RpcError(
+        RpcErrorCode.denied,
+        'Only the visible desktop can approve requests',
+      );
     final pending = _pending[id];
-    if (pending == null) throw StateError('Approval expired');
+    if (pending == null)
+      throw RpcError(RpcErrorCode.notFound, 'Approval expired');
     if (!pending.done.isCompleted) pending.done.complete(allow);
   }
 
   static bool needsApproval(String method, Map<String, dynamic> args) {
-    if ((method == 'answer' || method == 'answer.stream') &&
-        args['web_search'] == true)
-      return true;
-    return !const {
-      'status',
-      'audio.capabilities',
-      'notifications.capabilities',
-      'sources.list',
-      'sources.get',
-      'sources.search',
-      'sources.index',
-      'notes.list',
-      'notes.save',
-      'meetings.list',
-      'meetings.get',
-      'meetings.create',
-      'meetings.notes',
-      'meetings.pause',
-      'meetings.stop',
-      'answer',
-      'answer.stream',
-      'application.resume',
-      'google.status',
-      'artifacts.edit',
-      'meetings.generate',
-      'meetings.enhance',
-      'meetings.cancel_enhance',
-      'meetings.retry_question',
-      'meetings.retry_detection',
-      'meetings.link_answer',
-    }.contains(method);
+    return Operation.parse(
+      method,
+    ).requiresApproval(webSearch: args['web_search'] == true);
   }
 
   Future<void> authorize(
@@ -155,14 +136,19 @@ class AgentAccessGate {
     Map<String, dynamic> args, {
     required bool Function() current,
   }) async {
-    final capture = method == 'meetings.start' || method == 'meetings.resume';
+    final capture =
+        method == Operation.meetings_start.wire ||
+        method == Operation.meetings_resume.wire;
     if (!needsApproval(method, args)) return;
     if (isHost(client) && !capture) return;
     final host = _host;
     if (host == null)
-      throw StateError('Open the desktop app to review this operation');
+      throw RpcError(
+        RpcErrorCode.denied,
+        'Open the desktop app to review this operation',
+      );
     if (_pending.length >= 8)
-      throw StateError('Too many pending approval requests');
+      throw RpcError(RpcErrorCode.busy, 'Too many pending approval requests');
     final id = 'approval-${++_next}';
     final done = Completer<bool>();
     _pending[id] = (client: client, done: done);
@@ -178,7 +164,8 @@ class AgentAccessGate {
         onTimeout: () => false,
       );
       if (!allowed || !identical(_host, host) || !current()) {
-        throw StateError(
+        throw RpcError(
+          !current() ? RpcErrorCode.cancelled : RpcErrorCode.denied,
           'Operation was denied, cancelled, or its desktop approval expired',
         );
       }

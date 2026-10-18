@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -32,6 +33,9 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final tmp = Directory.systemTemp.createTempSync('source-browse-');
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+    });
     final path = '${tmp.path}/app.db';
     final store = BrowsingStore(path);
     final text = 'needle ${'word ' * 8000}';
@@ -51,7 +55,10 @@ void main() {
     final helper = OfflineHelper('${tmp.path}/socket', '${tmp.path}/helper');
     try {
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();

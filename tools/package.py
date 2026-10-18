@@ -156,6 +156,18 @@ def main():
     shutil.copy2(worker, args.output / "bin/foresight-model")
     shutil.copy2(args.litert_library, args.output / "lib/liblitert-lm.so")
     if extensions is not None:
+        # Bind the copied worker's preflight to the artifact verified above.
+        # The final bundle manifest becomes authoritative once packaging ends.
+        (args.output / "lib/litert-identity.json").write_text(
+            json.dumps(
+                {
+                    "version": "0.18.0",
+                    "upstream_commit": extensions.manifest["upstream_commit"],
+                    "library_sha256": extensions.manifest["library_sha256"],
+                }
+            )
+            + "\n"
+        )
         extension_libraries = copy_linux_extension_dependencies(
             extensions, args.output / "lib"
         )

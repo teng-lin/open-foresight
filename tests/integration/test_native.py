@@ -8,6 +8,7 @@ import json
 import math
 import os
 import signal
+import threading
 from pathlib import Path
 import tempfile
 import time
@@ -29,6 +30,7 @@ LIBRARY = (
 def load(path=LIBRARY):
     lib = C.CDLL(path)
     for name, args, ret in [
+        ("fs_set_runtime_environment", [C.c_char_p, C.c_char_p], C.c_int),
         ("fs_engine_create", [C.c_char_p, C.c_char_p], C.c_void_p),
         ("fs_engine_create_backend", [C.c_char_p, C.c_char_p, C.c_int], C.c_void_p),
         ("fs_engine_state", [C.c_void_p], C.c_void_p),
@@ -167,6 +169,124 @@ class NativeTest(unittest.TestCase):
 
     def engine(self, body):
         return self.lib.fs_engine_create(self.runner(body), str(self.model).encode())
+
+    def test_runtime_environment_is_sealed_by_the_first_handle(self):
+        engine = self.engine("pass\n")
+        try:
+            self.assertEqual(
+                self.lib.fs_set_runtime_environment(
+                    b"FORESIGHT_LITERT_BACKEND", b"gpu"
+                ),
+                -1,
+            )
+        finally:
+            self.lib.fs_engine_destroy(engine)
+        self.assertEqual(
+            self.lib.fs_set_runtime_environment(b"FORESIGHT_LITERT_BACKEND", b"gpu"), -1
+        )
+
+    def test_destroy_wakes_and_joins_a_blocking_poll(self):
+        speech = self.lib.fs_speech_create(
+            self.runner("pass\n"), str(self.model).encode()
+        )
+        entered = threading.Event()
+        result = []
+
+        def poll():
+            entered.set()
+            result.append(self.lib.fs_event_poll(speech, 60000))
+
+        thread = threading.Thread(target=poll)
+        thread.start()
+        self.assertTrue(entered.wait(2))
+        before = time.monotonic()
+        self.lib.fs_speech_destroy(speech)
+        thread.join(timeout=2)
+        self.assertFalse(thread.is_alive())
+        self.assertLess(time.monotonic() - before, 2)
+        self.assertEqual(result, [None])
+        self.assertIsNone(self.lib.fs_event_poll(speech, 0))
+
+    def test_destroy_refuses_a_live_engine_probe(self):
+        ready = self.path / "probe-ready"
+        release = self.path / "probe-release"
+        body = (
+            "import pathlib,time\npathlib.Path("
+            + repr(str(ready))
+            + ").touch()\nwhile not pathlib.Path("
+            + repr(str(release))
+            + ").exists():time.sleep(.005)\n"
+        )
+        engine = self.engine(body)
+        result = []
+        probe = threading.Thread(
+            target=lambda: result.append(self.lib.fs_engine_probe(engine))
+        )
+        probe.start()
+        try:
+            deadline = time.monotonic() + 3
+            while not ready.exists() and time.monotonic() < deadline:
+                threading.Event().wait(0.005)
+            self.assertTrue(ready.exists())
+            self.assertEqual(self.lib.fs_engine_destroy(engine), -1)
+        finally:
+            release.touch()
+            probe.join(timeout=3)
+        self.assertFalse(probe.is_alive())
+        self.assertEqual(result, [0])
+        self.assertEqual(self.lib.fs_engine_destroy(engine), 0)
+
+    def test_generation_and_speech_replace_invalid_utf8(self):
+        runner = self.runner('import os\nos.write(1,b"good\\xffbad\\xed\\xa0\\x80")\n')
+        engine = self.lib.fs_engine_create(runner, str(self.model).encode())
+        conversation = self.lib.fs_conversation_create(engine)
+        speech = self.lib.fs_speech_create(runner, str(self.model).encode())
+        try:
+            self.assertEqual(self.lib.fs_generate(conversation, b"utf8", b"prompt"), 0)
+            events = drain(self.lib, conversation)
+            self.assertIn("good\ufffdbad", "".join(e.get("text", "") for e in events))
+            self.assertEqual(events[-1]["status"], "completed")
+            samples = (C.c_int16 * 1600)(*([100] * 1600))
+            self.lib.fs_speech_push(speech, samples, len(samples), 16000)
+            self.lib.fs_speech_finish(speech, b"utf8-speech")
+            events = drain(self.lib, speech)
+            self.assertIn(
+                "good\ufffdbad",
+                next(e["text"] for e in events if e["type"] == "transcript"),
+            )
+        finally:
+            self.lib.fs_conversation_destroy(conversation, 1)
+            self.lib.fs_engine_destroy(engine)
+            self.lib.fs_speech_destroy(speech)
+
+    def test_tool_payloads_reject_newlines_before_changing_request_state(self):
+        engine = self.lib.fs_engine_create_backend(
+            self.runner(
+                "import sys\nprint('tool []',flush=True)\nsys.stdin.readline()\nprint('answer {}',flush=True)\n"
+            ),
+            str(self.model).encode(),
+            1,
+        )
+        handle = self.lib.fs_conversation_create(engine)
+        try:
+            self.assertEqual(
+                self.lib.fs_generate_tools(handle, b"framed", b"q", b"[\n{}]", 256), -1
+            )
+            self.assertEqual(
+                self.lib.fs_generate_tools(handle, b"framed", b"q", b"[{}]", 256), 0
+            )
+            request = owned_json(self.lib, self.lib.fs_event_poll(handle, 5000))
+            self.assertEqual(request["type"], "tool_request")
+            self.assertEqual(
+                self.lib.fs_generation_tool_reply(handle, b"framed", b"{}\n{}"), -1
+            )
+            self.assertEqual(
+                self.lib.fs_generation_tool_reply(handle, b"framed", b"{}"), 0
+            )
+            self.assertEqual(drain(self.lib, handle)[-1]["status"], "completed")
+        finally:
+            self.lib.fs_conversation_destroy(handle, 1)
+            self.lib.fs_engine_destroy(engine)
 
     def test_tool_round_trip_large_unicode_and_scoped_single_reply(self):
         body = """import json,sys
@@ -407,23 +527,20 @@ else:
                 self.lib.fs_engine_destroy(engine)
 
     def test_full_capture_queue_emits_real_overflow_gap(self):
-        ready = self.path / "capture-queue-filled"
+        completed = self.path / "capture-filled"
         runner = self.runner(
-            'import os,pathlib,time\nfor _ in range(600):os.write(1,b"A"*3840)\npathlib.Path('
-            + repr(str(ready))
-            + ").touch()\ntime.sleep(30)\n"
+            'import os,pathlib\nfor _ in range(600):os.write(1,b"A"*3840)\n'
+            + "pathlib.Path("
+            + repr(str(completed))
+            + ").touch()\n"
         ).decode()
         with patch.dict(os.environ, {"FORESIGHT_CAPTURE_RUNTIME": runner}):
             handle = self.lib.fs_capture_start(b"auto", 0, 48000)
             try:
-                # Completed writes exceed both pipe and native queue capacity.
-                # Keep events queued until the producer confirms those writes.
                 deadline = time.monotonic() + 10
-                while not ready.exists() and time.monotonic() < deadline:
-                    time.sleep(0.005)
-                self.assertTrue(
-                    ready.exists(), "capture producer did not fill the queue"
-                )
+                while not completed.exists() and time.monotonic() < deadline:
+                    threading.Event().wait(0.005)
+                self.assertTrue(completed.exists(), "Capture producer did not finish")
                 self.lib.fs_capture_finish(handle)
                 events = []
                 while True:
@@ -655,6 +772,7 @@ else:
                 (0, 48000, b"auto"),
                 (1, 48000, b"auto"),
                 (1, 16000, b"auto"),
+                (1, 11013, b"auto"),
                 (0, 48000, b"selected-microphone"),
                 (1, 48000, b"selected-playback"),
             ]:
@@ -685,7 +803,8 @@ else:
                     )
                     if playback:
                         self.assertEqual(
-                            len(base64.b64decode(frame["data"])), rate * 2 * 40 // 1000
+                            len(base64.b64decode(frame["data"])),
+                            (rate * 40 // 1000) * 2,
                         )
         finally:
             os.environ["PATH"] = old

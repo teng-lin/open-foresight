@@ -55,6 +55,148 @@ void main() {
   );
 
   test(
+    'missing Linux sandbox gives installation guidance without a fallback',
+    () async {
+      final source = File('${directory.path}/file.pdf')
+        ..writeAsStringSync('fixture');
+      var attempts = 0;
+      final parser = Parser(
+        macOS: false,
+        startProcess: (executable, arguments) async {
+          attempts++;
+          expect(executable, '/usr/bin/bwrap');
+          throw ProcessException(executable, arguments, 'No such file', 2);
+        },
+      );
+      await expectLater(
+        parser.extract(source.path),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              contains('/usr/bin/bwrap'),
+              contains('Install'),
+              contains('bubblewrap'),
+            ),
+          ),
+        ),
+      );
+      expect(attempts, 1);
+    },
+  );
+
+  test('Linux namespace rejection gives host policy guidance', () async {
+    final helper = executable(
+      'echo " bwrap: Creating new namespace failed: Permission denied" >&2\nexit 1',
+    );
+    for (final extension in ['pdf', 'rtf']) {
+      final source = File('${directory.path}/file.$extension')
+        ..writeAsStringSync('fixture');
+      var attempts = 0;
+      final parser = Parser(
+        macOS: false,
+        startProcess: (executable, arguments) async {
+          attempts++;
+          expect(executable, '/usr/bin/bwrap');
+          return Process.start(helper.path, []);
+        },
+      );
+      await expectLater(
+        parser.extract(source.path),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              contains('Ubuntu 24.04'),
+              contains('AppArmor'),
+              contains('user namespaces'),
+              contains('Permission denied'),
+            ),
+          ),
+        ),
+      );
+      expect(attempts, 1);
+    }
+  });
+
+  test('Linux loopback setup denial gives host policy guidance', () async {
+    final source = File('${directory.path}/file.pdf')
+      ..writeAsStringSync('fixture');
+    const diagnostic =
+        'bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted';
+    final helper = executable('echo "$diagnostic" >&2\nexit 1');
+    final parser = Parser(
+      macOS: false,
+      startProcess: (_, _) => Process.start(helper.path, []),
+    );
+    await expectLater(
+      parser.extract(source.path),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          allOf(contains('AppArmor'), contains(diagnostic)),
+        ),
+      ),
+    );
+  });
+
+  test('Linux extractor errors retain the document diagnostic', () async {
+    final source = File('${directory.path}/broken.pdf')
+      ..writeAsStringSync('fixture');
+    final helper = executable('echo "Syntax Error: Invalid PDF" >&2\nexit 1');
+    final parser = Parser(
+      macOS: false,
+      startProcess: (_, _) => Process.start(helper.path, []),
+    );
+    await expectLater(
+      parser.extract(source.path),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          allOf(
+            startsWith('PDF extraction failed:'),
+            contains('Invalid PDF'),
+            isNot(contains('AppArmor')),
+          ),
+        ),
+      ),
+    );
+  });
+
+  test(
+    'missing sandboxed extractor is not reported as a namespace denial',
+    () async {
+      final source = File('${directory.path}/file.pdf')
+        ..writeAsStringSync('fixture');
+      final helper = executable(
+        'echo "bwrap: execvp /usr/bin/pdftotext: No such file or directory" >&2\nexit 1',
+      );
+      final parser = Parser(
+        macOS: false,
+        startProcess: (_, _) => Process.start(helper.path, []),
+      );
+      await expectLater(
+        parser.extract(source.path),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            allOf(
+              startsWith('PDF extraction failed:'),
+              contains('/usr/bin/pdftotext'),
+              isNot(contains('AppArmor')),
+            ),
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
     'document extraction deadline kills and reaps a stuck owned process',
     () async {
       final source = File('${directory.path}/file.rtf')
@@ -159,4 +301,47 @@ void main() {
       expect(result, ('café Ω', 'UTF-8 text'));
     },
   );
+  test(
+    'Linux import reports missing PDF and RTF tools as actionable errors',
+    () async {
+      for (final extension in ['pdf', 'rtf']) {
+        final source = File('${directory.path}/file.$extension')
+          ..writeAsStringSync('fixture');
+        await expectLater(
+          Parser(
+            macOS: false,
+            startProcess: (executable, arguments) async =>
+                throw ProcessException(executable, arguments, 'missing'),
+          ).extract(source.path),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('Install the Linux import dependencies'),
+            ),
+          ),
+        );
+      }
+    },
+  );
+  test('Linux RTF import omits the unrtf translation banner', () async {
+    final helper = executable(
+      "printf '%s\\n' '### Translation from RTF performed by UnRTF, version 0.21' '-----------------' 'Real document body'",
+    );
+    final source = File('${directory.path}/notes.rtf')
+      ..writeAsStringSync('fixture');
+    final result = await Parser(
+      macOS: false,
+      startProcess: (_, _) => Process.start(helper.path, []),
+    ).extract(source.path);
+    expect(result.$1, 'Real document body\n');
+    expect(result.$1, isNot(contains('Translation from RTF')));
+  });
+  test('malformed text and Markdown replace invalid UTF-8 bytes', () async {
+    for (final extension in ['txt', 'md']) {
+      final source = File('${directory.path}/notes.$extension')
+        ..writeAsBytesSync([65, 255, 66]);
+      expect((await Parser(macOS: false).extract(source.path)).$1, 'A\ufffdB');
+    }
+  });
 }

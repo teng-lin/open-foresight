@@ -130,9 +130,8 @@ void main() {
         jsonEncode(['Existing', 'New']),
         id,
       ]);
-      store.db.execute('PRAGMA user_version=1');
-      final before = store.sources.single;
       store.db.execute('PRAGMA user_version=8');
+      final before = store.sources.single;
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);

@@ -7,9 +7,31 @@ import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
-import 'fixtures/remote_service.dart';
+import 'package:foresight_test_support/remote_service.dart';
 
 void main() {
+  test(
+    'partial fixture startup removes its private directory and can close twice',
+    () async {
+      final partial = RemoteFixture(
+        openStore: (_) => throw StateError('fixture store failure'),
+      );
+      await expectLater(
+        partial.start(),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'fixture store failure',
+          ),
+        ),
+      );
+      expect(partial.root.existsSync(), isFalse);
+      await partial.close();
+      await partial.close();
+    },
+  );
+
   late RemoteFixture f;
   late Map<String, String> environment;
   setUp(() async {

@@ -1,5 +1,9 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
+import 'pump_until.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/foresight_core.dart' show NativeRuntime;
@@ -15,6 +19,7 @@ class WidgetNoteGenerator extends NativeRuntime {
   WidgetNoteGenerator()
     : super(Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6');
   final events = StreamController<Map<String, dynamic>>();
+  final entered = Completer<void>();
   @override
   Stream<Map<String, dynamic>> generateConversation(
     String id,
@@ -25,6 +30,7 @@ class WidgetNoteGenerator extends NativeRuntime {
     Duration timeout = const Duration(minutes: 5),
   }) async* {
     var text = '';
+    entered.complete();
     await for (final event in events.stream) {
       if (event['type'] == 'delta') {
         text += event['text'] as String;
@@ -47,6 +53,8 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'note-stream-widget-',
       );
+      addTearDown(() => directory.deleteSync(recursive: true));
+      final time = FakeAsync();
       final store = Store('${directory.path}/app.db');
       store.setPreference('liveEnhance', 'false');
       final id = store.meeting('Meeting');
@@ -61,17 +69,20 @@ void main() {
       final domain = Domain(
         store,
         OfflineHelper('${directory.path}/sock', '${directory.path}/helper'),
+        clock: time.getClock(DateTime.utc(2026)),
+        createTimer: (duration, callback) =>
+            time.run((_) => Timer(duration, callback)),
       );
       final generator = WidgetNoteGenerator();
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
       Future<void> waitForUi(bool Function() ready) async {
-        final deadline = DateTime.now().add(const Duration(seconds: 3));
-        while (!ready() && DateTime.now().isBefore(deadline)) {
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 20)),
-          );
-          await tester.pump(const Duration(milliseconds: 100));
+        final elapsed = Stopwatch()..start();
+        while (!ready() && elapsed.elapsed < const Duration(seconds: 5)) {
+          await tester.runAsync(() => Future<void>(() {}));
+          await tester.pump(const Duration(milliseconds: 20));
         }
         expect(
           ready(),
@@ -80,14 +91,14 @@ void main() {
         );
       }
 
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
       late Future<void> work;
       await tester.runAsync(() async {
         work = domain.application.enhanceNotes(id);
-        await Future<void>.delayed(const Duration(milliseconds: 20));
       });
+      await pumpUntil(tester, () => generator.entered.isCompleted);
       await waitForUi(
         () => find
             .byKey(const ValueKey('cancel-note-enhancement'))
@@ -106,7 +117,6 @@ void main() {
       );
       await tester.runAsync(() async {
         generator.events.add({'type': 'delta', 'text': '- Streamed first'});
-        await Future<void>.delayed(const Duration(milliseconds: 20));
       });
       await waitForUi(
         () => find
@@ -126,9 +136,7 @@ void main() {
         ),
         findsOneWidget,
       );
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 1100)),
-      );
+      time.elapse(const Duration(seconds: 1));
       await tester.pump();
       expect(store.meetingEnhancedNotes(id), '- Streamed first');
       expect(store.rows('SELECT * FROM artifacts'), hasLength(1));
@@ -144,14 +152,15 @@ void main() {
       );
       await tester.runAsync(() async {
         generator.events.add({'type': 'delta', 'text': ' ignored'});
-        await work;
       });
-      await waitForUi(
+      await pumpUntil(
+        tester,
         () => find
             .byKey(const ValueKey('cancel-note-enhancement'))
             .evaluate()
             .isEmpty,
       );
+      await tester.runAsync(() => work);
       expect(
         find.byKey(const ValueKey('cancel-note-enhancement')),
         findsNothing,
@@ -164,16 +173,13 @@ void main() {
         ),
         findsOneWidget,
       );
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 1100)),
-      );
+      time.elapse(const Duration(seconds: 1));
       await tester.pump();
       expect(store.meetingEnhancedNotes(id), '- Old\n\n💡 Retained');
       expect(store.rows('SELECT * FROM artifacts'), hasLength(1));
       await tester.runAsync(() => generator.events.close());
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
-      directory.deleteSync(recursive: true);
     },
   );
 }

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
@@ -146,6 +147,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final directory = Directory.systemTemp.createTempSync('rich-meeting-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final id = store.meeting('Rich preview fixture');
       store.artifact(id, 'summary', 'Original generated summary', 'fixture');
@@ -165,11 +169,13 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            Domain(
-              store,
-              OfflineHelper(
-                '${directory.path}/socket',
-                '${directory.path}/helper',
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper(
+                  '${directory.path}/socket',
+                  '${directory.path}/helper',
+                ),
               ),
             ),
             deviceLoader: () async => [],
@@ -177,8 +183,8 @@ void main() {
         );
         final dynamic state = tester.state(find.byType(Workspace));
         state.update(() {
-          state.meetingId = id;
-          state.meetingPanel = 'Summary';
+          state.meetingFeature.meetingId = id;
+          state.meetingFeature.meetingPanel = 'Summary';
         });
         await tester.pumpAndSettle();
         expect(find.text('Review summary', findRichText: true), findsOneWidget);

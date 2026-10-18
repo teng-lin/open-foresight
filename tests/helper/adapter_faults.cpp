@@ -1,6 +1,6 @@
 #include "helper_control.grpc.pb.h"
 #include "model.h"
-#include "research/xeno/labs/foresight/launch_agent/proto/rag_service.grpc.pb.h"
+#include "rag_service.grpc.pb.h"
 #include <grpcpp/grpcpp.h>
 #ifdef __APPLE__
 #include <libproc.h>
@@ -19,7 +19,7 @@
       throw std::runtime_error(#value);                                        \
   } while (0)
 
-namespace p = research::xeno::labs::foresight::launch_agent::proto;
+namespace p = foresight::helper::v1;
 namespace c = foresight::linux::control::v1;
 
 static bool dead(pid_t pid) {
@@ -62,6 +62,7 @@ int main(int argc, char **argv) {
   pid_t helpers[2] = {-1, -1};
   try {
     REQUIRE(argc == 3);
+    setenv("FORESIGHT_HELPER", argv[1], 1);
     fs::remove_all(root);
     const fs::path model_path = root / "model.litertlm";
     private_dir(root);
