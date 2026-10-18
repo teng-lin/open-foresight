@@ -24,7 +24,7 @@ void main() {
     root = '${scratch.path}/Old App.app';
     generation = '$root/Contents/Resources/bin/litert-runner';
     speech = '$root/Contents/Resources/bin/whisper-cli';
-    query = '$root/Contents/Resources/adapters/litert-python';
+    query = '$root/Contents/Resources/bin/foresight-query';
     runner(generation);
     runner(speech);
     runner(query);
@@ -32,7 +32,7 @@ void main() {
       'FORESIGHT_INSTALL_ROOT': root,
       'FORESIGHT_LITERT_RUNNER': generation,
       'FORESIGHT_WHISPER_RUNTIME': speech,
-      'FORESIGHT_LITERT_PYTHON': query,
+      'FORESIGHT_QUERY_RUNTIME': query,
     });
     asset = File('${scratch.path}/model.bin')..writeAsStringSync('model');
     store = Store('${scratch.path}/application.db');
@@ -51,7 +51,7 @@ void main() {
       'FORESIGHT_INSTALL_ROOT': moved,
       'FORESIGHT_LITERT_RUNNER': generation.replaceFirst(root, moved),
       'FORESIGHT_WHISPER_RUNTIME': speech.replaceFirst(root, moved),
-      'FORESIGHT_LITERT_PYTHON': query.replaceFirst(root, moved),
+      'FORESIGHT_QUERY_RUNTIME': query.replaceFirst(root, moved),
     });
   }
 
@@ -98,6 +98,33 @@ void main() {
       );
     },
   );
+  test(
+    'owned legacy query interpreter registration adopts the native runtime',
+    () async {
+      await store.register(
+        'query-detection',
+        asset.path,
+        query,
+        backend: 'legacy_query_cpu',
+      );
+      final key = 'modelRuntimeResource.query-detection';
+      final record = jsonDecode(store.preference(key)) as Map;
+      store.setPreference(
+        key,
+        jsonEncode({...record, 'resource': 'FORESIGHT_LITERT_PYTHON'}),
+      );
+      move();
+      expect(
+        store.model('query-detection')!['runtime'],
+        contains('Moved App With Spaces.app'),
+      );
+      expect(
+        store.model('query-detection')!['runtime'],
+        endsWith('/bin/foresight-query'),
+      );
+    },
+  );
+
   test(
     'explicit external registration clears provenance and remains unchanged',
     () async {

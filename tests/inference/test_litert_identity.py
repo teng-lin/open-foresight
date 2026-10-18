@@ -74,6 +74,54 @@ class RuntimeIdentityTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.marker.exists())
 
+    def test_app_bundle_hosts_use_sealed_resource_identity(self):
+        app = self.root / "Relocated path with spaces/Example.app"
+        for relative in (
+            "Contents/MacOS/loader",
+            "Contents/Resources/bin/loader",
+            "Contents/Library/Services/Service.app/Contents/MacOS/loader",
+        ):
+            with self.subTest(host=relative):
+                self.loader = app / relative
+                self.loader.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(LOADER, self.loader)
+                contents = self.loader.parent.parent
+                manifest = (
+                    contents / "Resources/manifest.json"
+                    if self.loader.parent.name == "MacOS"
+                    else contents / "manifest.json"
+                )
+                manifest.parent.mkdir(parents=True, exist_ok=True)
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "gemma_runtime": {
+                                "version": "0.18.0",
+                                "sha256": self.sha,
+                            }
+                        }
+                    )
+                )
+                self.marker.unlink(missing_ok=True)
+                result = self.run_loader()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(self.marker.exists())
+                # Adjacent override metadata must not replace the bundle pin.
+                self.build_identity()
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "gemma_runtime": {
+                                "version": "0.18.0",
+                                "sha256": "0" * 64,
+                            }
+                        }
+                    )
+                )
+                self.marker.unlink()
+                self.assertNotEqual(self.run_loader().returncode, 0)
+                self.assertFalse(self.marker.exists())
+
     def test_bundle_pin_cannot_be_replaced_by_override_metadata(self):
         self.bundle("0" * 64)
         self.build_identity()

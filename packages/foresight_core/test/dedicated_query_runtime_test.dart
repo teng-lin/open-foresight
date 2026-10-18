@@ -85,6 +85,33 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
   }
 
   test(
+    'native worker launches directly and owns its process lifecycle',
+    () async {
+      await runtime.close();
+      final process = DeferredExitProcess();
+      runtime = DedicatedQueryRuntime(
+        python: '/bundle/bin/foresight-query',
+        worker: '/bundle/bin/foresight-query',
+        model: '/profile/detector.tflite',
+        startProcess: (executable, arguments) async {
+          expect(executable, '/bundle/bin/foresight-query');
+          expect(arguments, ['--model', '/profile/detector.tflite']);
+          return process;
+        },
+      );
+      final pending = runtime.complete(' <ctrl1>question', 'native');
+      final failure = expectLater(pending, throwsStateError);
+      await process.requested.future;
+      runtime.cancel('native');
+      await failure;
+      process.exited.complete(-9);
+      await runtime.close();
+      await process.sink.close();
+      await process.output.close();
+    },
+  );
+
+  test(
     'reuses the dedicated process and preserves output whitespace',
     () async {
       expect(await runtime.complete('first', '1'), ' Question?\n');

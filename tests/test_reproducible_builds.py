@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import yaml
 
@@ -29,7 +28,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
                 [sys.executable, "-O", "-c", code],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
             path.write_bytes(b"tampered")
@@ -37,7 +36,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
                 [sys.executable, "-O", "-c", code],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("SHA256 checksum mismatch", result.stderr)
@@ -75,7 +74,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
                 ],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Speech model checksum mismatch", result.stderr)
@@ -122,7 +121,7 @@ package.main()
                 ],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("Native LiteRT-LM library checksum mismatch", result.stderr)
@@ -139,7 +138,7 @@ verify_descriptor.verify('must-not-execute-protoc')
             [sys.executable, "-O", "-c", code],
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=30,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Validation failed: recovered.package == PACKAGE", result.stderr)
@@ -147,32 +146,6 @@ verify_descriptor.verify('must-not-execute-protoc')
 
 
 class BuildPolicyTests(unittest.TestCase):
-    def test_macos_runtime_checks_versions_from_the_hashed_lock(self):
-        sys.path.insert(0, str(ROOT / "tools"))
-        import package_macos
-
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory)
-            (source / "bin").mkdir()
-            (source / "bin/python3").touch()
-            checked = {}
-
-            def query(*args):
-                if "sys.base_prefix" in args[3]:
-                    return json.dumps([str(source), str(source / "lib")])
-                checked.update(dict.fromkeys(args[4:]))
-                # Stop after the metadata check; no macOS runtime is needed.
-                return json.dumps([[3, 12], {}])
-
-            with patch.object(package_macos, "run", side_effect=query):
-                with self.assertRaisesRegex(ValueError, "Use Python 3.13"):
-                    package_macos.copy_python(source, source / "resources", {})
-            self.assertIn("litert-lm", checked)
-            self.assertIn("numpy", checked)
-            self.assertTrue(
-                all(re.fullmatch(r"[A-Za-z0-9_.-]+", name) for name in checked)
-            )
-
     def test_every_python_lock_requirement_has_hashes(self):
         for path in ROOT.glob("requirements-*.lock"):
             text = re.sub(r"\\\n\s*", " ", path.read_text())

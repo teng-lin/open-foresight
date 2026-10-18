@@ -267,7 +267,10 @@ void main() {
         final registered = store.model(dedicatedQueryModelKind)!;
         expect(registered['backend'], dedicatedQueryBackend);
         expect(registered['digest'], dedicatedQueryModelDigest);
-        expect(registered['runtime'], env['FORESIGHT_LITERT_PYTHON']);
+        expect(
+          registered['runtime'],
+          env['FORESIGHT_QUERY_RUNTIME'] ?? env['FORESIGHT_LITERT_PYTHON'],
+        );
         expect(dedicatedQuerySetupProblem(store), isNull);
         final reopened = Store('${directory.path}/app.db');
         try {

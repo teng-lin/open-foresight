@@ -79,8 +79,15 @@ class LiteRt {
   static std::string expected_digest(const std::filesystem::path &path) {
     // Release metadata is anchored to this executable, so an environment
     // override cannot redirect the identity check to its own manifest.
+    const auto directory = foresight::executable_path().parent_path();
+    // App bundle Contents admits code directories; runtime metadata belongs in
+    // Resources so codesign seals it as data. Resource-bin and Linux hosts
+    // retain the sibling manifest layout.
     const auto manifest =
-        foresight::executable_path().parent_path() / "../manifest.json";
+        directory.filename() == "MacOS" &&
+                directory.parent_path().filename() == "Contents"
+            ? directory.parent_path() / "Resources/manifest.json"
+            : directory / "../manifest.json";
     if (std::filesystem::is_regular_file(manifest)) {
       std::ifstream input(manifest);
       auto runtime = nlohmann::json::parse(input).at("gemma_runtime");

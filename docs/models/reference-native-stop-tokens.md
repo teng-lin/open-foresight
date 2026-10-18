@@ -13,13 +13,12 @@ sequences are ignored; order and duplicates are retained. The Python extension
 applies this setter before the conversation config copies the session config.
 The extension never dereferences an opaque object outside the source runtime.
 
-Both generation workers accept optional `stop_token_ids` in their existing
-conversation JSON. The Linux worker calls the extension before creating its
-native conversation. The Python worker requires both the extended Python
-keyword and the actual C symbol. Custom stops disable empty-history base reuse.
+The shared native generation worker accepts optional `stop_token_ids` in its
+conversation JSON on Linux and macOS. It calls the extension before creating
+the native conversation. Custom stops disable empty-history base reuse.
 Requests with nonempty sequences fail explicitly on the stock library.
 Ordinary conversations without sequences keep working with the stock library.
-Both workers advertise `native_stop_token_sequences` in `--probe` metadata;
+The worker advertises `native_stop_token_sequences` in `--probe` metadata;
 the application can reject an unsupported runtime before batch error recovery.
 
 Notes also request `use_default_output_limit: true` for plain conversations.
@@ -60,18 +59,15 @@ build, SDK and signing options:
 
 ```sh
 python3 tools/package_macos.py \
-  --python-runtime /path/to/standalone-python \
   --litert-extensions-manifest build/litert-extensions/build-manifest.json
 ```
 
-The packager first copies the standalone prefix into the bundle, then overlays
-the verified API wheel only into that copy. It preserves existing backend
-libraries and rejects paths or symlinks escaping the copied prefix. The source
-Python installation is not modified. The copied interpreter must load the
-extended Python API and successfully call the real native setter before the
-normal relocation/signing steps and again after signing. Source-artifact
-provenance is included with the bundle's licenses; signing can change the final
-binary bytes, so those input hashes are not final signed-file hashes.
+The Mac packager extracts only the authenticated arm64 C API and vendor dylibs
+from the build wheel. It rejects non-arm64 payloads and escaping paths, relocates
+their loader dependencies, signs the app, and checks the native worker. No Python
+runtime or inference scripts are included. Source-artifact provenance ships with
+the licenses; signing can change final bytes, so input hashes are not final
+signed-file hashes.
 
 For Linux, select the matching source-built library as well:
 
@@ -97,8 +93,8 @@ sequence detector from treating the IDs as an unordered stop set. It writes the
 observed output and model hash only after the assertions pass; this test has no
 Python text-stopping substitute.
 
-Validation status: 28 Python runner tests and the native tool-protocol test
-pass. The Mac arm64 source library and API wheel built successfully, and the
+The shared native tool-protocol and grounding tests cover the shipped worker.
+Historical source-build evidence follows. The Mac arm64 source library and API wheel built successfully, and the
 exact native config-copy regression ran once and passed. An isolated extraction
 of the wheel loaded successfully and exercised the exported native setter on a
 real session config without changing the installed runtime.

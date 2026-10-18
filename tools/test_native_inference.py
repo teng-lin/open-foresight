@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise native inference with an empty executable PATH and optional Python parity oracle.
+"""Exercise the shared native inference path with an empty executable PATH.
 
 Python here drives tests only; the native child has no Python executable in PATH.
 """
@@ -41,7 +41,6 @@ def main():
     p.add_argument("--embedding", type=Path, required=True)
     p.add_argument("--generation", type=Path)
     p.add_argument("--backend", choices=["cpu", "gpu"], default="cpu")
-    p.add_argument("--reference-python", type=Path)
     p.add_argument("--output", type=Path, required=True)
     args = p.parse_args()
     environment = dict(
@@ -82,30 +81,6 @@ def main():
         "requests": len(requests),
         "empty_path": True,
     }
-    if args.reference_python:
-        reference = run_worker(
-            [
-                str(args.reference_python.absolute()),
-                "-I",
-                str(ROOT / "tests/reference/inference/litert_embedding_adapter.py"),
-                str(args.embedding.resolve()),
-                *options,
-            ],
-            requests,
-            dict(os.environ),
-        )
-        assert all(native[0][key] == value for key, value in reference[0].items()), (
-            native[0],
-            reference[0],
-        )
-        assert native[1:6] == reference[1:6], "Tokenizer mismatch"
-        differences = [
-            max(abs(a - b) for a, b in zip(n["result"], r["result"], strict=False))
-            for n, r in zip(native[6:], reference[6:], strict=False)
-        ]
-        assert max(differences) < 0.0001, differences
-        report["max_embedding_difference"] = max(differences)
-        report["python_oracle"] = "test-only, not packaged"
     if args.generation:
         command = [
             worker,
