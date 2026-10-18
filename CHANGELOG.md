@@ -53,7 +53,6 @@ Notable changes to Open Foresight are recorded here. Versions follow
 ### Security
 
 - Refresh tokens are stored in macOS Keychain or Linux Secret Service instead of plaintext profile preferences.
-
 - Agent file imports require selected roots and bounded regular files, and cannot read the private profile. Sensitive actions require visible desktop approval; recording shows an indicator and stops when the desktop is hidden or closed.
 - URL imports pin validated public addresses, recheck redirects, refuse HTTPS downgrades, and parse bounded HTML outside the service isolate. Private network access requires an explicit opt-in; response charsets are decoded correctly.
 - Private temporary directories are created atomically with `mkdtemp` and mode 0700.

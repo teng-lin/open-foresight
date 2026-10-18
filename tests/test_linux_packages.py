@@ -896,7 +896,43 @@ def test_nlohmann_notice_is_listed_in_native_package_payload(tmp_path, kind, too
         command = ["rpm", "-qlp", str(output)]
     else:
         output = tmp_path / "fixture.pkg.tar.zst"
-        packages.make_arch(root, output, "0.1.1", "1", packages.METADATA, 1234)
+        if os.geteuid() == 0:
+            # The linux-native CI container runs pytest as root, while makepkg
+            # requires an unprivileged owner. Isolate this build on disk in
+            # /var/tmp so root's private pytest ancestors stay private.
+            import pwd
+
+            account = pwd.getpwnam("nobody")
+            with tempfile.TemporaryDirectory(
+                prefix="of-arch-payload-", dir="/var/tmp"
+            ) as temporary:
+                build = Path(temporary)
+                build.chmod(0o755)
+                os.chown(build, account.pw_uid, account.pw_gid)
+                shutil.copytree(root, build / "root")
+                subprocess.run(
+                    [
+                        "runuser",
+                        "-u",
+                        account.pw_name,
+                        "--",
+                        sys.executable,
+                        "-c",
+                        "import runpy,sys; from pathlib import Path; "
+                        "module=runpy.run_path(sys.argv[1]); "
+                        "module['make_arch'](Path(sys.argv[2]),Path(sys.argv[3]),'0.1.1','1',module['METADATA'],1234)",
+                        str(ROOT / "packaging/package_linux.py"),
+                        str(build / "root"),
+                        str(build / "fixture.pkg.tar.zst"),
+                    ],
+                    cwd=build,
+                    env={**os.environ, "TMPDIR": str(build)},
+                    check=True,
+                    timeout=120,
+                )
+                shutil.copy2(build / "fixture.pkg.tar.zst", output)
+        else:
+            packages.make_arch(root, output, "0.1.1", "1", packages.METADATA, 1234)
         command = ["bsdtar", "-tf", str(output)]
     listing = subprocess.check_output(command, text=True, timeout=60)
     assert "usr/share/doc/open-foresight/notices/nlohmann-json-LICENSE.MIT" in listing
