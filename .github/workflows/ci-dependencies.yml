@@ -24,6 +24,7 @@ name: Reusable CI dependencies
     - services/speech/**
     - services/inference/persistent_worker.h
     - services/inference/output_budget.h
+    - services/inference/worker_frame.h
     - third_party/litert_lm/**
   workflow_dispatch: {}
   schedule:
@@ -61,6 +62,7 @@ name: Reusable CI dependencies
     - services/speech/**
     - services/inference/persistent_worker.h
     - services/inference/output_budget.h
+    - services/inference/worker_frame.h
     - third_party/litert_lm/**
 permissions:
   contents: read

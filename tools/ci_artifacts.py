@@ -23,6 +23,7 @@ FILES = {
         "services/speech/worker.cpp",
         "services/inference/persistent_worker.h",
         "services/inference/output_budget.h",
+        "services/inference/worker_frame.h",
     ],
     "macos-vendor": [
         "tools/build_macos_vendor.py",
@@ -56,6 +57,7 @@ FILES = {
         "services/speech/worker.cpp",
         "services/inference/persistent_worker.h",
         "services/inference/output_budget.h",
+        "services/inference/worker_frame.h",
     ],
 }
 PARENTS = {

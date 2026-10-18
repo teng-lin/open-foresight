@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
@@ -45,6 +46,31 @@ class FingerprintTests(unittest.TestCase):
                                 copied.relative_to(artifacts.ROOT).as_posix(),
                                 artifacts.FILES[component],
                             )
+
+    def test_linux_sdk_copies_transitive_worker_headers(self):
+        copied = set()
+        recipe = artifacts.ROOT / "packaging/sdk.Dockerfile"
+        for line in recipe.read_text().splitlines():
+            if not line.startswith("COPY "):
+                continue
+            words = shlex.split(line)
+            if not words or words[0] != "COPY" or words[1].startswith("--from="):
+                continue
+            for source in words[1:-1]:
+                path = artifacts.ROOT / source
+                if path.is_dir():
+                    copied.update(p.resolve() for p in path.rglob("*") if p.is_file())
+                else:
+                    copied.add(path.resolve())
+        for source in copied:
+            if source.suffix not in {".cpp", ".h"}:
+                continue
+            for include in re.findall(
+                r'^#include "([^"\n]+)"', source.read_text(), re.M
+            ):
+                dependency = (source.parent / include).resolve()
+                with self.subTest(source=str(source), include=include):
+                    self.assertIn(dependency, copied)
 
     def test_litert_change_does_not_invalidate_core_or_whisper(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -137,6 +163,7 @@ class FingerprintTests(unittest.TestCase):
             changes = {
                 "services/speech/worker.cpp": {"linux-sdk", "macos-runtime"},
                 "services/inference/output_budget.h": {"linux-sdk", "macos-runtime"},
+                "services/inference/worker_frame.h": {"linux-sdk", "macos-runtime"},
                 "requirements-dev.lock": {"linux-sdk"},
                 "packaging/sdk-core.Dockerfile": {
                     "linux-core",
