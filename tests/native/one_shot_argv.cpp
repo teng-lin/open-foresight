@@ -1,5 +1,5 @@
-#include "one_shot_launch.h"
 #include "json_string.h"
+#include "one_shot_launch.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -24,11 +24,12 @@ int main() {
       foresight::json_string_literal("\"raw\nline\"") ||
       foresight::json_string_literal(R"("bad\q")") ||
       foresight::json_string_literal(R"("one" "two")") ||
-      foresight::json_string_literal("null")) return 1;
+      foresight::json_string_literal("null"))
+    return 1;
   try {
     const std::string prompt = "unique-one-shot-prompt-52";
-    const auto llama = foresight::one_shot_launch(
-        0, "llama-cli", "model.gguf", prompt, 32, 0, "");
+    const auto llama = foresight::one_shot_launch(0, "llama-cli", "model.gguf",
+                                                  prompt, 32, 0, "");
     require_prompt_absent(llama, prompt);
     REQUIRE(llama.standard_input == prompt + "\n");
 
