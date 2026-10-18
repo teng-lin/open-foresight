@@ -566,10 +566,9 @@ public:
     return text;
   }
 };
-std::string
-prompt_from_arguments(const std::map<std::string, std::string> &args) {
+json request_from_arguments(const std::map<std::string, std::string> &args) {
   if (args.count("--prompt"))
-    return args.at("--prompt");
+    return json{{"prompt", args.at("--prompt")}};
   std::string line;
   if (!std::getline(std::cin, line))
     throw std::runtime_error("Missing prompt");
@@ -577,7 +576,11 @@ prompt_from_arguments(const std::map<std::string, std::string> &args) {
   if (!payload.is_object() || !payload.contains("prompt") ||
       !payload["prompt"].is_string())
     throw std::runtime_error("Missing prompt");
-  return payload["prompt"].get<std::string>();
+  return payload;
+}
+std::string
+prompt_from_arguments(const std::map<std::string, std::string> &args) {
+  return request_from_arguments(args).at("prompt").get<std::string>();
 }
 #include "grounded.h"
 
@@ -708,32 +711,34 @@ int main(int argc, char **argv) {
                << std::flush;
       return 0;
     }
+    const auto payload = request_from_arguments(args);
+    const auto tools = args.count("--tools")
+                           ? json::parse(args.at("--tools"))
+                           : payload.value("tools", json(nullptr));
     int budget = args.count("--max-output-tokens")
                      ? std::stoi(args["--max-output-tokens"])
-                     : 256;
-    if (!foresight::valid_output_budget(
-            budget, args.count("--tools") ? json::parse(args.at("--tools"))
-                                          : json(nullptr)))
+                     : payload.value("max_output_tokens", 256);
+    if (!foresight::valid_output_budget(budget, tools))
       throw std::runtime_error("Output budget must be between 1 and 3072");
     json schema = args.count("--json-schema")
                       ? json::parse(args["--json-schema"])
-                      : json(nullptr);
+                      : payload.value("schema", json(nullptr));
     if (!schema.is_null() && !schema.is_object())
       throw std::runtime_error("JSON schema must be an object");
-    if (args.count("--tools") && !schema.is_null())
+    if (!tools.is_null() && !schema.is_null())
       throw std::runtime_error(
           "Tools cannot be combined with a response schema");
-    if (args.count("--tools"))
-      generator.generate(prompt_from_arguments(args), budget, false, nullptr,
-                         &protocol, json::parse(args.at("--tools")));
+    if (!tools.is_null())
+      generator.generate(payload.at("prompt").get<std::string>(), budget, false,
+                         nullptr, &protocol, tools);
     else if (schema.contains("x-foresight-grounded-request"))
       protocol << foresight::frame_json(grounded_answer(
                       generator, schema["x-foresight-grounded-request"],
                       budget))
                << std::flush;
     else
-      generator.generate(prompt_from_arguments(args), budget, false, schema,
-                         &protocol);
+      generator.generate(payload.at("prompt").get<std::string>(), budget, false,
+                         schema, &protocol);
     return 0;
   } catch (const std::exception &e) {
     if (embedding || probing)
