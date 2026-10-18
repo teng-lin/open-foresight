@@ -40,6 +40,7 @@ if [[ ! -x "$task_python" ]]; then
   echo "Create .venv and install --require-hashes -r requirements-dev.lock before building." >&2
   exit 1
 fi
+"$task_python" "$task_root/tools/check_build_cache.py" "$task_build/CMakeCache.txt"
 "$task_python" "$task_root/tools/verify_descriptor.py"
 ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" "${task_cmake_platform[@]}" "$@"
 ci_timed "native compile" cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
