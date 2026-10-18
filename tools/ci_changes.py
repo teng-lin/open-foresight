@@ -25,6 +25,7 @@ def check_gates(jobs, build, main):
         "changes": "success",
         "macos": "success" if build else "skipped",
         "linux-native": "success" if build else "skipped",
+        "linux-document-imports": "success" if build else "skipped",
         "linux-bundle": "success" if build and main else "skipped",
     }
     for name, result in expected.items():

@@ -1240,8 +1240,9 @@ class Parser {
     // A fresh user/PID/network/mount namespace exposes only system runtime
     // libraries and the one selected input. Profile files and credentials are
     // absent. Failure to establish the sandbox fails the import closed.
+    ProcessResult result;
     try {
-      return await _extractProcess('/usr/bin/bwrap', [
+      result = await _extractProcess('/usr/bin/bwrap', [
         '--unshare-all',
         '--die-with-parent',
         '--new-session',
@@ -1288,10 +1289,29 @@ class Parser {
     } on ProcessException catch (error) {
       final dependency = tool == 'pdftotext' ? 'poppler-utils' : 'unrtf';
       throw StateError(
-        'Cannot launch the Linux document sandbox. Install the Linux import dependencies '
-        '(bubblewrap and $dependency): ${error.message}',
+        'Cannot start the document sandbox at /usr/bin/bwrap. '
+        'Install the Linux import dependencies (bubblewrap and $dependency) '
+        'and check executable permissions: '
+        '${error.message}',
       );
     }
+    final diagnostic = result.stderr.toString().trim();
+    final namespaceFailure =
+        diagnostic.startsWith('bwrap:') &&
+        !RegExp(r'^bwrap:\s*exec\w*\b').hasMatch(diagnostic) &&
+        RegExp(
+          r'namespace|unshare|userns|[ug]id map|capset|^bwrap:\s*loopback:',
+          caseSensitive: false,
+        ).hasMatch(diagnostic);
+    if (result.exitCode != 0 && namespaceFailure) {
+      throw StateError(
+        'The document sandbox could not start. Check the bubblewrap installation '
+        'and host user-namespace permissions. On Ubuntu 24.04, an administrator '
+        'may need to allow bubblewrap user namespaces in its AppArmor profile. '
+        '$diagnostic',
+      );
+    }
+    return result;
   }
 
   Future<(String, String)> extract(String path) async {
