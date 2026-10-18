@@ -26,10 +26,12 @@ class ApprovalDomain implements RemoteDomain {
   final capture = <String, dynamic>{};
   void Function(Map<String, dynamic>)? events;
   bool attached = false;
+  bool failAttach = false;
   @override
   Future<void> enableDesktopApprovals(
     void Function(Map<String, dynamic>) value,
   ) async {
+    if (failAttach) throw StateError('Fixture approval attachment unavailable');
     events = value;
     attached = true;
   }
@@ -50,7 +52,7 @@ class ApprovalDomain implements RemoteDomain {
 
 void main() {
   testWidgets(
-    'recording requires visible explicit approval and exposes stop indicator',
+    'external recording still requires explicit approval without a duplicate capture bar',
     (tester) async {
       final domain = ApprovalDomain();
       Widget app() => MaterialApp(
@@ -83,13 +85,38 @@ void main() {
       domain.capture['active'] = true;
       await tester.pumpWidget(app());
       await tester.pumpAndSettle();
-      expect(
-        find.text('Microphone and system audio recording'),
-        findsOneWidget,
-      );
-      expect(find.text('Stop recording'), findsOneWidget);
+      expect(find.text('Microphone and system audio recording'), findsNothing);
+      expect(find.text('Stop recording'), findsNothing);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+      await tester.pumpAndSettle();
+      expect(domain.attached, false);
+      tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+      await tester.pumpAndSettle();
+      expect(domain.attached, true);
       await tester.pumpWidget(const SizedBox());
       expect(domain.attached, false);
+    },
+  );
+  testWidgets(
+    'approval attachment failures remain visible without a capture banner',
+    (tester) async {
+      final domain = ApprovalDomain()..failAttach = true;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AgentApprovalSurface(
+            domain: domain,
+            child: const Scaffold(body: Text('Workspace')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.textContaining('Agent approvals unavailable:'),
+        findsOneWidget,
+      );
+      expect(find.text('Workspace'), findsOneWidget);
+      expect(find.text('Microphone and system audio recording'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
     },
   );
   testWidgets(
