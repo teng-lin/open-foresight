@@ -32,7 +32,17 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           args=()
-          if [[ "$EVENT" != pull_request ]]; then args+=(--force); fi
+          if [[ "$EVENT" == push ]]; then
+            # Deleted/recreated branches and unavailable history must fail safe.
+            if [[ ! "$BASE" =~ ^[0-9a-f]{40}$ || "$BASE" == 0000000000000000000000000000000000000000 ]] ||
+               ! git cat-file -e "$BASE^{commit}" 2>/dev/null ||
+               ! git merge-base --is-ancestor "$BASE" HEAD; then
+              BASE=HEAD
+              args+=(--force)
+            fi
+          elif [[ "$EVENT" != pull_request ]]; then
+            args+=(--force)
+          fi
           python3 tools/ci_changes.py --base "$BASE" "${args[@]}"
   acceptance-checks:
     timeout-minutes: 5

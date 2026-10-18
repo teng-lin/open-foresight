@@ -53,6 +53,12 @@ LINUX_FILES = {
 def select_gates(paths, force=False):
     selected = dict.fromkeys(GATES, force)
     for path in paths:
+        # These Markdown notices are installed payloads, so editorial suffix
+        # rules must not hide changes to the package's legal contents.
+        if path.startswith("packaging/notices/"):
+            for gate in GATES[1:]:
+                selected[gate] = True
+            continue
         if (
             path.startswith("docs/")
             or PurePosixPath(path).suffix == ".md"

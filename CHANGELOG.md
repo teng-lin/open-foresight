@@ -23,6 +23,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
+- Documentation-only main pushes skip application packaging and model acceptance; shipped license notices still select package validation.
+
 - CI software Vulkan explicitly selects lavapipe and records unavailable GPU support as skipped. Disposable installer-test containers permit the real document sandbox to initialize isolated networking.
 
 - macOS CI consumes the same PR source as dependency producers and waits only for matching trusted producers, with pinned source fallback when no eligible producer exists.

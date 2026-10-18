@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import shutil
 
 import pytest
 import yaml
@@ -167,14 +168,6 @@ def test_acceptance_aggregate_rejects_every_incomplete_selected_job(
         timeout=30,
     )
     assert (result.returncode == 0) == success
-
-
-def test_main_schedule_and_manual_acceptance_force_validation():
-    selection = workflow("integration-acceptance.yml")["jobs"]["changes"]["steps"][-1]
-    assert (
-        'if [[ "$EVENT" != pull_request ]]; then args+=(--force); fi'
-        in selection["run"]
-    )
 
 
 @pytest.mark.parametrize(
@@ -373,3 +366,73 @@ def test_optional_gpu_policy_is_confined_to_ci_emulator_acceptance():
         assert (
             "--allow-unavailable" not in (ROOT / ".github/workflows" / name).read_text()
         )
+
+
+@pytest.mark.parametrize(
+    ("event", "before", "changed", "selected"),
+    [
+        ("push", "valid", "docs/unshipped.md", False),
+        ("push", "valid", "packaging/notices/nlohmann-json.md", True),
+        ("push", "valid", "native/new.cpp", True),
+        ("push", "", "docs/unshipped.md", True),
+        ("push", "0" * 40, "docs/unshipped.md", True),
+        ("push", "1" * 40, "docs/unshipped.md", True),
+        ("push", "HEAD~1", "docs/unshipped.md", True),
+        ("push", "unrelated", "docs/unshipped.md", True),
+        ("workflow_dispatch", "valid", "docs/unshipped.md", True),
+        ("schedule", "valid", "docs/unshipped.md", True),
+        ("pull_request", "valid", "docs/unshipped.md", False),
+    ],
+)
+def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
+    tmp_path, event, before, changed, selected
+):
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    tools = repository / "tools"
+    tools.mkdir()
+    shutil.copy2(ROOT / "tools/ci_changes.py", tools / "ci_changes.py")
+
+    def git(*arguments):
+        return subprocess.check_output(
+            ["git", *arguments], cwd=repository, text=True, timeout=30
+        ).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "CI fixture")
+    git("config", "user.email", "ci@example.invalid")
+    git("add", ".")
+    git("commit", "-qm", "baseline")
+    base = git("rev-parse", "HEAD")
+    if before == "unrelated":
+        tree = git("rev-parse", "HEAD^{tree}")
+        before = git("commit-tree", tree, "-m", "unrelated history")
+    elif before == "valid":
+        before = base
+    path = repository / changed
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("fixture change\n")
+    git("add", ".")
+    git("commit", "-qm", "current")
+    command = next(
+        step["run"]
+        for step in workflow("integration-acceptance.yml")["jobs"]["changes"]["steps"]
+        if step.get("id") == "select"
+    )
+    output = tmp_path / "output"
+    subprocess.run(
+        ["bash", "-e", "-c", command],
+        cwd=repository,
+        env={
+            **os.environ,
+            "BASE": before,
+            "EVENT": event,
+            "GITHUB_OUTPUT": str(output),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert values["linux_bundle"] == str(selected).lower()
