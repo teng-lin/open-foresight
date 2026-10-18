@@ -31,12 +31,26 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 - macOS CI consumes the same PR source as dependency producers and waits only for matching trusted producers, with pinned source fallback when no eligible producer exists.
 - Stale CMake Python paths fail before native work. Workspace cleanup waits for observed completion under parallel load; speech GPU-to-CPU retry and cancellation cover both worker protocols.
+- Long meeting generation includes balanced beginning, middle and ending evidence within the model context. HTML imports honor bounded meta encodings, and Unicode truncation preserves supplementary characters.
+- Local edits use a structured schema flag and URL imports deduplicate by source URI. Helper crash recovery resets after a quiet window, and answer validation failures are visible by reason.
+- Native worker failures clean up owned processes and roll back busy handles; model framing and one-shot requests keep prompts out of argv. Reconfiguration respects cancellation, audio writes detect failures, and Linux LiteRT loading binds hashes to the loaded descriptor.
+- Workspace clear securely deletes application rows and attempts checkpoint/VACUUM; helper deletions erase freed database content.
+
+
 - Package upgrades ignore installation locks with invalid ownership, permissions or symlinks, preventing other local users from blocking updates.
 - Clearing a workspace works offline, discards pending meeting drafts and retries helper deletion after reconnect. Stale speech audio is removed on startup.
 - Calendar refresh preserves local edits and deletions and bounds untrusted invitation HTML parsing.
 - Failed answers discard partial text and citations; cancelled note enhancements restore the previous notes.
 - Background credential and recording failures no longer escape the service worker. Interrupted meetings are indexed after restart.
 - Native adapter writes and model probes have deadlines, and worker output replaces invalid UTF-8. New generation registrations default to LiteRT-LM.
+
+### Security
+
+- macOS authorization uses a service-process Keychain principal with verified legacy migration and no plaintext fallback on protected-store failure. Parser confinement, private startup configuration and private temporary socket roots reduce exposure.
+- Local source links reveal files instead of launching their default handlers. Approval dialogs highlight risky options and limit repeated identical prompts; verified peer identity and trusted gesture redesign remain deferred.
+- Automatic question-model downloads require configured genuine publisher terms and revision-specific acknowledgment. Missing terms configuration disables automatic acquisition.
+- Release builds disable crash and delay test hooks, and system integration commands use absolute paths.
+
 
 ## [0.1.1] - 2026-10-17
 

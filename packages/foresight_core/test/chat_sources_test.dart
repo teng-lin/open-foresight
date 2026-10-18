@@ -41,7 +41,7 @@ void main() {
     },
   );
   test(
-    'chat callback truncates at 2000 UTF-16 units with the recovered suffix',
+    'chat callback truncates at 2000 Unicode scalars with the recovered suffix',
     () {
       final sources = ReferenceChatSources();
       final text = sources.formatSearch((

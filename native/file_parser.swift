@@ -43,6 +43,13 @@ func fail(_ message: String, _ code: Int32 = 1) -> ExtractionFailure {
 func extract(_ kind: String, _ path: String) throws -> String {
     let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
     guard descriptor >= 0 else { throw fail("Cannot open the selected document safely.") }
+    var metadata = stat()
+    guard fstat(descriptor, &metadata) == 0,
+          (metadata.st_mode & S_IFMT) == S_IFREG,
+          metadata.st_size >= 0 && metadata.st_size <= 10 * 1024 * 1024 else {
+        close(descriptor)
+        throw fail("The selected document must be a regular file of at most 10 MiB.")
+    }
     let input = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     let data: Data
     do {

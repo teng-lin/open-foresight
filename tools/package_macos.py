@@ -252,6 +252,8 @@ def main(argv=None):
         write_google_client(target, google_client, mode=0o644)
         values["FORESIGHT_GOOGLE_CLIENT"] = target
     values.update(web_search_keys)
+    if query_terms := os.environ.get("FORESIGHT_QUERY_TERMS_URL"):
+        values["FORESIGHT_QUERY_TERMS_URL"] = query_terms
     write_runtime(resources, values)
     write_runtime(service_path.parent.parent / "Resources", values)
     info = contents / "Info.plist"

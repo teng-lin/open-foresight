@@ -1384,8 +1384,9 @@ class Application implements ModelGate {
         throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
       }
       if (s['locally_edited'] == 1 ||
-          (s['provenance'] as String).startsWith('user edit; '))
+          (s['provenance'] as String).startsWith('user edit; ')) {
         continue;
+      }
       bool sourceCurrent() =>
           (current?.call() ?? true) &&
           store.rows(
@@ -1543,8 +1544,9 @@ class Application implements ModelGate {
     // framing tokens as well as the instructions before selecting evidence.
     final transcriptBudget =
         contextTokens - outputTokens - utf8.encode(instructions).length - 128;
-    if (transcriptBudget < 256)
+    if (transcriptBudget < 256) {
       throw StateError('Model context is too small for meeting generation');
+    }
     final selected = balancedTranscriptWindow(text, transcriptBudget);
     final result = await _generate(
       'meeting',

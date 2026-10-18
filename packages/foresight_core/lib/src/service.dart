@@ -1294,8 +1294,9 @@ Future<ServiceClient> _connectCompatibleService(String path) async {
           'Application service bundle is missing Info.plist: $bundle',
         );
       }
-      if (startupEnvironmentFile == null)
+      if (startupEnvironmentFile == null) {
         throw StateError('A private startup environment handoff is required');
+      }
       return (
         executable: '/usr/bin/open',
         arguments: [

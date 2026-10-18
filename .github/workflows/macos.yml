@@ -88,6 +88,7 @@ jobs:
       env:
         FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
         FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
+        FORESIGHT_QUERY_TERMS_URL: ${{ vars.FORESIGHT_QUERY_TERMS_URL }}
         FORESIGHT_GOOGLE_CLIENT_JSON: ${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
         REQUIRE_GOOGLE_CLIENT: ${{ github.ref == 'refs/heads/main' }}
       run: |

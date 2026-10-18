@@ -16,7 +16,9 @@ NSDictionary *identity(const char *service, const char *account) {
   return @{
     (__bridge id)kSecClass : (__bridge id)kSecClassGenericPassword,
     (__bridge id)kSecAttrService : label,
-    (__bridge id)kSecAttrAccount : name
+    (__bridge id)kSecAttrAccount : name,
+    (__bridge id)
+    kSecUseAuthenticationUI : (__bridge id)kSecUseAuthenticationUIFail
   };
 }
 } // namespace

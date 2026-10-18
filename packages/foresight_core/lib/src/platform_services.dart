@@ -17,6 +17,7 @@ const _scalarRuntimeKeys = {
   'FORESIGHT_RUNTIME_REVISION',
   'FORESIGHT_SEARCH_API_KEY',
   'FORESIGHT_WEB_CONTENT_API_KEY',
+  'FORESIGHT_QUERY_TERMS_URL',
   'FORESIGHT_WHISPER_BACKEND',
   'FORESIGHT_WHISPER_DEVICE',
   'FORESIGHT_MICROPHONE_TARGET',
@@ -36,8 +37,9 @@ class RuntimeConfiguration {
       environment ?? Platform.environment,
     );
     final startup = values.remove('FORESIGHT_STARTUP_ENV');
-    if (startup != null)
+    if (startup != null) {
       values.addAll(consumeServiceStartupEnvironment(startup));
+    }
     final path = executable ?? Platform.resolvedExecutable;
     final marker = path.lastIndexOf('.app/Contents/');
     final resources =
@@ -263,13 +265,15 @@ bool allowedSourceUri(Uri uri) {
   Uri uri, {
   bool? macOS,
 }) {
-  if (!allowedSourceUri(uri))
+  if (!allowedSourceUri(uri)) {
     throw ArgumentError.value(uri, 'uri', 'Unsupported source URI');
+  }
   final mac = macOS ?? Platform.isMacOS;
   if (uri.scheme == 'file') {
     final path = uri.toFilePath();
-    if (mac)
+    if (mac) {
       return (executable: '/usr/bin/open', arguments: ['-R', '--', path]);
+    }
     return (
       executable: '/usr/bin/dbus-send',
       arguments: [
