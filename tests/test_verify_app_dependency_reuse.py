@@ -135,3 +135,40 @@ def test_actual_mac_make_381_noop_records_preserve_following_command_checks(
 def test_make_noop_target_cannot_embed_shell_quoting(target):
     for body in (f"Nothing to be done for `{target}'.", f"`{target}' is up to date."):
         assert MAKE_NOOP_STATUS.fullmatch("make[2]: " + body) is None
+
+
+@pytest.mark.parametrize("timeout", [False, True])
+def test_failed_dependency_graph_preserves_and_reports_backend_output(
+    tmp_path, timeout
+):
+    import subprocess
+
+    (tmp_path / "CMakeCache.txt").write_text("CMAKE_GENERATOR:INTERNAL=Ninja\n")
+    for name in ("flatbuffers", "sentencepiece"):
+        (tmp_path / "_deps" / (name + "-build")).mkdir(parents=True)
+
+    def request(command, **kwargs):
+        assert "_deps/flatbuffers-build/all" in command
+        assert "_deps/sentencepiece-build/all" in command
+        assert kwargs["stderr"] == subprocess.STDOUT
+        if timeout:
+            raise subprocess.TimeoutExpired(
+                command, 120, output=b"backend timed out detail"
+            )
+        raise subprocess.CalledProcessError(
+            2, command, output="missing dependency rule detail"
+        )
+
+    with pytest.raises(ValueError, match="Dependency ALL dry run failed") as error:
+        verify(tmp_path, request)
+    output = (tmp_path / "dependency-reuse-plan.log").read_text()
+    detail = "backend timed out detail" if timeout else "missing dependency rule detail"
+    assert detail in output
+    assert detail in str(error.value)
+
+
+def test_missing_dependency_all_graph_cannot_pass_guard(tmp_path):
+    (tmp_path / "CMakeCache.txt").write_text("CMAKE_GENERATOR:INTERNAL=Ninja\n")
+    (tmp_path / "_deps/flatbuffers-build").mkdir(parents=True)
+    with pytest.raises(ValueError, match="build trees are missing"):
+        verify(tmp_path, lambda *args, **kwargs: pytest.fail("Must not invoke backend"))

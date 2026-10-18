@@ -3,7 +3,7 @@
   "profiles": {
     "address": {
       "snapshot": "2026/10/18",
-      "repository_setup": "printf '%s\\n' 'Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch' > /etc/pacman.d/mirrorlist\n",
+      "repository_setup": "cat > /etc/pacman.d/mirrorlist <<'FORESIGHT_ARCH_MIRROR'\nServer = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch\nFORESIGHT_ARCH_MIRROR\n",
       "qualified_sdk": {
         "run_id": 39170861992,
         "source_commit": "de2bf5a0856021ed94faeb4ea1db6612efd0b43c",
