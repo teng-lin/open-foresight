@@ -25,6 +25,7 @@ case "$task_gate" in
     else
       ci_timed "core tests" dart test
     fi
+    ci_timed "core enabled-hook regression" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test --compiler=source test/platform_services_test.dart --name 'crash and delay hooks'
   )
   mkdir -p "$task_build/application"
   ci_timed "service compilation" dart compile exe "$task_root/packages/foresight_core/bin/service.dart" -o "$task_build/application/foresight-service"
