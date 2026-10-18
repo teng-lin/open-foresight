@@ -1,0 +1,9 @@
+Name:   setup-docker-action
+Driver: docker
+
+Nodes:
+Name:             setup-docker-action
+Endpoint:         setup-docker-action
+Status:           running
+BuildKit version: v0.34.0
+Platforms:        linux/amd64, linux/amd64/v2, linux/amd64/v3

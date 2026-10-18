@@ -250,7 +250,13 @@ def sdk_profile(image, request=subprocess.check_output, root=ROOT):
                 ("/etc/os-release", "os-release"),
             ):
                 request(
-                    ["docker", "cp", container + ":" + source, str(path / target)],
+                    [
+                        "docker",
+                        "cp",
+                        "-L",
+                        container + ":" + source,
+                        str(path / target),
+                    ],
                     timeout=60,
                 )
             profile = validate_sdk_profile(

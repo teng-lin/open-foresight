@@ -107,6 +107,12 @@ def test_dependency_objects_survive_full_application_reconfigure(
         "add_executable(application ../../app.cpp)\n"
         "target_link_libraries(application PRIVATE sentencepiece-static)\n"
     )
+    # The actual root declares these Apple ALL targets. Keep their real inputs
+    # available to the dry run without adding native/CMakeLists.txt or building
+    # any Swift target in this dependency-only fixture.
+    (source / "native").mkdir()
+    for name in ("notifications.swift", "file_parser.swift", "model_crypto.swift"):
+        shutil.copy(ROOT / "native" / name, source / "native" / name)
     (source / "app.cpp").write_text("int main() { return 0; }\n")
     run(*configure)
     # Actual application compilation/linking is required and remains allowed.

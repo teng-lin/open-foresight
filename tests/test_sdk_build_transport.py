@@ -1,6 +1,7 @@
 """Transport uses published layers without losing verified local parents."""
 
 import json
+from pathlib import Path
 import subprocess
 
 import pytest
@@ -20,7 +21,12 @@ def docker_queries(*, driver="docker", containerd=True, context="setup-docker-ac
         if arguments == ["docker", "context", "show"]:
             return context + "\n"
         if arguments[:3] == ["docker", "buildx", "inspect"]:
-            return json.dumps({"Driver": driver})
+            assert arguments == ["docker", "buildx", "inspect", context]
+            return (
+                (Path(__file__).parent / "fixtures/buildx/docker-inspect.txt")
+                .read_text()
+                .replace("Driver: docker", "Driver: " + driver)
+            )
         return json.dumps(
             [["driver-type", "io.containerd.snapshotter.v1"]]
             if containerd
@@ -168,8 +174,6 @@ def test_registry_cache_preserves_local_parent_arguments_and_loads_result():
         "buildx",
         "inspect",
         "setup-docker-action",
-        "--format",
-        "{{json .}}",
     ]
     assert recipe[:2] == ["docker", "build"]  # Recipe itself is not modified.
 
@@ -207,4 +211,23 @@ def test_pr_transport_cannot_write_registry_or_other_outputs(option):
     with pytest.raises(ValueError, match="must not publish"):
         transport.command(
             ["docker", "build", option, "."], ["docker", "buildx", "build"]
+        )
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "driver: docker\n",
+        "prefix Driver: docker\n",
+        "Driver: docker\nDriver: docker-container\n",
+        "Driver: docker trailing\n",
+        "Driver: \n",
+        '{"Driver":"docker"}',
+    ],
+)
+def test_builder_driver_requires_one_anchored_plain_field(raw):
+    with pytest.raises(RuntimeError, match="exactly one valid anchored Driver"):
+        transport.inspect_builder_driver(
+            "setup-docker-action", lambda *args, **kwargs: raw
         )
