@@ -228,6 +228,59 @@ void worker_reports_failure() {
   }
 }
 
+void worker_survives_throwing_handler() {
+  foresight::ReplyBuffer commands;
+  std::istream input(&commands);
+  std::vector<std::string> lines;
+  foresight::FrameBuffer capture([&](const std::string &line) {
+    lines.push_back(line);
+    if (line == "ready 1")
+      commands.push("generate 1 {\"prompt\":\"throw\"}");
+    else if (line == "1 done failed")
+      commands.push("generate 2 {\"prompt\":\"recover\"}");
+    else if (line == "2 done completed")
+      commands.push("shutdown");
+  });
+  std::ostream output(&capture);
+  foresight::persistent_worker(
+      input, output,
+      [](const nlohmann::json &request, std::istream &, std::ostream &,
+         const std::function<bool(void *)> &) {
+        if (request.at("prompt") == "throw")
+          throw 42;
+      },
+      [](void *) {});
+  check(std::find(lines.begin(), lines.end(), "1 done failed") != lines.end());
+  check(std::find(lines.begin(), lines.end(), "2 done completed") !=
+        lines.end());
+}
+
+void reader_joins_after_output_failure() {
+  foresight::ReplyBuffer commands;
+  std::istream input(&commands);
+  foresight::FrameBuffer capture([&](const std::string &line) {
+    if (line == "ready 1")
+      commands.push("generate 1 {\"prompt\":\"throw\"}");
+    else
+      throw std::runtime_error("Injected worker output failure");
+  });
+  std::ostream output(&capture);
+  output.exceptions(std::ios::badbit | std::ios::failbit);
+  bool caught = false;
+  try {
+    foresight::persistent_worker(
+        input, output,
+        [](const nlohmann::json &, std::istream &, std::ostream &,
+           const std::function<bool(void *)> &) {
+          throw std::runtime_error("handler failed");
+        },
+        [](void *) {});
+  } catch (...) {
+    caught = true;
+  }
+  check(caught);
+}
+
 int main() {
   try {
     const auto repaired =
@@ -237,6 +290,8 @@ int main() {
     const auto error = foresight::frame_json(
         nlohmann::json({{"error", std::string("bad \xff")}}));
     check(nlohmann::json::parse(error).at("error") == "bad \xef\xbf\xbd");
+    reader_joins_after_output_failure();
+    worker_survives_throwing_handler();
     valid_boundaries();
     invalid_input();
     failed_output();
