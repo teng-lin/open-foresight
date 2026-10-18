@@ -11,7 +11,6 @@ import tarfile
 import tempfile
 import unittest
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location(
@@ -830,9 +829,9 @@ def test_nlohmann_notice_is_in_shared_deb_rpm_arch_payload(tmp_path):
     assert "/usr/share/doc/open-foresight" in packages.PAYLOAD_PATHS
 
 
-@pytest.mark.skipif(
-    sys.platform != "linux",
-    reason="Linux maintainer scripts require GNU stat and Linux LP64 record locks",
+@unittest.skipUnless(
+    sys.platform == "linux",
+    "Linux maintainer scripts require GNU stat and Linux LP64 record locks",
 )
 def test_install_lock_rejects_untrusted_directories_and_preserves_legitimate_lock(
     tmp_path,
@@ -870,10 +869,21 @@ def test_install_lock_rejects_untrusted_directories_and_preserves_legitimate_loc
         directory.rmdir()
 
 
-@pytest.mark.parametrize(
-    "kind,tool", [("deb", "dpkg-deb"), ("rpm", "rpmbuild"), ("arch", "makepkg")]
-)
-def test_nlohmann_notice_is_listed_in_native_package_payload(tmp_path, kind, tool):
+def test_nlohmann_notice_is_listed_in_debian_package(tmp_path):
+    _assert_native_package_notice(tmp_path, "deb", "dpkg-deb")
+
+
+def test_nlohmann_notice_is_listed_in_rpm_package(tmp_path):
+    _assert_native_package_notice(tmp_path, "rpm", "rpmbuild")
+
+
+def test_nlohmann_notice_is_listed_in_arch_package(tmp_path):
+    _assert_native_package_notice(tmp_path, "arch", "makepkg")
+
+
+def _assert_native_package_notice(tmp_path, kind, tool):
+    import pytest
+
     if not shutil.which(tool):
         pytest.skip(f"Native {kind} packager {tool} required")
     root = tmp_path / "root"
