@@ -760,7 +760,10 @@ class Store {
         rows.map((row) => [row['id'], row['revision'], row['state']]).toList(),
       );
       if (revisions(current) != revisions(expectedSources)) {
-        throw StateError('Sources changed while organizing labels; retry');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Sources changed while organizing labels; retry',
+        );
       }
       final plan = planLabelPropagation(
         name,

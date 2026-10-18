@@ -1,3 +1,4 @@
+import 'gemma_download.dart' show ModelDownloadCancelled;
 import 'conversation_answer.dart';
 import 'operations.dart';
 import 'rpc_error.dart';
@@ -996,13 +997,17 @@ class Application implements ModelGate {
           }
           return null;
         case Operation.models_speech:
-          await configureSpeech(
-            store,
-            File(a['path'] as String),
-            a['runtime'] as String,
-            a['digest'] as String,
-            current: () => !_closed && (current?.call() ?? true),
-          );
+          try {
+            await configureSpeech(
+              store,
+              File(a['path'] as String),
+              a['runtime'] as String,
+              a['digest'] as String,
+              current: () => !_closed && (current?.call() ?? true),
+            );
+          } on ModelDownloadCancelled catch (error) {
+            throw RpcError(RpcErrorCode.cancelled, error.toString());
+          }
           return null;
         case Operation.models_register:
           if (a['kind'] == dedicatedQueryModelKind) {

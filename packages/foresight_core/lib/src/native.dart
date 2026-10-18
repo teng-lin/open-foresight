@@ -413,7 +413,10 @@ class NativeRuntime implements GenerationStatus {
         // close/load may have destroyed this handle while awaiting the timer
         // or while a consumer was processing a yielded event.
         if (owner.released || owner.epoch != _epoch) {
-          throw StateError('Generation closed before completion');
+          throw RpcError(
+            RpcErrorCode.cancelled,
+            'Generation closed before completion',
+          );
         }
         if (clock.elapsed >= timeout) {
           throw TimeoutException('Native generation timed out', timeout);
@@ -484,7 +487,10 @@ class NativeRuntime implements GenerationStatus {
               if (interrupted.isCompleted) return;
               if (owner.released || owner.epoch != _epoch || owner.cancelled) {
                 interrupted.completeError(
-                  StateError('Tool request is no longer current'),
+                  RpcError(
+                    RpcErrorCode.cancelled,
+                    'Tool request is no longer current',
+                  ),
                 );
               } else if (clock.elapsed >= timeout) {
                 interrupted.completeError(
@@ -503,7 +509,10 @@ class NativeRuntime implements GenerationStatus {
             }
           }
           if (owner.released || owner.epoch != _epoch || owner.cancelled) {
-            throw StateError('Tool request is no longer current');
+            throw RpcError(
+              RpcErrorCode.cancelled,
+              'Tool request is no longer current',
+            );
           }
           if (clock.elapsed >= timeout)
             throw TimeoutException('Native generation timed out', timeout);
