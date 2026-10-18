@@ -5,9 +5,27 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart'
-    show serviceEndpoint, serviceLaunchCommand;
+    show serviceEndpoint, serviceLaunchCommand, writeServiceStartupEnvironment;
 
 void main() {
+  test('crash and delay hooks require an explicit test compilation', () {
+    final configuration = RuntimeConfiguration.resolve(
+      environment: {
+        'FORESIGHT_CRASH_AT': 'commit',
+        'FORESIGHT_TEST_DELAY_MS': '500',
+      },
+      executable: '/service',
+    );
+    expect(
+      configuration['FORESIGHT_CRASH_AT'],
+      foresightTestHooksEnabled ? 'commit' : isNull,
+    );
+    expect(
+      configuration['FORESIGHT_TEST_DELAY_MS'],
+      foresightTestHooksEnabled ? '500' : isNull,
+    );
+  });
+
   test(
     'local sources are revealed even for executable document extensions',
     () {
@@ -76,6 +94,27 @@ void main() {
     );
   });
 
+  test('private startup handoff hides API keys and is consumed once', () async {
+    final runtime = Directory('${scratch.path}/runtime');
+    final handoff = await writeServiceStartupEnvironment(runtime, {
+      'FORESIGHT_SEARCH_API_KEY': 'private-api-marker',
+      'FORESIGHT_RUNTIME': runtime.path,
+      'UNRELATED_SECRET': 'do-not-forward',
+    });
+    expect(handoff.statSync().mode & 0x1ff, 0x180);
+    final resolved = RuntimeConfiguration.resolve(
+      environment: {'FORESIGHT_STARTUP_ENV': handoff.path},
+      executable: '/service',
+    );
+    expect(resolved['FORESIGHT_SEARCH_API_KEY'], 'private-api-marker');
+    expect(resolved['UNRELATED_SECRET'], isNull);
+    expect(handoff.existsSync(), isFalse);
+    expect(
+      () => consumeServiceStartupEnvironment(handoff.path),
+      throwsStateError,
+    );
+  });
+
   test(
     'packaged service uses LaunchServices with isolated explicit overrides',
     () {
@@ -84,13 +123,23 @@ void main() {
       final executable = File('$bundle/Contents/MacOS/service')
         ..createSync(recursive: true);
       File('$bundle/Contents/Info.plist').writeAsStringSync('<plist/>');
-      final command = serviceLaunchCommand(executable.path, {
-        'FORESIGHT_DATA': '/private/profile with spaces',
-        'FORESIGHT_RUNTIME': '/private/runtime',
-        'FORESIGHT_LITERT_BACKEND': 'gpu',
-        'PYTHONPYCACHEPREFIX': '/private/cache',
-        'UNRELATED_SECRET': 'must not be forwarded',
-      }, macOS: true);
+      final command = serviceLaunchCommand(
+        executable.path,
+        {
+          'FORESIGHT_DATA': '/private/profile with spaces',
+          'FORESIGHT_RUNTIME': '/private/runtime',
+          'FORESIGHT_LITERT_BACKEND': 'gpu',
+          'PYTHONPYCACHEPREFIX': '/private/cache',
+          'UNRELATED_SECRET': 'must not be forwarded',
+          'FORESIGHT_SEARCH_API_KEY': 'argv-must-not-contain-this-key',
+        },
+        macOS: true,
+        startupEnvironmentFile: '/private/startup.json',
+      );
+      expect(
+        command.arguments.join(' '),
+        isNot(contains('argv-must-not-contain-this-key')),
+      );
       expect(command.executable, '/usr/bin/open');
       expect(command.arguments.take(2), ['-g', '-n']);
       expect(
@@ -99,9 +148,12 @@ void main() {
       );
       expect(
         command.arguments,
-        contains('FORESIGHT_DATA=/private/profile with spaces'),
+        contains('FORESIGHT_STARTUP_ENV=/private/startup.json'),
       );
-      expect(command.arguments, contains('FORESIGHT_LITERT_BACKEND=gpu'));
+      expect(
+        command.arguments.join(' '),
+        isNot(contains('FORESIGHT_LITERT_BACKEND=gpu')),
+      );
       expect(
         command.arguments.join(' '),
         isNot(contains('must not be forwarded')),
@@ -201,7 +253,7 @@ void main() {
   });
 
   test(
-    'canonical aliases resolve to one profile and short deterministic Mac runtime',
+    'canonical aliases resolve to one profile under the user Mac temporary root',
     () {
       final home = Directory('${scratch.path}/home')..createSync();
       final profile = Directory('${scratch.path}/profile')..createSync();
@@ -215,6 +267,16 @@ void main() {
         'FORESIGHT_DATA': '${alias.path}/new',
       }, macOS: true);
       expect(first.data, second.data);
+      final privateTemp = Directory('${scratch.path}/T')..createSync();
+      Process.runSync('/bin/chmod', ['700', privateTemp.path]);
+      final scoped = ProfilePaths.resolve({
+        'HOME': home.path,
+        'TMPDIR': privateTemp.path,
+      }, macOS: true);
+      expect(
+        scoped.runtime,
+        startsWith('${privateTemp.resolveSymbolicLinksSync()}/of-'),
+      );
       expect(first.runtime, second.runtime);
       expect(
         utf8.encode('${first.runtime}/application.sock').length,

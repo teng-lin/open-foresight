@@ -55,9 +55,22 @@ class ProfilePaths {
               ? '$home/Library/Application Support/Open Foresight'
               : '$base/open-foresight'),
     );
-    final uid = mac
-        ? Process.runSync('/usr/bin/id', ['-u']).stdout.toString().trim()
+    final temporary = mac
+        ? (environment['TMPDIR'] ??
+              (Platform.isMacOS ? Directory.systemTemp.path : '/tmp'))
         : '';
+    if (mac && Platform.isMacOS) {
+      final parent = Directory(temporary);
+      final owner = Process.runSync('/usr/bin/stat', ['-f', '%u', parent.path]);
+      final user = Process.runSync('/usr/bin/id', ['-u']);
+      if (!parent.existsSync() ||
+          owner.exitCode != 0 ||
+          user.exitCode != 0 ||
+          owner.stdout.toString().trim() != user.stdout.toString().trim() ||
+          (parent.statSync().mode & 0x3f) != 0) {
+        throw StateError('macOS TMPDIR must be a private user-owned directory');
+      }
+    }
     final identity = sha256
         .convert(utf8.encode(data))
         .toString()
@@ -65,7 +78,7 @@ class ProfilePaths {
     final runtime = canonicalProfilePath(
       environment['FORESIGHT_RUNTIME'] ??
           (mac
-              ? '/tmp/of-$uid-$identity'
+              ? '$temporary/of-${identity.substring(0, 12)}'
               : '${environment['XDG_RUNTIME_DIR'] ?? '$data/runtime'}/open-foresight'),
     );
     if (mac && utf8.encode('$runtime/application.sock').length >= 104) {
