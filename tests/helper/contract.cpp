@@ -278,6 +278,40 @@ int main(int argc, char **argv) {
     auto found = retrieve("cats");
     REQUIRE(found.chunks_size() && found.chunks(0).document_id() == "cats");
     REQUIRE(retrieve("cats", "dogs").chunks_size() == 0);
+    // A model publication can hold the reconfiguration guard while another
+    // index RPC is cancelled. The waiting RPC must not retain a server thread.
+    std::filesystem::remove(dir + "/.paused");
+    std::ofstream(dir + "/.pause-at") << "model_before_commit";
+    auto changing_model = std::async(std::launch::async, [&] {
+      auto next = model;
+      next.set_cache_dir("cancel-wait-rebuild");
+      p::UpdateModelPathsResponse result;
+      REQUIRE(call(next, result, [&](auto *ctx, auto &q, auto *r) {
+                return stub->UpdateModelPaths(ctx, q, r);
+              }).ok());
+    });
+    for (int n = 0; n < 100 && !std::filesystem::exists(dir + "/.paused"); ++n)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    REQUIRE(std::filesystem::exists(dir + "/.paused"));
+    grpc::ClientContext cancelled_index;
+    p::IndexRequest cancelled_request;
+    cancelled_request.set_document_id("cancelled-guard-wait");
+    cancelled_request.set_content("must not publish");
+    p::IndexResponse cancelled_response;
+    auto waiting_index = std::async(std::launch::async, [&] {
+      return stub->IndexDocument(&cancelled_index, cancelled_request,
+                                 &cancelled_response);
+    });
+    REQUIRE(waiting_index.wait_for(std::chrono::milliseconds(50)) ==
+            std::future_status::timeout);
+    cancelled_index.TryCancel();
+    REQUIRE(waiting_index.wait_for(std::chrono::milliseconds(200)) ==
+            std::future_status::ready);
+    REQUIRE(waiting_index.get().error_code() == grpc::StatusCode::CANCELLED);
+    std::filesystem::remove(dir + "/.pause-at");
+    changing_model.get();
+    std::filesystem::remove(dir + "/.paused");
+
     // Keep a replacement transaction open while a reader searches its previous
     // immutable index. A global read/write mutex would deadlock this assertion.
     std::ofstream(dir + "/.pause-at") << "partial_vectors";

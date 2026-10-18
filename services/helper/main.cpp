@@ -2,6 +2,7 @@
 #include "helper_control.grpc.pb.h"
 #include "model.h"
 #include "rag_service.grpc.pb.h"
+#include "reconfig_wait.h"
 #include "vector_index.h"
 #include <algorithm>
 #include <atomic>
@@ -131,11 +132,23 @@ class Service : public rpc::RagService::Service,
     Service &s;
     bool held = false;
     explicit ReconfigGuard(Service &x) : s(x) {}
-    void enter() {
+    Status enter(grpc::ServerContext *context) {
       std::unique_lock lock(s.reconfig_mu);
-      s.reconfig_cv.wait(lock, [&] { return !s.reconfiguring; });
+      const auto result = foresight::wait_for_reconfiguration(
+          s.reconfig_cv, lock, s.reconfiguring,
+          [&] { return context->IsCancelled(); },
+          [&] {
+            return std::chrono::system_clock::now() >= context->deadline();
+          });
+      if (result == foresight::ReconfigWait::cancelled)
+        return {StatusCode::CANCELLED,
+                "Cancelled while awaiting model reconfiguration"};
+      if (result == foresight::ReconfigWait::deadline)
+        return {StatusCode::DEADLINE_EXCEEDED,
+                "Model reconfiguration wait expired"};
       s.reconfiguring = true;
       held = true;
+      return Status::OK;
     }
     ~ReconfigGuard() {
       if (!held)
@@ -451,7 +464,8 @@ public:
                           rpc::UpdateModelPathsResponse *r) override {
     ReconfigGuard guard(*this);
     try {
-      guard.enter();
+      if (auto status = guard.enter(context); !status.ok())
+        return status;
       std::string next, next_cache;
       bool next_gpu = false;
       {
@@ -588,7 +602,8 @@ public:
                        rpc::IndexResponse *r) override {
     ReconfigGuard guard(*this);
     try {
-      guard.enter();
+      if (auto status = guard.enter(context); !status.ok())
+        return status;
       std::shared_ptr<Model> current;
       std::string id, content, user, mime, image;
       int size = 0, overlap = 0;
@@ -681,7 +696,8 @@ public:
                         const rpc::DeleteRequest *req,
                         rpc::DeleteResponse *r) override {
     ReconfigGuard guard(*this);
-    guard.enter();
+    if (auto status = guard.enter(context); !status.ok())
+      return status;
     std::lock_guard lock(mu);
     try {
       if (req->document_id().empty())
