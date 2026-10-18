@@ -22,6 +22,7 @@ Future<void> waitUntil(
   int seconds = 60,
   String reason = 'Workflow timed out',
 }) async {
+  final elapsed = Stopwatch()..start();
   final deadline = DateTime.now().add(Duration(seconds: seconds));
   while (!ready() && DateTime.now().isBefore(deadline)) {
     await tester.pump(const Duration(milliseconds: 100));
@@ -36,9 +37,17 @@ Future<void> waitUntil(
     final workspaces = find.byType(app.Workspace);
     if (workspaces.evaluate().isNotEmpty) {
       final dynamic workspace = tester.state(workspaces);
+      // Capture before the status RPC: pending work can finish while that
+      // request runs, making a post-failure database artifact look successful.
+      final observedAt = DateTime.now().toUtc().toIso8601String();
+      final waitedMs = elapsed.elapsedMilliseconds;
+      final sources = workspace.d.store.rows(
+        'SELECT id,state,error,revision FROM sources WHERE deleted=0 ORDER BY id',
+      );
       final status = await workspace.d.command(Operation.status);
       fail(
         '$reason: busy=${workspace.busy}, error=${workspace.error}, '
+        'waited_ms=$waitedMs, observed_at=$observedAt, sources=$sources, '
         'status=$status',
       );
     }
