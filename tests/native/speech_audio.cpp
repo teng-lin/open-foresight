@@ -1,7 +1,9 @@
 #include "speech_audio.h"
+#include "wav_writer.h"
 #include <cstdlib>
 #include <dirent.h>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -31,6 +33,12 @@ static int count_tmp_asr() {
   return count;
 }
 
+class ShortWavBuffer : public std::stringbuf {
+  std::streamsize xsputn(const char *, std::streamsize) override {
+    return 0;
+  }
+};
+
 int main() {
   // The profile must be writable and outside /tmp. A fixed workstation path
   // cannot be created on the macOS runner.
@@ -40,6 +48,19 @@ int main() {
       std::string(home) + "/.of-speech-" + std::to_string(getpid());
   const std::string profile = root + "/profile";
   try {
+    ShortWavBuffer short_write;
+    std::ostream failed(&short_write);
+    bool rejected = false;
+    try {
+      foresight::write_wav(failed, {1, 2, 3});
+    } catch (const std::runtime_error &error) {
+      rejected = std::string(error.what()).find("Speech audio write failed") !=
+                 std::string::npos;
+    }
+    REQUIRE(rejected);
+    std::ostringstream complete;
+    foresight::write_wav(complete, {1, 2, 3});
+    REQUIRE(complete.str().size() == 50);
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
     REQUIRE(setenv("HOME", root.c_str(), 1) == 0);
