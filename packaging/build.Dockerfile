@@ -56,7 +56,7 @@ RUN --mount=type=secret,id=google_client \
 # No host audio devices or host session sockets are passed to this image.
 FROM builder AS integration
 RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
-    pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 && \
+    pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 mesa-vulkan-drivers && \
     rm -rf /var/lib/apt/lists/*
 
 FROM scratch AS artifact
