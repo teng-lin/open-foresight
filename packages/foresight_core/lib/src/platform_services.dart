@@ -5,6 +5,11 @@ import 'package:ffi/ffi.dart';
 import 'dart:convert';
 import 'dart:io';
 
+const foresightTestHooksEnabled = bool.fromEnvironment(
+  'FORESIGHT_ENABLE_TEST_HOOKS',
+);
+const _testHookKeys = {'FORESIGHT_CRASH_AT', 'FORESIGHT_TEST_DELAY_MS'};
+
 /// The same immutable resource map is used by Finder, MCP and detached workers.
 /// Paths in runtime.json are relative to Contents/Resources, never the cwd.
 const _scalarRuntimeKeys = {
@@ -30,6 +35,9 @@ class RuntimeConfiguration {
     final values = Map<String, String>.from(
       environment ?? Platform.environment,
     );
+    final startup = values.remove('FORESIGHT_STARTUP_ENV');
+    if (startup != null)
+      values.addAll(consumeServiceStartupEnvironment(startup));
     final path = executable ?? Platform.resolvedExecutable;
     final marker = path.lastIndexOf('.app/Contents/');
     final resources =
@@ -63,6 +71,11 @@ class RuntimeConfiguration {
       }
       values['FORESIGHT_RESOURCES'] = resources;
     }
+    if (!foresightTestHooksEnabled) {
+      for (final key in _testHookKeys) {
+        values.remove(key);
+      }
+    }
     return RuntimeConfiguration(values);
   }
   String? operator [](String key) => environment[key];
@@ -77,6 +90,40 @@ final runtimeConfiguration = RuntimeConfiguration.resolve();
 
 // mode_t is unsigned short on Darwin and unsigned int on Linux. Calling libc
 // directly avoids starting a child process while publishing a local socket.
+/// Consume one private, bounded startup handoff before resolving resources.
+Map<String, String> consumeServiceStartupEnvironment(String path) {
+  final file = File(path);
+  if (file.uri.pathSegments.last != 'startup.json' ||
+      !file.parent.uri.pathSegments
+          .where((s) => s.isNotEmpty)
+          .last
+          .startsWith('of-launch-') ||
+      FileSystemEntity.typeSync(path, followLinks: false) !=
+          FileSystemEntityType.file) {
+    throw StateError('Invalid service environment handoff');
+  }
+  privateDirectory(file.parent.path);
+  if ((file.statSync().mode & 0x1ff) != 0x180 || file.lengthSync() > 65536) {
+    throw StateError('Service environment handoff must be private and bounded');
+  }
+  final decoded = jsonDecode(file.readAsStringSync());
+  if (decoded is! Map ||
+      decoded.entries.any(
+        (e) =>
+            e.key is! String ||
+            e.value is! String ||
+            (!(e.key as String).startsWith('FORESIGHT_') &&
+                e.key != 'PYTHONPYCACHEPREFIX') ||
+            e.key == 'FORESIGHT_STARTUP_ENV',
+      )) {
+    throw StateError('Invalid service environment entries');
+  }
+  final result = Map<String, String>.from(decoded);
+  file.deleteSync();
+  file.parent.deleteSync();
+  return result;
+}
+
 final int Function(Pointer<Utf8>, int) _chmod = Platform.isMacOS
     ? DynamicLibrary.process().lookupFunction<
         Int32 Function(Pointer<Utf8>, Uint16),

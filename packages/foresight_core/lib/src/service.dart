@@ -1280,6 +1280,7 @@ Future<ServiceClient> _connectCompatibleService(String path) async {
   String executable,
   Map<String, String> environment, {
   bool? macOS,
+  String? startupEnvironmentFile,
 }) {
   if (macOS ?? Platform.isMacOS) {
     final canonical = File(executable).resolveSymbolicLinksSync();
@@ -1293,23 +1294,48 @@ Future<ServiceClient> _connectCompatibleService(String path) async {
           'Application service bundle is missing Info.plist: $bundle',
         );
       }
+      if (startupEnvironmentFile == null)
+        throw StateError('A private startup environment handoff is required');
       return (
         executable: '/usr/bin/open',
         arguments: [
           '-g',
           '-n',
-          for (final entry in environment.entries)
-            if (entry.key.startsWith('FORESIGHT_') ||
-                entry.key == 'PYTHONPYCACHEPREFIX') ...[
-              '--env',
-              '${entry.key}=${entry.value}',
-            ],
+          '--env',
+          'FORESIGHT_STARTUP_ENV=$startupEnvironmentFile',
           bundle,
         ],
       );
     }
   }
   return (executable: executable, arguments: const []);
+}
+
+/// Distribution credentials travel through a private file, never open --env argv.
+Future<File> writeServiceStartupEnvironment(
+  Directory runtime,
+  Map<String, String> environment,
+) async {
+  privateDirectory(runtime.path);
+  final directory = await createPrivateTempDirectory(runtime, 'of-launch-');
+  final file = File('${directory.path}/startup.json');
+  try {
+    await file.writeAsString(
+      jsonEncode({
+        for (final entry in environment.entries)
+          if ((entry.key.startsWith('FORESIGHT_') ||
+                  entry.key == 'PYTHONPYCACHEPREFIX') &&
+              entry.key != 'FORESIGHT_STARTUP_ENV')
+            entry.key: entry.value,
+      }),
+      flush: true,
+    );
+    protectPrivateFile(file.path);
+    return file;
+  } catch (_) {
+    await directory.delete(recursive: true);
+    rethrow;
+  }
 }
 
 /// Attach first; competing launchers may race safely on the service's OS lock.
@@ -1333,45 +1359,62 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
     'FORESIGHT_DATA': profile.data,
     'FORESIGHT_RUNTIME': profile.runtime,
   };
-  final launch = serviceLaunchCommand(executable, environment);
-  String? startupLog;
-  if (launch.executable == '/usr/bin/open') {
-    startupLog = '${profile.runtime}/service-startup.log';
-    if (FileSystemEntity.typeSync(startupLog, followLinks: false) ==
-        FileSystemEntityType.link) {
-      throw StateError(
-        'Service startup log must not be a symbolic link: $startupLog',
-      );
-    }
-    File(startupLog).openSync(mode: FileMode.append).closeSync();
-    final protect = await Process.run('/bin/chmod', ['600', startupLog]);
-    if (protect.exitCode != 0) throw StateError('Cannot protect $startupLog');
-    launch.arguments.insertAll(2, ['--stderr', startupLog]);
-    final result = await Process.run(launch.executable, launch.arguments);
-    if (result.exitCode != 0) {
-      throw StateError(
-        'LaunchServices could not start the application service: ${result.stderr}. See $startupLog.',
-      );
-    }
-  } else {
-    await Process.start(
-      launch.executable,
-      launch.arguments,
-      mode: ProcessStartMode.detached,
-      environment: environment,
+  final handoff = Platform.isMacOS
+      ? await writeServiceStartupEnvironment(
+          Directory(profile.runtime),
+          environment,
+        )
+      : null;
+  try {
+    final launch = serviceLaunchCommand(
+      executable,
+      environment,
+      startupEnvironmentFile: handoff?.path,
     );
-  }
-  for (var attempt = 0; attempt < 100; attempt++) {
-    try {
-      path = serviceEndpoint(profile);
-      return await _connectCompatibleService(path);
-    } on SocketException {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
+    String? startupLog;
+    if (launch.executable == '/usr/bin/open') {
+      startupLog = '${profile.runtime}/service-startup.log';
+      if (FileSystemEntity.typeSync(startupLog, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw StateError(
+          'Service startup log must not be a symbolic link: $startupLog',
+        );
+      }
+      File(startupLog).openSync(mode: FileMode.append).closeSync();
+      final protect = await Process.run('/bin/chmod', ['600', startupLog]);
+      if (protect.exitCode != 0) throw StateError('Cannot protect $startupLog');
+      launch.arguments.insertAll(2, ['--stderr', startupLog]);
+      final result = await Process.run(launch.executable, launch.arguments);
+      if (result.exitCode != 0) {
+        throw StateError(
+          'LaunchServices could not start the application service: ${result.stderr}. See $startupLog.',
+        );
+      }
+    } else {
+      await Process.start(
+        launch.executable,
+        launch.arguments,
+        mode: ProcessStartMode.detached,
+        environment: environment,
+      );
+    }
+    for (var attempt = 0; attempt < 100; attempt++) {
+      try {
+        path = serviceEndpoint(profile);
+        return await _connectCompatibleService(path);
+      } on SocketException {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+    }
+    throw StateError(
+      startupLog == null
+          ? 'Application service did not start. Run $executable directly to inspect the startup error.'
+          : 'Application service did not start. Inspect $startupLog for startup diagnostics.',
+    );
+  } finally {
+    if (handoff != null && handoff.existsSync()) {
+      await handoff.delete();
+      await handoff.parent.delete();
     }
   }
-  throw StateError(
-    startupLog == null
-        ? 'Application service did not start. Run $executable directly to inspect the startup error.'
-        : 'Application service did not start. Inspect $startupLog for startup diagnostics.',
-  );
 }
