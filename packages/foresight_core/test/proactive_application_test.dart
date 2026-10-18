@@ -210,7 +210,8 @@ void main() {
         'answer_id': answer['id'],
       });
       expect(store.sources.single['id'], 'meeting-$id');
-      final details = await domain.command('meetings.get', {'id': id}) as Map;
+      final details =
+          await domain.command(Operation.meetings_get, {'id': id}) as Map;
       expect(details['questions'], hasLength(1));
       expect(
         (domain.application.captureState['proactive']
@@ -244,11 +245,11 @@ void main() {
         0,
       );
       detector.failure = null;
-      await domain.command('meetings.retry_detection', {'id': id});
+      await domain.command(Operation.meetings_retry_detection, {'id': id});
       await queue.process();
       expect(store.rows('SELECT * FROM meeting_questions'), hasLength(1));
       await queue.reset();
-      await domain.command('workspace.clear');
+      await domain.command(Operation.workspace_clear);
       expect(store.rows('SELECT * FROM meeting_questions'), isEmpty);
       expect(store.rows('SELECT * FROM meeting_question_cursors'), isEmpty);
       expect(store.rows('SELECT * FROM transcript'), isEmpty);
@@ -354,7 +355,7 @@ void main() {
             ..writeAsStringSync('Fixture');
           await store.register('speech', model.path, '/usr/bin/true');
           final id = store.meeting('Capture fixture');
-          await domain.command('meetings.start', {'id': id});
+          await domain.command(Operation.meetings_start, {'id': id});
           final bytes = ByteData(interim ? 12000 : 4000);
           final event = jsonEncode({
             'type': 'pcm',
@@ -370,7 +371,8 @@ void main() {
             1,
           );
           calloc.free(event);
-          if (!interim) await domain.command('meetings.pause', {'id': id});
+          if (!interim)
+            await domain.command(Operation.meetings_pause, {'id': id});
           final deadline = DateTime.now().add(const Duration(seconds: 3));
           while ((interim
                   ? domain.application.provisionalTranscript.values.every(
@@ -417,7 +419,7 @@ void main() {
             store.rows('SELECT body FROM answers').single['body'],
             'Mira owns the draft. [S1]',
           );
-          await domain.command('meetings.stop');
+          await domain.command(Operation.meetings_stop);
         } finally {
           if (prior == null) {
             runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');

@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/desktop_connection.dart';
@@ -14,6 +15,21 @@ Type recordingStatusType<T extends RecordingStatus>() => T;
 Type googleAccountType<T extends GoogleAccount>() => T;
 Type connectedSourcesType<T extends ConnectedSources>() => T;
 Type desktopConnectionType<T extends DesktopConnection>() => T;
+
+// A String-based implementation cannot satisfy these tear-off types.
+typedef DesktopCommand =
+    Future<Object?> Function(Operation operation, [Map<String, dynamic> args]);
+typedef CurrentDesktopCommand =
+    Future<Object?> Function(
+      Operation operation,
+      Map<String, dynamic> args,
+      bool Function() current,
+    );
+DesktopCommand typedDesktopCommand(DesktopConnection connection) =>
+    connection.command;
+CurrentDesktopCommand typedCurrentDesktopCommand(
+  DesktopConnection connection,
+) => connection.commandCurrent;
 
 void main() {
   test(

@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
@@ -223,7 +224,7 @@ void main() {
           await domain.application.enhanceNotes(id);
           final model = File('${directory.path}/embedding.litertlm');
           model.writeAsStringSync('ABI fixture model');
-          final change = domain.command('models.embedding', {
+          final change = domain.command(Operation.models_embedding, {
             'path': model.path,
             if (!registrySucceeds) 'digest': 'incorrect-digest',
           });
@@ -241,7 +242,7 @@ void main() {
 
           embeddings.modelUpdateSucceeds = false;
           await expectLater(
-            domain.command('models.embedding', {'path': model.path}),
+            domain.command(Operation.models_embedding, {'path': model.path}),
             throwsStateError,
           );
           await domain.application.enhanceNotes(id);
@@ -274,7 +275,10 @@ void main() {
           await embeddings.embeddingEntered.future;
           expect(runtime.generating, isFalse);
           expect(runtime.prompts, isEmpty);
-          for (final method in ['models.embedding', 'models.generation']) {
+          for (final method in [
+            Operation.models_embedding,
+            Operation.models_generation,
+          ]) {
             await expectLater(
               domain.command(method, {'path': '/unused'}),
               throwsStateError,
@@ -313,7 +317,7 @@ void main() {
               domain.application.captureState['note_enhancements'] as Map;
           final state = states['$id'] as Map;
           expect(
-            await domain.command('meetings.cancel_enhance', {
+            await domain.command(Operation.meetings_cancel_enhance, {
               'id': id,
               'request_id': state['request_id'],
             }),
@@ -449,7 +453,7 @@ void main() {
         expect(runtime.prompts.first, isNot(contains('Novel evidence')));
         expect(embeddings.texts, ['Original evidence', 'Raw note']);
 
-        await domain.command('meetings.transcript', {
+        await domain.command(Operation.meetings_transcript, {
           'id': id,
           'text': 'Novel evidence',
         });

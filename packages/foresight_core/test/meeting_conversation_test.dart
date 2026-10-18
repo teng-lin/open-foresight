@@ -168,11 +168,11 @@ void main() {
         first = await RemoteDomain.connect(profile);
         second = await RemoteDomain.connect(profile);
         final alpha =
-            (await first.command('meetings.create', {'title': 'Alpha'})
+            (await first.command(Operation.meetings_create, {'title': 'Alpha'})
                     as Map)['id']
                 as int;
         final beta =
-            (await second.command('meetings.create', {'title': 'Beta'})
+            (await second.command(Operation.meetings_create, {'title': 'Beta'})
                     as Map)['id']
                 as int;
         await Future.wait([
@@ -184,7 +184,7 @@ void main() {
               .drain<void>(),
           first.ask('General question').drain<void>(),
         ]);
-        await first.command('answer', {
+        await first.command(Operation.answer, {
           'question': 'Command question',
           'meeting_id': alpha,
         });

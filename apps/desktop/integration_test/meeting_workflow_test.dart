@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -34,7 +35,7 @@ Future<void> waitUntil(
     final workspaces = find.byType(app.Workspace);
     if (workspaces.evaluate().isNotEmpty) {
       final dynamic workspace = tester.state(workspaces);
-      final status = await workspace.d.command('status');
+      final status = await workspace.d.command(Operation.status);
       fail(
         '$reason: busy=${workspace.busy}, error=${workspace.error}, '
         'status=$status',
@@ -460,7 +461,7 @@ void main() {
         ]).single['edited'],
         'My meeting review: preserve this edit.',
       );
-      await workspace.d.command('preferences.set', {
+      await workspace.d.command(Operation.preferences_set, {
         'key': 'liveEnhance',
         'value': 'false',
       });
@@ -594,7 +595,7 @@ void main() {
       final speechAsset = reopened.d.store
           .rows("SELECT path FROM models WHERE kind='speech'")
           .single['path'];
-      await reopened.d.command('models.register', {
+      await reopened.d.command(Operation.models_register, {
         'kind': 'speech',
         'path': speechAsset,
         'runtime': slowSpeech.path,
@@ -646,7 +647,7 @@ void main() {
         ).single['state'],
         'completed',
       );
-      await afterCancellation.d.command('models.register', {
+      await afterCancellation.d.command(Operation.models_register, {
         'kind': 'speech',
         'path': speechAsset,
         'runtime': savedSpeech,
@@ -655,7 +656,7 @@ void main() {
       final inactivitySetting =
           afterCancellation.d.store.preference('inactivity', '15') as String;
       final inactivityObservations = <Map<String, Object?>>[];
-      await afterCancellation.d.command('preferences.set', {
+      await afterCancellation.d.command(Operation.preferences_set, {
         'key': 'inactivity',
         'value': realInactivity ? '5' : '0.1',
       });
@@ -720,7 +721,7 @@ void main() {
         ).single['state'],
         'empty',
       );
-      await afterCancellation.d.command('preferences.set', {
+      await afterCancellation.d.command(Operation.preferences_set, {
         'key': 'inactivity',
         'value': inactivitySetting,
       });
@@ -789,7 +790,7 @@ void main() {
       final address = 'http://127.0.0.1:${server.port}/notes';
       try {
         await afterCancellation.run(() async {
-          await afterCancellation.d.command('sources.import_url', {
+          await afterCancellation.d.command(Operation.sources_import_url, {
             'url': address,
             'allow_private_network': true,
           });
@@ -797,7 +798,7 @@ void main() {
         expect(afterCancellation.error, isEmpty);
         page = 'URL acceptance fixture: the review is Wednesday.';
         await afterCancellation.run(() async {
-          await afterCancellation.d.command('sources.refresh', {
+          await afterCancellation.d.command(Operation.sources_refresh, {
             'allow_private_network': true,
           });
         });
@@ -896,11 +897,11 @@ void main() {
         fixtureStore.close();
       }
       final labelledSources = afterCancellation.d.store.sources;
-      await afterCancellation.d.command('labels.set', {
+      await afterCancellation.d.command(Operation.labels_set, {
         'id': labelledSources[0]['id'],
         'labels': ['Planning'],
       });
-      await afterCancellation.d.command('labels.set', {
+      await afterCancellation.d.command(Operation.labels_set, {
         'id': labelledSources[1]['id'],
         'labels': ['Planning', 'Local AI'],
       });
@@ -1251,7 +1252,7 @@ void main() {
         (k, v) => MapEntry(k, GraphPoint(v.x * .75, v.y, v.z)),
       );
       expect(
-        await afterCancellation.d.command('graph.save', {
+        await afterCancellation.d.command(Operation.graph_save, {
           'identity': snapshot.identity,
           'sources': graphSceneSources(snapshotStore.sources, snapshot.vectors),
           'vectors': snapshot.vectors,

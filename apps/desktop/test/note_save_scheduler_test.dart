@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -17,14 +18,15 @@ class GatedNoteDomain extends CommandFixtureDomain {
   Map<String, dynamic>? artifactEdit;
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]) async {
-    if (method == 'meetings.notes' && rejectNotes)
+    if (operation == Operation.meetings_notes && rejectNotes)
       throw StateError('Service disconnected');
-    if (method == 'artifacts.edit') artifactEdit = Map.of(args);
-    if (method == 'meetings.notes' && saveGate != null) await saveGate!.future;
-    return super.command(method, args);
+    if (operation == Operation.artifacts_edit) artifactEdit = Map.of(args);
+    if (operation == Operation.meetings_notes && saveGate != null)
+      await saveGate!.future;
+    return super.command(operation, args);
   }
 }
 

@@ -494,12 +494,12 @@ void main() {
         app.recordingMeeting = id;
         app.recordingBegan = now;
         await expectLater(
-          domain.command('meetings.pause', {'id': id + 1}),
+          domain.command(Operation.meetings_pause, {'id': id + 1}),
           throwsStateError,
         );
         expect(recording.paused, false);
         final paused =
-            await domain.command('meetings.pause', {'id': id}) as Map;
+            await domain.command(Operation.meetings_pause, {'id': id}) as Map;
         expect(paused['active'], true);
         expect(paused['paused'], true);
         now = now.add(const Duration(seconds: 20));
@@ -518,14 +518,14 @@ void main() {
           'paused',
         );
         await expectLater(
-          domain.command('models.speech', {
+          domain.command(Operation.models_speech, {
             'path': 'unused',
             'runtime': 'unused',
           }),
           throwsStateError,
         );
         final resumed =
-            await domain.command('meetings.resume', {'id': id}) as Map;
+            await domain.command(Operation.meetings_resume, {'id': id}) as Map;
         expect(resumed['paused'], false);
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -533,8 +533,8 @@ void main() {
           ]).single['state'],
           'recording',
         );
-        await domain.command('meetings.pause');
-        final stopped = await domain.command('meetings.stop') as Map;
+        await domain.command(Operation.meetings_pause);
+        final stopped = await domain.command(Operation.meetings_stop) as Map;
         expect(stopped['active'], false);
         expect(stopped['meeting_id'], isNull);
         expect(stopped['began'], isNull);
@@ -547,7 +547,10 @@ void main() {
           ]).single['state'],
           'empty',
         );
-        await expectLater(domain.command('meetings.resume'), throwsStateError);
+        await expectLater(
+          domain.command(Operation.meetings_resume),
+          throwsStateError,
+        );
       } finally {
         await app.close();
         domain.close();

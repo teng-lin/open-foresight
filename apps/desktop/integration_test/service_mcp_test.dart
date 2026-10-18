@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -111,7 +112,7 @@ void main() {
       );
       // A ready snapshot may precede the current restore transaction finishing.
       await workspace.d.resume();
-      final initial = await workspace.d.command('status') as Map;
+      final initial = await workspace.d.command(Operation.status) as Map;
       final mcp = Mcp(
         await Process.start(
           Platform.environment['FORESIGHT_MCP_EXECUTABLE']!,
@@ -176,7 +177,8 @@ void main() {
       await mcp.close();
       observed.expect(
         'recording_survived_mcp_close',
-        (await workspace.d.command('status') as Map)['capture']['active'],
+        (await workspace.d.command(Operation.status)
+            as Map)['capture']['active'],
         true,
       );
       // Closing the desktop removes its visible indicator and must stop capture.
@@ -193,18 +195,19 @@ void main() {
       await workspace.d.resume();
       observed.expect(
         'recording_stopped_when_desktop_indicator_closed',
-        (await workspace.d.command('status') as Map)['capture']['active'],
+        (await workspace.d.command(Operation.status)
+            as Map)['capture']['active'],
         false,
       );
       observed.expect(
         'desktop_restart_preserved_owner',
-        (await workspace.d.command('status') as Map)['pid'],
+        (await workspace.d.command(Operation.status) as Map)['pid'],
         initial['pid'],
       );
       await workspace.meetingFeature.stopRecording();
       await waitFor(tester, () => workspace.meetingFeature.recording == null);
       final meeting =
-          await workspace.d.command('meetings.get', {'id': id}) as Map;
+          await workspace.d.command(Operation.meetings_get, {'id': id}) as Map;
       observed.expect(
         'transcript_persisted',
         (meeting['transcript'] as List).where(
@@ -213,12 +216,12 @@ void main() {
         ),
         isNotEmpty,
       );
-      await workspace.d.command('meetings.generate', {
+      await workspace.d.command(Operation.meetings_generate, {
         'id': id,
         'kind': 'summary',
       });
       final content =
-          await workspace.d.command('meetings.get', {'id': id}) as Map;
+          await workspace.d.command(Operation.meetings_get, {'id': id}) as Map;
       observed.expect(
         'artifact_persisted',
         (content['artifacts'] as List).single['generated'],

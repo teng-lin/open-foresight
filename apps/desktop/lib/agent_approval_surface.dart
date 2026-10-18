@@ -1,4 +1,3 @@
-import 'package:foresight_core/remote.dart' show DesktopConnection;
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:foresight_core/remote.dart';
@@ -143,7 +142,7 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
     _activeId = null;
     _route = null;
     if (!mounted || _closed.remove(id)) return;
-    await widget.domain.command('security.decide', {
+    await widget.domain.command(Operation.security_decide, {
       'approval_id': id,
       'allow': allow,
     });
@@ -187,7 +186,8 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
                     ),
                     if (active)
                       TextButton(
-                        onPressed: () => widget.domain.command('meetings.stop'),
+                        onPressed: () =>
+                            widget.domain.command(Operation.meetings_stop),
                         child: const Text(
                           'Stop recording',
                           style: TextStyle(color: Colors.white),
