@@ -204,12 +204,24 @@ class BuildPolicyTests(unittest.TestCase):
         workflow = yaml.safe_load(
             (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
         )
-        validation = workflow["jobs"]["linux-pr"]
-        self.assertEqual(validation["permissions"], {"contents": "read"})
-        self.assertEqual(validation["if"], "github.event_name == 'pull_request'")
-        commands = "\n".join(step.get("run", "") for step in validation["steps"])
-        self.assertNotIn("--push", commands)
-        self.assertIn("tools/build_linux_sdk_local.sh", commands)
+        for name in ("linux-pr-core", "linux-pr-runtime", "linux-pr"):
+            validation = workflow["jobs"][name]
+            self.assertTrue(
+                all(value == "read" for value in validation["permissions"].values())
+            )
+            self.assertEqual(validation["if"], "github.event_name == 'pull_request'")
+            self.assertFalse(validation["concurrency"]["cancel-in-progress"])
+            commands = "\n".join(step.get("run", "") for step in validation["steps"])
+            self.assertNotIn("--push", commands)
+            self.assertIn("tools/linux_sdk_artifacts.py produce", commands)
+            self.assertTrue(
+                any(
+                    "actions/upload-artifact@" in step.get("uses", "")
+                    for step in validation["steps"]
+                )
+            )
+        self.assertIn("linux-pr-core", workflow["jobs"]["linux-pr-runtime"]["needs"])
+        self.assertIn("linux-pr-runtime", workflow["jobs"]["linux-pr"]["needs"])
         local_build = (ROOT / "tools/build_linux_sdk_local.sh").read_text()
         self.assertNotIn("--push", local_build)
         for component in ("sdk-core", "sdk-litert", "sdk-whisper", "sdk"):
@@ -242,10 +254,25 @@ class BuildPolicyTests(unittest.TestCase):
                 )
                 steps = workflow["jobs"][job]["steps"]
                 resolve = next(step for step in steps if step.get("id") == "sdk")["run"]
+                self.assertIn('if [[ "$FORK_PR" == true ]]; then', resolve)
                 self.assertIn("tools/build_linux_sdk_local.sh", resolve)
-                self.assertIn("image=foresight-sdk:pr", resolve)
-                self.assertIn("--optional", resolve)
-                self.assertIn('test "$task_result" = 4', resolve)
+                self.assertNotIn("--optional", resolve)
+                self.assertIn("--wait 12600", resolve)
+                self.assertIn("tools/linux_sdk_artifacts.py resolve", resolve)
+                sdk_step = next(step for step in steps if step.get("id") == "sdk")
+                self.assertIn(
+                    "head.repo.full_name != github.repository",
+                    sdk_step["env"]["FORK_PR"],
+                )
+                checkout = next(
+                    step
+                    for step in steps
+                    if "actions/checkout@" in step.get("uses", "")
+                )
+                self.assertEqual(
+                    checkout["with"]["ref"],
+                    "${{ github.event.pull_request.head.sha || github.sha }}",
+                )
                 driver = next(
                     step
                     for step in steps

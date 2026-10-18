@@ -45,6 +45,10 @@ FILES = {
     "linux-whisper": [
         "packaging/sdk-whisper.Dockerfile",
         "tools/build_whisper_vulkan.py",
+        "services/speech/CMakeLists.txt",
+        "services/speech/worker.cpp",
+        "services/inference/persistent_worker.h",
+        "services/inference/output_budget.h",
     ],
     "linux-sdk": ["packaging/sdk.Dockerfile"],
 }
@@ -103,6 +107,7 @@ def pack(component, identity, prefix, output):
                 "identity": identity,
                 "sha256": digest(archive),
                 "source_commit": os.environ.get("GITHUB_SHA", ""),
+                "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
             },
             indent=2,
         )
@@ -191,6 +196,21 @@ def merged_source(repository, run):
     return comparison["status"] in ("ahead", "identical")
 
 
+def dependency_jobs(repository, run_id):
+    """Retain completed producers when a later workflow attempt reruns failures."""
+    jobs = []
+    page = 1
+    while True:
+        batch = api(
+            repository,
+            f"actions/runs/{run_id}/jobs?filter=all&per_page=100&page={page}",
+        )["jobs"]
+        jobs.extend(batch)
+        if len(batch) < 100:
+            return jobs
+        page += 1
+
+
 def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0):
     artifact_name = name(component, identity)
     deadline = time.monotonic() + wait
@@ -218,9 +238,7 @@ def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0)
                 if run["head_sha"] != identity:
                     continue
             else:
-                jobs = api(repository, f"actions/runs/{run['id']}/jobs?per_page=100")[
-                    "jobs"
-                ]
+                jobs = dependency_jobs(repository, run["id"])
                 if not any(
                     j["name"] == JOBS[component] and j.get("conclusion") == "success"
                     for j in jobs
@@ -248,6 +266,20 @@ def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0)
                     }:
                         raise ValueError("Unexpected artifact download members")
                     stream.extractall(source)  # noqa: S202 - Archive members are validated immediately above; links are retained.
+                if not component.endswith("-app"):
+                    receipt = json.loads((source / "identity.json").read_text())
+                    attempt = receipt.get(
+                        "source_run_attempt", run.get("run_attempt", 1)
+                    )
+                    if type(attempt) is not int or attempt < 1:
+                        raise ValueError("Invalid artifact producer attempt")
+                    if not any(
+                        j["name"] == JOBS[component]
+                        and j.get("conclusion") == "success"
+                        and j.get("run_attempt", 1) == attempt
+                        for j in jobs
+                    ):
+                        continue
                 unpack(component, identity, source, prefix)
             print(
                 f"Using {artifact_name} from verified workflow run {run['id']}",

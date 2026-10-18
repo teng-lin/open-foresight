@@ -3,6 +3,7 @@
 import io
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -16,6 +17,33 @@ from tools import ci_registry as registry
 
 
 class FingerprintTests(unittest.TestCase):
+    def test_all_linux_dockerfile_copy_sources_are_bound_to_component_identity(self):
+        for component in ("linux-core", "linux-litert", "linux-whisper", "linux-sdk"):
+            recipe = next(
+                name
+                for name in artifacts.FILES[component]
+                if name.endswith(".Dockerfile")
+            )
+            for line in (artifacts.ROOT / recipe).read_text().splitlines():
+                if not line.startswith("COPY "):
+                    continue
+                words = shlex.split(line)
+                if not words or words[0] != "COPY" or words[1].startswith("--from="):
+                    continue
+                for source in words[1:-1]:
+                    path = artifacts.ROOT / source
+                    files = (
+                        [p for p in path.rglob("*") if p.is_file()]
+                        if path.is_dir()
+                        else [path]
+                    )
+                    for copied in files:
+                        with self.subTest(component=component, source=str(copied)):
+                            self.assertIn(
+                                copied.relative_to(artifacts.ROOT).as_posix(),
+                                artifacts.FILES[component],
+                            )
+
     def test_litert_change_does_not_invalidate_core_or_whisper(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -40,6 +68,32 @@ class FingerprintTests(unittest.TestCase):
             (root / "requirements-dev.lock").write_text("new toolchain dependencies")
             for name in ("linux-core", "linux-litert", "linux-whisper", "linux-sdk"):
                 self.assertNotEqual(after[name], artifacts.fingerprint(name, root))
+
+    def test_speech_worker_changes_invalidate_whisper_and_sdk_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for files in artifacts.FILES.values():
+                for name in files:
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(name)
+            before = {
+                name: artifacts.fingerprint(name, root) for name in artifacts.FILES
+            }
+            (root / "services/speech/worker.cpp").write_text(
+                "new persistent speech worker"
+            )
+            for component in (
+                "linux-core",
+                "linux-litert",
+                "linux-whisper",
+                "linux-sdk",
+            ):
+                after = artifacts.fingerprint(component, root)
+                if component in ("linux-whisper", "linux-sdk"):
+                    self.assertNotEqual(before[component], after)
+                else:
+                    self.assertEqual(before[component], after)
 
 
 class ArchiveTests(unittest.TestCase):
@@ -165,7 +219,8 @@ class ProvenanceTests(unittest.TestCase):
                 root = Path(directory)
                 prefix = root / "original"
                 prefix.mkdir()
-                artifacts.pack("macos-sdk", "a" * 64, prefix, root / "upload")
+                with patch.dict("os.environ", {"GITHUB_RUN_ATTEMPT": "1"}):
+                    artifacts.pack("macos-sdk", "a" * 64, prefix, root / "upload")
                 run = self.run_record()
                 listed = {
                     "artifacts": [
@@ -181,7 +236,7 @@ class ProvenanceTests(unittest.TestCase):
                 def api(repo, route):
                     if route.startswith("actions/artifacts?"):
                         return listed  # noqa: B023 - Fixture callbacks are consumed within this iteration.
-                    if route.endswith("/jobs?per_page=100"):
+                    if "/jobs?" in route:
                         return {
                             "jobs": [
                                 {"name": "Build macOS sdk", "conclusion": conclusion}  # noqa: B023 - Fixture callbacks are consumed within this iteration.
@@ -208,6 +263,81 @@ class ProvenanceTests(unittest.TestCase):
                         expected,
                     )
                     self.assertEqual((root / "restored").exists(), expected)
+
+    def test_successful_component_survives_later_attempt_failure_without_blessing_failed_outputs(
+        self,
+    ):
+        for attempt, expected in [(1, True), (2, False)]:
+            with (
+                self.subTest(attempt=attempt),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                prefix = root / "original"
+                prefix.mkdir()
+                (prefix / "retained.txt").write_text("first successful component")
+                with patch.dict("os.environ", {"GITHUB_RUN_ATTEMPT": str(attempt)}):
+                    artifacts.pack("linux-core", "a" * 64, prefix, root / "upload")
+                run = self.run_record(conclusion="failure", run_attempt=2)
+                jobs = [
+                    {
+                        "name": "Build Linux core",
+                        "conclusion": "success",
+                        "run_attempt": 1,
+                    },
+                    {
+                        "name": "Build Linux core",
+                        "conclusion": "failure",
+                        "run_attempt": 2,
+                    },
+                    {
+                        "name": "Assemble Linux SDK",
+                        "conclusion": "failure",
+                        "run_attempt": 2,
+                    },
+                ]
+
+                def api(repository, route, job_records=jobs, run_record=run):
+                    if route.startswith("actions/artifacts?"):
+                        return {
+                            "artifacts": [
+                                {
+                                    "id": 5,
+                                    "name": artifacts.name("linux-core", "a" * 64),
+                                    "expired": False,
+                                    "workflow_run": {"id": 123},
+                                }
+                            ]
+                        }
+                    if "/jobs?" in route:
+                        self.assertIn("filter=all", route)
+                        return {"jobs": job_records}
+                    return run_record
+
+                def download(args, stdout, check, timeout, fixture_root=root):
+                    with zipfile.ZipFile(stdout, "w") as archive:
+                        for name in ("identity.json", "payload.tar.gz"):
+                            archive.write(fixture_root / "upload" / name, name)
+
+                with (
+                    patch.object(artifacts, "api", side_effect=api),
+                    patch.object(artifacts.subprocess, "run", side_effect=download),
+                ):
+                    self.assertEqual(
+                        artifacts.pull(
+                            "teng-lin/open-foresight",
+                            "linux-core",
+                            "a" * 64,
+                            root / "restored",
+                        ),
+                        expected,
+                    )
+                self.assertEqual((root / "restored").exists(), expected)
+                if expected:
+                    self.assertEqual(
+                        (root / "restored/retained.txt").read_text(),
+                        "first successful component",
+                    )
 
     def test_release_rejects_candidate_for_another_commit(self):
         run = self.run_record(
