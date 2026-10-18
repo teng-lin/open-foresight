@@ -248,11 +248,17 @@ else:
                 self.lib.fs_conversation_destroy(handle,1);self.lib.fs_engine_destroy(engine)
 
     def test_full_capture_queue_emits_real_overflow_gap(self):
-        runner=self.runner('import os,time\nfor _ in range(600):os.write(1,b"A"*3840)\ntime.sleep(2)\n').decode()
+        ready=self.path/'capture-queue-filled'
+        runner=self.runner('import os,pathlib,time\nfor _ in range(600):os.write(1,b"A"*3840)\npathlib.Path('+repr(str(ready))+').touch()\ntime.sleep(30)\n').decode()
         with patch.dict(os.environ, {'FORESIGHT_CAPTURE_RUNTIME':runner}):
             handle=self.lib.fs_capture_start(b'auto',0,48000)
             try:
-                time.sleep(.4)  # Deliberately let the real native queue fill.
+                # Completed writes exceed both pipe and native queue capacity.
+                # Keep events queued until the producer confirms those writes.
+                deadline=time.monotonic()+10
+                while not ready.exists() and time.monotonic()<deadline:
+                    time.sleep(.005)
+                self.assertTrue(ready.exists(),'capture producer did not fill the queue')
                 self.lib.fs_capture_finish(handle)
                 events=[]
                 while True:
