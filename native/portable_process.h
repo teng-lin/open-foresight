@@ -23,6 +23,37 @@ namespace foresight {
 // posix_spawn also uses CLOEXEC_DEFAULT so concurrent launches cannot inherit
 // descriptors during the pipe/fcntl window.
 inline std::mutex launch_mutex;
+// Configuration is immutable once the first native handle starts. The seal is
+// permanent: a later handle may still have runtime-owned background threads.
+inline bool runtime_environment_sealed = false;
+inline void seal_runtime_environment() {
+  std::lock_guard lock(launch_mutex);
+  runtime_environment_sealed = true;
+}
+inline void configure_spawn_signals(posix_spawnattr_t *attr) {
+  sigset_t mask, defaults;
+  sigemptyset(&mask);
+  sigfillset(&defaults);
+  sigdelset(&defaults, SIGKILL);
+  sigdelset(&defaults, SIGSTOP);
+  posix_spawnattr_setsigmask(attr, &mask);
+  posix_spawnattr_setsigdefault(attr, &defaults);
+  short flags = 0;
+  posix_spawnattr_getflags(attr, &flags);
+  posix_spawnattr_setflags(attr, flags | POSIX_SPAWN_SETSIGMASK |
+                                     POSIX_SPAWN_SETSIGDEF);
+}
+inline void close_spawn_descriptors(posix_spawn_file_actions_t *actions,
+                                    int first) {
+#ifdef __APPLE__
+  // CLOEXEC_DEFAULT is set on the spawn attributes. Only explicit dup2 actions
+  // survive; there is no descriptor enumeration race.
+  (void)actions;
+  (void)first;
+#else
+  posix_spawn_file_actions_addclosefrom_np(actions, first);
+#endif
+}
 inline int cloexec_pipe(int fd[2]) {
 #ifdef __linux__
   return pipe2(fd, O_CLOEXEC);
@@ -78,6 +109,8 @@ inline int supervise_worker(int argc, char **argv) {
 #endif
   posix_spawnattr_setflags(&attr, flags);
   posix_spawnattr_setpgroup(&attr, 0);
+  configure_spawn_signals(&attr);
+  close_spawn_descriptors(&actions, 3);
   pid_t worker = -1;
   int error =
       posix_spawnp(&worker, argv[2], &actions, &attr, argv + 2, environ);
@@ -185,6 +218,8 @@ public:
     for (auto &arg : command)
       argv.push_back(arg.data());
     argv.push_back(nullptr);
+    close_spawn_descriptors(actions, 5);
+    configure_spawn_signals(attr);
     int error =
         posix_spawnp(supervisor, argv[0], actions, attr, argv.data(), environ);
     close(fds[0]);

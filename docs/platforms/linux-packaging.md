@@ -65,6 +65,31 @@ The container base and apt repositories receive updates; pinned source versions
 and normalized archives do not make the complete compiler build bit-for-bit
 reproducible. Build manifests and ABI reports record what was produced.
 
+## Document import sandbox
+
+PDF and RTF imports require `/usr/bin/bwrap` (bubblewrap), `/usr/bin/pdftotext`
+(poppler), and `/usr/bin/unrtf`, plus host permission for bubblewrap to create its
+user, mount, PID, and network namespaces. Package dependencies provide these
+executables; namespace permissions also depend on kernel, container, and host
+security policy.
+
+Ubuntu 24.04 mediates unprivileged user namespaces through AppArmor. If a sandbox
+startup error reports a namespace permission denial, an administrator must review
+the host policy and allow the necessary user-namespace access in the applicable
+AppArmor profile for bubblewrap. See [Ubuntu's AppArmor user-namespace
+guidance](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/#apparmor-unprivileged-user-namespace-restrictions).
+Open Foresight reports the startup diagnostic and stops the import when its
+sandbox cannot start. Ordinary PDF/RTF parsing errors retain their document
+diagnostics.
+
+The `linux-document-imports` CI job runs the shipped parser against actual PDF
+and RTF fixtures directly on a disposable Ubuntu host. It requires all tools and
+fails on missing prerequisites or namespace errors. If the host initially denies
+the namespace probe, CI loads `packaging/ci/document-sandbox.apparmor` for that
+runner's bubblewrap executable and retries; this profile is never installed by
+the product packages. The initial denial and actual import output are retained
+as CI evidence. Local runs missing required executables report a skipped test.
+
 ## Build locally
 
 Run from a clean checkout with Docker/BuildKit available:

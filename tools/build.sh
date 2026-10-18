@@ -22,6 +22,15 @@ case "$task_platform" in
   linux) task_native="$task_build/native/libforesight_native.so" ;;
   *) echo 'Platform must be linux or macos' >&2; exit 2 ;;
 esac
+# Missing language SDKs must fail before an expensive native build in CI.
+if [[ "${CI:-}" == true || "${FORESIGHT_REQUIRE_DART_GATES:-0}" == 1 ]]; then
+  for task_sdk in dart flutter; do
+    if ! command -v "$task_sdk" >/dev/null; then
+      echo "Required $task_sdk SDK is missing from PATH." >&2
+      exit 1
+    fi
+  done
+fi
 task_cmake_platform=()
 if [[ "$task_platform" == macos ]]; then
   task_cmake_platform=(-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 -DCMAKE_OSX_ARCHITECTURES=arm64)

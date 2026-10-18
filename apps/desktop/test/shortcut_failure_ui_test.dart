@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,15 +16,22 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
     final temp = Directory.systemTemp.createTempSync('shortcut-failure-ui-');
+    addTearDown(() {
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    });
     final store = Store('${temp.path}/app.db');
     final domain = Domain(
       store,
       OfflineHelper('${temp.path}/helper.sock', temp.path),
     );
-    await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+    await tester.pumpWidget(
+      Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+    );
     await tester.pumpAndSettle();
     final dynamic workspace = tester.state(find.byType(Workspace));
-    workspace.reportShortcutFailure(StateError('Microphone unavailable'));
+    workspace.integrationFeature.reportShortcutFailure(
+      StateError('Microphone unavailable'),
+    );
     await tester.pumpAndSettle();
     expect(find.textContaining('Global shortcut failed:'), findsWidgets);
     expect(find.textContaining('Microphone unavailable'), findsWidgets);

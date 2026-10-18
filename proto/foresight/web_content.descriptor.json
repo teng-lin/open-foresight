@@ -1,0 +1,245 @@
+{
+  "name": "web_content.proto",
+  "package": "ai_edge.foresight.service",
+  "message_type": [
+    {
+      "name": "FetchExternalWebsiteRequest",
+      "field": [
+        {
+          "name": "url",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "url"
+        },
+        {
+          "name": "use_trawler",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_BOOL",
+          "json_name": "useTrawler"
+        },
+        {
+          "name": "summarize_content",
+          "number": 4,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_BOOL",
+          "json_name": "summarizeContent"
+        },
+        {
+          "name": "max_summarization_words",
+          "number": 5,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_INT32",
+          "default_value": "100",
+          "json_name": "maxSummarizationWords"
+        },
+        {
+          "name": "model_id",
+          "number": 6,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "modelId"
+        },
+        {
+          "name": "summary_timeout_millis",
+          "number": 8,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_INT32",
+          "json_name": "summaryTimeoutMillis"
+        },
+        {
+          "name": "max_input_tokens",
+          "number": 9,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_INT32",
+          "json_name": "maxInputTokens"
+        }
+      ],
+      "reserved_range": [
+        {
+          "start": 3,
+          "end": 4
+        },
+        {
+          "start": 7,
+          "end": 8
+        }
+      ]
+    },
+    {
+      "name": "FetchExternalWebsiteResponse",
+      "field": [
+        {
+          "name": "title",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "title"
+        },
+        {
+          "name": "content",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "content"
+        },
+        {
+          "name": "mime_type",
+          "number": 5,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "mimeType"
+        },
+        {
+          "name": "summary",
+          "number": 7,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "summary"
+        },
+        {
+          "name": "summary_confidence_score",
+          "number": 8,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_DOUBLE",
+          "json_name": "summaryConfidenceScore"
+        }
+      ],
+      "reserved_range": [
+        {
+          "start": 1,
+          "end": 2
+        },
+        {
+          "start": 4,
+          "end": 5
+        },
+        {
+          "start": 6,
+          "end": 7
+        }
+      ]
+    },
+    {
+      "name": "GetSharedConfigRequest",
+      "field": [
+        {
+          "name": "app_version",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "appVersion"
+        },
+        {
+          "name": "platform",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "platform"
+        },
+        {
+          "name": "fallback_mode",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_INT32",
+          "json_name": "fallbackMode"
+        }
+      ]
+    },
+    {
+      "name": "OnDeviceModelMetadata",
+      "field": [
+        {
+          "name": "model_type",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_INT32",
+          "json_name": "modelType"
+        },
+        {
+          "name": "name",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "name"
+        },
+        {
+          "name": "version",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "version"
+        },
+        {
+          "name": "blob_id",
+          "number": 6,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "blobId"
+        },
+        {
+          "name": "size",
+          "number": 8,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_INT64",
+          "json_name": "size"
+        }
+      ],
+      "reserved_range": [
+        {
+          "start": 4,
+          "end": 5
+        },
+        {
+          "start": 5,
+          "end": 6
+        },
+        {
+          "start": 7,
+          "end": 8
+        },
+        {
+          "start": 9,
+          "end": 14
+        }
+      ]
+    },
+    {
+      "name": "ForesightSharedConfig",
+      "field": [
+        {
+          "name": "on_device_model_metadatas",
+          "number": 1,
+          "label": "LABEL_REPEATED",
+          "type": "TYPE_MESSAGE",
+          "type_name": ".ai_edge.foresight.service.OnDeviceModelMetadata",
+          "json_name": "onDeviceModelMetadatas"
+        }
+      ],
+      "reserved_range": [
+        {
+          "start": 2,
+          "end": 6
+        }
+      ]
+    }
+  ],
+  "service": [
+    {
+      "name": "ForesightService",
+      "method": [
+        {
+          "name": "FetchExternalWebsite",
+          "input_type": ".ai_edge.foresight.service.FetchExternalWebsiteRequest",
+          "output_type": ".ai_edge.foresight.service.FetchExternalWebsiteResponse"
+        },
+        {
+          "name": "GetSharedConfig",
+          "input_type": ".ai_edge.foresight.service.GetSharedConfigRequest",
+          "output_type": ".ai_edge.foresight.service.ForesightSharedConfig"
+        }
+      ]
+    }
+  ]
+}

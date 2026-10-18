@@ -44,6 +44,9 @@ void main() {
     'missing-vector positions reopen honestly and index promotion invalidates cache',
     () {
       final dir = Directory.systemTemp.createTempSync('graph-scene-cache-');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
       var store = Store('${dir.path}/app.db');
       final a = store.importText('Indexed', 'text', 'text/plain', 'fixture:a');
       final b = store.importText('Pending', 'text', 'text/plain', 'fixture:b');

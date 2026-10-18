@@ -257,6 +257,7 @@ class SelectionTests(unittest.TestCase):
                     "changes": "success",
                     "macos": "success" if build else "skipped",
                     "linux-native": "success" if build else "skipped",
+                    "linux-document-imports": "success" if build else "skipped",
                     "linux-bundle": "success" if build and main else "skipped",
                 }.items()
             }

@@ -58,6 +58,8 @@ def test_fixture_download_has_network_timeout_and_checks_existing_hash(tmp_path)
         fixture.main()
         assert opening.call_args.kwargs["timeout"] == 120
         assert (destination / "fixture.litertlm").read_bytes() == content
+        fixture.main()
+        assert opening.call_count == 1
     (destination / "fixture.litertlm").write_bytes(b"corrupt")
     script = """
 import importlib.util

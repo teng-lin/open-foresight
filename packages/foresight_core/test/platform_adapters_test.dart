@@ -30,7 +30,6 @@ void main() {
   test(
     'notification adapters preserve arguments and distinguish denial from failure',
     () async {
-      if (!Platform.isMacOS) return;
       runtimeConfiguration.environment.remove('FORESIGHT_NOTIFICATIONS');
       await expectLater(notificationCapabilities(), throwsStateError);
       await expectLater(
@@ -71,6 +70,7 @@ void main() {
         ),
       );
     },
+    skip: !Platform.isMacOS,
   );
 
   test(

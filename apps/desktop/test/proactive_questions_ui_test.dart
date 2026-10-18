@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -16,6 +18,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final directory = Directory.systemTemp.createTempSync('proactive-ui-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final domain = Domain(
         store,
@@ -75,12 +80,15 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         final dynamic workspace = tester.state(find.byType(Workspace));
         workspace.update(() {
-          workspace.meetingId = id;
-          workspace.meetingPanel = 'Live Q&A';
+          workspace.meetingFeature.meetingId = id;
+          workspace.meetingFeature.meetingPanel = 'Live Q&A';
         });
         await tester.pumpAndSettle();
         expect(find.text('Automatic · Answered'), findsOneWidget);

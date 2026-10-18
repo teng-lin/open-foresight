@@ -82,7 +82,10 @@ void main() {
         expect(File('${profile.data}/application.db').existsSync(), false);
         installerLock.unlockSync();
         owner = await launch(profile.data, profile.runtime);
-        for (var attempt = 0; attempt < 600; attempt++) {
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 60);
+        ) {
           try {
             first = await ServiceClient.connect(serviceEndpoint(profile));
             break;
@@ -184,7 +187,10 @@ void main() {
         installerLock.unlockSync();
         // A stale endpoint and different runtime must recover the same database.
         owner = await launch(other.data, other.runtime);
-        for (var attempt = 0; attempt < 600; attempt++) {
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 60);
+        ) {
           try {
             first = await ServiceClient.connect(serviceEndpoint(other));
             break;
@@ -205,7 +211,10 @@ void main() {
         final crashRuntime = '${scratch.path}/c';
         owner = await launch(other.data, crashRuntime);
         final crashProfile = ProfilePaths(other.data, crashRuntime);
-        for (var attempt = 0; attempt < 600; attempt++) {
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 60);
+        ) {
           try {
             first = await ServiceClient.connect(serviceEndpoint(crashProfile));
             final state = await first.call('status') as Map;

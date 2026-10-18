@@ -15,7 +15,10 @@ DERIVING = [
     "packages/foresight_core/bin/mcp.dart",
     "tools/package.py",
     "tools/package_macos.py",
-    "apps/desktop/lib/screenshot_ui.dart",
+    *[
+        str(path.relative_to(ROOT))
+        for path in sorted((ROOT / "apps/desktop/lib").rglob("*.dart"))
+    ],
 ]
 
 

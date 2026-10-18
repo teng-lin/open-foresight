@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -61,6 +62,9 @@ void main() {
         final directory = Directory.systemTemp.createTempSync(
           'answer-validation-',
         );
+        addTearDown(() {
+          if (directory.existsSync()) directory.deleteSync(recursive: true);
+        });
         final store = Store('${directory.path}/app.db');
         final socket = '${directory.path}/helper.sock';
         final retrieval = Retrieval()

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +14,9 @@ void main() {
       await tester.binding.setSurfaceSize(const Size(1280, 900));
       addTearDown(() => tester.binding.setSurfaceSize(null));
       final tmp = Directory.systemTemp.createTempSync('source-collection-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
       final store = Store('${tmp.path}/app.db');
       for (var i = 0; i < 847; i++) {
         final id = store.importText(
@@ -34,7 +38,10 @@ void main() {
         }
 
         await tester.pumpWidget(
-          Foresight(Domain(store, helper), deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(Domain(store, helper)),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.tap(find.text('Sources'));
         await tester.pumpAndSettle();

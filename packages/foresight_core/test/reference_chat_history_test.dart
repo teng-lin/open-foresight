@@ -11,6 +11,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'history-migration-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final path = '${directory.path}/app.db';
       final legacy = sqlite3.open(path);
       legacy.execute(
