@@ -32,19 +32,19 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           args=()
-          if [[ "$EVENT" == schedule || "$EVENT" == workflow_dispatch ]]; then args+=(--force); fi
+          if [[ "$EVENT" != pull_request ]]; then args+=(--force); fi
           python3 tools/ci_changes.py --base "$BASE" "${args[@]}"
   acceptance-checks:
     timeout-minutes: 5
     if: always()
-    needs: [changes, linux]
+    needs: [changes, ubuntu-package]
     runs-on: ubuntu-24.04
     steps:
       - name: Require selected integration acceptance
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
           SELECTED: ${{ needs.changes.outputs.linux_bundle }}
-          LINUX_RESULT: ${{ needs.linux.result }}
+          LINUX_RESULT: ${{ needs.ubuntu-package.result }}
         run: |
           test "$CHANGES_RESULT" = success
           if [[ "$SELECTED" == true ]]; then
@@ -53,7 +53,7 @@ jobs:
             test "$SELECTED" = false
             test "$LINUX_RESULT" = skipped
           fi
-  linux:
+  ubuntu-package:
     needs: changes
     if: needs.changes.outputs.linux_bundle == 'true'
     runs-on: ubuntu-24.04
@@ -92,7 +92,7 @@ jobs:
         env:
           REGISTRY_TOKEN: ${{ github.token }}
         run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-      - name: Build disposable acceptance image
+      - name: Build the shared Ubuntu 24.04 application and acceptance image
         id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
@@ -105,6 +105,37 @@ jobs:
             SDK_IMAGE=${{ steps.sdk.outputs.image }}
             SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}
           cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
+      - name: Package version
+        id: version
+        run: |
+          python3 - <<'PY'
+          import os, subprocess, sys
+          sys.path.insert(0, 'tools')
+          from app_version import read_version, stale
+          if paths := stale():
+              raise SystemExit('Out of date with apps/desktop/pubspec.yaml: ' + ', '.join(paths))
+          version, _ = read_version()
+          release = '1'
+          epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
+          PY
+      - name: Export the exact Ubuntu acceptance application for packaging
+        run: |
+          mkdir -p build/portable/dist
+          task_container=$(docker create foresight-integration:local /bin/true)
+          trap 'docker rm "$task_container" >/dev/null' EXIT
+          docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/
+      - name: Build and install the Ubuntu 24.04 package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+        run: |
+          python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
+          mkdir -p artifacts
+          cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
+          docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: models
         with:
