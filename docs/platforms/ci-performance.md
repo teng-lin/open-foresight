@@ -37,6 +37,16 @@ the original provenance. Only this exact verified path may create local approval
 metadata for an old descriptor. Cleanup retains referenced original identities.
 These entries do not authorize arbitrary intermediate PR artifacts.
 
+Other original SDK artifacts may qualify after their PR merges when immutable
+Git evidence relates the producer to the approved final PR head, the consumer
+computes identical component build identities, and all producer-control files
+(including the dependency workflow) have identical bytes and modes. The final
+head must pass the authoritative merge-tree and main-reachability proof. This
+retains the original receipt, source, successful attempt and payload checksums;
+it does not relabel the output as a new build. Changed build inputs or controls
+require a compatibility review and preserve the artifact rather than silently
+authorizing a cold compile.
+
 ## Application stages
 
 Linux native regression and macOS validation run four separate jobs: native,
@@ -80,13 +90,20 @@ including the source commit in every compiled object. On a native hit, CMake
 always regenerates and relinks the small helper build-identity unit, then the
 runner checks the actual helper's `--build-id` against the current version and
 commit. Main pushes always run current validation. Their native compilation-only
-lookup can retain compatible objects from verified main producers; it never reuses a
-successful test result or admits another PR's artifacts. Before the first merge
-of this staged workflow, no main-produced native compilation archive exists, so
-that first main run has no compiler-work source under this trust policy. SDK,
-LiteRT and Whisper artifacts still reuse their independent approved originals.
-Waiting for a successful clean Linux main native producer gives later PRs a
-trusted compiler-work source when environments match. macOS distribution stamping
+lookup can retain compatible objects from verified main or approved merged-PR
+producers. For another PR, the original producer must belong to the reviewed
+final PR history and its complete conservative native input inventory must equal
+that final head. The existing final-source approval check also proves the final
+head is on main, or that its full tree equals the authoritative rebase merge on
+main. Thus a Dart-only final fix can preserve an earlier native compilation
+archive without relabeling it as a final-head build. Repository, workflow,
+original source/recipe, successful job attempt, environment, upload bounds and
+payload digests remain independently verified. This eligibility applies only to
+compiler work; successful test-result reuse remains PR-scoped, and main/release
+validation always configures, incrementally builds and tests current inputs.
+API or missing-source proof failures stop lookup rather than authorize a cold
+build. SDK, LiteRT and Whisper artifacts retain their separate approval policy.
+macOS distribution stamping
 changes the native version input; its derived receipts remain ineligible until a
 separately verified stamping recipe can describe those exact inputs.
 Native process identity checks run again. Binary archives have their own
@@ -185,6 +202,43 @@ Release publication requires administrator-created protected tags, complete
 installer provenance and installed acceptance. See
 [preview packages](preview-packages.md) and
 [release acceptance](../validation/release-acceptance.md).
+
+## Checking reuse before a push or rerun
+
+A matching cache key proves neither that a runner can read the cache nor that
+the producer is eligible. Check the actual storage scope and producer evidence
+across these transitions before changing dependency jobs:
+
+| Transition | Required evidence |
+| --- | --- |
+| Another commit on the same PR | The completed output is accessible; an active compatible producer is preserved. |
+| A new PR after an earlier PR merged | A shared artifact or registry layer is accessible and its original source is approved. A cache under another PR's merge ref alone is insufficient. |
+| Rebase or merge to main | Relevant build inputs remain compatible, original receipts stay intact, and main runs current validation. |
+| An application test or upload fails | Successful dependency outputs remain saved and reusable independently of the failed operation. |
+| Transport or receipt code changes | Existing bytes have a verified qualification or migration path without changing their build identity. |
+| A dependency, compiler or ABI changes | Identify the exact incompatibility and rebuild only affected components after checking preserved compatible outputs. |
+
+Exercise the external interfaces too: consult the installed CLI's supported
+options, retain representative real output for parser tests, and model actual
+filesystem behavior such as Ubuntu's symlinked `/etc/os-release`. Mock commands
+alone cannot establish that a hosted job will reach dependency restoration.
+Report separately what was proved offline and what still needs hosted execution.
+
+Remaining efficiency limits need separate evidence before narrowing them:
+
+- Unknown shared tools and workflow paths conservatively select all platform
+  gates. Distinguishing Linux-only transport changes requires an audited input
+  inventory, including the Python tests currently run by native jobs.
+- Model download keys still include the complete release-model test script;
+  diagnostic edits can therefore miss a compatible weight cache. Flutter/pub
+  keys remain version/role/lock based. Repeated Python setup can also download
+  the same locked wheels in different jobs.
+- Fresh Ubuntu jobs materialize the immutable dependency seed even when a
+  registry layer is reusable; its downloaded blobs are currently job-local.
+- GitHub SDK payloads and receipts expire. The existing 90-day retention is not
+  durable preservation: retain the original bytes and producer evidence in
+  verified immutable storage before expiry. An expired receipt alone does not
+  justify recompiling a still-compatible SDK or accepting an unqualified image.
 
 ## Monthly dependency maintenance
 

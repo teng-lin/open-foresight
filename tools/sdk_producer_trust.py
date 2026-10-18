@@ -29,6 +29,7 @@ PRODUCER_CONTROLS = (
     "tools/ci_verify_dependency.py",
     "tools/sdk_producer_trust.py",
     "tools/sdk_approval_bridge.py",
+    "tools/sdk_final_approval.py",
     "tools/sdk_approved_legacy.json",
     "tools/sdk_workflow_recipe.py",
     "tools/sdk_transport_contract.json",
