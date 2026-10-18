@@ -32,6 +32,7 @@ jobs:
     outputs:
       identity: ${{ steps.stage.outputs.identity }}
       artifact_name: ${{ steps.stage.outputs.artifact_name }}
+      runtime_artifact_name: ${{ steps.stage.outputs.runtime_artifact_name }}
     steps:
       - name: Bootstrap Git in the pinned Arch container
         run: pacman -Syu --noconfirm git
@@ -72,6 +73,17 @@ jobs:
           retention-days: 14
           overwrite: true
           compression-level: 0
+      - name: Retain the slim native runtime prerequisite
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.stage.outputs.runtime_artifact_name }}
+          path: |
+            build/ci-stage/linux-native-runtime/identity.json
+            build/ci-stage/linux-native-runtime/payload.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+          compression-level: 0
       - name: Retain native diagnostics
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -104,7 +116,7 @@ jobs:
       - name: Download the successful native prerequisite from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: ${{ needs.native-linux.outputs.artifact_name }}
+          name: ${{ needs.native-linux.outputs.runtime_artifact_name }}
           path: build/ci-input/native
       - name: Validate or restore the core stage
         id: stage
@@ -164,7 +176,7 @@ jobs:
       - name: Download the successful native prerequisite from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: ${{ needs.native-linux.outputs.artifact_name }}
+          name: ${{ needs.native-linux.outputs.runtime_artifact_name }}
           path: build/ci-input/native
       - name: Validate or restore the desktop stage
         id: stage
@@ -225,18 +237,13 @@ jobs:
       - name: Download the successful native prerequisite from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: ${{ needs.native-linux.outputs.artifact_name }}
+          name: ${{ needs.native-linux.outputs.runtime_artifact_name }}
           path: build/ci-input/native
       - name: Download the successful core prerequisite from this run
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: ${{ needs.core-linux.outputs.artifact_name }}
           path: build/ci-input/core
-      - name: Download the successful desktop prerequisite from this run
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: ${{ needs.desktop-linux.outputs.artifact_name }}
-          path: build/ci-input/desktop
       - name: Validate or restore the service stage
         id: stage
         env:
@@ -252,8 +259,7 @@ jobs:
             --platform linux --stage service --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja \
             --input native=build/ci-input/native \
-            --input core=build/ci-input/core \
-            --input desktop=build/ci-input/desktop "${args[@]}"
+            --input core=build/ci-input/core "${args[@]}"
       - name: Retain the independently qualified service stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

@@ -58,6 +58,9 @@ def test_linux_native_core_desktop_and_service_are_independent_jobs():
         for parent_job in job.get("needs", []):
             parent = parent_job.removesuffix("-linux")
             assert parents[parent] == "${{ needs." + parent_job + ".outputs.identity }}"
+            if parent == "desktop":
+                assert f"--input {parent}=" not in command
+                continue
             assert f"--input {parent}=build/ci-input/{parent}" in command
             download = next(
                 step
@@ -66,7 +69,11 @@ def test_linux_native_core_desktop_and_service_are_independent_jobs():
             )
             assert (
                 download["with"]["name"]
-                == "${{ needs." + parent_job + ".outputs.artifact_name }}"
+                == "${{ needs."
+                + parent_job
+                + ".outputs."
+                + ("runtime_artifact_name" if parent == "native" else "artifact_name")
+                + " }}"
             )
         upload = next(
             step
@@ -289,3 +296,36 @@ def test_container_git_access_is_configured_for_foreign_owned_checkout(tmp_path)
     assert accepted.returncode == 0, accepted.stderr
     assert accepted.stdout.strip() == str(repository)
     assert "*" not in (tmp_path / "gitconfig").read_text()
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_language_jobs_download_only_slim_native_runtime_and_service_omits_unused_release_bundle(
+    platform,
+):
+    jobs = workflow(f"{platform}-platform-stages.yml")["jobs"]
+    for stage in ("core", "desktop", "service"):
+        steps = jobs[f"{stage}-{platform}"]["steps"]
+        native = next(
+            step
+            for step in steps
+            if step.get("with", {}).get("path") == "build/ci-input/native"
+        )
+        assert (
+            native["with"]["name"]
+            == "${{ needs.native-" + platform + ".outputs.runtime_artifact_name }}"
+        )
+        command = next(step["run"] for step in steps if step.get("id") == "stage")
+        assert "--input native=build/ci-input/native" in command
+        if stage == "service":
+            assert "--input core=build/ci-input/core" in command
+            assert "--input desktop=" not in command
+            assert not any(
+                step.get("with", {}).get("path") == "build/ci-input/desktop"
+                for step in steps
+            )
+            assert f"desktop-{platform}" in jobs[f"service-{platform}"]["needs"]
+            assert "desktop" in json.loads(
+                next(step for step in steps if step.get("id") == "stage")["env"][
+                    "STAGE_PARENTS"
+                ]
+            )

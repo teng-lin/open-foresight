@@ -34,7 +34,10 @@ def restore_input(root, platform, stage, directory, identity, source):
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     if digest != receipt.get("sha256"):
         raise ValueError(f"Corrupt same-run {stage} prerequisite")
-    payloads.unpack(root, platform, stage, archive, receipt["content"])
+    payload_kind = "native-runtime" if stage == "native" else stage
+    if receipt.get("payload_kind", stage) != payload_kind:
+        raise ValueError("Prerequisite has an unexpected payload kind")
+    payloads.unpack(root, platform, payload_kind, archive, receipt["content"])
 
 
 def execute(root, platform, stage, hit, cmake_args):
@@ -119,10 +122,17 @@ def run(
     required = (
         {"native"}
         if stage in ("core", "desktop")
-        else {"native", "core", "desktop"}
+        else {"native", "core"}
         if stage == "service"
         else set()
     )
+    expected_parents = {"native", "core", "desktop"} if stage == "service" else required
+    if set(parents) != expected_parents:
+        raise ValueError(
+            f"Stage {stage} requires parent identities {sorted(expected_parents)}"
+        )
+    # Service integration compiles its Debug UI harness from current source. Its
+    # successful desktop prerequisite is bound by identity, not a Release bundle.
     if set(inputs) != required:
         raise ValueError(f"Stage {stage} requires input artifacts {sorted(required)}")
     environment = {
@@ -205,6 +215,29 @@ def run(
             "cache_hit": found["hit"],
             "output": str(output),
         }
+        if stage == "native":
+            runtime_output = root / "build/ci-stage" / f"{platform}-native-runtime"
+            runtime_manifest = payloads.pack(
+                root, platform, "native-runtime", runtime_output
+            )
+            (runtime_output / "content.json").unlink()
+            runtime = cache.publish(
+                platform,
+                stage,
+                root,
+                environment,
+                parents,
+                runtime_output / "payload.tar.gz",
+                runtime_output,
+                runtime_manifest,
+                reusable_result=False,
+                payload_kind="native-runtime",
+            )
+            if runtime["identity"] != published["identity"]:
+                raise ValueError(
+                    "Runtime prerequisite differs from validated native inputs"
+                )
+            result["runtime_artifact_name"] = runtime["artifact_name"]
         if destination := os.environ.get("GITHUB_OUTPUT"):
             with open(destination, "a") as stream:
                 for key, value in result.items():
