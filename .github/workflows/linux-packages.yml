@@ -128,7 +128,7 @@ jobs:
   ubuntu-package:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 300
     permissions:
       contents: read
       actions: read
@@ -139,6 +139,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
@@ -148,23 +149,16 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
+        FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
       run: |-
-        # PR dependency changes are built locally; no PR publishes an SDK image.
-        if python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
-          :
-        else
-          task_result=$?
-          test "$task_result" = 4
+        # Forks retain local validation without consuming untrusted archives.
+        if [[ "$FORK_PR" == true ]]; then
           tools/build_linux_sdk_local.sh
           echo 'image=foresight-sdk:pr' >> "$GITHUB_OUTPUT"
           exit 0
         fi
-        python - <<'PY'
-        import json,os,re
-        image=json.load(open('build/sdk-descriptor/image.json'))['image']
-        if not re.fullmatch(r'ghcr.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}', image): raise ValueError('Unpinned SDK image')
-        with open(os.environ['GITHUB_OUTPUT'],'a') as output: print('image='+image, 'cache='+image.split('@')[0]+':app-buildcache-x86-64', sep=chr(10), file=output)
-        PY
+        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
     - name: Package version
       id: version
       run: |
@@ -196,7 +190,7 @@ jobs:
         outputs: type=local,dest=build/portable
         build-args: |
           SDK_IMAGE=${{ steps.sdk.outputs.image }}
-          SOURCE_REVISION=${{ github.sha }}
+          SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}
         cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
     - name: Build and install the Ubuntu 24.04 package
       env:
