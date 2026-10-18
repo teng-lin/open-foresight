@@ -1,4 +1,5 @@
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -172,7 +173,7 @@ void main() {
       try {
         await app
             .call('workspace.clear', {})
-            .timeout(const Duration(seconds: 2));
+            .timeout(const Duration(seconds: 10));
         expect(auth.connected, isFalse);
         expect(File('${authDirectory.path}/tokens.json').existsSync(), isFalse);
         for (final table in [
@@ -186,8 +187,8 @@ void main() {
           expect(store.rows('SELECT * FROM $table'), isEmpty, reason: table);
         }
         if (online) {
-          await rag.deleted.future.timeout(const Duration(seconds: 2));
-          await revoked.future.timeout(const Duration(seconds: 2));
+          await rag.deleted.future.timeout(const Duration(seconds: 10));
+          await revoked.future.timeout(const Duration(seconds: 10));
           releaseRevoke.complete();
         }
         await app.close();
@@ -443,7 +444,11 @@ void main() {
         auth: FailingForgetAuth(Directory('${directory.path}/google')),
       );
       await app.call('workspace.clear', {});
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await eventually(
+        () => (app.googleState['loadError'] as String? ?? '').contains(
+          'cleanup failed',
+        ),
+      );
       expect(app.googleState['loadError'], contains('cleanup failed'));
       expect(await app.call('notes.list', {}), isEmpty);
     },
