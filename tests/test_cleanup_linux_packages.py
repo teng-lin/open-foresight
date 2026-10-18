@@ -1,6 +1,9 @@
 """Protect live images and descriptors when retiring obsolete GHCR versions."""
 
 import copy
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -34,6 +37,54 @@ class CleanupTests(unittest.TestCase):
     def test_missing_current_image_stops_cleanup(self):
         with self.assertRaisesRegex(RuntimeError, "not published"):
             cleanup.candidates([version(1, "old")], "new", set())
+
+    def test_approval_bridge_preserves_original_images_and_descriptors(self):
+        current, original, obsolete = "a" * 64, "b" * 64, "c" * 64
+        entry = {
+            "repository": cleanup.REPO,
+            "component": "linux-litert",
+            "semantic_identity": current,
+            "legacy_identity": original,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "bridge.json"
+            manifest.write_text(json.dumps({"schema": 1, "entries": [entry]}))
+            keep = cleanup.retained_identities("linux-litert", current, manifest)
+            self.assertEqual(keep, {current, original})
+            self.assertEqual(
+                cleanup.retained_identities("linux-core", current, manifest), {current}
+            )
+            self.assertEqual(
+                cleanup.retained_identities("linux-litert", obsolete, manifest),
+                {obsolete},
+            )
+        versions = [version(1, current), version(2, original), version(3, obsolete)]
+        retired = cleanup.candidates(versions, current, set(), keep)
+        self.assertEqual(retired, [versions[2]])
+        identities = {"linux-litert": set().union(*(cleanup.tags(v) for v in retired))}
+        for prefix in ("ci-", "receipt-ci-"):
+            self.assertFalse(
+                cleanup.obsolete_artifact(
+                    prefix + "linux-litert-" + original, identities
+                )
+            )
+            self.assertTrue(
+                cleanup.obsolete_artifact(
+                    prefix + "linux-litert-" + obsolete, identities
+                )
+            )
+
+    def test_invalid_bridge_stops_cleanup_instead_of_retiring_originals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "bridge.json"
+            for record in (
+                {"schema": 2, "entries": []},
+                {"schema": 1, "entries": [None]},
+            ):
+                with self.subTest(record=record):
+                    manifest.write_text(json.dumps(record))
+                    with self.assertRaisesRegex(RuntimeError, "refusing cleanup"):
+                        cleanup.retained_identities("linux-core", "a" * 64, manifest)
 
     def test_matches_only_retired_component_descriptors(self):
         old, new = "a" * 64, "b" * 64

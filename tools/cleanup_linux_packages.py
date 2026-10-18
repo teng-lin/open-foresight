@@ -53,10 +53,34 @@ def tags(version):
     return set(version["metadata"]["container"]["tags"])
 
 
-def candidates(versions, identity, protected):
+def retained_identities(component, identity, manifest=None):
+    """Keep original images/descriptors referenced by the reviewed SDK bridge."""
+    path = manifest or Path(__file__).with_name("sdk_approved_legacy.json")
+    retained = {identity}
+    if not path.exists():
+        return retained
+    record = json.loads(path.read_text())
+    if record.get("schema") != 1 or not isinstance(record.get("entries"), list):
+        raise RuntimeError("Invalid SDK approval manifest; refusing cleanup")
+    for entry in record["entries"]:
+        if not isinstance(entry, dict):
+            raise RuntimeError("Invalid SDK approval entry; refusing cleanup")
+        if (
+            entry.get("repository") == REPO
+            and entry.get("component") == component
+            and entry.get("semantic_identity") == identity
+        ):
+            legacy = entry.get("legacy_identity")
+            if not isinstance(legacy, str) or not re.fullmatch(r"[a-f0-9]{64}", legacy):
+                raise RuntimeError("Invalid legacy SDK identity; refusing cleanup")
+            retained.add(legacy)
+    return retained
+
+
+def candidates(versions, identity, protected, retained=()):
     if not any(identity in tags(v) for v in versions):
         raise RuntimeError("Current identity is not published; refusing cleanup")
-    keep = {identity, "current", "buildcache", "app-buildcache-x86-64"}
+    keep = {identity, "current", "buildcache", "app-buildcache-x86-64", *retained}
     return [
         v
         for v in versions
@@ -64,7 +88,7 @@ def candidates(versions, identity, protected):
     ]
 
 
-def protected_manifests(component, versions, identity):
+def protected_manifests(component, versions, identity, retained=()):
     package = "teng-lin/open-foresight/" + component
     url = "https://ghcr.io/token?" + urllib.parse.urlencode(
         {"service": "ghcr.io", "scope": f"repository:{package}:pull"}
@@ -74,7 +98,8 @@ def protected_manifests(component, versions, identity):
     roots = {
         v["name"]
         for v in versions
-        if tags(v) & {identity, "current", "buildcache", "app-buildcache-x86-64"}
+        if tags(v)
+        & {identity, "current", "buildcache", "app-buildcache-x86-64", *retained}
     }
     protected = set()
     while roots:
@@ -114,10 +139,15 @@ def make_plan():
     retired = {}
     for component in COMPONENTS:
         identity = fingerprint(component)
+        retained = retained_identities(component, identity)
         versions = pages(versions_path(component))
-        protected = protected_manifests(component, versions, identity)
-        obsolete = candidates(versions, identity, protected)
-        plan["packages"][component] = {"identity": identity, "versions": obsolete}
+        protected = protected_manifests(component, versions, identity, retained)
+        obsolete = candidates(versions, identity, protected, retained)
+        plan["packages"][component] = {
+            "identity": identity,
+            "retained_identities": sorted(retained),
+            "versions": obsolete,
+        }
         retired[component] = {
             tag
             for v in obsolete
@@ -143,6 +173,7 @@ def apply(plan):
             {
                 c: (
                     p["identity"],
+                    sorted(p.get("retained_identities", [p["identity"]])),
                     sorted(
                         (v["id"], v["name"], sorted(tags(v))) for v in p["versions"]
                     ),
