@@ -347,6 +347,22 @@ def make_arch(root, output, version, release, metadata, epoch):
         shutil.copy2(source, recipe / "payload.tar.gz")
 
 
+PREVIEW_VERSION = re.compile(r"(\d+\.\d+\.\d+)~nightly\.(\d{8})\.([1-9]\d*)")
+
+
+def native_version(version, release, kind):
+    preview = PREVIEW_VERSION.fullmatch(version)
+    if not (re.fullmatch(r"\d+\.\d+\.\d+", version) or preview) or not re.fullmatch(
+        r"[1-9]\d*", release
+    ):
+        raise ValueError(
+            "Use X.Y.Z or X.Y.Z~nightly.YYYYMMDD.BUILD and a positive release"
+        )
+    if preview and kind == "arch":
+        return preview[1], "0." + preview[3]
+    return version, release
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", type=Path, required=True)
@@ -357,10 +373,12 @@ def main():
     parser.add_argument("--release", default="1")
     parser.add_argument("--output", type=Path, default=Path("dist/packages"))
     args = parser.parse_args()
-    if not re.fullmatch(r"\d+\.\d+\.\d+", args.version) or not re.fullmatch(
-        r"[1-9]\d*", args.release
-    ):
-        parser.error("Use numeric major.minor.patch and a positive integer release")
+    try:
+        package_version, package_release = native_version(
+            args.version, args.release, args.format
+        )
+    except ValueError as error:
+        parser.error(str(error))
     manifest = validate(args.bundle)
     epoch = int(os.environ.get("SOURCE_DATE_EPOCH", "0"))
     args.output.mkdir(parents=True, exist_ok=True)
@@ -383,7 +401,7 @@ def main():
         "tar": f"{stem}-linux-x86_64.tar.gz",
         "deb": f"open-foresight_{args.version}-{args.release}_amd64.deb",
         "rpm": f"{stem}.x86_64.rpm",
-        "arch": f"open-foresight-bin-{args.version}-{args.release}-x86_64.pkg.tar.zst",
+        "arch": f"open-foresight-bin-{package_version}-{package_release}-x86_64.pkg.tar.zst",
     }
     output = args.output / names[args.format]
     if output.exists():
@@ -399,7 +417,9 @@ def main():
             elif args.format == "rpm":
                 make_rpm(root, output, args.version, args.release, METADATA, epoch)
             else:
-                make_arch(root, output, args.version, args.release, METADATA, epoch)
+                make_arch(
+                    root, output, package_version, package_release, METADATA, epoch
+                )
     (output.parent / (output.name + ".sha256")).write_text(
         f"{digest(output)}  {output.name}\n"
     )
@@ -409,6 +429,9 @@ def main():
                 "revision": manifest["revision"],
                 "version": args.version,
                 "release": args.release,
+                "native_version": package_version,
+                "native_release": package_release,
+                "build_number": manifest.get("build_number"),
                 "format": args.format,
                 "sha256": digest(output),
                 "source_date_epoch": epoch,

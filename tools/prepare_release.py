@@ -14,7 +14,7 @@ from ci_artifacts import api, name, trusted_run
 from github_release import release_for_tag
 
 
-def candidates_ready(repository, commit):
+def candidates_ready(repository, commit, run_id=None):
     for component in ("linux-app", "macos-app"):
         artifact_name = name(component, commit)
         artifacts = api(
@@ -24,10 +24,13 @@ def candidates_ready(repository, commit):
         for artifact in artifacts:
             if artifact["expired"] or artifact["name"] != artifact_name:
                 continue
+            if run_id is not None and artifact["workflow_run"]["id"] != run_id:
+                continue
             run = api(repository, f"actions/runs/{artifact['workflow_run']['id']}")
-            if run["head_sha"] == commit and trusted_run(
-                run, component, repository=repository
-            ):
+            if (
+                run["head_sha"] == commit
+                or (run_id is not None and run.get("event") == "workflow_dispatch")
+            ) and trusted_run(run, component, repository=repository):
                 qualified = True
                 break
         if not qualified:
@@ -35,22 +38,61 @@ def candidates_ready(repository, commit):
     return True
 
 
-def require_candidates(repository, commit, wait):
-    if candidates_ready(repository, commit):
-        return
-    if api(repository, "commits/main")["sha"] != commit:
+def require_candidates(repository, commit, wait, fresh=False):
+    if not fresh and candidates_ready(repository, commit):
+        return None
+    current_main = api(repository, "commits/main")["sha"]
+    if fresh and current_main != commit:
+        comparison = api(repository, f"compare/{commit}...{current_main}")
+        if comparison["status"] not in ("ahead", "identical"):
+            raise ValueError("Distribution source must be reachable from reviewed main")
+    if not fresh and current_main != commit:
         raise ValueError(
             "Exact-commit candidates are unavailable; refusing to substitute a newer main build"
         )
+    route = "actions/workflows/macos.yml/runs?branch=main&event=workflow_dispatch&per_page=100"
+    previous = (
+        {run["id"] for run in api(repository, route)["workflow_runs"]}
+        if fresh
+        else set()
+    )
+    command = [
+        "gh",
+        "workflow",
+        "run",
+        "macos.yml",
+        "--repo",
+        repository,
+        "--ref",
+        "main",
+    ]
+    if fresh:
+        command += ["-f", f"source={commit}"]
     subprocess.run(
-        ["gh", "workflow", "run", "macos.yml", "--repo", repository, "--ref", "main"],
+        command,
         check=True,
         timeout=300,
     )
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
-        if candidates_ready(repository, commit):
-            return
+        if fresh:
+            for run in api(repository, route)["workflow_runs"]:
+                if run["id"] in previous:
+                    continue
+                if run.get("conclusion") in ("failure", "cancelled", "timed_out"):
+                    raise RuntimeError(
+                        "Fresh distribution build failed; no release tag was created"
+                    )
+                if run.get("conclusion") == "success" and candidates_ready(
+                    repository, commit, run["id"]
+                ):
+                    return run["id"]
+        elif candidates_ready(repository, commit):
+            return None
+        if not fresh and api(repository, "commits/main")["sha"] != commit:
+            raise ValueError(
+                "Main advanced before the requested candidate was available; retry release preparation"
+            )
         print(f"Waiting for exact-commit main candidates: {commit}", flush=True)
         time.sleep(min(20, max(0, deadline - time.monotonic())))
     raise TimeoutError(
@@ -206,11 +248,11 @@ def main():
         raise ValueError(
             "A new release tag must match the synchronized application version"
         )
-    require_candidates(args.repo, commit, args.wait)
+    candidate_run = require_candidates(args.repo, commit, args.wait, fresh=True)
     release = create_draft(args.repo, args.tag, commit)
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         stream.write(
-            f"tag={args.tag}\npackage_release={release}\ncommit={commit}\ncontrol_commit={control_commit}\n"
+            f"tag={args.tag}\npackage_release={release}\ncommit={commit}\ncontrol_commit={control_commit}\ncandidate_run={candidate_run or 0}\n"
         )
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a") as stream:

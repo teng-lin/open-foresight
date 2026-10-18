@@ -34,6 +34,7 @@ jobs:
       id: version
       env:
         GH_TOKEN: ${{ github.token }}
+        CANDIDATE_RUN: ${{ inputs.candidate_run }}
       run: |-
         python3 tools/app_version.py --check
         python3 - <<'PY'
@@ -44,7 +45,7 @@ jobs:
         epoch=subprocess.check_output(['git','show','-s','--format=%ct','HEAD'],text=True).strip()
         with open(os.environ['GITHUB_OUTPUT'],'a') as output: print(f'version={version}', f'release={os.environ["PACKAGE_RELEASE"]}', f'epoch={epoch}', sep=chr(10), file=output)
         PY
-        python tools/ci_artifacts.py pull --component linux-app --identity "$(git rev-parse HEAD)" --prefix dist/packages --wait 3600
+        python tools/ci_artifacts.py pull --component linux-app --identity "$(git rev-parse HEAD)" --prefix dist/packages --wait 3600 --run-id "$CANDIDATE_RUN"
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: portable-bundle
@@ -205,6 +206,9 @@ jobs:
 on:
   workflow_call:
     inputs:
+      candidate_run:
+        type: string
+        default: "0"
       tag:
         required: true
         type: string

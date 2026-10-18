@@ -108,7 +108,7 @@ class ReleaseSourceTest(unittest.TestCase):
             ):
                 release.main()
             candidates.assert_called_once_with(
-                "teng-lin/open-foresight", self.product, 10800
+                "teng-lin/open-foresight", self.product, 10800, fresh=True
             )
             draft.assert_called_once_with(
                 "teng-lin/open-foresight", self.tag, self.product

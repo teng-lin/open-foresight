@@ -10,7 +10,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: release-${{ inputs.tag }}
+  group: distribution-packages
   cancel-in-progress: false
 jobs:
   prepare:
@@ -22,6 +22,7 @@ jobs:
     outputs:
       tag: ${{ steps.prepare.outputs.tag }}
       package_release: ${{ steps.prepare.outputs.package_release }}
+      candidate_run: ${{ steps.prepare.outputs.candidate_run }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -44,6 +45,7 @@ jobs:
     with:
       tag: ${{ needs.prepare.outputs.tag }}
       package_release: ${{ needs.prepare.outputs.package_release }}
+      candidate_run: ${{ needs.prepare.outputs.candidate_run }}
   macos:
     needs: prepare
     permissions:
@@ -52,6 +54,7 @@ jobs:
     uses: ./.github/workflows/macos-release.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}
+      candidate_run: ${{ needs.prepare.outputs.candidate_run }}
   acceptance:
     needs: [prepare, linux, macos]
     permissions:

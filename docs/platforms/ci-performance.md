@@ -147,6 +147,13 @@ CI reruns using those images will need dependency production again. Untagged
 versions are left alone: they can be child manifests or digest-only references.
 The apply step rejects changed main, active CI runs, and changed package tags.
 
+## Preview distribution
+
+[Preview installers](preview-packages.md) documents nightly/manual DMG, DEB, RPM,
+Arch and portable packages. Previews stamp a shared monotonic build number before
+building, retain immutable source provenance, and publish an artifact only after
+all selected installer acceptance passes. They do not publish official releases.
+
 ## Normal checks and release readiness
 
 The Ubuntu `changes` job always checks whitespace, workflow syntax, integration
@@ -190,10 +197,11 @@ desktop phase timings remain in their separate retained gate logs. Measure these
 phases before adding compilation caches; dependency downloads are already reused.
 
 Use `release.yml` on reviewed main to prepare a release. Before creating a tag,
-the coordinator requires successful candidates for that exact commit: the macOS
-application and Linux portable bundle. If candidates are absent, expired, or
-missing after a documentation-only commit, it forces `macos.yml` on main and waits.
-A failed candidate build leaves no new release tag.
+the coordinator forces fresh candidates for the exact product commit through
+`macos.yml` on main and waits. This reserves a shared build number after previews;
+both packagers are pinned to that producer run. A failed candidate build leaves
+no new release tag. The managed `ci/build-sequence` branch persists the build
+counter; local pubspec build numbers are its lower bound.
 
 Both reusable packagers check out the tag, promote those candidates into a draft,
 and perform platform checks. macOS runs runtime/model/cloud checks before making

@@ -20,11 +20,12 @@ jobs:
     - name: Require tag version and retrieve the exact tested app
       env:
         GH_TOKEN: ${{ github.token }}
+        CANDIDATE_RUN: ${{ inputs.candidate_run }}
         RELEASE_TAG: ${{ inputs.tag }}
       run: |-
         python tools/app_version.py --check
         test "$RELEASE_TAG" = "v$(python tools/app_version.py)"
-        python tools/ci_artifacts.py pull --component macos-app --identity "$(git rev-parse HEAD)" --prefix artifacts --wait 3600
+        python tools/ci_artifacts.py pull --component macos-app --identity "$(git rev-parse HEAD)" --prefix artifacts --wait 3600 --run-id "$CANDIDATE_RUN"
         mkdir -p staging test-results
         ditto -x -k artifacts/Open-Foresight-macos-arm64.zip staging
         codesign --verify --deep --strict 'staging/Open Foresight.app'
@@ -98,13 +99,9 @@ jobs:
         codesign --verify --deep --strict --verbose=2 'staging/Open Foresight.app'
         python3 tools/verify_macos_release_runtime.py 'staging/Open Foresight.app' \
           --output dist/runtime-verification.json
-        ln -s /Applications staging/Applications
-        dmg="Open-Foresight-${RELEASE_TAG}-macos-arm64.dmg"
-        hdiutil create -volname 'Open Foresight' -srcfolder staging \
-          -format UDZO "dist/$dmg"
-        hdiutil verify "dist/$dmg"
-        (cd dist && shasum -a 256 "$dmg" > "$dmg.sha256")
-        cp 'artifacts/Open Foresight.manifest.json' "dist/$dmg.manifest.json"
+        python3 tools/create_dmg.py --app 'staging/Open Foresight.app' \
+          --manifest 'artifacts/Open Foresight.manifest.json' \
+          --name "Open-Foresight-${RELEASE_TAG}-macos-arm64.dmg" --output dist
     - name: Retain disk image and provenance
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -122,6 +119,9 @@ jobs:
 on:
   workflow_call:
     inputs:
+      candidate_run:
+        type: string
+        default: "0"
       tag:
         required: true
         type: string

@@ -9,6 +9,7 @@ import 'package:foresight_core/foresight_core.dart'
         openPlatformUri,
         allowedSourceUri,
         openForesightBuildNumber,
+        openForesightBuildLabel,
         openForesightVersion,
         MeetingSpeaker,
         platformNotification;

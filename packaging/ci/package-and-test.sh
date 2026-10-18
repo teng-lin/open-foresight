@@ -11,7 +11,7 @@ case "$task_format" in
     apt-get install -y --no-install-recommends python3 binutils xz-utils xvfb xauth dbus-x11 libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils
     ;;
   rpm)
-    dnf install -y python3 rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
+    dnf install -y python3 python3-rpm rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
     ;;
   arch)
     pacman -Syu --noconfirm --needed python binutils xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils
@@ -19,6 +19,7 @@ case "$task_format" in
   *) exit 2;;
 esac
 cd /work
+python3 packaging/check_preview_version.py "$task_format" "$task_version"
 mkdir -p build/package-input dist/packages
 (cd artifacts && sha256sum --check ./*.tar.gz.sha256)
 tar -xzf artifacts/*.tar.gz -C build/package-input
@@ -37,6 +38,8 @@ else
 fi
 desktop-file-validate /usr/share/applications/io.openforesight.App.desktop
 install -d -o package-test -g package-test /home/package-test/.local/share/open-foresight
+# Expand HOME inside the package-test shell rather than the root shell.
+# shellcheck disable=SC2016
 runuser -u package-test -- sh -c 'printf preserve > "$HOME/.local/share/open-foresight/install-test-sentinel"'
 runuser -u package-test -- xvfb-run -a dbus-run-session -- python3 packaging/smoke_installed.py
 # Reinstall/upgrade the same version, then uninstall. All per-user data remains.

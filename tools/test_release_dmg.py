@@ -118,7 +118,22 @@ def run(args):
                     )
                 report["installer"] = identity
                 functional += ["--expected-revision", identity["source_commit"]]
-                subprocess.run(functional, check=True, timeout=2400)
+                if getattr(args, "validation", "full") == "full":
+                    subprocess.run(functional, check=True, timeout=2400)
+                else:
+                    subprocess.run(
+                        [
+                            sys.executable,
+                            str(Path(__file__).with_name("smoke_macos_bundle.py")),
+                            str(destination),
+                            "--desktop",
+                            "--output",
+                            str(args.output / "smoke.json"),
+                        ],
+                        check=True,
+                        timeout=300,
+                    )
+                report["validation"] = getattr(args, "validation", "full")
                 # The harness stops its isolated GUI/service before replacement.
                 persistence_profile = Path(temporary).resolve() / "persistence"
                 persistence_state = args.output / "persistence.json"
@@ -178,9 +193,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dmg", type=Path, required=True)
     parser.add_argument("--destination", type=Path, required=True)
-    parser.add_argument("--models", type=Path, required=True)
+    parser.add_argument("--models", type=Path)
+    parser.add_argument("--validation", choices=("standard", "full"), default="full")
     parser.add_argument("--output", type=Path, required=True)
-    print(json.dumps(run(parser.parse_args()), indent=2))
+    args = parser.parse_args()
+    if args.validation == "full" and args.models is None:
+        parser.error("Full validation requires --models")
+    print(json.dumps(run(args), indent=2))
 
 
 if __name__ == "__main__":
