@@ -7,10 +7,19 @@ extern "C" {
 /* ABI v1. Handles are owned, single caller controls lifecycle. Poll may run on
  * another thread. Each poll result is owned UTF-8 JSON, release with
  * string_free. Destroy cancels, joins workers and drains queues: no callbacks
- * after release. All status codes: 0 success, -1 invalid/busy/unavailable. No
+ * after release. Poll may overlap destroy: destroy wakes and joins existing
+ * polls, and a poll of a retired handle returns null. The lifecycle owner must
+ * prevent new calls once destroy starts and finish every non-poll call before
+ * destruction. Only polling may overlap destruction; cancellation can overlap
+ * worker execution, and must return before destroy starts. Other API calls on
+ * one handle are serialized by the caller. Handle addresses must not be reused
+ * by a stale caller after release.
+ * All status codes: 0 success, -1 invalid/busy/unavailable. No
  * fake inference. */
 int fs_abi_version(void);
-/* Before worker startup only; 0 success, -1 unsupported key/invalid value. */
+/* Before the first handle is created only (permanently sealed thereafter);
+ * 0 success, -1 sealed/unsupported key/invalid value. Hosts must also avoid
+ * external setenv/unsetenv while any native/runtime threads exist. */
 int fs_set_runtime_environment(const char *key, const char *value);
 /* 1 verified helper identity; 0 mismatch or confirmed absent; -1 inspection
  * unavailable (never evidence that shutdown succeeded). */
@@ -29,7 +38,7 @@ char *fs_engine_state(void *engine);
 int fs_engine_probe(
     void *engine); /* synchronous actual model load; no retained KV/model */
 int fs_engine_destroy(
-    void *engine); /* reject while conversations reference it */
+    void *engine); /* reject while probing/busy or conversations reference it */
 void *fs_conversation_create(void *engine);
 int fs_generate(void *conversation, const char *request_id, const char *prompt);
 /* Additive ABI v1 extension: constrained JSON, same stream/lifetime rules. */
@@ -61,9 +70,9 @@ int fs_speech_cancel(void *speech);
 void fs_speech_destroy(void *speech);
 /* target "auto" uses default device; playback sets stream.capture.sink=true.
  * PipeWire converts to mono signed 16-bit LE at sample_rate. Playback frames
- * contain rate*2*40/1000 bytes (3840 at 48kHz). Mic frames retain read buffer
- * sizes/even samples. Legacy channel map fields stay distinct; state/error
- * events use linux channel. */
+ * contain floor(rate*40/1000)*2 bytes (3840 at 48kHz). Mic frames retain read
+ * buffer sizes/even samples. Legacy channel map fields stay distinct;
+ * state/error events use linux channel. */
 void *fs_capture_start(const char *target, int playback, int sample_rate);
 void *fs_capture_start_with_options(const char *target, int playback,
                                     int sample_rate, int echo_cancellation);

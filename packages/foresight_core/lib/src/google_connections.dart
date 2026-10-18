@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'desktop_connection.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -5,7 +7,7 @@ import 'domain.dart';
 import 'google_auth.dart';
 import 'store.dart';
 
-class GoogleConnections {
+class GoogleConnections implements ConnectedSources {
   final Domain domain;
   final GoogleAuth auth;
   bool _closed = false;
@@ -83,7 +85,10 @@ class GoogleConnections {
 
   void _check(String account) {
     if (_closed || !auth.connected || auth.account != account)
-      throw StateError('Google connection changed. Retry after signing in.');
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Google connection changed. Retry after signing in.',
+      );
   }
 
   Future<void> _checkpoint(String account) async {

@@ -12,6 +12,10 @@ class AppCommands {
   final RandomAccessFile _lock;
   final _handler = Completer<CommandAction>();
   bool _closed = false;
+  bool _released = false;
+
+  /// The listening socket and activation lock have both been released.
+  bool get isClosed => _released;
   void Function(Object error)? onError;
   AppCommands._(this.server, this.path, this._lock) {
     server.listen(_accept);
@@ -139,5 +143,6 @@ class AppCommands {
       File(path).deleteSync();
     await server.close();
     _lock.closeSync();
+    _released = true;
   }
 }

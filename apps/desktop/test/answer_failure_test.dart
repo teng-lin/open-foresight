@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,7 +9,7 @@ import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/native.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
-import '../../../packages/foresight_core/test/fixtures/delayed_index_service.dart'
+import 'package:foresight_test_support/delayed_index_service.dart'
     show DelayedIndexService;
 
 class AnswerService extends DelayedIndexService {
@@ -56,7 +58,7 @@ void main() {
   test(
     'failed generation replaces provisional insufficient text with an error',
     () async {
-      final tmp = Directory('/tmp').createTempSync('answer-failure-');
+      final tmp = shortTestTempRoot.createTempSync('answer-failure-');
       final store = Store('${tmp.path}/app.db');
       final id = store.importText(
         'Atlas',

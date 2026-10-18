@@ -36,13 +36,11 @@ void main() {
       );
       await tester.tap(find.text('Discover'));
       for (
-        var i = 0;
-        i < 100 && find.text('Apollo.md').evaluate().isEmpty;
-        i++
+        final pollingClock = Stopwatch()..start();
+        pollingClock.elapsed < const Duration(seconds: 5) &&
+            find.text('Apollo.md').evaluate().isEmpty;
       ) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
-        );
+        await tester.runAsync(() => Future<void>(() {}));
         await tester.pump();
       }
       expect(find.text('Apollo.md'), findsOneWidget);

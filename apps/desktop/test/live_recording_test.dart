@@ -75,7 +75,8 @@ void main() {
         }
         await recorder.stop();
         stopped = true;
-        await Future<void>.delayed(const Duration(milliseconds: 300));
+        await Future<void>(() {});
+        expect(recorder.timer?.isActive, false);
         expect(callbacksAfterClose, 0);
         expect(recorder.speeches, isEmpty);
         expect(recorder.captures, isEmpty);

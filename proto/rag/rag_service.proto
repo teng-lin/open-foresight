@@ -1,6 +1,7 @@
-// Reconstructed wire-compatible schema. Exact original edition/options are in rag_service.descriptor.pb.
+// Open Foresight helper v1. Recovered tags and edition features are retained by
+// generate_bindings.py; the historical descriptor remains immutable evidence.
 syntax = "proto3";
-package research.xeno.labs.foresight.launch_agent.proto;
+package foresight.helper.v1;
 
 message IndexRequest {
   string document_id = 1;
@@ -13,6 +14,7 @@ message IndexRequest {
 }
 
 message IndexResponse {
+  // Success acknowledgement only. All failures use gRPC status codes.
   bool success = 1;
   string error_message = 2;
 }
@@ -51,6 +53,7 @@ message UpdateModelPathsRequest {
 }
 
 message UpdateModelPathsResponse {
+  // Success acknowledgement only. All failures use gRPC status codes.
   bool success = 1;
   string error_message = 2;
 }
@@ -61,6 +64,7 @@ message DeleteRequest {
 }
 
 message DeleteResponse {
+  // Success acknowledgement only. All failures use gRPC status codes.
   bool success = 1;
   string error_message = 2;
 }

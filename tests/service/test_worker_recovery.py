@@ -4,7 +4,9 @@ import os
 import signal
 import time
 
-from test_service_process import running  # noqa: F401 - shared integration fixture
+import pytest
+
+from test_service_process import running, poll_delay  # noqa: F401 - shared integration fixture
 
 
 def _ready(peer, previous=None):
@@ -14,7 +16,7 @@ def _ready(peer, previous=None):
         identity = helper.get("instanceId")
         if identity and identity != previous and helper.get("pipeline") == "ready":
             return identity
-        time.sleep(0.05)
+        poll_delay(deadline)
     raise AssertionError("helper did not recover")
 
 
@@ -27,17 +29,21 @@ def test_explicit_resume_restarts_helper_after_automatic_budget_is_exhausted(run
             identity = _ready(peer, identity)
     deadline = time.monotonic() + 3
     while peer.call("status").get("helper") and time.monotonic() < deadline:
-        time.sleep(0.02)
+        poll_delay(deadline)
     assert not peer.call("status").get("helper")
     peer.call("application.resume")
     assert _ready(peer, identity) != identity
 
 
+@pytest.mark.parametrize("running", ["capture_poll_gate"], indirect=True)
 def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noqa: F811 - pytest injects the imported fixture by parameter name.
     capture = running["root"] / "fixtures" / "pw-record"
+    ready = running["root"] / "fixtures" / "capture-filled"
+    gate = running["root"] / "fixtures" / "hold-capture-poll"
     capture.write_text(
-        '#!/usr/bin/env python3\nimport os,time\nblock=b"A"*3840\n'
+        '#!/usr/bin/env python3\nimport os,pathlib,time\nblock=b"A"*3840\n'
         "for _ in range(2000):os.write(1,block)\n"
+        f"pathlib.Path({str(ready)!r}).touch()\n"
         "while True:os.write(1,block);time.sleep(.04)\n"
     )
     peer = running["peer"]
@@ -50,9 +56,15 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
         },
     )
     meeting = peer.call("meetings.create", {"title": "Overflow persists a gap"})["id"]
+    gate.touch()
     peer.call("meetings.start", {"id": meeting})
     try:
         deadline = time.monotonic() + 10
+        while not ready.exists() and time.monotonic() < deadline:
+            poll_delay(deadline)
+        assert ready.exists(), (
+            "Capture producer did not finish filling the native queue"
+        )
         while time.monotonic() < deadline:
             rows = peer.call("meetings.get", {"id": meeting})["transcript"]
             if any(
@@ -60,10 +72,11 @@ def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noq
                 for row in rows
             ):
                 break
-            time.sleep(0.02)
+            poll_delay(deadline)
         else:
             raise AssertionError(
                 "Native capture overflow was not persisted as an interruption"
             )
     finally:
+        gate.unlink(missing_ok=True)
         peer.call("meetings.stop")

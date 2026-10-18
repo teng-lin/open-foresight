@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/src/model_setup.dart';
@@ -97,11 +98,9 @@ void main() {
         current: () => false,
       ),
       throwsA(
-        isA<StateError>().having(
-          (e) => e.message,
-          'reason',
-          contains('cancelled'),
-        ),
+        isA<RpcError>()
+            .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+            .having((e) => e.message, 'message', 'Model setup cancelled'),
       ),
     );
     expect(store.model('query-detection'), prior);
