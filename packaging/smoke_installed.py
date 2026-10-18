@@ -64,7 +64,6 @@ def main():
         os.environ,
         LD_LIBRARY_PATH=f"{root}/lib:{root}/app/lib",
         FORESIGHT_LITERT_LIBRARY=str(root / "lib/liblitert-lm.so"),
-        FORESIGHT_ONNX_LIBRARY=str(root / "lib/libonnxruntime.so"),
         LIBGL_ALWAYS_SOFTWARE="1",
         GDK_BACKEND="x11",
     )

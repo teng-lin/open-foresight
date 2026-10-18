@@ -52,7 +52,6 @@ def packaged_paths(bundle):
                 for key in (
                     "FORESIGHT_MODEL_PYTHON",
                     "FORESIGHT_LITERT_PYTHON",
-                    "FORESIGHT_MODEL_ADAPTER",
                     "FORESIGHT_LITERT_EMBEDDING_ADAPTER",
                 )
             },
@@ -70,7 +69,6 @@ def packaged_paths(bundle):
         worker,
         {
             "FORESIGHT_LITERT_LIBRARY": str(own("lib/liblitert-lm.so")),
-            "FORESIGHT_ONNX_LIBRARY": str(own("lib/libonnxruntime.so")),
             "LD_LIBRARY_PATH": str(bundle / "lib"),
         },
     )

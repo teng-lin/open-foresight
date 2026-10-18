@@ -18,8 +18,10 @@ void main() {
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
-      final auth = GoogleAuth(Directory('${directory.path}/google'))
-        ..client = GoogleClient('fixture.apps.googleusercontent.com', '');
+      final auth = GoogleAuth(
+        Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
+      )..client = GoogleClient('fixture.apps.googleusercontent.com', '');
       addTearDown(auth.close);
       final opened = Completer<void>();
       final pending = auth.signIn((_) async => opened.complete());
@@ -58,6 +60,7 @@ void main() {
       final auth = GoogleAuth(
         Directory('${directory.path}/google'),
         endpoints: fixture.endpoints,
+        secretStore: const UnavailableSecretStore(),
       )..client = GoogleClient('fixture.apps.googleusercontent.com', '');
       addTearDown(auth.close);
       fixture.beforeUserInfo = auth.forget;
@@ -90,6 +93,7 @@ void main() {
       await fixture.start();
       final auth = GoogleAuth(
         Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
       );
       final store = Store('${directory.path}/app.db');
@@ -220,6 +224,7 @@ void main() {
       await fixture.start();
       var auth = GoogleAuth(
         Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
       );
       final config = File('${directory.path}/client.json')
@@ -241,6 +246,7 @@ void main() {
         await auth.close();
         auth = GoogleAuth(
           Directory('${directory.path}/google'),
+          secretStore: const UnavailableSecretStore(),
           endpoints: fixture.endpoints,
         );
         expect(auth.connected, true);
@@ -286,6 +292,7 @@ void main() {
       await fixture.start();
       final auth = GoogleAuth(
         Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
       );
       final store = Store('${directory.path}/app.db');
@@ -446,6 +453,7 @@ void main() {
       await fixture.start();
       final auth = GoogleAuth(
         Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
       );
       final store = Store('${directory.path}/app.db');
@@ -538,6 +546,7 @@ void main() {
       await fixture.start();
       final auth = GoogleAuth(
         Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
       );
       final config = File('${directory.path}/client.json')

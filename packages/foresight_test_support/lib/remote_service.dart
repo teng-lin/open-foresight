@@ -41,9 +41,6 @@ class RemoteFixture {
       );
       owner = openStore('${profile.data}/application.db');
       _hasOwner = true;
-      owner.db.execute(
-        'CREATE TABLE calendar_events(meeting_id INTEGER,metadata TEXT)',
-      );
       server = await ServerSocket.bind(
         InternetAddress(
           '${profile.runtime}/application.sock',
