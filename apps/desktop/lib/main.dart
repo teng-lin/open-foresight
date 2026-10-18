@@ -280,7 +280,8 @@ class Workspace extends StatefulWidget {
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
+class _WorkspaceState extends State<Workspace>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   late final sourceFeature = _SourcesController(this);
   late final chatFeature = _ChatController(this);
   late final meetingFeature = _MeetingsController(this);
@@ -315,6 +316,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     sourceFeature.graphMotionTicker = createTicker(
       sourceFeature.tickGraphMotion,
     );
@@ -405,7 +407,22 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   }
 
   @override
+  void didChangeMetrics() {
+    if (!meetingFeature.meetingAssistantFallback) return;
+    // Measure the workspace after layout; a compositor may cap the requested
+    // resize, leaving the compact assistant necessary.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted &&
+          meetingFeature.meetingAssistantFallback &&
+          meetingFeature.meetingAssistantWide) {
+        update(() => meetingFeature.meetingAssistantFallback = false);
+      }
+    });
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     serviceUiTimer?.cancel();
     serviceUiRevision.dispose();
     unawaited(meetingFeature.noteEnhancementChanges?.cancel());
@@ -663,6 +680,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                                     meetingFeature.quickStarting ||
                                     meetingFeature.meetingEnhancing
                                 ? null
+                                : tab == 3 && meetingFeature.meetingId != null
+                                ? () => meetingFeature.recordExistingMeeting(
+                                    meetingFeature.meetingId!,
+                                  )
                                 : meetingFeature.quickStart,
                             icon: Icon(
                               meetingFeature.recording != null
