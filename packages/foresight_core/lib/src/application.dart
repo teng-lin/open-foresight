@@ -1,3 +1,4 @@
+import 'answer_contract.dart' show answerValidationFailures;
 import 'helper.dart' show helperUserId;
 import 'gemma_download.dart' show ModelDownloadCancelled;
 import 'conversation_answer.dart';
@@ -607,6 +608,7 @@ class Application implements ModelGate {
             'helper_state': domain.helper.state,
             'generation': generationState,
             'web_search_available': domain.webSearchAvailable,
+            'answer_validation_failures': answerValidationFailures,
             'revision': store.dataRevision,
             'google': googleState,
           };

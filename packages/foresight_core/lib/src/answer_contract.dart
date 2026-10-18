@@ -1,5 +1,13 @@
 import 'dart:convert';
 
+final _validationFailures = <String, int>{};
+Map<String, int> get answerValidationFailures =>
+    Map.unmodifiable(_validationFailures);
+Never _invalidAnswer(String reason, String message) {
+  _validationFailures.update(reason, (value) => value + 1, ifAbsent: () => 1);
+  throw FormatException(message);
+}
+
 Map<String, dynamic> groundedAnswerSchema(Set<String> allowed) {
   // Keep the decoding grammar shallow. Branching on a literal answer string
   // can fail inside LLGuidance's token parser; validate branch rules below.
@@ -25,13 +33,18 @@ class GroundedAnswer {
   final bool sufficient;
   GroundedAnswer(this.text, this.citations, this.sufficient);
   factory GroundedAnswer.parse(String raw, Set<String> allowed) {
-    final result = jsonDecode(raw);
+    late final dynamic result;
+    try {
+      result = jsonDecode(raw);
+    } on FormatException {
+      _invalidAnswer('json', 'Invalid grounded-answer JSON');
+    }
     if (result is! Map<String, dynamic> ||
         result['answer'] is! String ||
         result['citations'] is! List ||
         (result['citations'] as List).any((id) => id is! String) ||
         (result.containsKey('status') && result['status'] is! String)) {
-      throw const FormatException('Invalid grounded-answer shape');
+      _invalidAnswer('shape', 'Invalid grounded-answer shape');
     }
     final text = result['answer'] as String;
     final citations = (result['citations'] as List)
@@ -43,7 +56,10 @@ class GroundedAnswer {
         (citations.isEmpty ? 'insufficient_context' : 'answered');
     if (status == 'insufficient_context') {
       if (citations.isNotEmpty) {
-        throw const FormatException('Invalid insufficient-context response');
+        _invalidAnswer(
+          'insufficient_context',
+          'Invalid insufficient-context response',
+        );
       }
       return GroundedAnswer('Insufficient context', [], false);
     }
@@ -51,13 +67,17 @@ class GroundedAnswer {
         text.trim().isEmpty ||
         citations.isEmpty ||
         citations.any((id) => !allowed.contains(id))) {
-      throw const FormatException(
+      _invalidAnswer(
+        'missing_sources',
         'The answer has missing or unknown source citations',
       );
     }
     final inline = citationIds(text, citations.length);
     if (inline.any((id) => !citations.contains(id))) {
-      throw const FormatException('The answer cites an unselected source');
+      _invalidAnswer(
+        'unselected_source',
+        'The answer cites an unselected source',
+      );
     }
     return GroundedAnswer(text, citations, true);
   }
@@ -98,7 +118,7 @@ Set<String> citationIds(String text, int limit) {
         .substring(1, bracket.group(0)!.length - 1)
         .trim();
     if (!RegExp('^$item(?:(?:\\s*,\\s*|\\s+)$item)*\$').hasMatch(content)) {
-      throw const FormatException('Malformed citation group');
+      _invalidAnswer('citation_group', 'Malformed citation group');
     }
     for (final match in RegExp(item).allMatches(content)) {
       final first = int.tryParse(match.group(1)!);
@@ -107,7 +127,7 @@ Set<String> citationIds(String text, int limit) {
           last == null ||
           last < first ||
           last - first >= limit) {
-        throw const FormatException('Invalid citation range');
+        _invalidAnswer('citation_range', 'Invalid citation range');
       }
       for (var n = first; ; n++) {
         ids.add('S$n');
