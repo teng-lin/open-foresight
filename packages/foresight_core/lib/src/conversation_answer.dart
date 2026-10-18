@@ -610,7 +610,10 @@ class ConversationAnswer {
           ]);
         yield body;
       }
-      if (status != 'completed' || (!useWeb && !verifiedLocalAnswer)) {
+      final validatedInsufficientContext =
+          !useWeb && verifiedLocalAnswer && status == 'insufficient_context';
+      if ((status != 'completed' && !validatedInsufficientContext) ||
+          (!useWeb && !verifiedLocalAnswer)) {
         if (!useWeb &&
             !verifiedLocalAnswer &&
             status == 'insufficient_context') {

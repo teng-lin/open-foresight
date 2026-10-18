@@ -89,6 +89,59 @@ void main() {
     }
   });
 
+  test(
+    'validated insufficient context remains an owned non-failure result',
+    () async {
+      final directory = Directory.systemTemp.createTempSync(
+        'validated-insufficient-',
+      );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      final store = Store('${directory.path}/app.db');
+      final socket = '${directory.path}/helper.sock';
+      final retrieval = Retrieval()
+        ..document = store.importText(
+          'Atlas',
+          'Mira leads Atlas.',
+          'text/plain',
+          'fixture',
+        );
+      store.state(retrieval.document, 'indexed');
+      final server = Server.create(services: [retrieval]);
+      await server.serve(
+        address: InternetAddress(socket, type: InternetAddressType.unix),
+        port: 0,
+      );
+      final helper = Helper(
+        socket,
+        '${directory.path}/unused',
+        manageProcess: false,
+      );
+      final runtime = DraftRuntime(
+        '{"answer":"Insufficient context","citations":[]}',
+        'completed',
+      );
+      final domain = Domain(store, helper)..generator = runtime;
+      try {
+        final answer = await domain
+            .askInConversation('Who is Unlisted Person90210?', 'fixture')
+            .last;
+        expect(answer, 'Insufficient context');
+        final row = store.rows('SELECT * FROM answers').single;
+        expect(row['status'], 'insufficient_context');
+        expect(row['body'], 'Insufficient context');
+        expect(jsonDecode(row['citations'] as String), isEmpty);
+      } finally {
+        domain.close();
+        runtime.close();
+        await helper.close();
+        await server.shutdown();
+        store.close();
+      }
+    },
+  );
+
   for (final payload in [
     ('{"answer":"Unverified draft [S1, S9]","citations":["S1"]}', 'completed'),
     ('{"answer":"Unverified draft","citations":[1]}', 'completed'),
