@@ -8,11 +8,14 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
-- Native and helper tests run in a separate ThreadSanitizer configuration with a real race-detection probe and retained triage evidence; the initial reporting-only probation expires after one week.
-
-- Python tooling uses 3.13 with matching protobuf type stubs and reproducible lock recipes; current CI guidance is separated from historical measurements and shared dependency pins guard workflow literals.
-
-- Build tooling pins the Dart protobuf compiler and Ubuntu archive snapshot; monthly snapshot changes arrive as draft review PRs. Weekly dependency and vulnerability reports keep lockfile updates visible. Every CI job has a finite timeout.
+- CI pins Python 3.13, Dart protobuf tooling, shared dependency versions and dated Ubuntu archives; monthly snapshot updates arrive as draft review PRs, with weekly dependency and vulnerability reports.
+- Native and helper tests have a separate ThreadSanitizer gate with a real race-detection probe and one-week reporting probation. Software Vulkan acceptance exercises shipped GPU runtimes; release publication requires installer-bound manual GPU evidence.
+- Offline Python and desktop tests enforce measured coverage baselines. Test fixtures share isolated disk-backed temporary paths and cached native stubs, and every optional integration probe has an explicit validation path.
+- Preview and release installers verify PDF/RTF extraction through their installed application service and real document sandbox.
+- Release publication preserves Latest on the highest stable version and correlates fresh candidate builds to their own dispatch. Shared DMG provenance binds preview and release installer bytes to the source revision, version and build number.
+- Linux packages ship the nlohmann-json notice and complete copyright stanzas for bundled license files; unknown licenses stop packaging.
+- Installer workflows publish signed build provenance and SBOM attestations. Dependency artifact downloads verify GitHub ZIP digests.
+- Offline Python tests use directory discovery with an explicit inventory for build and device harnesses. Integration acceptance reports an always-running required check.
 
 ### Security
 
@@ -20,17 +23,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Fixed
 
-- macOS CI consumes the same PR source as dependency producers and builds pinned dependencies locally when no trusted artifact is available, including fork PRs.
-
-### Changed
-
-- Release publication preserves Latest on the highest stable version and correlates fresh candidate builds to their own dispatch. Shared DMG provenance binds preview and release installer bytes to the source revision, version and build number.
-- Linux packages ship the nlohmann-json notice and complete copyright stanzas for bundled license files; unknown licenses stop packaging.
-- Installer workflows publish signed build provenance and SBOM attestations. Dependency artifact downloads verify GitHub ZIP digests.
-- Offline Python tests use directory discovery with an explicit inventory for build and device harnesses. Integration acceptance reports an always-running required check.
-
-### Fixed
-
+- macOS CI consumes the same PR source as dependency producers and waits only for matching trusted producers, with pinned source fallback when no eligible producer exists.
+- Stale CMake Python paths fail before native work. Workspace cleanup waits for observed completion under parallel load; speech GPU-to-CPU retry and cancellation cover both worker protocols.
 - Package upgrades ignore installation locks with invalid ownership, permissions or symlinks, preventing other local users from blocking updates.
 - Clearing a workspace works offline, discards pending meeting drafts and retries helper deletion after reconnect. Stale speech audio is removed on startup.
 - Calendar refresh preserves local edits and deletions and bounds untrusted invitation HTML parsing.
