@@ -18,7 +18,7 @@ class NoteSaveScheduler {
   final _failed = <int, (String, int, int?)>{};
   final _latest = <int, int>{};
   final _accepted = <int, int>{};
-  var _serial = 0, _inFlight = 0;
+  var _serial = 0, _inFlight = 0, _epoch = 0;
   Future<void> _tail = Future.value();
   Future<void> _lastResult = Future.value();
   bool _closed = false;
@@ -48,6 +48,18 @@ class NoteSaveScheduler {
     );
   }
 
+  /// Invalidate drafts before destructive workspace operations.
+  void discardAll() {
+    _epoch++;
+    _timer?.cancel();
+    _timer = null;
+    _pending = null;
+    _failed.clear();
+    _latest.clear();
+    _accepted.clear();
+    _lastResult = Future.value();
+  }
+
   Future<void> flush() {
     _timer?.cancel();
     _timer = null;
@@ -58,17 +70,21 @@ class NoteSaveScheduler {
       drafts[pending.$1] = (pending.$2, pending.$3, pending.$4);
     _pending = null;
     if (drafts.isEmpty) return _lastResult;
+    final epoch = _epoch;
     _inFlight++;
     final result = _tail
         .then((_) async {
           final entries = drafts.entries.toList();
           for (var index = 0; index < entries.length; index++) {
+            if (epoch != _epoch) return;
             final draft = entries[index];
             try {
               await write(draft.key, draft.value.$1, draft.value.$3);
+              if (epoch != _epoch) return;
               _accepted[draft.key] = draft.value.$2;
               onSaved?.call(draft.key);
             } catch (_) {
+              if (epoch != _epoch) return;
               for (final unwritten in entries.skip(index)) {
                 if (_latest[unwritten.key] == unwritten.value.$2) {
                   _failed[unwritten.key] = unwritten.value;
