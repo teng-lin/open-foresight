@@ -1,0 +1,14 @@
+{
+  "tests/integration/test_file_parser.py": "Requires a native build, model runtime or macOS device/SDK; run explicitly through CTest or the integration gate.",
+  "tests/integration/test_model_crypto_keychain.py": "Requires a native build, model runtime or macOS device/SDK; run explicitly through CTest or the integration gate.",
+  "tests/integration/test_model_type.py": "Requires a native build, model runtime or macOS device/SDK; run explicitly through CTest or the integration gate.",
+  "tests/integration/test_native.py": "Requires a native build, model runtime or macOS device/SDK; run explicitly through CTest or the integration gate.",
+  "tests/integration/test_native_process.py": "Requires a native build, model runtime or macOS device/SDK; run explicitly through CTest or the integration gate.",
+  "tests/integration/test_persistent_speech.py": "Requires a native build, model runtime or macOS device/SDK; run explicitly through CTest or the integration gate.",
+  "tests/service/test_service_process.py": "Requires built service, MCP and helper executables; run through the service integration gate.",
+  "tests/service/test_worker_recovery.py": "Requires built service, MCP and helper executables; run through the service integration gate.",
+  "tests/inference/test_grounding_corpus.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions.",
+  "tests/inference/test_native_query.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions.",
+  "tests/inference/test_probe_failure.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions.",
+  "tests/inference/test_raw_query_model.py": "CTest CLI harness with positional executable/model arguments; contains no ordinary pytest test functions."
+}

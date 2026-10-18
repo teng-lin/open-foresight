@@ -7,7 +7,8 @@ import tempfile
 import unittest
 
 spec = importlib.util.spec_from_file_location(
-    "oracle_prepare", Path(__file__).with_name("prepare.py")
+    "oracle_prepare",
+    Path(__file__).resolve().parents[1] / "tools/original_query_oracle/prepare.py",
 )
 if spec is None or spec.loader is None:
     raise RuntimeError("Packaged module has no loader")

@@ -135,11 +135,11 @@ def main(argv=None):
         help="Create a distributable ZIP after signing/notarization",
     )
     args = parser.parse_args(argv)
-    extensions = verify_extensions_manifest(
-        args.litert_extensions_manifest, platform_name="darwin"
-    )
     google_client = release_google_client(
         args.google_client, required=args.require_google_client
+    )
+    extensions = verify_extensions_manifest(
+        args.litert_extensions_manifest, platform_name="darwin"
     )
     web_search_keys = release_web_search_keys()
     if sys.platform != "darwin":
@@ -215,6 +215,10 @@ def main(argv=None):
     values["FORESIGHT_LITERT_LIBRARY"] = library_directory / "liblitert-lm.dylib"
     notices = resources / "licenses"
     notices.mkdir(exist_ok=True)
+    shutil.copy2(
+        ROOT / "packaging/notices/nlohmann-json-LICENSE.MIT",
+        notices / "nlohmann-json-LICENSE.MIT",
+    )
     write_extension_provenance(extensions, notices / "LiteRT-LM-extension.json")
     shutil.copy2(ROOT / "third_party/litert_lm/LICENSE", notices / "LiteRT-LM-LICENSE")
     shutil.copy2(

@@ -9,7 +9,9 @@ import sys
 import tempfile
 import unittest
 
-from google_client_release import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+from google_client_release import (  # noqa: E402
     SECRET_NAME,
     release_google_client,
     write_google_client,
@@ -86,10 +88,15 @@ class GoogleClientReleaseTest(unittest.TestCase):
         self.assertNotIn("private-account-token", str(error.exception))
 
     def test_packagers_reject_unconfigured_release_before_building(self):
-        root = Path(__file__).resolve().parent
+        root = Path(__file__).resolve().parents[1] / "tools"
         for script in ("package.py", "package_macos.py"):
             result = subprocess.run(
-                [sys.executable, str(root / script), "--require-google-client"],
+                [sys.executable, str(root / script), "--require-google-client"]
+                + (
+                    ["--litert-extensions-manifest", "/nonexistent/fixture.json"]
+                    if script == "package_macos.py"
+                    else []
+                ),
                 env={SECRET_NAME: ""},
                 capture_output=True,
                 text=True,

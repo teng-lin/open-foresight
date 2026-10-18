@@ -9,7 +9,7 @@ import tempfile
 import time
 import unittest
 
-LIBRARY = sys.argv.pop(1)
+LIBRARY = sys.argv.pop(1) if __name__ == "__main__" else None
 
 
 class ModelTypeTest(unittest.TestCase):
