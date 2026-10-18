@@ -1,3 +1,4 @@
+import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -23,7 +24,7 @@ class _AudioSegment {
 
 /// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
 /// ephemeral; completed speech segments are committed while capture continues.
-class Recording {
+class Recording implements RecordingStatus {
   final DynamicLibrary lib;
   final Duration speechTimeout, stopTimeout;
   final void Function(String) state;

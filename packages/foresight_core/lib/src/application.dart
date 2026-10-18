@@ -1,3 +1,6 @@
+import 'conversation_answer.dart';
+import 'operations.dart';
+import 'rpc_error.dart';
 import 'audio_devices.dart';
 import 'agent_access.dart';
 import 'web_import.dart';
@@ -6,6 +9,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'domain.dart';
+import 'model_gate.dart';
 import 'recording.dart';
 import 'meeting_speakers.dart';
 import 'proactive_questions.dart';
@@ -37,7 +41,7 @@ import 'package:grpc/grpc.dart';
 
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
-class Application {
+class Application implements ModelGate {
   final Domain domain;
   ImportPolicy? importPolicy;
   Store get store => domain.store;
@@ -218,11 +222,14 @@ class Application {
         await Future.any<void>([
           indexMeeting(id),
           cancelled.future.then(
-            (_) => throw StateError('Automatic answer cancelled'),
+            (_) => throw RpcError(
+              RpcErrorCode.cancelled,
+              'Automatic answer cancelled',
+            ),
           ),
         ]);
         if (cancelled.isCompleted)
-          throw StateError('Automatic answer cancelled');
+          throw RpcError(RpcErrorCode.cancelled, 'Automatic answer cancelled');
         await Future.any<void>([
           domain
               .askInConversation(
@@ -234,11 +241,14 @@ class Application {
               )
               .drain<void>(),
           cancelled.future.then(
-            (_) => throw StateError('Automatic answer cancelled'),
+            (_) => throw RpcError(
+              RpcErrorCode.cancelled,
+              'Automatic answer cancelled',
+            ),
           ),
         ]);
         if (cancelled.isCompleted)
-          throw StateError('Automatic answer cancelled');
+          throw RpcError(RpcErrorCode.cancelled, 'Automatic answer cancelled');
         final saved = store.rows(
           'SELECT id FROM answers WHERE request_id=? ORDER BY id DESC LIMIT 1',
           [request],
@@ -263,7 +273,90 @@ class Application {
     QueryCompletionRuntime? queryRuntime,
   }) : _auth = auth,
        _queryRuntime = queryRuntime,
-       _providedQueryRuntime = queryRuntime != null;
+       _providedQueryRuntime = queryRuntime != null {
+    domain.modelGate = this;
+    _applications[domain] = this;
+  }
+
+  Stream<String> ask(String question) => askInConversation(question, 'desktop');
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => _askInConversation(
+    question,
+    conversation,
+    useWeb: true,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+
+  Stream<String> _askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+    bool useWeb = false,
+  }) => ConversationAnswer(
+    domain,
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+    useWeb: useWeb,
+  ).run();
+  Future<int> autoAssignLabel(String name, {bool Function()? current}) async {
+    name = name.trim();
+    if (name.isEmpty) throw ArgumentError.value(name, 'name');
+    final generation = domain.workspaceGeneration;
+    final all = store.sources;
+    final indexed = all.where((row) => row['state'] == 'indexed').toList();
+    final snapshot = domain.helper.snapshot;
+    final saved = snapshot?.pipeline == 'ready'
+        ? store.loadGraphLayout(
+            jsonEncode([
+              graphLayoutAlgorithmVersion,
+              snapshot!.model.modelDigest,
+              snapshot.model.tokenizerDigest,
+              snapshot.model.preprocessing,
+              snapshot.model.backend,
+              snapshot.model.dimensions,
+            ]),
+            indexed,
+            snapshot.model.dimensions,
+          )
+        : store.loadRegisteredGraphLayout(indexed);
+    final vectors = Map<String, List<double>>.from(saved.vectors);
+    final missing = indexed
+        .where((row) => !vectors.containsKey(row['id']))
+        .toList();
+    if (missing.isNotEmpty)
+      vectors.addAll(await domain.graphEmbeddings(missing));
+    domain.checkWorkspace(generation);
+    if (!(current?.call() ?? true)) {
+      throw RpcError(RpcErrorCode.cancelled, 'Label assignment cancelled');
+    }
+    return store.autoAssignLabel(name, all, vectors);
+  }
 
   Future<List<String>> _detectQuestions(String text, String request) async {
     if (!_providedQueryRuntime) {
@@ -308,7 +401,10 @@ class Application {
       }
     }
     if (!proactive.ownsRequest(request)) {
-      throw StateError('Dedicated query detection cancelled');
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Dedicated query detection cancelled',
+      );
     }
     return ReferenceQueryDetector(
       _queryRuntime!.complete,
@@ -410,21 +506,24 @@ class Application {
     Map<String, dynamic> a, {
     bool Function()? current,
   }) async {
-    if (_closed) throw StateError('Application closed');
-    if (_clearingWorkspace) throw StateError('Workspace is being cleared');
+    if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
+    if (_clearingWorkspace)
+      throw RpcError(RpcErrorCode.busy, 'Workspace is being cleared');
     final generation = domain.workspaceGeneration;
     final callerCurrent = current;
     current = () =>
         generation == domain.workspaceGeneration &&
         (callerCurrent?.call() ?? true);
-    if (!current()) throw StateError('Operation cancelled');
+    if (!current())
+      throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     if (method.startsWith('models.') &&
         method != 'models.cancel_query_acquisition' &&
         (modelBusy ||
             domain.generator?.generating == true ||
             _noteEnhancements.values.any((state) => state.active) ||
             recording != null)) {
-      throw StateError(
+      throw RpcError(
+        RpcErrorCode.busy,
         'Model configuration is busy while generation or recording is active',
       );
     }
@@ -433,18 +532,18 @@ class Application {
         method != 'models.cancel_query_acquisition';
     if (modelOperation) _modelBusy = true;
     try {
-      switch (method) {
-        case 'notifications.capabilities':
+      switch (Operation.parse(method)) {
+        case Operation.notifications_capabilities:
           return await notificationCapabilities();
-        case 'notifications.request_permission':
+        case Operation.notifications_request_permission:
           return await notificationCapabilities(requestPermission: true);
-        case 'audio.capabilities':
+        case Operation.audio_capabilities:
           return audioCapabilities();
-        case 'audio.request_system':
+        case Operation.audio_request_system:
           return await requestSystemAudioPermission();
-        case 'audio.request_microphone':
+        case Operation.audio_request_microphone:
           return await requestMicrophonePermission();
-        case 'status':
+        case Operation.status:
           return {
             'pid': pid,
             'application_api_version': 1,
@@ -466,11 +565,11 @@ class Application {
             'revision': store.dataRevision,
             'google': googleState,
           };
-        case 'sources.list':
+        case Operation.sources_list:
           return store.sourceSummaries;
-        case 'sources.get':
+        case Operation.sources_get:
           return _source(a['id'] as String);
-        case 'sources.import':
+        case Operation.sources_import:
           final id = store.importText(
             a['title'] as String,
             a['text'] as String,
@@ -482,7 +581,7 @@ class Application {
           );
           if (a['index'] != false) await domain.index(id);
           return {'id': id};
-        case 'sources.import_url':
+        case Operation.sources_import_url:
           return {
             'id': await importUrl(
               a['url'] as String,
@@ -490,32 +589,32 @@ class Application {
               allowPrivateNetwork: a['allow_private_network'] == true,
             ),
           };
-        case 'sources.import_directory':
+        case Operation.sources_import_directory:
           await importDirectory(a['path'] as String, current: current);
           return null;
-        case 'sources.refresh':
+        case Operation.sources_refresh:
           await reimport(
             current: current,
             allowPrivateNetwork: a['allow_private_network'] == true,
           );
           return null;
-        case 'sources.import_file':
+        case Operation.sources_import_file:
           return {
             'id': await importFile(a['path'] as String, current: current),
           };
-        case 'sources.index':
+        case Operation.sources_index:
           await domain.index(a['id'] as String);
           return null;
-        case 'sources.delete':
+        case Operation.sources_delete:
           await domain.delete(a['id'] as String);
           return null;
-        case 'sources.pause':
+        case Operation.sources_pause:
           domain.pauseSources();
           return null;
-        case 'sources.resume':
+        case Operation.sources_resume:
           domain.resumeSources();
           return null;
-        case 'sources.search':
+        case Operation.sources_search:
           final allowed = {
             for (final source in store.sourceSummaries)
               if (source['state'] == 'indexed')
@@ -534,7 +633,8 @@ class Application {
               allowedDocumentIds: allowed.keys,
             ),
           );
-          if (!current()) throw StateError('Search cancelled');
+          if (!current())
+            throw RpcError(RpcErrorCode.cancelled, 'Search cancelled');
           return [
             for (final chunk in result.chunks)
               if (allowed.containsKey(chunk.documentId))
@@ -552,12 +652,12 @@ class Application {
                     'trust': 'untrusted',
                   },
           ];
-        case 'answer':
+        case Operation.answer:
           return {
             'text':
                 await (a['web_search'] == true
-                        ? domain.askWithWebInConversation
-                        : domain.askInConversation)(
+                        ? askWithWebInConversation
+                        : askInConversation)(
                       a['question'] as String,
                       a['conversation'] as String? ?? 'desktop',
                       meetingId: a['meeting_id'] as int?,
@@ -566,18 +666,18 @@ class Application {
                     )
                     .last,
           };
-        case 'google.status':
+        case Operation.google_status:
           return googleState;
-        case 'google.configure':
+        case Operation.google_configure:
           await googleAuth.configure(File(a['path'] as String));
           return googleState;
-        case 'google.cancel_sign_in':
+        case Operation.google_cancel_sign_in:
           googleAuth.cancelSignIn();
           return googleState;
-        case 'google.disconnect':
+        case Operation.google_disconnect:
           await googleAuth.disconnect();
           return googleState;
-        case 'google.drive_files':
+        case Operation.google_drive_files:
           return google.driveFiles(
             parent: a['parent'] as String?,
             query: a['query'] as String? ?? '',
@@ -585,34 +685,34 @@ class Application {
                 ? null
                 : DateTime.parse(a['modifiedAfter'] as String),
           );
-        case 'google.import_file':
+        case Operation.google_import_file:
           await google.importDriveFile(a['id'] as String);
           return null;
-        case 'google.import_folder':
+        case Operation.google_import_folder:
           await google.importDriveFolder(a['id'] as String);
           return null;
-        case 'google.import_year':
+        case Operation.google_import_year:
           await google.importLastYear();
           return null;
-        case 'google.refresh':
+        case Operation.google_refresh:
           await google.refresh();
           return googleState;
-        case 'google.calendar':
+        case Operation.google_calendar:
           await google.syncCalendar();
           return null;
-        case 'google.attachments':
+        case Operation.google_attachments:
           await google.importAttachments(a['id'] as int);
           return null;
-        case 'notes.list':
+        case Operation.notes_list:
           return store.rows('SELECT * FROM notes ORDER BY id');
-        case 'notes.save':
+        case Operation.notes_save:
           store.saveNote(
             a['id'] as int?,
             a['title'] as String,
             a['body'] as String,
           );
           return {'id': a['id'] ?? store.db.lastInsertRowId};
-        case 'preferences.set':
+        case Operation.preferences_set:
           if (a['key'] == 'echoCancellation') {
             final enabled = a['value'] == 'true';
             if (enabled && !Platform.isMacOS)
@@ -624,13 +724,13 @@ class Application {
           store.setPreference(a['key'] as String, a['value'] as String);
           if (a['key'] == 'proactiveAnswers') proactive.wake();
           return null;
-        case 'meetings.list':
+        case Operation.meetings_list:
           return store.rows(
             'SELECT m.*,d.created,d.reminder FROM meetings m LEFT JOIN meeting_details d ON d.meeting_id=m.id ORDER BY m.id',
           );
-        case 'meetings.create':
+        case Operation.meetings_create:
           return {'id': store.meeting(a['title'] as String)};
-        case 'meetings.get':
+        case Operation.meetings_get:
           final id = a['id'] as int;
           return {
             'meeting': _meeting(id),
@@ -664,24 +764,27 @@ class Application {
               [id],
             ),
           };
-        case 'meetings.retry_question':
+        case Operation.meetings_retry_question:
           proactive.retry(a['id'] as int);
           return null;
-        case 'meetings.retry_detection':
+        case Operation.meetings_retry_detection:
           final id = a['id'] as int;
           _meeting(id);
           proactive.notify(id);
           return null;
-        case 'meetings.link_answer':
+        case Operation.meetings_link_answer:
           store.db.execute(
             'INSERT OR IGNORE INTO meeting_answers(meeting_id,answer_id) VALUES(?,?)',
             [a['id'], a['answer']],
           );
           return null;
-        case 'workspace.clear':
+        case Operation.workspace_clear:
           google;
           if (recording != null)
-            throw StateError('Stop recording before clearing the workspace');
+            throw RpcError(
+              RpcErrorCode.busy,
+              'Stop recording before clearing the workspace',
+            );
           for (final timer in _enhance.values) {
             timer.cancel();
           }
@@ -750,7 +853,7 @@ class Application {
             }
           }
           return null;
-        case 'meetings.notes':
+        case Operation.meetings_notes:
           final noteId = a['id'] as int;
           _meeting(noteId);
           final oldNotes = store.rows(
@@ -775,7 +878,7 @@ class Application {
             );
           }
           return null;
-        case 'meetings.transcript':
+        case Operation.meetings_transcript:
           final id = a['id'] as int;
           _meeting(id);
           store.transcript(
@@ -793,10 +896,10 @@ class Application {
           }
           await indexMeeting(id);
           return null;
-        case 'meetings.index':
+        case Operation.meetings_index:
           await indexMeeting(a['id'] as int);
           return null;
-        case 'meetings.generate':
+        case Operation.meetings_generate:
           await generateMeeting(
             a['id'] as int,
             a['kind'] as String,
@@ -804,7 +907,7 @@ class Application {
             current: current,
           );
           return null;
-        case 'meetings.enhance':
+        case Operation.meetings_enhance:
           await enhanceNotes(
             a['id'] as int,
             forceRegenerate: a['force_regenerate'] == true,
@@ -812,7 +915,7 @@ class Application {
             current: current,
           );
           return null;
-        case 'meetings.cancel_enhance':
+        case Operation.meetings_cancel_enhance:
           final enhancement = _noteEnhancements[a['id'] as int];
           if (enhancement == null ||
               !enhancement.active ||
@@ -821,19 +924,19 @@ class Application {
           enhancement.cancelRequested = true;
           changed();
           return true;
-        case 'meetings.start':
+        case Operation.meetings_start:
           await startRecording(a['id'] as int);
           return captureState;
-        case 'meetings.stop':
+        case Operation.meetings_stop:
           await stopRecording();
           return captureState;
-        case 'meetings.pause':
+        case Operation.meetings_pause:
           pauseRecording(a['id'] as int?);
           return captureState;
-        case 'meetings.resume':
+        case Operation.meetings_resume:
           resumeRecording(a['id'] as int?);
           return captureState;
-        case 'artifacts.edit':
+        case Operation.artifacts_edit:
           final selectedBeforeEdit = store.rows(
             "SELECT selected.meeting_id,selected.edited,selected.generated FROM artifacts AS selected WHERE selected.id=? AND selected.kind='enhanced_notes' AND NOT EXISTS (SELECT 1 FROM artifacts AS newer WHERE newer.meeting_id=selected.meeting_id AND newer.kind=selected.kind AND newer.id>selected.id)",
             [a['id']],
@@ -875,10 +978,10 @@ class Application {
             }
           }
           return null;
-        case 'models.cancel_query_acquisition':
+        case Operation.models_cancel_query_acquisition:
           await _queryAcquisition?.close();
           return null;
-        case 'models.acquire_query':
+        case Operation.models_acquire_query:
           final acquisition = DedicatedQueryAcquisition.distribution(store);
           _queryAcquisition = acquisition;
           _queryDownloadReceived = _queryDownloadTotal = 0;
@@ -897,7 +1000,7 @@ class Application {
             changed();
           }
           return null;
-        case 'models.speech':
+        case Operation.models_speech:
           await configureSpeech(
             store,
             File(a['path'] as String),
@@ -906,7 +1009,7 @@ class Application {
             current: () => !_closed && (current?.call() ?? true),
           );
           return null;
-        case 'models.register':
+        case Operation.models_register:
           if (a['kind'] == dedicatedQueryModelKind) {
             if (a['backend'] != null && a['backend'] != dedicatedQueryBackend)
               throw StateError('Unsupported dedicated question model backend');
@@ -929,7 +1032,7 @@ class Application {
             current: () => !_closed && (current?.call() ?? true),
           );
           return null;
-        case 'models.generation':
+        case Operation.models_generation:
           final candidate = await configureGeneration(
             store,
             runtimeConfiguration.nativeLibrary,
@@ -942,7 +1045,7 @@ class Application {
           domain.generator?.close();
           domain.generator = candidate;
           return null;
-        case 'models.embedding':
+        case Operation.models_embedding:
           requireEmbeddingBundle(a['path'] as String);
           final result = await domain.helper.client.updateModelPaths(
             UpdateModelPathsRequest(
@@ -967,17 +1070,19 @@ class Application {
             current: () => !_closed && (current?.call() ?? true),
           );
           return null;
-        case 'application.resume':
+        case Operation.application_resume:
           await domain.helper.recover();
           await domain.resume();
           return null;
-        case 'graph.embeddings':
+        case Operation.graph_embeddings:
           return domain.graphEmbeddings(
             (a['sources'] as List)
                 .map((s) => Map<String, Object?>.from(s as Map))
                 .toList(),
           );
-        case 'labels.put':
+        case Operation.labels_auto_assign:
+          return await autoAssignLabel(a['name'] as String, current: current);
+        case Operation.labels_put:
           store.putDocumentLabel(
             DocumentLabel(
               a['id'] as String,
@@ -988,22 +1093,22 @@ class Application {
             ),
           );
           return null;
-        case 'labels.set':
+        case Operation.labels_set:
           store.labels(a['id'] as String, (a['labels'] as List).cast<String>());
           return null;
-        case 'labels.cluster':
+        case Operation.labels_cluster:
           store.saveLabelCluster(a['name'] as String);
           return null;
-        case 'labels.delete':
+        case Operation.labels_delete:
           store.deleteOrganizationLabel(a['name'] as String);
           return null;
-        case 'graph.invalidate':
+        case Operation.graph_invalidate:
           store.invalidateGraphOrganization();
           return null;
-        case 'graph.acknowledge':
+        case Operation.graph_acknowledge:
           store.acknowledgeGraphLabelRemoval();
           return null;
-        case 'graph.save':
+        case Operation.graph_save:
           return store.saveGraphLayout(
             a['identity'] as String,
             (a['sources'] as List)
@@ -1033,32 +1138,27 @@ class Application {
                 )
                 .toList(),
           );
-        default:
-          throw ArgumentError('Unknown application operation: $method');
+        case Operation.answer_stream:
+        case Operation.google_sign_in:
+        case Operation.security_attach_desktop:
+        case Operation.security_detach_desktop:
+        case Operation.security_decide:
+        case Operation.security_allow_import_root:
+        case Operation.service_stop_if_idle:
+          throw RpcError(
+            RpcErrorCode.invalidArgument,
+            'Operation requires service dispatch: $method',
+          );
       }
     } finally {
       if (modelOperation) _modelBusy = false;
-      if (!{
-        'status',
-        'audio.capabilities',
-        'notifications.capabilities',
-        'sources.list',
-        'sources.get',
-        'sources.search',
-        'notes.list',
-        'meetings.list',
-        'meetings.get',
-        'google.status',
-        'google.drive_files',
-        'graph.embeddings',
-      }.contains(method))
-        changed();
+      if (Operation.parse(method).notifiesChanges) changed();
     }
   }
 
   Stream<Object?> signIn(String owner) async* {
     if (_signInOwner != null)
-      throw StateError('Google sign-in is already open');
+      throw RpcError(RpcErrorCode.busy, 'Google sign-in is already open');
     _signInOwner = owner;
     final invitation = Completer<Uri>();
     final signedIn = googleAuth.signIn((uri) async {
@@ -1090,7 +1190,8 @@ class Application {
     final rows = store.rows('SELECT * FROM sources WHERE id=? AND deleted=0', [
       id,
     ]);
-    if (rows.isEmpty) throw StateError('Source not found: $id');
+    if (rows.isEmpty)
+      throw RpcError(RpcErrorCode.notFound, 'Source not found: $id');
     return {
       ...rows.single,
       'trust': 'untrusted',
@@ -1101,7 +1202,8 @@ class Application {
 
   Map<String, Object?> _meeting(int id) {
     final rows = store.rows('SELECT * FROM meetings WHERE id=?', [id]);
-    if (rows.isEmpty) throw StateError('Meeting not found: $id');
+    if (rows.isEmpty)
+      throw RpcError(RpcErrorCode.notFound, 'Meeting not found: $id');
     return rows.single;
   }
 
@@ -1119,7 +1221,10 @@ class Application {
     final modified = (await file.stat()).modified.millisecondsSinceEpoch;
     domain.checkWorkspace(generation);
     if (current != null && !current())
-      throw StateError('Import cancelled or source changed');
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Import cancelled or source changed',
+      );
 
     final uri = Uri.file(file.path).toString();
     final existing = store.sources
@@ -1153,7 +1258,8 @@ class Application {
       current: current,
     );
     domain.checkWorkspace(generation);
-    if (current != null && !current()) throw StateError('Operation cancelled');
+    if (current != null && !current())
+      throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     final existing = store.sources
         .where((s) => s['provenance'] == 'url:$uri')
         .firstOrNull;
@@ -1187,7 +1293,7 @@ class Application {
     for (final file in files) {
       domain.checkWorkspace(generation);
       if (current != null && !current())
-        throw StateError('Operation cancelled');
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
       try {
         await importFile(file.path, current: current);
       } catch (e) {
@@ -1209,7 +1315,7 @@ class Application {
     for (final s in store.sources) {
       domain.checkWorkspace(generation);
       if (current != null && !current())
-        throw StateError('Operation cancelled');
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
       if ((s['provenance'] as String).startsWith('user edit; ')) continue;
       bool sourceCurrent() =>
           (current?.call() ?? true) &&
@@ -1217,18 +1323,23 @@ class Application {
             'SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0',
             [s['id'], s['revision']],
           ).isNotEmpty;
-      final path = (s['provenance'] as String).split('; ').last;
+      final sourceUri = Uri.tryParse(s['source_uri'] as String? ?? '');
       try {
-        if (path.startsWith('url:')) {
+        if (sourceUri != null && ['http', 'https'].contains(sourceUri.scheme)) {
           await importUrl(
-            path.substring(4),
+            sourceUri.toString(),
             current: sourceCurrent,
             allowPrivateNetwork: allowPrivateNetwork,
           );
-        } else if (File(path).existsSync()) {
+        } else if (sourceUri != null && sourceUri.scheme == 'file') {
+          final path = sourceUri.toFilePath();
+          if (!File(path).existsSync()) {
+            throw RpcError(
+              RpcErrorCode.notFound,
+              'Imported file is missing: $path',
+            );
+          }
           await importFile(path, current: sourceCurrent);
-        } else if (path.startsWith('/')) {
-          throw StateError('Imported file is missing: $path');
         } else {
           await domain.index(s['id'] as String);
         }
@@ -1294,7 +1405,8 @@ class Application {
     bool Function()? current,
   }) async {
     final generation = domain.workspaceGeneration;
-    if (current != null && !current()) throw StateError('Generation cancelled');
+    if (current != null && !current())
+      throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
 
     if (![
       'summary',
@@ -1324,7 +1436,8 @@ class Application {
       current: current,
     );
     domain.checkWorkspace(generation);
-    if (current != null && !current()) throw StateError('Generation cancelled');
+    if (current != null && !current())
+      throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
 
     store.artifact(
       id,
@@ -1353,10 +1466,13 @@ class Application {
     final generation = domain.workspaceGeneration;
     await Future<void>.value();
     domain.checkWorkspace(generation);
-    if (current != null && !current()) throw StateError('Generation cancelled');
-    if (modelBusy) throw StateError('Model configuration is busy');
+    if (current != null && !current())
+      throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+    if (modelBusy)
+      throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
     final generator = domain.generator;
-    if (generator == null) throw StateError('Generation model unavailable');
+    if (generator == null)
+      throw RpcError(RpcErrorCode.unavailable, 'Generation model unavailable');
     var result = '', status = 'failed', failure = '';
     await for (final event in generator.generate(
       requestId ?? '$prefix-${DateTime.now().microsecondsSinceEpoch}',
@@ -1366,7 +1482,7 @@ class Application {
     )) {
       domain.checkWorkspace(generation);
       if (current != null && !current())
-        throw StateError('Generation cancelled');
+        throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
       if (event['type'] == 'delta') {
         result += event['text'] as String;
         onText?.call(result);
@@ -1375,9 +1491,14 @@ class Application {
       if (event['type'] == 'error') failure = event['message'].toString();
     }
     domain.checkWorkspace(generation);
-    if (current != null && !current()) throw StateError('Generation cancelled');
+    if (current != null && !current())
+      throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
 
-    if (status != 'completed') throw StateError('Generation $status: $failure');
+    if (status != 'completed')
+      throw RpcError(
+        status == 'cancelled' ? RpcErrorCode.cancelled : RpcErrorCode.internal,
+        'Generation $status: $failure',
+      );
     return result;
   }
 
@@ -1433,8 +1554,9 @@ class Application {
     String? requestId,
     bool Function()? current,
   }) async {
-    if (current != null && !current()) throw StateError('Generation cancelled');
-    if (_closed) throw StateError('Application closed');
+    if (current != null && !current())
+      throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
+    if (_closed) throw RpcError(RpcErrorCode.unavailable, 'Application closed');
     if (domain.generator?.generating == true ||
         _noteEnhancements.values.any((state) => state.active)) {
       if (deferWhenBusy) {
@@ -1451,7 +1573,7 @@ class Application {
         }
         return;
       }
-      throw StateError('Generation already in progress');
+      throw RpcError(RpcErrorCode.busy, 'Generation already in progress');
     }
     final notes = store.rows(
       'SELECT body,revision FROM meeting_notes WHERE meeting_id=?',
@@ -1500,7 +1622,8 @@ class Application {
       if (forceRegenerate) mapping.accepted.clear();
       final producer = ReferenceNoteEnhancer(
         ensureReady: () async {
-          if (modelBusy) throw StateError('Model configuration is busy');
+          if (modelBusy)
+            throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
           generator = await acquireNoteEnhancementService<NativeRuntime>(
             getService: domain.noteEnhancementService,
             isReady: (service) => service.loaded,
@@ -1525,7 +1648,7 @@ class Application {
               enhancement.cancelRequested ||
               !(current?.call() ?? true) ||
               !identical(_noteEnhancements[id], enhancement)) {
-            throw StateError('Generation cancelled');
+            throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
           }
         },
         loadEmbeddedTranscript: () =>
@@ -1567,7 +1690,7 @@ class Application {
             enhancement.cancelRequested ||
             !(current?.call() ?? true) ||
             !identical(_noteEnhancements[id], enhancement)) {
-          throw StateError('Generation cancelled');
+          throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
         }
         if (isNoteEnhancementStatus(text)) {
           enhancement.status = text;
@@ -1582,7 +1705,7 @@ class Application {
           enhancement.cancelRequested ||
           !(current?.call() ?? true) ||
           !identical(_noteEnhancements[id], enhancement))
-        throw StateError('Generation cancelled');
+        throw RpcError(RpcErrorCode.cancelled, 'Generation cancelled');
       enhancement.saveTimer?.cancel();
       store.artifact(
         id,
@@ -1703,9 +1826,11 @@ class Application {
   }
 
   Future<void> startRecording(int id) async {
-    if (modelBusy) throw StateError('Model configuration is busy');
+    if (modelBusy)
+      throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
     _meeting(id);
-    if (recording != null) throw StateError('A meeting is already recording');
+    if (recording != null)
+      throw RpcError(RpcErrorCode.busy, 'A meeting is already recording');
     final speech = store.model('speech');
     if (speech == null)
       throw StateError('Register speech model and whisper.cpp runner first');
@@ -1814,10 +1939,10 @@ class Application {
   Recording _activeRecording(int? id) {
     final active = recording;
     if (active == null || (id != null && id != recordingMeeting)) {
-      throw StateError('No matching active recording');
+      throw RpcError(RpcErrorCode.notFound, 'No matching active recording');
     }
     if (active.finishing || _stopping != null) {
-      throw StateError('Transcription is finalizing');
+      throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     }
     return active;
   }
@@ -1877,6 +2002,10 @@ class Application {
           : 'completed';
     } finally {
       recording = null;
+      recordingMeeting = null;
+      recordingBegan = null;
+      _recordingPausedAt = null;
+      _recordingPausedMs = 0;
       provisionalTranscript.clear();
       proactive.clearInterim(id);
       store.db.execute('UPDATE meetings SET state=? WHERE id=?', [status, id]);
@@ -1935,4 +2064,48 @@ class _NoteEnhancement {
     'cancel_requested': cancelRequested,
     'active_index': activeIndex,
   };
+}
+
+// Convenience composition for tools/tests; Domain never imports or constructs
+// its orchestrator. The service explicitly owns the Application lifecycle.
+final _applications = Expando<Application>();
+
+extension ApplicationDomain on Domain {
+  Application get application => _applications[this] ?? Application(this);
+  Stream<String> ask(String question) => application.ask(question);
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => application.askWithWebInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  Future<Object?> command(
+    String method, [
+    Map<String, dynamic> args = const {},
+  ]) => application.call(method, args);
+  Future<Object?> commandCurrent(
+    String method,
+    Map<String, dynamic> args,
+    bool Function() current,
+  ) => application.call(method, args, current: current);
 }

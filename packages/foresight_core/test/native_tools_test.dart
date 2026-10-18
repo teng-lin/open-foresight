@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:test/test.dart';
@@ -101,6 +102,46 @@ print('answer '+json.dumps(answer),flush=True)
         runtime.close();
         await directory.delete(recursive: true);
       });
+
+      test(
+        'non-encodable payloads release the request before native string allocation',
+        () async {
+          await expectLater(
+            runtime
+                .generateWithTools(
+                  'invalid-tools',
+                  'Question',
+                  tools: [
+                    {'bad': Object()},
+                  ],
+                  dispatcher: ReferenceToolDispatcher({}),
+                )
+                .toList(),
+            throwsA(isA<JsonUnsupportedObjectError>()),
+          );
+          expect(runtime.generating, false);
+          await expectLater(
+            runtime
+                .generate(
+                  'invalid-schema',
+                  'Question',
+                  responseSchema: {'bad': Object()},
+                )
+                .toList(),
+            throwsA(isA<JsonUnsupportedObjectError>()),
+          );
+          expect(runtime.generating, false);
+          final events = await runtime
+              .generateWithTools(
+                'valid-after-invalid',
+                'Stream question',
+                tools: [referenceGoogleSearchTool()],
+                dispatcher: ReferenceToolDispatcher({}),
+              )
+              .toList();
+          expect(events.last['status'], 'completed');
+        },
+      );
 
       test(
         'stream previews arrive before the single authoritative answer',

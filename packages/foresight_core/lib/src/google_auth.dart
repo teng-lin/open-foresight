@@ -1,3 +1,4 @@
+import 'desktop_connection.dart';
 import 'secret_store.dart';
 export 'secret_store.dart';
 import 'platform_services.dart';
@@ -57,7 +58,7 @@ class GoogleClient {
 
 /// OAuth access never uses another application's tokens. Loopback listener,
 /// PKCE and state validation bind consent to this app's sign-in attempt.
-class GoogleAuth {
+class GoogleAuth implements GoogleAccount {
   static const scopes = [
     'openid',
     'email',

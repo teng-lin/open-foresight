@@ -1,6 +1,6 @@
 #include "helper_control.grpc.pb.h"
 #include "model.h"
-#include "research/xeno/labs/foresight/launch_agent/proto/rag_service.grpc.pb.h"
+#include "rag_service.grpc.pb.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -21,7 +21,7 @@
 #include <thread>
 #include <unistd.h>
 using json = nlohmann::json;
-namespace rpc = research::xeno::labs::foresight::launch_agent::proto;
+namespace rpc = foresight::helper::v1;
 namespace ctl = foresight::linux::control::v1;
 namespace fs = std::filesystem;
 using grpc::Status;
@@ -218,12 +218,16 @@ class Service : public rpc::RagService::Service,
                   : "Pipeline not initialized"};
   }
   template <class Response>
-  Status app_error(Response *r, const std::exception &e) {
-    r->set_success(false);
-    r->set_error_message(e.what());
+  Status app_error(Response *r, const std::exception &e,
+                   grpc::ServerContext *context) {
+    (void)r;
     state.set_last_error(e.what());
     changed();
-    return Status::OK;
+    return {context->IsCancelled() ? StatusCode::CANCELLED
+            : dynamic_cast<const std::invalid_argument *>(&e)
+                ? StatusCode::INVALID_ARGUMENT
+                : StatusCode::FAILED_PRECONDITION,
+            e.what()};
   }
   std::string model_identity(const Model &m) {
     return json({"index-model-v1", m.digest, m.tokenizer_digest,
@@ -381,7 +385,7 @@ public:
                 ? req->use_gpu()
                 : (req->embedding_model_path().empty() ? use_gpu : false);
         if (!req->sentence_piece_model_path().empty())
-          throw std::runtime_error(
+          throw std::invalid_argument(
               "External SentencePiece unsupported: tokenizer is owned by the "
               "registered embedding model");
         if (context->IsCancelled())
@@ -496,7 +500,7 @@ public:
       state.set_failed(state.failed() + 1);
       state.set_pipeline(model ? "ready" : "failed");
       state.set_index(model ? "degraded" : "failed");
-      return app_error(r, e);
+      return app_error(r, e, context);
     }
   }
   Status IndexDocument(grpc::ServerContext *context,
@@ -515,7 +519,7 @@ public:
         if (!model)
           throw std::runtime_error("Pipeline not initialized");
         if (req->document_id().empty())
-          throw std::runtime_error("Document ID is empty");
+          throw std::invalid_argument("Document ID is empty");
         if (!req->image_bytes().empty() ||
             req->mime_type().starts_with("image/"))
           throw std::runtime_error(
@@ -582,17 +586,18 @@ public:
       return Status::OK;
     } catch (const std::exception &e) {
       std::lock_guard lock(mu);
-      return app_error(r, e);
+      return app_error(r, e, context);
     }
   }
-  Status DeleteDocument(grpc::ServerContext *, const rpc::DeleteRequest *req,
+  Status DeleteDocument(grpc::ServerContext *context,
+                        const rpc::DeleteRequest *req,
                         rpc::DeleteResponse *r) override {
     ReconfigGuard guard(*this);
     guard.enter();
     std::lock_guard lock(mu);
     try {
       if (req->document_id().empty())
-        throw std::runtime_error("Document ID is empty");
+        throw std::invalid_argument("Document ID is empty");
       Tx tx(*this);
       std::vector<std::string> ids{req->document_id()};
       if (req->document_id().starts_with("file://"))
@@ -622,7 +627,7 @@ public:
       r->set_success(true);
       return Status::OK;
     } catch (const std::exception &e) {
-      return app_error(r, e);
+      return app_error(r, e, context);
     }
   }
   Status RetrieveContext(grpc::ServerContext *, const rpc::RetrieveRequest *req,

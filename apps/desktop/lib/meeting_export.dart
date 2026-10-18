@@ -66,35 +66,7 @@ MeetingExportContent composeMeetingExport(Store store, {DateTimeRange? range}) {
   final output = <String>[];
   // Acquire the original global note limit before excluding empty bodies or
   // applying date filters. Legacy NULL save times retain SQLite's DESC order.
-  final notesToExport = store.rows(
-    'WITH candidates(note_type,note_id,timestamp) AS ('
-    'SELECT 0,meeting_id,timestamp FROM meeting_notes UNION ALL '
-    'SELECT 1,id,timestamp FROM notes), '
-    'acquired AS (SELECT * FROM candidates ORDER BY timestamp DESC LIMIT 1000) '
-    'SELECT * FROM ('
-    'SELECT meetings.id,meetings.title,meeting_notes.body,'
-    'COALESCE(meeting_notes.enhanced_body,(SELECT COALESCE(edited,generated) FROM artifacts '
-    "WHERE artifacts.meeting_id=meetings.id AND kind='enhanced_notes' "
-    'ORDER BY id DESC LIMIT 1)) AS enhanced_body,'
-    'COALESCE(calendar_events.starts,meeting_notes.timestamp,meeting_details.created,0) AS export_date,'
-    'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata,'
-    '(SELECT title FROM meeting_note_events WHERE meeting_id=meetings.id '
-    'AND event_key=note_event.event_key AND title!=\'\' ORDER BY id DESC LIMIT 1) AS association_title '
-    'FROM acquired JOIN meetings ON acquired.note_type=0 AND meetings.id=acquired.note_id '
-    'JOIN meeting_notes ON meeting_notes.meeting_id=meetings.id '
-    'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
-    'LEFT JOIN meeting_note_events AS note_event ON note_event.id=('
-    'SELECT id FROM meeting_note_events WHERE meeting_id=meetings.id '
-    'AND event_key!=\'\' ORDER BY id LIMIT 1) '
-    'LEFT JOIN calendar_events ON calendar_events.event_key=COALESCE(note_event.event_key,('
-    'SELECT event_key FROM calendar_events AS export_event '
-    'WHERE export_event.meeting_id=meetings.id ORDER BY export_event.rowid LIMIT 1'
-    ')) UNION ALL '
-    'SELECT notes.id,notes.title,notes.body,NULL AS enhanced_body,'
-    'COALESCE(notes.timestamp,0) AS export_date,NULL AS export_end,NULL AS export_metadata,NULL AS association_title '
-    'FROM acquired JOIN notes ON acquired.note_type=1 AND notes.id=acquired.note_id'
-    ') ORDER BY export_date DESC,id',
-  );
+  final notesToExport = store.exportNotes();
   for (final meeting in notesToExport) {
     final date = meeting['export_date'] as int;
     if (lower != null && (date < lower || date >= upper!)) continue;

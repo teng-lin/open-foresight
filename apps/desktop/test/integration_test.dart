@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
