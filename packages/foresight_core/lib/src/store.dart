@@ -1140,23 +1140,36 @@ class Store {
 class Parser {
   final bool _macOS;
   final String? _macParser;
-  final String linuxPdfParser, linuxRtfParser;
+  final Duration extractionTimeout;
+  final Future<Process> Function(String, List<String>) _startProcess;
   Parser({
     bool? macOS,
     String? macParser,
-    this.linuxPdfParser = 'pdftotext',
-    this.linuxRtfParser = 'unrtf',
+    this.extractionTimeout = const Duration(seconds: 30),
+    Future<Process> Function(String, List<String>)? startProcess,
   }) : _macOS = macOS ?? Platform.isMacOS,
-       _macParser = macParser;
+       _macParser = macParser,
+       _startProcess =
+           startProcess ??
+           ((executable, arguments) => Process.start(
+             executable,
+             arguments,
+             includeParentEnvironment: false,
+             environment: {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
+           ));
+
   Future<ProcessResult> _extractProcess(
     String executable,
     List<String> arguments,
   ) async {
-    final process = await Process.start(executable, arguments);
-    final timer = Timer(
-      const Duration(seconds: 30),
-      () => process.kill(ProcessSignal.sigkill),
-    );
+    if (!executable.startsWith('/'))
+      throw StateError('Extractor must use an absolute path');
+    final process = await _startProcess(executable, arguments);
+    var expired = false;
+    final timer = Timer(extractionTimeout, () {
+      expired = true;
+      process.kill(ProcessSignal.sigkill);
+    });
     Future<String> bounded(Stream<List<int>> stream) async {
       final bytes = <int>[];
       await for (final chunk in stream) {
@@ -1174,28 +1187,78 @@ class Parser {
         bounded(process.stdout),
         bounded(process.stderr),
       ]);
-      return ProcessResult(
-        process.pid,
-        await process.exitCode,
-        output[0],
-        output[1],
-      );
+      final code = await process.exitCode;
+      if (expired)
+        throw TimeoutException(
+          'Document extraction timed out',
+          extractionTimeout,
+        );
+      return ProcessResult(process.pid, code, output[0], output[1]);
     } finally {
       timer.cancel();
     }
   }
 
-  Future<ProcessResult> _linuxExtract(
+  Future<ProcessResult> _linuxExtractor(
     String tool,
-    List<String> arguments,
-    String dependency,
+    String path,
+    List<String> options,
   ) async {
+    final file = File(path).resolveSymbolicLinksSync();
+    final isolated = '/input/document${tool == 'pdftotext' ? '.pdf' : '.rtf'}';
+    // A fresh user/PID/network/mount namespace exposes only system runtime
+    // libraries and the one selected input. Profile files and credentials are
+    // absent. Failure to establish the sandbox fails the import closed.
     try {
-      return await _extractProcess(tool, arguments);
+      return await _extractProcess('/usr/bin/bwrap', [
+        '--unshare-all',
+        '--die-with-parent',
+        '--new-session',
+        '--cap-drop',
+        'ALL',
+        '--ro-bind',
+        '/usr',
+        '/usr',
+        '--ro-bind-try',
+        '/lib',
+        '/lib',
+        '--ro-bind-try',
+        '/lib64',
+        '/lib64',
+        '--ro-bind-try',
+        '/etc/fonts',
+        '/etc/fonts',
+        '--proc',
+        '/proc',
+        '--dev',
+        '/dev',
+        '--tmpfs',
+        '/tmp',
+        '--dir',
+        '/input',
+        '--ro-bind',
+        file,
+        isolated,
+        '--chdir',
+        '/input',
+        '--clearenv',
+        '--setenv',
+        'HOME',
+        '/tmp',
+        '--setenv',
+        'PATH',
+        '/nonexistent',
+        '--',
+        '/usr/bin/$tool',
+        ...options,
+        isolated,
+        if (tool == 'pdftotext') '-',
+      ]);
     } on ProcessException catch (error) {
+      final dependency = tool == 'pdftotext' ? 'poppler-utils' : 'unrtf';
       throw StateError(
-        'Cannot launch $tool. Install the Linux import dependency '
-        '($dependency): ${error.message}',
+        'Cannot launch the Linux document sandbox. Install the Linux import dependencies '
+        '(bubblewrap and $dependency): ${error.message}',
       );
     }
   }
@@ -1239,21 +1302,13 @@ class Parser {
       );
     }
     if (lower.endsWith('.pdf')) {
-      final r = await _linuxExtract(linuxPdfParser, [
-        '-layout',
-        path,
-        '-',
-      ], 'poppler-utils');
+      final r = await _linuxExtractor('pdftotext', path, ['-layout']);
       if (r.exitCode != 0)
         throw StateError('PDF extraction failed: ${r.stderr}');
       return (r.stdout as String, 'pdftotext -layout (Linux adapter)');
     }
     if (lower.endsWith('.rtf')) {
-      final r = await _linuxExtract(linuxRtfParser, [
-        '--text',
-        '--quiet',
-        path,
-      ], 'unrtf');
+      final r = await _linuxExtractor('unrtf', path, ['--text', '--quiet']);
       if (r.exitCode != 0)
         throw StateError('RTF extraction failed: ${r.stderr}');
       // unrtf 0.21 emits metadata before this separator even in text mode.
