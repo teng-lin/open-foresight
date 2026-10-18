@@ -87,13 +87,31 @@ def missing_timeouts(source: str) -> list[int]:
     return missing
 
 
-def main() -> int:
+def source_files(root: Path) -> list[str]:
+    # Check new source before staging too; otherwise local success can become a
+    # CI failure solely because git add made an unchecked file visible.
     files = subprocess.check_output(
-        ["git", "ls-files", "*.py"], cwd=ROOT, text=True, timeout=30
-    ).splitlines()
+        [
+            "git",
+            "ls-files",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "*.py",
+        ],
+        cwd=root,
+        text=True,
+        timeout=30,
+    ).split("\0")
+    return sorted({name for name in files if name and (root / name).is_file()})
+
+
+def main(root: Path = ROOT) -> int:
     failed = False
-    for name in files:
-        for line in missing_timeouts((ROOT / name).read_text()):
+    for name in source_files(root):
+        for line in missing_timeouts((root / name).read_text()):
             print(f"{name}:{line}: subprocess call requires a finite timeout")
             failed = True
     return int(failed)

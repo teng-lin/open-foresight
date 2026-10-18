@@ -3,6 +3,7 @@
 from copy import deepcopy
 import io
 import json
+import os
 import shutil
 import subprocess
 import tarfile
@@ -30,8 +31,8 @@ def source(tmp_path):
         destination = root / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(sdk.ROOT / name, destination)
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
-    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True, timeout=30)
+    subprocess.run(["git", "add", "."], cwd=root, check=True, timeout=30)
     subprocess.run(
         [
             "git",
@@ -45,6 +46,7 @@ def source(tmp_path):
         ],
         cwd=root,
         check=True,
+        timeout=30,
     )
     return root
 
@@ -397,7 +399,9 @@ def test_tampered_archive_cannot_escape_prefix(tmp_path):
 def test_workflow_retains_legacy_keys_and_publishes_before_application_checks():
     current = yaml.safe_load((sdk.ROOT / sdk.WORKFLOW).read_text())
     old = yaml.safe_load(
-        subprocess.check_output(["git", "show", "HEAD:" + sdk.WORKFLOW], cwd=sdk.ROOT)
+        subprocess.check_output(
+            ["git", "show", "HEAD:" + sdk.WORKFLOW], cwd=sdk.ROOT, timeout=30
+        )
     )
     for kind, job in sdk.JOBS.items():
         steps = current["jobs"][job]["steps"]
@@ -435,6 +439,46 @@ def test_workflow_retains_legacy_keys_and_publishes_before_application_checks():
     assert current["permissions"]["actions"] == "read"
 
 
+def test_container_workspace_trust_persists_for_provenance_checks(tmp_path):
+    workflow = yaml.safe_load((sdk.ROOT / sdk.WORKFLOW).read_text())
+    steps = workflow["jobs"][sdk.JOBS["address"]]["steps"]
+    checkout = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    trust = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("name")
+        == "Trust this checked-out workspace for container Git provenance checks"
+    )
+    qualification = next(
+        i
+        for i, step in enumerate(steps)
+        if "ci_sanitizer_artifacts.py restore" in step.get("run", "")
+    )
+    assert checkout < trust < qualification
+    workspace = tmp_path / "workspace with spaces"
+    workspace.mkdir()
+    environment = {
+        **os.environ,
+        "GITHUB_WORKSPACE": str(workspace),
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }
+    subprocess.run(
+        ["sh", "-ec", steps[trust]["run"]], env=environment, check=True, timeout=30
+    )
+    trusted = subprocess.check_output(
+        ["git", "config", "--global", "--get-all", "safe.directory"],
+        env=environment,
+        text=True,
+        timeout=30,
+    ).splitlines()
+    assert trusted == [str(workspace)]
+
+
 def test_actual_119_bootstrap_recipe_and_builder_bytes_are_unchanged():
     original = "2c083383ae9fad6f016a90bc9aee1cd8284f19c0"
     for kind in sdk.JOBS:
@@ -447,7 +491,7 @@ def test_actual_119_bootstrap_recipe_and_builder_bytes_are_unchanged():
 
 def cache_origin_fixture(source, abi):
     commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True, timeout=30
     ).strip()
     key = (
         "sanitizer-sdk-clang-23.1.3-"
@@ -568,14 +612,14 @@ def test_intermediate_producer_inherits_only_equal_merged_final_recipe_and_contr
     source,
 ):
     producer = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"], cwd=source, text=True
+        ["git", "rev-parse", "HEAD"], cwd=source, text=True, timeout=30
     ).strip()
 
     def save(name, text):
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
-        subprocess.run(["git", "add", "."], cwd=source, check=True)
+        subprocess.run(["git", "add", "."], cwd=source, check=True, timeout=30)
         subprocess.run(
             [
                 "git",
@@ -589,9 +633,10 @@ def test_intermediate_producer_inherits_only_equal_merged_final_recipe_and_contr
             ],
             cwd=source,
             check=True,
+            timeout=30,
         )
         return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], cwd=source, text=True
+            ["git", "rev-parse", "HEAD"], cwd=source, text=True, timeout=30
         ).strip()
 
     final = save("apps/desktop/lib/ui.dart", "Dart-only final change")
