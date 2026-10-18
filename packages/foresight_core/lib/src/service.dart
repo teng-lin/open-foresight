@@ -17,6 +17,15 @@ import 'store.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
 
+void _serviceTrace(String message) {
+  if (runtimeConfiguration['FORESIGHT_SERVICE_TRACE'] == '1') {
+    stderr.writeln(
+      'service-trace ${DateTime.now().toIso8601String()} '
+      'pid=$pid isolate=${Isolate.current.debugName} $message',
+    );
+  }
+}
+
 /// The profile lock is independent of runtime overrides. An endpoint record lets
 /// clients attach to that owner even when launched with a different runtime.
 String serviceEndpoint(ProfilePaths profile) {
@@ -423,6 +432,10 @@ class ApplicationService {
 
   void _send(Socket client, Map<String, Object?> message) {
     try {
+      _serviceTrace(
+        'worker send peer=${identityHashCode(client)} id=${message['id']} '
+        'event=${message['event']} done=${message['done']}',
+      );
       client.writeln(jsonEncode(message));
     } catch (_) {
       client.destroy();
@@ -448,6 +461,7 @@ class ApplicationService {
   }
 
   void _accept(Socket client) {
+    _serviceTrace('worker accept peer=${identityHashCode(client)}');
     final conversation =
         'connection-$pid-${DateTime.now().microsecondsSinceEpoch}-${++_connectionSequence}';
     unawaited(client.done.catchError((Object _) {}));
@@ -469,6 +483,10 @@ class ApplicationService {
             bytes = 0;
             try {
               final request = jsonDecode(line) as Map<String, dynamic>;
+              _serviceTrace(
+                'worker request peer=${identityHashCode(client)} '
+                'id=${request['id']} method=${request['method']}',
+              );
               if (request['cancel'] is int) {
                 _cancel(client, request['cancel'] as int);
                 return;
@@ -606,6 +624,7 @@ class ApplicationService {
           },
           onError: (Object _) => client.destroy(),
           onDone: () {
+            _serviceTrace('worker eof peer=${identityHashCode(client)}');
             final wasHost = access.isHost(client);
             access.detach(client);
             if (wasHost) {
@@ -776,6 +795,7 @@ class ApplicationService {
       });
 
   Future<void> _close({Socket? acknowledgementClient}) async {
+    _serviceTrace('worker closing');
     _closing = true;
     _heartbeat?.cancel();
     Object? failure;
@@ -845,6 +865,7 @@ class IsolatedApplicationService {
   Future<void>? _finishing;
   final _workerExited = Completer<void>();
   bool _publicRemoved = false;
+  int _bridgeSequence = 0;
   Future<void> get closed => _closed.future;
   IsolatedApplicationService._(
     this._dataPath,
@@ -862,10 +883,12 @@ class IsolatedApplicationService {
     );
     host._messages.listen(host._message);
     host._errors.listen((dynamic error) {
+      _serviceTrace('host worker-error=$error');
       host._failure = StateError('Application worker failed: $error');
       if (!host._ready.isCompleted) host._ready.completeError(host._failure!);
     });
     host._exits.listen((_) {
+      _serviceTrace('host worker-exited');
       if (!host._workerExited.isCompleted) host._workerExited.complete();
       if (!host._ready.isCompleted)
         host._ready.completeError(
@@ -905,6 +928,7 @@ class IsolatedApplicationService {
       return;
     }
     final value = message as List;
+    _serviceTrace('host worker-message=${value.first}');
     if (value.first == 'ready') {
       _workerPath = value[1] as String;
       _publicPath = value[2] as String;
@@ -951,9 +975,12 @@ class IsolatedApplicationService {
       _bridges.add(bridge);
       unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
     });
+    _serviceTrace('host listening');
   }
 
   Future<void> _bridge(Socket client) async {
+    final id = ++_bridgeSequence;
+    _serviceTrace('bridge=$id accepted closing=$_closing');
     if (_closing) {
       client.destroy();
       return;
@@ -961,10 +988,12 @@ class IsolatedApplicationService {
     _peers.add(client);
     Socket? backend;
     try {
+      _serviceTrace('bridge=$id connecting');
       backend = await Socket.connect(
         InternetAddress(_workerPath!, type: InternetAddressType.unix),
         0,
       );
+      _serviceTrace('bridge=$id connected closing=$_closing');
       _peers.add(backend);
       if (_closing) {
         client.destroy();
@@ -973,11 +1002,19 @@ class IsolatedApplicationService {
       }
       // pipe applies stream backpressure and flushes before closing. Keeping
       // both directions alive is necessary for approval and cancel frames.
-      Future<void> copy(Socket source, Socket target) async {
+      Future<void> copy(Socket source, Socket target, String direction) async {
         try {
-          await target.addStream(source.cast<List<int>>());
+          await target.addStream(
+            source.map((chunk) {
+              _serviceTrace('bridge=$id $direction bytes=${chunk.length}');
+              return chunk;
+            }).cast<List<int>>(),
+          );
+          _serviceTrace('bridge=$id $direction eof');
           await target.flush();
+          _serviceTrace('bridge=$id $direction flushed');
         } finally {
+          _serviceTrace('bridge=$id $direction destroy');
           // Socket.close only half-closes its write side. Once either peer
           // reaches EOF, flush that direction and release both read sides.
           source.destroy();
@@ -985,17 +1022,23 @@ class IsolatedApplicationService {
         }
       }
 
-      await Future.wait<void>([copy(client, backend), copy(backend, client)]);
-    } catch (_) {
+      await Future.wait<void>([
+        copy(client, backend, 'request'),
+        copy(backend, client, 'response'),
+      ]);
+    } catch (error) {
+      _serviceTrace('bridge=$id error=$error');
       client.destroy();
       backend?.destroy();
     } finally {
+      _serviceTrace('bridge=$id finished');
       _peers.remove(client);
       if (backend != null) _peers.remove(backend);
     }
   }
 
   Future<void> close() => _shutdown ??= () async {
+    _serviceTrace('host closing');
     if (!_closing) {
       _closing = true;
       // An explicit stop must make cached clients observe EOF immediately.
@@ -1011,6 +1054,7 @@ class IsolatedApplicationService {
   }();
 
   Future<void> _removePublicSocket({bool workerOwnsLock = false}) async {
+    _serviceTrace('host remove-public workerOwnsLock=$workerOwnsLock');
     await _listener?.close();
     if (_publicRemoved || _publicPath == null) return;
     RandomAccessFile? ownership;

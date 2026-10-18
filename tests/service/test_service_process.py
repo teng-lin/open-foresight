@@ -972,6 +972,7 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
         FORESIGHT_RUNTIME=str(runtime),
         FORESIGHT_HELPER=str(HELPER),
         FORESIGHT_NATIVE=str(NATIVE),
+        FORESIGHT_SERVICE_TRACE="1",
     )
     with (tmp_path / "adopted-helper.log").open("w+") as log:
         helper = subprocess.Popen(
@@ -1025,12 +1026,26 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
             assert helper.wait(timeout=10) == -signal.SIGTERM
             assert not (data / ".application-endpoint.json").exists()
         finally:
+            print(
+                json.dumps(
+                    {
+                        "service_pid": service.pid if service else None,
+                        "service_exit": service.poll() if service else None,
+                        "helper_pid": helper.pid,
+                        "helper_exit": helper.poll(),
+                        "public_socket": (runtime / "application.sock").exists(),
+                        "worker_socket": (runtime / "application-worker.sock").exists(),
+                    }
+                )
+            )
             if peer is not None:
                 peer.close()
             for process in (service, helper):
                 if process is not None and process.poll() is None:
                     process.kill()
                     process.wait(timeout=10)
+            log.seek(0)
+            print(log.read()[-16384:])
 
 
 def poll_delay(deadline):
@@ -1041,7 +1056,8 @@ def poll_delay(deadline):
     threading.Event().wait(min(0.02, remaining))
 
 
-def test_two_live_profiles_keep_notes_private(running, tmp_path):
+@pytest.mark.parametrize("_attempt", range(10))
+def test_two_live_profiles_keep_notes_private(running, tmp_path, _attempt):
     """Separate owners and databases must isolate actual writes, not just paths."""
     processes = []
     peers = []
@@ -1054,6 +1070,7 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path):
                 **running["env"],
                 "FORESIGHT_DATA": str(profile / "data"),
                 "FORESIGHT_RUNTIME": str(profile / "run"),
+                "FORESIGHT_SERVICE_TRACE": "1",
             }
             log = (profile / "service.log").open("w+")
             logs.append(log)
@@ -1102,4 +1119,6 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path):
                     process.kill()
                     process.wait(timeout=5)
         for log in logs:
+            log.seek(0)
+            print(log.read()[-16384:])
             log.close()
