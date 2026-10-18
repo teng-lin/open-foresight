@@ -233,3 +233,19 @@ def test_failed_macos_stage_cannot_be_hidden_by_successful_packaging(failed):
     }
     with pytest.raises(ValueError, match="macos-stages"):
         check_gates(results, selected, False)
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_stage_artifact_uploads_allow_reruns_and_do_not_recompress_gzip(platform):
+    jobs = workflow(f"{platform}-platform-stages.yml")["jobs"]
+    for job in jobs.values():
+        uploads = [
+            step["with"]
+            for step in job["steps"]
+            if step.get("uses", "").startswith("actions/upload-artifact@")
+        ]
+        assert uploads
+        for upload in uploads:
+            assert upload["overwrite"] is True
+            if "payload.tar.gz" in upload["path"]:
+                assert upload["compression-level"] == 0
