@@ -1,4 +1,5 @@
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -76,7 +77,16 @@ void main() {
           );
           socket.add(bytes.sublist(0, 1234));
           await socket.flush();
-          await Future<void>.delayed(const Duration(milliseconds: 100));
+          await eventually(
+            () =>
+                File(
+                  '${root.path}/${model.directory}/.download/model.part',
+                ).existsSync() &&
+                File(
+                      '${root.path}/${model.directory}/.download/model.part',
+                    ).lengthSync() ==
+                    1234,
+          );
           socket.destroy();
         } else {
           expect(request.headers.value('range'), 'bytes=1234-4095');
@@ -129,7 +139,16 @@ void main() {
           );
           socket.add(bytes.sublist(start, start + 300));
           await socket.flush();
-          await Future<void>.delayed(const Duration(milliseconds: 100));
+          await eventually(
+            () =>
+                File(
+                  '${root.path}/${model.directory}/.download/range-1.part',
+                ).existsSync() &&
+                File(
+                      '${root.path}/${model.directory}/.download/range-1.part',
+                    ).lengthSync() ==
+                    300,
+          );
           socket.destroy();
         } else {
           request.response.add(bytes.sublist(start, end + 1));

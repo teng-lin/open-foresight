@@ -232,10 +232,27 @@ print(' '.join(labels))
         expect(recording.sampleCounts, pausedCounts);
         await stopPlayer(localPlayer);
         await stopPlayer(remotePlayer);
-        // This is waveform tail duration after the owned players have exited,
-        // not a readiness assumption: avoid mixing the paused 1699 Hz tone into
-        // the following resumed 437/997 Hz classification fixture.
-        await Future<void>.delayed(const Duration(milliseconds: 400));
+        // Wait for the owned routes to drain instead of assuming a fixed
+        // waveform tail duration after stopping the paused marker players.
+        await eventually(() async {
+          final sinks =
+              jsonDecode(
+                    await command('pactl', ['--format=json', 'list', 'sinks']),
+                  )
+                  as List;
+          final owned = sinks
+              .where(
+                (sink) =>
+                    sink['name'] == '$prefix-local' ||
+                    sink['name'] == '$prefix-remote',
+              )
+              .toList();
+          return owned.length == 2 &&
+              owned.every(
+                (sink) =>
+                    sink['state'] == 'IDLE' || sink['state'] == 'SUSPENDED',
+              );
+        }, timeout: const Duration(seconds: 10));
         recording.resume();
         localPlayer = await play('$prefix-local', 437);
         remotePlayer = await play('$prefix-remote', 997);
