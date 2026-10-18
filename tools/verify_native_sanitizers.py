@@ -51,7 +51,7 @@ def main():
                     str(executable),
                 ],
                 check=True,
-                timeout=300,
+                timeout=120,
             )
             environment = dict(
                 os.environ,

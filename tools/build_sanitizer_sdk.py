@@ -106,7 +106,7 @@ def main():
         subprocess.check_output(
             ["git", "-C", str(grpc / "third_party/protobuf"), "rev-parse", "HEAD"],
             text=True,
-            timeout=300,
+            timeout=30,
         ).strip()
         != PROTOBUF_COMMIT
     ):

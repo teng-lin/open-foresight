@@ -886,11 +886,12 @@ class IsolatedApplicationService {
     });
     host._exits.listen((_) {
       if (!host._workerExited.isCompleted) host._workerExited.complete();
-      if (!host._ready.isCompleted)
+      if (!host._ready.isCompleted) {
         host._ready.completeError(
           host._failure ??
               StateError('Application worker exited during startup'),
         );
+      }
       unawaited(host._finish());
     });
     var spawned = false;
@@ -963,8 +964,9 @@ class IsolatedApplicationService {
       InternetAddress(path, type: InternetAddressType.unix),
       0,
     );
-    if ((await Process.run('/bin/chmod', ['600', path])).exitCode != 0)
+    if ((await Process.run('/bin/chmod', ['600', path])).exitCode != 0) {
       throw StateError('Cannot protect application socket');
+    }
     _listener!.listen((client) {
       final bridge = _bridge(client);
       _bridges.add(bridge);
@@ -1081,12 +1083,14 @@ void _applicationServiceWorker(List<Object?> configuration) async {
     if (message == 'frontend_closed') {
       if (!frontendClosed.isCompleted) frontendClosed.complete();
     } else if (message == 'frontend_failed') {
-      if (!frontendClosed.isCompleted)
+      if (!frontendClosed.isCompleted) {
         frontendClosed.completeError(
           StateError('Public service socket cleanup failed'),
         );
-    } else if (!stop.isCompleted)
+      }
+    } else if (!stop.isCompleted) {
       stop.complete();
+    }
   });
   try {
     final profile = ProfilePaths(
