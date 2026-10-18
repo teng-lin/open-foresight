@@ -680,3 +680,9 @@ def test_zip_download_checks_github_digest_before_unpacking(tmp_path):
             artifacts.download_zip(
                 "owner/repo", {"id": 1, "digest": "sha256:" + "a" * 64}, destination
             )
+
+
+def test_shared_dmg_packaging_selects_macos_checks():
+    selected = changes.select_gates(["tools/create_dmg.py"])
+    assert selected["macos"]
+    assert not selected["linux-native"]

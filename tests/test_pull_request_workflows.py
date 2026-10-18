@@ -590,3 +590,13 @@ def test_installers_have_pinned_attestations_and_job_scoped_permissions():
             assert len(uses) == 1 and re.fullmatch(
                 re.escape(action) + r"@[0-9a-f]{40}", uses[0]
             )
+
+
+def test_candidate_dispatch_has_unique_display_name_and_concurrency_identity():
+    workflow = parse_workflow((WORKFLOWS / "macos.yml").read_text())
+    assert "request_id" in workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "Release candidate {0}" in workflow["run-name"]
+    assert "inputs.request_id" in workflow["run-name"]
+    assert "inputs.request_id" in workflow["concurrency"]["group"]
+    for name in ("macos-release.yml", "preview-packages.yml"):
+        assert "tools/create_dmg.py" in (WORKFLOWS / name).read_text()

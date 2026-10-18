@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import re
 import shutil
@@ -13,6 +14,15 @@ import tempfile
 def create(app, manifest, name, output):
     if not re.fullmatch(r"Open-Foresight-[A-Za-z0-9.+_-]+-macos-arm64\.dmg", name):
         raise ValueError("Invalid DMG filename")
+    metadata = json.loads(manifest.read_text())
+    if (
+        not re.fullmatch(r"[0-9a-f]{40}", metadata["revision"])
+        or metadata["architecture"] != "arm64"
+        or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", metadata["version"])
+        or type(metadata["build_number"]) is not int
+        or metadata["build_number"] < 1
+    ):
+        raise ValueError("DMG requires a complete arm64 application build identity")
     output.mkdir(parents=True, exist_ok=True)
     destination = (output / name).resolve()
     if destination.exists():
@@ -50,6 +60,20 @@ def create(app, manifest, name, output):
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     Path(str(destination) + ".sha256").write_text(f"{digest}  {name}\n")
     shutil.copy2(manifest, Path(str(destination) + ".manifest.json"))
+    Path(str(destination) + ".build.json").write_text(
+        json.dumps(
+            {
+                "sha256": digest,
+                "format": "dmg",
+                "version": metadata["version"],
+                "revision": metadata["revision"],
+                "arch": metadata["architecture"],
+                "build_number": metadata["build_number"],
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     return destination
 
 

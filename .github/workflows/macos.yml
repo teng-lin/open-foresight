@@ -1,11 +1,12 @@
 name: Mac support and Linux native regression
+run-name: ${{ inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name) }}
 permissions:
   contents: read
   actions: read
 concurrency:
   # Release promotion waits for an exact commit's completed candidate.
   # Keep main commits independent; updated PR checks can supersede each other.
-  group: platform-checks-${{ inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha) }}
+  group: platform-checks-${{ inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha)) }}
   cancel-in-progress: true
 jobs:
   macos:
@@ -513,12 +514,19 @@ jobs:
   pull_request: null
   workflow_dispatch:
     inputs:
+      request_id:
+        description: Unique release coordinator request; leave empty for manual builds
+        type: string
+        default: ''
       source:
         description: Reviewed main commit to build; empty means the dispatch commit
         type: string
         default: ''
   workflow_call:
     inputs:
+      request_id:
+        type: string
+        default: ''
       preview:
         type: boolean
         default: false
