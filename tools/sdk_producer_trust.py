@@ -23,6 +23,34 @@ JOBS = {
     "linux-whisper": "Build Linux whisper",
     "linux-sdk": "Assemble Linux SDK",
 }
+PRODUCER_CONTROLS = (
+    "tools/ci_artifacts.py",
+    "tools/linux_sdk_artifacts.py",
+    "tools/ci_verify_dependency.py",
+    "tools/sdk_producer_trust.py",
+    "tools/sdk_approval_bridge.py",
+    "tools/sdk_approved_legacy.json",
+    "tools/sdk_workflow_recipe.py",
+    "tools/sdk_transport_contract.json",
+)
+
+
+def producer_controls_match(repository, commit, *, api, root, paths=PRODUCER_CONTROLS):
+    """Qualify executable transport separately from SDK build compatibility.
+
+    This check never changes a semantic SDK identity. A reviewed main producer
+    or exact approved migration may instead be qualified by the caller. A
+    mismatch needs requalification of existing bytes, not a cold compilation.
+    """
+    source = read_source(repository, commit, api=api, paths=paths)
+    for name, (mode, data) in source.items():
+        path = Path(root) / name
+        if path.is_symlink() or not path.is_file():
+            return False
+        current_mode = "100755" if path.stat().st_mode & 0o111 else "100644"
+        if (mode, data) != (current_mode, path.read_bytes()):
+            return False
+    return True
 
 
 def source_fingerprint(
@@ -158,6 +186,7 @@ def verify_producer_source(
     *,
     fingerprint_at,
     approved_legacy=None,
+    qualified_control=None,
 ):
     """Bind an eligible producer's payload to its successful source recipe.
 
@@ -178,11 +207,15 @@ def verify_producer_source(
         return False
     if approved_legacy and approved_legacy(run, component, identity, receipt, artifact):
         return True
-    return (
-        receipt.get("source_commit") == head
-        and receipt.get("identity") == identity
-        and fingerprint_at(repository, head, component) == identity
-    )
+    if receipt.get("source_commit") != head or receipt.get("identity") != identity:
+        return False
+    if qualified_control is None or not qualified_control(repository, run):
+        raise ValueError(
+            "SDK producer executable controls are not qualified. Preserve its "
+            "artifact and obtain reviewed control compatibility or source approval; "
+            "this does not authorize a cold SDK build."
+        )
+    return fingerprint_at(repository, head, component) == identity
 
 
 def compatible_producers(
