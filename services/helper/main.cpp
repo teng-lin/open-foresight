@@ -371,7 +371,8 @@ public:
       throw std::runtime_error("Cannot open metadata");
     }
     sqlite3_busy_timeout(db, 5000);
-    sql("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL");
+    sql("PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; PRAGMA "
+        "secure_delete=ON");
     sql("CREATE TABLE IF NOT EXISTS documents(id TEXT PRIMARY KEY,content "
         "TEXT,userId TEXT,maxTokensPerChunk INTEGER,chunkOverlap "
         "INTEGER,mimeType TEXT,imageBytes BLOB); CREATE TABLE IF NOT EXISTS "
@@ -382,6 +383,7 @@ public:
       a.row();
     }
     sql("PRAGMA linux.journal_mode=DELETE; PRAGMA linux.synchronous=FULL; "
+        "PRAGMA linux.secure_delete=ON; "
         "CREATE TABLE IF NOT EXISTS linux.source_revisions(id TEXT PRIMARY "
         "KEY,revision INTEGER NOT NULL,tombstone INTEGER NOT NULL); CREATE "
         "TABLE IF NOT EXISTS linux.journal(sequence INTEGER PRIMARY "
@@ -393,6 +395,7 @@ public:
       a.row();
     }
     sql("PRAGMA vectors.journal_mode=DELETE; PRAGMA vectors.synchronous=FULL; "
+        "PRAGMA vectors.secure_delete=ON; "
         "CREATE TABLE IF NOT EXISTS vectors.chunks(generation "
         "INTEGER,document_id TEXT,revision INTEGER,ordinal INTEGER,text "
         "TEXT,mime TEXT,embedding BLOB,PRIMARY "
