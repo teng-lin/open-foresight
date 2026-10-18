@@ -205,3 +205,49 @@ def test_test_edits_and_old_mtime_source_edits_reuse_objects_and_rerun_ctest(
     assert command(root / "build", str(helper), "--value") == "31"
     assert command(root, str(helper), "--build-id").endswith(revision[:12])
     assert marker.read_text().splitlines() == ["validated"] * 4
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("cmake", "ninja", "c++", "git")),
+    reason="Tiny native cache proof needs a local compiler, CMake and Ninja",
+)
+def test_pin_changes_refresh_consumed_cmake_defaults_and_keep_unrelated_objects(
+    tmp_path,
+):
+    root = tmp_path / "project"
+    project(root)
+    pins = root / "tools/pins.json"
+    pins.write_text(json.dumps({"native_default": 0, "ubuntu_snapshot": "old"}))
+    cmake = root / "CMakeLists.txt"
+    cmake.write_text(
+        cmake.read_text().replace(
+            'set(FIXTURE_DEFAULT 0 CACHE STRING "Tiny configuration default")',
+            'file(READ "${CMAKE_SOURCE_DIR}/tools/pins.json" pins)\n'
+            'string(JSON native_default GET "${pins}" native_default)\n'
+            'set(FIXTURE_DEFAULT "${native_default}" CACHE STRING "Tiny configuration default")',
+        )
+    )
+    commit(root)
+    validate(root)
+    stable = object_path(root, "stable.cpp")
+    changed = object_path(root, "changed.cpp")
+    stable_time, changed_time = stable.stat().st_mtime_ns, changed.stat().st_mtime_ns
+    original = preserve_artifact(root, tmp_path / "first")
+    pins.write_text(json.dumps({"native_default": 0, "ubuntu_snapshot": "new"}))
+    commit(root)
+    shutil.rmtree(root / "build")
+    assert validate(root, original)["compilation_cache_hit"]
+    assert stable.stat().st_mtime_ns == stable_time
+    assert changed.stat().st_mtime_ns == changed_time
+    second = preserve_artifact(root, tmp_path / "second")
+    pins.write_text(json.dumps({"native_default": 5, "ubuntu_snapshot": "new"}))
+    commit(root)
+    shutil.rmtree(root / "build")
+    assert validate(root, second)["compilation_cache_hit"]
+    assert stable.stat().st_mtime_ns == stable_time
+    assert changed.stat().st_mtime_ns > changed_time
+    helper = root / "build/services/helper/ForesightHelper"
+    assert command(root / "build", str(helper), "--value") == "23"
+    assert (root / "build/Testing/fixture_runs.txt").read_text().splitlines() == [
+        "validated"
+    ] * 3

@@ -63,8 +63,17 @@ from reusing a passed test result: the compiler, SDK, system packages and build
 settings must match, while a new validation date or changed test still requires
 fresh tests. Changed source bytes rebuild even when checkout timestamps are old;
 unchanged native/dependency objects retain their exact output timestamps.
-Legacy warm-cache lookup may transfer a candidate before checking its full
-environment. Failed producer jobs are not accepted as validated cache results.
+The host kernel string and whole pins record do not discard compiler work;
+tracked pin changes refresh CMake configuration values and rebuild affected
+targets. Validation reuse still checks the full environment.
+
+Native jobs publish a small receipt beside the full object archive. Warm lookup
+verifies its producer and environment before downloading objects, then requires
+the downloaded payload's receipt and checksums to match. Legacy archives without
+sidecars permit three full candidate transfers; an incomplete search then fails
+with the next artifact identified, instead of authorizing a cold build while
+older compatible work may remain. API/protocol failures also abort the lookup.
+Failed producer jobs are not accepted as validated cache results.
 
 The native key describes the implementation and validation inputs, rather than
 including the source commit in every compiled object. On a native hit, CMake

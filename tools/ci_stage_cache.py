@@ -41,6 +41,8 @@ COMMIT = r"[a-f0-9]{40}"
 # input set rather than silently missing a newly introduced build dependency.
 EDITORIAL = {"README.md", "CHANGELOG.md", "LICENSE", "AGENTS.md"}
 IDENTITY_RECIPE = 2
+MAX_NATIVE_WORK_DOWNLOADS = 3
+MAX_STAGE_RECEIPT_BYTES = 16 * 1024 * 1024
 
 
 def git(root, *args):
@@ -282,13 +284,16 @@ def read_zip(path, destination=None):
         if sorted(stream.namelist()) != ["identity.json", "payload.tar.gz"]:
             raise ValueError("Unexpected stage artifact members")
         receipt_info = stream.getinfo("identity.json")
-        if receipt_info.file_size > 16 * 1024 * 1024:
+        if receipt_info.file_size > MAX_STAGE_RECEIPT_BYTES:
             raise ValueError("Stage receipt too large")
         for entry in stream.infolist():
             kind = stat.S_IFMT(entry.external_attr >> 16)
             if kind not in (0, stat.S_IFREG) or entry.is_dir():
                 raise ValueError("Stage artifact members must be regular files")
-        receipt = json.loads(stream.read(receipt_info))
+        try:
+            receipt = json.loads(stream.read(receipt_info))
+        except json.JSONDecodeError as error:
+            raise ValueError("Invalid cached stage receipt JSON") from error
         # Do not trust a receipt's checksum without reading the actual payload.
         with stream.open("payload.tar.gz") as payload:
             digest = hashlib.sha256()
@@ -396,6 +401,11 @@ def compilation_environment(environment):
     bind compatibility more precisely than its bookkeeping identity, which can
     change solely because the SDK fingerprint algorithm migrated.
 
+    The host kernel string does not select compiler inputs inside the pinned
+    toolchain; platform/architecture, packages and Apple SDK/Xcode stay bound.
+    Pins are tracked source/configuration inputs, not a reason to discard object
+    files: changed pins refresh CMake values and rebuild affected targets.
+
     All actual compiler, SDK bytes/prefix, workspace, system packages, flags,
     locale, and unknown settings remain bound. This is a warm build input, never
     a successful validation result. Original receipts retain every field.
@@ -403,7 +413,7 @@ def compilation_environment(environment):
     result = {
         key: value
         for key, value in environment.items()
-        if key not in ("utc_validation_date", "dart", "flutter")
+        if key not in ("utc_validation_date", "dart", "flutter", "system", "pins")
     }
     sdk = result.get("sdk")
     if (
@@ -433,7 +443,8 @@ def changed_configuration(root, producer):
             for name, value in inputs.items()
             if Path(name).name == "CMakeLists.txt"
             or name.endswith(".cmake")
-            or name in ("tools/build.sh", "tools/check_build_cache.py")
+            or name
+            in ("tools/build.sh", "tools/check_build_cache.py", "tools/pins.json")
         }
 
     before = configuration(source_inputs(root, "native", producer))
@@ -459,6 +470,75 @@ def native_work_candidates(repository, platform):
                 yield artifact, match[1]
         if len(batch) < 100:
             return
+        page += 1
+
+
+def native_work_metadata(repository, artifact, identity, run, platform, jobs, root):
+    """Read a small successful producer receipt before transferring its objects.
+
+    Metadata and full payload must share the exact run/job attempt and source.
+    The payload's embedded receipt is compared again after its ZIP and tar
+    checksums have been verified. Missing metadata enables bounded legacy reuse;
+    malformed metadata is not silently treated as a legacy artifact.
+    """
+    metadata_name = "receipt-" + artifact["name"]
+    page = 1
+    found = False
+    while True:
+        batch = artifacts.api(
+            repository,
+            f"actions/artifacts?name={metadata_name}&per_page=100&page={page}",
+        )["artifacts"]
+        for metadata in batch:
+            if (
+                metadata.get("name") != metadata_name
+                or metadata.get("expired")
+                or metadata.get("workflow_run", {}).get("id") != run["id"]
+            ):
+                continue
+            found = True
+            if metadata.get(
+                "size_in_bytes", MAX_STAGE_RECEIPT_BYTES * 2 + 1
+            ) > MAX_STAGE_RECEIPT_BYTES * 2 or not any(
+                artifacts.in_producer_attempt(metadata, job) for job in jobs
+            ):
+                continue
+            with tempfile.TemporaryDirectory() as temporary:
+                archive = Path(temporary) / "receipt.zip"
+                artifacts.download_zip(repository, metadata, archive)
+                with zipfile.ZipFile(archive) as stream:
+                    if stream.namelist() != ["identity.json"]:
+                        raise ValueError("Unexpected native metadata members")
+                    info = stream.getinfo("identity.json")
+                    if info.file_size > MAX_STAGE_RECEIPT_BYTES or stat.S_IFMT(
+                        info.external_attr >> 16
+                    ) not in (0, stat.S_IFREG):
+                        raise ValueError("Invalid native metadata file")
+                    try:
+                        receipt = json.loads(stream.read(info))
+                    except json.JSONDecodeError as error:
+                        raise ValueError(
+                            "Invalid cached native metadata JSON"
+                        ) from error
+            environment = (
+                receipt.get("environment") if isinstance(receipt, dict) else None
+            )
+            validate_receipt(
+                receipt, platform, "native", identity, run, environment, {}, root
+            )
+            if not any(
+                job.get("run_attempt", 1) == receipt["source_run_attempt"]
+                and artifacts.in_producer_attempt(metadata, job)
+                for job in jobs
+            ):
+                raise ValueError(
+                    "Native metadata differs from successful payload attempt"
+                )
+            return receipt
+        if len(batch) < 100:
+            if found:
+                raise ValueError("No valid native metadata from the payload's producer")
+            return None
         page += 1
 
 
@@ -491,6 +571,7 @@ def find_native_work(
     jobs_by_run = {}
     mismatches: set[str] = set()
     rejected = 0
+    legacy_downloads = 0
     for artifact, identity in native_work_candidates(repository, platform):
         run_id = artifact["workflow_run"]["id"]
         if run_id not in runs:
@@ -512,8 +593,28 @@ def find_native_work(
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "native.zip"
             try:
-                artifacts.download_zip(repository, artifact, archive)
-                receipt = read_zip(archive)
+                metadata = native_work_metadata(
+                    repository, artifact, identity, run, platform, jobs, root
+                )
+                if metadata is None:
+                    if legacy_downloads >= MAX_NATIVE_WORK_DOWNLOADS:
+                        fields = (
+                            ", ".join(sorted(mismatches))
+                            or "invalid original receipts/payloads"
+                        )
+                        raise RuntimeError(
+                            f"Native compilation-work search inspected {legacy_downloads} legacy full artifacts; "
+                            f"another trusted successful candidate has no small receipt "
+                            f"(artifact {artifact['id']}, run {run_id}). Earlier candidates differed in {fields}. "
+                            "The search is incomplete: preserve the artifacts and inspect the "
+                            "remaining legacy candidates or publish a verified small receipt. "
+                            "Do not start a cold build solely because this transfer budget was reached."
+                        )
+                    legacy_downloads += 1
+                    artifacts.download_zip(repository, artifact, archive)
+                    receipt = read_zip(archive)
+                else:
+                    receipt = metadata
                 previous_environment = receipt.get("environment")
                 if (
                     not isinstance(previous_environment, dict)
@@ -560,13 +661,22 @@ def find_native_work(
                 if previous_links != current_links:
                     rejected += 1
                     continue
+                if metadata is not None:
+                    artifacts.download_zip(repository, artifact, archive)
+                    if read_zip(archive) != metadata:
+                        raise ValueError(
+                            "Native payload receipt differs from verified metadata"
+                        )
                 if output:
                     read_zip(archive, Path(output))
+            except json.JSONDecodeError:
+                # A malformed API response is not evidence that compiler work
+                # is unavailable. Cached JSON parse failures are wrapped above.
+                raise
             except (
                 ValueError,
                 KeyError,
                 zipfile.BadZipFile,
-                subprocess.CalledProcessError,
             ):
                 rejected += 1
                 continue

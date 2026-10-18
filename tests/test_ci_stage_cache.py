@@ -243,21 +243,41 @@ class ProducerTests(SourceTree):
         self.payload = b"payload"
         self.members = {}
         self.transfers = 0
+        self.downloaded_ids = []
+        self.additional_runs = {}
+        self.metadata = []
+        self.metadata_receipts = {}
+        self.payload_receipts = {}
 
     def api(self, repository, route):
         self.assertEqual(repository, REPOSITORY)
+        if route.startswith("actions/artifacts?name=receipt-ci-stage-"):
+            return {"artifacts": self.metadata}
         if route.startswith("actions/artifacts?"):
             return {"artifacts": [self.artifact]}
         if route == "actions/runs/100":
             return self.run
+        if (
+            route.startswith("actions/runs/")
+            and int(route.rsplit("/", 1)[-1]) in self.additional_runs
+        ):
+            return self.additional_runs[int(route.rsplit("/", 1)[-1])]
         self.fail(route)
 
     def download(self, repository, artifact, destination):
         self.transfers += 1
+        self.downloaded_ids.append(artifact["id"])
         buffer = io.BytesIO()
         with zipfile.ZipFile(buffer, "w") as stream:
-            stream.writestr("identity.json", json.dumps(self.receipt))
-            stream.writestr("payload.tar.gz", self.payload)
+            metadata = artifact["id"] in self.metadata_receipts
+            receipt = (
+                self.metadata_receipts[artifact["id"]]
+                if metadata
+                else self.payload_receipts.get(artifact["id"], self.receipt)
+            )
+            stream.writestr("identity.json", json.dumps(receipt))
+            if not metadata:
+                stream.writestr("payload.tar.gz", self.payload)
             for name, data in self.members.items():
                 stream.writestr(name, data)
         destination.write_bytes(buffer.getvalue())
@@ -282,7 +302,7 @@ class ProducerTests(SourceTree):
         ):
             return cache.find(**args)
 
-    def find_work(self, **overrides):
+    def find_work(self, candidates=None, **overrides):
         args = {
             "repository": REPOSITORY,
             "platform": "linux",
@@ -299,10 +319,131 @@ class ProducerTests(SourceTree):
             patch.object(
                 cache,
                 "native_work_candidates",
-                return_value=[(self.artifact, self.identity)],
+                return_value=[(self.artifact, self.identity)]
+                if candidates is None
+                else candidates,
             ),
         ):
             return cache.find_native_work(**args)
+
+    def add_metadata(self, artifact, receipt):
+        metadata = {
+            **artifact,
+            "id": artifact["id"] + 1000,
+            "name": "receipt-" + artifact["name"],
+            "size_in_bytes": 1000,
+        }
+        self.metadata.append(metadata)
+        self.metadata_receipts[metadata["id"]] = deepcopy(receipt)
+        return metadata
+
+    def test_metadata_rejects_many_incompatible_environments_without_full_downloads(
+        self,
+    ):
+        candidates = []
+        for number in range(101, 109):
+            artifact = {**self.artifact, "id": number, "workflow_run": {"id": number}}
+            self.additional_runs[number] = {**self.run, "id": number}
+            self.add_metadata(artifact, self.receipt)
+            candidates.append((artifact, self.identity))
+        result = self.find_work(
+            candidates=candidates, environment={**ENVIRONMENT, "compiler": "different"}
+        )
+        self.assertFalse(result["hit"])
+        self.assertEqual(self.downloaded_ids, list(range(1101, 1109)))
+
+    def test_metadata_can_select_older_compatible_work_after_many_cheap_mismatches(
+        self,
+    ):
+        current = {**ENVIRONMENT, "compiler": "new compiler"}
+        identity = self.key(environment=current)
+        compatible = {**self.receipt, "environment": current, "identity": identity}
+        candidates = []
+        for number in range(101, 107):
+            use_identity = identity if number == 106 else self.identity
+            receipt = compatible if number == 106 else self.receipt
+            artifact = {
+                **self.artifact,
+                "id": number,
+                "name": cache.name("linux", "native", use_identity),
+                "workflow_run": {"id": number},
+            }
+            self.additional_runs[number] = {**self.run, "id": number}
+            self.add_metadata(artifact, receipt)
+            self.payload_receipts[number] = receipt
+            candidates.append((artifact, use_identity))
+        self.assertTrue(
+            self.find_work(candidates=candidates, environment=current)["hit"]
+        )
+        self.assertEqual(self.downloaded_ids, list(range(1101, 1107)) + [106])
+
+    def test_metadata_cannot_launder_a_different_embedded_payload_receipt(self):
+        self.add_metadata(self.artifact, self.receipt)
+        self.payload_receipts[self.artifact["id"]] = {
+            **self.receipt,
+            "unexpected": "changed",
+        }
+        self.assertFalse(self.find_work()["hit"])
+        self.assertEqual(self.downloaded_ids, [1101, 101])
+
+    def test_metadata_requires_exact_source_attempt_and_successful_upload_window(self):
+        original = deepcopy(self.receipt)
+        for change in (
+            {"source_commit": "b" * 40},
+            {"source_run_attempt": 2},
+            {"identity": "0" * 64},
+            {"payload_kind": "native-runtime"},
+        ):
+            self.metadata.clear()
+            self.metadata_receipts.clear()
+            self.downloaded_ids.clear()
+            self.add_metadata(self.artifact, {**original, **change})
+            self.assertFalse(self.find_work()["hit"])
+            self.assertEqual(self.downloaded_ids, [1101])
+        self.metadata.clear()
+        self.metadata_receipts.clear()
+        self.downloaded_ids.clear()
+        metadata = self.add_metadata(self.artifact, original)
+        metadata["created_at"] = "2026-01-01T01:00:00Z"
+        self.assertFalse(self.find_work()["hit"])
+        self.assertEqual(self.downloaded_ids, [])
+
+    def test_metadata_api_protocol_auth_and_network_errors_never_authorize_build(self):
+        original_api = self.api
+        errors = (
+            json.JSONDecodeError("Malformed GitHub response", "{", 1),
+            subprocess.CalledProcessError(1, ["gh", "api"], output=b"HTTP 401"),
+            subprocess.CalledProcessError(
+                1, ["gh", "api"], output=b"network unavailable"
+            ),
+        )
+        for error in errors:
+
+            def query(repository, route, error=error):
+                if route.startswith("actions/artifacts?name=receipt-ci-stage-"):
+                    raise error
+                return original_api(repository, route)
+
+            self.api = query
+            with self.assertRaises(type(error)):
+                self.find_work()
+        self.assertEqual(self.downloaded_ids, [])
+
+    def test_malformed_cached_metadata_is_rejected_without_masking_api_errors(self):
+        self.add_metadata(self.artifact, self.receipt)
+        original_download = self.download
+
+        def download(repository, artifact, destination):
+            if artifact["id"] == 1101:
+                self.downloaded_ids.append(artifact["id"])
+                with zipfile.ZipFile(destination, "w") as stream:
+                    stream.writestr("identity.json", "{")
+            else:
+                original_download(repository, artifact, destination)
+
+        self.download = download
+        self.assertFalse(self.find_work()["hit"])
+        self.assertEqual(self.downloaded_ids, [1101])
 
     def test_native_work_survives_new_sources_but_is_not_a_validation_hit(self):
         self.write("native/main.cpp", "changed implementation")
@@ -343,6 +484,114 @@ class ProducerTests(SourceTree):
                 self.assertFalse(
                     self.find_work(environment={**current, key: "different"})["hit"]
                 )
+
+    def test_native_work_reuses_across_host_kernel_and_irrelevant_pin_changes(self):
+        old = {
+            **ENVIRONMENT,
+            "system": "Linux-old-host-kernel",
+            "pins": {"flutter": "old", "ubuntu_snapshot": "old"},
+        }
+        self.receipt["environment"] = old
+        self.identity = self.key(environment=old)
+        self.receipt["identity"] = self.identity
+        self.artifact["name"] = cache.name("linux", "native", self.identity)
+        current = {
+            **old,
+            "system": "Linux-new-host-kernel",
+            "pins": {"flutter": "new", "ubuntu_snapshot": "new"},
+        }
+        self.assertFalse(
+            self.find(identity=self.key(environment=current), environment=current)[
+                "hit"
+            ]
+        )
+        self.assertTrue(self.find_work(environment=current)["hit"])
+        for key in (
+            "compiler",
+            "packages",
+            "machine",
+            "platform",
+            "apple_sdk",
+            "xcode",
+            "base_image",
+        ):
+            with self.subTest(key=key):
+                self.assertFalse(
+                    self.find_work(environment={**current, key: "changed"})["hit"]
+                )
+
+    def test_native_work_download_limit_never_authorizes_cold_build_with_older_work(
+        self,
+    ):
+        current = {**ENVIRONMENT, "compiler": "new compiler"}
+        compatible_identity = self.key(environment=current)
+        compatible_receipt = {
+            **self.receipt,
+            "environment": current,
+            "identity": compatible_identity,
+        }
+        candidates = []
+        for artifact_id in (101, 102, 103, 104):
+            identity = compatible_identity if artifact_id == 104 else self.identity
+            artifact = {
+                **self.artifact,
+                "id": artifact_id,
+                "name": cache.name("linux", "native", identity),
+            }
+            candidates.append((artifact, identity))
+        foreign = (
+            {**self.artifact, "id": 99, "workflow_run": {"id": 99}},
+            self.identity,
+        )
+        candidates = [foreign] * 10 + candidates
+        original_api, original_download = self.api, self.download
+        downloaded = []
+
+        def query(repository, route):
+            if route == "actions/runs/99":
+                return {
+                    **self.run,
+                    "id": 99,
+                    "head_repository": {"full_name": "attacker/fork"},
+                }
+            return original_api(repository, route)
+
+        def download(repository, artifact, destination):
+            downloaded.append(artifact["id"])
+            previous = self.receipt
+            try:
+                if artifact["id"] == 104:
+                    self.receipt = compatible_receipt
+                original_download(repository, artifact, destination)
+            finally:
+                self.receipt = previous
+
+        self.api, self.download = query, download
+        # Establish that the older fourth candidate really contains compatible
+        # verified work, even after unrelated/untrusted candidates were skipped.
+        with patch.object(cache, "MAX_NATIVE_WORK_DOWNLOADS", 4):
+            self.assertTrue(
+                self.find_work(candidates=candidates, environment=current)["hit"]
+            )
+        self.assertEqual(downloaded, [101, 102, 103, 104])
+        downloaded.clear()
+        with self.assertRaisesRegex(
+            RuntimeError, "search is incomplete.*Do not start a cold build"
+        ):
+            self.find_work(candidates=candidates, environment=current)
+        self.assertEqual(downloaded, [101, 102, 103])
+
+    def test_native_work_exhausted_three_candidates_is_a_real_miss(self):
+        candidates = [
+            ({**self.artifact, "id": i}, self.identity) for i in range(101, 104)
+        ]
+        self.assertFalse(
+            self.find_work(
+                candidates=candidates,
+                environment={**ENVIRONMENT, "compiler": "different"},
+            )["hit"]
+        )
+        self.assertEqual(self.transfers, 3)
 
     def test_native_work_sdk_key_migration_preserves_actual_content_binding(self):
         sdk = {

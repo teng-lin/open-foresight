@@ -120,6 +120,14 @@ jobs:
         retention-days: 14
         overwrite: true
         compression-level: 0
+    - name: Retain the small native compilation receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-${{ steps.stage.outputs.artifact_name }}
+        path: build/ci-stage/macos-native/identity.json
+        if-no-files-found: error
+        retention-days: 14
+        overwrite: true
     - name: Retain the slim native runtime prerequisite
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
