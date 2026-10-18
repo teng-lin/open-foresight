@@ -15,6 +15,38 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class OptimizedVerificationTests(unittest.TestCase):
+    def test_installed_smoke_rejects_tampering_under_optimization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'installed-runtime'
+            path.write_bytes(b'expected')
+            code = f'''import runpy
+from pathlib import Path
+verify = runpy.run_path({str(ROOT / 'packaging/smoke_installed.py')!r})['verify_sha256']
+verify(Path({str(path)!r}), {hashlib.sha256(b'expected').hexdigest()!r})
+'''
+            accepted = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True)
+            self.assertEqual(accepted.returncode, 0, accepted.stderr)
+            path.write_bytes(b'tampered')
+            result = subprocess.run([sys.executable, '-O', '-c', code], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('SHA256 checksum mismatch', result.stderr)
+
+    def test_live_speech_rejects_tampering_before_launch_under_optimization(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / 'speech.bin'
+            model.write_bytes(b'tampered')
+            manifest = root / 'manifest.json'
+            manifest.write_text(json.dumps({'speech': {'model': str(model),
+                'sha256': hashlib.sha256(b'expected').hexdigest(), 'runtime': 'unused'}}))
+            result = subprocess.run([sys.executable, '-O', str(ROOT / 'tools/test_live_transcription_gap.py'),
+                '--manifest', str(manifest), '--report', str(root / 'report.json'),
+                '--log', str(root / 'flutter.log'), '--flutter', 'must-not-execute-flutter'],
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Speech model checksum mismatch', result.stderr)
+            self.assertFalse((root / 'flutter.log').exists())
+
     def test_package_rejects_corrupt_litert_under_optimization(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
