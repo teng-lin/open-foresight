@@ -462,3 +462,25 @@ String boundUtf8(String text, int budget) {
   }
   return output.toString();
 }
+
+/// UTF-8 bytes conservatively bound tokenizer input. Select the beginning,
+/// midpoint and ending rather than silently discarding the end of a meeting.
+String balancedTranscriptWindow(String text, int budget) {
+  if (utf8.encode(text).length <= budget) return text;
+  const omitted =
+      '\n[Transcript abridged: balanced beginning, middle and ending excerpts; omitted passages are not evidence.]\n';
+  final share = (budget - utf8.encode(omitted).length - 20) ~/ 3;
+  if (share < 1)
+    throw StateError('Model context is too small for transcript excerpts');
+  final runes = text.runes.toList();
+  final head = boundUtf8(text, share);
+  final middle = boundUtf8(
+    String.fromCharCodes(runes.skip(runes.length ~/ 2)),
+    share,
+  );
+  final reverse = String.fromCharCodes(runes.reversed);
+  final tail = String.fromCharCodes(
+    boundUtf8(reverse, share).runes.toList().reversed,
+  );
+  return '$omitted$head\n[… ]\n$middle\n[… ]\n$tail';
+}

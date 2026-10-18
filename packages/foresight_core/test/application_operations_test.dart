@@ -386,6 +386,39 @@ void main() {
   );
 
   test(
+    'long meeting generation includes final facts within the model context',
+    () async {
+      final id = domain.store.meeting('Long meeting');
+      final generator = ArtifactGenerator();
+      domain.generator = generator;
+      domain.store.transcript(
+        id,
+        'Opening discussion. ' * 4000,
+        true,
+        0,
+        100,
+        'microphone',
+      );
+      domain.store.transcript(
+        id,
+        'FINAL DECISION: Launch on November 9.',
+        true,
+        100,
+        200,
+        'microphone',
+      );
+      await app.generateMeeting(id, 'summary');
+      final prompt = generator.prompts.single;
+      expect(prompt, contains('FINAL DECISION: Launch on November 9.'));
+      expect(
+        prompt,
+        contains('balanced beginning, middle and ending excerpts'),
+      );
+      expect(utf8.encode(prompt).length, lessThanOrEqualTo(4096 - 1024));
+    },
+  );
+
+  test(
     'artifact generation accepts only final transcript and never saves failed output',
     () async {
       final id = domain.store.meeting('Planning');

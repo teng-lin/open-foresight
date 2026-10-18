@@ -1527,9 +1527,21 @@ class Application implements ModelGate {
         .map((t) => t['text'])
         .join('\n');
     if (text.isEmpty) throw StateError('No final transcript');
+    final contextTokens =
+        domain.generator?.effectiveState['context_length'] as int? ?? 4096;
+    const outputTokens = 1024;
+    final instructions =
+        'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n';
+    // A byte is an upper bound on byte-tokenizer cost; reserve output and
+    // framing tokens as well as the instructions before selecting evidence.
+    final transcriptBudget =
+        contextTokens - outputTokens - utf8.encode(instructions).length - 128;
+    if (transcriptBudget < 256)
+      throw StateError('Model context is too small for meeting generation');
+    final selected = balancedTranscriptWindow(text, transcriptBudget);
     final result = await _generate(
       'meeting',
-      'Produce $kind from this transcript only. Use ${store.preference('noteStyle', 'Standard') == 'Concise' ? 'brief phrases' : 'complete sentences'}. Do not invent details. $meetingSpeakerInstructions\n${boundUtf8(text, 2800)}',
+      '$instructions$selected',
       requestId: requestId,
       current: current,
     );
