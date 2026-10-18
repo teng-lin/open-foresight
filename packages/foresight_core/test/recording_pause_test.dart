@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/native_fixture.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
@@ -18,15 +19,10 @@ void main() {
   setUpAll(() async {
     directory = createTestTempDirectorySync('recording-pause-');
     library = '${directory.path}/fixture.${Platform.isMacOS ? 'dylib' : 'so'}';
-    final build = await Process.run('c++', [
-      '-std=c++17',
-      '-shared',
-      '-fPIC',
-      'test/fixtures/recording_native_stub.cpp',
-      '-o',
-      library,
-    ]);
-    expect(build.exitCode, 0, reason: '${build.stdout}\n${build.stderr}');
+    await buildCachedNativeFixture(
+      source: 'test/fixtures/recording_native_stub.cpp',
+      output: library,
+    );
     fixture = DynamicLibrary.open(library);
     model = '${directory.path}/model';
     File(model).writeAsStringSync('ABI fixture only');

@@ -94,3 +94,10 @@ resource cleanup after allocating its directory, using `addTearDown`, so databas
 and process owners close before their files are removed. For fixtures allocated
 in `setUp` or `setUpAll`, register their resource cleanup in that same setup scope
 (or a later setup callback).
+
+The recording ABI fixtures need a C++17 compiler (`c++`) on PATH. The shared
+`buildCachedNativeFixture` helper builds each source/compiler/platform identity
+once in `$FORESIGHT_TEST_TEMP_ROOT/foresight-native-fixtures` (the system temp
+root when unset), then copies it to a unique test path to isolate native globals.
+This disposable build cache can be removed when no suite is running; no separate
+CMake setup is needed for the Dart suites.
