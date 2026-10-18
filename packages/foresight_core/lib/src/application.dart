@@ -1,3 +1,4 @@
+import 'helper.dart' show helperUserId;
 import 'gemma_download.dart' show ModelDownloadCancelled;
 import 'conversation_answer.dart';
 import 'operations.dart';
@@ -674,7 +675,7 @@ class Application implements ModelGate {
               query: Query(textQuery: a['query'] as String),
               maxResults: limit,
               minSimilarityScore: 0,
-              userId: 'local_user',
+              userId: helperUserId,
               allowedDocumentIds: allowed.keys,
             ),
           );

@@ -166,4 +166,16 @@ void invalidCommands(DesktopConnection desktop) {
       isNot(contains('default:')),
     );
   });
+  test('helper account wire identity has one definition', () {
+    final literals = <String>[];
+    for (final file in Directory(
+      'lib',
+    ).listSync(recursive: true).whereType<File>()) {
+      if (file.path.endsWith('.dart') &&
+          file.readAsStringSync().contains("'local_user'")) {
+        literals.add(file.path);
+      }
+    }
+    expect(literals, ['lib/src/helper.dart']);
+  });
 }
