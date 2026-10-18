@@ -26,6 +26,7 @@ if(APPLE)
     COMMAND ${CMAKE_COMMAND} -E make_directory "${MACOS_TOOLS}"
     COMMAND ${SWIFTC} -warnings-as-errors -O -target arm64-apple-macosx15.0
       "${CMAKE_SOURCE_DIR}/native/file_parser.swift"
+      -lsandbox
       -o "${MACOS_TOOLS}/foresight-file-parser"
     DEPENDS "${CMAKE_SOURCE_DIR}/native/file_parser.swift" VERBATIM)
   add_custom_target(macos_file_parser ALL DEPENDS "${MACOS_TOOLS}/foresight-file-parser")
