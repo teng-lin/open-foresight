@@ -88,7 +88,17 @@ class RuntimeConfiguration {
           : 'libforesight_native.so');
 }
 
-final runtimeConfiguration = RuntimeConfiguration.resolve();
+RuntimeConfiguration? _runtimeConfiguration;
+RuntimeConfiguration get runtimeConfiguration =>
+    _runtimeConfiguration ??= RuntimeConfiguration.resolve();
+
+/// Install the frontend's resolved map before any worker runtime access. The
+/// process environment still names the handoff already consumed by the frontend.
+void installServiceWorkerEnvironment(Map<String, String> environment) {
+  _runtimeConfiguration = RuntimeConfiguration(
+    Map<String, String>.from(environment),
+  );
+}
 
 // mode_t is unsigned short on Darwin and unsigned int on Linux. Calling libc
 // directly avoids starting a child process while publishing a local socket.

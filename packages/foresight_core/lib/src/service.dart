@@ -1204,9 +1204,9 @@ void _applicationServiceWorker(List<Object?> configuration) {
 
 Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
   final parent = configuration[0] as SendPort;
-  runtimeConfiguration.environment
-    ..clear()
-    ..addAll((configuration[3] as Map).cast<String, String>());
+  installServiceWorkerEnvironment(
+    (configuration[3] as Map).cast<String, String>(),
+  );
   _traceServiceTransport('worker starting');
   final control = ReceivePort();
   parent.send(control.sendPort);
