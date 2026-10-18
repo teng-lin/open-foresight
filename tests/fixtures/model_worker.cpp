@@ -26,6 +26,9 @@ int main(int argc, char **argv) {
                      {"backend", "litert-lm-embedding-cpu"}})
                    .dump()
             << std::endl;
+  if (std::getenv("FORESIGHT_FIXTURE_NEVER_READ"))
+    for (;;)
+      pause();
   const char *stall_after = std::getenv("FORESIGHT_FIXTURE_STALL_AFTER");
   const int stall_at = stall_after ? std::atoi(stall_after) : -1;
   const bool fail_encode =

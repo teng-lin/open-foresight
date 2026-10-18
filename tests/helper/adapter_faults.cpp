@@ -96,6 +96,28 @@ int main(int argc, char **argv) {
     std::cout << "direct stall returned in " << direct_ms
               << " ms and killed worker " << worker << "\n";
 
+    setenv("FORESIGHT_FIXTURE_NEVER_READ", "1", 1);
+    setenv("FORESIGHT_ADAPTER_DEADLINE_MS", "250", 1);
+    {
+      Model blocked(model_path.string(), false);
+      const pid_t blocked_pid = blocked.worker_pid();
+      const auto start = std::chrono::steady_clock::now();
+      bool write_timeout = false;
+      try {
+        blocked.encode(std::string(1024 * 1024, 'x'));
+      } catch (const std::exception &error) {
+        write_timeout =
+            std::string(error.what()).find("timed out") != std::string::npos;
+      }
+      const auto elapsed = std::chrono::steady_clock::now() - start;
+      REQUIRE(write_timeout);
+      REQUIRE(elapsed < std::chrono::seconds(2));
+      REQUIRE(!blocked.healthy.load());
+      REQUIRE(!blocked.available());
+      REQUIRE(dead(blocked_pid));
+    }
+    unsetenv("FORESIGHT_FIXTURE_NEVER_READ");
+
     const fs::path storage = root / "storage";
     const fs::path socket = storage / "helper.sock";
     const fs::path flag = root / "stall.flag";
