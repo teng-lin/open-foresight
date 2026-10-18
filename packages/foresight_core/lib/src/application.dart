@@ -872,6 +872,7 @@ class Application implements ModelGate {
                 "DELETE FROM preferences WHERE key GLOB 'webAnswer.v1.*'",
               );
               store.db.execute('COMMIT');
+              store.compactAfterClear();
             } catch (_) {
               store.db.execute('ROLLBACK');
               rethrow;
