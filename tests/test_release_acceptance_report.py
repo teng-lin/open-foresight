@@ -1,6 +1,7 @@
 """Publication requires GPU evidence for the accepted installer bytes."""
 
 import json
+import shutil
 
 import pytest
 
@@ -102,3 +103,26 @@ def test_publication_mode_requires_acceptance_and_exact_build_states(publish_onl
                 require_coordinator(failed, "refs/heads/main", publish_only)
     with pytest.raises(ValueError):
         require_coordinator(results, "refs/heads/main", not publish_only)
+
+
+def test_real_five_artifact_matrix_retains_duplicate_deb_validation(tmp_path):
+    receipts(tmp_path)
+    shutil.copytree(tmp_path / "0", tmp_path / "debian")
+    report = aggregate(tmp_path, "v1.2.3", json.dumps(evidence()))
+    assert len(report["installers"]) == 4
+    assert len(report["validation_artifacts"]) == 5
+    require_publication(report, "v1.2.3")
+    (tmp_path / "debian/reports/functional.json").unlink()
+    with pytest.raises(ValueError, match="functional"):
+        aggregate(tmp_path, "v1.2.3", "")
+
+
+def test_conflicting_duplicate_installer_identity_is_rejected(tmp_path):
+    receipts(tmp_path)
+    shutil.copytree(tmp_path / "0", tmp_path / "debian")
+    receipt = tmp_path / "debian/assets/installer.json"
+    data = json.loads(receipt.read_text())
+    data["sha256"] = "f" * 64
+    receipt.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="conflicting"):
+        aggregate(tmp_path, "v1.2.3", "")

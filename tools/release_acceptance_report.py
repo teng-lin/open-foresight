@@ -10,6 +10,8 @@ import re
 def aggregate(directory, tag, evidence):
     installers = []
     suffixes = set()
+    validation_artifacts = []
+    identities = {}
     for receipt in sorted(directory.glob("*/assets/installer.json")):
         identity = json.loads(receipt.read_text())
         artifact = receipt.parents[1]
@@ -37,16 +39,25 @@ def aggregate(directory, tag, evidence):
             ),
             None,
         )
-        if kind is None or kind in suffixes:
-            raise ValueError("Unexpected or repeated installer kind")
-        suffixes.add(kind)
-        installers.append(
-            {
-                "asset": asset,
-                "sha256": identity["sha256"],
-                "platform": "macos" if kind == ".dmg" else "linux",
-            }
+        if kind is None:
+            raise ValueError("Unexpected installer kind")
+        binding = {
+            "asset": asset,
+            "sha256": identity["sha256"],
+            "platform": "macos" if kind == ".dmg" else "linux",
+        }
+        validation_artifacts.append(
+            {"artifact": artifact.name, **binding, "status": report["status"]}
         )
+        if kind in identities:
+            if binding != identities[kind]:
+                raise ValueError(
+                    "Repeated installer kind has conflicting asset or digest"
+                )
+            continue
+        identities[kind] = binding
+        suffixes.add(kind)
+        installers.append(binding)
     if suffixes != {".deb", ".rpm", ".pkg.tar.zst", ".dmg"}:
         raise ValueError(
             "Acceptance must include DEB, RPM, Arch and DMG installer evidence"
@@ -93,6 +104,7 @@ def aggregate(directory, tag, evidence):
         if gpu["status"] == "manual_passed"
         else "automated_passed_manual_pending",
         "installers": installers,
+        "validation_artifacts": validation_artifacts,
         "gpu_inference": gpu,
     }
 
