@@ -1,4 +1,5 @@
 import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/remote.dart' show RemoteDomain;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -72,6 +73,32 @@ Future<dynamic> startedWorkspace(WidgetTester tester) async {
     throw StateError('Desktop did not start: $startupFailure');
   }
   return tester.state(find.byType(app.Workspace));
+}
+
+/// Unmount first so disposal owns the pending note save and recording stop.
+/// Join its existing cleanup work instead of guessing when the next launch is safe.
+Future<void> closeWorkspace(WidgetTester tester, dynamic workspace) async {
+  final saves = workspace.meetingFeature.meetingNoteSaves;
+  final connection = workspace.d as RemoteDomain;
+  final client = connection.client;
+  final helper = connection.helper;
+  final commands = workspace.integrationFeature.commands;
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.runAsync(() async {
+    try {
+      await saves.close().timeout(const Duration(seconds: 30));
+    } finally {
+      await Future.wait<void>([
+        client.close(),
+        helper.close(),
+      ]).timeout(const Duration(seconds: 30));
+    }
+  });
+  await waitUntil(
+    tester,
+    () => client.isClosed && (commands == null || commands.isClosed == true),
+    reason: 'Desktop disposal did not release the client and activation lock',
+  );
 }
 
 /// Recording starts only after the desktop confirms the service request.
@@ -500,8 +527,7 @@ void main() {
               as String;
       expect(enhanced.toLowerCase(), contains('country'));
       // Release the actual widget/domain and launch a fresh one against the saved profile.
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeWorkspace(tester, workspace);
       final dynamic reopened = await startedWorkspace(tester);
       await waitUntil(
         tester,
@@ -622,14 +648,12 @@ void main() {
       secondPlayer.stdout.drain<void>();
       secondPlayer.stderr.drain<void>();
       expect(await secondPlayer.exitCode, 0);
-      await tester.pump(const Duration(milliseconds: 300));
       await tester.tap(find.byTooltip('Stop transcribing'));
       await waitUntil(
         tester,
         () => reopened.meetingFeature.recording?.finishing == true,
       );
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 300));
+      await closeWorkspace(tester, reopened);
       expect(tester.takeException(), isNull);
       dynamic afterCancellation = await startedWorkspace(tester);
       await waitUntil(
@@ -838,8 +862,9 @@ void main() {
       );
       expect(find.text('2 files found · 5 already imported'), findsOneWidget);
       await tester.tap(find.text('Discovered review.md'));
-      // The workspace's busy indicator keeps animating during this dialog.
-      await tester.pump(const Duration(milliseconds: 250));
+      // The busy indicator keeps animating; render one frame and let the
+      // screenshot pixel deadline observe compositor presentation.
+      await tester.pump();
       await captureWindow(
         tester,
         '$screenshotDirectory/11-find-files-selection.png',
@@ -1268,8 +1293,7 @@ void main() {
         ))
           row['document_id']: [row['proj_x'], row['proj_y'], row['proj_z']],
       };
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeWorkspace(tester, afterCancellation);
       afterCancellation = await startedWorkspace(tester);
       await waitUntil(
         tester,
@@ -1523,8 +1547,7 @@ void main() {
           }),
         );
       }
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump(const Duration(milliseconds: 500));
+      await closeWorkspace(tester, afterCancellation);
     },
     timeout: Timeout(
       Duration(
