@@ -18,11 +18,7 @@ void main() {
   }
 
   setUp(() async {
-    // The original full-path contains predicate also includes ancestor names.
-    do {
-      root = await createTestTempDirectory('model-assets-');
-      if (root.path.contains('4')) await root.delete();
-    } while (root.path.contains('4'));
+    root = await createTestTempDirectory('model-assets-');
     metadata = [];
     catalog = ModelAssetLifecycle(
       root: root,
@@ -49,7 +45,9 @@ void main() {
       final stale = await write('models/2/old/stale');
       final events = <ModelAsset>[];
       final sub = catalog.updates.listen((asset) {
-        expect(stale.existsSync(), isFalse);
+        // The catalog deliberately applies its decimal predicate to the full
+        // path, so a missing type 4 also protects a root containing that digit.
+        expect(stale.existsSync(), root.absolute.path.contains('4'));
         events.add(asset);
       });
       await catalog.refresh();
@@ -63,6 +61,10 @@ void main() {
       expect(await catalog.localPath(4), existing.path);
       expect(events.map((a) => a.path), [existing.path]);
       await sub.cancel();
+      await write('models/4/2/new');
+      await write('models/14/3/gemma');
+      await catalog.refresh();
+      expect(await stale.exists(), isFalse);
     },
   );
   test(
@@ -75,11 +77,39 @@ void main() {
       await catalog.refresh();
       expect(await old.exists(), isTrue);
       expect(await broad.exists(), isTrue);
-      expect(await removed.exists(), isFalse);
+      expect(await removed.exists(), root.absolute.path.contains('4'));
       await write('models/4/2/new');
       await catalog.refresh();
       expect(await old.exists(), isFalse);
       expect(await broad.exists(), isFalse);
+      expect(await removed.exists(), isFalse);
+    },
+  );
+  test(
+    'an ancestor containing 4 is retained only while type 4 is missing',
+    () async {
+      final nested = Directory('${root.path}/ancestor4')..createSync();
+      final stale = File('${nested.path}/models/2/old/stale');
+      await stale.parent.create(recursive: true);
+      await stale.writeAsString('previous');
+      final latest = File('${nested.path}/models/4/2/new');
+      final nestedCatalog = ModelAssetLifecycle(
+        root: nested,
+        fetch: () async => ForesightSharedConfig(
+          onDeviceModelMetadatas: [model(4, 'new', '2')],
+        ),
+      );
+      try {
+        await nestedCatalog.refresh();
+        expect(await stale.exists(), isTrue);
+        await latest.parent.create(recursive: true);
+        await latest.writeAsString('current');
+        await nestedCatalog.refresh();
+        expect(await stale.exists(), isFalse);
+        expect(await latest.readAsString(), 'current');
+      } finally {
+        await nestedCatalog.close();
+      }
     },
   );
   test(

@@ -42,23 +42,21 @@ Future<void> buildCachedNativeFixture({
   final artifact = File(
     '${root.path}/$identity.${Platform.isMacOS ? 'dylib' : 'so'}',
   );
-  final lock = Directory('${artifact.path}.lock');
+  final lock = File('${artifact.path}.lock');
   final deadline = DateTime.now().add(const Duration(minutes: 2));
   var locked = false;
   while (!locked) {
-    // Directory.create treats an existing directory as success. System mkdir
-    // supplies the exclusive create needed for a lock across test processes.
-    final created = await _run('/bin/mkdir', [
-      lock.path,
-    ], const Duration(seconds: 5));
-    locked = created.exitCode == 0;
-    if (!locked) {
-      if (!lock.existsSync()) {
-        throw FileSystemException(
-          'Cannot create fixture lock: ${created.stderr}',
-          lock.path,
-        );
-      }
+    try {
+      await lock.create(exclusive: true);
+      locked = true;
+    } on FileSystemException catch (error) {
+      // Inspect the exclusive-create result itself: the winner may remove the
+      // lock before a later exists() check. Never classify that as a failure.
+      final code = error.osError?.errorCode;
+      final exists = Platform.isWindows
+          ? code == 80 || code == 183
+          : code == 17; // EEXIST on the supported Unix platforms.
+      if (!exists) rethrow;
       if (DateTime.now().isAfter(deadline)) {
         throw StateError('Timed out waiting for fixture build: ${lock.path}');
       }

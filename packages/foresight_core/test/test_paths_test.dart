@@ -29,6 +29,13 @@ void main() {
     expect(synchronous.existsSync(), isFalse);
     expect(asynchronous.existsSync(), isFalse);
   });
+  test('default root keeps macOS socket paths short and honors overrides', () {
+    final override = Platform.environment['FORESIGHT_TEST_TEMP_ROOT'];
+    expect(
+      shortTestTempRoot.path,
+      override ?? (Platform.isMacOS ? '/tmp' : Directory.systemTemp.path),
+    );
+  });
   test('early explicit removal is safe', () async {
     createTestTempDirectorySync('temp-helper-early-').deleteSync();
     await (await createTestTempDirectory('temp-helper-early-')).delete();
