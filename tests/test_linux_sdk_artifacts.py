@@ -249,7 +249,7 @@ class ImageProductionTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def test_valid_cache_hit_is_requalified_and_repacked_without_build(self):
+    def test_valid_cache_hit_is_verified_and_repacked_without_docker(self):
         for component in sdk.COMPONENTS:
             with self.subTest(component=component):
                 output = self.root / component
@@ -286,7 +286,7 @@ class ImageProductionTests(unittest.TestCase):
                         for command in commands
                     )
                 )
-                self.assertEqual(commands[0][:3], ["docker", "image", "load"])
+                self.assertEqual(commands, [])
                 restored = self.root / f"restored-{component}"
                 artifacts.unpack(
                     component, artifacts.fingerprint(component), output, restored

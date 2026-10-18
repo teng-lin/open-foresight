@@ -10,11 +10,12 @@ not the application test requirements.
 | Output | Identity | Storage |
 | --- | --- | --- |
 | macOS static SDK | SDK builder and its pinned sources/flags | Actions artifact, 90 days |
-| macOS native LiteRT/Whisper prefix | runtime builders, pinned wheel hashes, sources and patches | Actions artifact, 90 days |
-| Linux core | core Dockerfile, CMake hook, Python locks | PR Actions artifact, 14 days; reviewed GHCR image by digest |
+| macOS vendor LiteRT/Whisper SDK | vendor builders, upstream pins, compiler flags and patches | Actions artifact, 90 days |
+| macOS assembled runtime | vendor identity plus speech worker and shared headers | Actions artifact, 90 days |
+| Linux core | compiler/gRPC/Flutter Dockerfile and CMake hook | PR Actions artifact, 14 days; reviewed GHCR image by digest |
 | Linux LiteRT | its Dockerfile, builder, patch, core identity | PR Actions artifact, 14 days; reviewed GHCR image by digest |
-| Linux Whisper | its Dockerfile, builder, speech sources, core identity | PR Actions artifact, 14 days; reviewed GHCR image by digest |
-| Linux assembled SDK | assembly Dockerfile and all component identities | PR Actions artifact, 14 days; reviewed GHCR image by digest |
+| Linux Whisper | upstream library Dockerfile, vendor builder, core identity | PR Actions artifact, 14 days; reviewed GHCR image by digest |
+| Linux assembled SDK | component identities, Python locks, speech worker and shared headers | PR Actions artifact, 14 days; reviewed GHCR image by digest |
 | Tested macOS/Linux applications | exact successful main commit | Actions artifact, 30 days |
 
 The producer runs when dependency inputs change on main or a same-repository
@@ -24,12 +25,48 @@ Linux archives. Linux registry publication runs only on main; PR dependency jobs
 retain Docker images with read-only credentials. Fork PRs keep local consumer
 builds and cannot supply shared dependency artifacts. Dependency jobs have
 their own concurrency groups with cancellation disabled. Application/docs pushes cannot cancel compilation.
-Linux LiteRT and Whisper run in separate jobs after core, then assembly copies
-their outputs. Registry layer caches are separate per component. A LiteRT recipe
-change leaves the core and Whisper identities intact. The initial migration to
-these new component identities may require one Linux bootstrap; subsequent
-unchanged recipes reuse the image. macOS producers can bootstrap from existing
-exact main/PR caches.
+Linux LiteRT and Whisper run in separate jobs after core. Whisper installs its
+static libraries, headers, and CMake package separately from Foresight code.
+SDK assembly copies vendor outputs, installs the Python tooling environments,
+and compiles only the speech worker against that installed package. A speech
+worker change or Python dependency change therefore leaves all vendor identities
+intact. macOS similarly retains a vendor SDK and assembles the worker in a
+separate producer. Its application consumers continue to use the complete runtime
+artifact. LiteRT's patched C API stays in the vendor build because those patches
+change the library itself.
+
+Whole comment lines in Python lockfiles are excluded from artifact identities;
+requirements, hashes, flags, ordering, inline comments and continued lines remain
+bound to the key. A comment-only edit can reuse the complete SDK; a real Python
+dependency edit rebuilds only SDK assembly. Compiler/base-image/gRPC/Flutter
+changes still invalidate downstream vendor artifacts because they physically
+inherit that toolchain image. These new boundaries require one initial vendor
+bootstrap; subsequent worker and application changes reuse it.
+
+A verified saved-image cache hit checks the successful trusted producer receipt,
+archive checksum, recipe identity, image configuration ID format and platform
+metadata without loading Docker or running qualification again. Consumers still
+validate the loaded image ID and platform; new builds must qualify before export.
+This avoids a multi-gigabyte Docker load merely to forward an unchanged output.
+
+Registry layer caches remain separate per component. The macOS static SDK can
+still bootstrap from its existing exact main/PR cache.
+
+This split does not remove all CI transfer or application build costs. Retained
+component images still include inherited Docker layers, so downloading multiple
+parent archives transfers duplicate base/toolchain bytes. SDK forwarding still
+unpacks and recompresses its artifact envelope. Package and acceptance consumers
+also build application images separately. Deduplicating those transfers,
+forwarding verified envelopes directly, probing before hosted disk cleanup, and
+sharing a tested application stage are separate follow-ups. CI timing must be
+measured after the initial vendor bootstrap before claiming an overall speedup.
+
+For a standalone macOS build, prepare vendors before assembling the runtime:
+
+```sh
+python tools/build_macos_vendor.py --jobs 3
+python tools/build_macos_runtimes.py --jobs 3
+```
 
 The monthly Linux dependency schedule bypasses qualified descriptors and Docker
 layer caches, rebuilds from digest-pinned base images, applies Ubuntu package

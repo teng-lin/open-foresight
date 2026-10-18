@@ -12,6 +12,7 @@ name: Reusable CI dependencies
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
+    - tools/build_macos_vendor.py
     - tools/build_litert_extensions.py
     - tools/litert_extensions.py
     - tools/test_litert_status_abi.py
@@ -48,6 +49,7 @@ name: Reusable CI dependencies
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
+    - tools/build_macos_vendor.py
     - tools/build_litert_extensions.py
     - tools/litert_extensions.py
     - tools/test_litert_status_abi.py
@@ -69,6 +71,7 @@ jobs:
     outputs:
       macos-sdk: ${{ steps.keys.outputs['macos-sdk'] }}
       macos-runtime: ${{ steps.keys.outputs['macos-runtime'] }}
+      macos-vendor: ${{ steps.keys.outputs['macos-vendor'] }}
       linux-core: ${{ steps.keys.outputs['linux-core'] }}
       linux-litert: ${{ steps.keys.outputs['linux-litert'] }}
       linux-whisper: ${{ steps.keys.outputs['linux-whisper'] }}
@@ -95,11 +98,9 @@ jobs:
       matrix:
         component:
         - sdk
-        - runtime
     concurrency:
-      group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)]
-        }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted'
-        }}
+      group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}-${{
+        github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
       cancel-in-progress: false
     env:
       COMPONENT: ${{ matrix.component }}
@@ -140,21 +141,9 @@ jobs:
       with:
         path: build/sdk
         key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
-    - name: Bootstrap from existing runtime cache
-      if: matrix.component == 'runtime' && steps.shared.outputs.hit != 'true'
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      with:
-        path: build/macos-runtimes
-        key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py',
-          'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'services/speech/**', 'services/inference/persistent_worker.h',
-          'services/inference/output_budget.h', 'third_party/litert_lm/*.patch')
-          }}
     - name: Build or verify SDK
       if: matrix.component == 'sdk'
       run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
-    - name: Build or verify inference runtimes
-      if: matrix.component == 'runtime'
-      run: .venv/bin/python tools/build_macos_runtimes.py --jobs 3
     - name: Verify and archive the qualified prefix
       run: |-
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
@@ -759,5 +748,131 @@ jobs:
         path: build/published/
         retention-days: 14
         overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+  macos-vendor:
+    name: Build macOS vendor
+    needs: plan
+    runs-on: macos-15
+    timeout-minutes: 120
+    concurrency:
+      group: dependency-macos-vendor-${{ needs.plan.outputs['macos-vendor'] }}-${{ github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    env:
+      COMPONENT: vendor
+      IDENTITY: ${{ needs.plan.outputs['macos-vendor'] }}
+      PREFIX: build/macos-vendor
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Install compiler tools
+      run: brew install cmake ninja git-lfs
+    - name: Install verifier dependencies
+      run: |-
+        python -m venv .venv
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+    - name: Restore an already verified shared prefix
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "macos-${COMPONENT}" --prefix "$PREFIX" --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Build or verify vendor runtimes
+      run: .venv/bin/python tools/build_macos_vendor.py --jobs 3
+    - name: Verify and archive the qualified prefix
+      run: |-
+        python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
+        python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-macos-vendor-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+  macos-runtime:
+    name: Build macOS ${{ matrix.component }}
+    needs:
+    - plan
+    - macos-vendor
+    runs-on: macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+        - runtime
+    concurrency:
+      group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}-${{
+        github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    env:
+      COMPONENT: ${{ matrix.component }}
+      IDENTITY: ${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}
+      PREFIX: ${{ matrix.component == 'sdk' && 'build/sdk' || 'build/macos-runtimes' }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Install compiler tools
+      run: brew install cmake ninja git-lfs
+    - name: Install verifier dependencies
+      run: |-
+        python -m venv .venv
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+    - name: Restore an already verified shared prefix
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "macos-${COMPONENT}" --prefix "$PREFIX" --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+    - name: Restore verified vendor libraries for worker assembly
+      if: matrix.component == 'runtime' && steps.shared.outputs.hit != 'true'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py pull --component macos-vendor --prefix build/macos-vendor --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
+    - name: Build or verify inference runtimes
+      if: matrix.component == 'runtime'
+      run: .venv/bin/python tools/build_macos_runtimes.py --jobs 3
+    - name: Verify and archive the qualified prefix
+      run: |-
+        python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
+        python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-macos-${{ matrix.component }}-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
         if-no-files-found: error
         compression-level: 0

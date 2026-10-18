@@ -1,6 +1,7 @@
 """Supply-chain gates must reject tampering even with optimized Python."""
 
 import hashlib
+import fnmatch
 import json
 from pathlib import Path
 import re
@@ -226,6 +227,37 @@ class BuildPolicyTests(unittest.TestCase):
         self.assertNotIn("--push", local_build)
         for component in ("sdk-core", "sdk-litert", "sdk-whisper", "sdk"):
             self.assertIn(f"packaging/{component}.Dockerfile", local_build)
+
+    def test_dependency_workflow_triggers_cover_every_artifact_input(self):
+        from tools.ci_artifacts import FILES
+
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        for event in ("push", "pull_request"):
+            patterns = workflow["on"][event]["paths"]
+            for component, names in FILES.items():
+                for name in names:
+                    self.assertTrue(
+                        any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns),
+                        (event, component, name),
+                    )
+
+    def test_macos_worker_assembly_depends_on_vendor_but_static_sdk_stays_parallel(
+        self,
+    ):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        jobs = workflow["jobs"]
+        self.assertEqual(jobs["macos"]["needs"], "plan")
+        self.assertEqual(jobs["macos-vendor"]["needs"], "plan")
+        self.assertIn("macos-vendor", jobs["macos-runtime"]["needs"])
+        commands = "\n".join(
+            step.get("run", "") for step in jobs["macos-runtime"]["steps"]
+        )
+        self.assertIn("--component macos-vendor", commands)
+        self.assertIn("tools/build_macos_runtimes.py", commands)
 
     def test_monthly_builds_bypass_descriptor_and_layer_caches(self):
         text = (ROOT / ".github/workflows/ci-dependencies.yml").read_text()

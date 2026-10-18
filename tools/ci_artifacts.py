@@ -18,21 +18,22 @@ FILES = {
     "macos-sdk": ["tools/build_macos_sdk.py"],
     "macos-runtime": [
         "tools/build_macos_runtimes.py",
-        "tools/build_litert_extensions.py",
-        "tools/litert_extensions.py",
-        "tools/test_litert_status_abi.py",
-        "third_party/litert_lm/stop-token-sequences.patch",
-        "third_party/litert_lm/macos-trivial-abi.patch",
         "services/speech/CMakeLists.txt",
         "services/speech/worker.cpp",
         "services/inference/persistent_worker.h",
         "services/inference/output_budget.h",
     ],
+    "macos-vendor": [
+        "tools/build_macos_vendor.py",
+        "tools/build_litert_extensions.py",
+        "tools/litert_extensions.py",
+        "tools/test_litert_status_abi.py",
+        "third_party/litert_lm/stop-token-sequences.patch",
+        "third_party/litert_lm/macos-trivial-abi.patch",
+    ],
     "linux-core": [
         "packaging/sdk-core.Dockerfile",
         "packaging/minimal-grpc.cmake",
-        "requirements-dev.lock",
-        "requirements-litert.lock",
     ],
     "linux-litert": [
         "packaging/sdk-litert.Dockerfile",
@@ -45,14 +46,19 @@ FILES = {
     "linux-whisper": [
         "packaging/sdk-whisper.Dockerfile",
         "tools/build_whisper_vulkan.py",
+    ],
+    "linux-sdk": [
+        "packaging/sdk.Dockerfile",
+        "requirements-dev.lock",
+        "requirements-litert.lock",
         "services/speech/CMakeLists.txt",
         "services/speech/worker.cpp",
         "services/inference/persistent_worker.h",
         "services/inference/output_budget.h",
     ],
-    "linux-sdk": ["packaging/sdk.Dockerfile"],
 }
 PARENTS = {
+    "macos-runtime": ["macos-vendor"],
     "linux-litert": ["linux-core"],
     "linux-whisper": ["linux-core"],
     "linux-sdk": ["linux-core", "linux-litert", "linux-whisper"],
@@ -60,6 +66,7 @@ PARENTS = {
 JOBS = {
     "macos-sdk": "Build macOS sdk",
     "macos-runtime": "Build macOS runtime",
+    "macos-vendor": "Build macOS vendor",
     "linux-sdk": "Assemble Linux SDK",
     "linux-core": "Build Linux core",
     "linux-litert": "Build Linux litert",
@@ -72,12 +79,32 @@ def fingerprint(component, root=ROOT):
     record = {
         "schema": 1,
         "component": component,
-        "files": {name: digest(root / name) for name in FILES[component]},
+        "files": {name: input_digest(root / name) for name in FILES[component]},
         "parents": {
             name: fingerprint(name, root) for name in PARENTS.get(component, [])
         },
     }
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+def input_digest(path):
+    """Ignore pip comment-only lines; retain requirement order, flags and hashes.
+
+    Only whole comment lines are ignored. Inline comments and continuation syntax
+    remain byte-exact to avoid accidentally changing pip's parsing semantics.
+    """
+    path = Path(path)
+    if path.name.startswith("requirements-") and path.suffix == ".lock":
+        lines = []
+        continued = False
+        for line in path.read_bytes().splitlines(keepends=True):
+            if not continued and line.lstrip().startswith(b"#"):
+                continue
+            lines.append(line)
+            continued = line.rstrip().endswith(b"\\")
+        meaningful = b"".join(lines)
+        return hashlib.sha256(meaningful).hexdigest()
+    return digest(path)
 
 
 def digest(path):
