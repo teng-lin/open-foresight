@@ -57,9 +57,18 @@ def test_only_explicit_missing_driver_capability_is_a_recorded_limit(tmp_path):
         gpu.litert_probe(Path("runner"), "model", {}, tmp_path)
 
 
-def test_decode_executes_on_gpu_with_sixteen_token_bound(tmp_path):
+@pytest.mark.parametrize(
+    ("content", "decoded"),
+    [
+        ("one two three", True),
+        ("", False),
+        ([{"text": "one"}], True),
+        ([{"text": ""}], False),
+    ],
+)
+def test_decode_executes_on_gpu_with_sixteen_token_bound(tmp_path, content, decoded):
     frames = iter(
-        ["ready 1", '1 answer {"content":"one two three"}', "1 done completed"]
+        ["ready 1", "1 answer " + json.dumps({"content": content}), "1 done completed"]
     )
     commands = []
 
@@ -86,9 +95,13 @@ def test_decode_executes_on_gpu_with_sixteen_token_bound(tmp_path):
         patch.object(gpu, "Peer", Peer),
         patch.object(gpu, "finish_peer"),
     ):
-        assert (
-            gpu.litert_probe(Path("runner"), "model", {}, tmp_path)["status"]
-            == "passed"
-        )
+        if decoded:
+            assert (
+                gpu.litert_probe(Path("runner"), "model", {}, tmp_path)["status"]
+                == "passed"
+            )
+        else:
+            with pytest.raises(RuntimeError, match="no decoded text"):
+                gpu.litert_probe(Path("runner"), "model", {}, tmp_path)
     assert commands[0][-3:] == ["--backend", "gpu", "--serve"]
     assert '"max_output_tokens": 16' in commands[1]
