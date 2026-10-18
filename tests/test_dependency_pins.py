@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import runpy
 
+from test_pull_request_workflows import parse_workflow
+
 ROOT = Path(__file__).resolve().parents[1]
 PINS = json.loads((ROOT / "tools/pins.json").read_text())
 
@@ -95,10 +97,26 @@ def test_minimal_ubuntu_bootstraps_verified_ca_before_snapshot_https():
 
 
 def test_macos_offline_contracts_run_after_the_pinned_sdk_protoc_is_available():
-    source = (ROOT / ".github/workflows/macos.yml").read_text()
-    sdk = source.index("name: Fetch verified macos-sdk")
-    path = source.index('echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"')
-    tests = source.index("name: Offline Python tests and branch coverage")
-    assert sdk < path < tests
-    install = source.split("name: Install build tools", 1)[1].split("    - ", 1)[0]
-    assert "protobuf" not in install
+    setup = parse_workflow(
+        (ROOT / ".github/actions/setup-macos-stage/action.yml").read_text()
+    )
+    steps = setup["runs"]["steps"]
+    sdk = next(step for step in steps if "--component macos-sdk" in step.get("run", ""))
+    assert sdk["run"].index("ci_verify_dependency.py") < sdk["run"].index(
+        'echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"'
+    )
+    workflow = parse_workflow(
+        (ROOT / ".github/workflows/macos-platform-stages.yml").read_text()
+    )
+    native = workflow["jobs"]["native-macos"]["steps"]
+    setup_index = next(
+        i
+        for i, step in enumerate(native)
+        if step.get("uses") == "./.github/actions/setup-macos-stage"
+    )
+    tests_index = next(
+        i for i, step in enumerate(native) if step.get("run") == "tools/coverage.sh"
+    )
+    assert setup_index < tests_index
+    install = next(step for step in steps if step.get("name") == "Install build tools")
+    assert "protobuf" not in install["run"]

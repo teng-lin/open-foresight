@@ -93,6 +93,7 @@ def check_gates(jobs, selected, main):
             for name, required in selected.items()
         }
     )
+    expected["macos-stages"] = expected["macos"]
     for name, result in expected.items():
         if jobs.get(name, {}).get("result") != result:
             raise ValueError(

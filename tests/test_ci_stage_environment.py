@@ -29,7 +29,7 @@ def stage_identity(root, context):
 def repository(tmp_path):
     import subprocess
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=30)
     return tmp_path
 
 

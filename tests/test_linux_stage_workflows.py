@@ -157,6 +157,7 @@ def test_acceptance_aggregate_rejects_every_incomplete_selected_job(
             "LINUX_RESULT": package,
         },
         check=False,
+        timeout=30,
     )
     assert (result.returncode == 0) == success
 
@@ -183,7 +184,7 @@ def test_main_schedule_and_manual_acceptance_force_validation():
 def test_complete_stage_inputs_and_parent_identities_invalidate_expected_stages(
     tmp_path, changed, expected
 ):
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, timeout=30)
     environment = {
         "compiler": "gcc",
         "runtime": "Dart",
@@ -208,3 +209,27 @@ def test_complete_stage_inputs_and_parent_identities_invalidate_expected_stages(
     path.write_text("new input")
     after = keys()
     assert {stage for stage in STAGES if before[stage] != after[stage]} == expected
+
+
+@pytest.mark.parametrize("failed", ["native", "core", "desktop", "service"])
+def test_failed_macos_stage_cannot_be_hidden_by_successful_packaging(failed):
+    from tools.ci_changes import check_gates, select_gates
+
+    jobs = workflow("macos.yml")["jobs"]
+    assert "needs.macos-stages.result == 'success'" in jobs["macos"]["if"]
+    assert "macos-stages" in jobs["platform-checks"]["needs"]
+    reusable = workflow("macos-platform-stages.yml")["jobs"]
+    assert f"{failed}-macos" in reusable
+    selected = select_gates(["apps/desktop/macos/source.swift"])
+    # A failed reusable child makes its caller fail even when installer artifacts
+    # from other children exist and packaging could otherwise finish successfully.
+    results = {
+        "changes": {"result": "success"},
+        **{
+            name: {"result": "success" if value else "skipped"}
+            for name, value in selected.items()
+        },
+        "macos-stages": {"result": "failure"},
+    }
+    with pytest.raises(ValueError, match="macos-stages"):
+        check_gates(results, selected, False)

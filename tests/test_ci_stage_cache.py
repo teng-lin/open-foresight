@@ -49,7 +49,7 @@ class SourceTree(unittest.TestCase):
     def git(self, *args):
         return (
             subprocess.check_output(
-                ["git", *args], cwd=self.root, stderr=subprocess.DEVNULL
+                ["git", *args], cwd=self.root, stderr=subprocess.DEVNULL, timeout=30
             )
             .decode()
             .strip()

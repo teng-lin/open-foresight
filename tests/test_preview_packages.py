@@ -301,10 +301,26 @@ def test_preview_workflow_has_no_release_publication_and_gates_downloads():
     )
     for name in ("macos", "linux-bundle"):
         steps = builds["jobs"][name]["steps"]
-        assert any(
-            step.get("name") == "Stamp distribution identity before building"
+        if name == "macos":
+            setup = next(
+                step
+                for step in steps
+                if step.get("uses") == "./.github/actions/setup-macos-stage"
+            )
+            assert (
+                setup["with"]["build-number"]
+                == "${{ inputs.build_number || needs.distribution-number.outputs.build_number }}"
+            )
+            composite = parse_workflow(
+                (ROOT / ".github/actions/setup-macos-stage/action.yml").read_text()
+            )
+            steps = composite["runs"]["steps"]
+        stamp = next(
+            step
             for step in steps
+            if "tools/preview_packages.py stamp" in step.get("run", "")
         )
+        assert "--source" in stamp["run"] and "--build-number" in stamp["run"]
 
 
 def test_application_receipts_bind_to_the_actual_source_checkout(tmp_path):

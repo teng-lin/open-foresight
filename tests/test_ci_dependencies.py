@@ -567,6 +567,7 @@ class SelectionTests(unittest.TestCase):
                         for name, required in selected.items()
                     },
                 }
+                jobs["macos-stages"] = {"result": jobs["macos"]["result"]}
                 changes.check_gates(jobs, selected, main)
                 for name in jobs:
                     for result in ("success", "cancelled", "failure", "skipped"):

@@ -77,6 +77,7 @@ jobs:
           name: linux-native-evidence
           path: |
             test-results/
+            coverage/
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
   core-linux:
@@ -133,6 +134,7 @@ jobs:
           name: linux-core-evidence
           path: |
             test-results/
+            coverage/
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
   desktop-linux:
@@ -189,6 +191,8 @@ jobs:
           name: linux-desktop-evidence
           path: |
             test-results/
+            coverage/
+            apps/desktop/coverage/lcov.info
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
   service-linux:
@@ -257,5 +261,6 @@ jobs:
           name: linux-service-evidence
           path: |
             test-results/
+            coverage/
             build/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
