@@ -2,6 +2,14 @@
   "schema": 1,
   "entries": [
     {
+      "path": "tools/accept_software_gpu.py",
+      "mode": "automated",
+      "reason": "Shipped GPU defaults on the explicitly selected Mesa software Vulkan ICD; physical GPU remains a release-day check.",
+      "wiring": [
+        ".github/workflows/integration-acceptance.yml"
+      ]
+    },
+    {
       "path": "tools/test_capture_device_recovery.py",
       "mode": "manual",
       "reason": "Verify private PipeWire device loss/return without physical recording.",

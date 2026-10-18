@@ -179,3 +179,7 @@ and web-search release tests live under `tests/` and run in the offline suite.
 ### Timing fixtures
 
 Readiness polling in Dart tests always checks a condition and has a deadline; it does not assume readiness after a delay. The remaining nonzero polling intervals cover socket ownership, native capture/transcript readiness, search completion and process startup. Zero-duration delays only yield the event queue. The HTTP slow-stream fixture deliberately paces bytes to test the importer's wall-clock timeout, and the PipeWire pause fixture observes the full two-second no-capture window. These are measured negative assertions, not startup waits. Interrupted model downloads wait until the actual partial file has the expected bytes before breaking the socket. The PipeWire marker test waits for both owned sinks to become idle before resuming.
+
+### Software Vulkan
+
+The PR and weekly acceptance container installs Mesa lavapipe and selects only its ICD. `accept_software_gpu.py` checks the shipped Vulkan Whisper runtime on two seconds of the pinned speech fixture, and attempts the shipped LiteRT GPU backend/model plus a 16-token decode. A missing OpenCL GPU API on the software driver is recorded explicitly as `unsupported_software_driver`; unexpected capability failures and every decode failure fail the gate. Lavapipe implements Vulkan, so it cannot establish OpenCL delegate support or production GPU correctness. Physical GPU inference remains a release-day manual check. Full probe diagnostics are retained with integration evidence.
