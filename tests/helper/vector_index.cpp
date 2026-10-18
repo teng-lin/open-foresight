@@ -103,14 +103,16 @@ int main(int argc, char **argv) {
       for (const auto &allowed :
            {std::set<std::string>{}, std::set<std::string>{"0", "2", "7"}}) {
         for (double minimum : {-.5, 0., .7}) {
-          auto actual = snapshot.search(query, 7, minimum, allowed);
-          auto reference = expected.search(query, 7, minimum, allowed);
-          REQUIRE(actual.size() == reference.size());
-          for (size_t i = 0; i < actual.size(); ++i) {
-            const auto &wanted = expected.chunks[reference[i].chunk];
-            REQUIRE(actual[i].chunk->id == wanted.id);
-            REQUIRE(actual[i].chunk->text == wanted.text);
-            REQUIRE(actual[i].score == reference[i].score);
+          for (size_t limit : {size_t(0), size_t(1), size_t(7), size_t(100)}) {
+            auto actual = snapshot.search(query, limit, minimum, allowed);
+            auto reference = expected.search(query, limit, minimum, allowed);
+            REQUIRE(actual.size() == reference.size());
+            for (size_t i = 0; i < actual.size(); ++i) {
+              const auto &wanted = expected.chunks[reference[i].chunk];
+              REQUIRE(actual[i].chunk->id == wanted.id);
+              REQUIRE(actual[i].chunk->text == wanted.text);
+              REQUIRE(actual[i].score == reference[i].score);
+            }
           }
         }
       }
@@ -147,11 +149,35 @@ int main(int argc, char **argv) {
   }
   stop = true;
   reader.join();
-  // A full 4096-chunk rebuild after each write would cost >500k here. Binary
-  // compaction builds 576 chunks, sharing the original base with old readers.
-  REQUIRE(construction == 576);
+  // A full 4096-chunk rebuild after each write would cost >500k here. Bound
+  // amortized work without depending on a particular compaction schedule.
+  REQUIRE(construction <= 128 * 8);
   REQUIRE(old.search({1, 0}, 4096, .9).size() == 4096);
   REQUIRE(updated.search({1, 0}, 4096, .9).size() == 4096 - 128);
+  // A single large document can cross several weight classes at once; it
+  // compacts the base exactly once, then tiny replacements/deletes hide all of
+  // its old high-scoring chunks before the per-segment top-k is selected.
+  std::vector<IndexedChunk> oversized;
+  for (int i = 0; i < 10000; ++i)
+    oversized.push_back({std::to_string(i), "oversized", "", {0, 1}});
+  auto large = updated.replacing({"oversized"}, std::move(oversized));
+  REQUIRE(large.segment_count() == 1);
+  REQUIRE(large.constructed_chunks() == 14096);
+  auto first = large.search({0, 1}, 5, .9, {"oversized"});
+  REQUIRE(first.size() == 5);
+  for (size_t i = 0; i < first.size(); ++i)
+    REQUIRE(first[i].chunk->text == std::to_string(i));
+  auto tiny =
+      large.replacing({"oversized"}, {{"tiny", "oversized", "", {1, 0}}});
+  REQUIRE(tiny.search({0, 1}, 5, .9, {"oversized"}).empty());
+  REQUIRE(tiny.search({1, 0}, 5, .9, {"oversized"}).front().chunk->text ==
+          "tiny");
+  auto removed = tiny.replacing({"oversized"}, {});
+  REQUIRE(removed.search({1, 0}, 5, 0, {"oversized"}).empty());
+  auto reinserted =
+      removed.replacing({"oversized"}, {{"zero", "oversized", "", {0, 0}}});
+  REQUIRE(reinserted.search({0, 0}, 5, 0, {"oversized"}).front().chunk->text ==
+          "zero");
   // Switching embedding generations creates an independent forest: no old
   // dimension, document revision or tombstone can enter the replacement.
   VectorIndexSnapshot generation({{"fresh", "base-0", "", {0, 0, 1}}});

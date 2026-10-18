@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <queue>
@@ -245,6 +246,8 @@ public:
                     std::make_move_iterator(chunks.end()));
       chunks = std::move(merged);
       ids.insert(older.replaced.begin(), older.replaced.end());
+      if (weight > std::numeric_limits<uint64_t>::max() - older.weight)
+        throw std::overflow_error("Vector index compaction weight overflow");
       weight += older.weight;
     }
     // Match SQLite's document/ordinal ordering, including exact score ties.
