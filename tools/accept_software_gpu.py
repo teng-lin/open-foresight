@@ -83,6 +83,11 @@ def litert_probe(runner, model, env, output):
             "status": "passed",
             "backend": "gpu",
             "max_output_tokens": 16,
+            "tools": {
+                "tools": [],
+                "system_message": "Answer briefly.",
+                "stop_token_ids": [[1, 1]],
+            },
             "answer": answer,
         }
     except Exception as error:
@@ -107,6 +112,7 @@ def main():
         env = {
             "PATH": "/usr/bin:/bin",
             "HOME": temporary,
+            "FORESIGHT_LITERT_CACHE": str(Path(temporary) / "litert-cache"),
             "VK_ICD_FILENAMES": str(icds[0]),
             "VK_DRIVER_FILES": str(icds[0]),
             **environment,
