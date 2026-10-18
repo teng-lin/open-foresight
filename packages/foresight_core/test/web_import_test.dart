@@ -520,6 +520,36 @@ void main() {
     },
   );
 
+  test('HTML meta charset is sniffed only without an HTTP encoding', () async {
+    for (final declaration in [
+      '<meta charset="gbk">',
+      '<meta content="text/html; charset=gbk" http-equiv="Content-Type">',
+    ]) {
+      final bytes = Uint8List.fromList([
+        ...ascii.encode('$declaration<p>'),
+        0xd6,
+        0xd0,
+        0xce,
+        0xc4,
+        ...ascii.encode('</p>'),
+      ]);
+      expect(await parseWebPage(bytes, mimeType: 'text/html'), '中文');
+    }
+    final bytes = Uint8List.fromList(
+      utf8.encode('<meta charset="gbk"><p>中文</p>'),
+    );
+    expect(
+      await parseWebPage(bytes, mimeType: 'text/html', charset: 'utf-8'),
+      '中文',
+    );
+    expect(
+      htmlDeclaredCharset(
+        Uint8List.fromList(ascii.encode('${' ' * 1024}<meta charset=gbk>')),
+      ),
+      isNull,
+    );
+  });
+
   test(
     'response charsets decode GBK, Big5 and Shift_JIS with full HTML entities',
     () async {
