@@ -9,6 +9,57 @@ import 'package:test/test.dart';
 
 void main() {
   test(
+    'concurrent isolated startup protects both sockets before the first RPC',
+    () async {
+      final saved = Map<String, String>.from(runtimeConfiguration.environment);
+      for (final key in [
+        'FORESIGHT_HELPER',
+        'FORESIGHT_NATIVE',
+        'FORESIGHT_INSTALL_ROOT',
+        'FORESIGHT_RUNTIME_REVISION',
+        'FORESIGHT_MODEL_MANIFEST',
+      ]) {
+        runtimeConfiguration.environment.remove(key);
+      }
+      final directory = shortTestTempRoot.createTempSync('of-startup-');
+      final hosts = <IsolatedApplicationService>[];
+      final clients = <ServiceClient>[];
+      try {
+        await Future.wait(
+          List.generate(8, (index) async {
+            final profile = ProfilePaths(
+              '${directory.path}/$index/data',
+              '${directory.path}/$index/run',
+            );
+            final host = await IsolatedApplicationService.start(profile);
+            hosts.add(host);
+            for (final name in [
+              'application.sock',
+              'application-worker.sock',
+            ]) {
+              final mode = FileStat.statSync('${profile.runtime}/$name').mode;
+              expect(mode & 0x1ff, 0x180, reason: '$name must be private');
+            }
+            final client = await ServiceClient.connect(
+              serviceEndpoint(profile),
+            );
+            clients.add(client);
+            final status = await client.call('status') as Map;
+            expect(status['pid'], pid);
+            expect(await client.call('notes.list'), isEmpty);
+          }),
+        );
+      } finally {
+        await Future.wait(clients.map((client) => client.close()));
+        await Future.wait(hosts.map((host) => host.close()));
+        directory.deleteSync(recursive: true);
+        runtimeConfiguration.environment
+          ..clear()
+          ..addAll(saved);
+      }
+    },
+  );
+  test(
     'isolated domain preserves multiplexing, committed writes and idle shutdown acknowledgement',
     () async {
       final saved = Map<String, String>.from(runtimeConfiguration.environment);
@@ -32,6 +83,12 @@ void main() {
       final host = await IsolatedApplicationService.start(profile);
       ServiceClient? client;
       try {
+        for (final name in ['application.sock', 'application-worker.sock']) {
+          expect(
+            File('${profile.runtime}/$name').statSync().mode & 0x1ff,
+            0x180,
+          );
+        }
         client = await ServiceClient.connect(serviceEndpoint(profile));
         final status = await client.call('status') as Map;
         expect(status['pid'], pid);

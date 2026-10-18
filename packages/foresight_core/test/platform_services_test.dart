@@ -18,6 +18,26 @@ void main() {
   });
   tearDown(() => scratch.deleteSync(recursive: true));
 
+  test('private file permissions use literal paths and report failures', () {
+    final file = File('${scratch.path}/private file \u03bb;literal')
+      ..writeAsStringSync('private');
+    expect(Process.runSync('/bin/chmod', ['777', file.path]).exitCode, 0);
+    protectPrivateFile(file.path);
+    expect(file.statSync().mode & 0x1ff, 0x180);
+    expect(file.readAsStringSync(), 'private');
+    final missing = '${scratch.path}/missing';
+    expect(
+      () => protectPrivateFile(missing),
+      throwsA(
+        isA<FileSystemException>().having((e) => e.path, 'path', missing),
+      ),
+    );
+    expect(
+      () => protectPrivateFile('${file.path}\u0000other'),
+      throwsArgumentError,
+    );
+  });
+
   test(
     'packaged service uses LaunchServices with isolated explicit overrides',
     () {
