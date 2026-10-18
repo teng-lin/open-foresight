@@ -9,3 +9,4 @@ linter:
     discarded_futures: true
     cancel_subscriptions: true
     close_sinks: true
+    avoid_void_async: true

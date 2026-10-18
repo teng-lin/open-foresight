@@ -492,6 +492,10 @@ class _WorkspaceState extends State<Workspace>
     super.dispose();
   }
 
+  void reportAsyncError(Object failure) {
+    if (mounted) setState(() => error = failure.toString());
+  }
+
   Future<void> run(Future<void> Function() action) async {
     setState(() {
       _operations++;

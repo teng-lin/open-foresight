@@ -192,7 +192,7 @@ class _MeetingsController extends _FeatureController {
     });
   }
 
-  void editArtifact(Map<String, Object?> a) async {
+  Future<void> editArtifact(Map<String, Object?> a) async {
     final controller = TextEditingController(
       text: (a['edited'] ?? a['generated']) as String,
     );
@@ -1183,10 +1183,12 @@ class _MeetingsController extends _FeatureController {
                       if (enhanced != null)
                         IconButton(
                           tooltip: 'Edit enhanced notes',
-                          onPressed: () => editArtifact({
-                            ...enhanced,
-                            'edited': enhancedText,
-                          }),
+                          onPressed: () => unawaited(
+                            editArtifact({
+                              ...enhanced,
+                              'edited': enhancedText,
+                            }).catchError(shell.reportAsyncError),
+                          ),
                           icon: const Icon(Icons.edit_outlined, size: 18),
                         ),
                       IconButton(
@@ -1851,7 +1853,9 @@ class _MeetingsController extends _FeatureController {
               if (artifact != null)
                 IconButton(
                   tooltip: 'Edit $title',
-                  onPressed: () => editArtifact(artifact),
+                  onPressed: () => unawaited(
+                    editArtifact(artifact).catchError(shell.reportAsyncError),
+                  ),
                   icon: const Icon(Icons.edit_outlined),
                 ),
             ],
@@ -1900,7 +1904,11 @@ class _MeetingsController extends _FeatureController {
                                 ),
                                 trailing: IconButton(
                                   tooltip: 'Edit previous version',
-                                  onPressed: () => editArtifact(previous),
+                                  onPressed: () => unawaited(
+                                    editArtifact(
+                                      previous,
+                                    ).catchError(shell.reportAsyncError),
+                                  ),
                                   icon: const Icon(Icons.edit_outlined),
                                 ),
                               ),
