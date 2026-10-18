@@ -6,9 +6,11 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import subprocess
 import tarfile
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE_PATHS = (
@@ -152,12 +154,115 @@ def pack(root, platform, stage, output):
     manifest = {
         "files": record,
         "source_times": source_times(root) if stage == "native" else {},
+        # tarfile stores stat().st_mtime as a float. Its sub-microsecond rounding
+        # invalidates Ninja's exact object-mtime dependency records on restore.
+        "output_times": {
+            name: (root / name).stat().st_mtime_ns
+            for name, value in record.items()
+            if stage == "native" and value["kind"] == "file"
+        },
     }
     (output / "content.json").write_text(json.dumps(manifest, sort_keys=True) + "\n")
     return manifest
 
 
-def unpack(root, platform, stage, archive, manifest):
+def restore_source_times(root, manifest, force_changed=False):
+    """Keep unchanged objects warm without hiding changed old-mtime sources."""
+    previous = manifest.get("source_times", {})
+    if not isinstance(previous, dict):
+        raise ValueError("Invalid source timestamp inventory")
+    for name, value in previous.items():
+        if (
+            not isinstance(name, str)
+            or PurePosixPath(name).is_absolute()
+            or ".." in PurePosixPath(name).parts
+            or not isinstance(value, dict)
+            or not isinstance(value.get("sha256"), str)
+            or not re.fullmatch(r"[a-f0-9]{64}", value["sha256"])
+            or type(value.get("mtime_ns")) is not int
+            or not 0 <= value["mtime_ns"] < 2**63
+        ):
+            raise ValueError("Unsafe source timestamp entry")
+        path = root / name
+        if (
+            path.resolve().is_relative_to(root.resolve())
+            and path.is_file()
+            and not path.is_symlink()
+            and digest(path) == value["sha256"]
+        ):
+            os.utime(path, ns=(path.stat().st_atime_ns, value["mtime_ns"]))
+    if not force_changed:
+        return
+    current = source_times(root)
+    changed = [
+        name
+        for name, value in current.items()
+        if previous.get(name, {}).get("sha256") != value["sha256"]
+    ]
+    if not changed:
+        return
+    # A checkout can deliberately preserve an old mtime for different bytes.
+    # Touch every changed/new source after all restored outputs, including on
+    # filesystems/tools that compare whole seconds. Avoid future CMake inputs:
+    # they can otherwise cause an endless build.ninja regeneration loop.
+    latest = max(
+        (
+            (root / name).stat().st_mtime_ns
+            for name, value in manifest["files"].items()
+            if value["kind"] == "file"
+        ),
+        default=0,
+    )
+    minimum = (latest // 1_000_000_000 + 1) * 1_000_000_000
+    delay = (minimum - time.time_ns()) / 1_000_000_000
+    if delay > 2:
+        raise ValueError("Native cache has output timestamps in the future")
+    if delay > 0:
+        time.sleep(delay)
+    stamp = time.time_ns()
+    for name in changed:
+        path = root / name
+        if not path.resolve().is_relative_to(root.resolve()):
+            raise ValueError("Changed source escapes workspace")
+        os.utime(path, ns=(path.stat().st_atime_ns, stamp))
+        if path.stat().st_mtime_ns <= latest:
+            raise ValueError("Cannot make changed source newer than cached outputs")
+
+
+def restore_legacy_ninja_times(root, files):
+    """Repair only tar rounding in verified legacy objects, using Ninja's log.
+
+    `-t deps` only reads the restored manifest/dependency database; it never runs
+    a producer command or builds a target. Accept only listed regular objects
+    whose dependency-record timestamp differs by less than one microsecond,
+    the range explained by tar's floating-point round-trip.
+    """
+    if "build/.ninja_deps" not in files or "build/build.ninja" not in files:
+        return
+    result = subprocess.check_output(
+        ["ninja", "-C", str(root / "build"), "-t", "deps"],
+        text=True,
+        timeout=30,
+    )
+    for line in result.splitlines():
+        match = re.fullmatch(
+            r"(.+): #deps [0-9]+, deps mtime ([0-9]+) \((?:VALID|STALE)\)", line
+        )
+        if not match:
+            continue
+        candidate = Path(match[1])
+        path = candidate if candidate.is_absolute() else root / "build" / candidate
+        if not path.resolve().is_relative_to(root.resolve()):
+            continue
+        name = path.relative_to(root).as_posix()
+        if name not in files or files[name]["kind"] != "file" or path.is_symlink():
+            continue
+        expected = int(match[2])
+        if 0 < expected < 2**63 and abs(path.stat().st_mtime_ns - expected) < 1000:
+            os.utime(path, ns=(path.stat().st_atime_ns, expected))
+
+
+def unpack(root, platform, stage, archive, manifest, force_changed=False):
     files = manifest.get("files")
     if (
         not isinstance(files, dict)
@@ -165,6 +270,15 @@ def unpack(root, platform, stage, archive, manifest):
         or any(not allowed(name, platform, stage) for name in files)
     ):
         raise ValueError("Unexpected stage manifest paths")
+    output_times = manifest.get("output_times", {})
+    if not isinstance(output_times, dict) or any(
+        name not in files
+        or files[name].get("kind") != "file"
+        or type(value) is not int
+        or not 0 <= value < 2**63
+        for name, value in output_times.items()
+    ):
+        raise ValueError("Invalid output timestamp inventory")
     root.mkdir(parents=True, exist_ok=True)
     # Validate all members before changing any build outputs.
     with tempfile.TemporaryDirectory(dir=root) as temporary:
@@ -190,6 +304,9 @@ def unpack(root, platform, stage, archive, manifest):
                 raise ValueError(f"Unsafe stage file mode: {name}")
             if expected.get("kind") != "symlink":
                 (payload / name).chmod(mode)
+            if name in output_times:
+                path = payload / name
+                os.utime(path, ns=(path.stat().st_atime_ns, output_times[name]))
             if entry(payload / name, payload) != expected:
                 raise ValueError(f"Stage content mismatch: {name}")
         # Validate existing destination links before changing any output. Never
@@ -216,21 +333,9 @@ def unpack(root, platform, stage, archive, manifest):
                     raise ValueError(f"Stage file collides with directory: {name}")
                 destination.unlink()
             (payload / name).rename(destination)
-    for name, value in manifest.get("source_times", {}).items():
-        path = root / name
-        if (
-            not isinstance(name, str)
-            or PurePosixPath(name).is_absolute()
-            or ".." in PurePosixPath(name).parts
-        ):
-            raise ValueError("Unsafe source timestamp path")
-        if (
-            path.resolve().is_relative_to(root.resolve())
-            and path.is_file()
-            and not path.is_symlink()
-            and digest(path) == value["sha256"]
-        ):
-            os.utime(path, ns=(path.stat().st_atime_ns, value["mtime_ns"]))
+    if stage == "native" and "output_times" not in manifest:
+        restore_legacy_ninja_times(root, files)
+    restore_source_times(root, manifest, force_changed)
 
 
 def main():

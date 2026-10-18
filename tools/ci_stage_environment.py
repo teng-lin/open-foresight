@@ -19,6 +19,16 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def reject_compiler_overrides(environment=None):
+    """The recorded PATH compiler must be the one CMake actually selects."""
+    environment = os.environ if environment is None else environment
+    if any(environment.get(key) for key in ("CC", "CXX")):
+        raise ValueError(
+            "Stage caching does not support CC/CXX overrides; use the recorded "
+            "PATH compiler or explicitly configure and record the toolchain"
+        )
+
+
 def validation_context(environment=None, now=None):
     """Bind process-sensitive validation inputs without publishing credentials."""
     environment = os.environ if environment is None else environment
@@ -118,6 +128,7 @@ def version(command, required=False):
 def collect(platform_name, root=ROOT, sdk_prefix=None, stage=None):
     if platform_name not in ("linux", "macos"):
         raise ValueError("Unknown stage platform")
+    reject_compiler_overrides()
     record = {
         "schema": 1,
         "platform": platform_name,

@@ -79,6 +79,13 @@ def test_source_commit_and_volatile_github_job_variables_are_excluded():
     )
 
 
+@pytest.mark.parametrize("key", ["CC", "CXX"])
+def test_unrecorded_compiler_override_is_rejected_before_cache_use(key):
+    with pytest.raises(ValueError, match="CC/CXX overrides"):
+        environment.reject_compiler_overrides({key: "/another/compiler"})
+    environment.reject_compiler_overrides({key: ""})
+
+
 def test_effective_locale_timezone_and_daily_validation_window_are_recorded():
     first = environment.validation_context(environment={}, now=NOW)
     second = environment.validation_context(environment={}, now=NOW.replace(day=19))

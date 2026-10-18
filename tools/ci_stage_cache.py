@@ -40,13 +40,15 @@ COMMIT = r"[a-f0-9]{40}"
 # These are known editorial inputs. Unknown/new paths always enter the common
 # input set rather than silently missing a newly introduced build dependency.
 EDITORIAL = {"README.md", "CHANGELOG.md", "LICENSE", "AGENTS.md"}
+IDENTITY_RECIPE = 2
 
 
 def git(root, *args):
     return subprocess.check_output(["git", *args], cwd=root, timeout=120)
 
 
-def selected(path, stage):
+def selected_v1(path, stage):
+    """Frozen original selector for independently verifying legacy artifacts."""
     if path in EDITORIAL or path.startswith("docs/"):
         return False
     if path == "apps/desktop/pubspec.yaml":
@@ -65,7 +67,32 @@ def selected(path, stage):
     return True
 
 
-def source_inputs(root, stage, ref=None):
+def selected(path, stage, recipe=IDENTITY_RECIPE):
+    if recipe == 2 and path.startswith("packages/foresight_test_support/"):
+        return stage != "native"
+    return selected_v1(path, stage)
+
+
+def version_input(root, stage, name, mode, kind, identity, recipe, data=None):
+    """Bind only the exact version line consumed by native CMake, when valid."""
+    if (
+        recipe >= 2
+        and stage == "native"
+        and name == "apps/desktop/pubspec.yaml"
+        and kind == "blob"
+        and mode != "120000"
+    ):
+        data = git(root, "cat-file", "blob", identity) if data is None else data
+        # This mirrors OpenForesightVersion.cmake's anchored file(STRINGS)
+        # expression. Malformed/duplicate declarations retain the full blob;
+        # they must never inherit a previously successful version qualification.
+        lines = re.findall(rb"(?m)^version: [0-9]+\.[0-9]+\.[0-9]+\+[0-9]+$", data)
+        if len(lines) == 1:
+            return [mode, "native-version", lines[0].decode("ascii")]
+    return [mode, kind, identity]
+
+
+def source_inputs(root, stage, ref=None, recipe=IDENTITY_RECIPE):
     """Mode and Git blob identities, including modified/new working files."""
     if ref is not None:
         if not re.fullmatch(COMMIT, ref):
@@ -76,15 +103,17 @@ def source_inputs(root, stage, ref=None):
             metadata, path = row.split(b"\t", 1)
             mode, kind, identity = metadata.decode().split()
             name = os.fsdecode(path)
-            if selected(name, stage):
-                result[name] = [mode, kind, identity]
+            if selected(name, stage, recipe):
+                result[name] = version_input(
+                    root, stage, name, mode, kind, identity, recipe
+                )
         return result
     paths = git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
     result = {}
     object_format = git(root, "rev-parse", "--show-object-format").decode().strip()
     for raw in filter(None, paths.split(b"\0")):
         name = os.fsdecode(raw)
-        if not selected(name, stage):
+        if not selected(name, stage, recipe):
             continue
         path = root / name
         if not path.exists() and not path.is_symlink():
@@ -101,13 +130,32 @@ def source_inputs(root, stage, ref=None):
             data = path.read_bytes()
             mode = "100755" if info.st_mode & 0o111 else "100644"
         blob = b"blob " + str(len(data)).encode() + b"\0" + data
-        result[name] = [mode, "blob", hashlib.new(object_format, blob).hexdigest()]
+        result[name] = version_input(
+            root,
+            stage,
+            name,
+            mode,
+            "blob",
+            hashlib.new(object_format, blob).hexdigest(),
+            recipe,
+            data,
+        )
     return result
 
 
-def fingerprint(platform, stage, root=ROOT, ref=None, environment=None, parents=None):
+def fingerprint(
+    platform,
+    stage,
+    root=ROOT,
+    ref=None,
+    environment=None,
+    parents=None,
+    recipe=IDENTITY_RECIPE,
+):
     if platform not in PLATFORMS or stage not in STAGES:
         raise ValueError("Invalid platform or stage")
+    if type(recipe) is not int or recipe not in (1, IDENTITY_RECIPE):
+        raise ValueError("Unsupported stage identity recipe")
     if not isinstance(environment, dict) or not environment:
         raise ValueError("Explicit compiler/runtime/system/SDK environment is required")
     parents = {} if parents is None else parents
@@ -126,7 +174,7 @@ def fingerprint(platform, stage, root=ROOT, ref=None, environment=None, parents=
         "stage": stage,
         "environment": environment,
         "parents": parents,
-        "inputs": source_inputs(Path(root), stage, ref),
+        "inputs": source_inputs(Path(root), stage, ref, recipe),
     }
     return hashlib.sha256(
         json.dumps(record, sort_keys=True, separators=(",", ":")).encode()
@@ -213,7 +261,18 @@ def validate_receipt(
     if not isinstance(commit, str) or commit != run.get("head_sha"):
         raise ValueError("Receipt source differs from actual workflow producer")
     ensure_commit(root, commit)
-    if fingerprint(platform, stage, root, commit, environment, parents) != identity:
+    if (
+        fingerprint(
+            platform,
+            stage,
+            root,
+            commit,
+            environment,
+            parents,
+            recipe=receipt.get("identity_recipe", 1),
+        )
+        != identity
+    ):
         raise ValueError("Producer source fingerprint differs from current recipe")
 
 
@@ -328,6 +387,183 @@ def find(
     return result
 
 
+def compilation_environment(environment):
+    """Compilation compatibility deliberately excludes only validation's date.
+
+    All actual compiler, SDK bytes, workspace, system packages, flags, locale,
+    tool/runtime versions and unknown settings remain bound. This is a warm
+    build input, never a successful validation result.
+    """
+    return {
+        key: value for key, value in environment.items() if key != "utc_validation_date"
+    }
+
+
+def changed_configuration(root, producer):
+    """Changed CMake defaults must not inherit stale producer cache values."""
+
+    def configuration(inputs):
+        return {
+            name: value
+            for name, value in inputs.items()
+            if Path(name).name == "CMakeLists.txt"
+            or name.endswith(".cmake")
+            or name in ("tools/build.sh", "tools/check_build_cache.py")
+        }
+
+    before = configuration(source_inputs(root, "native", producer))
+    after = configuration(source_inputs(root, "native"))
+    return sorted(
+        name
+        for name in before.keys() | after.keys()
+        if before.get(name) != after.get(name)
+    )
+
+
+def native_work_candidates(repository, platform):
+    """Find retained full native artifacts, including those with older keys."""
+    pattern = rf"ci-stage-{platform}-native-({HEX})"
+    page = 1
+    while True:
+        batch = artifacts.api(
+            repository, f"actions/artifacts?per_page=100&page={page}"
+        )["artifacts"]
+        for artifact in batch:
+            match = re.fullmatch(pattern, artifact.get("name", ""))
+            if match and not artifact.get("expired"):
+                yield artifact, match[1]
+        if len(batch) < 100:
+            return
+        page += 1
+
+
+def find_native_work(
+    repository,
+    platform,
+    environment,
+    root=ROOT,
+    own_pr=0,
+    event="",
+    branch="",
+    release=False,
+    output=None,
+):
+    """Restore compatible compilation work without reusing its test result.
+
+    A different source tree is intentional: CMake/Ninja must incrementally build
+    current inputs and CTest must run afterwards. The original successful
+    producer and its full original receipt are independently verified first.
+    """
+    if not reusable(event, own_pr, branch, release):
+        return {"hit": False}
+    current_environment = compilation_environment(environment)
+    current_links = {
+        key: value
+        for key, value in source_inputs(root, "native").items()
+        if value[0] == "120000"
+    }
+    runs = {}
+    jobs_by_run = {}
+    mismatches: set[str] = set()
+    rejected = 0
+    for artifact, identity in native_work_candidates(repository, platform):
+        run_id = artifact["workflow_run"]["id"]
+        if run_id not in runs:
+            runs[run_id] = artifacts.api(repository, f"actions/runs/{run_id}")
+        run = runs[run_id]
+        if not trusted_run(run, repository, own_pr):
+            continue
+        if run_id not in jobs_by_run:
+            jobs_by_run[run_id] = artifacts.dependency_jobs(repository, run_id)
+        jobs = [
+            job
+            for job in jobs_by_run[run_id]
+            if job.get("name", "").split(" / ")[-1] == f"native-{platform}"
+            and job.get("conclusion") == "success"
+            and artifacts.in_producer_attempt(artifact, job)
+        ]
+        if not jobs:
+            continue
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "native.zip"
+            try:
+                artifacts.download_zip(repository, artifact, archive)
+                receipt = read_zip(archive)
+                previous_environment = receipt.get("environment")
+                if (
+                    not isinstance(previous_environment, dict)
+                    or compilation_environment(previous_environment)
+                    != current_environment
+                ):
+                    if isinstance(previous_environment, dict):
+                        previous_compile = compilation_environment(previous_environment)
+                        mismatches.update(
+                            key
+                            for key in previous_compile.keys()
+                            | current_environment.keys()
+                            if previous_compile.get(key) != current_environment.get(key)
+                        )
+                    rejected += 1
+                    continue
+                validate_receipt(
+                    receipt,
+                    platform,
+                    "native",
+                    identity,
+                    run,
+                    previous_environment,
+                    {},
+                    root,
+                )
+                if not any(
+                    job.get("run_attempt", 1) == receipt["source_run_attempt"]
+                    for job in jobs
+                ):
+                    raise ValueError("Native compilation not from successful attempt")
+                previous_links = {
+                    key: value
+                    for key, value in source_inputs(
+                        root,
+                        "native",
+                        receipt["source_commit"],
+                        recipe=receipt.get("identity_recipe", 1),
+                    ).items()
+                    if value[0] == "120000"
+                }
+                # A changed symlink can point to an old-mtime header outside
+                # Git's regular-file inventory. Do not warm that ambiguity.
+                if previous_links != current_links:
+                    rejected += 1
+                    continue
+                if output:
+                    read_zip(archive, Path(output))
+            except (
+                ValueError,
+                KeyError,
+                zipfile.BadZipFile,
+                subprocess.CalledProcessError,
+            ):
+                rejected += 1
+                continue
+        return {
+            "hit": True,
+            "identity": identity,
+            "artifact_id": artifact["id"],
+            "run_id": run_id,
+            "receipt": receipt,
+            "configuration_changed": changed_configuration(
+                root, receipt["source_commit"]
+            ),
+            **({"download_dir": str(output)} if output else {}),
+        }
+    return {
+        "hit": False,
+        "reason": "No retained verified successful native producer has compatible work",
+        "incompatible_environment_fields": sorted(mismatches),
+        "rejected_payloads": rejected,
+    }
+
+
 def publish(
     platform,
     stage,
@@ -356,6 +592,7 @@ def publish(
         raise ValueError("Cannot publish outputs with uncommitted stage inputs")
     receipt = {
         "schema": 1,
+        "identity_recipe": IDENTITY_RECIPE,
         "platform": platform,
         "stage": stage,
         "identity": identity,
