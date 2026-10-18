@@ -88,11 +88,11 @@ def main():
             if peer.receive() != "ready 1":
                 raise RuntimeError("Native worker did not become ready")
 
-            active_peer = peer
+            connection = peer
 
             def request(token, prompt, messages=None, cancel=False):
                 tools = {"tools": [], "system_message": "", "messages": messages or []}
-                active_peer.send(
+                connection.send(
                     f"generate {token} "
                     + json.dumps(
                         {
@@ -104,12 +104,12 @@ def main():
                 )
                 answer, cancelled = None, False
                 while True:
-                    line = active_peer.receive()
+                    line = connection.receive()
                     owner, kind, value = line.split(" ", 2)
                     if owner != str(token):
                         raise RuntimeError("Cross-request native frame: " + line)
                     if kind == "delta" and cancel and not cancelled:
-                        active_peer.send(f"cancel {token}")
+                        connection.send(f"cancel {token}")
                         cancelled = True
                     if kind == "answer":
                         answer = json.loads(value)

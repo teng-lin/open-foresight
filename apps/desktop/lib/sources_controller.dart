@@ -229,9 +229,7 @@ class _SourcesController extends _FeatureController {
             Expanded(
               child: ListView(
                 children: d.store
-                    .rows(
-                      'SELECT id,title,revision FROM notes ORDER BY id DESC',
-                    )
+                    .noteSummaries()
                     .map(
                       (n) => ListTile(
                         title: Text(n['title'] as String),
@@ -239,12 +237,9 @@ class _SourcesController extends _FeatureController {
                         onTap: () => setState(() {
                           meetingFeature.noteId = n['id'] as int;
                           meetingFeature.noteTitle.text = n['title'] as String;
-                          meetingFeature.noteBody.text =
-                              d.store.rows(
-                                    'SELECT body FROM notes WHERE id=?',
-                                    [n['id']],
-                                  ).single['body']
-                                  as String;
+                          meetingFeature.noteBody.text = d.store.noteBody(
+                            n['id'] as int,
+                          );
                         }),
                       ),
                     )
@@ -475,7 +470,9 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> removeSelectedGraphLabel(String id, String name) async {
-    final source = d.store.sourceById(id).single;
+    final source = d.store.sourceSummaries
+        .where((row) => row['id'] == id)
+        .single;
     await d.command(Operation.labelsSet, {
       'id': id,
       'labels': sourceLabels(source).where((label) => label != name).toList(),
@@ -656,7 +653,6 @@ class _SourcesController extends _FeatureController {
       final key = jsonEncode([sourceQuery, d.store.dataRevision]);
       if (key != sourceSearchCacheKey) {
         sourceSearchCacheKey = key;
-        // Titles can respond immediately from the already-loaded summaries.
         sourceSearchMatches = {
           for (final source in collection ?? d.store.sourceSummaries)
             if ((source['title'] as String).toLowerCase().contains(
@@ -666,7 +662,6 @@ class _SourcesController extends _FeatureController {
         };
         final databasePath = d.store.path;
         final query = sourceQuery.toLowerCase();
-        // Search SQLite on a worker isolate; only matching IDs cross to the UI.
         unawaited(
           searchSourceIds(databasePath, query).then(
             (matches) {
@@ -679,7 +674,6 @@ class _SourcesController extends _FeatureController {
             },
           ),
         );
-        sourceSearchCacheKey = key;
       }
       searchMatches = sourceSearchMatches;
     }

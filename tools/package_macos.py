@@ -270,7 +270,7 @@ def main(argv=None):
         [str(values["FORESIGHT_MODEL_WORKER"]), "--check"],
         env=environment,
         check=True,
-        timeout=300,
+        timeout=30,
     )
     notarized = False
     if args.notary_profile:
