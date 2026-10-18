@@ -21,10 +21,16 @@ import hashlib,json,sys
 if '--probe' in sys.argv:
  print(json.dumps({'native_stop_token_sequences':True}),flush=True)
  sys.exit(0)
-assert '--tools' in sys.argv
-options=json.loads(sys.argv[sys.argv.index('--tools')+1])
+request=json.loads(sys.stdin.readline())
+assert set(request)=={'prompt','max_output_tokens','tools'}
+options=request['tools']
 tools=options['tools']
-prompt=sys.argv[sys.argv.index('--prompt')+1]
+prompt=request['prompt']
+assert '--tools' not in sys.argv and '--prompt' not in sys.argv
+assert all(prompt not in argument and 'google_search' not in argument for argument in sys.argv)
+if options['system_message']:
+ assert all(options['system_message'] not in argument for argument in sys.argv)
+assert sys.argv[sys.argv.index('--max-output-tokens')+1]==str(request['max_output_tokens'])
 if not tools:
  assert options['system_message']==('Safe web instructions' if prompt=='Web prompt' else '')
  assert prompt in ['Summary prompt','Note prompt','Web prompt']
