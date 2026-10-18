@@ -2,6 +2,7 @@
 """Retain Linux dependency images without publishing from pull requests."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -38,6 +40,7 @@ def inspect(image):
             ["docker", "image", "inspect", image, "--format", "{{json .}}"],
             text=True,
             timeout=300,
+            stderr=subprocess.STDOUT,
         )
     )
     if not IMAGE_ID.fullmatch(value.get("Id", "")):
@@ -80,6 +83,96 @@ def record(prefix, component):
     return value
 
 
+def archive_manifests(archive, original):
+    """Bind a containerd manifest ID to the receipt's original saved config ID.
+
+    Docker's containerd store addresses images by manifest, unlike the classic
+    store's config ID. Read only content-addressed OCI metadata from the already
+    checksum-verified archive; load stdout and mutable tags are not authority.
+    """
+    with tarfile.open(archive, "r:") as saved:
+        members = {}
+        for member in saved:
+            if member.name in members:
+                raise ValueError("Duplicate SDK archive member")
+            members[member.name] = member
+
+        def read(name):
+            member = members.get(name)
+            if member is None or not member.isfile() or member.size > 8 * 1024 * 1024:
+                raise ValueError("Missing or invalid SDK archive OCI metadata")
+            stream = saved.extractfile(member)
+            if stream is None:
+                raise ValueError("Unreadable SDK archive OCI metadata")
+            with stream:
+                return stream.read()
+
+        def blob(descriptor):
+            digest = descriptor.get("digest", "")
+            if not IMAGE_ID.fullmatch(digest):
+                raise ValueError("Invalid SDK archive OCI digest")
+            data = read("blobs/sha256/" + digest.removeprefix("sha256:"))
+            if (
+                len(data) != descriptor.get("size")
+                or "sha256:" + hashlib.sha256(data).hexdigest() != digest
+            ):
+                raise ValueError("SDK archive OCI metadata checksum mismatch")
+            return json.loads(data)
+
+        index = json.loads(read("index.json"))
+        matches = []
+        visited: set[str] = set()
+
+        def visit(descriptor, ancestors):
+            digest = descriptor.get("digest", "")
+            if digest in visited or len(visited) >= 64:
+                raise ValueError("Duplicate or excessive SDK archive OCI inventory")
+            visited.add(digest)
+            document = blob(descriptor)
+            children = document.get("manifests")
+            if children is not None:
+                if not isinstance(children, list):
+                    raise ValueError("Invalid SDK archive OCI image inventory")
+                for child in children:
+                    visit(child, [digest, *ancestors])
+                return
+            config_descriptor = document.get("config")
+            if not isinstance(config_descriptor, dict):
+                raise ValueError("SDK archive has an invalid image manifest")
+            config = blob(config_descriptor)
+            layers = document.get("layers")
+            if not isinstance(layers, list):
+                raise ValueError("Invalid SDK archive layer inventory")
+            for layer in layers:
+                layer_digest = layer.get("digest", "")
+                member = members.get(
+                    "blobs/sha256/" + layer_digest.removeprefix("sha256:")
+                )
+                if (
+                    not IMAGE_ID.fullmatch(layer_digest)
+                    or not isinstance(layer.get("mediaType"), str)
+                    or not layer["mediaType"].startswith("application/")
+                    or member is None
+                    or not member.isfile()
+                    or member.size != layer.get("size")
+                ):
+                    raise ValueError("Missing or invalid SDK archive layer blob")
+            if original in (digest, config_descriptor["digest"], *ancestors) and (
+                config.get("os"),
+                config.get("architecture"),
+            ) == ("linux", "amd64"):
+                matches.append([digest, *ancestors])
+
+        descriptors = index.get("manifests", [])
+        if not isinstance(descriptors, list):
+            raise ValueError("Invalid SDK archive OCI image inventory")
+        for descriptor in descriptors:
+            visit(descriptor, [])
+        if len(matches) != 1:
+            raise ValueError("SDK archive has no unique manifest for original image ID")
+        return matches[0]
+
+
 def load(prefix, component, tag):
     """Load a qualified component into this job's Docker daemon."""
     value = record(prefix, component)
@@ -89,7 +182,35 @@ def load(prefix, component, tag):
     else:
         image = value["image_id"]
         run(["docker", "image", "load", "--input", str(prefix / "image.tar")])
-    loaded = inspect(image)
+    try:
+        loaded = inspect(image)
+    except subprocess.CalledProcessError as error:
+        # Only the known config-ID lookup failure permits the OCI lookup. Daemon,
+        # permission, transport and platform errors remain fatal.
+        diagnostic = error.output or ""
+        if isinstance(diagnostic, bytes):
+            diagnostic = diagnostic.decode("utf-8", errors="replace")
+        if (
+            value.get("transport") != "docker-archive"
+            or diagnostic.strip()
+            != f"Error response from daemon: No such image: {image}"
+        ):
+            raise
+        for candidate in archive_manifests(prefix / "image.tar", value["image_id"]):
+            try:
+                loaded = inspect(candidate)
+            except subprocess.CalledProcessError as candidate_error:
+                if str(candidate_error.output).strip() != (
+                    f"Error response from daemon: No such image: {candidate}"
+                ):
+                    raise
+            else:
+                image = candidate
+                break
+        else:
+            raise ValueError(
+                "Verified SDK archive manifests were not loaded"
+            ) from error
     if value.get("transport") == "docker-archive" and loaded != image:
         raise ValueError("Loaded SDK image configuration ID mismatch")
     run(["docker", "image", "tag", image, tag])
