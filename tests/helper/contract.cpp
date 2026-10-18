@@ -500,13 +500,24 @@ int main(int argc, char **argv) {
     watch_context.set_deadline(std::chrono::system_clock::now() +
                                std::chrono::seconds(5));
     c::WatchRequest watch;
-    watch.set_last_revision(state.revision());
+    REQUIRE(state.revision() > 0);
+    watch.set_last_revision(state.revision() - 1);
     auto stream = control->WatchState(&watch_context, watch);
     c::State initial;
     REQUIRE(stream->Read(&initial) &&
             initial.instance_id() == state.instance_id());
     watch_context.TryCancel();
     REQUIRE(stream->Finish().error_code() == grpc::StatusCode::CANCELLED);
+    grpc::ClientContext duplicate_context;
+    duplicate_context.set_deadline(std::chrono::system_clock::now() +
+                                   std::chrono::milliseconds(200));
+    c::WatchRequest unchanged;
+    unchanged.set_last_revision(state.revision());
+    auto duplicates = control->WatchState(&duplicate_context, unchanged);
+    c::State duplicate;
+    REQUIRE(!duplicates->Read(&duplicate));
+    REQUIRE(duplicates->Finish().error_code() ==
+            grpc::StatusCode::DEADLINE_EXCEEDED);
     // Mutations submitted while a replacement is building must apply after
     // activation, never resurrect deletions.
     for (int n = 0; n < 30; ++n)

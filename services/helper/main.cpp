@@ -904,9 +904,10 @@ public:
     *r = view;
     return Status::OK;
   }
-  Status WatchState(grpc::ServerContext *context, const ctl::WatchRequest *,
+  Status WatchState(grpc::ServerContext *context,
+                    const ctl::WatchRequest *request,
                     grpc::ServerWriter<ctl::State> *writer) override {
-    uint64_t last = 0;
+    uint64_t last = request->last_revision();
     while (!context->IsCancelled()) {
       refresh_model_health();
       ctl::State snapshot;
@@ -914,7 +915,7 @@ public:
         std::lock_guard lock(view_mu);
         snapshot = view;
       }
-      if (snapshot.revision() != last) {
+      if (snapshot.revision() > last) {
         if (!writer->Write(snapshot))
           break;
         last = snapshot.revision();
