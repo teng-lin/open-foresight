@@ -116,8 +116,14 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
 
     import pytest
 
-    if not shutil.which("cmake") or not shutil.which("c++") or not shutil.which("ninja"):
-        pytest.skip("Native CMake/Ninja toolchain required for incremental revision test")
+    if (
+        not shutil.which("cmake")
+        or not shutil.which("c++")
+        or not shutil.which("ninja")
+    ):
+        pytest.skip(
+            "Native CMake/Ninja toolchain required for incremental revision test"
+        )
     source = tmp_path / "source"
     source.mkdir()
     template = ROOT / "services/helper/build_identity.cpp.in"
@@ -128,6 +134,8 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
         f'include("{ROOT / "cmake/ForesightBuildIdentity.cmake"}")\n'
         f'foresight_build_identity_source(identity_source "{template}" "${{CMAKE_BINARY_DIR}}")\n'
         'add_executable(probe main.cpp "${identity_source}")\n'
+        'add_executable(instrumented main.cpp "${identity_source}")\n'
+        "target_compile_definitions(instrumented PRIVATE FORESIGHT_ENABLE_TEST_HOOKS=1)\n"
     )
     (source / "main.cpp").write_text(
         "#include <iostream>\n"
@@ -165,17 +173,28 @@ def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
             check=True,
             timeout=60,
         )
-        return subprocess.check_output([str(build / "probe")], text=True, timeout=5)
+        output = subprocess.check_output([str(build / "probe")], text=True, timeout=5)
+        assert (
+            subprocess.check_output([str(build / "instrumented")], text=True, timeout=5)
+            == output
+        )
+        return output
 
     assert compile_revision("123456789abc") == "open-foresight-1.0.0-123456789abc"
     objects = list(build.rglob("main.cpp.o"))
-    assert len(objects) == 1
-    original = objects[0].stat().st_mtime_ns
+    assert len(objects) == 2
+    original = {path: path.stat().st_mtime_ns for path in objects}
     assert compile_revision("abcdef123456") == "open-foresight-1.0.0-abcdef123456"
-    assert objects[0].stat().st_mtime_ns == original
+    assert {path: path.stat().st_mtime_ns for path in objects} == original
     identity_objects = list(build.rglob("build_identity_*.cpp.o"))
-    assert len(identity_objects) == 2
+    assert len(identity_objects) == 4
     before = {path: path.stat().st_mtime_ns for path in identity_objects}
     assert compile_revision("abcdef123456") == "open-foresight-1.0.0-abcdef123456"
     assert {path: path.stat().st_mtime_ns for path in identity_objects} == before
-    assert objects[0].stat().st_mtime_ns == original
+    assert {path: path.stat().st_mtime_ns for path in objects} == original
+
+
+def test_instrumented_helper_links_the_same_generated_identity_source():
+    source = (ROOT / "services/helper/CMakeLists.txt").read_text()
+    assert 'target_sources(ForesightHelperTest PRIVATE "${IDENTITY_SOURCE}")' in source
+    assert "FORESIGHT_BUILD_ID=" not in source

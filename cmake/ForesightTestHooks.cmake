@@ -1,4 +1,6 @@
-include_guard(GLOBAL)
+# Derived variables live in directory scope. Sibling helper/native directories
+# must each initialize their gate even though the option itself is cached.
+include_guard(DIRECTORY)
 set(_foresight_test_hooks_default ON)
 string(TOLOWER "${CMAKE_BUILD_TYPE}" _foresight_test_hooks_configuration)
 if(_foresight_test_hooks_configuration MATCHES "^(release|relwithdebinfo|minsizerel)$")

@@ -12,6 +12,37 @@ RELEASE_CONFIGURATIONS = ("Release", "RelWithDebInfo", "MinSizeRel")
 MARKER = "FORESIGHT_CRASH_AT"
 
 
+@pytest.mark.parametrize("configuration,expected", [("Debug", "1"), ("Release", "0")])
+def test_sibling_directories_each_receive_the_configuration_gate(
+    tmp_path, configuration, expected
+):
+    if not shutil.which("cmake"):
+        pytest.skip("CMake required for directory-scope fixture")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.20)\n"
+        "project(sibling_hooks LANGUAGES NONE)\n"
+        "add_subdirectory(helper)\nadd_subdirectory(native)\n"
+    )
+    for name in ("helper", "native"):
+        directory = source / name
+        directory.mkdir()
+        (directory / "CMakeLists.txt").write_text(
+            f'include("{ROOT / "cmake/ForesightTestHooks.cmake"}")\n'
+            'file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/hooks.txt" CONTENT "${FORESIGHT_PRODUCTION_TEST_HOOKS}")\n'
+        )
+    build = tmp_path / "build"
+    configure(
+        source,
+        build,
+        f"-DCMAKE_BUILD_TYPE={configuration}",
+        "-DFORESIGHT_ENABLE_TEST_HOOKS=ON",
+    )
+    for name in ("helper", "native"):
+        assert (build / name / "hooks.txt").read_text() == expected
+
+
 @pytest.fixture
 def configuration_fixture(tmp_path):
     if not all(shutil.which(tool) for tool in ("cmake", "c++", "ninja")):

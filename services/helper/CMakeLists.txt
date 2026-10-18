@@ -59,7 +59,8 @@ if(BUILD_TESTING)
   # The release executable remains hook-free while crash-consistency contracts
   # exercise an explicitly instrumented test-only executable.
   add_executable(ForesightHelperTest main.cpp)
-  target_compile_definitions(ForesightHelperTest PRIVATE FORESIGHT_ENABLE_TEST_HOOKS=1 FORESIGHT_BUILD_ID="open-foresight-${OPEN_FORESIGHT_VERSION}-${BUILD_REV}")
+  target_sources(ForesightHelperTest PRIVATE "${IDENTITY_SOURCE}")
+  target_compile_definitions(ForesightHelperTest PRIVATE FORESIGHT_ENABLE_TEST_HOOKS=1)
   target_compile_options(ForesightHelperTest PRIVATE -Wall -Wextra -Werror)
   target_link_libraries(ForesightHelperTest PRIVATE foresight_protocol SQLite3::SQLite3 nlohmann_json::nlohmann_json)
   set(FORESIGHT_CONTRACT_HELPER ForesightHelperTest)
