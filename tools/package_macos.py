@@ -40,13 +40,14 @@ def write_litert_manifests(app, library, service):
             "version": "0.18.0",
             "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
         }
-    # LiteRt anchors release identity at executable.parent / ../manifest.json.
-    # Main UI/MCP, resource workers/helper, and the service have distinct hosts.
+    # UI/MCP and the nested service resolve identity from Contents/Resources;
+    # resource-bin workers share the main app receipt. Keep JSON out of the
+    # Contents root, where codesign treats unknown files as code subcomponents.
     for manifest in (
-        app / "Contents/manifest.json",
         app / "Contents/Resources/manifest.json",
-        service.parent.parent / "manifest.json",
+        service.parent.parent / "Resources/manifest.json",
     ):
+        manifest.parent.mkdir(parents=True, exist_ok=True)
         manifest.write_text(json.dumps({"gemma_runtime": runtime}, indent=2) + "\n")
 
 

@@ -49,8 +49,16 @@ class MacRuntimeIdentityTests(unittest.TestCase):
                     library.write_bytes(b"signed relocated library")
                     events.append("library signed")
                 elif target.is_dir():
+                    self.assertFalse(list(app.rglob("Contents/manifest.json")))
                     for host in hosts:
-                        manifest = (host.parent / "../manifest.json").resolve()
+                        contents = host.parent.parent
+                        if host.parent.name == "MacOS":
+                            self.assertFalse((contents / "manifest.json").exists())
+                        manifest = (
+                            contents / "Resources/manifest.json"
+                            if host.parent.name == "MacOS"
+                            else host.parent / "../manifest.json"
+                        ).resolve()
                         self.assertEqual(
                             json.loads(manifest.read_text())["gemma_runtime"],
                             {"version": "0.18.0", "sha256": expected},
