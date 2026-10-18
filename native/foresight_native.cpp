@@ -861,7 +861,8 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
   if (max_output_tokens < 0 || max_output_tokens > 3072 ||
       (max_output_tokens == 0 && !tools))
     return -1;
-  if (!h || !id || !*id || !prompt)
+  if (!h || !id || !*id || !prompt ||
+      (schema && !foresight::single_line_json(schema)))
     return -1;
   auto &c = *static_cast<Conversation *>(h);
   std::lock_guard life(c.life);

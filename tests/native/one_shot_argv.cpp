@@ -33,6 +33,9 @@ int main() {
             "\"\\ufffd\\ufffd\\ufffd\"");
     REQUIRE(foresight::quote(std::string("\xf0\x9f", 2)) ==
             "\"\\ufffd\\ufffd\"");
+    REQUIRE(foresight::single_line_json("{\"type\":\"object\"}"));
+    REQUIRE(!foresight::single_line_json("{\n\"type\":\"object\"}"));
+    REQUIRE(!foresight::single_line_json("{}\rgenerate 2 {}"));
     const std::string prompt = "unique-one-shot-prompt-52";
     const auto llama = foresight::one_shot_launch(0, "llama-cli", "model.gguf",
                                                   prompt, 32, 0, "");
