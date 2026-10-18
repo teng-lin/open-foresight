@@ -54,11 +54,10 @@ still bootstrap from its existing exact main/PR cache.
 
 This split does not remove all CI transfer or application build costs. Retained
 component images still include inherited Docker layers, so downloading multiple
-parent archives transfers duplicate base/toolchain bytes. SDK forwarding still
-unpacks and recompresses its artifact envelope. Package and acceptance consumers
-also build application images separately. Deduplicating those transfers,
-forwarding verified envelopes directly, probing before hosted disk cleanup, and
-sharing a tested application stage are separate follow-ups. CI timing must be
+parent archives transfers duplicate base/toolchain bytes. Legacy outputs without receipt sidecars still
+unpack and recompress their artifact envelope on first reuse. Package and acceptance consumers
+also build application images separately. Deduplicating those transfers and sharing a tested application stage remain
+separate follow-ups. CI timing must be
 measured after the initial vendor bootstrap before claiming an overall speedup.
 
 For a standalone macOS build, prepare vendors before assembling the runtime:
@@ -67,6 +66,22 @@ For a standalone macOS build, prepare vendors before assembling the runtime:
 python tools/build_macos_vendor.py --jobs 3
 python tools/build_macos_runtimes.py --jobs 3
 ```
+
+Producers also publish a tiny receipt sidecar after the original payload upload.
+It binds the immutable Actions artifact ID and GitHub ZIP digest to the original
+recipe identity, payload checksum, source commit and producer attempt. On later
+runs a metadata probe checks both uploads belong to the same successful attempt,
+that the source is trusted under the existing rules, and that the original
+payload still exists with at least 24 hours before expiration. A hit skips hosted
+disk cleanup, Docker authentication/loading, compiler installation, compilation,
+archive extraction/recompression and duplicate payload upload. The original
+artifact remains the consumer's source; receipts never reference other receipts.
+Consumers continue to download and verify its full checksum and attempt receipt.
+Missing, expired, malformed or mismatched receipts fall back to normal production.
+Legacy outputs without sidecars take that normal path once. Main Linux publishers
+still load and publish reviewed image archives; metadata hits cannot bypass that
+publication step. macOS vendor/worker jobs use plain Python and do not install the
+unrelated development requirements; the static SDK keeps its protobuf tooling.
 
 The monthly Linux dependency schedule bypasses qualified descriptors and Docker
 layer caches, rebuilds from digest-pinned base images, applies Ubuntu package

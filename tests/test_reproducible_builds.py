@@ -259,6 +259,59 @@ class BuildPolicyTests(unittest.TestCase):
         self.assertIn("--component macos-vendor", commands)
         self.assertIn("tools/build_macos_runtimes.py", commands)
 
+    def test_cheap_dependency_probe_skips_heavy_resources_and_duplicate_uploads(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        for name in (
+            "linux-pr-core",
+            "linux-pr-runtime",
+            "linux-pr",
+            "macos",
+            "macos-vendor",
+            "macos-runtime",
+        ):
+            steps = workflow["jobs"][name]["steps"]
+            probe = next(
+                index for index, step in enumerate(steps) if step.get("id") == "probe"
+            )
+            self.assertIn("tools/ci_artifacts.py probe", steps[probe]["run"])
+            for step in steps[probe + 1 :]:
+                self.assertIn(
+                    "steps.probe.outputs.hit != 'true'", step["if"], (name, step)
+                )
+            self.assertTrue(any(step.get("id") == "payload" for step in steps))
+        for name in ("core", "litert", "whisper", "sdk"):
+            steps = workflow["jobs"][name]["steps"]
+            self.assertFalse(any(step.get("id") == "probe" for step in steps))
+            commands = "\n".join(step.get("run", "") for step in steps)
+            self.assertIn("tools/linux_sdk_artifacts.py promote", commands)
+            self.assertIn("tools/ci_artifacts.py publish-receipt", commands)
+
+    def test_macos_vendor_and_worker_jobs_need_no_python_development_environment(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        for name in ("macos-vendor", "macos-runtime"):
+            commands = "\n".join(
+                step.get("run", "") for step in workflow["jobs"][name]["steps"]
+            )
+            self.assertNotIn("pip install", commands)
+            self.assertNotIn(".venv/bin/python", commands)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-c",
+                "import sys; sys.path.insert(0, 'tools'); import build_macos_vendor, build_macos_runtimes, ci_verify_dependency",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_monthly_builds_bypass_descriptor_and_layer_caches(self):
         text = (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
         workflow = yaml.safe_load(text)
