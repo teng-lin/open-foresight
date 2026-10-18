@@ -33,7 +33,7 @@ inline int adapter_deadline_ms() {
 enum class EmbeddingTask { Document, Query, Raw };
 struct Model {
   bool test = false;
-  FILE *input = nullptr;
+  int input_fd = -1;
   int output_fd = -1;
   std::string output_pending;
   std::unique_ptr<ChildProcess> process;
@@ -43,8 +43,8 @@ struct Model {
   std::string digest, tokenizer_digest, preprocessing;
   std::string backend = "litert-lm-embedding-cpu";
   ~Model() {
-    if (input)
-      fclose(input);
+    if (input_fd >= 0)
+      close(input_fd);
     if (output_fd >= 0)
       close(output_fd);
   }
@@ -56,13 +56,18 @@ struct Model {
   }
   // Serialized by call() except the constructor's banner read, which happens
   // before the model is shared. A stalled adapter is killed at the deadline.
-  json receive() {
+  using Deadline = std::chrono::steady_clock::time_point;
+  [[noreturn]] void fail(const char *message) {
+    healthy.store(false);
+    if (process)
+      process->stop();
+    throw std::runtime_error(message);
+  }
+  json receive(Deadline deadline) {
     if (output_fd < 0) {
       healthy.store(false);
       throw std::runtime_error("Embedding adapter exited; reload the model");
     }
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(adapter_deadline_ms());
     while (output_pending.find('\n') == std::string::npos) {
       const auto remaining =
           std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -178,16 +183,18 @@ struct Model {
     }
     close(in[0]);
     close(out[1]);
-    input = fdopen(in[1], "w");
+    input_fd = in[1];
     output_fd = out[0];
-    if (!input) {
-      close(in[1]);
+    if (fcntl(input_fd, F_SETFL, O_NONBLOCK) < 0) {
+      close(input_fd);
+      input_fd = -1;
       close(output_fd);
       output_fd = -1;
       throw std::runtime_error("Adapter stream initialization failed");
     }
     try {
-      auto info = receive();
+      auto info = receive(std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(adapter_deadline_ms()));
       dimensions = info.at("dimensions");
       digest = info.at("digest");
       tokenizer_digest = info.at("tokenizer_digest");
@@ -196,8 +203,8 @@ struct Model {
       if (dimensions <= 0)
         throw std::runtime_error("Invalid embedding dimensions");
     } catch (...) {
-      fclose(input);
-      input = nullptr;
+      close(input_fd);
+      input_fd = -1;
       if (output_fd >= 0)
         close(output_fd);
       output_fd = -1;
@@ -209,12 +216,32 @@ struct Model {
     if (!available())
       throw std::runtime_error(
           "Embedding adapter unavailable; reload the model");
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(adapter_deadline_ms());
     std::string s = request.dump() + "\n";
-    if (fwrite(s.data(), 1, s.size(), input) != s.size() || fflush(input)) {
-      healthy.store(false);
-      throw std::runtime_error("Adapter input failure; reload the model");
+    size_t sent = 0;
+    while (sent < s.size()) {
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              deadline - std::chrono::steady_clock::now());
+      if (remaining.count() <= 0)
+        fail("Embedding adapter timed out; reload the model");
+      pollfd ready{input_fd, POLLOUT, 0};
+      const int waited = poll(&ready, 1, static_cast<int>(remaining.count()));
+      if (waited < 0 && errno == EINTR)
+        continue;
+      if (waited == 0)
+        fail("Embedding adapter timed out; reload the model");
+      if (waited < 0 || (ready.revents & (POLLERR | POLLHUP | POLLNVAL)))
+        fail("Adapter input failure; reload the model");
+      const ssize_t written = write(input_fd, s.data() + sent, s.size() - sent);
+      if (written < 0 && (errno == EINTR || errno == EAGAIN))
+        continue;
+      if (written <= 0)
+        fail("Adapter input failure; reload the model");
+      sent += static_cast<size_t>(written);
     }
-    return receive().at("result");
+    return receive(deadline).at("result");
   }
   std::vector<int> encode(const std::string &s) {
     if (!test)
