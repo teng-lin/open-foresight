@@ -1,4 +1,8 @@
 #include "foresight_native.h"
+#ifdef __APPLE__
+#include <libproc.h>
+#include <sys/proc.h>
+#endif
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -15,6 +19,24 @@ namespace fs = std::filesystem;
 void check(bool value) {
   if (!value)
     throw std::runtime_error("Probe deadline assertion failed");
+}
+// A killed descendant can briefly remain a zombie until the system reaps it.
+// The supervisor reaps the direct worker; descendants must no longer execute.
+bool dead(pid_t pid) {
+  if (kill(pid, 0) == -1 && errno == ESRCH)
+    return true;
+#ifdef __APPLE__
+  proc_bsdinfo info{};
+  return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) ==
+             sizeof(info) &&
+         info.pbi_status == SZOMB;
+#else
+  std::ifstream input("/proc/" + std::to_string(pid) + "/stat");
+  std::string line;
+  std::getline(input, line);
+  const auto end = line.find_last_of(')');
+  return end != std::string::npos && line[end + 2] == 'Z';
+#endif
 }
 int main(int argc, char **argv) {
   const fs::path root = std::getenv("FORESIGHT_PROBE_FIXTURE_ROOT")
@@ -64,7 +86,7 @@ int main(int argc, char **argv) {
     std::ifstream(directory / "pids") >> worker >> child;
     check(worker > 0 && child > 0);
     check(kill(worker, 0) == -1 && errno == ESRCH);
-    check(kill(child, 0) == -1 && errno == ESRCH);
+    check(dead(child));
     std::ofstream(directory / "succeed") << "ready";
     check(fs_engine_probe(engine) == 0);
     check(fs_engine_destroy(engine) == 0);
