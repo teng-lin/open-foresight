@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,7 +11,7 @@ void main() {
     testWidgets('embedding download is explicit, generation=$generation', (
       tester,
     ) async {
-      final root = Directory.systemTemp.createTempSync('embedding-prompt-');
+      final root = createTestTempDirectorySync('embedding-prompt-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

@@ -9,7 +9,7 @@ void main() {
   test(
     'owned generation discovery prefers original type order and preserves explicit registrations',
     () async {
-      final root = await shortTestTempRoot.createTemp('model-discovery-');
+      final root = await createTestTempDirectory('model-discovery-');
       final store = Store('${root.path}/app.db');
       try {
         for (final type in [14, 16]) {
@@ -59,7 +59,7 @@ void main() {
   test(
     'no owned assets does not initialize a runtime or replace registrations',
     () async {
-      final root = await shortTestTempRoot.createTemp('empty-model-discovery-');
+      final root = await createTestTempDirectory('empty-model-discovery-');
       final store = Store('${root.path}/app.db');
       try {
         expect(await discoverGenerationRuntime(store, '/missing'), isNull);

@@ -11,7 +11,7 @@ void main() {
   testWidgets(
     'real startup connection failures render guidance and release command ownership before retry',
     (tester) async {
-      final root = shortTestTempRoot.createTempSync('of-start-');
+      final root = createTestTempDirectorySync('of-start-');
       addTearDown(() => root.deleteSync(recursive: true));
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
       var attempts = 0;

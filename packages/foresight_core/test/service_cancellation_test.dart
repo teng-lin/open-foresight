@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
-import 'dart:io';
 
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
@@ -30,7 +30,7 @@ void main() {
           runtimeConfiguration.environment.remove(key);
         }
         runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
-        final root = Directory.systemTemp.createTempSync('rpc-cancellation-');
+        final root = createTestTempDirectorySync('rpc-cancellation-');
         final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
         final service = await ApplicationService.start(profile);
         final client = await ServiceClient.connect(

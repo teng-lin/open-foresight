@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -10,7 +11,7 @@ void main() {
   testWidgets('missing runner reuses a registered model outside the cache', (
     tester,
   ) async {
-    final root = Directory.systemTemp.createTempSync('gemma-runner-repair-');
+    final root = createTestTempDirectorySync('gemma-runner-repair-');
     addTearDown(() {
       if (root.existsSync()) root.deleteSync(recursive: true);
     });
@@ -60,7 +61,7 @@ void main() {
   testWidgets(
     'cached embedding setup offers reuse instead of another download',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync('embedding-cache-ui-');
+      final root = createTestTempDirectorySync('embedding-cache-ui-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -112,7 +113,7 @@ void main() {
   testWidgets('14 GB host offers E2B and prevents larger model installation', (
     tester,
   ) async {
-    final root = Directory.systemTemp.createTempSync('gemma-chooser-');
+    final root = createTestTempDirectorySync('gemma-chooser-');
     addTearDown(() {
       if (root.existsSync()) root.deleteSync(recursive: true);
     });
@@ -170,7 +171,7 @@ void main() {
   testWidgets(
     'current E4B closes with Done without verification, loading or download',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync('gemma-current-');
+      final root = createTestTempDirectorySync('gemma-current-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -241,7 +242,7 @@ void main() {
   testWidgets('downloaded inactive model has no download action on the right', (
     tester,
   ) async {
-    final root = Directory.systemTemp.createTempSync('gemma-cached-');
+    final root = createTestTempDirectorySync('gemma-cached-');
     addTearDown(() {
       if (root.existsSync()) root.deleteSync(recursive: true);
     });

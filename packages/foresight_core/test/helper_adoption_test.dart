@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/helper.dart';
@@ -56,7 +57,7 @@ void main() {
     runtimeConfiguration.environment['FORESIGHT_RUNTIME_REVISION'] = revision;
     runtimeConfiguration.environment['FORESIGHT_HELPER'] =
         '/must-not-launch-a-second-helper';
-    root = Directory.systemTemp.createTempSync('helper-adoption-');
+    root = createTestTempDirectorySync('helper-adoption-');
     rag = AdoptionRag();
     status = AdoptionControl(
       control.State(
@@ -74,13 +75,15 @@ void main() {
     );
     helper = Helper(socket, root.path);
   });
-  tearDown(() async {
-    await helper.close();
-    await server.shutdown();
-    root.deleteSync(recursive: true);
-    runtimeConfiguration.environment
-      ..clear()
-      ..addAll(environment);
+  setUp(() {
+    addTearDown(() async {
+      await helper.close();
+      await server.shutdown();
+      root.deleteSync(recursive: true);
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(environment);
+    });
   });
   test('a matching helper is adopted before application readiness', () async {
     var ready = 0;

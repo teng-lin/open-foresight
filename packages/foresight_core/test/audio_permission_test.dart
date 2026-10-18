@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:ffi';
 import 'dart:io';
 import 'package:foresight_core/src/audio_devices.dart';
@@ -8,7 +9,7 @@ void main() {
   test(
     'system permission is explicit, asynchronous and preserves uncertainty',
     () async {
-      final scratch = Directory.systemTemp.createTempSync('audio-permission-');
+      final scratch = createTestTempDirectorySync('audio-permission-');
       final previous = runtimeConfiguration.environment['FORESIGHT_NATIVE'];
       try {
         final source = File('${scratch.path}/fixture.c')

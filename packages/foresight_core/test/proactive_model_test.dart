@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -9,7 +10,7 @@ void main() {
   test(
     'dedicated detector queues English and Chinese questions without a chat model',
     () async {
-      final directory = Directory.systemTemp.createTempSync('proactive-model-');
+      final directory = createTestTempDirectorySync('proactive-model-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

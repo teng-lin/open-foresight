@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -12,9 +13,7 @@ void main() {
     'real Gemma 4 E2B native stream, grounded citation and owned cancellation',
     () async {
       final env = Platform.environment;
-      final dir = Directory.systemTemp.createTempSync(
-        'foresight-gemma-native-',
-      );
+      final dir = createTestTempDirectorySync('foresight-gemma-native-');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });

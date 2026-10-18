@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
@@ -15,7 +16,7 @@ void main() {
   test(
     'sign-in reentry is busy and owned cancellation returns cancelled',
     () async {
-      final directory = Directory.systemTemp.createTempSync('google-cancel-');
+      final directory = createTestTempDirectorySync('google-cancel-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -49,9 +50,7 @@ void main() {
   test(
     'forgetting an account during sign-in prevents late credential adoption',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'google-late-signin-',
-      );
+      final directory = createTestTempDirectorySync('google-late-signin-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -84,9 +83,7 @@ void main() {
   test(
     'Drive pause retains an active export and resumes the folder queue',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'foresight-drive-pause-',
-      );
+      final directory = createTestTempDirectorySync('foresight-drive-pause-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -169,9 +166,7 @@ void main() {
   test(
     'packaged sign-in configuration works without user setup and private override wins',
     () async {
-      final root = Directory.systemTemp.createTempSync(
-        'foresight-google-default-',
-      );
+      final root = createTestTempDirectorySync('foresight-google-default-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -215,9 +210,7 @@ void main() {
   test(
     'PKCE, state validation, private persistence, refresh serialization and revocation',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'foresight-google-auth-',
-      );
+      final directory = createTestTempDirectorySync('foresight-google-auth-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -283,9 +276,7 @@ void main() {
   test(
     'Drive and Calendar retain original modification time separately from import time',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'foresight-source-dates-',
-      );
+      final directory = createTestTempDirectorySync('foresight-source-dates-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -444,7 +435,7 @@ void main() {
   test(
     'Reminder delivery rejects a Google account switch while awaiting notification',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
+      final directory = createTestTempDirectorySync(
         'foresight-reminder-account-',
       );
       addTearDown(() {
@@ -537,7 +528,7 @@ void main() {
   test(
     'Drive paging/folders/exports and Calendar context, attachments, refresh, reminders and cancellation',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
+      final directory = createTestTempDirectorySync(
         'foresight-google-adapter-',
       );
       addTearDown(() {

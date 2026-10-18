@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -32,7 +33,7 @@ void main() {
   ) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
-    final tmp = Directory.systemTemp.createTempSync('source-browse-');
+    final tmp = createTestTempDirectorySync('source-browse-');
     addTearDown(() {
       if (tmp.existsSync()) tmp.deleteSync(recursive: true);
     });

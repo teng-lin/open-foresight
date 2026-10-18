@@ -130,7 +130,7 @@ class McpFixture {
 void main() {
   late Directory compiled;
   setUpAll(() async {
-    compiled = Directory.systemTemp.createTempSync('of-mcp-kernel-');
+    compiled = createTestTempDirectorySync('of-mcp-kernel-');
     mcpKernel = '${compiled.path}/mcp.dill';
     final result = await Process.run(Platform.resolvedExecutable, [
       'compile',
@@ -141,13 +141,17 @@ void main() {
     ]);
     expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
   });
-  tearDownAll(() => compiled.deleteSync(recursive: true));
+  setUpAll(() {
+    addTearDown(() => compiled.deleteSync(recursive: true));
+  });
   late McpFixture fixture;
   setUp(() async {
     fixture = McpFixture();
     await fixture.start();
   });
-  tearDown(() => fixture.close());
+  setUp(() {
+    addTearDown(() => fixture.close());
+  });
 
   for (final tool in rpcTools) {
     test(

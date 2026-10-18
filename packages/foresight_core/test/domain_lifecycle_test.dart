@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -10,9 +11,7 @@ import 'package:foresight_test_support/delayed_index_service.dart';
 
 void main() {
   test('embedding backend selection survives app database restart', () async {
-    final temporary = Directory.systemTemp.createTempSync(
-      'foresight-gpu-restore-',
-    );
+    final temporary = createTestTempDirectorySync('foresight-gpu-restore-');
     addTearDown(() {
       if (temporary.existsSync()) temporary.deleteSync(recursive: true);
     });
@@ -64,9 +63,7 @@ void main() {
   test(
     'pause retains queued indexing while allowing deletion and shutdown',
     () async {
-      final temporary = Directory.systemTemp.createTempSync(
-        'foresight-source-pause-',
-      );
+      final temporary = createTestTempDirectorySync('foresight-source-pause-');
       addTearDown(() {
         if (temporary.existsSync()) temporary.deleteSync(recursive: true);
       });
@@ -148,9 +145,7 @@ void main() {
   test(
     'closing workspace cancels in-flight and queued indexing before database disposal',
     () async {
-      final temporary = Directory.systemTemp.createTempSync(
-        'foresight-domain-close-',
-      );
+      final temporary = createTestTempDirectorySync('foresight-domain-close-');
       addTearDown(() {
         if (temporary.existsSync()) temporary.deleteSync(recursive: true);
       });

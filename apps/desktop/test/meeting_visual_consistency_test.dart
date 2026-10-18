@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -29,7 +30,7 @@ void main() {
     await (FontLoader(
       'MaterialIcons',
     )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
-    final directory = Directory.systemTemp.createTempSync('meeting-visual-');
+    final directory = createTestTempDirectorySync('meeting-visual-');
     addTearDown(() {
       if (directory.existsSync()) directory.deleteSync(recursive: true);
     });

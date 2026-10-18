@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
@@ -75,7 +76,7 @@ void main() {
       r'printf partial > "$5"; printf started > "$3.started"; exec /bin/sleep 5';
 
   setUp(() async {
-    fixture = await Directory.systemTemp.createTemp('encrypted-query-test-');
+    fixture = await createTestTempDirectory('encrypted-query-test-');
     leases = await Directory('${fixture.path}/leases').create();
     encrypted = await File(
       '${fixture.path}/encrypted',
@@ -106,14 +107,16 @@ void main() {
       },
     );
   });
-  tearDown(() async {
-    for (final worker in workers) {
-      if (worker.closeGate != null && !worker.closeGate!.isCompleted) {
-        worker.closeGate!.complete();
+  setUp(() {
+    addTearDown(() async {
+      for (final worker in workers) {
+        if (worker.closeGate != null && !worker.closeGate!.isCompleted) {
+          worker.closeGate!.complete();
+        }
       }
-    }
-    await runtime.close();
-    await fixture.delete(recursive: true);
+      await runtime.close();
+      await fixture.delete(recursive: true);
+    });
   });
 
   test('one decrypted lease and worker are retained across requests', () async {

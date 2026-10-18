@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,9 +8,7 @@ void main() {
   testWidgets(
     'discovery selection returns only chosen files; cancellation returns none',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync(
-        'foresight-discovery-sheet-',
-      );
+      final root = createTestTempDirectorySync('foresight-discovery-sheet-');
       File('${root.path}/Apollo.md').writeAsStringSync('fixture');
       File('${root.path}/Borealis.txt').writeAsStringSync('fixture');
       List<String>? selected;

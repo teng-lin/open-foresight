@@ -68,7 +68,7 @@ void main() {
   late RecoveryControl controlService;
   late Server server;
   setUp(() async {
-    root = shortTestTempRoot.createTempSync('of-recovery-');
+    root = createTestTempDirectorySync('of-recovery-');
     store = Store('${root.path}/app.db');
     rag = RecoveryRag();
     controlService = RecoveryControl();
@@ -81,12 +81,14 @@ void main() {
     helper = Helper(path, '${root.path}/helper', manageProcess: false);
     domain = Domain(store, helper);
   });
-  tearDown(() async {
-    domain.close();
-    await helper.close();
-    await server.shutdown();
-    store.close();
-    root.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      domain.close();
+      await helper.close();
+      await server.shutdown();
+      store.close();
+      root.deleteSync(recursive: true);
+    });
   });
 
   test(

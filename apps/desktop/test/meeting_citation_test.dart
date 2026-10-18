@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -11,9 +12,7 @@ void main() {
     'saved meeting factual answer includes a valid source citation',
     () async {
       final env = Platform.environment;
-      final temporary = Directory.systemTemp.createTempSync(
-        'meeting-citation-',
-      );
+      final temporary = createTestTempDirectorySync('meeting-citation-');
       addTearDown(() {
         if (temporary.existsSync()) temporary.deleteSync(recursive: true);
       });

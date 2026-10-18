@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
@@ -62,7 +63,7 @@ void main() {
   late Store store;
   late DownloadFixture downloader;
   setUp(() {
-    root = Directory.systemTemp.createTempSync('query-acquire-test-');
+    root = createTestTempDirectorySync('query-acquire-test-');
     store = Store('${root.path}/app.db');
     store.db.execute(
       'INSERT INTO models(kind,path,digest,runtime,backend) VALUES(?,?,?,?,?)',
@@ -76,9 +77,11 @@ void main() {
     );
     downloader = DownloadFixture();
   });
-  tearDown(() {
-    store.close();
-    root.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      root.deleteSync(recursive: true);
+    });
   });
 
   DedicatedQueryAcquisition operation(MetadataFixture config) =>

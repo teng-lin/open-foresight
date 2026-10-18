@@ -34,21 +34,23 @@ void main() {
     ]) {
       runtimeConfiguration.environment.remove(key);
     }
-    temp = shortTestTempRoot.createTempSync('of-access-');
+    temp = createTestTempDirectorySync('of-access-');
     service = await ApplicationService.start(
       ProfilePaths('${temp.path}/profile', '${temp.path}/run'),
     );
     agent = await ServiceClient.connect(service.path);
     desktop = await ServiceClient.connect(service.path);
   });
-  tearDown(() async {
-    await agent.close();
-    await desktop.close();
-    await service.close();
-    temp.deleteSync(recursive: true);
-    runtimeConfiguration.environment
-      ..clear()
-      ..addAll(original);
+  setUp(() {
+    addTearDown(() async {
+      await agent.close();
+      await desktop.close();
+      await service.close();
+      temp.deleteSync(recursive: true);
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(original);
+    });
   });
   Future<void> attach() async => desktop.call('security.attach_desktop', {
     'token': File(

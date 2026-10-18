@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 
 import 'package:foresight_core/src/file_discovery.dart';
@@ -7,7 +8,7 @@ void main() {
   test(
     'discovery scans chosen roots, excludes imports, skips links and hidden/build folders',
     () async {
-      final root = Directory.systemTemp.createTempSync('foresight-discovery-');
+      final root = createTestTempDirectorySync('foresight-discovery-');
       addTearDown(() => root.deleteSync(recursive: true));
       final nested = Directory('${root.path}/nested')..createSync();
       for (final path in [
@@ -38,7 +39,7 @@ void main() {
   test(
     'unavailable folders do not prevent discovery in readable roots',
     () async {
-      final root = Directory.systemTemp.createTempSync(
+      final root = createTestTempDirectorySync(
         'foresight-discovery-unavailable-',
       );
       addTearDown(() => root.deleteSync(recursive: true));
@@ -52,9 +53,7 @@ void main() {
     },
   );
   test('scan limits and cancellation bound work', () async {
-    final root = Directory.systemTemp.createTempSync(
-      'foresight-discovery-limits-',
-    );
+    final root = createTestTempDirectorySync('foresight-discovery-limits-');
     addTearDown(() => root.deleteSync(recursive: true));
     for (var i = 0; i < 150; i++) {
       File('${root.path}/note-$i.txt').writeAsStringSync('fixture');
@@ -94,7 +93,7 @@ void main() {
   });
 
   test('default folders include only existing directories', () {
-    final root = Directory.systemTemp.createTempSync('discovery-defaults-');
+    final root = createTestTempDirectorySync('discovery-defaults-');
     addTearDown(() => root.deleteSync(recursive: true));
     expect(LocalFileDiscovery.defaultFolders(root.path), isEmpty);
     Directory('${root.path}/Downloads').createSync();
@@ -109,7 +108,7 @@ void main() {
   test(
     'results sort newest first with a stable path tie break and byte sizes',
     () async {
-      final root = Directory.systemTemp.createTempSync('discovery-order-');
+      final root = createTestTempDirectorySync('discovery-order-');
       addTearDown(() => root.deleteSync(recursive: true));
       final old = DateTime.utc(2020), recent = DateTime.utc(2021);
       for (final name in ['b.txt', 'a.RTF', 'c.md']) {
@@ -131,7 +130,7 @@ void main() {
   test(
     'canonical roots deduplicate aliases and excluded symlinks resolve to their targets',
     () async {
-      final root = Directory.systemTemp.createTempSync('discovery-alias-');
+      final root = createTestTempDirectorySync('discovery-alias-');
       addTearDown(() => root.deleteSync(recursive: true));
       final folder = Directory('${root.path}/documents')..createSync();
       final file = File('${folder.path}/saved.md')
@@ -153,7 +152,7 @@ void main() {
   test(
     'missing excluded files and non-directory roots do not block readable roots',
     () async {
-      final root = Directory.systemTemp.createTempSync('discovery-missing-');
+      final root = createTestTempDirectorySync('discovery-missing-');
       addTearDown(() => root.deleteSync(recursive: true));
       final file = File('${root.path}/note.txt')
         ..writeAsStringSync('available');
@@ -170,7 +169,7 @@ void main() {
   test(
     'progress remains monotonic and ends with the exact completed count',
     () async {
-      final root = Directory.systemTemp.createTempSync('discovery-progress-');
+      final root = createTestTempDirectorySync('discovery-progress-');
       addTearDown(() => root.deleteSync(recursive: true));
       for (var i = 0; i < 105; i++) {
         File('${root.path}/$i.txt').writeAsStringSync('fixture');

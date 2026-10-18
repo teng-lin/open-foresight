@@ -19,7 +19,7 @@ void main() {
     ]) {
       runtimeConfiguration.environment.remove(key);
     }
-    final directory = shortTestTempRoot.createTempSync('of-path-');
+    final directory = createTestTempDirectorySync('of-path-');
     IsolatedApplicationService? host;
     ServiceClient? client;
     try {
@@ -70,7 +70,7 @@ void main() {
       ]) {
         runtimeConfiguration.environment.remove(key);
       }
-      final directory = shortTestTempRoot.createTempSync('of-startup-');
+      final directory = createTestTempDirectorySync('of-startup-');
       final hosts = <IsolatedApplicationService>[];
       final clients = <ServiceClient>[];
       try {
@@ -119,9 +119,7 @@ void main() {
         runtimeConfiguration.environment.remove(key);
       }
       runtimeConfiguration.environment['FORESIGHT_SERVICE_TRACE'] = '1';
-      final directory = Directory.systemTemp.createTempSync(
-        'isolated-service-',
-      );
+      final directory = createTestTempDirectorySync('isolated-service-');
       final profile = ProfilePaths(
         '${directory.path}/data',
         '${directory.path}/run',
@@ -181,7 +179,7 @@ void main() {
       ]) {
         runtimeConfiguration.environment.remove(key);
       }
-      final directory = shortTestTempRoot.createTempSync('of-shutdown-');
+      final directory = createTestTempDirectorySync('of-shutdown-');
       final started = File('${directory.path}/started');
       final stopping = File('${directory.path}/stopping');
       final release = File('${directory.path}/release');

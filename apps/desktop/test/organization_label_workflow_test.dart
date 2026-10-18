@@ -1,6 +1,6 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/domain.dart';
@@ -13,9 +13,7 @@ void main() {
   test(
     'replacement writes all association fields and cluster update preserves ID and nullable data',
     () {
-      final dir = Directory.systemTemp.createTempSync(
-        'foresight-cluster-write-',
-      );
+      final dir = createTestTempDirectorySync('foresight-cluster-write-');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });
@@ -51,9 +49,7 @@ void main() {
   testWidgets(
     'global label creation uses all documents despite active search and deletion requires confirmation',
     (tester) async {
-      final dir = Directory.systemTemp.createTempSync(
-        'foresight-label-workflow-',
-      );
+      final dir = createTestTempDirectorySync('foresight-label-workflow-');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });

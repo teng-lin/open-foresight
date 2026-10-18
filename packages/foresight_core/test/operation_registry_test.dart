@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/src/operations.dart';
@@ -103,10 +104,21 @@ void main() {
   test(
     'desktop command API rejects stale and unknown wire strings at compile time',
     () async {
-      final directory = Directory(
-        '.dart_tool',
-      ).createTempSync('invalid-desktop-command-');
-      addTearDown(() => directory.deleteSync(recursive: true));
+      final directory = createTestTempDirectorySync('invalid-desktop-command-');
+      // Give the out-of-tree compile fixture the same package resolution as
+      // this package, while keeping every disposable file under the test root.
+      final config = File('.dart_tool/package_config.json').absolute;
+      final packages =
+          jsonDecode(config.readAsStringSync()) as Map<String, dynamic>;
+      for (final package in packages['packages'] as List) {
+        package['rootUri'] = config.uri
+            .resolve(package['rootUri'] as String)
+            .toString();
+      }
+      Directory('${directory.path}/.dart_tool').createSync();
+      File(
+        '${directory.path}/.dart_tool/package_config.json',
+      ).writeAsStringSync(jsonEncode(packages));
       final fixture = File('${directory.path}/invalid_commands.dart')
         ..writeAsStringSync(r'''import 'package:foresight_core/remote.dart';
 void invalidCommands(DesktopConnection desktop) {

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -10,7 +11,7 @@ void main() {
   testWidgets(
     'active speech model finishes without probing; deleted asset offers download',
     (tester) async {
-      final directory = Directory.systemTemp.createTempSync('speech-ui-');
+      final directory = createTestTempDirectorySync('speech-ui-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

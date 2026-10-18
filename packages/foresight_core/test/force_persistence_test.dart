@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'package:test/test.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:foresight_core/src/store.dart';
@@ -9,7 +9,7 @@ import 'package:foresight_core/src/graph_clusters.dart';
 
 void main() {
   test('registered scene does not reuse pre-recovery PCA cache identity', () {
-    final dir = Directory.systemTemp.createTempSync('pca-cache-version-');
+    final dir = createTestTempDirectorySync('pca-cache-version-');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
@@ -59,7 +59,7 @@ void main() {
   test(
     'force cache restores wider finite coordinates and invalidates only requested label organization',
     () {
-      final dir = Directory.systemTemp.createTempSync('force-cache-');
+      final dir = createTestTempDirectorySync('force-cache-');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });
@@ -164,7 +164,7 @@ void main() {
   test(
     'cluster write failure rolls back positions, vectors and force signature together',
     () {
-      final dir = Directory.systemTemp.createTempSync('force-publish-');
+      final dir = createTestTempDirectorySync('force-publish-');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });

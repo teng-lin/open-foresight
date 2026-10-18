@@ -1,4 +1,4 @@
-import 'dart:io';
+import 'package:foresight_test_support/test_paths.dart';
 
 import 'package:foresight_core/src/store.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -8,7 +8,7 @@ void main() {
   test(
     'busy writer preserves revisions and source caches recover after rollback',
     () {
-      final root = Directory.systemTemp.createTempSync('store-resilience-');
+      final root = createTestTempDirectorySync('store-resilience-');
       addTearDown(() => root.deleteSync(recursive: true));
       final writer = Store('${root.path}/application.db');
       final other = Store(writer.path);

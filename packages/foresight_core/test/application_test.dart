@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -59,20 +60,22 @@ void main() {
   late Directory directory;
   late TestDomain domain;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('foresight-core-');
+    directory = createTestTempDirectorySync('foresight-core-');
     domain = TestDomain(
       Store('${directory.path}/app.db'),
       Helper('${directory.path}/helper.sock', '${directory.path}/helper'),
     );
     domain.store.setPreference('liveEnhance', 'false');
   });
-  tearDown(() async {
-    await domain.application.close();
-    domain.close();
-    domain.generator?.close();
-    await domain.helper.close();
-    domain.store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await domain.application.close();
+      domain.close();
+      domain.generator?.close();
+      await domain.helper.close();
+      domain.store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
   test(
     'OAuth cancellation before the callback listener binds does not escape its request',

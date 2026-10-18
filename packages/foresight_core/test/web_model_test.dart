@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -10,7 +11,7 @@ void main() {
   test(
     'real model searches and persists a cited controlled answer',
     () async {
-      final directory = Directory.systemTemp.createTempSync('web-model-');
+      final directory = createTestTempDirectorySync('web-model-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

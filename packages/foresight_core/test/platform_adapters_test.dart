@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -10,14 +11,16 @@ void main() {
   late Directory root;
   late Map<String, String> previous;
   setUp(() {
-    root = Directory.systemTemp.createTempSync('platform-adapter-');
+    root = createTestTempDirectorySync('platform-adapter-');
     previous = Map.of(runtimeConfiguration.environment);
   });
-  tearDown(() {
-    runtimeConfiguration.environment
-      ..clear()
-      ..addAll(previous);
-    root.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(previous);
+      root.deleteSync(recursive: true);
+    });
   });
 
   Future<File> script(String body) async {

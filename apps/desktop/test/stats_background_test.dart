@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/domain.dart';
@@ -29,9 +29,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final temporary = Directory.systemTemp.createTempSync(
-        'stats-background-',
-      );
+      final temporary = createTestTempDirectorySync('stats-background-');
       final store = BodyReadCountingStore('${temporary.path}/application.db');
       store.answer('Question', 'one two three', 'completed', [], 'fixture');
       final helper = OfflineHelper(

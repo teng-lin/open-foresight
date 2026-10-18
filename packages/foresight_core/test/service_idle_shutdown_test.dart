@@ -32,26 +32,26 @@ void main() {
       ])
         key: runtimeConfiguration.environment.remove(key),
     };
-    directory = shortTestTempRoot.createTempSync('of-idle-');
+    directory = createTestTempDirectorySync('of-idle-');
     profile = ProfilePaths('${directory.path}/data', '${directory.path}/run');
     service = await ApplicationService.start(profile);
     client = await ServiceClient.connect('${profile.runtime}/application.sock');
   });
-  tearDown(() async {
-    await client.close();
-    try {
-      await service.close();
-    } catch (_) {
-      /* Failure-path tests deliberately close invalid resources. */
-    }
-    directory.deleteSync(recursive: true);
-    for (final entry in original.entries) {
-      if (entry.value == null) {
-        runtimeConfiguration.environment.remove(entry.key);
-      } else {
-        runtimeConfiguration.environment[entry.key] = entry.value!;
+  setUp(() {
+    addTearDown(() async {
+      await client.close();
+      try {
+        await service.close();
+      } catch (_) {}
+      directory.deleteSync(recursive: true);
+      for (final entry in original.entries) {
+        if (entry.value == null) {
+          runtimeConfiguration.environment.remove(entry.key);
+        } else {
+          runtimeConfiguration.environment[entry.key] = entry.value!;
+        }
       }
-    }
+    });
   });
 
   test(

@@ -10,7 +10,7 @@ void main() {
   test(
     'closing a retired listener preserves its replacement endpoint',
     () async {
-      final directory = shortTestTempRoot.createTempSync('of-socket-');
+      final directory = createTestTempDirectorySync('of-socket-');
       final path = '${directory.path}/application.sock';
       ServiceSocketBinding? old;
       ServiceSocketBinding? replacement;
@@ -55,7 +55,7 @@ void main() {
   test(
     'cancelled publication cannot replace a newer owner after a pause',
     () async {
-      final directory = shortTestTempRoot.createTempSync('of-socket-');
+      final directory = createTestTempDirectorySync('of-socket-');
       final path = '${directory.path}/application.sock';
       final pause = Completer<void>();
       final old = await ServiceSocketBinding.bind(path);
@@ -86,7 +86,7 @@ void main() {
   );
 
   test('an unpublished listener closes without disturbing the owner', () async {
-    final directory = shortTestTempRoot.createTempSync('of-socket-');
+    final directory = createTestTempDirectorySync('of-socket-');
     final path = '${directory.path}/worker.sock';
     ServiceSocketBinding? owner;
     ServiceSocketBinding? candidate;

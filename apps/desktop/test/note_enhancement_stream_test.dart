@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
 import 'pump_until.dart';
@@ -52,9 +53,7 @@ void main() {
   testWidgets(
     'local editor streams content and cancel restores the exact previous notes',
     (tester) async {
-      final directory = Directory.systemTemp.createTempSync(
-        'note-stream-widget-',
-      );
+      final directory = createTestTempDirectorySync('note-stream-widget-');
       addTearDown(() => directory.deleteSync(recursive: true));
       final time = FakeAsync();
       final store = Store('${directory.path}/app.db');

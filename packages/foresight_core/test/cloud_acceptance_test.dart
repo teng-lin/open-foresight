@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -75,7 +76,7 @@ void main() {
   test(
     'CLI redacts malformed runtime configuration and rejects unknown flags',
     () async {
-      final resources = Directory.systemTemp.createTempSync('of-cloud-config-');
+      final resources = createTestTempDirectorySync('of-cloud-config-');
       final environment = Map<String, String>.from(Platform.environment)
         ..remove('FORESIGHT_SEARCH_API_KEY')
         ..remove('FORESIGHT_WEB_CONTENT_API_KEY')
@@ -147,10 +148,12 @@ void main() {
         await request.response.close();
       });
     });
-    tearDown(() async {
-      await channel.shutdown();
-      await grpc.shutdown();
-      await http.close(force: true);
+    setUp(() {
+      addTearDown(() async {
+        await channel.shutdown();
+        await grpc.shutdown();
+        await http.close(force: true);
+      });
     });
     Future<({Map<String, Object?> report, int code})> run({
       bool download = false,

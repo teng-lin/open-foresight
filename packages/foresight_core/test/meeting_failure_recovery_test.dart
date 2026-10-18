@@ -44,17 +44,19 @@ void main() {
   late RecoveryHelper helper;
   late IndexingDomain domain;
   setUp(() {
-    temp = shortTestTempRoot.createTempSync('of-meeting-recovery-');
+    temp = createTestTempDirectorySync('of-meeting-recovery-');
     store = Store('${temp.path}/application.db');
     helper = RecoveryHelper('${temp.path}/helper.sock', '${temp.path}/helper');
     domain = IndexingDomain(store, helper);
   });
-  tearDown(() async {
-    await domain.application.close();
-    domain.close();
-    await helper.close();
-    store.close();
-    temp.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await domain.application.close();
+      domain.close();
+      await helper.close();
+      store.close();
+      temp.deleteSync(recursive: true);
+    });
   });
   test(
     'speech stop failure retains, indexes and exposes committed transcript as recoverable',

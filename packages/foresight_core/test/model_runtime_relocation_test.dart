@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/src/model_setup.dart';
@@ -19,7 +20,7 @@ void main() {
   }
 
   setUp(() {
-    scratch = Directory.systemTemp.createTempSync('runtime-relocation-');
+    scratch = createTestTempDirectorySync('runtime-relocation-');
     previous = Map.of(runtimeConfiguration.environment);
     root = '${scratch.path}/Old App.app';
     generation = '$root/Contents/Resources/bin/litert-runner';
@@ -37,12 +38,14 @@ void main() {
     asset = File('${scratch.path}/model.bin')..writeAsStringSync('model');
     store = Store('${scratch.path}/application.db');
   });
-  tearDown(() {
-    store.close();
-    runtimeConfiguration.environment
-      ..clear()
-      ..addAll(previous);
-    scratch.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(previous);
+      scratch.deleteSync(recursive: true);
+    });
   });
   void move() {
     final moved = '${scratch.path}/Moved App With Spaces.app';

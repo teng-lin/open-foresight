@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -16,7 +17,7 @@ void main() {
   testWidgets(
     'Settings selectors retain selection, keyboard and disabled behavior',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync('desktop-select-');
+      final root = createTestTempDirectorySync('desktop-select-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
@@ -122,7 +123,7 @@ void main() {
       await (FontLoader(
         'MaterialIcons',
       )..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'))).load();
-      final root = Directory.systemTemp.createTempSync('desktop-audit-');
+      final root = createTestTempDirectorySync('desktop-audit-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

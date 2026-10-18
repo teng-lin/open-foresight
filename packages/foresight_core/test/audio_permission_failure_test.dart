@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:ffi';
 import 'dart:io';
 
@@ -13,7 +14,7 @@ void main() {
   String? previous;
 
   setUpAll(() async {
-    root = Directory.systemTemp.createTempSync('audio-permission-failures-');
+    root = createTestTempDirectorySync('audio-permission-failures-');
     final source = File('${root.path}/fixture.c')
       ..writeAsStringSync(r'''
 #include <stdio.h>
@@ -67,24 +68,28 @@ void fs_string_free(char *value) { outstanding--; free(value); }
       'system_calls',
     );
   });
-  tearDownAll(() => root.deleteSync(recursive: true));
+  setUpAll(() {
+    addTearDown(() => root.deleteSync(recursive: true));
+  });
   setUp(() {
     previous = runtimeConfiguration.environment['FORESIGHT_NATIVE'];
     runtimeConfiguration.environment['FORESIGHT_NATIVE'] = libraryPath;
     setMode(0);
   });
-  tearDown(() {
-    if (previous == null) {
-      runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
-    } else {
-      runtimeConfiguration.environment['FORESIGHT_NATIVE'] = previous!;
-    }
-    expect(
-      balance(),
-      0,
-      reason:
-          'Every owned native response must be freed, including rejected JSON',
-    );
+  setUp(() {
+    addTearDown(() {
+      if (previous == null) {
+        runtimeConfiguration.environment.remove('FORESIGHT_NATIVE');
+      } else {
+        runtimeConfiguration.environment['FORESIGHT_NATIVE'] = previous!;
+      }
+      expect(
+        balance(),
+        0,
+        reason:
+            'Every owned native response must be freed, including rejected JSON',
+      );
+    });
   });
 
   test(

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -59,7 +60,7 @@ void main() {
     },
   );
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('proactive-');
+    directory = createTestTempDirectorySync('proactive-');
     store = Store('${directory.path}/app.db');
     meeting = store.meeting('Fixture');
     detectedText = [];
@@ -74,10 +75,12 @@ void main() {
     detectionGate = null;
     queue = create();
   });
-  tearDown(() async {
-    await queue.close();
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await queue.close();
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
   void append(String text, {bool finalText = true, int? id}) {
     store.transcript(id ?? meeting, text, finalText, 0, 1000, 'microphone');

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -146,7 +147,7 @@ void main() {
   late Domain domain;
   late ToolRuntime runtime;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('web-answer-');
+    directory = createTestTempDirectorySync('web-answer-');
     store = Store('${directory.path}/app.db');
     helper = Helper(
       '${directory.path}/unused.sock',
@@ -157,12 +158,14 @@ void main() {
     domain = Domain(store, helper, webSearch: fixtureSearch())
       ..generator = runtime;
   });
-  tearDown(() async {
-    domain.close();
-    runtime.close();
-    await helper.close();
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      domain.close();
+      runtime.close();
+      await helper.close();
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
   test(
     'empty date completion uses request date without rewriting model memory',

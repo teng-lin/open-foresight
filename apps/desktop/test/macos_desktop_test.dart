@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
@@ -40,7 +41,9 @@ void main() {
   const channel = MethodChannel('foresight/desktop');
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-  tearDown(() => messenger.setMockMethodCallHandler(channel, null));
+  setUp(() {
+    addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+  });
 
   test(
     'Mac login reflects native status and retains value when permission fails',
@@ -140,9 +143,7 @@ void main() {
   testWidgets(
     'Mac audio setup requests service permission only after explicit action and displays denial',
     (tester) async {
-      final tmp = Directory.systemTemp.createTempSync(
-        'foresight-mac-permissions-',
-      );
+      final tmp = createTestTempDirectorySync('foresight-mac-permissions-');
       final store = Store('${tmp.path}/app.db');
       final domain = PermissionDomain(
         store,

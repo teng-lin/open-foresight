@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_core/src/domain.dart';
@@ -23,7 +24,7 @@ void main() {
   late File model;
   late Map<String, String> environment;
   setUpAll(() async {
-    root = Directory.systemTemp.createTempSync('generation-setup-failure-');
+    root = createTestTempDirectorySync('generation-setup-failure-');
     final source = File('${root.path}/fixture.c')
       ..writeAsStringSync(r'''
 #include <stdatomic.h>
@@ -98,7 +99,9 @@ void fs_string_free(char *value) { strings--; free(value); }
       'string_count',
     );
   });
-  tearDownAll(() => root.deleteSync(recursive: true));
+  setUpAll(() {
+    addTearDown(() => root.deleteSync(recursive: true));
+  });
   setUp(() async {
     environment = Map.of(runtimeConfiguration.environment);
     store = Store('${root.path}/app.db');
@@ -106,18 +109,20 @@ void fs_string_free(char *value) { strings--; free(value); }
     await store.register('generation', model.path, '/previous/runtime');
     mode(0);
   });
-  tearDown(() {
-    runtimeConfiguration.environment
-      ..clear()
-      ..addAll(environment);
-    try {
-      expect(engines(), 0);
-      expect(conversations(), 0);
-      expect(strings(), 0);
-    } finally {
-      store.close();
-      File('${root.path}/app.db').deleteSync();
-    }
+  setUp(() {
+    addTearDown(() {
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(environment);
+      try {
+        expect(engines(), 0);
+        expect(conversations(), 0);
+        expect(strings(), 0);
+      } finally {
+        store.close();
+        File('${root.path}/app.db').deleteSync();
+      }
+    });
   });
 
   for (final failureMode in [1, 2, 3, 4, 5, 6]) {

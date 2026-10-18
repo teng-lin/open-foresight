@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/profile_paths.dart';
@@ -5,9 +6,9 @@ import 'package:foresight_core/src/profile_paths.dart';
 void main() {
   test('canonical profile ignores independent legacy sessions', () {
     final root = Directory(
-      Directory.systemTemp
-          .createTempSync('foresight-profile-')
-          .resolveSymbolicLinksSync(),
+      createTestTempDirectorySync(
+        'foresight-profile-',
+      ).resolveSymbolicLinksSync(),
     );
     addTearDown(() => root.deleteSync(recursive: true));
     final env = {

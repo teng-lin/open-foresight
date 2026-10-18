@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:test/test.dart';
 import 'package:grpc/grpc.dart';
@@ -14,7 +15,7 @@ class PingService extends RagServiceBase {
 
 void main() {
   test('concurrent helper shutdown shares one transport termination', () async {
-    final directory = Directory.systemTemp.createTempSync('fc-close-');
+    final directory = createTestTempDirectorySync('fc-close-');
     final socket = '${directory.path}/socket';
     final server = Server.create(services: [PingService()]);
     final helper = Helper(socket, directory.path, manageProcess: false);

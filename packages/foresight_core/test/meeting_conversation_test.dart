@@ -58,7 +58,7 @@ void main() {
   test(
     'meeting follow-up retrieval and generation use only that conversation history',
     () async {
-      final directory = Directory.systemTemp.createTempSync('meeting-history-');
+      final directory = createTestTempDirectorySync('meeting-history-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -155,7 +155,7 @@ void main() {
   test(
     'remote streams and command answers retain exact meeting links across clients',
     () async {
-      final directory = shortTestTempRoot.createTempSync('of-chat-');
+      final directory = createTestTempDirectorySync('of-chat-');
       final original = runtimeConfiguration.environment['FORESIGHT_HELPER'];
       runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
       final profile = ProfilePaths(

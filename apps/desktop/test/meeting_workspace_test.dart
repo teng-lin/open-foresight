@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/application.dart';
 import 'desktop_connection_fixture.dart';
@@ -44,9 +45,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final directory = Directory.systemTemp.createTempSync(
-        'meeting-workspace-',
-      );
+      final directory = createTestTempDirectorySync('meeting-workspace-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -185,7 +184,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final directory = Directory.systemTemp.createTempSync('meeting-layout-');
+      final directory = createTestTempDirectorySync('meeting-layout-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -248,7 +247,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final root = Directory.systemTemp.createTempSync('meeting-window-');
+      final root = createTestTempDirectorySync('meeting-window-');
       final store = Store('${root.path}/app.db');
       final id = store.meeting('Window resize');
       final requests = <MethodCall>[];
@@ -336,9 +335,7 @@ void main() {
         tester.view.devicePixelRatio = 1;
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
-        final root = Directory.systemTemp.createTempSync(
-          'meeting-window-fallback-',
-        );
+        final root = createTestTempDirectorySync('meeting-window-fallback-');
         final store = Store('${root.path}/app.db');
         final id = store.meeting('Small display');
         const channel = MethodChannel('foresight/window');

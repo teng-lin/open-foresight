@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/src/rpc_error.dart';
@@ -9,7 +10,7 @@ void main() {
   test(
     'every stable error survives the service wire without message prefixes',
     () async {
-      final root = Directory.systemTemp.createTempSync('rpc-errors-');
+      final root = createTestTempDirectorySync('rpc-errors-');
       final path = '${root.path}/service.sock';
       final listener = await ServerSocket.bind(
         InternetAddress(path, type: InternetAddressType.unix),

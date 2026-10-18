@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
@@ -33,9 +34,7 @@ void main() {
   testWidgets('GPU registration persists only after helper acceptance', (
     tester,
   ) async {
-    final temporary = Directory.systemTemp.createTempSync(
-      'foresight-embedding-setup-',
-    );
+    final temporary = createTestTempDirectorySync('foresight-embedding-setup-');
     addTearDown(() {
       if (temporary.existsSync()) temporary.deleteSync(recursive: true);
     });

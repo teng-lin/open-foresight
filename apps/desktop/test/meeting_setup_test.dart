@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -26,7 +27,7 @@ void main() {
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
-    final root = Directory.systemTemp.createTempSync('stale-summary-ui-');
+    final root = createTestTempDirectorySync('stale-summary-ui-');
     final store = Store('${root.path}/application.db');
     final id = store.meeting('Meeting');
     store.artifact(id, 'summary', 'Earlier summary', 'fixture');
@@ -59,7 +60,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final directory = Directory.systemTemp.createTempSync('meeting-panels-');
+      final directory = createTestTempDirectorySync('meeting-panels-');
       final store = Store('${directory.path}/app.db');
       final helper = OfflineHelper(
         '${directory.path}/helper.sock',
@@ -137,7 +138,7 @@ void main() {
   testWidgets(
     'meeting recording requires setup and opens speech setup instead of throwing',
     (tester) async {
-      final directory = Directory.systemTemp.createTempSync('meeting-setup-');
+      final directory = createTestTempDirectorySync('meeting-setup-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });
@@ -183,7 +184,7 @@ void main() {
   test(
     'registered missing runner is reported as incomplete speech setup',
     () async {
-      final directory = Directory.systemTemp.createTempSync('meeting-model-');
+      final directory = createTestTempDirectorySync('meeting-model-');
       addTearDown(() {
         if (directory.existsSync()) directory.deleteSync(recursive: true);
       });

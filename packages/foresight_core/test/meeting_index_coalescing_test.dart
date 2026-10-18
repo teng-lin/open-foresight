@@ -43,7 +43,7 @@ void main() {
   late MeetingIndexService service;
   late int meeting;
   setUp(() async {
-    root = shortTestTempRoot.createTempSync('meeting-index-');
+    root = createTestTempDirectorySync('meeting-index-');
     store = Store('${root.path}/app.db');
     reader = Store.readOnly(store.path);
     service = MeetingIndexService();
@@ -70,15 +70,17 @@ void main() {
       'microphone',
     );
   });
-  tearDown(() async {
-    if (!service.release.isCompleted) service.release.complete();
-    await app.close();
-    domain.close();
-    await helper.close();
-    await server.shutdown();
-    reader.close();
-    store.close();
-    root.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      if (!service.release.isCompleted) service.release.complete();
+      await app.close();
+      domain.close();
+      await helper.close();
+      await server.shutdown();
+      reader.close();
+      store.close();
+      root.deleteSync(recursive: true);
+    });
   });
   Future<void> drainMutations() => domain.delete('queue-barrier');
   test(

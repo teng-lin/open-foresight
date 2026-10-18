@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/store.dart';
@@ -43,7 +43,7 @@ void main() {
   test(
     'missing-vector positions reopen honestly and index promotion invalidates cache',
     () {
-      final dir = Directory.systemTemp.createTempSync('graph-scene-cache-');
+      final dir = createTestTempDirectorySync('graph-scene-cache-');
       addTearDown(() {
         if (dir.existsSync()) dir.deleteSync(recursive: true);
       });

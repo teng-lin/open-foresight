@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/store.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -7,12 +8,14 @@ void main() {
   late Directory directory;
   late Store store;
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('foresight-note-time-');
+    directory = createTestTempDirectorySync('foresight-note-time-');
     store = Store('${directory.path}/app.db');
   });
-  tearDown(() {
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   int meetingTimestamp(int id) =>

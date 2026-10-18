@@ -20,7 +20,7 @@ void main() {
   setUp(() async {
     // The original full-path contains predicate also includes ancestor names.
     do {
-      root = await shortTestTempRoot.createTemp('model-assets-');
+      root = await createTestTempDirectory('model-assets-');
       if (root.path.contains('4')) await root.delete();
     } while (root.path.contains('4'));
     metadata = [];
@@ -30,9 +30,11 @@ void main() {
           ForesightSharedConfig(onDeviceModelMetadatas: metadata),
     );
   });
-  tearDown(() async {
-    await catalog.close();
-    await root.delete(recursive: true);
+  setUp(() {
+    addTearDown(() async {
+      await catalog.close();
+      await root.delete(recursive: true);
+    });
   });
 
   test(
@@ -86,7 +88,7 @@ void main() {
       final downloading = await write('models/4/v/a.downloading');
       await write('models/4/v/b.tmp');
       final usable = await write('models/4/v/usable');
-      final outside = await Directory.systemTemp.createTemp('external-models-');
+      final outside = await createTestTempDirectory('external-models-');
       try {
         await File('${outside.path}/external').writeAsString('keep');
         await Link('${root.path}/models/4/link').create(outside.path);
@@ -126,7 +128,7 @@ void main() {
           throwsFormatException,
         );
       }
-      final outside = await Directory.systemTemp.createTemp('outside-assets-');
+      final outside = await createTestTempDirectory('outside-assets-');
       try {
         final keep = File('${outside.path}/keep');
         await keep.writeAsString('keep');

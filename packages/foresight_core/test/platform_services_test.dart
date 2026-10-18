@@ -11,12 +11,14 @@ void main() {
   late Directory scratch;
   setUp(() {
     scratch = Directory(
-      Directory.systemTemp
-          .createTempSync('foresight-platform-')
-          .resolveSymbolicLinksSync(),
+      createTestTempDirectorySync(
+        'foresight-platform-',
+      ).resolveSymbolicLinksSync(),
     );
   });
-  tearDown(() => scratch.deleteSync(recursive: true));
+  setUp(() {
+    addTearDown(() => scratch.deleteSync(recursive: true));
+  });
 
   test('private file permissions use literal paths and report failures', () {
     final file = File('${scratch.path}/private file \u03bb;literal')
@@ -270,7 +272,7 @@ void main() {
       Process.runSync('/bin/chmod', ['700', script.path]);
       final previous = runtimeConfiguration.environment['FORESIGHT_HELPER'];
       runtimeConfiguration.environment['FORESIGHT_HELPER'] = script.path;
-      final runtime = shortTestTempRoot.createTempSync('of-probe-');
+      final runtime = createTestTempDirectorySync('of-probe-');
       final socketPath = '${runtime.path}/helper.sock';
       final server = await ServerSocket.bind(
         InternetAddress(socketPath, type: InternetAddressType.unix),

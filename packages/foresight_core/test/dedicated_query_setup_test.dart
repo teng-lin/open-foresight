@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -11,16 +12,18 @@ void main() {
   late Store store;
   late Map<String, String> environment;
   setUp(() {
-    scratch = Directory.systemTemp.createTempSync('dedicated-query-import-');
+    scratch = createTestTempDirectorySync('dedicated-query-import-');
     store = Store('${scratch.path}/app.db');
     environment = Map.of(runtimeConfiguration.environment);
   });
-  tearDown(() {
-    store.close();
-    runtimeConfiguration.environment
-      ..clear()
-      ..addAll(environment);
-    scratch.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(environment);
+      scratch.deleteSync(recursive: true);
+    });
   });
 
   Future<Map<String, Object?>> existing() async {

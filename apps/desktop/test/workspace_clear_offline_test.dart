@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -26,7 +27,7 @@ void main() {
   testWidgets('offline clear reaches local service and erases sources', (
     tester,
   ) async {
-    final root = Directory.systemTemp.createTempSync('clear-offline-ui-');
+    final root = createTestTempDirectorySync('clear-offline-ui-');
     final store = Store('${root.path}/application.db');
     store.importText('Secret', 'private content', 'text/plain', 'fixture');
     final helper = OfflineHelper('${root.path}/sock', '${root.path}/helper');

@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
 
@@ -7,9 +7,7 @@ void main() {
   test(
     'shortcut failures reach the owning UI error handler after queued acknowledgement',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'foresight-command-error-',
-      );
+      final directory = createTestTempDirectorySync('foresight-command-error-');
       final failed = Completer<Object>();
       final commands = await AppCommands.bind(
         '${directory.path}/commands.sock',
@@ -34,9 +32,7 @@ void main() {
   test(
     'activation forwards to the existing owner and socket can reopen after close',
     () async {
-      final directory = Directory.systemTemp.createTempSync(
-        'foresight-commands-',
-      );
+      final directory = createTestTempDirectorySync('foresight-commands-');
       final path = '${directory.path}/commands.sock';
       final received = <String>[];
       final observed = StreamController<String>.broadcast();

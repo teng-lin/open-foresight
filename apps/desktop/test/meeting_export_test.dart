@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:io';
@@ -19,16 +20,18 @@ void main() {
   final today = DateTime(2026, 10, 16);
 
   setUp(() {
-    directory = Directory.systemTemp.createTempSync('meeting-export-');
+    directory = createTestTempDirectorySync('meeting-export-');
     store = Store('${directory.path}/app.db');
     Domain(
       store,
       OfflineHelper('${directory.path}/socket', '${directory.path}/helper'),
     ).application.google;
   });
-  tearDown(() {
-    store.close();
-    directory.deleteSync(recursive: true);
+  setUp(() {
+    addTearDown(() {
+      store.close();
+      directory.deleteSync(recursive: true);
+    });
   });
 
   void savedAt(int id, DateTime date) => store.db.execute(

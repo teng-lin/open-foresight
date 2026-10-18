@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'dart:io';
@@ -14,7 +15,7 @@ void main() {
   test(
     'real Unix helper + native generation cited answer, restart persistence and deletion',
     () async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-e2e-');
+      final tmp = createTestTempDirectorySync('foresight-e2e-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });

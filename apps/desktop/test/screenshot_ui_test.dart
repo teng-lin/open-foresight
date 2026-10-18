@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -14,7 +15,7 @@ void main() {
   testWidgets('source pause can resume a pending import while the UI is busy', (
     tester,
   ) async {
-    final tmp = Directory.systemTemp.createTempSync('foresight-pause-ui-');
+    final tmp = createTestTempDirectorySync('foresight-pause-ui-');
     addTearDown(() {
       if (tmp.existsSync()) tmp.deleteSync(recursive: true);
     });
@@ -54,7 +55,7 @@ void main() {
   testWidgets(
     'source search, label editing, graph navigation and settings persist',
     (tester) async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-screens-');
+      final tmp = createTestTempDirectorySync('foresight-screens-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
@@ -186,7 +187,7 @@ void main() {
   testWidgets(
     'Start transcribing opens speech setup before creating a meeting; cancel preserves selection',
     (tester) async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-quick-start-');
+      final tmp = createTestTempDirectorySync('foresight-quick-start-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
@@ -222,7 +223,7 @@ void main() {
   testWidgets(
     'Ask composer rejects blank input and submits through keyboard or send',
     (tester) async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-composer-');
+      final tmp = createTestTempDirectorySync('foresight-composer-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
@@ -280,9 +281,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final tmp = Directory.systemTemp.createTempSync(
-        'foresight-source-columns-',
-      );
+      final tmp = createTestTempDirectorySync('foresight-source-columns-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
@@ -367,7 +366,7 @@ void main() {
   testWidgets(
     'Local file import preserves file modification time and first import time',
     (tester) async {
-      final tmp = Directory.systemTemp.createTempSync('foresight-file-dates-');
+      final tmp = createTestTempDirectorySync('foresight-file-dates-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
@@ -422,7 +421,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final tmp = Directory.systemTemp.createTempSync('foresight-layout-');
+      final tmp = createTestTempDirectorySync('foresight-layout-');
       addTearDown(() {
         if (tmp.existsSync()) tmp.deleteSync(recursive: true);
       });
@@ -448,9 +447,7 @@ void main() {
   testWidgets(
     'type filters combine with labels/search and survive view switches',
     (tester) async {
-      final root = Directory.systemTemp.createTempSync(
-        'foresight-type-filter-',
-      );
+      final root = createTestTempDirectorySync('foresight-type-filter-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });

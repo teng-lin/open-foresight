@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/main.dart';
@@ -36,7 +36,7 @@ void main() {
       addTearDown(
         tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
       );
-      final temp = Directory.systemTemp.createTempSync('graph-restoration-ui-');
+      final temp = createTestTempDirectorySync('graph-restoration-ui-');
       addTearDown(() {
         if (temp.existsSync()) temp.deleteSync(recursive: true);
       });

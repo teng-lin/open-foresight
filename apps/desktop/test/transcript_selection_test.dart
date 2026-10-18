@@ -1,5 +1,5 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -16,7 +16,7 @@ void main() {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
-      final root = Directory.systemTemp.createTempSync('transcript-selection-');
+      final root = createTestTempDirectorySync('transcript-selection-');
       addTearDown(() {
         if (root.existsSync()) root.deleteSync(recursive: true);
       });
