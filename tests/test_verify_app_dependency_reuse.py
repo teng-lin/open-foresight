@@ -4,6 +4,7 @@ import pytest
 
 from tools.verify_app_dependency_reuse import (
     MAKE_DIRECTORY_STATUS,
+    MAKE_NOOP_STATUS,
     planned_dependency_work,
     verify,
 )
@@ -103,3 +104,34 @@ def test_parse_error_diagnostic_is_bounded():
         planned_dependency_work(line)
     assert repr(line[:500]) in str(error.value)
     assert len(str(error.value)) < 600
+
+
+@pytest.mark.parametrize("program", ["make", "make[2]", "gmake[12]"])
+@pytest.mark.parametrize(
+    "target",
+    ["_deps/sentencepiece-build/CMakeFiles/sentencepiece-static.dir/build", "all"],
+)
+def test_actual_mac_make_381_noop_records_preserve_following_command_checks(
+    program, target
+):
+    # Actual de2bf5a Mac job117803932575: Nothing to be done for `_deps/.../build'.
+    # GNU Make3.81 remake.c229-230 defines both exact successful/noop forms.
+    # https://github.com/mirror/make/blob/776d8b7bc2ff83f8ebf5d357ec89e3bbe6d83962/remake.c#L224-L231
+    for body in (f"Nothing to be done for `{target}'.", f"`{target}' is up to date."):
+        line = f"{program}: {body}"
+        assert planned_dependency_work(line) is None
+        forbidden = (
+            "gcc -c /src/build/_deps/spm-src/source.c -o _deps/spm-build/source.o"
+        )
+        assert planned_dependency_work(line + "\n" + forbidden) == forbidden
+        for suffix in ("; gcc -c bad.c", " && gcc -c bad.c", " trailing", " # '"):
+            assert MAKE_NOOP_STATUS.fullmatch(line + suffix) is None
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["embedded'quote", "embedded`backtick", "bad' ; gcc -c _deps/source.c # '"],
+)
+def test_make_noop_target_cannot_embed_shell_quoting(target):
+    for body in (f"Nothing to be done for `{target}'.", f"`{target}' is up to date."):
+        assert MAKE_NOOP_STATUS.fullmatch("make[2]: " + body) is None

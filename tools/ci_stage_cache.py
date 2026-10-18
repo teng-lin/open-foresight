@@ -264,8 +264,9 @@ def trusted_native_work_run(run, repository, own_pr, root=ROOT):
                 "status"
             ] in ("ahead", "identical")
         if not ancestor:
-            page = 1
-            while True:
+            # GitHub exposes at most 250 PR commits. Bound API work even if a
+            # malformed/paginated response keeps returning a full page.
+            for page in range(1, 4):
                 commits = artifacts.api(
                     repository, f"pulls/{number}/commits?per_page=100&page={page}"
                 )
@@ -274,7 +275,6 @@ def trusted_native_work_run(run, repository, own_pr, root=ROOT):
                     break
                 if len(commits) < 100:
                     break
-                page += 1
         if not ancestor:
             continue
         approved = {**run, "head_sha": final, "pull_requests": [{"number": number}]}

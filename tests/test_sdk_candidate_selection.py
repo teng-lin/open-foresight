@@ -20,7 +20,15 @@ def candidates(tmp_path, monkeypatch):
     payload.mkdir()
     (payload / "retained").write_text("verified SDK fixture")
     packed = tmp_path / "packed"
-    artifacts.pack(COMPONENT, IDENTITY, payload, packed)
+
+    def revision(command, **kwargs):
+        assert command == ["git", "rev-parse", "HEAD"]
+        assert kwargs == {"cwd": artifacts.ROOT, "text": True, "timeout": 30}
+        return "9" * 40 + "\n"
+
+    with monkeypatch.context() as packing:
+        packing.setattr(artifacts.subprocess, "check_output", revision)
+        artifacts.pack(COMPONENT, IDENTITY, payload, packed)
     receipt = json.loads((packed / "identity.json").read_text())
     archives = {}
     payloads, sidecars = [], []

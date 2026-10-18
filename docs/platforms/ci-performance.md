@@ -163,6 +163,20 @@ looks for shared verified SDK artifacts. GitHub caches under another PR's merge
 ref are not a shared artifact store. The existing cache keys and builder files
 remain unchanged, preserving already running producers and their saved work.
 
+Compiler installation uses the Arch archive for `2026/10/18` and the Ubuntu
+snapshot `20261018T210000Z`. The original install commands and SDK recipes stay
+unchanged. Official repository indices were checked against all 12 Arch and 65
+Ubuntu compiler/ABI package versions recorded in successful run `39170861992`.
+Ubuntu uses an isolated, signed snapshot source list so rolling mirrors and
+third-party feeds cannot select newer toolchain packages. The separately
+recorded [toolchain profiles](../../tools/sanitizer_toolchain_profiles.json) bind
+the original artifacts, complete environment, compiler and runtime hashes.
+Post-install checks require exact equality before restoring SDKs; their existing
+semantic identities remain unchanged. GitHub's preinstalled Ubuntu runner image
+can still change independently of these repositories. Such drift stops with a
+specific environment mismatch and requires compatibility review; it never
+authorizes an automatic SDK rebuild.
+
 Shared identities bind the consumed recipes, compiler/runtime bytes, relevant
 system ABI packages, flags and install paths. Only definitions actually imported
 from the macOS SDK builder enter the sanitizer recipe: an unrelated JSON pin or
@@ -202,6 +216,16 @@ compilation, archive creation or relinking before executing the build. A lost
 object or timestamp mismatch requires investigation rather than a silent library
 rebuild. Local developer builds can populate dependencies normally; CI always
 sets `REQUIRE_DEPENDENCY_REUSE=1`.
+
+The retained Ubuntu seed permits one exact CMake runtime migration for
+`libarchive.so.13`, `libcurl.so.4` and `libxml2.so.2`. The immutable
+[compatibility proof](../../tools/ubuntu_app_dependency_runtime_compatibility.json)
+binds their original/replacement bytes, package versions and ELF symbol contracts.
+These three libraries are consumed only by the unchanged CMake executable;
+compiler and generated-output consumers remain excluded from this exception.
+The remaining 486 consumed files must match byte for byte, and the configured
+build dry-run must still prove that dependency compilation and relinking are
+unnecessary.
 
 Application cache transport uses the current Docker context's Docker driver with
 the containerd image store. Provisioning happens before loading a qualified SDK

@@ -349,6 +349,48 @@ def identity(inputs, abi):
     )
 
 
+def verify_environment_profile(root, kind, prefix):
+    """Preserve the published SDK's actual compiler/ABI while freezing repos.
+
+    Repository selection is qualification plumbing, not a new SDK build input:
+    compare every recorded environment field before allowing existing SDK use.
+    """
+    profiles = json.loads(
+        (root / "tools/sanitizer_toolchain_profiles.json").read_text()
+    )
+    if profiles.get("schema") != 1:
+        raise ValueError("Unsupported sanitizer toolchain profile")
+    profile = profiles["profiles"][kind]
+    workflow = yaml.safe_load((root / WORKFLOW).read_bytes())
+    steps = workflow["jobs"][JOBS[kind]]["steps"]
+    selections = [
+        step.get("run")
+        for step in steps
+        if step.get("name", "").startswith("Select the verified ")
+    ]
+    if selections != [profile["repository_setup"]]:
+        raise ValueError(
+            "Sanitizer repository selection differs from its verified profile"
+        )
+    actual = environment(kind, prefix)
+    changed = sorted(
+        key
+        for key in set(actual) | set(profile["environment"])
+        if actual.get(key) != profile["environment"].get(key)
+    )
+    if changed:
+        raise RuntimeError(
+            "Sanitizer compiler/ABI environment differs from preserved successful SDK "
+            f"artifact {profile['qualified_sdk']['artifact_id']}: {', '.join(changed)}. "
+            "Preserve existing SDKs; qualify the runner/package change before replacing "
+            "this profile. This mismatch does not authorize an SDK rebuild."
+        )
+    return {
+        "verified_environment_artifact": profile["qualified_sdk"]["artifact_id"],
+        "repository_snapshot": profile["snapshot"],
+    }
+
+
 def inventory(prefix):
     result = {}
     for path in sorted(prefix.rglob("*")):
@@ -890,7 +932,7 @@ def pack(root, kind, prefix, output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("restore", "pack"))
+    parser.add_argument("action", choices=("restore", "pack", "verify-environment"))
     parser.add_argument("--kind", choices=JOBS, required=True)
     parser.add_argument("--prefix", type=Path, required=True)
     parser.add_argument("--output", type=Path)
@@ -904,7 +946,9 @@ def main():
     parser.add_argument("--allow-build", action="store_true")
     parser.add_argument("--reason", default="")
     args = parser.parse_args()
-    if args.action == "restore":
+    if args.action == "verify-environment":
+        result = verify_environment_profile(ROOT, args.kind, args.prefix.absolute())
+    elif args.action == "restore":
         result = restore(
             ROOT,
             args.kind,

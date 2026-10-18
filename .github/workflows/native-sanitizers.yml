@@ -19,6 +19,7 @@ on:
       - 'tools/verify_thread_sanitizer.py'
       - 'tools/verify_native_sanitizers.py'
       - 'tools/ci_sanitizer_artifacts.py'
+      - 'tools/sanitizer_toolchain_profiles.json'
       - 'tests/test_ci_sanitizer_artifacts.py'
       - 'tools/build_sanitizer_sdk.py'
       - 'tools/sanitizer_runtime.py'
@@ -47,6 +48,7 @@ on:
       - 'tools/verify_thread_sanitizer.py'
       - 'tools/verify_native_sanitizers.py'
       - 'tools/ci_sanitizer_artifacts.py'
+      - 'tools/sanitizer_toolchain_profiles.json'
       - 'tests/test_ci_sanitizer_artifacts.py'
       - 'tools/build_sanitizer_sdk.py'
       - 'tools/sanitizer_runtime.py'
@@ -79,6 +81,11 @@ jobs:
     container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 120
     steps:
+      # The archive was checked against all 12 compiler/ABI package versions in
+      # successful SDK artifact 12152408008; preserve the existing SDK inputs.
+      - name: Select the verified Arch repository snapshot before compiler installation
+        run: |
+          printf '%s\n' 'Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch' > /etc/pacman.d/mirrorlist
       - name: Install the native compiler and test dependencies
         run: pacman -Syu --noconfirm cmake ninja gcc clang compiler-rt git nlohmann-json sqlite icu openssl zlib python python-pip
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -101,6 +108,8 @@ jobs:
           echo "identity=$(clang++ --version | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           runtime_directory=$(python tools/sanitizer_runtime.py --directory)
           echo "LD_LIBRARY_PATH=$runtime_directory:$PWD/build/sanitizer-sdk/lib" >> "$GITHUB_ENV"
+      - name: Verify the pinned address toolchain still matches the preserved SDK
+        run: .venv/bin/python tools/ci_sanitizer_artifacts.py verify-environment --kind address --prefix build/sanitizer-sdk
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: sdk-cache
         with:
@@ -191,6 +200,21 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      # All 65 recorded compiler/ABI package versions from successful SDK
+      # artifact 12152850851 are available in this immutable Ubuntu snapshot.
+      - name: Select the verified Ubuntu repository snapshot before compiler installation
+        run: |
+          printf '%s\n' \
+            'Types: deb' \
+            'URIs: https://snapshot.ubuntu.com/ubuntu/20261018T210000Z/' \
+            'Suites: noble noble-updates noble-security' \
+            'Components: main universe' \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \
+            | sudo tee /etc/apt/foresight-sanitizer.sources
+          printf '%s\n' \
+            'Dir::Etc::sourcelist "/etc/apt/foresight-sanitizer.sources";' \
+            'Dir::Etc::sourceparts "-";' \
+            | sudo tee /etc/apt/apt.conf.d/50foresight-sanitizer-snapshot
       - name: Install the separate TSan toolchain
         run: |
           sudo apt-get update
@@ -205,6 +229,8 @@ jobs:
           echo "identity=$(clang++ --version | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           runtime=$(python3 tools/sanitizer_runtime.py --kind thread --directory)
           echo "LD_LIBRARY_PATH=$runtime:$PWD/build/thread-sdk/lib" >> "$GITHUB_ENV"
+      - name: Verify the pinned thread toolchain still matches the preserved SDK
+        run: .venv/bin/python tools/ci_sanitizer_artifacts.py verify-environment --kind thread --prefix build/thread-sdk
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: thread-cache
         with:

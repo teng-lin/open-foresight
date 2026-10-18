@@ -816,6 +816,20 @@ class ProducerTests(SourceTree):
         ]
         self.assertTrue(self.find_work(own_pr=119)["hit"])
 
+    def test_native_approval_bounds_full_commit_pages_without_authorizing_reuse(self):
+        final, _, _ = self.approved_other_pr()
+        self.approval_routes[f"compare/{self.commit}...{final}"] = {
+            "status": "diverged"
+        }
+        for page in range(1, 4):
+            self.approval_routes[
+                f"pulls/112/commits?per_page=100&page={page}"
+            ] = [{"sha": "f" * 40}] * 100
+        # There is deliberately no page 4 fixture: a full terminal page must
+        # fail closed rather than request unbounded pages or download objects.
+        self.assertFalse(self.find_work(own_pr=119)["hit"])
+        self.assertEqual(self.transfers, 0)
+
     def test_merged_pr_api_or_missing_git_proof_is_not_permission_to_compile(self):
         _, _, pull = self.approved_other_pr()
         self.approval_routes["pulls/112"] = subprocess.CalledProcessError(

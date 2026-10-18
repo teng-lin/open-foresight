@@ -1,0 +1,144 @@
+{
+  "consumer": {
+    "excluded_consumer_roots": [
+      "gcc",
+      "g++",
+      "cc1",
+      "cc1plus",
+      "collect2",
+      "lto-wrapper",
+      "as",
+      "ld",
+      "ar",
+      "ranlib",
+      "gcc-ar",
+      "gcc-ranlib",
+      "liblto_plugin.so",
+      "make",
+      "flatc"
+    ],
+    "executable": "/usr/bin/cmake",
+    "package_version": "3.28.3-1build7",
+    "runtime_paths": {
+      "libarchive.so.13": [
+        "cmake",
+        "libarchive.so.13"
+      ],
+      "libcurl.so.4": [
+        "cmake",
+        "libcurl.so.4"
+      ],
+      "libxml2.so.2": [
+        "cmake",
+        "libarchive.so.13",
+        "libxml2.so.2"
+      ]
+    },
+    "sha256": "1c5227af4edd22d8d689def545e18ee458260c0fd579eba2187967f38817e638"
+  },
+  "original_toolchain_proof_sha256": "3a1b2d3aebcf832dd2ab3524cf8b1ca494063a4063cba5111655f33664eab4d7",
+  "provenance": {
+    "archive_sha256": "649516536799db378d232b3db260e50ddb449bf1d63a4f77945644b1a155c88b",
+    "artifact_digest": "sha256:fa3b57a079b9892dd4853d2591c8a4a20088944836f771a0dcb552ca92104c9f",
+    "artifact_id": 12146193446,
+    "image_config": "sha256:06e0e44aec34dbab5997ab80dc300677f2cafde5ca98d3547d66cfe1aeebb4c6",
+    "image_manifest": "sha256:b9faf2d1050c192cb68cd1479eafa75d67b1611d02b64e320ede038759910f00",
+    "inspection": "Static ELF readelf -d/-h/--dyn-syms --wide; no producer or SDK executable was run. Export contract hashes bind versioned symbol name, type, binding, visibility and OBJECT/TLS sizes; imported symbol hashes bind versioned names.",
+    "original_source_receipt": {
+      "component": "linux-sdk",
+      "identity": "70c234e98927b67a39489f104da4ba42b3b7dc989e45acdf6a294d646883101e",
+      "schema": 1,
+      "sha256": "675cc61e520f94faccce53ce80bcafcf4629281f4041fdd4249baa9214bd8195",
+      "source_commit": "29a0ae5ad1c0acd6e02bb264f27d303f06bf15a1",
+      "source_run_attempt": 1
+    },
+    "producer_attempt": 1,
+    "producer_run": 39149384061,
+    "producer_source": "e11de990448bd5b82e4c9f0135412eb086380e79",
+    "repository": "teng-lin/open-foresight",
+    "runtime_layer": "sha256:f7bdc50f79232dd4d12ccf7aefcc0e6ac42f3d89928b9174742a8c81a231b65c"
+  },
+  "replacements": {
+    "/usr/lib/x86_64-linux-gnu/libarchive.so.13": {
+      "abi": {
+        "elf_class": "ELF64",
+        "export_count": 421,
+        "exports_sha256": "227e6b26bf2c5cdd86a208f6a773bf82d9b8726b1d8791ab3b7a88b27c935978",
+        "imports_sha256": "0c94a791977e193762420ad20a9f63433531c7899a9d42edf62f1a2ef839f1ed",
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libacl.so.1",
+          "libbz2.so.1.0",
+          "libc.so.6",
+          "liblz4.so.1",
+          "liblzma.so.5",
+          "libnettle.so.8",
+          "libxml2.so.2",
+          "libz.so.1",
+          "libzstd.so.1"
+        ],
+        "soname": "libarchive.so.13"
+      },
+      "consumer_package_version": "3.7.2-2ubuntu0.8",
+      "consumer_sha256": "6de6959b1a1d0c4bbe0c8fadc3d410060f579e0cc671c9d3dc9ad20f5de91e47",
+      "original_package_version": "3.7.2-2ubuntu0.9",
+      "original_sha256": "2d8605282b26359a0994017373bff09fc7c9a6ed9ab7e1a4fd980b8ffcf1cd40",
+      "package": "libarchive13t64"
+    },
+    "/usr/lib/x86_64-linux-gnu/libcurl.so.4": {
+      "abi": {
+        "elf_class": "ELF64",
+        "export_count": 95,
+        "exports_sha256": "d7bec1152c59dc374f13d18beacf773df6b306fbd07aefa164a743275e377997",
+        "imports_sha256": "1d798fff18328908be6b51c8820e310b86551f52bc05b6b9810c6fbc8f8e2957",
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libbrotlidec.so.1",
+          "libc.so.6",
+          "libcrypto.so.3",
+          "libgssapi_krb5.so.2",
+          "libidn2.so.0",
+          "liblber.so.2",
+          "libldap.so.2",
+          "libnghttp2.so.14",
+          "libpsl.so.5",
+          "librtmp.so.1",
+          "libssh.so.4",
+          "libssl.so.3",
+          "libz.so.1",
+          "libzstd.so.1"
+        ],
+        "soname": "libcurl.so.4"
+      },
+      "consumer_package_version": "8.5.0-2ubuntu10.15",
+      "consumer_sha256": "cf6398ebba028cc7dcc5425208bb2da2d0706b885a7c9c4cbac3d453e512c1f6",
+      "original_package_version": "8.5.0-2ubuntu10.16",
+      "original_sha256": "3e51df20a6b52879ee83a207115a9bc6891092741ce2f5ec791606e6caf859fa",
+      "package": "libcurl4t64"
+    },
+    "/usr/lib/x86_64-linux-gnu/libxml2.so.2": {
+      "abi": {
+        "elf_class": "ELF64",
+        "export_count": 1785,
+        "exports_sha256": "f601d39e83fdca9ea939465ba876d1eeffd0f8b42b1013b70c588de823b13aa8",
+        "imports_sha256": "0b2adc0dca8e7fefd34eda84986cb274783132eff8eea598c0b77f47383dcd4f",
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libicuuc.so.74",
+          "liblzma.so.5",
+          "libm.so.6",
+          "libz.so.1"
+        ],
+        "soname": "libxml2.so.2"
+      },
+      "consumer_package_version": "2.9.14+dfsg-1.3ubuntu3.9",
+      "consumer_sha256": "ddd3af3f491a9686c82fe1232f1250cec368eb2fbcb1d2725c6ce9401a6dbd3b",
+      "original_package_version": "2.9.14+dfsg-1.3ubuntu3.10",
+      "original_sha256": "209e941be9eb2eb9ab36caaa0b81d1c6b36c8f5d7268c24f19e81039137e6485",
+      "package": "libxml2"
+    }
+  },
+  "schema": 1,
+  "scope": "Only the recorded CMake runtime replacements; every compiler, header, linker, Make and other consumed runtime file remains byte-identical. Current CMake configure plus dependency dry-run must still reject any planned dependency compile/archive/relink."
+}
