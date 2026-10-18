@@ -16,7 +16,9 @@
 static bool dead(pid_t pid) {
 #ifdef __APPLE__
   proc_bsdinfo info{};
-  return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info) || info.pbi_status == SZOMB;
+  return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, sizeof(info)) !=
+             sizeof(info) ||
+         info.pbi_status == SZOMB;
 #else
   std::ifstream status("/proc/" + std::to_string(pid) + "/stat");
   std::string line;
@@ -32,23 +34,29 @@ int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
 #ifdef __APPLE__
   int supervised = foresight::supervise_worker(argc, argv);
-  if (supervised >= 0) return supervised;
+  if (supervised >= 0)
+    return supervised;
   setenv("FORESIGHT_HELPER", foresight::executable_path().c_str(), 1);
 #endif
   std::string directory =
-      (fs::temp_directory_path().string()+"/foresight-model-lifetime-") + std::to_string(getpid());
+      (fs::temp_directory_path().string() + "/foresight-model-lifetime-") +
+      std::to_string(getpid());
   fs::create_directories(directory);
   const auto bundle = directory + "/model.litertlm";
   std::ofstream(bundle) << "controlled embedding fixture";
-  std::ofstream(directory + "/stubborn.litertlm") << "controlled embedding fixture";
+  std::ofstream(directory + "/stubborn.litertlm")
+      << "controlled embedding fixture";
   try {
     REQUIRE(argc == 2);
     setenv("FORESIGHT_MODEL_WORKER", argv[1], 1);
     for (bool gpu : {false, true}) {
       bool unsupported = false;
-      try { Model invalid(directory, false, gpu); }
-      catch (const std::runtime_error &error) {
-        unsupported = std::string(error.what()).find("Unsupported model format") != std::string::npos;
+      try {
+        Model invalid(directory, false, gpu);
+      } catch (const std::runtime_error &error) {
+        unsupported =
+            std::string(error.what()).find("Unsupported model format") !=
+            std::string::npos;
       }
       REQUIRE(unsupported);
     }
@@ -90,7 +98,8 @@ int main(int argc, char **argv) {
     REQUIRE(rejected);
     model.reset();
 
-    auto stubborn = std::make_unique<Model>(directory + "/stubborn.litertlm", false);
+    auto stubborn =
+        std::make_unique<Model>(directory + "/stubborn.litertlm", false);
     pid_t stubborn_pid = stubborn->worker_pid();
     auto before = std::chrono::steady_clock::now();
     stubborn.reset();
@@ -136,8 +145,13 @@ int main(int argc, char **argv) {
       pid_t racing = fork();
       REQUIRE(racing >= 0);
       if (racing == 0) {
-        try { Model launching(directory + "/stubborn.litertlm", false); for (;;) pause(); }
-        catch (...) { _exit(2); }
+        try {
+          Model launching(directory + "/stubborn.litertlm", false);
+          for (;;)
+            pause();
+        } catch (...) {
+          _exit(2);
+        }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(delay));
       kill(racing, SIGKILL);

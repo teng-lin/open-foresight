@@ -292,3 +292,21 @@ Open Foresight is released under the [MIT License](LICENSE). Third-party compone
 ## Disclaimer
 
 Open Foresight is an independent project. It is not affiliated with, endorsed by, or supported by Google. "Foresight" refers to the reference application this project studied.
+
+### Quality checks
+
+CI runs `ruff check .`, `mypy`, and `python tools/check_subprocess_timeouts.py`.
+Install the pinned development requirements first. Mypy checks every production
+Python script, including unannotated function bodies; tests with dynamic native
+API doubles are covered by ruff and the runtime suites.
+
+Format all tracked Dart sources with Flutter 3.35.7's Dart formatter and C/C++
+sources with clang-format 22.1.8 (configuration in `.clang-format`). CI rejects
+format differences across all tracked project sources, including fixtures; vendored C/C++ under
+`third_party` remains upstream-owned. Generated
+files should be formatted after regeneration.
+
+Synchronous Python subprocesses must pass an explicit finite `timeout` in seconds.
+Quick commands and probes generally allow 300 seconds; dependency builds allow
+3600 seconds. Long-lived `Popen` protocols use operation deadlines and bounded
+shutdown waits. Callers of build wrappers may override their bounded default.

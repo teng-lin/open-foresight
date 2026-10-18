@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Remove completed runtime compiler scratch, including read-only Bazel trees."""
+
 import os
 from pathlib import Path
 import shutil
@@ -12,7 +13,7 @@ def remove_sources(path):
     """Make owned directories removable without following external symlinks."""
     path = Path(path)
     if path.is_symlink():
-        raise ValueError('Runtime source directory must not be a symlink')
+        raise ValueError("Runtime source directory must not be a symlink")
     if not path.exists():
         return
     # Removing a file requires write permission on its parent, not on the file.
@@ -26,5 +27,5 @@ def remove_sources(path):
     shutil.rmtree(path)
 
 
-if __name__ == '__main__':
-    remove_sources(ROOT / 'build/macos-runtime-sources')
+if __name__ == "__main__":
+    remove_sources(ROOT / "build/macos-runtime-sources")
