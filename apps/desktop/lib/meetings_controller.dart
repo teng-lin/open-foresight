@@ -37,7 +37,7 @@ class _MeetingsController extends _FeatureController {
 
   late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
     (id, body, lastManualEdit) async {
-      await d.command('meetings.notes', {
+      await d.command(Operation.meetings_notes, {
         'id': id,
         'body': body,
         if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
@@ -113,7 +113,7 @@ class _MeetingsController extends _FeatureController {
     String? sourceUri,
   }) async {
     final result =
-        await d.command('sources.import', {
+        await d.command(Operation.sources_import, {
               'title': title,
               'text': text,
               'mime': mime,
@@ -163,24 +163,24 @@ class _MeetingsController extends _FeatureController {
     if (!accessReviewed && !await integrationFeature.ensureRecordingAccess())
       return;
     if (!mounted) return;
-    await d.command('meetings.start', {'id': meetingId!});
+    await d.command(Operation.meetings_start, {'id': meetingId!});
     syncCapture();
     if (mounted) setState(() {});
   }
 
   Future<void> stopRecording() async {
-    await d.command('meetings.stop');
+    await d.command(Operation.meetings_stop);
     syncCapture();
     if (mounted) setState(() {});
     await integrationFeature.notify('Meeting transcription completed');
   }
 
   Future<void> indexMeeting(int id) async {
-    await d.command('meetings.index', {'id': id});
+    await d.command(Operation.meetings_index, {'id': id});
   }
 
   Future<void> generateMeeting(String kind, {int? id}) async {
-    await d.command('meetings.generate', {
+    await d.command(Operation.meetings_generate, {
       'id': id ?? meetingId!,
       'kind': kind,
     });
@@ -207,7 +207,7 @@ class _MeetingsController extends _FeatureController {
           }
         },
         onSave: () async {
-          await d.command('artifacts.edit', {
+          await d.command(Operation.artifacts_edit, {
             'id': a['id'],
             'text': controller.text,
             if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
@@ -247,7 +247,9 @@ class _MeetingsController extends _FeatureController {
       if (!await integrationFeature.ensureRecordingAccess() || !mounted) return;
       await shell.run(() async {
         final created =
-            await d.command('meetings.create', {'title': '[New Meeting]'})
+            await d.command(Operation.meetings_create, {
+                  'title': '[New Meeting]',
+                })
                 as Map;
         if (!mounted) return;
         shell.update(() {
@@ -321,7 +323,7 @@ class _MeetingsController extends _FeatureController {
             ? null
             : () => shell.run(() async {
                 final created =
-                    await d.command('meetings.create', {
+                    await d.command(Operation.meetings_create, {
                           'title': '[New Meeting]',
                         })
                         as Map;
@@ -715,7 +717,7 @@ class _MeetingsController extends _FeatureController {
     });
     try {
       await flushMeetingNotesDraft();
-      await d.command('meetings.enhance', {'id': id});
+      await d.command(Operation.meetings_enhance, {'id': id});
     } catch (e) {
       if (mounted) shell.update(() => meetingEnhanceStatus = e.toString());
     } finally {
@@ -1099,7 +1101,7 @@ class _MeetingsController extends _FeatureController {
       ],
     );
     if (file == null) return;
-    await d.command('meetings.transcript', {
+    await d.command(Operation.meetings_transcript, {
       'id': id,
       'text': await File(file.path).readAsString(),
       'source': 'imported transcript',
@@ -1205,7 +1207,7 @@ class _MeetingsController extends _FeatureController {
                     onPressed: progress?['cancel_requested'] == true
                         ? null
                         : () async {
-                            await d.command('meetings.cancel_enhance', {
+                            await d.command(Operation.meetings_cancel_enhance, {
                               'id': id,
                               'request_id': progress?['request_id'],
                             });
@@ -1594,7 +1596,7 @@ class _MeetingsController extends _FeatureController {
             title: Text(detectionError),
             trailing: TextButton(
               onPressed: () => shell.run(() async {
-                await d.command('meetings.retry_detection', {'id': id});
+                await d.command(Operation.meetings_retry_detection, {'id': id});
               }),
               child: const Text('Retry detection'),
             ),
@@ -1677,9 +1679,10 @@ class _MeetingsController extends _FeatureController {
                               ].contains(item['state']))
                                 TextButton(
                                   onPressed: () => shell.run(() async {
-                                    await d.command('meetings.retry_question', {
-                                      'id': item['id'],
-                                    });
+                                    await d.command(
+                                      Operation.meetings_retry_question,
+                                      {'id': item['id']},
+                                    );
                                   }),
                                   child: const Text('Try again'),
                                 ),
@@ -1996,8 +1999,8 @@ class _MeetingsController extends _FeatureController {
                   : () => shell.run(() async {
                       await d.command(
                         recording!.paused
-                            ? 'meetings.resume'
-                            : 'meetings.pause',
+                            ? Operation.meetings_resume
+                            : Operation.meetings_pause,
                         {'id': recordingMeeting},
                       );
                       if (mounted) shell.update(syncCapture);

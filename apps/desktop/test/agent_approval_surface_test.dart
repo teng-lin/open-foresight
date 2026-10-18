@@ -41,9 +41,9 @@ class ApprovalDomain implements RemoteDomain {
 
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
-  ]) => client.call(method, args);
+  ]) => client.call(operation.wire, args);
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

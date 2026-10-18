@@ -2108,12 +2108,12 @@ extension ApplicationDomain on Domain {
     current: current,
   );
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
-  ]) => application.call(method, args);
+  ]) => application.call(operation.wire, args);
   Future<Object?> commandCurrent(
-    String method,
+    Operation operation,
     Map<String, dynamic> args,
     bool Function() current,
-  ) => application.call(method, args, current: current);
+  ) => application.call(operation.wire, args, current: current);
 }

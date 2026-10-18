@@ -269,7 +269,7 @@ class _SourcesController extends _FeatureController {
             FilledButton(
               onPressed: () => shell.run(() async {
                 final saved =
-                    await d.command('notes.save', {
+                    await d.command(Operation.notes_save, {
                           'id': meetingFeature.noteId,
                           'title': meetingFeature.noteTitle.text,
                           'body': meetingFeature.noteBody.text,
@@ -287,7 +287,7 @@ class _SourcesController extends _FeatureController {
   );
 
   Future<void> importPath(String path) async {
-    await d.command('sources.import_file', {'path': path});
+    await d.command(Operation.sources_import_file, {'path': path});
     if (mounted) shell.update(() {});
   }
 
@@ -338,11 +338,11 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> importDirectory(String path) async {
-    await d.command('sources.import_directory', {'path': path});
+    await d.command(Operation.sources_import_directory, {'path': path});
   }
 
   Future<void> reimport() async {
-    await d.command('sources.refresh');
+    await d.command(Operation.sources_refresh);
   }
 
   Future<void> importUrl() async {
@@ -405,7 +405,7 @@ class _SourcesController extends _FeatureController {
     String value, {
     bool allowPrivateNetwork = false,
   }) async {
-    await d.command('sources.import_url', {
+    await d.command(Operation.sources_import_url, {
       'url': value,
       if (allowPrivateNetwork) 'allow_private_network': true,
     });
@@ -415,7 +415,7 @@ class _SourcesController extends _FeatureController {
       (jsonDecode(s['labels'] as String? ?? '[]') as List).cast<String>();
 
   Future<void> putDocumentLabel(DocumentLabel label) async {
-    await d.command('labels.put', {
+    await d.command(Operation.labels_put, {
       'id': label.documentId,
       'name': label.name,
       'source': label.source,
@@ -432,7 +432,7 @@ class _SourcesController extends _FeatureController {
     String? labelSet,
     List<GraphCluster> clusters = const [],
   }) async {
-    return await d.command('graph.save', {
+    return await d.command(Operation.graph_save, {
           'identity': identity,
           'sources': sources,
           'vectors': vectors,
@@ -469,11 +469,11 @@ class _SourcesController extends _FeatureController {
 
   Future<void> removeSelectedGraphLabel(String id, String name) async {
     final source = d.store.sources.where((row) => row['id'] == id).single;
-    await d.command('labels.set', {
+    await d.command(Operation.labels_set, {
       'id': id,
       'labels': sourceLabels(source).where((label) => label != name).toList(),
     });
-    await d.command('graph.acknowledge');
+    await d.command(Operation.graph_acknowledge);
     if (mounted) shell.update(() {});
   }
 
@@ -517,7 +517,7 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> autoAssignOrganizationLabel(String name) async {
-    await d.command('labels.auto_assign', {'name': name});
+    await d.command(Operation.labels_auto_assign, {'name': name});
     if (mounted)
       shell.update(() {
         graphOrganizationRevision++;
@@ -552,8 +552,8 @@ class _SourcesController extends _FeatureController {
       ),
     );
     if (confirmed == true && mounted) {
-      await d.command('labels.delete', {'name': name});
-      await d.command('graph.acknowledge');
+      await d.command(Operation.labels_delete, {'name': name});
+      await d.command(Operation.graph_acknowledge);
       if (mounted)
         shell.update(() {
           if (labelFilter == name) labelFilter = '';
@@ -595,7 +595,7 @@ class _SourcesController extends _FeatureController {
     input.dispose();
     if (ok != true || !mounted) return;
     for (final row in s == null ? filteredSources() : [s]) {
-      await d.command('labels.set', {
+      await d.command(Operation.labels_set, {
         'id': row['id'],
         'labels': s == null
             ? {...sourceLabels(row), ...values}.toList()

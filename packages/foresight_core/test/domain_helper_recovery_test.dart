@@ -196,11 +196,13 @@ void main() {
       await failure;
       expect(domain.restoring, isFalse);
       final result =
-          await domain.command('meetings.create', {'title': 'Recovered'})
+          await domain.command(Operation.meetings_create, {
+                'title': 'Recovered',
+              })
               as Map;
       expect(result['id'], isA<int>());
       await expectLater(
-        domain.commandCurrent('notes.save', {}, () => false),
+        domain.commandCurrent(Operation.notes_save, {}, () => false),
         throwsStateError,
       );
       await domain.application.close();

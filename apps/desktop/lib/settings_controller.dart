@@ -35,7 +35,7 @@ class _SettingsController extends _FeatureController {
         needsGeneration:
             !embeddingOnly && (!firstRun || needsModel(d.store, 'generation')),
         installEmbedding: (asset, current) async {
-          await d.commandCurrent('models.embedding', {
+          await d.commandCurrent(Operation.models_embedding, {
             'path': asset.path,
             'gpu': true,
             'digest': embeddingGemmaModel.digest,
@@ -52,7 +52,7 @@ class _SettingsController extends _FeatureController {
         runner: runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? '',
         memoryGb: physicalMemoryGb(),
         installGeneration: (path, runtime, current) async {
-          await d.commandCurrent('models.generation', {
+          await d.commandCurrent(Operation.models_generation, {
             'path': path,
             'runtime': runtime,
             'backend': 'litert_lm',
@@ -100,7 +100,7 @@ class _SettingsController extends _FeatureController {
             registration?['runtime'] as String? ??
             '',
         installSpeech: (asset, runner, digest, current) async {
-          await d.commandCurrent('models.speech', {
+          await d.commandCurrent(Operation.models_speech, {
             'path': asset.path,
             'runtime': runner,
             'digest': digest,
@@ -164,7 +164,7 @@ class _SettingsController extends _FeatureController {
                         setState(() => queryModelDownloading = true);
                         try {
                           await shell.run(() async {
-                            await d.command('models.acquire_query', {});
+                            await d.command(Operation.models_acquire_query, {});
                             modelState = 'Automatic question model ready';
                           });
                         } finally {
@@ -182,7 +182,10 @@ class _SettingsController extends _FeatureController {
                 TextButton(
                   onPressed: () async {
                     try {
-                      await d.command('models.cancel_query_acquisition', {});
+                      await d.command(
+                        Operation.models_cancel_query_acquisition,
+                        {},
+                      );
                     } catch (failure) {
                       if (mounted)
                         setState(() => shell.error = failure.toString());
@@ -221,10 +224,10 @@ class _SettingsController extends _FeatureController {
               : () => shell.run(() async {
                   await d.command(
                     modelKind == 'embedding'
-                        ? 'models.embedding'
+                        ? Operation.models_embedding
                         : modelKind == 'generation'
-                        ? 'models.generation'
-                        : 'models.register',
+                        ? Operation.models_generation
+                        : Operation.models_register,
                     {
                       'kind': modelKind,
                       'path': modelPath.text,
@@ -645,7 +648,7 @@ class _SettingsController extends _FeatureController {
     await shell.run(() async {
       if (integrationFeature.googleAuth.connected)
         await integrationFeature.googleAuth.disconnect();
-      await d.command('workspace.clear');
+      await d.command(Operation.workspace_clear);
       shell.update(() {
         meetingFeature.meetingId = null;
         meetingFeature.loadedMeetingNotes = null;
@@ -665,7 +668,7 @@ class _SettingsController extends _FeatureController {
   }
 
   Future<void> preference(String key, String value) async {
-    await d.command('preferences.set', {'key': key, 'value': value});
+    await d.command(Operation.preferences_set, {'key': key, 'value': value});
     if (mounted) shell.update(() {});
   }
 

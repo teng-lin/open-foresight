@@ -163,7 +163,7 @@ void main() {
         '- First enhanced\n\n- Second enhanced',
         'fixture',
       );
-      await domain.command('meetings.notes', {
+      await domain.command(Operation.meetings_notes, {
         'id': id,
         'body': 'Second raw\nFirst raw',
         'last_manual_edit': 333,
@@ -193,7 +193,7 @@ void main() {
       final artifact = domain.store
           .rows('SELECT id FROM artifacts ORDER BY id DESC')
           .first['id'];
-      await domain.command('artifacts.edit', {
+      await domain.command(Operation.artifacts_edit, {
         'id': artifact,
         'text': '- Manually changed',
       });
@@ -203,7 +203,7 @@ void main() {
         generator.prompts.single,
         isNot(contains('<previous_enhanced_notes>')),
       );
-      await domain.command('meetings.cancel_enhance', {
+      await domain.command(Operation.meetings_cancel_enhance, {
         'id': id,
         'request_id': progress()['request_id'],
       });
@@ -225,17 +225,17 @@ void main() {
       );
       final work = domain.application.enhanceNotes(id);
       await generator.entered.future;
-      await domain.command('meetings.notes', {
+      await domain.command(Operation.meetings_notes, {
         'id': id,
         'body': 'Updated first\nUpdated second',
       });
-      await domain.command('meetings.cancel_enhance', {
+      await domain.command(Operation.meetings_cancel_enhance, {
         'id': id,
         'request_id': progress()['request_id'],
       });
       await emit('cancel observation');
       await work;
-      await domain.command('meetings.notes', {
+      await domain.command(Operation.meetings_notes, {
         'id': id,
         'body': 'Updated second\nUpdated first',
       });
@@ -383,7 +383,7 @@ void main() {
             .single,
         {'last_enhanced': 100, 'last_manual_edit': 200},
       );
-      await domain.command('meetings.cancel_enhance', {
+      await domain.command(Operation.meetings_cancel_enhance, {
         'id': id,
         'request_id': progress()['request_id'],
       });
@@ -401,7 +401,7 @@ void main() {
       await emit('- Persisted partial');
       await Future<void>.delayed(const Duration(milliseconds: 1100));
       final firstRequest = progress()['request_id'];
-      await domain.command('meetings.cancel_enhance', {
+      await domain.command(Operation.meetings_cancel_enhance, {
         'id': id,
         'request_id': firstRequest,
       });
@@ -414,13 +414,13 @@ void main() {
       final second = domain.application.enhanceNotes(id);
       await generator.entered.future;
       expect(
-        await domain.command('meetings.cancel_enhance', {
+        await domain.command(Operation.meetings_cancel_enhance, {
           'id': id,
           'request_id': firstRequest,
         }),
         isFalse,
       );
-      await domain.command('meetings.cancel_enhance', {
+      await domain.command(Operation.meetings_cancel_enhance, {
         'id': id,
         'request_id': progress()['request_id'],
       });
@@ -492,13 +492,13 @@ void main() {
       final work = domain.application.enhanceNotes(id);
       await generator.entered.future;
       await emit('- Partial');
-      await domain.command('artifacts.edit', {
+      await domain.command(Operation.artifacts_edit, {
         'id': historical,
         'text': 'Historical edit',
         'last_manual_edit': 666,
       });
       expect(progress()['body'], '- Partial');
-      await domain.command('artifacts.edit', {
+      await domain.command(Operation.artifacts_edit, {
         'id': current,
         'text': '- Manual',
         'last_manual_edit': 777,
@@ -534,7 +534,7 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 1100));
       final request = progress()['request_id'];
       expect(
-        await domain.command('meetings.cancel_enhance', {
+        await domain.command(Operation.meetings_cancel_enhance, {
           'id': id,
           'request_id': 'stale',
         }),
@@ -542,7 +542,7 @@ void main() {
       );
       expect(progress()['cancel_requested'], isFalse);
       expect(
-        await domain.command('meetings.cancel_enhance', {
+        await domain.command(Operation.meetings_cancel_enhance, {
           'id': id,
           'request_id': request,
         }),
