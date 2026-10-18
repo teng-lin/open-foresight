@@ -107,3 +107,52 @@ class HelperBuildIdentityTest(unittest.TestCase):
         valid = self.configure(source, "ABCDEF0123456789" * 2)
         self.assertEqual(valid.returncode, 0, valid.stderr)
         self.assertEqual(self.output.read_text(), "abcdef012345")
+
+
+def test_revision_change_recompiles_only_the_identity_unit(tmp_path):
+    """Current-revision metadata must survive reuse of expensive native objects."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    if not shutil.which("cmake") or not shutil.which("c++"):
+        pytest.skip("Native toolchain required for incremental revision test")
+    source = tmp_path / "source"
+    source.mkdir()
+    template = ROOT / "services/helper/build_identity.cpp.in"
+    (source / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.20)\n"
+        "project(identity_fixture LANGUAGES CXX)\n"
+        'set(OPEN_FORESIGHT_VERSION "1.0.0")\n'
+        f'configure_file("{template}" "${{CMAKE_BINARY_DIR}}/identity.cpp" @ONLY)\n'
+        'add_executable(probe main.cpp "${CMAKE_BINARY_DIR}/identity.cpp")\n'
+    )
+    (source / "main.cpp").write_text(
+        "#include <iostream>\n"
+        "const char *foresight_helper_build_id();\n"
+        "int main() { std::cout << foresight_helper_build_id(); }\n"
+    )
+    build = tmp_path / "build"
+
+    def compile_revision(revision):
+        subprocess.run(
+            ["cmake", "-S", str(source), "-B", str(build), f"-DBUILD_REV={revision}"],
+            capture_output=True,
+            check=True,
+            timeout=60,
+        )
+        subprocess.run(
+            ["cmake", "--build", str(build)],
+            capture_output=True,
+            check=True,
+            timeout=60,
+        )
+        return subprocess.check_output([str(build / "probe")], text=True, timeout=5)
+
+    assert compile_revision("123456789abc") == "open-foresight-1.0.0-123456789abc"
+    objects = list(build.rglob("main.cpp.o"))
+    assert len(objects) == 1
+    original = objects[0].stat().st_mtime_ns
+    assert compile_revision("abcdef123456") == "open-foresight-1.0.0-abcdef123456"
+    assert objects[0].stat().st_mtime_ns == original

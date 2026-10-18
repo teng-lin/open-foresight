@@ -33,7 +33,9 @@ target_link_libraries(ForesightHelper PRIVATE foresight_protocol SQLite3::SQLite
 set(FORESIGHT_BUILD_REVISION "" CACHE STRING "Source revision for exported source builds")
 include("${REPO_ROOT}/cmake/ForesightBuildIdentity.cmake")
 foresight_build_revision(BUILD_REV "${REPO_ROOT}")
-target_compile_definitions(ForesightHelper PRIVATE FORESIGHT_BUILD_ID="open-foresight-${OPEN_FORESIGHT_VERSION}-${BUILD_REV}")
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/build_identity.cpp.in"
+ "${CMAKE_CURRENT_BINARY_DIR}/build_identity.cpp" @ONLY)
+target_sources(ForesightHelper PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/build_identity.cpp")
 install(TARGETS ForesightHelper RUNTIME DESTINATION bin)
 include(CTest)
 if(BUILD_TESTING)
