@@ -89,6 +89,13 @@ def validate_native_python_payload(root):
         )
 
 
+def verify_sha256(path, expected):
+    with path.open("rb") as stream:
+        actual = hashlib.file_digest(stream, "sha256").hexdigest()
+    if actual != expected:
+        raise ValueError(f"SHA256 checksum mismatch: {path}")
+
+
 def main():
     root = Path("/opt/open-foresight")
     if not (os.getuid() != 0):
@@ -104,11 +111,7 @@ def main():
     # catches host dependencies that an executable-only ldd check misses.
     manifest = json.loads((root / "manifest.json").read_text())
     for entry in manifest["files"]:
-        with (root / entry["path"]).open("rb") as stream:
-            if not (
-                hashlib.file_digest(stream, "sha256").hexdigest() == entry["sha256"]
-            ):
-                raise RuntimeError(entry["path"])
+        verify_sha256(root / entry["path"], entry["sha256"])
     count = 0
     for file in root.rglob("*"):
         if not file.is_file() or file.is_symlink():
@@ -154,9 +157,7 @@ def main():
         ):
             while block := response.read(1024 * 1024):
                 output.write(block)
-        with model.open("rb") as stream:
-            if not (hashlib.file_digest(stream, "sha256").hexdigest() == SPEECH_PIN[3]):
-                raise RuntimeError("Verification failed")
+        verify_sha256(model, SPEECH_PIN[3])
         fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/audio/jfk.wav"
         decoded = subprocess.run(
             [

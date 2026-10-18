@@ -34,7 +34,7 @@ For just the Dart executables after native compilation:
 
 ```sh
 cd packages/foresight_core
-dart pub get
+dart pub get --enforce-lockfile
 dart analyze
 dart test
 cd ../..

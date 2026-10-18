@@ -36,7 +36,7 @@ jobs:
     - name: Install Python development dependencies
       run: |
         python -m venv .venv
-        .venv/bin/python -m pip install -r requirements-dev.txt
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - name: Offline Python tests and branch coverage
       run: tools/coverage.sh
     - name: Retain Python coverage
@@ -174,7 +174,7 @@ jobs:
     if: needs.changes.outputs.build == 'true'
   linux-native:
     runs-on: ubuntu-24.04
-    container: archlinux:base-devel
+    container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 60
     steps:
     - name: Install Linux native toolchain
@@ -185,7 +185,7 @@ jobs:
     - name: Install Python development dependencies
       run: |
         python -m venv .venv
-        .venv/bin/python -m pip install -r requirements-dev.txt
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - name: Offline Python tests
       run: .venv/bin/python -m pytest
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830

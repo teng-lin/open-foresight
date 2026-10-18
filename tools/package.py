@@ -92,23 +92,23 @@ def main():
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("Revision must be a full lowercase Git commit hash")
     web_search_keys = release_web_search_keys()
-    if not (args.whisper_gpu_device >= 0):
-        raise RuntimeError("Verification failed")
+    if args.whisper_gpu_device < 0:
+        raise ValueError("Whisper GPU device must be nonnegative")
     helper = args.build / "services/helper/ForesightHelper"
     native = args.build / "native/libforesight_native.so"
     service = args.build / "application/foresight-service"
     mcp = args.build / "application/foresight-mcp"
     if not (service.is_file() and mcp.is_file()):
-        raise RuntimeError("Build the application service and MCP server first")
+        raise ValueError("Build the application service and MCP server first")
     if not (helper.is_file() and native.is_file() and args.flutter_bundle.is_dir()):
-        raise RuntimeError("Build all components first")
-    if not (not args.output.exists()):
-        raise RuntimeError(
+        raise ValueError("Build all components first")
+    if args.output.exists():
+        raise ValueError(
             "Choose an empty output directory to avoid stale packaged libraries"
         )
     worker = args.build / "services/inference/foresight-model"
     if not (worker.is_file() and args.litert_library.is_file()):
-        raise RuntimeError("Build native inference and prepare LiteRT-LM first")
+        raise ValueError("Build native inference and prepare LiteRT-LM first")
     extensions = None
     if args.litert_extensions_manifest:
         extensions = verify_extensions_manifest(
@@ -123,7 +123,7 @@ def main():
             hashlib.sha256(args.litert_library.read_bytes()).hexdigest()
             == LIBRARY_SHA256
         ):
-            raise RuntimeError("Native LiteRT-LM library checksum mismatch")
+            raise ValueError("Native LiteRT-LM library checksum mismatch")
     # Refuse a Python extension or an incompatible/missing public C runtime.
     environment = dict(
         os.environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve())
@@ -142,7 +142,7 @@ def main():
     shutil.copy2(native, args.output / "lib/libforesight_native.so")
     if args.whisper_gpu_runtime:
         if not (args.whisper_gpu_runtime.is_file()):
-            raise RuntimeError("Build the Vulkan Whisper runtime first")
+            raise ValueError("Build the Vulkan Whisper runtime first")
         shutil.copy2(args.whisper_gpu_runtime, args.output / "bin/whisper-cli-vulkan")
         for name in ("LICENSE", "provenance.json"):
             shutil.copy2(
@@ -241,8 +241,8 @@ def main():
         env=environment,
         timeout=300,
     )
-    if not ("not found" not in dependencies):
-        raise RuntimeError(dependencies)
+    if "not found" in dependencies:
+        raise ValueError(dependencies)
     bundled = []
     for name, path in re.findall(r"\s*(\S+) => (/\S+)", dependencies):
         if name.startswith(

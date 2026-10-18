@@ -130,6 +130,7 @@ def main():
         "-m",
         "pip",
         "install",
+        "--require-hashes",
         "--only-binary=:all:",
         "-r",
         ROOT / "requirements-litert-macos.lock",

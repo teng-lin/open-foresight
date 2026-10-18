@@ -67,19 +67,25 @@ def verify(protoc="protoc"):
     raw = (ROOT / "proto/rag/rag_service.descriptor.pb").read_bytes()
     recovered = descriptor_pb2.FileDescriptorProto.FromString(raw)
     if not (recovered.package == PACKAGE):
-        raise RuntimeError("Verification failed")
+        raise ValueError("Validation failed: recovered.package == PACKAGE")
     if not (len(recovered.message_type) == 22):
-        raise RuntimeError("Verification failed")
+        raise ValueError("Validation failed: len(recovered.message_type) == 22")
     if not (len(recovered.service) == 1):
-        raise RuntimeError("Verification failed")
+        raise ValueError("Validation failed: len(recovered.service) == 1")
     if not ([m.name for m in recovered.service[0].method] == METHODS):
-        raise RuntimeError("Verification failed")
+        raise ValueError(
+            "Validation failed: [m.name for m in recovered.service[0].method] == METHODS"
+        )
     if not (recovered.syntax == "editions" and recovered.edition == 1001):
-        raise RuntimeError("Verification failed")
+        raise ValueError(
+            "Validation failed: recovered.syntax == 'editions' and recovered.edition == 1001"
+        )
     if not (
         recovered.options.features.utf8_validation == descriptor_pb2.FeatureSet.NONE
     ):
-        raise RuntimeError("Verification failed")
+        raise ValueError(
+            "Validation failed: recovered.options.features.utf8_validation == descriptor_pb2.FeatureSet.NONE"
+        )
     with tempfile.TemporaryDirectory() as temp:
         output = Path(temp) / "transcribed.pb"
         subprocess.run(
@@ -100,7 +106,7 @@ def verify(protoc="protoc"):
         json.dumps(shape(transcribed)).replace("foresight.helper.v1", PACKAGE)
     )
     if expected != actual:
-        raise RuntimeError("Wire shape differs from recovered descriptor")
+        raise ValueError("Wire shape differs from recovered descriptor")
     pool = descriptor_pool.DescriptorPool()
     pool.Add(recovered)
     ping = message_factory.GetMessageClass(
@@ -109,10 +115,14 @@ def verify(protoc="protoc"):
     # Edition explicit default presence and unknown field preservation are tested on actual bytes.
     default = ping.FromString(b"\x08\x00")
     if not (default.HasField("success") and default.SerializeToString() == b"\x08\x00"):
-        raise RuntimeError("Verification failed")
+        raise ValueError(
+            "Validation failed: default.HasField('success') and default.SerializeToString() == b'\\x08\\x00'"
+        )
     unknown = b"\x98\x06\x07"
     if not (ping.FromString(unknown).SerializeToString() == unknown):
-        raise RuntimeError("Verification failed")
+        raise ValueError(
+            "Validation failed: ping.FromString(unknown).SerializeToString() == unknown"
+        )
     query = message_factory.GetMessageClass(
         pool.FindMessageTypeByName(PACKAGE + ".Query")
     )
@@ -121,7 +131,9 @@ def verify(protoc="protoc"):
         selected.WhichOneof("query") == "audio_query"
         and cast(Any, selected).audio_query == b"y"
     ):
-        raise RuntimeError("Verification failed")
+        raise ValueError(
+            "Validation failed: selected.WhichOneof('query') == 'audio_query' and selected.audio_query == b'y'"
+        )
     return {
         "descriptor_sha256": hashlib.sha256(raw).hexdigest(),
         "service": PACKAGE + ".RagService",
