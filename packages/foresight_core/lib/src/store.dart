@@ -1,3 +1,4 @@
+import 'model_integrity.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
@@ -406,6 +407,56 @@ class Store {
   List<Map<String, Object?>> get models =>
       rows('SELECT * FROM models').map(resolveModelRuntime).toList();
 
+  /// Re-read stored bytes before any model worker is created. Startup rejects
+  /// invalid registrations while preserving their files so setup can repair them.
+  Future<List<String>> verifyRegisteredModels({
+    bool rejectInvalidRegistrations = false,
+  }) async {
+    final rejected = <Map<String, Object?>>[];
+    for (final model in rows('SELECT kind,path,digest FROM models')) {
+      String? actual;
+      try {
+        actual = await modelAssetDigest(model['path'] as String);
+      } on FileSystemException {
+        // Missing/unreadable files cannot retain trust from a stored digest.
+      } on StateError {
+        // An empty model directory is also an invalid registration.
+      }
+      if (actual != model['digest']) rejected.add(model);
+    }
+    if (rejected.isNotEmpty && !rejectInvalidRegistrations) {
+      throw StateError(
+        'The ${rejected.first['kind']} model no longer matches its stored digest. '
+        'Restore or replace the model.',
+      );
+    }
+    db.execute('SAVEPOINT verify_model_assets');
+    try {
+      for (final model in rejected) {
+        // Do not erase a replacement that was registered while hashing awaited IO.
+        db.execute('DELETE FROM models WHERE kind=? AND path=? AND digest=?', [
+          model['kind'],
+          model['path'],
+          model['digest'],
+        ]);
+        if (db.updatedRows == 0) continue;
+        db.execute('DELETE FROM preferences WHERE key=?', [
+          'modelRuntimeResource.${model['kind']}',
+        ]);
+        setPreference(
+          'modelIntegrityError.${model['kind']}',
+          'Stored ${model['kind']} model changed or is missing. Set up the model again.',
+        );
+      }
+      db.execute('RELEASE verify_model_assets');
+    } catch (_) {
+      db.execute('ROLLBACK TO verify_model_assets');
+      db.execute('RELEASE verify_model_assets');
+      rethrow;
+    }
+    return rejected.map((model) => model['kind'] as String).toList();
+  }
+
   Future<void> register(
     String kind,
     String path,
@@ -432,25 +483,7 @@ class Store {
       ],
     ];
     if (!backends.contains(backend)) throw ArgumentError.value(backend);
-    String digest;
-    if (Directory(path).existsSync()) {
-      final files =
-          Directory(path)
-              .listSync(recursive: true, followLinks: false)
-              .whereType<File>()
-              .toList()
-            ..sort((a, b) => a.path.compareTo(b.path));
-      if (files.isEmpty) throw StateError('Empty model directory');
-      final manifest = StringBuffer();
-      for (final file in files) {
-        manifest.writeln(
-          '${file.path.substring(Directory(path).path.length)}:${await sha256.bind(file.openRead()).first}',
-        );
-      }
-      digest = sha256.convert(utf8.encode(manifest.toString())).toString();
-    } else {
-      digest = (await sha256.bind(File(path).openRead()).first).toString();
-    }
+    final digest = await modelAssetDigest(path);
     if (current != null && !current())
       throw StateError('Model setup cancelled');
     if (expectedDigest != null && digest != expectedDigest)
@@ -485,6 +518,9 @@ class Store {
                   : 0),
         ],
       );
+      db.execute('DELETE FROM preferences WHERE key=?', [
+        'modelIntegrityError.$kind',
+      ]);
       final key = 'modelRuntimeResource.$kind';
       if (resource == null) {
         db.execute('DELETE FROM preferences WHERE key=?', [key]);
