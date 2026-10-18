@@ -8,6 +8,8 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Changed
 
+- Native and helper tests run in a separate ThreadSanitizer configuration with a real race-detection probe and retained triage evidence; the initial reporting-only probation expires after one week.
+
 - Python tooling uses 3.13 with matching protobuf type stubs and reproducible lock recipes; current CI guidance is separated from historical measurements and shared dependency pins guard workflow literals.
 
 - Build tooling pins the Dart protobuf compiler and Ubuntu archive snapshot; monthly snapshot changes arrive as draft review PRs. Weekly dependency and vulnerability reports keep lockfile updates visible. Every CI job has a finite timeout.

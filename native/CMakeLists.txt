@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/MacOSDeploymentTarget.cmake")
 project(foresight_native LANGUAGES CXX)
+include("${CMAKE_CURRENT_LIST_DIR}/../cmake/ForesightSanitizers.cmake")
 if(APPLE)
   enable_language(OBJCXX)
 endif()
