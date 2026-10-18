@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from sanitizer_runtime import address_runtime
 
 CASES = {
     'address': ('int main() { auto* value = new int(7); delete value; return *value; }', 'AddressSanitizer'),
@@ -31,8 +32,7 @@ def main():
                                UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1')
             environment.pop('LD_PRELOAD', None)
             if shared:
-                runtime = Path(subprocess.check_output([args.compiler,
-                    '-print-file-name=libclang_rt.asan-x86_64.so'], text=True).strip()).parent
+                runtime = address_runtime(args.compiler).parent
                 environment['LD_LIBRARY_PATH'] = os.pathsep.join(filter(None,
                     (str(runtime), environment.get('LD_LIBRARY_PATH'))))
             result = subprocess.run([str(executable)], capture_output=True, text=True,

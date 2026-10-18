@@ -27,7 +27,7 @@ if [[ "$task_platform" == macos ]]; then
   task_cmake_platform=(-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 -DCMAKE_OSX_ARCHITECTURES=arm64)
 fi
 if [[ ! -x "$task_python" ]]; then
-  echo "Create .venv and install requirements-dev.txt before building." >&2
+  echo "Create .venv and install --require-hashes -r requirements-dev.lock before building." >&2
   exit 1
 fi
 "$task_python" "$task_root/tools/verify_descriptor.py"

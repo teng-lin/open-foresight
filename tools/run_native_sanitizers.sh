@@ -8,7 +8,9 @@ task_output=$(cd -- "$task_output" && pwd)
 # Clang's shared runtime also instruments the Python ctypes test host. Python's
 # process-shutdown allocation policy is outside this address/UB gate; native
 # invalid accesses and undefined behavior remain fatal in all child processes.
-export LD_PRELOAD="$(clang++ -print-file-name=libclang_rt.asan-x86_64.so)${LD_PRELOAD:+:$LD_PRELOAD}"
+task_tools=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+task_runtime=$(python "$task_tools/sanitizer_runtime.py")
+export LD_PRELOAD="$task_runtime${LD_PRELOAD:+:$LD_PRELOAD}"
 export ASAN_OPTIONS="detect_leaks=0:halt_on_error=1:abort_on_error=1:log_path=$task_output/asan"
 export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1:log_path=$task_output/ubsan"
 task_result=0
