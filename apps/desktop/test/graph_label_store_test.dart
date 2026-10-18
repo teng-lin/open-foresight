@@ -130,7 +130,9 @@ void main() {
         jsonEncode(['Existing', 'New']),
         id,
       ]);
+      store.db.execute('PRAGMA user_version=1');
       final before = store.sources.single;
+      store.db.execute('PRAGMA user_version=8');
       store.close();
       store = Store('${dir.path}/app.db');
       expect(store.sources.single, before);
@@ -191,6 +193,7 @@ void main() {
         id,
       ]);
       store.db.execute('DROP TABLE document_labels');
+      store.db.execute('PRAGMA user_version=1');
       final before = store.sources.single;
       store.close();
       store = Store('${dir.path}/app.db');
@@ -200,7 +203,10 @@ void main() {
         '#0EBC5F',
         '#60D5F3',
       ]);
-      expect(store.rows('PRAGMA user_version').single.values.single, 1);
+      expect(
+        store.rows('PRAGMA user_version').single.values.single,
+        Store.schemaVersion,
+      );
       store.close();
     },
   );
