@@ -32,6 +32,44 @@ class GatedNoteDomain extends CommandFixtureDomain {
 
 void main() {
   test(
+    'discard prevents failed drafts from reaching a reused meeting ID',
+    () async {
+      final writes = <String>[];
+      var fail = true;
+      final scheduler = NoteSaveScheduler((_, body, __) async {
+        if (fail) throw StateError('offline');
+        writes.add(body);
+      });
+      scheduler.schedule(1, 'SECRET OLD DRAFT');
+      await expectLater(scheduler.flush(), throwsStateError);
+      scheduler.discardAll();
+      fail = false;
+      await scheduler.flush();
+      expect(writes, isEmpty);
+      scheduler.schedule(1, 'New meeting');
+      await scheduler.flush();
+      expect(writes, ['New meeting']);
+    },
+  );
+
+  test('discard invalidates in-flight acceptance and callbacks', () async {
+    final gate = Completer<void>();
+    final saved = <int>[];
+    final scheduler = NoteSaveScheduler(
+      (_, __, ___) => gate.future,
+      onSaved: saved.add,
+    );
+    scheduler.schedule(1, 'old');
+    final pending = scheduler.flush();
+    await Future<void>.delayed(Duration.zero);
+    scheduler.discardAll();
+    gate.complete();
+    await pending;
+    expect(saved, isEmpty);
+    expect(scheduler.isDirty(1), isFalse);
+  });
+
+  test(
     'autosave uses virtual time and resets its deadline after each edit',
     () {
       fakeAsync((time) {
@@ -47,6 +85,8 @@ void main() {
         time.elapse(const Duration(milliseconds: 1));
         time.flushMicrotasks();
         expect(writes, ['Latest']);
+        // The callback intentionally schedules work owned by its controller.
+        // ignore: discarded_futures
         scheduler.close();
         time.flushMicrotasks();
         expect(scheduler.hasWork, isFalse);

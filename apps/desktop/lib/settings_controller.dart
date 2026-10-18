@@ -669,8 +669,7 @@ class _SettingsController extends _FeatureController {
     );
     if (ok != true || !mounted) return;
     await shell.run(() async {
-      if (integrationFeature.googleAuth.connected)
-        await integrationFeature.googleAuth.disconnect();
+      meetingFeature.meetingNoteSaves.discardAll();
       await d.command(Operation.workspaceClear);
       shell.update(() {
         meetingFeature.meetingId = null;
