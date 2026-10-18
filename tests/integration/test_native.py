@@ -290,7 +290,9 @@ class NativeTest(unittest.TestCase):
 
     def test_tool_round_trip_large_unicode_and_scoped_single_reply(self):
         body = """import json,sys
-assert '--tools' in sys.argv
+assert '--tools' not in sys.argv and '--prompt' not in sys.argv
+envelope=json.loads(sys.stdin.readline())
+assert envelope['prompt']=='q' and envelope['tools']==[{'name':'google_search'}]
 print('tool '+json.dumps([{'function': {'name':'google_search','arguments':{'query':'q'}}}]), flush=True)
 reply=json.loads(sys.stdin.readline())
 assert reply['role']=='user'
@@ -758,7 +760,7 @@ else:
         self.assertEqual(list(out), [0, 2000, 4000])
 
     def test_capture_fixed_playback_frames_and_legacy_microphone_map(self):
-        runner = self.path / "pw-record"
+        runner = self.path / "capture-stdout"
         runner.write_text(
             '#!/usr/bin/env python3\nimport os,time,sys\nassert "--raw" not in sys.argv\nassert sys.argv[-1] == "-"\ntarget=sys.argv[sys.argv.index("--target")+1]\nif target != "auto":\n props=sys.argv[sys.argv.index("--properties")+1]\n assert "node.dont-fallback = true" in props\n assert "node.dont-reconnect = true" in props\nfor n in [1,500,4000,3219]:\n os.write(1,b"\\0"*n);time.sleep(.02)\ntime.sleep(60)\n'
         )
@@ -837,7 +839,7 @@ else:
         environment = patch.dict(
             os.environ,
             {
-                "FORESIGHT_CAPTURE_RUNTIME": "",
+                "FORESIGHT_CAPTURE_RUNTIME": str(runner),
                 "PATH": str(self.path) + ":" + os.environ["PATH"],
             },
         )
@@ -881,7 +883,7 @@ else:
         environment = patch.dict(
             os.environ,
             {
-                "FORESIGHT_CAPTURE_RUNTIME": "",
+                "FORESIGHT_CAPTURE_RUNTIME": str(runner),
                 "PATH": str(self.path) + ":" + os.environ["PATH"],
             },
         )
@@ -925,7 +927,7 @@ else:
         environment = patch.dict(
             os.environ,
             {
-                "FORESIGHT_CAPTURE_RUNTIME": "",
+                "FORESIGHT_CAPTURE_RUNTIME": str(runner),
                 "PATH": str(self.path) + ":" + os.environ["PATH"],
             },
         )
@@ -1000,7 +1002,7 @@ else:
         import base64
 
         marker = self.path / "capture-attempt"
-        runner = self.path / "pw-record"
+        runner = self.path / "capture-stdout"
         runner.write_text(
             "#!/usr/bin/env python3\nimport os,time,pathlib\np=pathlib.Path("
             + repr(str(marker))

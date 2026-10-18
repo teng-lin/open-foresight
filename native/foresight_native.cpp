@@ -1692,7 +1692,10 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                         break;
                     }
                   },
-                  false, c->runtime.empty());
+                  false,
+                  c->runtime.empty() ||
+                      std::filesystem::path(c->runtime).filename() ==
+                          "pw-record");
               if (c->cancel) {
                 residual.resize(residual.size() & ~size_t(1));
                 if (!residual.empty())
