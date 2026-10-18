@@ -157,6 +157,7 @@ void main() {
     await google.start();
     auth = GoogleAuth(
       Directory('${root.path}/google'),
+      secretStore: const UnavailableSecretStore(),
       endpoints: google.endpoints,
     );
     app = Application(domain, auth: auth);
