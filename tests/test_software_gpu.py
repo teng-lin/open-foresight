@@ -34,7 +34,11 @@ def test_whisper_requires_software_vulkan_and_a_transcript():
             gpu.whisper_result(
                 SimpleNamespace(returncode=0, stdout="text", stderr=stderr)
             )
-    with pytest.raises(RuntimeError, match="no transcript"):
+    with pytest.raises(RuntimeError, match="known speech"):
+        gpu.whisper_result(
+            SimpleNamespace(returncode=0, stdout="[BLANK_AUDIO]", stderr=passed.stderr)
+        )
+    with pytest.raises(RuntimeError, match="known speech"):
         gpu.whisper_result(
             SimpleNamespace(returncode=0, stdout="", stderr=passed.stderr)
         )

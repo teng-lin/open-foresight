@@ -31,8 +31,10 @@ def whisper_result(result):
         raise RuntimeError(
             "Whisper did not identify the selected software Vulkan device"
         )
-    if not re.search(r"[a-z]{2}", result.stdout, re.I):
-        raise RuntimeError("Whisper returned no transcript for the two-second fixture")
+    if not re.search(r"\b(?:and|so|my|fellow|americans)\b", result.stdout, re.I):
+        raise RuntimeError(
+            "Whisper returned no known speech from the two-second fixture"
+        )
     return {
         "status": "passed",
         "backend": "Vulkan0",
