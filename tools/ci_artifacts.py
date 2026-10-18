@@ -473,17 +473,7 @@ def pull(
                     continue
             with tempfile.TemporaryDirectory() as temporary:
                 archive = Path(temporary) / "artifact.zip"
-                with archive.open("wb") as stream:
-                    subprocess.run(
-                        [
-                            "gh",
-                            "api",
-                            f"repos/{repository}/actions/artifacts/{artifact['id']}/zip",
-                        ],
-                        stdout=stream,
-                        check=True,
-                        timeout=300,
-                    )
+                download_zip(repository, artifact, archive)
                 source = Path(temporary) / "download"
                 source.mkdir()
                 with zipfile.ZipFile(archive) as stream:

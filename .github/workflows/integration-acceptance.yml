@@ -5,52 +5,55 @@ on:
     - cron: '43 5 * * 1'
   push:
     branches: [main]
-    paths:
-      - 'apps/**'
-      - 'packages/**'
-      - 'native/**'
-      - 'services/**'
-      - 'tools/**'
-      - 'packaging/**'
-      - '.github/workflows/integration-acceptance.yml'
   pull_request:
-    paths:
-      - '.github/workflows/integration-acceptance.yml'
-      - 'apps/desktop/**'
-      - 'packages/foresight_core/**'
-      - 'packages/foresight_core/lib/src/answer_contract.dart'
-      - 'packages/foresight_core/lib/src/store.dart'
-      - 'packages/foresight_core/lib/src/application.dart'
-      - 'packaging/**'
-      - 'tools/integration_gates.py'
-      - 'tools/build_linux_sdk_local.sh'
-      - 'packaging/build.Dockerfile'
-      - 'apps/desktop/test/*native*'
-      - 'apps/desktop/test/integration_test.dart'
-      - 'apps/desktop/test/meeting_citation_test.dart'
-      - 'apps/desktop/test/google_real_helper_test.dart'
-      - 'apps/desktop/test/live*'
-      - 'native/**'
-      - 'services/inference/**'
-      - 'services/speech/**'
-      - 'services/helper/**'
-      - 'packages/foresight_core/test/*model*'
-      - 'packages/foresight_core/test/recording_pipewire_test.dart'
-      - 'packages/foresight_core/lib/src/native.dart'
-      - 'packages/foresight_core/lib/src/domain.dart'
-      - 'packages/foresight_core/lib/src/recording.dart'
-      - 'tools/test_macos_release_models.py'
-      - 'tools/model_pins.py'
-      - 'packages/foresight_core/lib/src/model_pins.dart'
 permissions:
   contents: read
   actions: read
   packages: read
 concurrency:
-  group: integration-${{ github.ref }}
+  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      linux_bundle: ${{ steps.select.outputs.linux_bundle }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Select integration acceptance
+        id: select
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          args=()
+          if [[ "$EVENT" == schedule || "$EVENT" == workflow_dispatch ]]; then args+=(--force); fi
+          python3 tools/ci_changes.py --base "$BASE" "${args[@]}"
+  acceptance-checks:
+    if: always()
+    needs: [changes, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require selected integration acceptance
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          SELECTED: ${{ needs.changes.outputs.linux_bundle }}
+          LINUX_RESULT: ${{ needs.linux.result }}
+        run: |
+          test "$CHANGES_RESULT" = success
+          if [[ "$SELECTED" == true ]]; then
+            test "$LINUX_RESULT" = success
+          else
+            test "$SELECTED" = false
+            test "$LINUX_RESULT" = skipped
+          fi
   linux:
+    needs: changes
+    if: needs.changes.outputs.linux_bundle == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:

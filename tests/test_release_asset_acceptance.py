@@ -170,7 +170,13 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
             source_revision([], "deb", "v0.1.0", "c" * 64)
         self.assertEqual(
             source_revision(
-                {"revision": "a" * 40, "architecture": "arm64"},
+                {
+                    "revision": "a" * 40,
+                    "arch": "arm64",
+                    "sha256": "c" * 64,
+                    "format": "dmg",
+                    "version": "0.1.0",
+                },
                 "dmg",
                 "v0.1.0",
                 "c" * 64,
@@ -643,3 +649,24 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
         self.assertIn(
             "test ! -e /usr/share/applications/io.openforesight.App.desktop", script
         )
+
+
+def test_dmg_provenance_requires_bytes_format_and_version():
+    import pytest
+
+    metadata = {
+        "revision": "a" * 40,
+        "arch": "arm64",
+        "format": "dmg",
+        "version": "0.1.1",
+        "sha256": "b" * 64,
+    }
+    assert source_revision(metadata, "dmg", "v0.1.1", "b" * 64) == "a" * 40
+    for changed in (
+        {"sha256": "c" * 64},
+        {"format": "deb"},
+        {"version": "0.1.0"},
+        {"arch": "x86_64"},
+    ):
+        with pytest.raises(ValueError):
+            source_revision({**metadata, **changed}, "dmg", "v0.1.1", "b" * 64)

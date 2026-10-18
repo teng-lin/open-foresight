@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
-      - name: Require tested main candidates, then create tag and draft
+      - name: Require tested main candidates and administrator tag, then create draft
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,6 +39,8 @@ jobs:
   linux:
     needs: prepare
     permissions:
+      id-token: write
+      attestations: write
       contents: write
       actions: write
     uses: ./.github/workflows/linux-packages.yml
@@ -49,6 +51,8 @@ jobs:
   macos:
     needs: prepare
     permissions:
+      id-token: write
+      attestations: write
       contents: write
       actions: read
     uses: ./.github/workflows/macos-release.yml
@@ -70,6 +74,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Require complete acceptance and publish the draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -84,4 +92,6 @@ jobs:
               raise SystemExit('Release remains unpublished: ' + str(results))
           PY
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
-          gh release edit "$TAG" --tag "$TAG" --verify-tag --draft=false --latest
+          gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/published-releases.json"
+          latest=$(python3 tools/release_latest.py --tag "$TAG" --releases "$RUNNER_TEMP/published-releases.json")
+          gh release edit "$TAG" --tag "$TAG" --verify-tag --draft=false --latest="$latest"

@@ -14,7 +14,7 @@ SUFFIXES = {"deb": ".deb", "rpm": ".rpm", "arch": ".pkg.tar.zst", "dmg": ".dmg"}
 
 
 def provenance_name(asset, kind):
-    return asset["name"] + (".manifest.json" if kind == "dmg" else ".build.json")
+    return asset["name"] + ".build.json"
 
 
 def named_asset(release, name):
@@ -64,11 +64,11 @@ def source_revision(metadata, kind, tag, installer_digest):
     if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("Installer provenance requires a full source commit")
     if kind == "dmg":
-        if metadata.get("architecture") != "arm64":
+        if metadata.get("arch") != "arm64":
             raise ValueError(
                 "DMG provenance must describe the published arm64 installer"
             )
-    elif (
+    if (
         metadata.get("sha256") != installer_digest
         or metadata.get("format") != kind
         or metadata.get("version") != tag[1:]

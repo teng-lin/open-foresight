@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build exact-main candidates before creating an immutable tag and draft release."""
+"""Verify exact-main candidates and an administrator-created tag before drafting."""
 
 import argparse
 import base64
@@ -96,7 +96,7 @@ def require_candidates(repository, commit, wait, fresh=False):
         print(f"Waiting for exact-commit main candidates: {commit}", flush=True)
         time.sleep(min(20, max(0, deadline - time.monotonic())))
     raise TimeoutError(
-        "Candidates unavailable; no release tag was created. Inspect macos.yml and retry."
+        "Candidates unavailable; release remains unpublished. Inspect macos.yml and retry."
     )
 
 
@@ -137,20 +137,9 @@ def create_draft(repository, tag, commit):
         if api(repository, f"commits/{tag}")["sha"] != commit:
             raise ValueError("Existing release tag points to a different commit")
     else:
-        subprocess.run(
-            [
-                "gh",
-                "api",
-                "--method",
-                "POST",
-                f"repos/{repository}/git/refs",
-                "-f",
-                f"ref=refs/tags/{tag}",
-                "-f",
-                f"sha={commit}",
-            ],
-            check=True,
-            timeout=300,
+        raise ValueError(
+            f"Release tag {tag} is missing. An administrator must create it at {commit} "
+            "and push it before dispatching release.yml; protected v* tags cannot be created by the workflow token."
         )
     release = release_for_tag(repository, tag, optional=True, request=api)
     if release is None:

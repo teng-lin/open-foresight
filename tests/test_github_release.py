@@ -71,7 +71,7 @@ class GithubReleaseTest(unittest.TestCase):
             (".deb", ".build.json"),
             (".rpm", ".build.json"),
             (".pkg.tar.zst", ".build.json"),
-            (".dmg", ".manifest.json"),
+            (".dmg", ".build.json"),
         ]:
             name = "installer" + suffix
             assets.extend(
