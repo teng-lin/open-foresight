@@ -57,3 +57,29 @@ def test_litert_transport_pin_matches_the_shared_version():
     wheel = PINS["litert_linux_wheel"]
     assert f"litert_lm_api-{PINS['litert_lm']}-" in wheel["url"]
     assert len(wheel["sha256"]) == len(wheel["library_sha256"]) == 64
+
+
+def test_litert_sdk_copied_context_resolves_module_file_dependencies(tmp_path):
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    dockerfile = (ROOT / "packaging/sdk-litert.Dockerfile").read_text()
+    context = tmp_path / "isolated-context"
+    for source, target in re.findall(
+        r"^COPY (\S+) /opt/foresight-extension/(\S+)$", dockerfile, re.M
+    ):
+        destination = context / target
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / source, destination)
+    result = subprocess.run(
+        [sys.executable, str(context / "tools/build_litert_extensions.py"), "--help"],
+        cwd=tmp_path,
+        env={"PATH": os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--output" in result.stdout
