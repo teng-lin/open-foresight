@@ -26,6 +26,27 @@ QUERY_WORKER_SOURCES = frozenset(
 )
 
 
+def stop_installed_service(service, env):
+    """Drop the install lock held by the detached application service.
+
+    The desktop starts foresight-service in its own session, so stopping the
+    GUI does not stop the service. A package upgrade refuses that lock. Idle
+    shutdown is the supported release. A service that has already exited is
+    not a failure.
+    """
+    if not Path(service).is_file():
+        return
+    stop = subprocess.run([str(service), '--stop-if-idle'], env=env, cwd='/',
+                          capture_output=True, text=True, timeout=30)
+    if stop.returncode == 0:
+        return
+    status = subprocess.run([str(service), '--status'], env=env, cwd='/',
+                            capture_output=True, text=True, timeout=15)
+    if status.returncode == 0:
+        detail = (stop.stderr or stop.stdout).strip()
+        raise RuntimeError('Installed service kept the install lock: ' + detail)
+
+
 def validate_native_python_payload(root):
     unexpected = []
     for path in root.rglob('*'):
@@ -45,7 +66,6 @@ def main():
     assert os.getuid() != 0, 'Run the application smoke test as a normal user'
     env = dict(os.environ, LD_LIBRARY_PATH=f'{root}/lib:{root}/app/lib',
                FORESIGHT_LITERT_LIBRARY=str(root / 'lib/liblitert-lm.so'),
-               FORESIGHT_ONNX_LIBRARY=str(root / 'lib/libonnxruntime.so'),
                LIBGL_ALWAYS_SOFTWARE='1', GDK_BACKEND='x11')
     # Check all runtime ELFs, including dlopen-only inference libraries. This
     # catches host dependencies that an executable-only ldd check misses.
@@ -119,12 +139,16 @@ def main():
                                   'whisper_cpu_fixture': True,
                                   'physical_audio_or_gpu_inference_tested': False}))
             finally:
-                os.killpg(app.pid, signal.SIGTERM) if app.poll() is None else None
-                try:
-                    app.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    os.killpg(app.pid, signal.SIGKILL)
-                    app.wait()
+                if app.poll() is None:
+                    os.killpg(app.pid, signal.SIGTERM)
+                    try:
+                        app.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(app.pid, signal.SIGKILL)
+                        app.wait()
+                # The GUI is gone, so it cannot launch another service over the
+                # idle shutdown that releases the installation lock.
+                stop_installed_service(root / 'bin/foresight-service', env)
 
 
 if __name__ == '__main__':

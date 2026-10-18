@@ -31,7 +31,6 @@ def main():
     if sys.platform == 'darwin':
         adapters = ROOT / 'services/inference/macos'
         extra = {
-            'FORESIGHT_MODEL_ADAPTER': str(adapters / 'model_adapter.py'),
             'FORESIGHT_LITERT_EMBEDDING_ADAPTER': str(adapters / 'litert_embedding_adapter.py'),
             'FORESIGHT_MODEL_PYTHON': str(args.python.expanduser().absolute()),
             'FORESIGHT_LITERT_PYTHON': str(args.python.expanduser().absolute()),

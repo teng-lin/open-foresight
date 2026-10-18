@@ -99,7 +99,6 @@ def main():
                 'FORESIGHT_HELPER': str(helper_bundle / 'bin/ForesightHelper'),
                 'FORESIGHT_MODEL_WORKER': str(helper_bundle / 'bin/foresight-model'),
                 'FORESIGHT_LITERT_LIBRARY': str(helper_bundle / 'lib/liblitert-lm.so'),
-                'FORESIGHT_ONNX_LIBRARY': str(helper_bundle / 'lib/libonnxruntime.so'),
                 'FORESIGHT_MODEL_MANIFEST': str(args.model_manifest.resolve()),
                 'FORESIGHT_NATIVE': str(helper_bundle / 'lib/libforesight_native.so'),
                 'FORESIGHT_PLAYBACK_TARGET': sink,

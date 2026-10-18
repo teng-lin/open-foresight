@@ -8,16 +8,13 @@ void main() {
   setUp(() {
     directory = Directory.systemTemp.createTempSync('note-event-snapshot-');
     store = Store('${directory.path}/notes.db');
-    store.db.execute(
-      'CREATE TABLE calendar_events(event_key TEXT PRIMARY KEY,meeting_id INTEGER,metadata TEXT)',
-    );
   });
   tearDown(() {
     store.close();
     directory.deleteSync(recursive: true);
   });
   void event(int meeting, String title) => store.db.execute(
-    'INSERT INTO calendar_events VALUES(?,?,?)',
+    "INSERT INTO calendar_events(event_key,meeting_id,metadata,account,calendar_id,google_id,source_id,starts,ends,status,synced) VALUES(?,?,?,'fixture','fixture','fixture','fixture',0,0,'confirmed',0)",
     ['event', meeting, '{"summary":"$title"}'],
   );
 
@@ -69,6 +66,7 @@ void main() {
     store.saveMeetingNotes(id, 'Existing note');
     event(id, 'Only current title is known');
     store.db.execute('DROP TABLE meeting_note_events');
+    store.db.execute('PRAGMA user_version=1');
     store.close();
     store = Store('${directory.path}/notes.db');
     expect(store.rows('SELECT * FROM meeting_note_events'), isEmpty);

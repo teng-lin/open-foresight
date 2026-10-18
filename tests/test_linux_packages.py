@@ -245,7 +245,7 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
             library = build / 'lib/liblitert-lm.so'
             compile('#include <stdio.h>\nvoid fixture(void) { puts("fixture"); }', library,
                     '-shared', '-fPIC')
-            for name in ('native/libforesight_native.so', 'lib/libonnxruntime.so'):
+            for name in ('native/libforesight_native.so',):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(library, target)
@@ -262,7 +262,6 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
             output = root / 'bundle'
             arguments = ['package.py', '--build', str(build), '--flutter-bundle', str(flutter),
                          '--output', str(output), '--litert-library', str(library),
-                         '--onnx-library', str(build / 'lib/libonnxruntime.so'),
                          '--litert-extensions-manifest', str(root / 'fixture-manifest.json'),
                          '--revision', 'a' * 40]
             # Only artifact authentication/C-API probing is stubbed. Library
@@ -272,14 +271,42 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                     patch.object(package, 'verify_extensions_manifest', return_value=extensions), \
                     patch.object(package, 'copy_linux_extension_dependencies',
                                  return_value=[output / 'lib/liblitert-lm.so']), \
-                    patch.object(package, 'probe_native_extensions'), \
-                    patch.object(package, 'ONNX_LIBRARY_SHA256', digest):
+                    patch.object(package, 'probe_native_extensions'):
                 package.main()
             manifest = json.loads((output / 'manifest.json').read_text())
             self.assertTrue({'libgrpc_fixture.so', 'libupb_fixture.so'} <= set(manifest['bundled_libraries']))
             shutil.rmtree(sdk)
             subprocess.run([str(output / 'bin/ForesightHelper')], check=True,
                            env={**os.environ, 'LD_LIBRARY_PATH': str(output / 'lib')})
+
+
+class InstalledServiceShutdownTest(unittest.TestCase):
+    def test_idle_shutdown_releases_a_detached_service_before_upgrade(self):
+        spec = importlib.util.spec_from_file_location(
+            'smoke_installed', ROOT / 'packaging/smoke_installed.py')
+        smoke = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(smoke)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            service = root / 'foresight-service'
+            log = root / 'calls'
+            service.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$1" >> "$CALLS"\n'
+                'if [ "$1" = "--stop-if-idle" ]; then exit "$STOP_CODE"; fi\n'
+                'if [ "$1" = "--status" ]; then exit "$STATUS_CODE"; fi\n'
+                'exit 2\n')
+            service.chmod(0o755)
+            env = {'CALLS': str(log), 'STOP_CODE': '0', 'STATUS_CODE': '0'}
+            smoke.stop_installed_service(service, env)
+            self.assertEqual(log.read_text().splitlines(), ['--stop-if-idle'])
+            log.write_text('')
+            env['STOP_CODE'] = '1'
+            env['STATUS_CODE'] = '1'
+            smoke.stop_installed_service(service, env)
+            self.assertEqual(log.read_text().splitlines(), ['--stop-if-idle', '--status'])
+            env['STATUS_CODE'] = '0'
+            with self.assertRaisesRegex(RuntimeError, 'kept the install lock'):
+                smoke.stop_installed_service(service, env)
 
 
 class NativePythonPayloadTest(unittest.TestCase):

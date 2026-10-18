@@ -1,6 +1,6 @@
 # Mac inference compatibility runtime
 
-Linux uses the native LiteRT/ONNX worker in the parent directory. Its pinned
+Linux uses the native LiteRT worker in the parent directory. Its pinned
 standalone runtime archives currently target Linux x86-64. Mac retains its
 validated Python runtime and Metal-backed LiteRT adapters until native Apple
 Silicon libraries have been integrated and tested.

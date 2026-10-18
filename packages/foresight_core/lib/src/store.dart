@@ -9,15 +9,96 @@ import 'graph_labels.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+void requireEmbeddingBundle(String path) {
+  if (!path.endsWith('.litertlm') || Directory(path).existsSync()) {
+    throw StateError(
+      'Unsupported model format: embedding requires a .litertlm file',
+    );
+  }
+}
+
 /// Linux application schema, independently versioned from helper databases.
 class Store {
   final Database db;
   final String path;
-  Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly);
+  static const schemaVersion = 9;
+
+  Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly) {
+    try {
+      _checkVersion();
+    } catch (_) {
+      db.dispose();
+      rethrow;
+    }
+  }
+
   Store(this.path) : db = sqlite3.open(path) {
-    db.execute('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON');
-    final version = db.select('PRAGMA user_version').first.values.first as int;
-    if (version > 1) throw StateError('Unsupported newer application database');
+    try {
+      // Refuse newer profiles before even changing their journal mode.
+      _checkVersion();
+      // Migrations populate the WAL before readers open the fresh profile.
+      // Switching only after COMMIT leaves no WAL for macOS read-only clients.
+      db.execute('PRAGMA journal_mode=WAL');
+      db.execute('PRAGMA foreign_keys=ON');
+      db.execute('BEGIN IMMEDIATE');
+      try {
+        // Re-read while holding the writer lock: another opener may have migrated.
+        var version = _checkVersion();
+        while (version < schemaVersion) {
+          _migrateTo(++version);
+          db.execute('PRAGMA user_version=$version');
+        }
+        db.execute('COMMIT');
+      } catch (_) {
+        // SQLITE_FULL/IOERR can already roll back the transaction.
+        if (!db.autocommit) db.execute('ROLLBACK');
+        rethrow;
+      }
+    } catch (_) {
+      db.dispose();
+      rethrow;
+    }
+  }
+
+  int _checkVersion() {
+    final version =
+        db.select('PRAGMA user_version').single.values.single as int;
+    if (version > schemaVersion) {
+      throw StateError(
+        'Unsupported newer application database version $version '
+        '(maximum $schemaVersion)',
+      );
+    }
+    return version;
+  }
+
+  void _migrateTo(int version) {
+    switch (version) {
+      case 1:
+      case 2:
+        // Historical version-1 releases added tables without bumping the version.
+        // Adopt that baseline once before applying individually versioned changes.
+        _createLegacyTables();
+      case 3:
+        _migrateNoteHistory();
+      case 4:
+        _migrateModelMetadata();
+      case 5:
+        _migrateSourceUris();
+      case 6:
+        _migrateAnswerHistory();
+      case 7:
+        _migrateMeetingQuestions();
+      case 8:
+        _migrateGoogleTables();
+      case 9:
+        _reconcileLabelRecords();
+      default:
+        throw StateError('Missing application database migration $version');
+    }
+  }
+
+  void _createLegacyTables() {
     db.execute(
       '''CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,mime TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',deleted INTEGER NOT NULL DEFAULT 0,provenance TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,timestamp INTEGER);
@@ -42,8 +123,11 @@ class Store {
     CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
-    PRAGMA user_version=1;''',
+    ''',
     );
+  }
+
+  void _migrateNoteHistory() {
     // Legacy profiles did not record when a note was saved. Preserve unknown
     // timestamps instead of manufacturing them from meeting creation times.
     for (final table in ['notes', 'meeting_notes']) {
@@ -65,6 +149,9 @@ class Store {
         .any((row) => row['name'] == 'enhanced_body')) {
       db.execute('ALTER TABLE meeting_notes ADD COLUMN enhanced_body TEXT');
     }
+  }
+
+  void _migrateModelMetadata() {
     if (!db
         .select('PRAGMA table_info(models)')
         .any((row) => row['name'] == 'backend'))
@@ -78,6 +165,9 @@ class Store {
         'ALTER TABLE models ADD COLUMN model_type INTEGER NOT NULL DEFAULT 0',
       );
     }
+  }
+
+  void _migrateSourceUris() {
     if (!db
         .select('PRAGMA table_info(source_details)')
         .any((row) => row['name'] == 'source_uri')) {
@@ -93,6 +183,9 @@ class Store {
           );
       }
     }
+  }
+
+  void _migrateAnswerHistory() {
     if (!db
         .select('PRAGMA table_info(answers)')
         .any((r) => r['name'] == 'conversation')) {
@@ -123,8 +216,14 @@ class Store {
     db.execute(
       'CREATE INDEX IF NOT EXISTS answer_conversation_id ON answers(conversation,id)',
     );
-    _migrateMeetingQuestions();
-    _reconcileLabelRecords();
+  }
+
+  void _migrateGoogleTables() {
+    db.execute(
+      '''CREATE TABLE IF NOT EXISTS google_sources(source_id TEXT PRIMARY KEY REFERENCES sources(id),account TEXT NOT NULL,file_id TEXT NOT NULL,modified TEXT NOT NULL,mime TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS calendar_events(event_key TEXT PRIMARY KEY,account TEXT NOT NULL,calendar_id TEXT NOT NULL,google_id TEXT NOT NULL,meeting_id INTEGER NOT NULL REFERENCES meetings(id),source_id TEXT NOT NULL,starts INTEGER NOT NULL,ends INTEGER NOT NULL,status TEXT NOT NULL,metadata TEXT NOT NULL,synced INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS google_folders(account TEXT NOT NULL,folder_id TEXT NOT NULL,PRIMARY KEY(account,folder_id));''',
+    );
   }
 
   // Keep durable history while allowing interim origins and repeated questions
@@ -148,9 +247,7 @@ class Store {
                   'meeting_id,normalized',
         );
     if (!requiredOrigin && !lifetimeUnique) return;
-    db.execute('BEGIN IMMEDIATE');
-    try {
-      db.execute("""
+    db.execute("""
         CREATE TABLE meeting_questions_interim(
           id INTEGER PRIMARY KEY,
           meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
@@ -165,27 +262,23 @@ class Store {
         DROP TABLE meeting_questions;
         ALTER TABLE meeting_questions_interim RENAME TO meeting_questions;
       """);
-      db.execute('COMMIT');
-    } catch (_) {
-      db.execute('ROLLBACK');
-      rethrow;
-    }
   }
 
-  // Reconcile the legacy JSON projection on opening so labels edited by an
-  // older Linux bundle retain their names and acquire persistent colors.
+  // One-time conversion of legacy JSON labels to normalized records.
   void _reconcileLabelRecords() {
-    db.execute('BEGIN IMMEDIATE');
-    try {
-      for (final row in rows('SELECT source_id,labels FROM source_details')) {
-        final names = (jsonDecode(row['labels'] as String) as List)
-            .cast<String>();
-        _writeLabelRecords(row['source_id'] as String, names);
+    for (final row in rows('SELECT source_id,labels FROM source_details')) {
+      List<String> names;
+      try {
+        final decoded = jsonDecode(row['labels'] as String);
+        names = decoded is List ? decoded.whereType<String>().toList() : [];
+      } on FormatException {
+        names = [];
       }
-      db.execute('COMMIT');
-    } catch (_) {
-      db.execute('ROLLBACK');
-      rethrow;
+      db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
+        jsonEncode(names),
+        row['source_id'],
+      ]);
+      _writeLabelRecords(row['source_id'] as String, names);
     }
   }
 
@@ -461,7 +554,7 @@ class Store {
     String kind,
     String path,
     String runtime, {
-    String backend = 'llama_cpp',
+    String? backend,
     String? expectedDigest,
     int? modelType,
     bool Function()? current,
@@ -469,15 +562,15 @@ class Store {
     if (modelType != null && (modelType < 0 || modelType > 17)) {
       throw ArgumentError.value(modelType, 'modelType');
     }
+    if (kind == 'embedding') requireEmbeddingBundle(path);
+    backend ??= kind == 'embedding' ? 'litert_lm_embedding_cpu' : 'llama_cpp';
     final backends = [
-      'llama_cpp',
-      'litert_lm',
+      if (kind != 'embedding') ...['llama_cpp', 'litert_lm'],
       if (kind == 'query-detection') ...[
         'legacy_query_cpu',
         'legacy_query_cpu_encrypted',
       ],
       if (kind == 'embedding') ...[
-        'sentence_transformers_cpu',
         'litert_lm_embedding_cpu',
         'litert_lm_embedding_gpu',
       ],

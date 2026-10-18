@@ -19,7 +19,7 @@ lib.fs_set_runtime_environment.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
 lib.fs_set_runtime_environment.restype = ctypes.c_int
 assert lib.fs_set_runtime_environment(b'PATH', b'/invalid') == -1
 assert lib.fs_set_runtime_environment(None, b'value') == -1
-for key in (b'FORESIGHT_LITERT_LIBRARY', b'FORESIGHT_ONNX_LIBRARY'):
+for key in (b'FORESIGHT_LITERT_LIBRARY',):
     assert lib.fs_set_runtime_environment(key, b'/controlled/native/library') == 0
 assert lib.fs_set_runtime_environment(b'FORESIGHT_HELPER', os.fsencode(helper)) == 0
 with tempfile.TemporaryDirectory(prefix='fs-identity-', dir='/tmp') as directory:

@@ -25,6 +25,7 @@ class BuildSnapshotTest(unittest.TestCase):
         self.git('config', 'user.name', 'Snapshot test')
         self.git('config', 'user.email', 'snapshot@example.invalid')
         self.git('config', 'core.abbrev', '8')
+        self.git('config', 'diff.mnemonicprefix', 'true')
         self.file = self.source / 'input.txt'
         self.file.write_text('original\n')
         self.abi_file = self.source / 'z_abi.txt'
@@ -44,7 +45,11 @@ class BuildSnapshotTest(unittest.TestCase):
         self.linux_abi_patch_path.write_bytes(self.linux_abi_patch)
 
     def git(self, *args):
-        return subprocess.check_output(['git', *args], cwd=self.source, stderr=subprocess.PIPE)
+        # Override repository and global diff.mnemonicprefix so patch capture
+        # stays on the a/ and b/ prefixes the builder verifies.
+        return subprocess.check_output(
+            ['git', '-c', 'diff.mnemonicprefix=false', *args],
+            cwd=self.source, stderr=subprocess.PIPE)
 
     def diff(self):
         return self.git('-c', 'core.abbrev=8', 'diff', '--no-ext-diff', '--no-textconv',

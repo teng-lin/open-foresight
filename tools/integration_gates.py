@@ -26,20 +26,46 @@ def check_events(path, expected):
     return {'passed': len(done), 'skipped': 0}
 
 
+def widget_test_alias(relative):
+    """Return a test/ path for one integration_test file.
+
+    Flutter 3.35 runs every file under integration_test/ on a connected device.
+    The acceptance image has no display, so the same source runs as a widget test.
+    """
+    desktop = ROOT / 'apps/desktop'
+    alias = desktop / 'test' / ('private_pipewire_' + Path(relative).name)
+    if alias.is_symlink() or alias.exists():
+        alias.unlink()
+    alias.symlink_to(Path('..') / relative)
+    return str(alias.relative_to(desktop))
+
+
 def run_tests(package, files, expected, env, output, name, flutter='flutter', dart='dart'):
     output.mkdir(parents=True, exist_ok=True)
     events = output / f'{name}.events.jsonl'
     events.unlink(missing_ok=True)
-    command = [flutter if package == 'desktop' else dart, 'test', *files,
+    aliases = []
+    command_files = []
+    for relative in files:
+        if package == 'desktop' and relative.startswith('integration_test/'):
+            command_files.append(widget_test_alias(relative))
+            aliases.append(ROOT / 'apps/desktop' / command_files[-1])
+        else:
+            command_files.append(relative)
+    command = [flutter if package == 'desktop' else dart, 'test', *command_files,
                '--concurrency=1', '--reporter=expanded', '--file-reporter=json:' + str(events)]
     if package == 'desktop': command.append('--no-pub')
     cwd = ROOT / ('apps/desktop' if package == 'desktop' else 'packages/foresight_core')
-    with (output / f'{name}.log').open('w') as log:
-        result = subprocess.run(command, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=2400)
-    if result.returncode:
-        print((output / f'{name}.log').read_text()[-12000:], flush=True)
-        raise RuntimeError(f'{name} failed with exit {result.returncode}')
-    return check_events(events, expected)
+    try:
+        with (output / f'{name}.log').open('w') as log:
+            result = subprocess.run(command, cwd=cwd, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=2400)
+        if result.returncode:
+            print((output / f'{name}.log').read_text()[-12000:], flush=True)
+            raise RuntimeError(f'{name} failed with exit {result.returncode}')
+        return check_events(events, expected)
+    finally:
+        for alias in aliases:
+            alias.unlink(missing_ok=True)
 
 
 def model_file(directory, kind):
@@ -60,7 +86,7 @@ def bundle_environment(bundle, inherited):
         config = json.loads((resources / 'runtime.json').read_text())
         keys = ['FORESIGHT_NATIVE', 'FORESIGHT_HELPER', 'FORESIGHT_LITERT_RUNNER',
                 'FORESIGHT_MODEL_WORKER', 'FORESIGHT_MODEL_PYTHON', 'FORESIGHT_LITERT_PYTHON',
-                'FORESIGHT_MODEL_ADAPTER', 'FORESIGHT_LITERT_EMBEDDING_ADAPTER', 'FORESIGHT_QUERY_WORKER']
+                'FORESIGHT_LITERT_EMBEDDING_ADAPTER', 'FORESIGHT_QUERY_WORKER']
         for key in keys:
             if key in config:
                 env[key] = str((resources / config[key]).resolve(strict=True))
@@ -70,7 +96,6 @@ def bundle_environment(bundle, inherited):
                    FORESIGHT_LITERT_RUNNER=str(bundle / 'bin/foresight-model'),
                    FORESIGHT_MODEL_WORKER=str(bundle / 'bin/foresight-model'),
                    FORESIGHT_LITERT_LIBRARY=str(bundle / 'lib/liblitert-lm.so'),
-                   FORESIGHT_ONNX_LIBRARY=str(bundle / 'lib/libonnxruntime.so'),
                    FORESIGHT_QUERY_WORKER=str(bundle / 'share/open-foresight/adapters/legacy_query_worker.py'),
                    FORESIGHT_LITERT_PYTHON=str(bundle / 'bin/query-python'),
                    LD_LIBRARY_PATH=str(bundle / 'lib') + ':' + str(bundle / 'app/lib'))
@@ -176,6 +201,45 @@ def private_pipewire(env, output):
             for stream in streams: stream.close()
 
 
+def meeting_environment(args, env, private):
+    data = args.output / 'meeting-data'
+    screenshots = args.output / 'meeting-screenshots'
+    opener = args.output / 'meeting-opener'
+    # The service creates FORESIGHT_DATA itself and rejects a directory other
+    # users can read. Screenshot and opener directories are not profile paths.
+    for directory in (screenshots, opener):
+        directory.mkdir(parents=True, exist_ok=True)
+    script = opener / 'xdg-open'
+    script.write_text(
+        '#!/usr/bin/env python3\n'
+        'import json, os, pathlib, sys\n'
+        'pathlib.Path(os.environ["FORESIGHT_LINK_OPEN_REPORT"]).write_text(json.dumps(sys.argv[1:]))\n')
+    script.chmod(0o700)
+    speech = env['FORESIGHT_SPEECH_MODEL']
+    generation = model_file(args.models, 'generation')
+    embedding = model_file(args.models, 'embedding')
+    manifest = args.output / 'meeting-models.json'
+    manifest.write_text(json.dumps({
+        'speech': {'model': speech, 'runtime': env['FORESIGHT_SPEECH_RUNNER'], 'sha256': MODELS['speech'][3]},
+        'generation': {'model': generation, 'runtime': env.get('FORESIGHT_LITERT_RUNNER', ''),
+                       'sha256': MODELS['generation'][3], 'backend': 'litert_lm'},
+        'embedding': {'model': embedding, 'runtime': '', 'sha256': MODELS['embedding'][3],
+                      'backend': 'litert_lm_embedding_cpu'},
+    }) + '\n')
+    meeting = dict(private)
+    meeting.update(FORESIGHT_PLAYBACK_TARGET=private['FORESIGHT_LIVE_SINK'],
+                   FORESIGHT_DATA=str(data),
+                   FORESIGHT_REFERENCE_SCREENSHOTS=str(screenshots),
+                   FORESIGHT_MEETING_SCREENSHOT=str(args.output / 'meetings.png'),
+                   FORESIGHT_COPILOT_SCREENSHOT=str(args.output / 'copilot.png'),
+                   FORESIGHT_MEETING_REPORT=str(args.output / 'meeting-workflow.json'),
+                   FORESIGHT_LINK_OPEN_REPORT=str(args.output / 'link-open.json'),
+                   FORESIGHT_MODEL_MANIFEST=str(manifest),
+                   FORESIGHT_SERVICE=str(args.bundle.resolve() / 'bin/foresight-service'),
+                   PATH=str(opener) + os.pathsep + meeting.get('PATH', ''))
+    return meeting
+
+
 def audio_gate(args, env):
     runner = args.bundle.resolve() / 'bin/whisper-cli-vulkan'
     if not runner.is_file(): raise ValueError('Linux bundle must include Whisper')
@@ -193,7 +257,9 @@ def audio_gate(args, env):
         # The PCM inspector supplies its own runner and a dummy model, not Whisper.
         inspector_env.pop('FORESIGHT_WHISPER_RUNTIME', None)
         core = run_tests('core', ['test/recording_pipewire_test.dart'], 1, inspector_env, args.output, 'audio-core', args.flutter, args.dart)
-    return {'desktop': desktop, 'core': core, 'physical_audio': 'not_run'}
+        meeting = run_tests('desktop', ['integration_test/meeting_workflow_test.dart'],
+                            1, meeting_environment(args, env, private), args.output, 'audio-meeting', args.flutter, args.dart)
+    return {'desktop': desktop, 'core': core, 'meeting': meeting, 'physical_audio': 'not_run'}
 
 
 def fast_gate(args, env):
@@ -220,6 +286,37 @@ def reference_gate(args, env):
     if not args.original_socket or not args.port_socket: raise ValueError('Both existing tokenizer sockets are required')
     env.update(FORESIGHT_ORIGINAL_TOKENIZER_SOCKET=args.original_socket, FORESIGHT_PORT_TOKENIZER_SOCKET=args.port_socket)
     return run_tests('core', ['test/reference_tokenizer_live_test.dart'], 1, env, args.output, 'reference-tokenizer', args.flutter, args.dart)
+
+
+def publish_report_tree(path):
+    """Let the host artifact uploader read profiles created mode 0700.
+
+    The service refuses a profile other users can read, so the suite keeps that
+    mode while tests run. Upload then scans the same tree as another user and
+    fails with EACCES on the private directory. This runs only after the suite.
+    """
+    if not path.exists():
+        return
+
+    def relax(entry, bits):
+        # The report root is the container mount, owned by the host user.
+        # chmod there is EPERM when the container drops CAP_FOWNER. Profiles
+        # created by this process are owned here and must still be relaxed.
+        try:
+            entry.chmod(entry.stat().st_mode | bits)
+        except OSError:
+            return
+
+    for current, _dirnames, filenames in os.walk(path):
+        directory = Path(current)
+        if directory.is_symlink():
+            continue
+        relax(directory, 0o755)
+        for name in filenames:
+            file = directory / name
+            if file.is_symlink():
+                continue
+            relax(file, 0o644)
 
 
 def main():
@@ -249,6 +346,7 @@ def main():
             else: result = reference_gate(args, env)
         report.update(status='passed', result=result)
     finally:
+        publish_report_tree(args.output)
         (args.output / 'summary.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))
 

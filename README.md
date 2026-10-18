@@ -41,8 +41,8 @@ The full method, including its limits and how evidence was kept, is in [Replicat
 Once the Linux reconstruction worked, the project stopped being only a copy and became an application of its own:
 
 1. **Reconstruct.** A Flutter interface, a C++ gRPC retrieval helper, SQLite persistence, and native model and capture workers rebuilt the reference's main workflows on Linux.
-2. **Own the stack.** Python inference was replaced with native C++ LiteRT and ONNX workers. Business logic moved into a Flutter-independent application service, which both the desktop and a new MCP server share. Linux gained `.deb`, `.rpm` and Arch packages.
-3. **Return to the Mac.** With the platform-specific parts behind small interfaces, macOS became a target again. Apple Silicon support now includes native Core Audio capture, a Mac runner, bundle tooling, and an ad-hoc development DMG workflow, all from the same codebase. The CI DMG does not yet include the full inference runtimes.
+2. **Own the stack.** Python inference was replaced with native C++ LiteRT workers. Business logic moved into a Flutter-independent application service, which both the desktop and a new MCP server share. Linux gained `.deb`, `.rpm` and Arch packages.
+3. **Return to the Mac.** With the platform-specific parts behind small interfaces, macOS became a target again. Apple Silicon support now includes native Core Audio capture, a Mac runner, bundle tooling, and an ad-hoc development DMG workflow, all from the same codebase. The CI DMG includes its inference and Whisper runtimes.
 
 The repository has a fresh history. Reference screenshots, reverse-engineering reports, evaluation results, machine-specific environments, downloaded models, application profiles and credentials are all excluded. Runtime fonts and images are kept because the interface uses them.
 
@@ -100,7 +100,7 @@ echo-cancellation quality has not been measured on a live meeting.
 | Platform | Status | Distribution |
 | --- | --- | --- |
 | **Linux** x86-64: Ubuntu 24.04, Debian 13, Fedora 44, Arch/Omarchy | Established target | `.deb`, `.rpm`, and Arch packages on [GitHub releases](https://github.com/teng-lin/open-foresight/releases) |
-| **macOS 15+** on Apple Silicon | In integration. Complete local development bundles pass production-model CPU/GPU checks. macOS 15 execution, Developer ID signing, notarization, and physical-device validation remain open. | CI produces an ad-hoc DMG without Python/LiteRT or Whisper runtimes; it is not an inference-ready release. |
+| **macOS 15+** on Apple Silicon | In integration. Each release still needs model and physical-device acceptance, including macOS 15 execution. | The ad-hoc DMG includes inference and Whisper runtimes. Developer ID signing and notarization remain open. |
 
 The remaining macOS release gates are listed in [macOS development and release](docs/platforms/macos-support.md#release-gates).
 
@@ -108,7 +108,7 @@ The remaining macOS release gates are listed in [macOS development and release](
 
 Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI when a release is published. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
 
-The current macOS CI DMG is an ad-hoc development artifact: it is not notarized, and it lacks the Python/LiteRT and Whisper runtimes required for inference. For a complete local bundle, follow the [Mac runtime packaging instructions](docs/platforms/macos-support.md#local-assembly-and-signed-distribution). A local full-runtime bundle does not show that the release DMG can run inference. See [release gates](docs/platforms/macos-support.md#release-gates).
+The macOS CI DMG includes its inference and speech runtimes; users install model weights separately through setup. Runtime bundling is complete, and signed distribution is blocked on Developer ID signing and notarization. The artifact remains ad-hoc signed. See [Mac runtime packaging](docs/platforms/macos-support.md#local-assembly-and-signed-distribution) and the per-release [acceptance gates](docs/platforms/macos-support.md#release-gates).
 
 ### First launch
 
@@ -125,7 +125,7 @@ flowchart LR
   Desktop -. read-only snapshots .-> DB[(SQLite profile)]
   Service --> DB
   Service --> Helper[C++ gRPC retrieval helper]
-  Service --> Workers[Native LiteRT / ONNX / whisper.cpp workers]
+  Service --> Workers[Native LiteRT / whisper.cpp workers]
   Service --> Capture[PipeWire or Core Audio capture]
 ```
 
@@ -136,7 +136,7 @@ There is one application service per profile. It owns every database write, the 
 | `apps/desktop` | Flutter interface, with Linux and macOS runners |
 | `packages/foresight_core` | Application operations, service and MCP entry points, persistence, sources, meetings, cited answers |
 | `services/helper` | gRPC retrieval helper |
-| `services/inference` | Native LiteRT/ONNX worker and the Mac runtime adapter |
+| `services/inference` | Shared native LiteRT worker and citation checker |
 | `native` | Generation, speech, and audio capture adapters |
 | `proto` | Service definitions and the protocol descriptor |
 | `packaging` | Linux package builders, SDK/build containers, ABI checks |
@@ -161,7 +161,6 @@ Flutter package dependencies are pinned in the source. The reference toolchain i
 uv venv .venv
 uv pip install --python .venv/bin/python -r requirements-dev.txt
 python3 tools/prepare_litert.py build/lib/liblitert-lm.so
-python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 ./tools/build.sh
 python3 tools/package.py
 ./tools/run_desktop.sh
@@ -173,15 +172,15 @@ The bundle is written to `dist/open-foresight/` and contains three programs:
 - `open-foresight-mcp`: the MCP stdio server
 - `open-foresight-service`: the foreground service and administration commands
 
-Linux generation and embedding use native C++ inference without Python. The optional legacy query detector needs a separately bundled Python runtime; complete macOS inference bundles use the pinned Python/LiteRT compatibility runtime and Whisper. See [runtime packaging](services/inference/README.md).
+Linux and macOS use the same native C++ LiteRT-LM worker for generation and embedding, one citation checker, and Whisper for speech. macOS also uses a native legacy query worker and ships no Python runtime. The optional Linux legacy query diagnostic can use a separately bundled Python runtime. See [runtime packaging](services/inference/README.md).
 
 ### Packaging options
 
 ```sh
 # Package Gemma GPU generation into a separate, unused output directory
 python3 tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
-# Optional native compatibility embedding model and CPU generation/speech runtimes
-python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2 --native
+# Optional EmbeddingGemma fixture and CPU generation/speech runtimes
+python3 tools/download_embedding_fixture.py models/local
 python3 native/setup_models.py --directory models/local/native
 ```
 
@@ -235,9 +234,9 @@ ctest --test-dir build --output-on-failure
 (cd apps/desktop && flutter test && flutter analyze)
 ```
 
-The default pytest run selects offline contracts, inference adapter tests, and Python tooling tests via `pytest.ini`. It requires `requirements-dev.txt` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands; standalone scripts under `tests/integration` take executable paths and are not collected by default.
+The default pytest run selects the offline allowlist in `pytest.ini`. That allowlist does not include `tests/integration` or `tests/service`, which need a native build, real models, physical devices, or an installed package. An explicit path such as `pytest tests/service` still selects those suites. It requires `requirements-dev.txt` and a `protoc` supporting Edition 2024 (on macOS, `brew install protobuf`). Native and service suites remain explicit build-dependent commands.
 
-Run `tools/coverage.sh` after installing the development dependencies into `.venv` (or set `FORESIGHT_PYTHON`). It writes branch-aware Python coverage for `tools/` and `services/inference/macos/` to `coverage/python/`: HTML, Cobertura XML, LCOV, and JUnit results. Unexecuted Python source files are included; probe scripts named `test_*.py` are excluded. This baseline measures Python only, including on macOS PR CI, which retains the reports as an artifact. Python coverage is reported without a minimum percentage; its baseline is separate from the core Dart gate.
+Run `tools/coverage.sh` after installing the development dependencies into `.venv` (or set `FORESIGHT_PYTHON`). It writes branch-aware Python coverage for the build and packaging tools to `coverage/python/`: HTML, Cobertura XML, LCOV, and JUnit results. Unexecuted Python source files are included; probe scripts named `test_*.py` are excluded. This baseline measures Python only, including on macOS PR CI, which retains the reports as an artifact. Python coverage is reported without a minimum percentage; its baseline is separate from the core Dart gate.
 
 Store, graph, Google adapter, and model installation suites now run in `packages/foresight_core/test` using pure Dart. Shared test helpers live under its `test/fixtures/` directory.
 
