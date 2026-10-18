@@ -156,3 +156,49 @@ def test_desktop_artifact_preserves_flutter_coverage_at_actual_output_path(
     repository(target)
     module.unpack(target, platform, "desktop", output / "payload.tar.gz", manifest)
     assert (target / coverage.relative_to(root)).read_bytes() == coverage.read_bytes()
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_native_runtime_payload_omits_compilers_and_retains_products_and_notices(
+    tmp_path, platform
+):
+    root = tmp_path / "original"
+    repository(root)
+    products = [
+        "build/services/helper/ForesightHelper",
+        "build/native/libforesight_native.dylib",
+        "build/sdk/foresight-sdk.json",
+        "build/sdk/share/foresight-sdk/licenses/LICENSE",
+    ]
+    excluded = [
+        "build/_deps/compiler/big.o",
+        "build/native/CMakeFiles/native.o",
+        "build/sdk/include/grpc.h",
+        "build/sdk/lib/libgrpc.a",
+    ]
+    for relative in [*products, *excluded]:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(relative.encode())
+    output = tmp_path / "runtime"
+    manifest = module.pack(root, platform, "native-runtime", output)
+    assert not manifest["source_times"]
+    target = tmp_path / "target"
+    module.unpack(
+        target, platform, "native-runtime", output / "payload.tar.gz", manifest
+    )
+    for relative in products:
+        assert (target / relative).read_bytes() == relative.encode()
+    for relative in excluded:
+        assert not (target / relative).exists()
+
+
+def test_runtime_manifest_cannot_restore_compiler_objects(tmp_path):
+    with pytest.raises(ValueError, match="manifest paths"):
+        module.unpack(
+            tmp_path,
+            "linux",
+            "native-runtime",
+            tmp_path / "unused",
+            {"files": {"build/_deps/object.o": {}}},
+        )

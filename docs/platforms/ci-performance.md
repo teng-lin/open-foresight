@@ -29,7 +29,7 @@ identity and archive contents before installing a prefix.
 
 Linux native regression and macOS validation run four separate jobs: native,
 core, desktop and service. Core and desktop run in parallel after native;
-service consumes all three outputs. `tools/build.sh --stage` uses these same
+service consumes the native/core binaries and all three qualification identities. `tools/build.sh --stage` uses these same
 boundaries locally; its default still builds and tests the complete application.
 
 A PR stage may reuse a completed successful result from the same PR or main.
@@ -61,6 +61,18 @@ application or packaging changes, but no longer compile a duplicate application.
 The container permits the nested parser sandbox to create namespaces; the actual
 parser sandbox is still required and checked. Release package publication retains
 its separate main-only workflow and credentials.
+
+Only the native job fetches and hashes the macOS compiler SDK. Native cache
+archives retain object files and dependency sources for incremental rebuilds;
+Dart/Flutter/service/package jobs download a separate slim native runtime archive
+containing executable products and SDK license/provenance files. They do not
+transfer compiler objects or a compiler SDK. Each archive has its own SHA256 and
+content manifest, bound to the same native qualification identity. The service
+job waits for desktop success and includes its identity, but omits the unused
+Release application: its Flutter integration test builds a separate Debug target.
+Linux's fast Flutter integration checks run in the desktop job, allowing native
+setup to omit Dart and Flutter. Role-specific setup avoids unnecessary package
+resolution and CocoaPods installation.
 
 Stage payloads retain native test outputs, language logs and available coverage.
 Core and desktop diagnostics also upload coverage separately. These jobs preserve

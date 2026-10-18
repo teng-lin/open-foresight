@@ -329,6 +329,7 @@ class ProducerTests(SourceTree):
         original = deepcopy(self.receipt)
         for change in (
             {"schema": True},
+            {"payload_kind": "native-runtime", "reusable": True},
             {"source_run_attempt": True},
             {"environment": {"compiler": "other"}},
             {"parents": {"native": "b" * 64}},

@@ -194,6 +194,8 @@ def validate_receipt(
         receipt.get("identity"),
     ) != (1, platform, stage, identity):
         raise ValueError("Stage receipt identity mismatch")
+    if receipt.get("payload_kind", stage) != stage:
+        raise ValueError("Runtime-only outputs are not a native compilation cache")
     if receipt.get("environment") != environment or receipt.get("parents") != parents:
         raise ValueError("Stage environment or parent mismatch")
     if not isinstance(receipt.get("sha256"), str) or not re.fullmatch(
@@ -336,7 +338,12 @@ def publish(
     output,
     content=None,
     reusable_result=True,
+    payload_kind=None,
 ):
+    payload_kind = stage if payload_kind is None else payload_kind
+    if payload_kind != stage and (stage, payload_kind) != ("native", "native-runtime"):
+        raise ValueError("Unexpected stage payload kind")
+    artifact_suffix = "-runtime" if payload_kind == "native-runtime" else ""
     identity = fingerprint(
         platform, stage, root, environment=environment, parents=parents
     )
@@ -355,6 +362,7 @@ def publish(
         "source_commit": commit,
         "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
         "reusable": reusable_result,
+        "payload_kind": payload_kind,
         "environment": environment,
         "parents": parents,
         "sha256": artifacts.digest(archive),
@@ -367,7 +375,7 @@ def publish(
     )
     return {
         "identity": identity,
-        "artifact_name": name(platform, stage, identity),
+        "artifact_name": name(platform, stage, identity) + artifact_suffix,
         "receipt": receipt,
     }
 

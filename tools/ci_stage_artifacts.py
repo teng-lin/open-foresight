@@ -25,6 +25,25 @@ NATIVE_PATHS = (
     "build/native",
     "build/services",
     "build/macos",
+    "build/sdk/foresight-sdk.json",
+    "build/sdk/share/foresight-sdk/licenses",
+)
+
+
+# Consumers execute these products; they never need CMake objects, third-party
+# source/build trees or the compiler SDK. Keep only the SDK notices for packaging.
+NATIVE_RUNTIME_PATHS = (
+    "build/native/libforesight_native.so",
+    "build/native/libforesight_native.dylib",
+    "build/native/foresight-audio",
+    "build/services/helper/ForesightHelper",
+    "build/services/inference/foresight-model",
+    "build/services/inference/foresight-query",
+    "build/macos/foresight-notifications",
+    "build/macos/foresight-file-parser",
+    "build/macos/foresight-model-crypto",
+    "build/sdk/foresight-sdk.json",
+    "build/sdk/share/foresight-sdk/licenses",
 )
 
 
@@ -33,6 +52,8 @@ def roots(platform, stage):
         raise ValueError("Unknown stage platform")
     if stage == "native":
         return NATIVE_PATHS
+    if stage == "native-runtime":
+        return NATIVE_RUNTIME_PATHS
     if stage == "core":
         return (
             "build/application",
@@ -217,7 +238,9 @@ def main():
     parser.add_argument("command", choices=("pack", "unpack"))
     parser.add_argument("--platform", choices=("linux", "macos"), required=True)
     parser.add_argument(
-        "--stage", choices=("native", "core", "desktop", "service"), required=True
+        "--stage",
+        choices=("native", "native-runtime", "core", "desktop", "service"),
+        required=True,
     )
     parser.add_argument("--root", type=Path, default=ROOT)
     parser.add_argument("--output", type=Path)
