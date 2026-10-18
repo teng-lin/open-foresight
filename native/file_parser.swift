@@ -42,7 +42,9 @@ func fail(_ message: String, _ code: Int32 = 1) -> ExtractionFailure {
 
 func extract(_ kind: String, _ path: String) throws -> String {
     let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
-    guard descriptor >= 0 else { throw fail("Cannot open the selected document safely.") }
+    guard descriptor >= 0 else {
+        throw fail("Cannot open the selected document safely. Check Files and Folders access in System Settings, or choose a readable copy.")
+    }
     var metadata = stat()
     guard fstat(descriptor, &metadata) == 0,
           (metadata.st_mode & S_IFMT) == S_IFREG,
