@@ -1,8 +1,8 @@
 # PR 5 hardening implementation notes
 
-This branch implements PR 5 of `2026-10-18-implementation-plan-2.md` on top of
-PR #109. The user explicitly deferred PR 3 and authorized independent PR 5 work.
-PR 4 must land before this branch is rebased and merged.
+This branch implements PR 5 of `2026-10-18-implementation-plan-2.md`, rebased onto
+main after PR #109, PR 4 (#111), #112 and #119 merged. The user explicitly
+deferred PR 3 and authorized independent PR 5 work.
 
 ## Scope and dependencies
 
@@ -77,3 +77,8 @@ The following manual evidence is **pending**, not passed:
 
 Hosted Apple CI and the retained parser/startup acceptance checks must pass
 before this PR is ready to merge. Linux tests cannot establish these macOS properties.
+
+The macOS Flutter Debug integration app receives a disposable test runtime
+manifest before startup. This fixture is restricted to the generated Debug test
+bundle and preserves the production sealed runtime-path rules. Linux unit tests
+exercise the actual sealed resolver, and hosted macOS CI must validate launch.
