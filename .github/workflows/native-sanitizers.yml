@@ -85,7 +85,9 @@ jobs:
       # successful SDK artifact 12152408008; preserve the existing SDK inputs.
       - name: Select the verified Arch repository snapshot before compiler installation
         run: |
-          printf '%s\n' 'Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch' > /etc/pacman.d/mirrorlist
+          cat > /etc/pacman.d/mirrorlist <<'FORESIGHT_ARCH_MIRROR'
+          Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch
+          FORESIGHT_ARCH_MIRROR
       - name: Install the native compiler and test dependencies
         run: pacman -Syu --noconfirm cmake ninja gcc clang compiler-rt git nlohmann-json sqlite icu openssl zlib python python-pip
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

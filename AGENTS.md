@@ -50,5 +50,45 @@ existing verified artifacts or compatible cached work can be reused.
 This policy requires evidence and a concrete justification for rebuilding. It
 does not add a separate user-approval step for work already authorized.
 
+## Verify changes before pushing
+
+- Fetch the current PR head, review threads, and CI results. Read the actual
+  failed-step output, verify each finding against current code, and batch valid
+  review fixes with related CI fixes before pushing. Check again for new reviews
+  while CI runs. Do not report a fix as verified from a passing unrelated check.
+- For workflow edits, require both actionlint and ShellCheck. Confirm ShellCheck
+  is on PATH before running actionlint: actionlint silently skips embedded shell
+  checks when it is unavailable. Match the hosted lint command and tool versions
+  where possible; a partial local lint run is not the hosted lint gate.
+- Run the applicable CI commands locally. Tests that consume archived source or
+  run in containers must also pass from a complete source export without `.git`.
+  Use checksum-verified frozen historical fixtures or narrowly scoped fixture
+  revisions; unit tests must not accidentally depend on local HEAD or deep Git
+  history. Preserve real archive, receipt, checksum, and provenance assertions.
+- For native/protocol/application changes, run the complete native, Dart core,
+  and desktop suites before pushing. Point Dart tests at the current native
+  library and helper so native integration tests actually run. When moving data
+  between argv and stdin, update and exercise every runner fixture and consumer;
+  checking only the C++ side is insufficient. Check test counts and skip reasons.
+- Test development hooks both disabled by default and explicitly enabled. Dart
+  compile-time defines need a source-compiler test invocation where required;
+  an ordinary kernel test run may not inherit the define. Verify release builds
+  remain hook-free even when a cached development option was previously enabled.
+- For application dependency reuse, verify both the dependency-only tree and the
+  configured full application after its sources are copied. Cover fresh generated
+  application files, existing dependency outputs, and the actual Make/Ninja
+  backend behavior. The guard must still reject dependency compilation/relinking;
+  an unrelated application dry-run failure must retain its output and fail with
+  an actionable diagnostic, never authorize a rebuild. Use small reproductions
+  without recompiling real SDKs or vendor libraries.
+- Before large parallel Dart/Flutter runs, check temporary-storage capacity and
+  quotas. Use a private task-specific disk-backed TMPDIR when needed. A storage
+  failure is an infrastructure failure, not a passing test or a reason to delete
+  dependency caches. Rerun the affected tests after correcting the environment.
+- Preserve failed command output in logs, including captured subprocess output.
+  If this host cannot execute Docker or Apple checks, state that limit explicitly
+  and require the corresponding hosted checks before merge. Do not claim those
+  runtime paths passed based only on mocks, static inspection, or a narrow fixture.
+
 See [the CI performance guide](docs/platforms/ci-performance.md) for the current
 pipeline and cache design.

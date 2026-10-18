@@ -84,19 +84,87 @@ def planned_dependency_work(output):
     return None
 
 
+def dependency_dry_runs(build, cache, generator):
+    """Check every dependency subtree's ALL graph, excluding unbuilt app edges.
+
+    Recursive Make -n does not create a just-planned application archive, so a
+    later application target can fail to find it. Dependency outputs, however,
+    must already exist in the qualified seed. Their complete ALL graphs include
+    training libraries and tools as well as flatc and sentencepiece-static.
+    """
+    directories = sorted((build / "_deps").glob("*-build"))
+    names = {directory.name for directory in directories}
+    if not {"flatbuffers-build", "sentencepiece-build"}.issubset(names):
+        raise ValueError("Qualified FlatBuffers/SentencePiece build trees are missing")
+    if any(
+        directory.is_symlink() or not directory.is_dir() for directory in directories
+    ):
+        raise ValueError("Dependency build trees must be regular directories")
+    if generator == "Ninja":
+        return [
+            [
+                "cmake",
+                "--build",
+                str(build),
+                "--verbose",
+                "--target",
+                *(
+                    directory.relative_to(build).as_posix() + "/all"
+                    for directory in directories
+                ),
+                "--",
+                "-n",
+            ]
+        ]
+    program = re.search(r"^CMAKE_MAKE_PROGRAM:[^=]+=(.+)$", cache, re.M)
+    if (
+        not program
+        or not Path(program[1]).is_absolute()
+        or Path(program[1]).name not in {"make", "gmake"}
+    ):
+        raise ValueError(
+            "Dependency reuse guard requires the configured Make executable"
+        )
+    commands = []
+    for directory in directories:
+        if not (directory / "Makefile").is_file():
+            raise ValueError("Dependency Make ALL graph is missing: " + str(directory))
+        commands.append([program[1], "-C", str(directory), "-n", "VERBOSE=1", "all"])
+    return commands
+
+
 def verify(build, request=subprocess.check_output):
     cache = (build / "CMakeCache.txt").read_text()
-    if not re.search(r"^CMAKE_GENERATOR:INTERNAL=(Unix Makefiles|Ninja)$", cache, re.M):
+    generator = re.search(
+        r"^CMAKE_GENERATOR:INTERNAL=(Unix Makefiles|Ninja)$", cache, re.M
+    )
+    if not generator:
         raise ValueError(
             "Dependency reuse guard requires the reviewed Make or Ninja dry-run backend"
         )
-    output = request(
-        ["cmake", "--build", str(build), "--verbose", "--", "-n"],
-        text=True,
-        stderr=subprocess.STDOUT,
-        timeout=120,
-    )
-    (build / "dependency-reuse-plan.log").write_text(output)
+    plan = build / "dependency-reuse-plan.log"
+    output = ""
+    for command in dependency_dry_runs(build, cache, generator[1]):
+        output += "$ " + shlex.join(command) + "\n"
+        plan.write_text(output)
+        try:
+            output += request(command, text=True, stderr=subprocess.STDOUT, timeout=120)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            diagnostic = error.output or ""
+            if isinstance(diagnostic, bytes):
+                diagnostic = diagnostic.decode("utf-8", errors="replace")
+            output += diagnostic
+            plan.write_text(output)
+            status = (
+                f"exit {error.returncode}"
+                if isinstance(error, subprocess.CalledProcessError)
+                else "timeout"
+            )
+            raise ValueError(
+                f"Dependency ALL dry run failed ({status}); "
+                f"preserve the seed and inspect {plan}:\n{diagnostic[-12000:]}"
+            ) from error
+        plan.write_text(output)
     if planned := planned_dependency_work(output):
         raise ValueError(
             "Qualified dependency outputs would compile or relink: "

@@ -551,6 +551,22 @@ def test_repository_snapshot_matches_full_published_environment_before_cache_res
     assert selection < install < verification < restoration
 
 
+def test_arch_snapshot_retains_pacman_placeholders_without_shell_expansion(tmp_path):
+    profiles = json.loads(
+        (sdk.ROOT / "tools/sanitizer_toolchain_profiles.json").read_text()
+    )
+    target = tmp_path / "mirrorlist"
+    script = profiles["profiles"]["address"]["repository_setup"].replace(
+        "/etc/pacman.d/mirrorlist", str(target)
+    )
+    subprocess.run(
+        ["sh", "-ec", script], capture_output=True, check=True, timeout=30
+    )
+    assert target.read_text() == (
+        "Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch\n"
+    )
+
+
 def test_ubuntu_snapshot_excludes_rolling_and_third_party_feeds(tmp_path):
     profiles = json.loads(
         (sdk.ROOT / "tools/sanitizer_toolchain_profiles.json").read_text()
