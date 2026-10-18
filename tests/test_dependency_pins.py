@@ -83,3 +83,12 @@ def test_litert_sdk_copied_context_resolves_module_file_dependencies(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert "--output" in result.stdout
+
+
+def test_minimal_ubuntu_bootstraps_verified_ca_before_snapshot_https():
+    text = (ROOT / "packaging/sdk-core.Dockerfile").read_text()
+    ca = PINS["ubuntu_bootstrap_ca"]
+    instruction = f"ADD --chmod=0644 --checksum=sha256:{ca['sha256']} {ca['url']} /etc/ssl/certs/ca-certificates.crt"
+    assert instruction in text
+    assert text.index(instruction) < text.index("RUN apt-get --snapshot")
+    assert "Verify-Peer=false" not in text

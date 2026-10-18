@@ -7,6 +7,9 @@ ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
 LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive CI=true FLUTTER_SUPPRESS_ANALYTICS=true
+# The minimal base has no CA store. BuildKit verifies this dated bootstrap
+# bundle before apt installs the snapshot's own ca-certificates package.
+ADD --chmod=0644 --checksum=sha256:a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505 https://curl.se/ca/cacert-2026-09-25.pem /etc/ssl/certs/ca-certificates.crt
 RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" upgrade -y && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
     build-essential clang cmake ninja-build git curl ca-certificates pkg-config \
     libgtk-3-dev libblkid-dev liblzma-dev libsqlite3-dev libssl-dev zlib1g-dev \
