@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 
+from installed_documents import probe_installed_documents
 from install_macos import install, metadata, verify_signature
 from release_asset_acceptance import verify_checksum
 from test_installed_persistence import run as persistence_probe
@@ -121,6 +122,9 @@ def run(args):
                 if getattr(args, "validation", "full") == "full":
                     subprocess.run(functional, check=True, timeout=2400)
                 else:
+                    report["installed_document_import"] = probe_installed_documents(
+                        destination
+                    )
                     subprocess.run(
                         [
                             sys.executable,

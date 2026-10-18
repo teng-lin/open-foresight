@@ -21,6 +21,7 @@ import urllib.request
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from installed_documents import probe_installed_documents  # noqa: E402
 from model_pins import release_models  # noqa: E402 - repository acceptance tooling
 
 SPEECH_PIN = release_models()["speech"]
@@ -144,6 +145,7 @@ def main():
         capture_output=True,
         timeout=30,
     )
+    document_report = probe_installed_documents(root)
     with tempfile.TemporaryDirectory(prefix="foresight-install-") as temp:
         private = Path(temp)
         model = private / "ggml-tiny.bin"
@@ -228,6 +230,7 @@ def main():
                 print(
                     json.dumps(
                         {
+                            "installed_document_import": document_report,
                             "installed_startup": True,
                             "installed_manifest": True,
                             "activation_ipc": True,

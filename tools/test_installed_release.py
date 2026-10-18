@@ -15,6 +15,7 @@ import tempfile
 import time
 
 from build_macos_runtimes import download
+from installed_documents import probe_installed_documents
 from installed_runtime import (
     clean_environment,
     layout,
@@ -150,10 +151,12 @@ def main():
     bundle = args.bundle.resolve(strict=True)
     report: dict[str, Any] = {
         "status": "failed",
+        "gpu_inference": {"status": "manual_pending", "evidence": None},
         "manual_gates": {gate: "not_run" for gate in MANUAL_GATES},
     }
     private_models = None
     try:
+        report["installed_document_import"] = probe_installed_documents(bundle)
         fixtures = prepare_models(args.models)
         private_models = tempfile.TemporaryDirectory(prefix="of-models-", dir="/tmp")
         models = {}
