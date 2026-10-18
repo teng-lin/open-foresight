@@ -71,6 +71,12 @@ a new version. The DMG remains ad-hoc signed and is not
 Developer ID signed or notarized. Signed distribution still requires the setup
 and release validation below.
 
+The DMG includes its inference and speech runtimes; users do not install those
+runtimes separately. Runtime bundling is complete. The remaining distribution
+blocker is Developer ID signing and notarization, rather than missing runtimes.
+The manual permission and device checks below still describe the evidence needed
+to qualify a particular installed environment.
+
 ### Local assembly and signed distribution
 
 Prepare a relocatable standalone arm64 Python 3.13 prefix, not a virtual

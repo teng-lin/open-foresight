@@ -38,9 +38,6 @@ class RemoteFixture {
       root.resolveSymbolicLinksSync(),
     );
     owner = Store('${profile.data}/application.db');
-    owner.db.execute(
-      'CREATE TABLE calendar_events(meeting_id INTEGER,metadata TEXT)',
-    );
     server = await ServerSocket.bind(
       InternetAddress(
         '${profile.runtime}/application.sock',

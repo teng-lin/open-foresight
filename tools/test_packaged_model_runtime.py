@@ -40,7 +40,7 @@ def packaged_paths(bundle):
         return path('FORESIGHT_LITERT_RUNNER'), path('FORESIGHT_MODEL_WORKER'), {
             key: str(path(key)) for key in (
                 'FORESIGHT_MODEL_PYTHON', 'FORESIGHT_LITERT_PYTHON',
-                'FORESIGHT_MODEL_ADAPTER', 'FORESIGHT_LITERT_EMBEDDING_ADAPTER')}
+                'FORESIGHT_LITERT_EMBEDDING_ADAPTER')}
     def own(relative):
         value = (bundle / relative).resolve(strict=True)
         if not value.is_relative_to(bundle):
@@ -49,7 +49,6 @@ def packaged_paths(bundle):
     worker = own('bin/foresight-model')
     return worker, worker, {
         'FORESIGHT_LITERT_LIBRARY': str(own('lib/liblitert-lm.so')),
-        'FORESIGHT_ONNX_LIBRARY': str(own('lib/libonnxruntime.so')),
         'LD_LIBRARY_PATH': str(bundle / 'lib')}
 
 

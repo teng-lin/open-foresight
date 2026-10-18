@@ -62,9 +62,9 @@ int main(int argc, char **argv) {
   try {
     REQUIRE(argc == 3);
     fs::remove_all(root);
-    const fs::path model_dir = root / "model";
+    const fs::path model_path = root / "model.litertlm";
     private_dir(root);
-    private_dir(model_dir);
+    std::ofstream(model_path) << "controlled embedding fixture";
     setenv("FORESIGHT_MODEL_WORKER", argv[2], 1);
     unsetenv("FORESIGHT_FIXTURE_FAIL_ENCODE");
     setenv("FORESIGHT_FIXTURE_STALL_AFTER", "0", 1);
@@ -74,7 +74,7 @@ int main(int argc, char **argv) {
     const auto started = std::chrono::steady_clock::now();
     bool timed_out = false;
     try {
-      Model model(model_dir.string(), false);
+      Model model(model_path.string(), false);
       worker = model.worker_pid();
       REQUIRE(worker > 0);
       model.encode("hello");
@@ -115,7 +115,7 @@ int main(int argc, char **argv) {
     auto stub = p::RagService::NewStub(channel);
     auto control = c::HelperControl::NewStub(channel);
     p::UpdateModelPathsRequest model;
-    model.set_embedding_model_path(model_dir.string());
+    model.set_embedding_model_path(model_path.string());
     p::UpdateModelPathsResponse configured;
     grpc::ClientContext configure;
     configure.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
