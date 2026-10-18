@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -9,7 +11,7 @@ import 'package:grpc/grpc.dart';
 import 'package:crypto/crypto.dart';
 import 'package:test/test.dart';
 
-import 'fixtures/google_connections.dart';
+import 'package:foresight_test_support/google_connections.dart';
 
 class OperationsRag extends RagServiceBase {
   RetrieveRequest? query;
@@ -69,7 +71,6 @@ class OperationsDomain extends AdapterDomain {
     await super.delete(id);
   }
 
-  @override
   Stream<String> askInConversation(
     String question,
     String conversation, {
@@ -80,7 +81,6 @@ class OperationsDomain extends AdapterDomain {
     yield '$question [$conversation:${meetingId ?? 0}]';
   }
 
-  @override
   Stream<String> askWithWebInConversation(
     String question,
     String conversation, {
@@ -131,6 +131,38 @@ class ArtifactGenerator extends NativeRuntime {
   }
 }
 
+class OperationsApplication extends Application {
+  OperationsApplication(super.domain, {super.auth});
+  @override
+  Stream<String> askInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => (domain as OperationsDomain).askInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+  @override
+  Stream<String> askWithWebInConversation(
+    String question,
+    String conversation, {
+    String? requestId,
+    int? meetingId,
+    bool Function()? current,
+  }) => (domain as OperationsDomain).askWithWebInConversation(
+    question,
+    conversation,
+    requestId: requestId,
+    meetingId: meetingId,
+    current: current,
+  );
+}
+
 void main() {
   late Directory root;
   late OperationsDomain domain;
@@ -140,7 +172,7 @@ void main() {
   late GoogleFixture google;
   late GoogleAuth auth;
   setUp(() async {
-    root = Directory('/tmp').createTempSync('of-operations-');
+    root = shortTestTempRoot.createTempSync('of-operations-');
     rag = OperationsRag();
     server = Server.create(services: [rag]);
     final socket = '${root.path}/rag.sock';
@@ -160,7 +192,7 @@ void main() {
       secretStore: const UnavailableSecretStore(),
       endpoints: google.endpoints,
     );
-    app = Application(domain, auth: auth);
+    app = OperationsApplication(domain, auth: auth);
   });
   tearDown(() async {
     await app.close();
@@ -236,7 +268,16 @@ void main() {
       }
       await app.call('sources.index', {'id': hidden['id']});
       await app.call('sources.delete', {'id': id});
-      await expectLater(app.call('sources.get', {'id': id}), throwsStateError);
+      await expectLater(
+        app.call('sources.get', {'id': id}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
+      );
       await app.call('sources.delete', {'id': hidden['id']});
       expect(await app.call('sources.search', {'query': 'q'}), isEmpty);
     },
@@ -247,6 +288,16 @@ void main() {
     () async {
       final id =
           (await call('meetings.create', {'title': 'Planning'}))['id'] as int;
+      await expectLater(
+        app.call('meetings.start', {'id': id}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.unavailable,
+          ),
+        ),
+      );
       final note = await call('notes.save', {
         'title': 'Personal',
         'body': 'v1',
@@ -309,10 +360,25 @@ void main() {
         app.call('meetings.get', {'id': 999}),
         throwsStateError,
       );
-      await expectLater(app.call('unsupported', {}), throwsArgumentError);
+      await expectLater(
+        app.call('unsupported', {}),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.notFound,
+          ),
+        ),
+      );
       await expectLater(
         app.call('notes.save', {}, current: () => false),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.cancelled,
+          ),
+        ),
       );
     },
   );
@@ -438,14 +504,14 @@ void main() {
       await app.call('sources.import_directory', {'path': directory.path});
       expect(domain.store.sources.single['id'], first);
       expect(domain.store.sources.single['revision'], 2);
-      File('${directory.path}/bad.txt').writeAsBytesSync([255]);
+      File('${directory.path}/bad.pdf').writeAsBytesSync([255]);
       await expectLater(
         app.importDirectory(directory.path),
         throwsA(
           isA<StateError>().having(
             (e) => e.message,
             'failure',
-            allOf(contains('Imported 1 files'), contains('bad.txt')),
+            allOf(contains('Imported 1 files'), contains('bad.pdf')),
           ),
         ),
       );
@@ -504,7 +570,13 @@ void main() {
       expect(app.modelBusy, isTrue);
       await expectLater(
         app.call('models.register', {'kind': 'speech', 'path': model.path}),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.code,
+            'code',
+            RpcErrorCode.busy,
+          ),
+        ),
       );
       rag.release!.complete();
       await pending;
@@ -524,6 +596,61 @@ void main() {
       await app.call('models.register', {'kind': 'speech', 'path': model.path});
       expect(domain.store.model('speech'), isNotNull);
       await app.call('models.cancel_query_acquisition', {});
+    },
+  );
+
+  test('speech setup cancellation retains its typed RPC code', () async {
+    final model = File('${root.path}/cancelled-speech.bin')
+      ..writeAsStringSync('candidate speech');
+    var checks = 0;
+    await expectLater(
+      app.call('models.speech', {
+        'path': model.path,
+        'runtime': Platform.resolvedExecutable,
+        'digest': 'fixture',
+      }, current: () => ++checks == 1),
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    expect(domain.store.model('speech'), isNull);
+    expect(app.modelBusy, isFalse);
+  });
+
+  test('retrying a missing proactive question returns notFound', () async {
+    await expectLater(
+      app.call('meetings.retry_question', {'id': -1}),
+      throwsA(
+        isA<RpcError>()
+            .having((e) => e.code, 'code', RpcErrorCode.notFound)
+            .having((e) => e.message, 'message', 'Question not found'),
+      ),
+    );
+  });
+
+  test(
+    'cancelled model registration preserves configuration and returns a stable code',
+    () async {
+      final old = File('${root.path}/old-speech.bin')
+        ..writeAsStringSync('existing model');
+      final candidate = File('${root.path}/candidate-speech.bin')
+        ..writeAsStringSync('candidate model');
+      await app.call('models.register', {'kind': 'speech', 'path': old.path});
+      final before = Map.of(domain.store.model('speech')!);
+      var checks = 0;
+      await expectLater(
+        app.call('models.register', {
+          'kind': 'speech',
+          'path': candidate.path,
+        }, current: () => ++checks == 1),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e.message, 'message', 'Model setup cancelled'),
+        ),
+      );
+      expect(domain.store.model('speech'), before);
+      expect(app.modelBusy, isFalse);
     },
   );
 
@@ -786,6 +913,21 @@ void main() {
       expect(results, hasLength(1));
       expect(results.single['id'], ids.last);
       expect(results.single['revision'], 1);
+    },
+  );
+
+  test(
+    'refresh uses source_uri for file names containing the provenance separator',
+    () async {
+      final file = File('${root.path}/project; draft.txt')
+        ..writeAsStringSync('Original');
+      final id = await app.importFile(file.path);
+      file.writeAsStringSync('Updated literal file');
+      await app.reimport();
+      final source = domain.store.sources.single;
+      expect(source['id'], id);
+      expect(source['content'], 'Updated literal file');
+      expect(source['source_uri'], file.uri.toString());
     },
   );
 

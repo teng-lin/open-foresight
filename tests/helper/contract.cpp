@@ -1,7 +1,8 @@
 #include "helper_control.grpc.pb.h"
-#include "research/xeno/labs/foresight/launch_agent/proto/rag_service.grpc.pb.h"
+#include "rag_service.grpc.pb.h"
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <grpcpp/grpcpp.h>
 #include <iostream>
 #include <signal.h>
@@ -9,18 +10,27 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
+#include <type_traits>
 #include <unistd.h>
-namespace p = research::xeno::labs::foresight::launch_agent::proto;
+namespace p = foresight::helper::v1;
 namespace c = foresight::linux::control::v1;
 #define REQUIRE(x)                                                             \
   do {                                                                         \
     if (!(x))                                                                  \
-      throw std::runtime_error(#x);                                            \
+      throw std::runtime_error(std::string(__FILE__) + ":" +                   \
+                               std::to_string(__LINE__) + ": " + #x);          \
   } while (0)
 template <class Q, class R, class F> grpc::Status call(Q &q, R &r, F f) {
   grpc::ClientContext ctx;
   ctx.set_deadline(std::chrono::system_clock::now() + std::chrono::seconds(5));
-  return f(&ctx, q, &r);
+  auto status = f(&ctx, q, &r);
+  if constexpr (std::is_same_v<R, p::UpdateModelPathsResponse>) {
+    if (!status.ok() || !r.success())
+      std::cerr << "Configure error: grpc=" << status.error_code()
+                << " message=" << status.error_message()
+                << " application=" << r.error_message() << "\n";
+  }
+  return status;
 }
 int main(int argc, char **argv) {
   setenv("FORESIGHT_TEST_DELAY_MS", "2", 1);
@@ -57,6 +67,30 @@ int main(int argc, char **argv) {
     REQUIRE(call(img, vec, [&](auto *ctx, auto &q, auto *r) {
               return stub->ComputeImageEmbedding(ctx, q, r);
             }).error_code() == grpc::StatusCode::UNAVAILABLE);
+    // All failure responses are non-OK gRPC statuses, never success=false
+    // payloads.
+    p::IndexRequest invalid_index;
+    p::IndexResponse invalid_index_result;
+    REQUIRE(call(invalid_index, invalid_index_result,
+                 [&](auto *ctx, auto &q, auto *r) {
+                   return stub->IndexDocument(ctx, q, r);
+                 })
+                .error_code() == grpc::StatusCode::FAILED_PRECONDITION);
+    p::DeleteRequest invalid_delete;
+    p::DeleteResponse invalid_delete_result;
+    REQUIRE(call(invalid_delete, invalid_delete_result,
+                 [&](auto *ctx, auto &q, auto *r) {
+                   return stub->DeleteDocument(ctx, q, r);
+                 })
+                .error_code() == grpc::StatusCode::INVALID_ARGUMENT);
+    p::UpdateModelPathsRequest invalid_model;
+    invalid_model.set_sentence_piece_model_path("external.model");
+    p::UpdateModelPathsResponse invalid_model_result;
+    REQUIRE(call(invalid_model, invalid_model_result,
+                 [&](auto *ctx, auto &q, auto *r) {
+                   return stub->UpdateModelPaths(ctx, q, r);
+                 })
+                .error_code() == grpc::StatusCode::INVALID_ARGUMENT);
     p::UpdateModelPathsRequest model;
     model.set_embedding_model_path("test://deterministic");
     p::UpdateModelPathsResponse configured;
@@ -239,6 +273,38 @@ int main(int argc, char **argv) {
     auto found = retrieve("cats");
     REQUIRE(found.chunks_size() && found.chunks(0).document_id() == "cats");
     REQUIRE(retrieve("cats", "dogs").chunks_size() == 0);
+    // Keep a replacement transaction open while a reader searches its previous
+    // immutable index. A global read/write mutex would deadlock this assertion.
+    std::ofstream(dir + "/.pause-at") << "partial_vectors";
+    auto publishing = std::async(std::launch::async,
+                                 [&] { index("new", "cats new document"); });
+    for (int i = 0; i < 100 && !std::filesystem::exists(dir + "/.paused"); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    REQUIRE(std::filesystem::exists(dir + "/.paused"));
+    auto reading = std::chrono::steady_clock::now();
+    auto during = retrieve("cats");
+    REQUIRE(std::chrono::steady_clock::now() - reading <
+            std::chrono::milliseconds(500));
+    REQUIRE(during.chunks_size() && during.chunks(0).document_id() == "cats");
+    std::filesystem::remove(dir + "/.pause-at");
+    publishing.get();
+    {
+      sqlite3 *vectors = nullptr;
+      REQUIRE(sqlite3_open((dir + "/rag_vector.db").c_str(), &vectors) ==
+              SQLITE_OK);
+      sqlite3_stmt *row = nullptr;
+      REQUIRE(
+          sqlite3_prepare_v2(vectors,
+                             "SELECT typeof(embedding),substr(embedding,1,4) "
+                             "FROM chunks LIMIT 1",
+                             -1, &row, nullptr) == SQLITE_OK);
+      REQUIRE(sqlite3_step(row) == SQLITE_ROW);
+      REQUIRE(std::string((const char *)sqlite3_column_text(row, 0)) == "blob");
+      REQUIRE(std::string((const char *)sqlite3_column_blob(row, 1), 4) ==
+              "FSV1");
+      sqlite3_finalize(row);
+      sqlite3_close(vectors);
+    }
     index("cats", "birds sing");
     REQUIRE(retrieve("cats", "cats").chunks_size() == 0);
     REQUIRE(retrieve("birds", "cats").chunks_size() == 1);

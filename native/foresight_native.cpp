@@ -1,5 +1,6 @@
 #include "foresight_native.h"
 #include "exception_barrier.h"
+#include "json_string.h"
 #include "one_shot_launch.h"
 #include "portable_process.h"
 #include "speech_audio.h"
@@ -21,10 +22,12 @@
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <poll.h>
 #include <set>
+#include <shared_mutex>
 #include <signal.h>
 #include <spawn.h>
 #include <string>
@@ -33,6 +36,7 @@
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 extern char **environ;
 namespace {
@@ -40,17 +44,49 @@ using foresight::quote;
 char *owned(const std::string &s) {
   return strdup(s.c_str());
 }
+struct PollLifetime {
+  std::shared_mutex gate;
+  std::atomic<bool> closed{false};
+};
+std::mutex poll_registry_mutex;
+std::unordered_map<void *, std::shared_ptr<PollLifetime>> poll_registry;
 struct Events {
   std::mutex mu;
   std::condition_variable cv;
   std::deque<std::string> events;
-  virtual ~Events() = default;
+  Events() {
+    std::lock_guard lock(poll_registry_mutex);
+    poll_registry[this] = std::make_shared<PollLifetime>();
+  }
+  virtual ~Events() {
+    std::lock_guard lock(poll_registry_mutex);
+    poll_registry.erase(this);
+  }
   void emit(std::string s) {
     std::lock_guard lock(mu);
     events.push_back(std::move(s));
     cv.notify_all();
   }
 };
+// Remove the handle before waiting, so late polls never dereference it. Wake
+// existing blocking polls, then join them before any derived fields are freed.
+void retire_events(Events *events) {
+  std::shared_ptr<PollLifetime> lifetime;
+  {
+    std::lock_guard lock(poll_registry_mutex);
+    auto found = poll_registry.find(events);
+    if (found == poll_registry.end())
+      return;
+    lifetime = found->second;
+    poll_registry.erase(found);
+  }
+  {
+    std::lock_guard lock(events->mu);
+    lifetime->closed = true;
+    events->cv.notify_all();
+  }
+  std::unique_lock join(lifetime->gate);
+}
 struct Worker : Events {
   std::thread thread;
   std::atomic<bool> cancel{false}, active{false};
@@ -343,7 +379,14 @@ void failure(Worker &w, const std::string &id, uint64_t &seq,
 Engine::~Engine() {
   shutdown_persistent(*this);
 }
+struct SpeechEngine {
+  Engine engine;
+  std::timed_mutex mutex;
+};
+std::mutex speech_engines_mutex;
+std::map<std::string, std::weak_ptr<SpeechEngine>> speech_engines;
 struct Speech : Worker {
+  std::shared_ptr<SpeechEngine> worker_engine;
   std::string runtime, model;
   std::vector<int16_t> samples, pending;
   double phase = 0;
@@ -524,11 +567,24 @@ char *fs_event_poll(void *h, int timeout) {
   try {
     if (!h)
       return nullptr;
+    std::shared_ptr<PollLifetime> lifetime;
+    {
+      std::lock_guard registry(poll_registry_mutex);
+      const auto found = poll_registry.find(h);
+      if (found == poll_registry.end())
+        return nullptr;
+      lifetime = found->second;
+    }
+    std::shared_lock poll(lifetime->gate);
+    if (lifetime->closed)
+      return nullptr;
     auto &e = *static_cast<Events *>(h);
     std::unique_lock lock(e.mu);
     e.cv.wait_for(lock,
                   std::chrono::milliseconds(std::clamp(timeout, 0, 60000)),
-                  [&] { return !e.events.empty(); });
+                  [&] { return lifetime->closed || !e.events.empty(); });
+    if (lifetime->closed)
+      return nullptr;
     if (e.events.empty()) {
       if (auto *capture = dynamic_cast<Capture *>(&e);
           capture && capture->pending_dropped_bytes)
@@ -566,6 +622,7 @@ void *fs_engine_create_backend(const char *runtime, const char *model,
       return nullptr;
     if (!valid_asset(runtime, model))
       return nullptr;
+    foresight::seal_runtime_environment();
     auto *e = new Engine;
     e->runtime = runtime;
     e->model = model;
@@ -650,6 +707,17 @@ int fs_engine_probe(void *h) {
       e.busy = true;
       e.state = "loading";
     }
+    struct ProbeLease {
+      Engine &engine;
+      ~ProbeLease() {
+        std::lock_guard lock(engine.mu);
+        if (engine.busy) {
+          engine.busy = false;
+          engine.state = "failed";
+          engine.error = "Model initialization probe aborted";
+        }
+      }
+    } probe_lease{e};
     shutdown_persistent(e);
     Worker probe;
     std::string diagnostics;
@@ -708,7 +776,7 @@ int fs_engine_destroy(void *h) {
     auto *e = static_cast<Engine *>(h);
     {
       std::lock_guard lock(e->mu);
-      if (e->refs)
+      if (e->refs || e->busy)
         return -1;
     }
     delete e;
@@ -790,6 +858,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           bool tool_answer_received = false;
           bool tool_protocol_failed = false;
           bool worker_error_received = false;
+          bool plain_text_received = false;
           auto tool_line = [&](const std::string &line) {
             bool request = line.starts_with("tool ");
             bool model = line.starts_with("model ");
@@ -878,12 +947,37 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
             duplex = true;
           }
           int status;
-          if (tools && e.persistent_protocol) {
+          if (e.persistent_protocol) {
+            // A persistent request owns its input; discard the one-shot stdin
+            // envelope.
+            {
+              std::lock_guard lock(c.input_mutex);
+              c.input.clear();
+            }
             const auto payload =
-                "{\"prompt\":" + quote(text) + ",\"tools\":" + json_schema +
+                "{\"prompt\":" + quote(text) +
+                (tools ? ",\"tools\":" : ",\"schema\":") +
+                (json_schema.empty() ? "null" : json_schema) +
                 ",\"max_output_tokens\":" + std::to_string(max_output_tokens) +
                 "}";
-            status = run_persistent(e, c, payload, tool_line);
+            status =
+                run_persistent(e, c, payload, [&](const std::string &line) {
+                  if (tools) {
+                    tool_line(line);
+                    return;
+                  }
+                  if (line.starts_with("text ") &&
+                      foresight::json_string_literal(line.substr(5))) {
+                    plain_text_received = true;
+                    // The worker frames text as a JSON string, preserving
+                    // Unicode/newlines.
+                    c.emit(event("delta", c.request, seq++,
+                                 ",\"text\":" + line.substr(5)));
+                  } else {
+                    worker_error_received = true;
+                    failure(c, c.request, seq, "runtime_failure", line);
+                  }
+                });
             if (tool_protocol_failed)
               shutdown_persistent(e, false);
           } else {
@@ -937,10 +1031,14 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
               c.emit(
                   event("delta", c.request, seq++, ",\"text\":" + quote(utf8)));
           }
-          std::string terminal = tool_protocol_failed ? "failed"
-                                 : c.cancel           ? "cancelled"
-                                 : status == 0        ? "completed"
-                                                      : "failed";
+          std::string terminal =
+              (tool_protocol_failed || worker_error_received ||
+               (!tools && e.persistent_protocol && !plain_text_received &&
+                !c.cancel))
+                  ? "failed"
+              : c.cancel    ? "cancelled"
+              : status == 0 ? "completed"
+                            : "failed";
           if (tools && (!utf8.empty() || !tool_answer_received) && !c.cancel)
             terminal = "failed";
           bool cpu_recovered = false;
@@ -1058,7 +1156,7 @@ int fs_generate_options(void *h, const char *id, const char *prompt,
 int fs_generate_tools(void *h, const char *id, const char *prompt,
                       const char *tools, int max_output_tokens) {
   try {
-    if (!tools || !*tools)
+    if (!tools || !*tools || std::strpbrk(tools, "\r\n"))
       return -1;
     return generate_with_schema(h, id, prompt, tools, max_output_tokens, true);
 
@@ -1072,7 +1170,7 @@ int fs_generate_tools(void *h, const char *id, const char *prompt,
 }
 int fs_generation_tool_reply(void *h, const char *id, const char *message) {
   try {
-    if (!h || !id || !message)
+    if (!h || !id || !message || std::strpbrk(message, "\r\n"))
       return -1;
     auto &c = *static_cast<Conversation *>(h);
     std::lock_guard life(c.life);
@@ -1125,6 +1223,7 @@ int fs_conversation_destroy(void *h, int drain) {
       std::lock_guard lock(c->engine->mu);
       --c->engine->refs;
     }
+    retire_events(c);
     delete c;
     return 0;
 
@@ -1138,6 +1237,7 @@ int fs_conversation_destroy(void *h, int drain) {
 }
 void *fs_speech_create(const char *runtime, const char *model) {
   try {
+    foresight::seal_runtime_environment();
     const char *override_runtime = std::getenv("FORESIGHT_WHISPER_RUNTIME");
     if (override_runtime && *override_runtime)
       runtime = override_runtime;
@@ -1146,6 +1246,37 @@ void *fs_speech_create(const char *runtime, const char *model) {
     auto *s = new Speech;
     s->runtime = runtime;
     s->model = model;
+    // Bundles install the speech server beside the diagnostic CLI. Explicit
+    // worker overrides are also supported for external runtime installations.
+    auto server = std::filesystem::path(runtime).parent_path() /
+                  "foresight-whisper-worker";
+    if (const char *configured = std::getenv("FORESIGHT_WHISPER_WORKER");
+        configured && *configured)
+      server = configured;
+    if (access(server.c_str(), X_OK) == 0) {
+      const char *backend = std::getenv("FORESIGHT_WHISPER_BACKEND");
+      const char *device = std::getenv("FORESIGHT_WHISPER_DEVICE");
+      const auto key = quote(server.string()) + quote(model) +
+                       quote(backend ? backend : "") +
+                       quote(device ? device : "");
+      std::lock_guard lock(speech_engines_mutex);
+      for (auto i = speech_engines.begin(); i != speech_engines.end();) {
+        if (i->second.expired())
+          i = speech_engines.erase(i);
+        else
+          ++i;
+      }
+      s->worker_engine = speech_engines[key].lock();
+      if (!s->worker_engine) {
+        s->worker_engine = std::make_shared<SpeechEngine>();
+        auto &engine = s->worker_engine->engine;
+        engine.runtime = server.string();
+        engine.model = model;
+        engine.backend = 2;
+        engine.cpu_fallback = backend && std::string(backend) == "cpu";
+        speech_engines[key] = s->worker_engine;
+      }
+    }
     return s;
 
   } catch (const std::exception &barrier_error) {
@@ -1247,37 +1378,69 @@ int fs_speech_finish(void *h, const char *id) {
                 }
                 return result;
               };
-              status = run(s, arguments(cpu), [&](const char *p, size_t n) {
-                transcript.append(p, n);
-              });
+              auto recognize = [&](bool cpu_only) {
+                if (s.worker_engine) {
+                  std::unique_lock lock(s.worker_engine->mutex,
+                                        std::defer_lock);
+                  while (!lock.try_lock_for(std::chrono::milliseconds(20))) {
+                    if (s.cancel)
+                      return -1;
+                  }
+                  if (s.cancel)
+                    return -1;
+                  auto &engine = s.worker_engine->engine;
+                  if (cpu_only && !engine.cpu_fallback) {
+                    shutdown_persistent(engine, false);
+                    engine.cpu_fallback = true;
+                  }
+                  bool received = false, invalid = false;
+                  transcript = quote("");
+                  const auto result = run_persistent(
+                      engine, s, "{\"prompt\":" + quote(audio.path) + "}",
+                      [&](const std::string &line) {
+                        if (line.starts_with("text ") && !received &&
+                            line.size() >= 7 &&
+                            foresight::json_string_literal(line.substr(5))) {
+                          transcript = line.substr(5);
+                          received = true;
+                        } else
+                          invalid = true;
+                      });
+                  return result == 0 && received && !invalid ? 0 : 1;
+                }
+                return run(
+                    s, arguments(cpu_only),
+                    [&](const char *p, size_t n) { transcript.append(p, n); });
+              };
+              status = recognize(cpu);
               if (status != 0 && !cpu && !s.cancel) {
                 // The failed attempt must not contaminate the CPU transcript.
                 transcript.clear();
                 s.emit(event("state", request, seq++,
                              ",\"message\":\"GPU speech recognition failed; "
                              "retrying on CPU\""));
-                status = run(s, arguments(true), [&](const char *p, size_t n) {
-                  transcript.append(p, n);
-                });
+                status = recognize(true);
               }
             }
             std::string terminal = s.cancel      ? "cancelled"
                                    : status == 0 ? "completed"
                                                  : "failed";
             if (terminal == "completed")
-              s.emit(event("transcript", request, seq++,
-                           ",\"text\":" + quote(transcript) +
-                               ",\"final\":true,\"start_ms\":0,\"end_ms\":" +
-                               std::to_string(samples.size() * 1000 / 16000) +
-                               ",\"sample_rate\":16000"));
+              s.emit(
+                  event("transcript", request, seq++,
+                        ",\"text\":" +
+                            (s.worker_engine ? transcript : quote(transcript)) +
+                            ",\"final\":true,\"start_ms\":0,\"end_ms\":" +
+                            std::to_string(samples.size() * 1000 / 16000) +
+                            ",\"sample_rate\":16000"));
             if (terminal == "failed")
               failure(
                   s, request, seq, "speech_runtime_failure",
                   "Speech runner failed; verify model, audio and executable");
             settled = true;
+            s.active = false;
             s.emit(event("done", request, seq++,
                          ",\"status\":" + quote(terminal)));
-            s.active = false;
           },
           [&](const std::string &message) {
             if (settled)
@@ -1326,6 +1489,7 @@ void fs_speech_destroy(void *h) {
       s->stop();
       s->join();
     }
+    retire_events(s);
     delete s;
 
   } catch (const std::exception &barrier_error) {
@@ -1374,6 +1538,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
   try {
     if (rate < 8000 || rate > 192000)
       return nullptr;
+    foresight::seal_runtime_environment();
     auto *c = new Capture;
     c->target = target && *target ? target : "auto";
     if (const char *runtime = getenv("FORESIGHT_CAPTURE_RUNTIME");
@@ -1452,7 +1617,7 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
                       attempt = 0;
                     }
                     residual.insert(residual.end(), data, data + n);
-                    size_t frame = c->playback ? size_t(c->rate * 2 * 40 / 1000)
+                    size_t frame = c->playback ? size_t(c->rate * 40 / 1000) * 2
                                                : residual.size() & ~size_t(1);
                     while (frame && residual.size() >= frame) {
                       std::vector<unsigned char> bytes(
@@ -1528,6 +1693,7 @@ void fs_capture_stop(void *h) {
     auto *c = static_cast<Capture *>(h);
     c->stop();
     c->join();
+    retire_events(c);
     delete c;
 
   } catch (const std::exception &barrier_error) {
@@ -1695,10 +1861,13 @@ extern "C" int fs_set_runtime_environment(const char *key, const char *value) {
         "FORESIGHT_LITERT_LIBRARY",  "FORESIGHT_LITERT_BACKEND",
         "FORESIGHT_WHISPER_BACKEND", "FORESIGHT_WHISPER_DEVICE",
         "FORESIGHT_HELPER",          "FORESIGHT_LITERT_CACHE",
-        "FORESIGHT_WHISPER_RUNTIME", "PYTHONPYCACHEPREFIX"};
+        "FORESIGHT_WHISPER_RUNTIME", "FORESIGHT_WHISPER_WORKER",
+        "PYTHONPYCACHEPREFIX"};
     if (!allowed.count(key))
       return -1;
     std::lock_guard lock(foresight::launch_mutex);
+    if (foresight::runtime_environment_sealed)
+      return -1;
     return setenv(key, value, 1) == 0 ? 0 : -1;
 
   } catch (const std::exception &barrier_error) {

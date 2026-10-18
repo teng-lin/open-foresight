@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'desktop_connection.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
@@ -5,7 +7,7 @@ import 'domain.dart';
 import 'google_auth.dart';
 import 'store.dart';
 
-class GoogleConnections {
+class GoogleConnections implements ConnectedSources {
   final Domain domain;
   final GoogleAuth auth;
   bool _closed = false;
@@ -14,6 +16,7 @@ class GoogleConnections {
   Store get store => domain.store;
 
   /// A different account must refresh immediately and cannot inherit a status.
+  @override
   int get lastCompletedRefreshMs {
     if (!auth.connected ||
         store.preference('googleLastSyncAccount') != auth.account) {
@@ -85,7 +88,10 @@ class GoogleConnections {
 
   void _check(String account) {
     if (_closed || !auth.connected || auth.account != account) {
-      throw StateError('Google connection changed. Retry after signing in.');
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Google connection changed. Retry after signing in.',
+      );
     }
   }
 
@@ -103,6 +109,7 @@ class GoogleConnections {
       auth.endpoints.calendar.resolve(path).replace(queryParameters: query);
   String _literal(String value) =>
       value.replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+  @override
   Future<List<Map<String, dynamic>>> driveFiles({
     String? parent,
     String query = '',
@@ -204,6 +211,7 @@ class GoogleConnections {
     if (contentChanged || old['state'] != 'indexed') await domain.index(id);
   }
 
+  @override
   Future<void> importDriveFile(
     String fileId, {
     Map<String, dynamic>? metadata,
@@ -276,6 +284,7 @@ class GoogleConnections {
     );
   }
 
+  @override
   Future<void> importDriveFolder(
     String folderId, {
     bool refreshing = false,
@@ -342,6 +351,7 @@ class GoogleConnections {
     }
   }
 
+  @override
   Future<void> importLastYear() async {
     final files = await driveFiles(
       modifiedAfter: DateTime.now().subtract(const Duration(days: 365)),
@@ -366,6 +376,7 @@ class GoogleConnections {
     );
   }
 
+  @override
   Future<void> syncCalendar({
     String calendarId = 'primary',
     DateTime? now,
@@ -483,6 +494,7 @@ class GoogleConnections {
     );
   }
 
+  @override
   Future<void> refresh() =>
       _refreshing ??= _refresh().whenComplete(() => _refreshing = null);
   Future<void> _refresh() async {
@@ -554,6 +566,7 @@ class GoogleConnections {
     store.setPreference('googleLastSyncAccount', account);
   }
 
+  @override
   List<Map<String, dynamic>> attachments(int meeting) {
     final row = store.rows(
       'SELECT metadata FROM calendar_events WHERE meeting_id=?',
@@ -566,6 +579,7 @@ class GoogleConnections {
         .cast<Map<String, dynamic>>();
   }
 
+  @override
   Future<void> importAttachments(int meeting) async {
     final failures = <String>[];
     for (final attachment in attachments(meeting)) {

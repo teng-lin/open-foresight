@@ -48,9 +48,8 @@ class IndexRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'IndexRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'documentId')
     ..aOS(2, _omitFieldNames ? '' : 'content')
@@ -167,9 +166,8 @@ class IndexResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'IndexResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOB(1, _omitFieldNames ? '' : 'success')
     ..aOS(2, _omitFieldNames ? '' : 'errorMessage')
@@ -242,9 +240,8 @@ class Query extends $pb.GeneratedMessage {
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'Query',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..oo(0, [1, 2])
     ..aOS(1, _omitFieldNames ? '' : 'textQuery')
@@ -326,9 +323,8 @@ class RetrieveRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RetrieveRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOM<Query>(1, _omitFieldNames ? '' : 'query', subBuilder: Query.create)
     ..aI(2, _omitFieldNames ? '' : 'maxResults')
@@ -418,9 +414,8 @@ class RetrieveResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RetrieveResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..pPM<RetrievedChunk>(1, _omitFieldNames ? '' : 'chunks',
         subBuilder: RetrievedChunk.create)
@@ -475,9 +470,8 @@ class RetrievedChunk extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'RetrievedChunk',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'text')
     ..aD(2, _omitFieldNames ? '' : 'relevanceScore')
@@ -569,9 +563,8 @@ class UpdateModelPathsRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'UpdateModelPathsRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'embeddingModelPath')
     ..aOS(2, _omitFieldNames ? '' : 'sentencePieceModelPath')
@@ -658,9 +651,8 @@ class UpdateModelPathsResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'UpdateModelPathsResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOB(1, _omitFieldNames ? '' : 'success')
     ..aOS(2, _omitFieldNames ? '' : 'errorMessage')
@@ -727,9 +719,8 @@ class DeleteRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'documentId')
     ..aOS(2, _omitFieldNames ? '' : 'userId')
@@ -795,9 +786,8 @@ class DeleteResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'DeleteResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOB(1, _omitFieldNames ? '' : 'success')
     ..aOS(2, _omitFieldNames ? '' : 'errorMessage')
@@ -861,9 +851,8 @@ class EncodeRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'EncodeRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'text')
     ..hasRequiredFields = false;
@@ -917,9 +906,8 @@ class EncodeResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'EncodeResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..p<$core.int>(1, _omitFieldNames ? '' : 'tokens', $pb.PbFieldType.K3)
     ..hasRequiredFields = false;
@@ -969,9 +957,8 @@ class ChunkTextRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ChunkTextRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'text')
     ..aI(2, _omitFieldNames ? '' : 'maxTokensPerChunk')
@@ -1035,9 +1022,8 @@ class ChunkTextResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ChunkTextResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..pPS(1, _omitFieldNames ? '' : 'chunks')
     ..hasRequiredFields = false;
@@ -1087,9 +1073,8 @@ class TruncateTextRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'TruncateTextRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'text')
     ..aI(2, _omitFieldNames ? '' : 'maxTokens')
@@ -1153,9 +1138,8 @@ class TruncateTextResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'TruncateTextResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'truncatedText')
     ..hasRequiredFields = false;
@@ -1209,9 +1193,8 @@ class ComputeEmbeddingRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ComputeEmbeddingRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'text')
     ..hasRequiredFields = false;
@@ -1266,9 +1249,8 @@ class ComputeEmbeddingResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ComputeEmbeddingResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..p<$core.double>(1, _omitFieldNames ? '' : 'embedding', $pb.PbFieldType.KD)
     ..hasRequiredFields = false;
@@ -1317,9 +1299,8 @@ class ComputeImageEmbeddingRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ComputeImageEmbeddingRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'imageBytes', $pb.PbFieldType.OY)
@@ -1377,9 +1358,8 @@ class ComputeAudioEmbeddingRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'ComputeAudioEmbeddingRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..a<$core.List<$core.int>>(
         1, _omitFieldNames ? '' : 'audioBytes', $pb.PbFieldType.OY)
@@ -1431,9 +1411,8 @@ class PingRequest extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PingRequest',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..hasRequiredFields = false;
 
@@ -1479,9 +1458,8 @@ class PingResponse extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'PingResponse',
-      package: const $pb.PackageName(_omitMessageNames
-          ? ''
-          : 'research.xeno.labs.foresight.launch_agent.proto'),
+      package:
+          const $pb.PackageName(_omitMessageNames ? '' : 'foresight.helper.v1'),
       createEmptyInstance: create)
     ..aOB(1, _omitFieldNames ? '' : 'success')
     ..aOS(2, _omitFieldNames ? '' : 'version')

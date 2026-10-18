@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
 
 import yaml
 
@@ -147,32 +146,6 @@ verify_descriptor.verify('must-not-execute-protoc')
 
 
 class BuildPolicyTests(unittest.TestCase):
-    def test_macos_runtime_checks_versions_from_the_hashed_lock(self):
-        sys.path.insert(0, str(ROOT / "tools"))
-        import package_macos
-
-        with tempfile.TemporaryDirectory() as directory:
-            source = Path(directory)
-            (source / "bin").mkdir()
-            (source / "bin/python3").touch()
-            checked = {}
-
-            def query(*args):
-                if "sys.base_prefix" in args[3]:
-                    return json.dumps([str(source), str(source / "lib")])
-                checked.update(dict.fromkeys(args[4:]))
-                # Stop after the metadata check; no macOS runtime is needed.
-                return json.dumps([[3, 12], {}])
-
-            with patch.object(package_macos, "run", side_effect=query):
-                with self.assertRaisesRegex(ValueError, "Use Python 3.13"):
-                    package_macos.copy_python(source, source / "resources", {})
-            self.assertIn("litert-lm", checked)
-            self.assertIn("numpy", checked)
-            self.assertTrue(
-                all(re.fullmatch(r"[A-Za-z0-9_.-]+", name) for name in checked)
-            )
-
     def test_every_python_lock_requirement_has_hashes(self):
         for path in ROOT.glob("requirements-*.lock"):
             text = re.sub(r"\\\n\s*", " ", path.read_text())
@@ -200,6 +173,22 @@ class BuildPolicyTests(unittest.TestCase):
             self.assertEqual(
                 installs, [f"python -m pip install --require-hashes -r {lock}"]
             )
+
+    def test_workflow_dependency_installs_enforce_their_locks(self):
+        for path in (ROOT / ".github/workflows").glob("*.yml"):
+            workflow = yaml.safe_load(path.read_text())
+            for name, job in workflow.get("jobs", {}).items():
+                for step in job.get("steps", []):
+                    commands = re.sub(r"\\\n\s*", " ", step.get("run", ""))
+                    for command in commands.splitlines():
+                        with self.subTest(
+                            workflow=path.name, job=name, command=command
+                        ):
+                            if re.search(r"\bpip(?:3)?\s+install\b", command):
+                                self.assertIn("--require-hashes", command)
+                                self.assertRegex(command, r"-r\s+\S+\.lock\b")
+                            if re.search(r"\b(?:dart|flutter)\s+pub\s+get\b", command):
+                                self.assertIn("--enforce-lockfile", command)
 
     def test_publication_jobs_are_unreachable_from_pull_requests(self):
         for path in (ROOT / ".github/workflows").glob("*.yml"):

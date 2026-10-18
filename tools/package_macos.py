@@ -2,22 +2,17 @@
 """Assemble the Mac application, standalone service/MCP, and local runtimes."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import plistlib
-import re
 import shutil
 import subprocess
 import sys
 
 from google_client_release import release_google_client, write_google_client
 from app_version import read_version
-from query_worker_packaging import (
-    copy_worker as copy_query_worker,
-    copy_licenses as copy_query_licenses,
-    inspect_runtime as inspect_query_runtime,
-)
 from web_search_release import release_web_search_keys
 from macos_bundle import (
     audit_dependencies,
@@ -27,8 +22,7 @@ from macos_bundle import (
 )
 from litert_extensions import (
     verify_extensions_manifest,
-    install_extension_wheel,
-    probe_python_extensions,
+    copy_macos_extension_dependencies,
     write_extension_provenance,
 )
 
@@ -37,6 +31,23 @@ PURPOSES = {
     "NSMicrophoneUsageDescription": "Transcribe your microphone during meetings you start.",
     "NSAudioCaptureUsageDescription": "Transcribe meeting audio playing on this Mac when you start recording.",
 }
+
+
+def write_litert_manifests(app, library, service):
+    """Bind every runtime host to the relocated and signed library bytes."""
+    with library.open("rb") as stream:
+        runtime = {
+            "version": "0.18.0",
+            "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+        }
+    # LiteRt anchors release identity at executable.parent / ../manifest.json.
+    # Main UI/MCP, resource workers/helper, and the service have distinct hosts.
+    for manifest in (
+        app / "Contents/manifest.json",
+        app / "Contents/Resources/manifest.json",
+        service.parent.parent / "manifest.json",
+    ):
+        manifest.write_text(json.dumps({"gemma_runtime": runtime}, indent=2) + "\n")
 
 
 def helper_bundle(path, executable, identifier):
@@ -74,89 +85,6 @@ def write_runtime(resources, values):
     (resources / "runtime.json").write_text(json.dumps(config, indent=2) + "\n")
 
 
-def copy_python(source, resources, values, extensions=None):
-    """Copy a relocatable standalone Python install, not a Homebrew framework."""
-    python = source / "bin/python3"
-    if not python.is_file():
-        raise ValueError("--python-runtime must contain bin/python3")
-    query = 'import sys,json,sysconfig; print(json.dumps([sys.base_prefix,sysconfig.get_path("stdlib")]))'
-    base, stdlib = json.loads(run(python, "-I", "-c", query))
-    if not Path(base).resolve().is_relative_to(source.resolve()) or not Path(
-        stdlib
-    ).resolve().is_relative_to(source.resolve()):
-        raise ValueError(
-            "Use a standalone Python runtime, not a venv linked to system/Homebrew Python"
-        )
-    lock = ROOT / "requirements-litert-macos.lock"
-    expected = dict(
-        re.findall(r"^([A-Za-z0-9_.-]+)==([^\s\\]+)", lock.read_text(), re.MULTILINE)
-    )
-    query = (
-        "import sys,json,importlib.metadata as m; "
-        "print(json.dumps([list(sys.version_info[:2]),"
-        "{name:m.version(name) for name in sys.argv[1:]}]))"
-    )
-    version, installed = json.loads(run(python, "-I", "-c", query, *expected))
-    if version != [3, 13] or installed != expected:
-        raise ValueError(
-            "Use Python 3.13 with the exact requirements-litert-macos.lock dependencies"
-        )
-    target = resources / "python"
-    shutil.copytree(
-        source,
-        target,
-        symlinks=True,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.a", "test", "tests"),
-    )
-    for path in target.rglob("*"):
-        if path.is_symlink() and not path.resolve().is_relative_to(target.resolve()):
-            raise ValueError(f"Python runtime symlink escapes bundle: {path}")
-    runtime = target / "bin/python3"
-    if extensions is not None:
-        purelib = Path(
-            run(
-                python,
-                "-I",
-                "-c",
-                'import sysconfig; print(sysconfig.get_path("purelib"))',
-            ).strip()
-        )
-        relative = purelib.resolve(strict=True).relative_to(source.resolve(strict=True))
-        install_extension_wheel(
-            extensions,
-            site_packages=target / relative,
-            source_prefix=source,
-            destination_prefix=target,
-        )
-        probe_python_extensions(runtime, run)
-    adapters = resources / "adapters"
-    for kind in ("litert-runner", "litert-python"):
-        launcher = adapters / kind
-        args = (
-            '"$task_resources/adapters/litert_runner.py" "$@"'
-            if kind == "litert-runner"
-            else '"$@"'
-        )
-        launcher.write_text(
-            "#!/bin/bash\nset -euo pipefail\n"
-            'task_resources=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)\n'
-            "export PYTHONDONTWRITEBYTECODE=1\n"
-            'exec "$task_resources/python/bin/python3" -I -B ' + args + "\n"
-        )
-        launcher.chmod(0o755)
-    values.update(
-        FORESIGHT_LITERT_RUNNER=adapters / "litert-runner",
-        FORESIGHT_LITERT_PYTHON=adapters / "litert-python",
-        FORESIGHT_MODEL_PYTHON=runtime,
-    )
-    notices = resources / "licenses"
-    notices.mkdir(exist_ok=True)
-    shutil.copy2(lock, notices / lock.name)
-    if extensions is not None:
-        write_extension_provenance(extensions, notices / "LiteRT-LM-extension.json")
-    copy_query_licenses(runtime, notices)
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path, default=ROOT / "build")
@@ -168,14 +96,10 @@ def main(argv=None):
     )
     parser.add_argument("--output", type=Path, default=ROOT / "dist/Open Foresight.app")
     parser.add_argument(
-        "--python-runtime",
-        type=Path,
-        help="Standalone relocatable Python prefix with pinned LiteRT dependencies installed",
-    )
-    parser.add_argument(
         "--litert-extensions-manifest",
         type=Path,
-        help="Verified source-built API wheel manifest to overlay into the bundled Python copy",
+        required=True,
+        help="Verified source-built native LiteRT C API runtime manifest",
     )
     parser.add_argument(
         "--sdk",
@@ -210,19 +134,8 @@ def main(argv=None):
         help="Create a distributable ZIP after signing/notarization",
     )
     args = parser.parse_args(argv)
-    if args.litert_extensions_manifest and not args.python_runtime:
-        parser.error("--litert-extensions-manifest requires --python-runtime")
-    if args.python_runtime and not args.litert_extensions_manifest:
-        parser.error(
-            "Bundled note enhancement requires --litert-extensions-manifest "
-            "from tools/build_litert_extensions.py; the stock runtime lacks native stop sequences"
-        )
-    extensions = (
-        verify_extensions_manifest(
-            args.litert_extensions_manifest, platform_name="darwin"
-        )
-        if args.litert_extensions_manifest
-        else None
+    extensions = verify_extensions_manifest(
+        args.litert_extensions_manifest, platform_name="darwin"
     )
     google_client = release_google_client(
         args.google_client, required=args.require_google_client
@@ -236,17 +149,17 @@ def main(argv=None):
         parser.error(
             "Notarization requires --identity with a Developer ID Application identity"
         )
-    if args.identity != "-" and (not args.python_runtime or not args.whisper_runtime):
+    if args.identity != "-" and not args.whisper_runtime:
         parser.error(
-            "Developer ID release requires bundled --python-runtime and --whisper-runtime; use ad-hoc signing for incomplete developer builds"
+            "Developer ID release requires bundled --whisper-runtime; use ad-hoc signing for incomplete developer builds"
         )
     if args.identity != "-" and (not args.sdk or not args.whisper_license):
         parser.error(
             "Developer ID release requires --sdk and --whisper-license to include third-party notices"
         )
-    if args.generation_backend == "gpu" and not args.python_runtime:
-        parser.error("GPU generation requires a validated --python-runtime")
     required = {
+        "FORESIGHT_MODEL_WORKER": args.build / "services/inference/foresight-model",
+        "FORESIGHT_QUERY_WORKER": args.build / "services/inference/foresight-query",
         "FORESIGHT_HELPER": args.build / "services/helper/ForesightHelper",
         "FORESIGHT_NATIVE": args.build / "native/libforesight_native.dylib",
         "FORESIGHT_AUDIO_DEVICES": args.build / "native/foresight-audio",
@@ -290,28 +203,30 @@ def main(argv=None):
         "io.openforesight.App.notifications",
     )
     values["FORESIGHT_NOTIFICATIONS"] = notification
-    adapters = resources / "adapters"
-    adapters.mkdir(exist_ok=True)
-    for name in (
-        "litert_embedding_adapter.py",
-        "litert_runner.py",
-        "grounded_generation.py",
-    ):
-        shutil.copy2(ROOT / "services/inference/macos" / name, adapters / name)
-    query_worker = copy_query_worker(adapters)
-    values["FORESIGHT_QUERY_WORKER"] = query_worker
-    shutil.copy2(
-        ROOT / "services/inference/macos/foresight-model", adapters / "foresight-model"
-    )
     values.update(
-        FORESIGHT_MODEL_WORKER=adapters / "foresight-model",
-        FORESIGHT_LITERT_EMBEDDING_ADAPTER=adapters / "litert_embedding_adapter.py",
+        FORESIGHT_QUERY_RUNTIME=values["FORESIGHT_QUERY_WORKER"],
+        FORESIGHT_LITERT_RUNNER=values["FORESIGHT_MODEL_WORKER"],
         FORESIGHT_LITERT_BACKEND=args.generation_backend,
+    )
+    library_directory = resources / "lib"
+    library_directory.mkdir(exist_ok=True)
+    copy_macos_extension_dependencies(extensions, library_directory)
+    values["FORESIGHT_LITERT_LIBRARY"] = library_directory / "liblitert-lm.dylib"
+    notices = resources / "licenses"
+    notices.mkdir(exist_ok=True)
+    write_extension_provenance(extensions, notices / "LiteRT-LM-extension.json")
+    shutil.copy2(ROOT / "third_party/litert_lm/LICENSE", notices / "LiteRT-LM-LICENSE")
+    shutil.copy2(
+        ROOT / "third_party/sentencepiece/LICENSE", notices / "sentencepiece-LICENSE"
     )
     if args.whisper_runtime:
         target = resources / "bin/whisper-cli"
         shutil.copy2(args.whisper_runtime, target)
         values["FORESIGHT_WHISPER_RUNTIME"] = target
+        shutil.copy2(
+            args.whisper_runtime.parent / "foresight-whisper-worker",
+            resources / "bin/foresight-whisper-worker",
+        )
         if args.whisper_license:
             notices = resources / "licenses"
             notices.mkdir(exist_ok=True)
@@ -328,8 +243,6 @@ def main(argv=None):
         target = resources / "google-client.json"
         write_google_client(target, google_client, mode=0o644)
         values["FORESIGHT_GOOGLE_CLIENT"] = target
-    if args.python_runtime:
-        copy_python(args.python_runtime, resources, values, extensions)
     values.update(web_search_keys)
     write_runtime(resources, values)
     write_runtime(service_path.parent.parent / "Resources", values)
@@ -342,18 +255,23 @@ def main(argv=None):
         plistlib.dump(metadata, stream)
     relocate_dependencies(app)
     entitlements = ROOT / "packaging/macos/Release.entitlements"
-    sign_application(app, args.identity, entitlements)
-    if extensions is not None:
-        probe_python_extensions(resources / "python/bin/python3", run)
-    if args.python_runtime:
-        run(resources / "adapters/litert-runner", "--check")
-        run(
-            resources / "adapters/litert-python",
-            "-I",
-            adapters / "litert_embedding_adapter.py",
-            "--check",
-        )
-        inspect_query_runtime(resources / "adapters/litert-python")
+    sign_application(
+        app,
+        args.identity,
+        entitlements,
+        before_seal=lambda: write_litert_manifests(
+            app, values["FORESIGHT_LITERT_LIBRARY"], service_path
+        ),
+    )
+    environment = dict(
+        os.environ, FORESIGHT_LITERT_LIBRARY=str(values["FORESIGHT_LITERT_LIBRARY"])
+    )
+    subprocess.run(
+        [str(values["FORESIGHT_MODEL_WORKER"]), "--check"],
+        env=environment,
+        check=True,
+        timeout=300,
+    )
     notarized = False
     if args.notary_profile:
         submission = app.parent / (app.stem + ".notary.zip")
@@ -400,9 +318,9 @@ def main(argv=None):
         "minimum_macos": "15.0",
         "signing": "ad-hoc-development" if args.identity == "-" else "developer-id",
         "notarized": notarized,
-        "python_bundled": bool(args.python_runtime),
+        "python_bundled": False,
         "whisper_bundled": bool(args.whisper_runtime),
-        "query_worker_runtime_bundled": bool(args.python_runtime),
+        "inference_runtime": "native-c-api",
         "linkage": audit_dependencies(app),
     }
     # A report outside the sealed bundle avoids invalidating its signature.

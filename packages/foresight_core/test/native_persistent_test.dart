@@ -30,6 +30,16 @@ for line in sys.stdin:
  assert command=='generate' and token not in seen
  seen.add(token)
  request=json.loads(payload)
+ if 'tools' not in request:
+  assert 'schema' in request
+  if 'cancel plain' in request['prompt']:
+   print(token+' text '+json.dumps('first chunk'),flush=True)
+   assert sys.stdin.readline().strip()=='cancel '+token
+   print(token+' done cancelled',flush=True)
+   continue
+  print(token+' text '+json.dumps('plain answer\\nwith Unicode λ'),flush=True)
+  print(token+' done completed',flush=True)
+  continue
  assert request['tools']['delegate_tool_detection'] is True
  prompt=request['prompt']
  if prompt=='stale frame':
@@ -82,6 +92,42 @@ for line in sys.stdin:
             prompt,
           );
         }
+        for (final schema in [
+          <String, dynamic>{
+            'x-foresight-grounded-request': {'version': 1},
+          },
+          <String, dynamic>{'type': 'object'},
+          null,
+        ]) {
+          final events = await runtime
+              .generate(
+                'plain-${schema.hashCode}',
+                'summary',
+                responseSchema: schema,
+              )
+              .toList();
+          expect(events.last['status'], 'completed');
+          expect(
+            events.where((event) => event['type'] == 'delta').single['text'],
+            'plain answer\nwith Unicode λ',
+          );
+        }
+        final plainEvents = <Map<String, dynamic>>[];
+        await for (final event in runtime.generate(
+          'cancel-plain',
+          'cancel plain',
+        )) {
+          plainEvents.add(event);
+          if (event['type'] == 'delta') {
+            expect(event['text'], 'first chunk');
+            expect(runtime.cancel(requestId: 'cancel-plain'), isTrue);
+          }
+        }
+        expect(plainEvents.last['status'], 'cancelled');
+        expect(
+          plainEvents.where((event) => event['type'] == 'delta'),
+          hasLength(1),
+        );
         final cancelled = await generate(
           'cancel-owner',
           'cancel',

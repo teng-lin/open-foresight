@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -15,17 +16,22 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final directory = Directory.systemTemp.createTempSync('meeting-chat-ui-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final alpha = store.meeting('Alpha');
       final beta = store.meeting('Beta');
       try {
         await tester.pumpWidget(
           Foresight(
-            Domain(
-              store,
-              OfflineHelper(
-                '${directory.path}/socket',
-                '${directory.path}/helper',
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper(
+                  '${directory.path}/socket',
+                  '${directory.path}/helper',
+                ),
               ),
             ),
             deviceLoader: () async => [],
@@ -34,8 +40,8 @@ void main() {
         final dynamic state = tester.state(find.byType(Workspace));
         for (final id in [alpha, beta]) {
           state.update(() {
-            state.meetingId = id;
-            state.meetingPanel = 'Chat';
+            state.meetingFeature.meetingId = id;
+            state.meetingFeature.meetingPanel = 'Chat';
           });
           await tester.pumpAndSettle();
           if (id == beta) {
@@ -59,7 +65,7 @@ void main() {
           await tester.pumpAndSettle();
         }
         state.update(() {
-          state.meetingId = null;
+          state.meetingFeature.meetingId = null;
           state.tab = 1;
         });
         await tester.pumpAndSettle();

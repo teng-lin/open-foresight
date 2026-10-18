@@ -374,7 +374,12 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("fixture license")
             digest = hashlib.sha256(library.read_bytes()).hexdigest()
-            extensions = SimpleNamespace(manifest={"library_sha256": digest})
+            extensions = SimpleNamespace(
+                manifest={
+                    "library_sha256": digest,
+                    "upstream_commit": "b2f686e2ed4718fb84ec398a61dd59ca0f0aff27",
+                }
+            )
             output = root / "bundle"
             arguments = [
                 "package.py",
@@ -499,14 +504,10 @@ class LinuxDocumentImportTest(unittest.TestCase):
             if shutil.which(name) is None
         ]
         if missing:
-            print(
-                "PDF/RTF import was not executed; missing: "
-                + ", ".join(missing)
-                + ". Package metadata declares poppler-utils (deb, rpm), poppler (arch), and unrtf. "
-                + "No successful import was fabricated.",
-                flush=True,
-            )
-            return
+            diagnostic = "PDF/RTF import prerequisites missing: " + ", ".join(missing)
+            if os.environ.get("FORESIGHT_REQUIRE_DOCUMENT_SANDBOX") == "1":
+                self.fail(diagnostic)
+            self.skipTest(diagnostic)
         phrase = "Foresight import fixture"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -644,10 +645,13 @@ class SpeechCpuBlockTest(unittest.TestCase):
         body = native[
             native.index("int fs_speech_finish") : native.index("int fs_speech_cancel")
         ]
-        self.assertLess(body.index("linux_speech_cpu_block"), body.index("run(s,"))
+        self.assertLess(
+            body.index("linux_speech_cpu_block"), body.index("run_persistent(")
+        )
+        self.assertLess(body.index("linux_speech_cpu_block"), body.index("return run("))
         self.assertIn(
             "speech_runtime_failure",
-            body[body.index("linux_speech_cpu_block") : body.index("run(s,")],
+            body[body.index("linux_speech_cpu_block") : body.index("run_persistent(")],
         )
 
 

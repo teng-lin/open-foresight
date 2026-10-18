@@ -1,41 +1,58 @@
+import 'rpc_error.dart';
+import 'operations.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'google_auth.dart';
-import 'google_connections.dart';
-import 'domain.dart';
+import 'desktop_connection.dart';
 import 'helper.dart';
-import 'native.dart';
 import 'profile_paths.dart';
-import 'recording.dart';
 import 'service.dart';
 import 'store.dart';
 import 'generated/helper_control.pb.dart' as control;
 
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
-class RemoteDomain extends Domain {
+class RemoteDomain implements DesktopConnection {
+  @override
+  final Store store;
+  @override
+  final Helper helper;
+  @override
+  GenerationStatus? generator;
+  @override
+  late final GoogleAccount googleAuth = RemoteGoogleAuth(this);
+  @override
+  late final ConnectedSources google = RemoteGoogleConnections(
+    this,
+    googleAuth,
+  );
   ServiceClient client;
+  @override
   final RemoteRuntime runtime;
   final ProfilePaths profile;
   void Function(Map<String, dynamic>)? _approvalEvents;
+  @override
   Future<void> enableDesktopApprovals(
     void Function(Map<String, dynamic>) events,
   ) async {
     _approvalEvents = events;
-    await client.call('security.attach_desktop', {
+    await client.call(Operation.securityAttachDesktop.wire, {
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });
   }
 
+  @override
   Future<void> disableDesktopApprovals() async {
     _approvalEvents = null;
-    await client.call('security.detach_desktop');
+    await client.call(Operation.securityDetachDesktop.wire);
   }
 
   bool _disposed = false;
   bool _reconnecting = false;
+  @override
   Map<String, dynamic> capture = {};
+  @override
   Map<String, dynamic> googleStatus = {};
   bool _paused = false;
   int _sourceControlRevision = 0;
@@ -44,19 +61,23 @@ class RemoteDomain extends Domain {
   bool get webSearchAvailable => _webSearchAvailable;
   StreamSubscription<Map<String, dynamic>>? _events;
   RemoteDomain._(
-    super.store,
-    super.helper,
+    this.store,
+    this.helper,
     this.client,
     this.runtime,
     this.profile,
   ) {
     _listen();
   }
+  String? _eventSignature;
   void _apply(Map<String, dynamic> event) {
     if (event['event'] == 'approval' || event['event'] == 'approval_closed') {
       _approvalEvents?.call(event);
       return;
     }
+    final signature = jsonEncode(event);
+    if (_eventSignature == signature) return;
+    _eventSignature = signature;
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});
@@ -102,7 +123,11 @@ class RemoteDomain extends Domain {
           _listen();
           final approvals = _approvalEvents;
           if (approvals != null) await enableDesktopApprovals(approvals);
-          _apply(Map<String, dynamic>.from(await next.call('status') as Map));
+          _apply(
+            Map<String, dynamic>.from(
+              await next.call(Operation.status.wire) as Map,
+            ),
+          );
           return;
         } catch (error) {
           helper.state = 'application service reconnect failed: $error';
@@ -129,7 +154,7 @@ class RemoteDomain extends Domain {
       profile,
     );
     final status = Map<String, dynamic>.from(
-      await client.call('status') as Map,
+      await client.call(Operation.status.wire) as Map,
     );
     domain._apply(status);
     return domain;
@@ -137,24 +162,24 @@ class RemoteDomain extends Domain {
 
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]) async {
     if (_approvalEvents != null &&
-        (method == 'sources.import_file' ||
-            method == 'sources.import_directory')) {
+        (operation == Operation.sourcesImportFile ||
+            operation == Operation.sourcesImportDirectory)) {
       final path = args['path'] as String;
-      await client.call('security.allow_import_root', {
-        'path': method == 'sources.import_directory'
+      await client.call(Operation.securityAllowImportRoot.wire, {
+        'path': operation == Operation.sourcesImportDirectory
             ? path
             : File(path).parent.path,
       });
     }
-    return client.call(method, args);
+    return client.call(operation.wire, args);
   }
 
   Stream<Object?> _streamCurrent(
-    String method,
+    Operation operation,
     Map<String, dynamic> args,
     bool Function()? current,
   ) {
@@ -163,7 +188,9 @@ class RemoteDomain extends Domain {
     Timer? timer;
     void cancelled() {
       if (controller.isClosed) return;
-      controller.addError(StateError('Operation cancelled'));
+      controller.addError(
+        RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
+      );
       timer?.cancel();
       unawaited(subscription?.cancel());
       unawaited(controller.close());
@@ -176,7 +203,7 @@ class RemoteDomain extends Domain {
           return;
         }
         subscription = client
-            .stream(method, args)
+            .stream(operation.wire, args)
             .listen(
               (value) {
                 if (controller.isClosed) return;
@@ -210,12 +237,12 @@ class RemoteDomain extends Domain {
 
   @override
   Future<Object?> commandCurrent(
-    String method,
+    Operation operation,
     Map<String, dynamic> args,
     bool Function() current,
   ) async {
     Object? result;
-    await for (final value in _streamCurrent(method, args, current)) {
+    await for (final value in _streamCurrent(operation, args, current)) {
       result = value;
     }
     return result;
@@ -223,37 +250,37 @@ class RemoteDomain extends Domain {
 
   @override
   Future<void> index(String id) async {
-    await command('sources.index', {'id': id});
+    await command(Operation.sourcesIndex, {'id': id});
   }
 
   @override
   Future<void> delete(String id) async {
-    await command('sources.delete', {'id': id});
+    await command(Operation.sourcesDelete, {'id': id});
   }
 
   @override
   Future<void> resume() async {
-    await command('application.resume');
+    await command(Operation.applicationResume);
   }
 
   @override
   bool get sourcesPaused => _paused;
   @override
   void pauseSources() {
-    _sourceControl('sources.pause', true);
+    _sourceControl(Operation.sourcesPause, true);
   }
 
   @override
   void resumeSources() {
-    _sourceControl('sources.resume', false);
+    _sourceControl(Operation.sourcesResume, false);
   }
 
-  void _sourceControl(String method, bool paused) {
+  void _sourceControl(Operation operation, bool paused) {
     final previous = _paused;
     final revision = ++_sourceControlRevision;
     _paused = paused;
     unawaited(
-      command(method).catchError((Object error) {
+      command(operation).catchError((Object error) {
         if (!_disposed) {
           if (revision == _sourceControlRevision) _paused = previous;
           helper.state = 'Source control failed: $error';
@@ -267,10 +294,12 @@ class RemoteDomain extends Domain {
   @override
   Future<void> waitForSourceWork() async {
     while (_paused) {
-      if (_disposed) throw StateError('Workspace closed');
+      if (_disposed) throw RpcError(RpcErrorCode.cancelled, 'Workspace closed');
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
   }
+
+  Stream<String> ask(String question) => askInConversation(question, 'desktop');
 
   @override
   Stream<String> askInConversation(
@@ -280,14 +309,18 @@ class RemoteDomain extends Domain {
     int? meetingId,
     bool Function()? current,
   }) async* {
-    if (current != null && !current()) throw StateError('Answer cancelled');
-    await for (final value in _streamCurrent('answer.stream', {
+    if (current != null && !current()) {
+      throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+    }
+    await for (final value in _streamCurrent(Operation.answerStream, {
       'question': question,
       'conversation': conversation,
       if (requestId != null) 'requestId': requestId,
       if (meetingId != null) 'meeting_id': meetingId,
     }, current)) {
-      if (current != null && !current()) throw StateError('Answer cancelled');
+      if (current != null && !current()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+      }
       yield value as String;
     }
   }
@@ -300,15 +333,19 @@ class RemoteDomain extends Domain {
     int? meetingId,
     bool Function()? current,
   }) async* {
-    if (current != null && !current()) throw StateError('Answer cancelled');
-    await for (final value in _streamCurrent('answer.stream', {
+    if (current != null && !current()) {
+      throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+    }
+    await for (final value in _streamCurrent(Operation.answerStream, {
       'question': question,
       'conversation': conversation,
       'web_search': true,
       if (requestId != null) 'requestId': requestId,
       if (meetingId != null) 'meeting_id': meetingId,
     }, current)) {
-      if (current != null && !current()) throw StateError('Answer cancelled');
+      if (current != null && !current()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+      }
       yield value as String;
     }
   }
@@ -318,7 +355,7 @@ class RemoteDomain extends Domain {
     List<Map<String, Object?>> sources,
   ) async {
     final result =
-        await command('graph.embeddings', {'sources': sources}) as Map;
+        await command(Operation.graphEmbeddings, {'sources': sources}) as Map;
     return result.map(
       (k, v) => MapEntry(
         k as String,
@@ -332,7 +369,6 @@ class RemoteDomain extends Domain {
     _disposed = true;
     unawaited(_events?.cancel());
     unawaited(client.close());
-    super.close();
   }
 }
 
@@ -347,7 +383,7 @@ class RemoteHelper extends Helper {
   }
 }
 
-class RemoteRuntime implements NativeRuntime {
+class RemoteRuntime implements GenerationStatus {
   ServiceClient client;
   Map<String, dynamic> state = {};
   RemoteRuntime(this.client);
@@ -360,11 +396,9 @@ class RemoteRuntime implements NativeRuntime {
       client.cancelAnswers(requestId: requestId);
   @override
   void close() {} // The service owns this worker.
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class RemoteRecording implements Recording {
+class RemoteRecording implements RecordingStatus {
   final Map<String, dynamic> snapshot;
   RemoteRecording(this.snapshot);
   @override
@@ -393,11 +427,9 @@ class RemoteRecording implements Recording {
       .toList();
   @override
   void dispose() {}
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class RemoteGoogleAuth implements GoogleAuth {
+class RemoteGoogleAuth implements GoogleAccount {
   final RemoteDomain domain;
   RemoteGoogleAuth(this.domain);
   @override
@@ -413,19 +445,24 @@ class RemoteGoogleAuth implements GoogleAuth {
   @override
   GoogleClient? get client =>
       domain.googleStatus['configured'] == true ? GoogleClient('', '') : null;
-  Future<void> _call(String op, [Map<String, dynamic> a = const {}]) async {
+  Future<void> _call(
+    Operation operation, [
+    Map<String, dynamic> a = const {},
+  ]) async {
     domain.googleStatus = Map<String, dynamic>.from(
-      await domain.command(op, a) as Map,
+      await domain.command(operation, a) as Map,
     );
   }
 
   @override
   Future<void> configure(File file) =>
-      _call('google.configure', {'path': file.path});
+      _call(Operation.googleConfigure, {'path': file.path});
   @override
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
     try {
-      await for (final value in domain.client.stream('google.sign_in')) {
+      await for (final value in domain.client.stream(
+        Operation.googleSignIn.wire,
+      )) {
         final state = Map<String, dynamic>.from(value as Map);
         if (state['authorization_url'] is String) {
           await openBrowser(Uri.parse(state['authorization_url'] as String));
@@ -434,29 +471,25 @@ class RemoteGoogleAuth implements GoogleAuth {
         }
       }
     } catch (_) {
-      await _call('google.cancel_sign_in');
+      await _call(Operation.googleCancelSignIn);
       rethrow;
     }
   }
 
   @override
   void cancelSignIn() {
-    unawaited(_call('google.cancel_sign_in'));
+    unawaited(_call(Operation.googleCancelSignIn));
   }
 
   @override
-  Future<void> disconnect() => _call('google.disconnect');
+  Future<void> disconnect() => _call(Operation.googleDisconnect);
   @override
   Future<void> close() async {}
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
-class RemoteGoogleConnections implements GoogleConnections {
-  @override
+class RemoteGoogleConnections implements ConnectedSources {
   final RemoteDomain domain;
-  @override
-  final GoogleAuth auth;
+  final GoogleAccount auth;
   RemoteGoogleConnections(this.domain, this.auth);
   @override
   int get lastCompletedRefreshMs =>
@@ -467,7 +500,7 @@ class RemoteGoogleConnections implements GoogleConnections {
     String query = '',
     DateTime? modifiedAfter,
   }) async =>
-      (await domain.command('google.drive_files', {
+      (await domain.command(Operation.googleDriveFiles, {
                 'parent': parent,
                 'query': query,
                 'modifiedAfter': modifiedAfter?.toIso8601String(),
@@ -481,7 +514,7 @@ class RemoteGoogleConnections implements GoogleConnections {
     Map<String, dynamic>? metadata,
     bool preserveDeleted = false,
   }) async {
-    await domain.command('google.import_file', {'id': fileId});
+    await domain.command(Operation.googleImportFile, {'id': fileId});
   }
 
   @override
@@ -489,12 +522,12 @@ class RemoteGoogleConnections implements GoogleConnections {
     String folderId, {
     bool refreshing = false,
   }) async {
-    await domain.command('google.import_folder', {'id': folderId});
+    await domain.command(Operation.googleImportFolder, {'id': folderId});
   }
 
   @override
   Future<void> importLastYear() async {
-    await domain.command('google.import_year');
+    await domain.command(Operation.googleImportYear);
   }
 
   @override
@@ -502,17 +535,17 @@ class RemoteGoogleConnections implements GoogleConnections {
     String calendarId = 'primary',
     DateTime? now,
   }) async {
-    await domain.command('google.calendar');
+    await domain.command(Operation.googleCalendar);
   }
 
   @override
   Future<void> refresh() async {
-    await domain.command('google.refresh');
+    await domain.command(Operation.googleRefresh);
   }
 
   @override
   Future<void> importAttachments(int meeting) async {
-    await domain.command('google.attachments', {'id': meeting});
+    await domain.command(Operation.googleAttachments, {'id': meeting});
   }
 
   @override
@@ -529,13 +562,9 @@ class RemoteGoogleConnections implements GoogleConnections {
         .toList();
   }
 
-  @override
   Future<void> reminders(
     DateTime now,
     Future<void> Function(String) deliver,
   ) async {} // Service timer owns delivery.
-  @override
   void close() {}
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }

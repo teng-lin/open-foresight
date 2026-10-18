@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -14,6 +15,7 @@ abstract interface class QueryCompletionRuntime {
 class _QueryRequest {
   final String id;
   final result = Completer<String>();
+  bool cancelled = false;
   _QueryRequest(this.id) {
     result.future.ignore();
   }
@@ -80,16 +82,17 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
     if (_process != null) return;
     final epoch = _epoch;
     final process = await _startProcess(python, [
-      '-I',
-      '-B',
-      worker,
+      if (python != worker) ...['-I', '-B', worker],
       '--model',
       model,
     ]);
     if (_closed || epoch != _epoch) {
       process.kill(ProcessSignal.sigkill);
       await process.exitCode;
-      throw StateError('Dedicated query detection cancelled');
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Dedicated query detection cancelled',
+      );
     }
     _process = process;
     _stderr = '';
@@ -177,8 +180,15 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
 
   @override
   Future<String> complete(String prompt, String requestId) async {
-    if (_closed) throw StateError('Dedicated query detector is closed');
-    if (_active != null) throw StateError('Dedicated query detector is busy');
+    if (_closed) {
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Dedicated query detector is closed',
+      );
+    }
+    if (_active != null) {
+      throw RpcError(RpcErrorCode.busy, 'Dedicated query detector is busy');
+    }
     final request = _active = _QueryRequest(requestId);
     final timer = Timer(timeout, () {
       if (identical(_active, request)) {
@@ -199,6 +209,17 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
       }
       return await request.result.future;
     } catch (error) {
+      if (_closed || request.cancelled) {
+        final failure =
+            error is RpcError && error.code == RpcErrorCode.cancelled
+            ? error
+            : RpcError(
+                RpcErrorCode.cancelled,
+                'Dedicated query detection cancelled',
+              );
+        _stop(failure);
+        throw failure;
+      }
       _stop(error);
       rethrow;
     } finally {
@@ -211,7 +232,10 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
   @override
   void cancel(String requestId) {
     if (_active?.id == requestId) {
-      _stop(StateError('Dedicated query detection cancelled'));
+      _active!.cancelled = true;
+      _stop(
+        RpcError(RpcErrorCode.cancelled, 'Dedicated query detection cancelled'),
+      );
     }
   }
 
@@ -223,7 +247,7 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
     final process = _process;
     final busy = _active != null;
     _epoch++;
-    _fail(StateError('Dedicated query detector closed'));
+    _fail(RpcError(RpcErrorCode.cancelled, 'Dedicated query detector closed'));
     _process = null;
     if (process != null) {
       if (busy) {

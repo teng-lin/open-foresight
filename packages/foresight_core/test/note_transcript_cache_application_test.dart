@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -98,6 +100,9 @@ Future<void> withTranscriptFixture(
   run,
 ) async {
   final directory = Directory.systemTemp.createTempSync('note-cache-app-');
+  addTearDown(() {
+    if (directory.existsSync()) directory.deleteSync(recursive: true);
+  });
   final socket = '${directory.path}/sock';
   final embeddings = EmbeddingService();
   final server = Server.create(services: [embeddings]);
@@ -219,7 +224,7 @@ void main() {
           await domain.application.enhanceNotes(id);
           final model = File('${directory.path}/embedding.litertlm');
           model.writeAsStringSync('ABI fixture model');
-          final change = domain.command('models.embedding', {
+          final change = domain.command(Operation.modelsEmbedding, {
             'path': model.path,
             if (!registrySucceeds) 'digest': 'incorrect-digest',
           });
@@ -237,7 +242,7 @@ void main() {
 
           embeddings.modelUpdateSucceeds = false;
           await expectLater(
-            domain.command('models.embedding', {'path': model.path}),
+            domain.command(Operation.modelsEmbedding, {'path': model.path}),
             throwsStateError,
           );
           await domain.application.enhanceNotes(id);
@@ -270,7 +275,10 @@ void main() {
           await embeddings.embeddingEntered.future;
           expect(runtime.generating, isFalse);
           expect(runtime.prompts, isEmpty);
-          for (final method in ['models.embedding', 'models.generation']) {
+          for (final method in [
+            Operation.modelsEmbedding,
+            Operation.modelsGeneration,
+          ]) {
             await expectLater(
               domain.command(method, {'path': '/unused'}),
               throwsStateError,
@@ -309,7 +317,7 @@ void main() {
               domain.application.captureState['note_enhancements'] as Map;
           final state = states['$id'] as Map;
           expect(
-            await domain.command('meetings.cancel_enhance', {
+            await domain.command(Operation.meetingsCancelEnhance, {
               'id': id,
               'request_id': state['request_id'],
             }),
@@ -411,6 +419,9 @@ void main() {
     'saved transcript append refreshes complete embedded grounding cache',
     () async {
       final directory = Directory.systemTemp.createTempSync('note-cache-app-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final socket = '${directory.path}/sock';
       final embeddings = EmbeddingService();
       final server = Server.create(services: [embeddings]);
@@ -442,7 +453,7 @@ void main() {
         expect(runtime.prompts.first, isNot(contains('Novel evidence')));
         expect(embeddings.texts, ['Original evidence', 'Raw note']);
 
-        await domain.command('meetings.transcript', {
+        await domain.command(Operation.meetingsTranscript, {
           'id': id,
           'text': 'Novel evidence',
         });

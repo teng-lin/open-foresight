@@ -247,6 +247,7 @@ class Generator {
   std::unique_ptr<LiteRtLmEngine, void (*)(LiteRtLmEngine *)> engine;
   std::unique_ptr<LiteRtLmConversation, void (*)(LiteRtLmConversation *)> base;
   std::string base_key;
+  std::function<bool(void *)> request_registration;
 
 public:
   Generator(LiteRt &api, const std::string &path, bool gpu,
@@ -290,6 +291,9 @@ public:
         foresight::startup_warning, config.vision,
         [&] { settings = make_settings(false); });
   }
+  void register_request(std::function<bool(void *)> callback) {
+    request_registration = std::move(callback);
+  }
   void cancel(void *pointer) {
     LM(conversation_cancel_process)(
         static_cast<LiteRtLmConversation *>(pointer));
@@ -306,7 +310,9 @@ public:
   generate(const std::string &prompt, int budget, bool grounded = false,
            const json &schema = nullptr, std::ostream *stream = nullptr,
            const json &tools = nullptr, std::istream *controls = nullptr,
-           const std::function<bool(void *)> &register_conversation = {}) {
+           const std::function<bool(void *)> &registration_callback = {}) {
+    const auto &register_conversation =
+        registration_callback ? registration_callback : request_registration;
     const auto tool_request = tools.is_null()
                                   ? foresight::ToolRequest{}
                                   : foresight::parse_tool_request(tools);
@@ -528,6 +534,8 @@ public:
                                                message.c_str(), nullptr,
                                                args.get(), callback, slot))
         throw std::runtime_error("Generation stream failed to start");
+      if (register_conversation)
+        register_conversation(conversation.get());
       std::unique_lock lock(slot->state.mutex);
       slot->state.changed.wait(lock, [&] { return slot->state.done; });
       if (!slot->state.error.empty())
@@ -654,10 +662,40 @@ int main(int argc, char **argv) {
           std::cin, protocol,
           [&](const json &request, std::istream &controls, std::ostream &frames,
               const std::function<bool(void *)> &registration) {
-            generator.generate(request.at("prompt").get<std::string>(),
-                               request.value("max_output_tokens", 256), false,
-                               nullptr, &frames, request.at("tools"), &controls,
-                               registration);
+            generator.register_request(registration);
+            struct Reset {
+              Generator &generator;
+              ~Reset() {
+                generator.register_request({});
+              }
+            } reset{generator};
+            const auto schema = request.value("schema", json(nullptr));
+            const auto tools = request.value("tools", json(nullptr));
+            const auto budget = request.value("max_output_tokens", 256);
+            if (!schema.is_null() && !schema.is_object())
+              throw std::runtime_error("JSON schema must be an object");
+            if (!tools.is_null()) {
+              generator.generate(request.at("prompt").get<std::string>(),
+                                 budget, false, schema, &frames, tools,
+                                 &controls, registration);
+            } else {
+              if (schema.contains("x-foresight-grounded-request")) {
+                // Verification must finish before exposing a grounded answer.
+                frames << "text "
+                       << json(grounded_answer(
+                                   generator,
+                                   schema.at("x-foresight-grounded-request"),
+                                   budget)
+                                   .dump())
+                              .dump()
+                       << std::endl;
+              } else {
+                foresight::TextFrameBuffer chunks(frames);
+                std::ostream text_stream(&chunks);
+                generator.generate(request.at("prompt").get<std::string>(),
+                                   budget, false, schema, &text_stream);
+              }
+            }
           },
           [&](void *pointer) { generator.cancel(pointer); });
       return 0;

@@ -15,11 +15,11 @@ get_filename_component(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 set(GEN "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GEN}")
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
-set(RECOVERED_STEM "research/xeno/labs/foresight/launch_agent/proto/rag_service")
+set(RECOVERED_STEM "rag_service")
 set(GENERATED "${GEN}/${RECOVERED_STEM}.pb.cc" "${GEN}/${RECOVERED_STEM}.grpc.pb.cc" "${GEN}/helper_control.pb.cc" "${GEN}/helper_control.grpc.pb.cc")
 add_custom_command(OUTPUT "${GEN}/${RECOVERED_STEM}.pb.cc" "${GEN}/${RECOVERED_STEM}.pb.h" "${GEN}/${RECOVERED_STEM}.grpc.pb.cc" "${GEN}/${RECOVERED_STEM}.grpc.pb.h"
  COMMAND ${Python3_EXECUTABLE} "${REPO_ROOT}/tools/generate_bindings.py" --language cpp --output ${GEN} --protoc $<TARGET_FILE:protobuf::protoc> --grpc-plugin $<TARGET_FILE:gRPC::grpc_cpp_plugin>
- DEPENDS "${REPO_ROOT}/proto/rag/rag_service.descriptor.pb" "${REPO_ROOT}/tools/generate_bindings.py" VERBATIM)
+ DEPENDS "${REPO_ROOT}/proto/rag/rag_service.descriptor.pb" "${REPO_ROOT}/proto/rag/rag_service.proto" "${REPO_ROOT}/tools/generate_bindings.py" VERBATIM)
 add_custom_command(OUTPUT "${GEN}/helper_control.pb.cc" "${GEN}/helper_control.pb.h" "${GEN}/helper_control.grpc.pb.cc" "${GEN}/helper_control.grpc.pb.h"
  COMMAND protobuf::protoc ARGS --proto_path=${REPO_ROOT}/proto/linux --cpp_out=${GEN} --grpc_out=${GEN} --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin> ${REPO_ROOT}/proto/linux/helper_control.proto
  DEPENDS "${REPO_ROOT}/proto/linux/helper_control.proto" VERBATIM)
@@ -37,6 +37,9 @@ target_compile_definitions(ForesightHelper PRIVATE FORESIGHT_BUILD_ID="open-fore
 install(TARGETS ForesightHelper RUNTIME DESTINATION bin)
 include(CTest)
 if(BUILD_TESTING)
+ add_executable(helper_vector_index_test "${REPO_ROOT}/tests/helper/vector_index.cpp")
+ target_include_directories(helper_vector_index_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+ add_test(NAME helper_vector_index COMMAND helper_vector_index_test)
  add_executable(helper_contract_test "${REPO_ROOT}/tests/helper/contract.cpp")
  target_link_libraries(helper_contract_test PRIVATE foresight_protocol SQLite3::SQLite3)
  add_test(NAME helper_contract COMMAND helper_contract_test $<TARGET_FILE:ForesightHelper>)

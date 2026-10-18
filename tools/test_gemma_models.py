@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Run real local Gemma native/helper acceptance without account data."""
 
-from typing import Any
-
 import argparse
 import os
 from pathlib import Path
@@ -34,13 +32,6 @@ def main():
         ),
     )
     parser.add_argument(
-        "--python",
-        type=Path,
-        default=Path(
-            os.environ.get("FORESIGHT_MODEL_PYTHON", ROOT / ".venv/bin/python")
-        ),
-    )
-    parser.add_argument(
         "--runner", type=Path, default=ROOT / "build/services/inference/foresight-model"
     )
     parser.add_argument(
@@ -64,33 +55,25 @@ def main():
         else ROOT / "build/native" / native_name
     )
     runner = bundle / "bin/foresight-model" if args.bundle else args.runner.resolve()
-    worker = runner
+    worker = (
+        bundle / "bin/foresight-model"
+        if args.bundle
+        else ROOT / "build/services/inference/foresight-model"
+    )
     helper = (
         bundle / "bin/ForesightHelper"
         if args.bundle
         else ROOT / "build/services/helper/ForesightHelper"
     )
-    library = (
-        bundle / "lib/liblitert-lm.so"
-        if args.bundle
-        else ROOT / "build/lib/liblitert-lm.so"
+    library_name = (
+        "liblitert-lm.dylib" if sys.platform == "darwin" else "liblitert-lm.so"
     )
-    extra: dict[str, Any] = {}
+    library = (
+        bundle / "lib" / library_name
+        if args.bundle
+        else ROOT / "build/lib" / library_name
+    )
     if sys.platform == "darwin":
-        adapters = ROOT / "services/inference/macos"
-        extra = {
-            "FORESIGHT_LITERT_EMBEDDING_ADAPTER": str(
-                adapters / "litert_embedding_adapter.py"
-            ),
-            "FORESIGHT_MODEL_PYTHON": str(args.python.expanduser().absolute()),
-            "FORESIGHT_LITERT_PYTHON": str(args.python.expanduser().absolute()),
-        }
-        worker = ROOT / "build/services/inference/foresight-model"
-        if not args.bundle and runner == worker.resolve():
-            parser.error(
-                "On macOS, pass --runner pointing to a LiteRT generation runner, "
-                "or test a packaged .app with --bundle"
-            )
         if args.bundle and bundle.suffix != ".app":
             parser.error("On macOS, --bundle must point to a packaged .app")
         if args.bundle:
@@ -103,7 +86,7 @@ def main():
                 "FORESIGHT_HELPER",
                 "FORESIGHT_LITERT_RUNNER",
                 "FORESIGHT_MODEL_WORKER",
-                *extra,
+                "FORESIGHT_LITERT_LIBRARY",
             )
             missing = [
                 key
@@ -122,7 +105,7 @@ def main():
             helper = resource("FORESIGHT_HELPER")
             runner = resource("FORESIGHT_LITERT_RUNNER")
             worker = resource("FORESIGHT_MODEL_WORKER")
-            extra = {key: str(resource(key)) for key in extra}
+            library = resource("FORESIGHT_LITERT_LIBRARY")
     report = args.report.resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -135,11 +118,7 @@ def main():
             "FORESIGHT_LITERT_RUNNER": str(runner),
             "FORESIGHT_HELPER": str(helper),
             "FORESIGHT_MODEL_WORKER": str(worker),
-            **(
-                {"FORESIGHT_LITERT_LIBRARY": str(library)}
-                if sys.platform != "darwin"
-                else extra
-            ),
+            "FORESIGHT_LITERT_LIBRARY": str(library),
             "FORESIGHT_EMBEDDING": str(args.embedding.resolve()),
             "FORESIGHT_GEMMA_REPORT": str(report),
             "LD_LIBRARY_PATH": str(bundle / "lib"),

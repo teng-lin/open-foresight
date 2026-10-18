@@ -125,9 +125,6 @@ def resolve_dependency(
 def executable_context(binary, app):
     if "EXECUTE" in run("otool", "-hv", binary):
         return binary
-    python = app / "Contents/Resources/python/bin/python3"
-    if binary.is_relative_to(app / "Contents/Resources/python") and python.exists():
-        return python.resolve()
     import plistlib
 
     for parent in binary.parents:
@@ -250,10 +247,10 @@ def audit_dependencies(app):
     return records
 
 
-def sign_application(app, identity, entitlements):
+def sign_application(app, identity, entitlements, *, before_seal=None):
     if identity == "-":
         # Ad-hoc signatures have no Team ID, so hardened runtime cannot match
-        # the host with its re-signed Python/FFI modules. Keep this exception
+        # the host with its re-signed FFI libraries. Keep this exception
         # exclusive to development; Developer ID signs all code with one team.
         with tempfile.TemporaryDirectory(prefix="foresight-dev-sign-") as folder:
             with Path(entitlements).open("rb") as stream:
@@ -262,11 +259,13 @@ def sign_application(app, identity, entitlements):
             development = Path(folder) / "Development.entitlements"
             with development.open("wb") as stream:
                 plistlib.dump(values, stream)
-            return _sign_application(app, identity, development)
-    return _sign_application(app, identity, entitlements)
+            return _sign_application(
+                app, identity, development, before_seal=before_seal
+            )
+    return _sign_application(app, identity, entitlements, before_seal=before_seal)
 
 
-def _sign_application(app, identity, entitlements):
+def _sign_application(app, identity, entitlements, *, before_seal=None):
     app = app.resolve()
     service = app / "Contents/Library/Services/Open Foresight Service.app"
     aot_paths = {
@@ -301,6 +300,8 @@ def _sign_application(app, identity, entitlements):
 
         for binary in sorted(binaries(app), key=lambda p: len(p.parts), reverse=True):
             sign(binary)
+        if before_seal is not None:
+            before_seal()
         containers = [
             p
             for p in app.rglob("*")

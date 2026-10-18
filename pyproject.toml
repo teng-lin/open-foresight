@@ -15,7 +15,7 @@ ignore = ["S603", "S607"]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["tools", "services/inference/macos", "native/setup_models.py", "packaging"]
+files = ["tools", "native/setup_models.py", "packaging"]
 exclude = ["build/", "dist/", "third_party/"]
 # Check every production script, including script functions without annotations.
 # Tests use dynamic native API doubles; ruff and runtime tests cover that tree.

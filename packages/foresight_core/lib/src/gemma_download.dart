@@ -1,3 +1,4 @@
+import 'model_pins.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:io';
@@ -77,45 +78,26 @@ Future<int> availableModelDiskBytes(Directory directory) async {
 
 // Pinned public artifact metadata, independently verified 2026-10-13. These
 // are not assumed identical to Foresight's encrypted Mac service artifacts.
-const gemmaModels = [
-  GemmaModel(
-    'Gemma 4 12B',
-    'litert-community/gemma-4-12B-it-litert-lm',
-    '7a0b1ce0ea821bcd01c5f72af84155e02191152f',
-    'gemma-4-12B-it.litertlm',
-    '58fd31b778ca2c21c80d634fb34fc5a89d11d563a38dfd3cbf1b40dbf252a8b6',
-    6883278368,
-    30,
-  ),
-  GemmaModel(
-    'Gemma 4 E4B',
-    'litert-community/gemma-4-E4B-it-litert-lm',
-    '2eee7ac325f20eb8c9ac1d0e972f7c84663062da',
-    'gemma-4-E4B-it.litertlm',
-    '0b2a8980ce155fd97673d8e820b4d29d9c7d99b8fa6806f425d969b145bd52e0',
-    3659530240,
-    15,
-  ),
-  GemmaModel(
-    'Gemma 4 E2B',
-    'litert-community/gemma-4-E2B-it-litert-lm',
-    'b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1',
-    'gemma-4-E2B-it.litertlm',
-    '181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c',
-    2588147712,
-    6,
-  ),
+GemmaModel modelFromPin(String filename) {
+  final pin = modelPin(filename);
+  return GemmaModel(
+    pin['name'] as String,
+    pin['repository'] as String,
+    pin['revision'] as String,
+    pin['filename'] as String,
+    pin['sha256'] as String,
+    pin['bytes'] as int,
+    pin['minimumMemoryGb'] as int,
+  );
+}
+
+final gemmaModels = [
+  modelFromPin('gemma-4-12B-it.litertlm'),
+  modelFromPin('gemma-4-E4B-it.litertlm'),
+  modelFromPin('gemma-4-E2B-it.litertlm'),
 ];
 
-const embeddingGemmaModel = GemmaModel(
-  'EmbeddingGemma 2',
-  'litert-community/embeddinggemma-2-740m-litert-lm',
-  '24d962e906c7d332c6428e71c9676855024569e2',
-  'embeddinggemma-2-740m.litertlm',
-  'e7a8a2204b91e0f96e92960e84a09a89212e1633dcb7575a9bf3378b4df77f4c',
-  484622336,
-  0,
-);
+final embeddingGemmaModel = modelFromPin('embeddinggemma-2-740m.litertlm');
 
 enum ModelDownloadPhase {
   checkingCache,

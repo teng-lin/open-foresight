@@ -144,6 +144,10 @@ def main():
         if not (args.whisper_gpu_runtime.is_file()):
             raise ValueError("Build the Vulkan Whisper runtime first")
         shutil.copy2(args.whisper_gpu_runtime, args.output / "bin/whisper-cli-vulkan")
+        speech_worker = args.whisper_gpu_runtime.parent / "foresight-whisper-worker"
+        if not speech_worker.is_file():
+            raise ValueError("Whisper runtime must include foresight-whisper-worker")
+        shutil.copy2(speech_worker, args.output / "bin/foresight-whisper-worker")
         for name in ("LICENSE", "provenance.json"):
             shutil.copy2(
                 args.whisper_gpu_runtime.parent / name,
@@ -152,6 +156,18 @@ def main():
     shutil.copy2(worker, args.output / "bin/foresight-model")
     shutil.copy2(args.litert_library, args.output / "lib/liblitert-lm.so")
     if extensions is not None:
+        # Bind the copied worker's preflight to the artifact verified above.
+        # The final bundle manifest becomes authoritative once packaging ends.
+        (args.output / "lib/litert-identity.json").write_text(
+            json.dumps(
+                {
+                    "version": "0.18.0",
+                    "upstream_commit": extensions.manifest["upstream_commit"],
+                    "library_sha256": extensions.manifest["library_sha256"],
+                }
+            )
+            + "\n"
+        )
         extension_libraries = copy_linux_extension_dependencies(
             extensions, args.output / "lib"
         )

@@ -1,0 +1,205 @@
+{
+  "name": "helper_control.proto",
+  "package": "foresight.linux.control.v1",
+  "message_type": [
+    {
+      "name": "Empty"
+    },
+    {
+      "name": "WatchRequest",
+      "field": [
+        {
+          "name": "last_revision",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "lastRevision"
+        }
+      ]
+    },
+    {
+      "name": "ModelIdentity",
+      "field": [
+        {
+          "name": "model_digest",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "modelDigest"
+        },
+        {
+          "name": "tokenizer_digest",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "tokenizerDigest"
+        },
+        {
+          "name": "preprocessing",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "preprocessing"
+        },
+        {
+          "name": "backend",
+          "number": 4,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "backend"
+        },
+        {
+          "name": "dimensions",
+          "number": 5,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT32",
+          "json_name": "dimensions"
+        },
+        {
+          "name": "modalities",
+          "number": 6,
+          "label": "LABEL_REPEATED",
+          "type": "TYPE_STRING",
+          "json_name": "modalities"
+        },
+        {
+          "name": "path",
+          "number": 7,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "path"
+        }
+      ]
+    },
+    {
+      "name": "State",
+      "field": [
+        {
+          "name": "build_id",
+          "number": 1,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "buildId"
+        },
+        {
+          "name": "reference_version",
+          "number": 2,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "referenceVersion"
+        },
+        {
+          "name": "instance_id",
+          "number": 3,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "instanceId"
+        },
+        {
+          "name": "revision",
+          "number": 4,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "revision"
+        },
+        {
+          "name": "pipeline",
+          "number": 5,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "pipeline"
+        },
+        {
+          "name": "tokenizer_ready",
+          "number": 6,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_BOOL",
+          "json_name": "tokenizerReady"
+        },
+        {
+          "name": "model",
+          "number": 7,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_MESSAGE",
+          "type_name": ".foresight.linux.control.v1.ModelIdentity",
+          "json_name": "model"
+        },
+        {
+          "name": "active_generation",
+          "number": 8,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "activeGeneration"
+        },
+        {
+          "name": "pending_generation",
+          "number": 9,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "pendingGeneration"
+        },
+        {
+          "name": "index",
+          "number": 10,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "index"
+        },
+        {
+          "name": "attempted",
+          "number": 11,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "attempted"
+        },
+        {
+          "name": "completed",
+          "number": 12,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "completed"
+        },
+        {
+          "name": "failed",
+          "number": 13,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_UINT64",
+          "json_name": "failed"
+        },
+        {
+          "name": "totals_known",
+          "number": 14,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_BOOL",
+          "json_name": "totalsKnown"
+        },
+        {
+          "name": "last_error",
+          "number": 15,
+          "label": "LABEL_OPTIONAL",
+          "type": "TYPE_STRING",
+          "json_name": "lastError"
+        }
+      ]
+    }
+  ],
+  "service": [
+    {
+      "name": "HelperControl",
+      "method": [
+        {
+          "name": "GetState",
+          "input_type": ".foresight.linux.control.v1.Empty",
+          "output_type": ".foresight.linux.control.v1.State"
+        },
+        {
+          "name": "WatchState",
+          "input_type": ".foresight.linux.control.v1.WatchRequest",
+          "output_type": ".foresight.linux.control.v1.State",
+          "server_streaming": true
+        }
+      ]
+    }
+  ],
+  "syntax": "proto3"
+}

@@ -1,6 +1,9 @@
+import 'package:foresight_core/src/rpc_error.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'package:clock/clock.dart';
 import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
 import 'package:test/test.dart';
@@ -61,7 +64,86 @@ void main() {
     });
   }
 
+  test('disposing during finalization returns an owned cancellation', () async {
+    fail(-1);
+    holdSpeech(true);
+    addTearDown(() => holdSpeech(false));
+    final recording = Recording(library, (_) {}, (_, _, _, _) {});
+    addTearDown(recording.dispose);
+    expect(
+      recording.pause,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.notFound),
+      ),
+    );
+    recording.start('/usr/bin/true', model, playback: false);
+    expect(
+      () => recording.start('/usr/bin/true', model, playback: false),
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
+    emit(0, 222, count: 20000);
+    recording.drain();
+    final pending = recording.stop();
+    final rejected = expectLater(
+      pending,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    await expectLater(
+      recording.stop(),
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
+    expect(
+      recording.pause,
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
+    expect(
+      recording.resume,
+      throwsA(isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy)),
+    );
+    recording.dispose();
+    await rejected;
+  });
+
   for (final stopLimit in [Duration.zero, const Duration(milliseconds: 60)]) {
+    test(
+      'live segments reuse their native speech handle until recording stops',
+      () async {
+        final creations = fixture
+            .lookupFunction<Int32 Function(), int Function()>(
+              'fixture_speech_creations',
+            );
+        final before = creations();
+        final rows = <String>[];
+        final recording = Recording(
+          library,
+          (_) {},
+          (text, _, __, ___) => rows.add(text),
+        );
+        try {
+          recording.start('/usr/bin/true', model, playback: false);
+          for (var segment = 0; segment < 3; segment++) {
+            emit(0, 100 + segment, count: 20000);
+            recording.drain();
+            final deadline = DateTime.now().add(const Duration(seconds: 2));
+            while (rows.length <= segment &&
+                DateTime.now().isBefore(deadline)) {
+              await Future<void>.delayed(const Duration(milliseconds: 10));
+            }
+            expect(rows.length, segment + 1);
+          }
+          expect(
+            creations() - before,
+            2,
+            reason: 'One startup probe and one retained speech handle',
+          );
+          await recording.stop();
+        } finally {
+          recording.dispose();
+        }
+      },
+    );
     test(
       'hung speech stop limit ${stopLimit.inMilliseconds} ms retains committed text',
       () async {
@@ -431,9 +513,11 @@ void main() {
     'service commands preserve active ownership while paused and reject stale meeting IDs',
     () async {
       final store = Store('${directory.path}/service.db');
+      var now = DateTime.utc(2026);
       final domain = Domain(
         store,
         Helper('${directory.path}/unused.sock', '${directory.path}/unused'),
+        clock: Clock(() => now),
       );
       final app = domain.application;
       final id = store.meeting('Pause fixture');
@@ -446,17 +530,17 @@ void main() {
         recording.start('/usr/bin/true', model);
         app.recording = recording;
         app.recordingMeeting = id;
-        app.recordingBegan = DateTime.now();
+        app.recordingBegan = now;
         await expectLater(
-          domain.command('meetings.pause', {'id': id + 1}),
+          domain.command(Operation.meetingsPause, {'id': id + 1}),
           throwsStateError,
         );
         expect(recording.paused, false);
         final paused =
-            await domain.command('meetings.pause', {'id': id}) as Map;
+            await domain.command(Operation.meetingsPause, {'id': id}) as Map;
         expect(paused['active'], true);
         expect(paused['paused'], true);
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        now = now.add(const Duration(seconds: 20));
         expect(app.captureState['elapsed_ms'], paused['elapsed_ms']);
         expect(RemoteRecording(Map<String, dynamic>.from(paused)).paused, true);
         expect(
@@ -472,14 +556,14 @@ void main() {
           'paused',
         );
         await expectLater(
-          domain.command('models.speech', {
+          domain.command(Operation.modelsSpeech, {
             'path': 'unused',
             'runtime': 'unused',
           }),
           throwsStateError,
         );
         final resumed =
-            await domain.command('meetings.resume', {'id': id}) as Map;
+            await domain.command(Operation.meetingsResume, {'id': id}) as Map;
         expect(resumed['paused'], false);
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -487,9 +571,13 @@ void main() {
           ]).single['state'],
           'recording',
         );
-        await domain.command('meetings.pause');
-        final stopped = await domain.command('meetings.stop') as Map;
+        await domain.command(Operation.meetingsPause);
+        final stopped = await domain.command(Operation.meetingsStop) as Map;
         expect(stopped['active'], false);
+        expect(stopped['meeting_id'], isNull);
+        expect(stopped['began'], isNull);
+        expect(stopped['elapsed_ms'], 0);
+        expect(app.captureState['elapsed_ms'], 0);
         expect(stopped['paused'], false);
         expect(
           store.rows('SELECT state FROM meetings WHERE id=?', [
@@ -497,7 +585,10 @@ void main() {
           ]).single['state'],
           'empty',
         );
-        await expectLater(domain.command('meetings.resume'), throwsStateError);
+        await expectLater(
+          domain.command(Operation.meetingsResume),
+          throwsStateError,
+        );
       } finally {
         await app.close();
         domain.close();

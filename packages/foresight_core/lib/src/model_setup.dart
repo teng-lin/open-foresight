@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
@@ -29,7 +30,7 @@ Future<NativeRuntime> configureGeneration(
   try {
     onCandidate?.call(candidate);
     if (current != null && !current()) {
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
     final digest = backend == 'litert_lm'
         ? (await sha256.bind(File(model).openRead()).first).toString()
@@ -38,7 +39,7 @@ Future<NativeRuntime> configureGeneration(
         modelType ?? referenceGenerationModelType(digest ?? '');
     await candidate.load(runner, model, backend: backend);
     if (current != null && !current()) {
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
     onRegister?.call();
     await store.register(
@@ -166,7 +167,9 @@ Future<void> configureEncryptedDedicatedQuery(
   bool Function()? current,
   MacModelVault? vault,
 }) async {
-  if (current != null && !current()) throw StateError('Model setup cancelled');
+  if (current != null && !current()) {
+    throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
+  }
   final encrypted = File(path);
   if (FileSystemEntity.typeSync(path, followLinks: false) !=
           FileSystemEntityType.file ||
@@ -213,7 +216,7 @@ Future<String> _prepareDedicatedQuery(
 }) async {
   void checkCurrent() {
     if (current != null && !current()) {
-      throw StateError('Model setup cancelled');
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
   }
 
@@ -233,7 +236,8 @@ Future<String> _prepareDedicatedQuery(
   }
   final python = runtime?.trim().isNotEmpty == true
       ? runtime!
-      : runtimeConfiguration['FORESIGHT_LITERT_PYTHON'];
+      : (runtimeConfiguration['FORESIGHT_QUERY_RUNTIME'] ??
+            runtimeConfiguration['FORESIGHT_LITERT_PYTHON']);
   final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
   if (python == null ||
       !File(python).existsSync() ||
@@ -241,7 +245,7 @@ Future<String> _prepareDedicatedQuery(
       worker == null ||
       !File(worker).existsSync()) {
     throw StateError(
-      'The dedicated question runtime is unavailable. Install a package with its bundled Python runtime.',
+      'The dedicated question runtime is unavailable. Install a package with its bundled question runtime.',
     );
   }
   // The real worker authenticates the model again, imports NumPy/SentencePiece,

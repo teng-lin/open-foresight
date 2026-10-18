@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -19,6 +20,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final temp = Directory.systemTemp.createTempSync('graph-selection-ui-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       final store = Store('${temp.path}/app.db');
       final center = store.importText(
         'Center',
@@ -52,7 +56,7 @@ void main() {
       final opened = <Uri>[];
       await tester.pumpWidget(
         Foresight(
-          domain,
+          TestDesktopConnection(domain),
           deviceLoader: () async => [],
           sourceLinkOpener: (uri) async {
             opened.add(uri);
@@ -81,22 +85,25 @@ void main() {
       });
       final dynamic state = tester.state(find.byType(Workspace));
       Future<void> waitUntil(bool Function() ready) async {
-        for (var i = 0; i < 100 && !ready(); i++) {
-          await tester.runAsync(
-            () => Future<void>.delayed(const Duration(milliseconds: 10)),
-          );
+        for (
+          final pollingClock = Stopwatch()..start();
+          pollingClock.elapsed < const Duration(seconds: 5) && !ready();
+        ) {
+          await tester.runAsync(() => Future<void>(() {}));
           await tester.pump();
         }
         expect(ready(), true);
       }
 
       await waitUntil(
-        () => !state.graphOrganizing && state.graphPoints.length == 9,
+        () =>
+            !state.sourceFeature.graphOrganizing &&
+            state.sourceFeature.graphPoints.length == 9,
       );
       state.update(() {
-        state.graphYaw = 0.0;
-        state.graphPitch = 0.0;
-        state.graphPoints = <String, GraphPoint>{
+        state.sourceFeature.graphYaw = 0.0;
+        state.sourceFeature.graphPitch = 0.0;
+        state.sourceFeature.graphPoints = <String, GraphPoint>{
           center: const GraphPoint(-.8, 0, 0),
           for (var i = 0; i < 7; i++)
             leaves[i]: GraphPoint(.5, (i - 3) * .24, 0),
@@ -121,15 +128,15 @@ void main() {
                       .painter
                   as GraphNodePainter)
               .dimmed;
-      expect(state.graphEdges.length, 7);
+      expect(state.sourceFeature.graphEdges.length, 7);
       expect(visibleEdges(), isEmpty);
       expect(find.byKey(const ValueKey('graph-inspector')), findsNothing);
       await tester.tapAt(
         tester.getCenter(find.byKey(ValueKey('graph-node-$center'))),
       );
       await tester.pump();
-      await waitUntil(() => !state.graphRelatedLoading);
-      expect(state.graphSelectedDocument, center);
+      await waitUntil(() => !state.sourceFeature.graphRelatedLoading);
+      expect(state.sourceFeature.graphSelectedDocument, center);
       expect(
         visibleEdges().length,
         7,
@@ -148,13 +155,32 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
       await tester.pumpAndSettle();
       expect(opened, [Uri.parse('https://example.test/original')]);
+      for (final unsafe in [
+        'javascript:alert(1)',
+        'data:text/html,payload',
+        'file://attacker/share',
+      ]) {
+        store.db.execute(
+          'UPDATE source_details SET source_uri=? WHERE source_id=?',
+          [unsafe, center],
+        );
+        state.update(() {});
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
+        await tester.pumpAndSettle();
+        expect(
+          opened,
+          [Uri.parse('https://example.test/original')],
+          reason: 'The inspector must reject $unsafe before calling the opener',
+        );
+      }
       await tester.ensureVisible(
         find.byKey(ValueKey('graph-related-${leaves.first}')),
       );
       await tester.tap(find.byKey(ValueKey('graph-related-${leaves.first}')));
       await tester.pump();
-      await waitUntil(() => !state.graphRelatedLoading);
-      expect(state.graphSelectedDocument, leaves.first);
+      await waitUntil(() => !state.sourceFeature.graphRelatedLoading);
+      expect(state.sourceFeature.graphSelectedDocument, leaves.first);
       expect(visibleEdges().length, 1);
       expect(find.byKey(const ValueKey('graph-inspector-link')), findsNothing);
       expect(dimmed(leaves.last), true);
@@ -172,30 +198,28 @@ void main() {
       await tester.tap(find.byTooltip('Resume graph animation'));
       await tester.pump();
       await tester.pump();
-      final before = state.graphYaw as double;
+      final before = state.sourceFeature.graphYaw as double;
       await tester.pump(const Duration(seconds: 1));
-      expect(state.graphYaw - before, closeTo(.025, 1e-6));
+      expect(state.sourceFeature.graphYaw - before, closeTo(.025, 1e-6));
       await tester.tapAt(
         tester.getCenter(find.byKey(ValueKey('graph-node-$center'))),
       );
       await tester.pump();
       await tester.pump();
-      expect(state.graphSelectedDocument, center);
-      final selectedYaw = state.graphYaw as double;
+      expect(state.sourceFeature.graphSelectedDocument, center);
+      final selectedYaw = state.sourceFeature.graphYaw as double;
       await tester.pump(const Duration(seconds: 1));
-      expect(state.graphYaw - selectedYaw, closeTo(.00125, 1e-6));
+      expect(state.sourceFeature.graphYaw - selectedYaw, closeTo(.00125, 1e-6));
       await tester.tapAt(
         tester.getCenter(find.byKey(ValueKey('graph-node-${leaves.first}'))),
       );
       await tester.pump();
       await tester.tap(find.byKey(const ValueKey('graph-inspector-close')));
       await tester.pump();
-      await waitUntil(() => !state.graphRelatedLoading);
-      await tester.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 50)),
-      );
+      await waitUntil(() => !state.sourceFeature.graphRelatedLoading);
+      await tester.runAsync(() => Future<void>(() {}));
       await tester.pump();
-      expect(state.graphSelectedDocument, isNull);
+      expect(state.sourceFeature.graphSelectedDocument, isNull);
       expect(visibleEdges(), isEmpty);
       expect(
         domain.requests.length,

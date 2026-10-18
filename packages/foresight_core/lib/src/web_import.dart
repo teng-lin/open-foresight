@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -106,7 +107,7 @@ class WebPageImporter {
     var stopped = false;
     void checkCurrent() {
       if (stopped || (current != null && !current())) {
-        throw StateError('Operation cancelled');
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
       }
     }
 
@@ -136,7 +137,9 @@ class WebPageImporter {
           Future<Socket> establish() async {
             for (var i = 0; i < addresses.length; i++) {
               checkCurrent();
-              if (cancelled) throw StateError('Operation cancelled');
+              if (cancelled) {
+                throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+              }
               try {
                 pending = await _connect(addresses[i], target.port);
                 if (cancelled || stopped) pending!.cancel();
@@ -144,7 +147,7 @@ class WebPageImporter {
                 socket = raw;
                 if (cancelled || stopped) {
                   raw.destroy();
-                  throw StateError('Operation cancelled');
+                  throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
                 }
                 if (target.scheme == 'https') {
                   socket = await SecureSocket.secure(
@@ -155,7 +158,7 @@ class WebPageImporter {
                 }
                 if (cancelled || stopped) {
                   socket!.destroy();
-                  throw StateError('Operation cancelled');
+                  throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
                 }
                 return socket!;
               } on SocketException {
@@ -232,6 +235,11 @@ class WebPageImporter {
           throw StateError('URL import exceeded its time limit.');
         },
       );
+    } catch (_) {
+      if (current != null && !current()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
+      rethrow;
     } finally {
       stopped = true;
       active?.close(force: true);

@@ -125,9 +125,8 @@ def bundle_environment(bundle, inherited):
             "FORESIGHT_HELPER",
             "FORESIGHT_LITERT_RUNNER",
             "FORESIGHT_MODEL_WORKER",
-            "FORESIGHT_MODEL_PYTHON",
-            "FORESIGHT_LITERT_PYTHON",
-            "FORESIGHT_LITERT_EMBEDDING_ADAPTER",
+            "FORESIGHT_LITERT_LIBRARY",
+            "FORESIGHT_QUERY_RUNTIME",
             "FORESIGHT_QUERY_WORKER",
         ]
         for key in keys:
@@ -488,7 +487,9 @@ def reference_gate(args, env):
             FORESIGHT_QUERY_MODEL_TEST="1",
             FORESIGHT_PROACTIVE_MODEL_TEST="1",
             FORESIGHT_QUERY_MODEL=str(args.query_model.resolve(strict=True)),
-            FORESIGHT_QUERY_PYTHON=env["FORESIGHT_LITERT_PYTHON"],
+            FORESIGHT_QUERY_PYTHON=env.get(
+                "FORESIGHT_QUERY_RUNTIME", env.get("FORESIGHT_LITERT_PYTHON", "")
+            ),
             FORESIGHT_QUERY_WORKER=env["FORESIGHT_QUERY_WORKER"],
         )
         return run_tests(
