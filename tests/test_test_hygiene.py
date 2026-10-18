@@ -175,3 +175,25 @@ def test_collection_guard_rejects_a_new_uncollected_module(tmp_path):
     (tmp_path / "tests/integration/test_new.py").write_text("def test_new(): pass\n")
     with pytest.raises(AssertionError, match="test_new.py"):
         verify_python_collection(tmp_path, set())
+
+
+def test_stale_python_cache_fails_before_cmake_or_native_work(tmp_path):
+    cache = tmp_path / "build/CMakeCache.txt"
+    cache.parent.mkdir()
+    cache.write_text("Python3_EXECUTABLE:FILEPATH=/definitely-missing/old-python\n")
+    result = subprocess.run(
+        ["bash", str(ROOT / "tools/build.sh")],
+        env={
+            **os.environ,
+            "CI": "false",
+            "FORESIGHT_REQUIRE_DART_GATES": "0",
+            "FORESIGHT_BUILD_DIR": str(cache.parent),
+            "FORESIGHT_PYTHON": sys.executable,
+        },
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert "Cached Python interpreter no longer exists" in result.stderr
+    assert "native configure" not in result.stdout
