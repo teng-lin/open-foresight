@@ -21,9 +21,12 @@ FILES = {
         "tools/build_litert_extensions.py",
         "tools/litert_extensions.py",
         "tools/test_litert_status_abi.py",
-        "requirements-litert-macos.lock",
         "third_party/litert_lm/stop-token-sequences.patch",
         "third_party/litert_lm/macos-trivial-abi.patch",
+        "services/speech/CMakeLists.txt",
+        "services/speech/worker.cpp",
+        "services/inference/persistent_worker.h",
+        "services/inference/output_budget.h",
     ],
     "linux-core": [
         "packaging/sdk-core.Dockerfile",
@@ -42,6 +45,10 @@ FILES = {
     "linux-whisper": [
         "packaging/sdk-whisper.Dockerfile",
         "tools/build_whisper_vulkan.py",
+        "services/speech/CMakeLists.txt",
+        "services/speech/worker.cpp",
+        "services/inference/persistent_worker.h",
+        "services/inference/output_budget.h",
     ],
     "linux-sdk": ["packaging/sdk.Dockerfile"],
 }

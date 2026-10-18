@@ -125,9 +125,6 @@ def resolve_dependency(
 def executable_context(binary, app):
     if "EXECUTE" in run("otool", "-hv", binary):
         return binary
-    python = app / "Contents/Resources/python/bin/python3"
-    if binary.is_relative_to(app / "Contents/Resources/python") and python.exists():
-        return python.resolve()
     import plistlib
 
     for parent in binary.parents:

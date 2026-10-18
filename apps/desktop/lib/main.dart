@@ -1,3 +1,4 @@
+import 'background_store.dart';
 import 'service_edit_dialog.dart';
 import 'package:foresight_core/foresight_core.dart'
     show
@@ -290,6 +291,18 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   void update(VoidCallback action) => setState(action);
 
+  final serviceUiRevision = ValueNotifier<int>(0);
+  Timer? serviceUiTimer;
+  void serviceChanged() {
+    if (!mounted || serviceUiTimer != null) return;
+    serviceUiTimer = Timer(const Duration(milliseconds: 100), () {
+      serviceUiTimer = null;
+      if (!mounted) return;
+      meetingFeature.syncCapture();
+      serviceUiRevision.value++;
+    });
+  }
+
   int tab = 3;
 
   bool busy = false;
@@ -362,9 +375,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         d.store.preference('notifications') == 'true';
     unawaited(integrationFeature.refreshNotifications());
     meetingFeature.syncCapture();
-    d.helper.changed = () {
-      if (mounted) setState(meetingFeature.syncCapture);
-    };
+    d.helper.changed = serviceChanged;
     d.helper.onReady = () async {
       try {
         await d.resume();
@@ -394,6 +405,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    serviceUiTimer?.cancel();
+    serviceUiRevision.dispose();
     unawaited(meetingFeature.noteEnhancementChanges?.cancel());
     void releaseDomain() {
       d.close();
@@ -480,7 +493,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     sourceFeature.syncGraphMotion();
     final workspace =
         meetingFeature.meetingImmersive && meetingFeature.meetingId != null
-        ? meetingFeature.immersiveMeetingWorkspace()
+        ? ValueListenableBuilder<int>(
+            valueListenable: serviceUiRevision,
+            builder: (_, __, ___) => meetingFeature.immersiveMeetingWorkspace(),
+          )
         : screenshotWorkspace(context);
     return AgentApprovalSurface(domain: d, child: workspace);
   }
@@ -544,127 +560,130 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       child: Scaffold(
         body: Column(
           children: [
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                24,
-                28,
-                meetingFeature.recording != null ? 16 : 24,
-                8,
-              ),
-              child: LayoutBuilder(
-                builder: (_, constraints) => SizedBox(
-                  width: constraints.maxWidth,
-                  child: Wrap(
-                    alignment: WrapAlignment.spaceBetween,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    spacing: 16,
-                    runSpacing: 12,
-                    children: [
-                      ConstrainedBox(
-                        constraints: BoxConstraints(
-                          maxWidth: math.max(200, constraints.maxWidth - 260),
-                        ),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          crossAxisAlignment: WrapCrossAlignment.center,
-                          children: [
-                            Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Image.asset(
-                                  'assets/images/open-foresight-logo.png',
-                                  width: 24,
-                                  height: 24,
-                                ),
-                                const SizedBox(width: 8),
-                                Flexible(
-                                  child: Text.rich(
-                                    TextSpan(
-                                      children: const [
-                                        TextSpan(
-                                          text: 'Open ',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w700,
+            ValueListenableBuilder<int>(
+              valueListenable: serviceUiRevision,
+              builder: (_, __, ___) => Padding(
+                padding: EdgeInsets.fromLTRB(
+                  24,
+                  28,
+                  meetingFeature.recording != null ? 16 : 24,
+                  8,
+                ),
+                child: LayoutBuilder(
+                  builder: (_, constraints) => SizedBox(
+                    width: constraints.maxWidth,
+                    child: Wrap(
+                      alignment: WrapAlignment.spaceBetween,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 16,
+                      runSpacing: 12,
+                      children: [
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: math.max(200, constraints.maxWidth - 260),
+                          ),
+                          child: Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            crossAxisAlignment: WrapCrossAlignment.center,
+                            children: [
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Image.asset(
+                                    'assets/images/open-foresight-logo.png',
+                                    width: 24,
+                                    height: 24,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Flexible(
+                                    child: Text.rich(
+                                      TextSpan(
+                                        children: const [
+                                          TextSpan(
+                                            text: 'Open ',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                            ),
                                           ),
-                                        ),
-                                        TextSpan(text: 'Foresight'),
-                                      ],
+                                          TextSpan(text: 'Foresight'),
+                                        ],
+                                      ),
+                                      style: const TextStyle(fontSize: 18),
                                     ),
-                                    style: const TextStyle(fontSize: 18),
+                                  ),
+                                ],
+                              ),
+                              if (MediaQuery.sizeOf(context).width > 1100) ...[
+                                Chip(
+                                  label: Text(
+                                    'Powered by ${settingsFeature.embeddingName()}',
+                                  ),
+                                ),
+                                Chip(
+                                  label: Text(
+                                    '${settingsFeature.localWords()} Local output words',
                                   ),
                                 ),
                               ],
-                            ),
-                            if (MediaQuery.sizeOf(context).width > 1100) ...[
-                              Chip(
-                                label: Text(
-                                  'Powered by ${settingsFeature.embeddingName()}',
-                                ),
-                              ),
-                              Chip(
-                                label: Text(
-                                  '${settingsFeature.localWords()} Local output words',
+                              SizedBox(
+                                width: 32,
+                                height: 28,
+                                child: IconButton(
+                                  tooltip: 'Local helper status',
+                                  onPressed: settingsFeature.showHelperMonitor,
+                                  padding: EdgeInsets.zero,
+                                  style: IconButton.styleFrom(
+                                    backgroundColor: Colors.white.withValues(
+                                      alpha: .7,
+                                    ),
+                                    foregroundColor: _ink,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  icon: Icon(
+                                    settingsFeature.helperEmbeddingHealthy
+                                        ? Icons.task_alt
+                                        : Icons.info_outline,
+                                    size: 18,
+                                  ),
                                 ),
                               ),
                             ],
-                            SizedBox(
-                              width: 32,
-                              height: 28,
-                              child: IconButton(
-                                tooltip: 'Local helper status',
-                                onPressed: settingsFeature.showHelperMonitor,
-                                padding: EdgeInsets.zero,
-                                style: IconButton.styleFrom(
-                                  backgroundColor: Colors.white.withValues(
-                                    alpha: .7,
-                                  ),
-                                  foregroundColor: _ink,
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                ),
-                                icon: Icon(
-                                  settingsFeature.helperEmbeddingHealthy
-                                      ? Icons.task_alt
-                                      : Icons.info_outline,
-                                  size: 18,
-                                ),
+                          ),
+                        ),
+                        if (meetingFeature.recording != null)
+                          meetingFeature.recordingHeader()
+                        else
+                          FilledButton.icon(
+                            onPressed:
+                                busy ||
+                                    meetingFeature.quickStarting ||
+                                    meetingFeature.meetingEnhancing
+                                ? null
+                                : meetingFeature.quickStart,
+                            icon: Icon(
+                              meetingFeature.recording != null
+                                  ? Icons.stop
+                                  : Icons.graphic_eq,
+                            ),
+                            label: Text(
+                              meetingFeature.recording != null
+                                  ? 'Stop transcribing'
+                                  : 'Start transcribing',
+                            ),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: _ink,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 18,
+                                vertical: 16,
                               ),
                             ),
-                          ],
-                        ),
-                      ),
-                      if (meetingFeature.recording != null)
-                        meetingFeature.recordingHeader()
-                      else
-                        FilledButton.icon(
-                          onPressed:
-                              busy ||
-                                  meetingFeature.quickStarting ||
-                                  meetingFeature.meetingEnhancing
-                              ? null
-                              : meetingFeature.quickStart,
-                          icon: Icon(
-                            meetingFeature.recording != null
-                                ? Icons.stop
-                                : Icons.graphic_eq,
                           ),
-                          label: Text(
-                            meetingFeature.recording != null
-                                ? 'Stop transcribing'
-                                : 'Start transcribing',
-                          ),
-                          style: FilledButton.styleFrom(
-                            backgroundColor: _ink,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 18,
-                              vertical: 16,
-                            ),
-                          ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -788,15 +807,18 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                               ),
                             ),
                           Expanded(
-                            child: [
-                              () => _SourcesView(sourceFeature),
-                              () => _ChatView(chatFeature),
-                              sourceFeature.notes,
-                              () => _MeetingsView(meetingFeature),
-                              settingsFeature.models,
-                              settingsFeature.stats,
-                              () => _SettingsView(settingsFeature),
-                            ][tab](),
+                            child: ValueListenableBuilder<int>(
+                              valueListenable: serviceUiRevision,
+                              builder: (_, __, ___) => [
+                                () => _SourcesView(sourceFeature),
+                                () => _ChatView(chatFeature),
+                                sourceFeature.notes,
+                                () => _MeetingsView(meetingFeature),
+                                settingsFeature.models,
+                                settingsFeature.stats,
+                                () => _SettingsView(settingsFeature),
+                              ][tab](),
+                            ),
                           ),
                         ],
                       ),

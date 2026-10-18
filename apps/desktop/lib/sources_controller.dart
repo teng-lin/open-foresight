@@ -96,7 +96,7 @@ class _SourcesController extends _FeatureController {
         mounted &&
         shell.tab == 0 &&
         graphView &&
-        d.store.sources.isNotEmpty &&
+        d.store.sourceSummaries.isNotEmpty &&
         !graphAnimationPaused &&
         graphMousePointer == null &&
         !graphModalOpen &&
@@ -229,7 +229,7 @@ class _SourcesController extends _FeatureController {
             Expanded(
               child: ListView(
                 children: d.store
-                    .notes()
+                    .noteSummaries()
                     .map(
                       (n) => ListTile(
                         title: Text(n['title'] as String),
@@ -237,7 +237,9 @@ class _SourcesController extends _FeatureController {
                         onTap: () => setState(() {
                           meetingFeature.noteId = n['id'] as int;
                           meetingFeature.noteTitle.text = n['title'] as String;
-                          meetingFeature.noteBody.text = n['body'] as String;
+                          meetingFeature.noteBody.text = d.store.noteBody(
+                            n['id'] as int,
+                          );
                         }),
                       ),
                     )
@@ -293,7 +295,7 @@ class _SourcesController extends _FeatureController {
 
   Future<void> findFilesOnComputer({List<String>? roots}) async {
     final excluded = <String>{};
-    for (final row in d.store.sources) {
+    for (final row in d.store.sourceSummaries) {
       final provenance = row['provenance'] as String;
       for (final prefix in [
         'UTF-8 text; ',
@@ -468,7 +470,9 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> removeSelectedGraphLabel(String id, String name) async {
-    final source = d.store.sources.where((row) => row['id'] == id).single;
+    final source = d.store.sourceSummaries
+        .where((row) => row['id'] == id)
+        .single;
     await d.command(Operation.labelsSet, {
       'id': id,
       'labels': sourceLabels(source).where((label) => label != name).toList(),
@@ -648,20 +652,28 @@ class _SourcesController extends _FeatureController {
     if (sourceQuery.isNotEmpty) {
       final key = jsonEncode([sourceQuery, d.store.dataRevision]);
       if (key != sourceSearchCacheKey) {
-        final searchable =
-            collection != null &&
-                collection.every((s) => s.containsKey('content'))
-            ? collection
-            : d.store.sources;
-        final query = sourceQuery.toLowerCase();
+        sourceSearchCacheKey = key;
         sourceSearchMatches = {
-          for (final source in searchable)
-            if ('${source['title']} ${source['content']}'
-                .toLowerCase()
-                .contains(query))
+          for (final source in collection ?? d.store.sourceSummaries)
+            if ((source['title'] as String).toLowerCase().contains(
+              sourceQuery.toLowerCase(),
+            ))
               source['id'] as String,
         };
-        sourceSearchCacheKey = key;
+        final databasePath = d.store.path;
+        final query = sourceQuery.toLowerCase();
+        unawaited(
+          searchSourceIds(databasePath, query).then(
+            (matches) {
+              if (mounted && sourceSearchCacheKey == key)
+                update(() => sourceSearchMatches = matches);
+            },
+            onError: (Object error) {
+              if (mounted && sourceSearchCacheKey == key)
+                update(() => shell.error = error.toString());
+            },
+          ),
+        );
       }
       searchMatches = sourceSearchMatches;
     }
@@ -695,7 +707,7 @@ class _SourcesController extends _FeatureController {
       typeIcon(sourceType(source, originalMime: originalMime));
 
   Widget sources() {
-    final all = graphView ? d.store.sources : d.store.sourceSummaries;
+    final all = d.store.sourceSummaries;
     final originals = driveSourceMimes();
     final rows = filteredSources(all, originals);
     final labelRecords = d.store.documentLabels;
@@ -1373,7 +1385,7 @@ class _SourcesController extends _FeatureController {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted &&
             graphSelectedDocument == selected &&
-            !d.store.sources.any((row) => row['id'] == selected)) {
+            !d.store.sourceSummaries.any((row) => row['id'] == selected)) {
           selectGraphDocument(null);
         }
       });

@@ -457,3 +457,50 @@ def write_extension_provenance(bundle, destination):
         )
         + "\n"
     )
+
+
+def copy_macos_extension_dependencies(bundle, destination):
+    """Extract only native C API and vendor dylibs; never install Python code."""
+    destination = Path(destination).resolve(strict=True)
+    if bundle.library_entry != "litert_lm/liblitert-lm.dylib":
+        raise ValueError("A macOS API wheel is required for macOS dependencies")
+    if file_sha256(bundle.wheel) != bundle.manifest["wheel_sha256"]:
+        raise ValueError("LiteRT extension wheel changed after verification")
+    copied = []
+    with zipfile.ZipFile(bundle.wheel) as archive:
+        entries = _wheel_entries(archive)
+        for name in ("liblitert-lm.dylib", *MACOS_VENDOR_LIBRARIES):
+            entry = "litert_lm/" + name
+            if entry not in entries:
+                raise ValueError(
+                    "LiteRT extension wheel lacks pinned dependency: " + name
+                )
+            output = destination / name
+            if output.resolve().parent != destination:
+                raise ValueError(
+                    "LiteRT extension dependency escapes the bundle lib directory"
+                )
+            expected = (
+                bundle.manifest["library_sha256"]
+                if name == "liblitert-lm.dylib"
+                else bundle.manifest["vendor_libraries"][name]
+            )
+            temporary = output.with_suffix(".dylib.part")
+            try:
+                with archive.open(entry) as source, temporary.open("wb") as target:
+                    shutil.copyfileobj(source, target)
+                if file_sha256(temporary) != expected:
+                    raise ValueError(
+                        "Copied LiteRT extension native library checksum mismatch"
+                    )
+                with temporary.open("rb") as stream:
+                    header = stream.read(8)
+                if header != b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01":
+                    raise ValueError(
+                        "LiteRT extension dependency must be a macOS arm64 Mach-O library"
+                    )
+                temporary.replace(output)
+            finally:
+                temporary.unlink(missing_ok=True)
+            copied.append(output)
+    return copied

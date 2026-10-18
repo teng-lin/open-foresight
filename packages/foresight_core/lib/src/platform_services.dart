@@ -222,6 +222,7 @@ const _nativeEnvironmentKeys = {
   'FORESIGHT_HELPER',
   'FORESIGHT_LITERT_CACHE',
   'FORESIGHT_WHISPER_RUNTIME',
+  'FORESIGHT_WHISPER_WORKER',
   'PYTHONPYCACHEPREFIX',
 };
 bool _nativeEnvironmentConfigured = false;

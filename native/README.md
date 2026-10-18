@@ -45,3 +45,5 @@ recovered Tink/AES-256-GCM format using only Open Foresight’s own Keychain ent
 Its `--self-test` uses temporary keys and fixed vectors without accessing Keychain.
 The application opens private plaintext leases and removes them after their owned
 worker has exited.
+
+Live speech uses `foresight-whisper-worker`, installed beside the diagnostic Whisper CLI. Recording retains native speech handles across segments; microphone and playback handles share one serialized model worker. The final handle releases the worker at recording shutdown. Explicit external installations can set `FORESIGHT_WHISPER_WORKER`; CLI-only installations retain compatibility with the per-request diagnostic path.

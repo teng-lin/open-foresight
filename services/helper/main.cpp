@@ -1,7 +1,9 @@
 #include "helper_control.grpc.pb.h"
 #include "model.h"
 #include "rag_service.grpc.pb.h"
+#include "vector_index.h"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -60,6 +62,35 @@ struct Statement {
 };
 class Service : public rpc::RagService::Service,
                 public ctl::HelperControl::Service {
+  struct SearchSnapshot {
+    std::shared_ptr<Model> model;
+    foresight::VectorIndex index;
+    SearchSnapshot(std::shared_ptr<Model> m,
+                   std::vector<foresight::IndexedChunk> chunks)
+        : model(std::move(m)), index(std::move(chunks)) {}
+  };
+  std::shared_ptr<const SearchSnapshot> search_snapshot;
+  std::mutex snapshot_mu;
+  void publish_index() {
+    std::vector<foresight::IndexedChunk> chunks;
+    Statement q(
+        db, "SELECT c.text,c.document_id,c.mime,c.embedding FROM "
+            "vectors.chunks c JOIN linux.source_revisions r ON "
+            "r.id=c.document_id AND r.revision=c.revision WHERE r.tombstone=0 "
+            "AND c.generation=? ORDER BY c.document_id,c.ordinal");
+    q.num(1, state.active_generation());
+    while (q.row())
+      chunks.push_back(
+          {q.str(0), q.str(1), q.str(2), foresight::read_vector(q.str(3))});
+    std::shared_ptr<const SearchSnapshot> replacement =
+        std::make_shared<SearchSnapshot>(model, std::move(chunks));
+    {
+      std::lock_guard lock(snapshot_mu);
+      search_snapshot.swap(replacement);
+    }
+    // Retire the old tree outside the pointer lock; destruction can be
+    // expensive.
+  }
   struct PreparedChunk {
     std::string text;
     std::vector<double> embedding;
@@ -128,6 +159,18 @@ class Service : public rpc::RagService::Service,
   void crash(const char *step) {
     if (!allow_test)
       return;
+    // Test-only publication barrier: prove active readers never wait on the
+    // writer's SQLite transaction or on construction of its replacement index.
+    std::string pause;
+    {
+      std::ifstream file(storage_root + "/.pause-at");
+      std::getline(file, pause);
+    }
+    if (pause == step) {
+      std::ofstream(storage_root + "/.paused") << step;
+      for (int i = 0; i < 100 && fs::exists(storage_root + "/.pause-at"); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
     std::string value;
     std::ifstream in(storage_root + "/.crash-at");
     std::getline(in, value);
@@ -185,7 +228,7 @@ class Service : public rpc::RagService::Service,
         q.num(4, i);
         q.text(5, chunks[i].text);
         q.text(6, mime);
-        q.text(7, json(chunks[i].embedding).dump());
+        q.blob(7, foresight::vector_blob(chunks[i].embedding));
         q.row();
         crash("partial_vectors");
       }
@@ -258,6 +301,7 @@ class Service : public rpc::RagService::Service,
                                     : model->preprocessing);
     identity->set_backend(model->backend);
     identity->set_dimensions(model->dimensions);
+    publish_index();
     identity->set_path(path);
     identity->clear_modalities();
     identity->add_modalities("text");
@@ -317,10 +361,27 @@ public:
     sql("PRAGMA vectors.journal_mode=DELETE; PRAGMA vectors.synchronous=FULL; "
         "CREATE TABLE IF NOT EXISTS vectors.chunks(generation "
         "INTEGER,document_id TEXT,revision INTEGER,ordinal INTEGER,text "
-        "TEXT,mime TEXT,embedding TEXT,PRIMARY "
+        "TEXT,mime TEXT,embedding BLOB,PRIMARY "
         "KEY(generation,document_id,revision,ordinal)); CREATE TABLE IF NOT "
         "EXISTS vectors.generations(id INTEGER PRIMARY KEY,model_digest "
         "TEXT,status TEXT)");
+    // Migrate legacy JSON once at startup; requests only consume binary
+    // snapshots.
+    {
+      Tx tx(*this);
+      Statement rows(db, "SELECT rowid,embedding FROM vectors.chunks WHERE "
+                         "typeof(embedding)='text'");
+      while (rows.row()) {
+        auto bytes = foresight::vector_blob(
+            json::parse(rows.str(1)).get<std::vector<double>>());
+        Statement update(db,
+                         "UPDATE vectors.chunks SET embedding=? WHERE rowid=?");
+        update.blob(1, bytes);
+        update.num(2, rows.integer(0));
+        update.row();
+      }
+      tx.commit();
+    }
     sql("INSERT OR IGNORE INTO linux.source_revisions SELECT id,1,0 FROM "
         "documents; DELETE FROM vectors.chunks WHERE NOT EXISTS (SELECT 1 FROM "
         "linux.source_revisions r WHERE r.id=chunks.document_id AND "
@@ -581,6 +642,7 @@ public:
       if (context->IsCancelled())
         throw std::runtime_error("Index operation cancelled");
       tx.commit();
+      publish_index();
       crash("replace_after_commit");
       state.set_index("ready");
       changed();
@@ -624,6 +686,7 @@ public:
       }
       crash("delete_before_commit");
       tx.commit();
+      publish_index();
       crash("delete_after_commit");
       changed();
       r->set_success(true);
@@ -637,75 +700,42 @@ public:
     if (!req->has_query() ||
         req->query().query_case() == rpc::Query::QUERY_NOT_SET)
       return {StatusCode::INVALID_ARGUMENT, "Query required"};
-    if (req->query().query_case() == rpc::Query::kAudioQuery) {
-      std::lock_guard lock(mu);
-      if (!model || !model->available())
-        return absent();
-      return {StatusCode::UNIMPLEMENTED,
-              "Audio query unavailable in text-only model"};
-    }
     if (req->max_results() <= 0)
       return {StatusCode::INVALID_ARGUMENT,
               "max_results must be positive (Linux policy)"};
-    std::shared_ptr<Model> current;
+    // Only copy shared ownership under this short pointer lock. Writers build
+    // replacements and retire old trees outside it, without blocking searches.
+    std::shared_ptr<const SearchSnapshot> snapshot;
     {
-      std::lock_guard lock(mu);
-      if (!model || !model->available())
-        return absent();
-      current = model;
+      std::lock_guard lock(snapshot_mu);
+      snapshot = search_snapshot;
     }
-    try {
-      auto query =
-          current->embed(req->query().text_query(), EmbeddingTask::Query);
+    if (!snapshot || !snapshot->model || !snapshot->model->available()) {
       std::lock_guard lock(mu);
-      if (model != current || !current->available())
-        return absent();
-      struct Match {
-        double score;
-        std::string text, id, mime;
-      };
-      std::vector<Match> matches;
-      Statement q(
-          db,
-          "SELECT c.text,c.document_id,c.mime,c.embedding FROM vectors.chunks "
-          "c JOIN linux.source_revisions r ON r.id=c.document_id AND "
-          "r.revision=c.revision WHERE r.tombstone=0 AND c.generation=?");
-      q.num(1, state.active_generation());
-      while (q.row()) {
-        auto id = q.str(1);
-        if (req->allowed_document_ids_size() &&
-            std::find(req->allowed_document_ids().begin(),
-                      req->allowed_document_ids().end(),
-                      id) == req->allowed_document_ids().end())
-          continue;
-        auto v = json::parse(q.str(3)).get<std::vector<double>>();
-        if (v.size() != query.size())
-          throw std::runtime_error("Stored model dimension mismatch");
-        double dot = 0, a = 0, b = 0;
-        for (size_t i = 0; i < v.size(); ++i) {
-          dot += v[i] * query[i];
-          a += v[i] * v[i];
-          b += query[i] * query[i];
-        }
-        double score = a && b ? dot / std::sqrt(a * b) : 0;
-        float threshold = req->min_similarity_score();
-        if (score >= threshold)
-          matches.push_back({score, q.str(0), id, q.str(2)});
-      }
-      std::stable_sort(matches.begin(), matches.end(),
-                       [](auto &a, auto &b) { return a.score > b.score; });
-      for (size_t i = 0;
-           i < std::min(matches.size(), size_t(req->max_results())); ++i) {
-        auto *c = r->add_chunks();
-        c->set_text(matches[i].text);
-        c->set_document_id(matches[i].id);
-        c->set_mime_type(matches[i].mime);
-        c->set_relevance_score(matches[i].score);
+      return absent();
+    }
+    if (req->query().query_case() == rpc::Query::kAudioQuery)
+      return {StatusCode::UNIMPLEMENTED,
+              "Audio query unavailable in text-only model"};
+    try {
+      auto query = snapshot->model->embed(req->query().text_query(),
+                                          EmbeddingTask::Query);
+      std::set<std::string> allowed(req->allowed_document_ids().begin(),
+                                    req->allowed_document_ids().end());
+      for (auto match : snapshot->index.search(
+               std::move(query), req->max_results(),
+               static_cast<float>(req->min_similarity_score()), allowed)) {
+        const auto &value = snapshot->index.chunks[match.chunk];
+        auto *chunk = r->add_chunks();
+        chunk->set_text(value.text);
+        chunk->set_document_id(value.id);
+        chunk->set_mime_type(value.mime);
+        chunk->set_relevance_score(match.score);
       }
       return Status::OK;
     } catch (const std::exception &e) {
       std::lock_guard lock(mu);
-      note_adapter_failure(current, e);
+      note_adapter_failure(snapshot->model, e);
       return {StatusCode::INTERNAL, e.what()};
     }
   }

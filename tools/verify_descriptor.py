@@ -128,8 +128,7 @@ def verify(protoc="protoc"):
     )
     selected = query.FromString(b"\x0a\x01x\x12\x01y")
     if not (
-        selected.WhichOneof("query") == "audio_query"
-        and cast(Any, selected).audio_query == b"y"
+        selected.WhichOneof("query") == "audio_query" and cast(Any, selected).audio_query == b"y"
     ):
         raise ValueError(
             "Validation failed: selected.WhichOneof('query') == 'audio_query' and selected.audio_query == b'y'"

@@ -154,7 +154,15 @@ class Domain {
       _checkOpen();
       if (sourcesPaused || helper.snapshot?.pipeline != 'ready') return {};
       final response = await helper.client.computeEmbedding(
-        ComputeEmbeddingRequest(text: source['content'] as String),
+        ComputeEmbeddingRequest(
+          text:
+              source['content'] as String? ??
+              store.rows(
+                    'SELECT content FROM sources WHERE id=? AND deleted=0',
+                    [source['id']],
+                  ).single['content']
+                  as String,
+        ),
       );
       _checkOpen();
       if (helper.snapshot?.model.writeToJson() != identity) return {};

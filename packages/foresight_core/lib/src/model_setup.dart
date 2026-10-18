@@ -236,7 +236,8 @@ Future<String> _prepareDedicatedQuery(
   }
   final python = runtime?.trim().isNotEmpty == true
       ? runtime!
-      : runtimeConfiguration['FORESIGHT_LITERT_PYTHON'];
+      : (runtimeConfiguration['FORESIGHT_QUERY_RUNTIME'] ??
+            runtimeConfiguration['FORESIGHT_LITERT_PYTHON']);
   final worker = runtimeConfiguration['FORESIGHT_QUERY_WORKER'];
   if (python == null ||
       !File(python).existsSync() ||
@@ -244,7 +245,7 @@ Future<String> _prepareDedicatedQuery(
       worker == null ||
       !File(worker).existsSync()) {
     throw StateError(
-      'The dedicated question runtime is unavailable. Install a package with its bundled Python runtime.',
+      'The dedicated question runtime is unavailable. Install a package with its bundled question runtime.',
     );
   }
   // The real worker authenticates the model again, imports NumPy/SentencePiece,

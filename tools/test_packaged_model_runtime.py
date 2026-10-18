@@ -47,14 +47,7 @@ def packaged_paths(bundle):
         return (
             path("FORESIGHT_LITERT_RUNNER"),
             path("FORESIGHT_MODEL_WORKER"),
-            {
-                key: str(path(key))
-                for key in (
-                    "FORESIGHT_MODEL_PYTHON",
-                    "FORESIGHT_LITERT_PYTHON",
-                    "FORESIGHT_LITERT_EMBEDDING_ADAPTER",
-                )
-            },
+            {"FORESIGHT_LITERT_LIBRARY": str(path("FORESIGHT_LITERT_LIBRARY"))},
         )
 
     def own(relative):

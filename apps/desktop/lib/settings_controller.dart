@@ -349,13 +349,36 @@ class _SettingsController extends _FeatureController {
         : path.split('/').where((s) => s.isNotEmpty).last;
   }
 
-  int localWords() => d.store.localOutputWords;
+  String? localOutputRevision;
+  int localOutputCount = 0;
+  List<int> localOutputWeekly = List<int>.filled(5, 0);
+
+  int localWords() {
+    final revision = d.store.dataRevision;
+    if (localOutputRevision != revision) {
+      localOutputRevision = revision;
+      unawaited(
+        localOutputStats(d.store.path).then((stats) {
+          if (!mounted || localOutputRevision != revision) return;
+          var changed = localOutputCount != stats.words;
+          for (var i = 0; i < 5; i++) {
+            changed |= localOutputWeekly[i] != stats.weekly[i];
+          }
+          localOutputCount = stats.words;
+          localOutputWeekly = stats.weekly;
+          if (changed) shell.serviceChanged();
+        }, onError: (Object _) {}),
+      );
+    }
+    return localOutputCount;
+  }
 
   Widget stats() {
     final meetings = d.store.recordedMeetingCountRows().single['n'] as int;
-    final sources = d.store.sources.length;
+    final sources = d.store.sourceSummaries.length;
     final answers = d.store.completedAnswerCountRows().single['n'] as int;
-    final weekly = d.store.weeklyAnswerWords(DateTime.now());
+    localWords();
+    final weekly = localOutputWeekly;
     return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
