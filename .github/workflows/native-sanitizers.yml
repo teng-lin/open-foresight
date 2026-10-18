@@ -52,7 +52,9 @@ permissions:
   contents: read
 concurrency:
   group: native-sanitizers-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish and cache the instrumented SDK before validating newer PR heads.
+  # Only the newest pending head waits, then reuses the compiler/recipe cache.
+  cancel-in-progress: false
 jobs:
   native-sanitizers:
     runs-on: ubuntu-24.04
