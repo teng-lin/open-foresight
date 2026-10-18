@@ -26,12 +26,27 @@ runs:
       run: |
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+    - name: Select the language cache role
+      if: inputs.stage != 'native'
+      id: language-cache
+      shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
+      run: |
+        case "$STAGE" in desktop|service) kind=ui ;; *) kind=dart ;; esac
+        echo "kind=$kind" >> "$GITHUB_OUTPUT"
+        mkdir -p "$GITHUB_WORKSPACE/.cache/foresight-pub"
+        echo "PUB_CACHE=$GITHUB_WORKSPACE/.cache/foresight-pub" >> "$GITHUB_ENV"
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       if: inputs.stage != 'native'
       id: flutter
       with:
         path: /opt/foresight-flutter
-        key: flutter-linux-x64-3.35.7-v1
+        key: flutter-linux-x64-3.35.7-${{ steps.language-cache.outputs.kind }}-v2
+        restore-keys: |
+          flutter-linux-x64-3.35.7-${{ steps.language-cache.outputs.kind }}-
+          flutter-linux-x64-3.35.7-v1
+          flutter-linux-x64-3.35.7-
     - name: Verify the pinned Linux Flutter SDK
       if: inputs.stage != 'native'
       shell: bash
@@ -47,11 +62,19 @@ runs:
           /opt/foresight-flutter/bin/flutter config --enable-linux-desktop --no-analytics
         fi
         /opt/foresight-flutter/bin/dart --version
-    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-      if: inputs.stage != 'native' && steps.flutter.outputs.cache-hit != 'true'
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: inputs.stage != 'native'
+      id: pub
       with:
-        path: /opt/foresight-flutter
-        key: flutter-linux-x64-3.35.7-v1
+        path: ${{ github.workspace }}/.cache/foresight-pub
+        key: pub-linux-${{ steps.language-cache.outputs.kind }}-v2-${{ (inputs.stage == 'desktop' || inputs.stage == 'service') && hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') || hashFiles('packages/foresight_core/pubspec.lock') }}
+        restore-keys: |
+          pub-linux-${{ steps.language-cache.outputs.kind }}-v2-
+          pub-linux-
+    - name: Warm the pinned desktop engine cache
+      if: inputs.stage == 'desktop' || inputs.stage == 'service'
+      shell: bash
+      run: flutter precache --linux
     - name: Resolve locked language prerequisites for isolated stages
       if: inputs.stage != 'native'
       shell: bash
@@ -62,6 +85,16 @@ runs:
         if [[ "$STAGE" == desktop || "$STAGE" == service ]]; then
           (cd apps/desktop && flutter pub get --enforce-lockfile)
         fi
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: inputs.stage != 'native' && steps.flutter.outputs.cache-hit != 'true'
+      with:
+        path: /opt/foresight-flutter
+        key: flutter-linux-x64-3.35.7-${{ steps.language-cache.outputs.kind }}-v2
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: inputs.stage != 'native' && steps.pub.outputs.cache-hit != 'true'
+      with:
+        path: ${{ github.workspace }}/.cache/foresight-pub
+        key: pub-linux-${{ steps.language-cache.outputs.kind }}-v2-${{ (inputs.stage == 'desktop' || inputs.stage == 'service') && hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') || hashFiles('packages/foresight_core/pubspec.lock') }}
     - name: Record compiler, runtime, package and workspace identity
       shell: bash
       env:
