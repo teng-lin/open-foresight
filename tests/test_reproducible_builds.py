@@ -360,16 +360,30 @@ class BuildPolicyTests(unittest.TestCase):
                     for step in steps
                     if "docker/setup-buildx-action@" in step.get("uses", "")
                 )
-                self.assertEqual(
-                    driver["with"]["driver"],
-                    "${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}",
+                self.assertEqual(driver["with"]["driver"], "docker")
+                daemon = next(
+                    step
+                    for step in steps
+                    if "docker/setup-docker-action@" in step.get("uses", "")
                 )
+                self.assertTrue(
+                    json.loads(daemon["with"]["daemon-config"])["features"][
+                        "containerd-snapshotter"
+                    ]
+                )
+                self.assertLess(steps.index(daemon), steps.index(sdk_step))
                 build = next(
                     step
                     for step in steps
                     if "docker/build-push-action@" in step.get("uses", "")
                 )
-                self.assertIn("|| ''", build["with"]["cache-from"])
+                self.assertIn(
+                    "steps.app-cache.outputs.cache", build["with"]["cache-from"]
+                )
+                self.assertIn(
+                    "steps.app-cache.outputs.legacy_cache", build["with"]["cache-from"]
+                )
+                self.assertNotIn("steps.sdk.outputs.cache", build["with"]["cache-from"])
 
     def test_dart_auth_and_model_revisions_are_pinned(self):
         auth = [
