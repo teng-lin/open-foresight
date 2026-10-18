@@ -73,7 +73,7 @@ class AppCommands {
         InternetAddress(path, type: InternetAddressType.unix),
         0,
       );
-      final mode = await Process.run('chmod', ['600', path]);
+      final mode = await Process.run('/bin/chmod', ['600', path]);
       if (mode.exitCode != 0) {
         await server.close();
         throw StateError('Cannot protect activation socket');
