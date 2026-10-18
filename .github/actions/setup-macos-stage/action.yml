@@ -1,0 +1,95 @@
+name: Set up the macOS application stage
+description: Resolve the pinned compiler SDK and language prerequisites independently
+inputs:
+  own-pr:
+    default: '0'
+    description: Same-repository pull request allowed to supply dependency artifacts
+  source:
+    required: true
+    description: Exact checked out source
+  version:
+    default: ''
+    description: Distribution version when stamping is requested
+  build-number:
+    default: ''
+    description: Shared distribution build number
+  label:
+    default: ''
+    description: Preview build label
+runs:
+  using: composite
+  steps:
+    - name: Verify Apple Silicon host
+      shell: bash
+      run: |
+        test "$RUNNER_ARCH" = ARM64
+        test "$(uname -m)" = arm64
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Stamp the shared distribution identity
+      if: inputs.build-number != ''
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        BUILD_LABEL: ${{ inputs.label }}
+        SOURCE: ${{ inputs.source }}
+      run: python tools/preview_packages.py stamp --version "$VERSION" --build-number "$BUILD_NUMBER" --label "$BUILD_LABEL" --source "$SOURCE"
+    - name: Install build tools
+      shell: bash
+      run: brew install cmake ninja cocoapods git-lfs icu4c
+    - name: Install locked Python development dependencies
+      shell: bash
+      run: |
+        python -m venv .venv
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: flutter
+      with:
+        path: ${{ runner.temp }}/flutter
+        key: flutter-macos-arm64-3.35.7-v1
+    - name: Verify the pinned macOS Flutter SDK
+      shell: bash
+      run: |
+        if [[ ! -x "$RUNNER_TEMP/flutter/bin/flutter" ]]; then
+          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        fi
+        test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+        echo "FORESIGHT_FLUTTER_EXECUTABLE=$RUNNER_TEMP/flutter/bin/flutter" >> "$GITHUB_ENV"
+        "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.flutter.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/flutter
+        key: flutter-macos-arm64-3.35.7-v1
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: pub
+      with:
+        path: ~/.pub-cache
+        key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
+        restore-keys: pub-macos-
+    - name: Resolve locked language prerequisites
+      shell: bash
+      run: |
+        (cd packages/foresight_core && dart pub get --enforce-lockfile)
+        (cd apps/desktop && flutter pub get --enforce-lockfile)
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.pub.outputs.cache-hit != 'true'
+      with:
+        path: ~/.pub-cache
+        key: pub-macos-${{ hashFiles('**/pubspec.lock') }}
+    - name: Fetch the qualified compiler SDK or build pinned sources
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ inputs.source }}
+        OWN_PR: ${{ inputs.own-pr }}
+      run: |
+        python tools/ci_macos_dependencies.py --component macos-sdk --prefix build/sdk --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
+        echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
+    - name: Record the compiler, runtime, package and SDK identity
+      shell: bash
+      run: .venv/bin/python tools/ci_stage_environment.py --platform macos --sdk-prefix build/sdk --output build/stage-environment.json

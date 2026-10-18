@@ -1,0 +1,338 @@
+name: Independent macOS application stages
+'on':
+  workflow_call:
+    inputs:
+      source:
+        type: string
+        required: true
+      own_pr:
+        type: number
+        default: 0
+      event:
+        type: string
+        required: true
+      release:
+        type: boolean
+        default: false
+      version:
+        type: string
+        default: ''
+      build_number:
+        type: string
+        default: ''
+      label:
+        type: string
+        default: ''
+    outputs:
+      native_identity:
+        description: native stage identity
+        value: ${{ jobs.native-macos.outputs.identity }}
+      native_artifact_name:
+        description: native stage artifact_name
+        value: ${{ jobs.native-macos.outputs.artifact_name }}
+      core_identity:
+        description: core stage identity
+        value: ${{ jobs.core-macos.outputs.identity }}
+      core_artifact_name:
+        description: core stage artifact_name
+        value: ${{ jobs.core-macos.outputs.artifact_name }}
+      desktop_identity:
+        description: desktop stage identity
+        value: ${{ jobs.desktop-macos.outputs.identity }}
+      desktop_artifact_name:
+        description: desktop stage artifact_name
+        value: ${{ jobs.desktop-macos.outputs.artifact_name }}
+      service_identity:
+        description: service stage identity
+        value: ${{ jobs.service-macos.outputs.identity }}
+      service_artifact_name:
+        description: service stage artifact_name
+        value: ${{ jobs.service-macos.outputs.artifact_name }}
+permissions:
+  contents: read
+  actions: read
+env:
+  MACOSX_DEPLOYMENT_TARGET: '15.0'
+  FORESIGHT_BUILD_JOBS: '3'
+  FORESIGHT_COVERAGE: '1'
+  FORESIGHT_CORE_COVERAGE_MIN: '90'
+  FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
+  FORESIGHT_MACOS_UI_TEST: '1'
+  FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
+  FORESIGHT_STAGE_ENVIRONMENT: build/stage-environment.json
+jobs:
+  native-macos:
+    name: native-macos
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      identity: ${{ steps.stage.outputs.identity }}
+      artifact_name: ${{ steps.stage.outputs.artifact_name }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.source }}
+    - uses: ./.github/actions/setup-macos-stage
+      with:
+        source: ${{ inputs.source }}
+        own-pr: ${{ inputs.own_pr }}
+        version: ${{ inputs.version }}
+        build-number: ${{ inputs.build_number }}
+        label: ${{ inputs.label }}
+    - name: Offline Python tests and coverage
+      run: tools/coverage.sh
+    - name: Verify SDK source guards
+      run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
+    - name: Validate or restore the native stage
+      id: stage
+      env:
+        GH_TOKEN: ${{ github.token }}
+        STAGE_EVENT: ${{ inputs.event }}
+        OWN_PR: ${{ inputs.own_pr }}
+        RELEASE_VALIDATION: ${{ inputs.release }}
+        STAGE_PARENTS: '{}'
+      run: |-
+        args=()
+        if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
+        .venv/bin/python tools/run_ci_stage.py \
+          --platform macos --stage native --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
+          --parents-json "$STAGE_PARENTS" \
+          --cmake-arg=-G --cmake-arg=Ninja \
+          --cmake-arg="-DCMAKE_PREFIX_PATH=$PWD/build/sdk" \
+          --cmake-arg=-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          --cmake-arg=-DCMAKE_OSX_ARCHITECTURES=arm64 \
+          --cmake-arg="-DICU_ROOT=$(brew --prefix icu4c)" \
+          --cmake-arg='-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'  "${args[@]}"
+    - name: Verify native process isolation on the current identity
+      run: .venv/bin/python tests/integration/test_native_process.py build/native/libforesight_native.dylib build/services/helper/ForesightHelper
+    - name: Retain the independently qualified native stage
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ steps.stage.outputs.artifact_name }}
+        path: |-
+          build/ci-stage/macos-native/identity.json
+          build/ci-stage/macos-native/payload.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+    - name: Retain native diagnostics
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: macos-native-evidence
+        path: |-
+          test-results/
+          coverage/
+          build/Testing/Temporary/LastTest.log
+        if-no-files-found: ignore
+  core-macos:
+    name: core-macos
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      identity: ${{ steps.stage.outputs.identity }}
+      artifact_name: ${{ steps.stage.outputs.artifact_name }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.source }}
+    - uses: ./.github/actions/setup-macos-stage
+      with:
+        source: ${{ inputs.source }}
+        own-pr: ${{ inputs.own_pr }}
+        version: ${{ inputs.version }}
+        build-number: ${{ inputs.build_number }}
+        label: ${{ inputs.label }}
+    - name: Download the successful native prerequisite
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ${{ needs.native-macos.outputs.artifact_name }}
+        path: build/ci-input/native
+    - name: Validate or restore the core stage
+      id: stage
+      env:
+        GH_TOKEN: ${{ github.token }}
+        STAGE_EVENT: ${{ inputs.event }}
+        OWN_PR: ${{ inputs.own_pr }}
+        RELEASE_VALIDATION: ${{ inputs.release }}
+        STAGE_PARENTS: '{"native":"${{ needs.native-macos.outputs.identity }}"}'
+      run: |-
+        args=()
+        if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
+        .venv/bin/python tools/run_ci_stage.py \
+          --platform macos --stage core --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
+          --parents-json "$STAGE_PARENTS" \
+          --cmake-arg=-G --cmake-arg=Ninja \
+          --cmake-arg="-DCMAKE_PREFIX_PATH=$PWD/build/sdk" \
+          --cmake-arg=-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          --cmake-arg=-DCMAKE_OSX_ARCHITECTURES=arm64 \
+          --cmake-arg="-DICU_ROOT=$(brew --prefix icu4c)" \
+          --cmake-arg='-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local' --input native=build/ci-input/native "${args[@]}"
+    - name: Retain the independently qualified core stage
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ steps.stage.outputs.artifact_name }}
+        path: |-
+          build/ci-stage/macos-core/identity.json
+          build/ci-stage/macos-core/payload.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+    - name: Retain core diagnostics
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: macos-core-evidence
+        path: |-
+          test-results/
+          coverage/
+          build/Testing/Temporary/LastTest.log
+        if-no-files-found: ignore
+    needs:
+    - native-macos
+  desktop-macos:
+    name: desktop-macos
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      identity: ${{ steps.stage.outputs.identity }}
+      artifact_name: ${{ steps.stage.outputs.artifact_name }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.source }}
+    - uses: ./.github/actions/setup-macos-stage
+      with:
+        source: ${{ inputs.source }}
+        own-pr: ${{ inputs.own_pr }}
+        version: ${{ inputs.version }}
+        build-number: ${{ inputs.build_number }}
+        label: ${{ inputs.label }}
+    - name: Download the successful native prerequisite
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ${{ needs.native-macos.outputs.artifact_name }}
+        path: build/ci-input/native
+    - name: Validate or restore the desktop stage
+      id: stage
+      env:
+        GH_TOKEN: ${{ github.token }}
+        STAGE_EVENT: ${{ inputs.event }}
+        OWN_PR: ${{ inputs.own_pr }}
+        RELEASE_VALIDATION: ${{ inputs.release }}
+        STAGE_PARENTS: '{"native":"${{ needs.native-macos.outputs.identity }}"}'
+      run: |-
+        args=()
+        if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
+        .venv/bin/python tools/run_ci_stage.py \
+          --platform macos --stage desktop --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
+          --parents-json "$STAGE_PARENTS" \
+          --cmake-arg=-G --cmake-arg=Ninja \
+          --cmake-arg="-DCMAKE_PREFIX_PATH=$PWD/build/sdk" \
+          --cmake-arg=-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          --cmake-arg=-DCMAKE_OSX_ARCHITECTURES=arm64 \
+          --cmake-arg="-DICU_ROOT=$(brew --prefix icu4c)" \
+          --cmake-arg='-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local' --input native=build/ci-input/native "${args[@]}"
+    - name: Retain the independently qualified desktop stage
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ steps.stage.outputs.artifact_name }}
+        path: |-
+          build/ci-stage/macos-desktop/identity.json
+          build/ci-stage/macos-desktop/payload.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+    - name: Retain desktop diagnostics
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: macos-desktop-evidence
+        path: |-
+          test-results/
+          coverage/
+          build/Testing/Temporary/LastTest.log
+        if-no-files-found: ignore
+    needs:
+    - native-macos
+  service-macos:
+    name: service-macos
+    runs-on: macos-15
+    timeout-minutes: 90
+    outputs:
+      identity: ${{ steps.stage.outputs.identity }}
+      artifact_name: ${{ steps.stage.outputs.artifact_name }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.source }}
+    - uses: ./.github/actions/setup-macos-stage
+      with:
+        source: ${{ inputs.source }}
+        own-pr: ${{ inputs.own_pr }}
+        version: ${{ inputs.version }}
+        build-number: ${{ inputs.build_number }}
+        label: ${{ inputs.label }}
+    - name: Download the successful native prerequisite
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ${{ needs.native-macos.outputs.artifact_name }}
+        path: build/ci-input/native
+    - name: Download the successful core prerequisite
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ${{ needs.core-macos.outputs.artifact_name }}
+        path: build/ci-input/core
+    - name: Download the successful desktop prerequisite
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+      with:
+        name: ${{ needs.desktop-macos.outputs.artifact_name }}
+        path: build/ci-input/desktop
+    - name: Validate or restore the service stage
+      id: stage
+      env:
+        GH_TOKEN: ${{ github.token }}
+        STAGE_EVENT: ${{ inputs.event }}
+        OWN_PR: ${{ inputs.own_pr }}
+        RELEASE_VALIDATION: ${{ inputs.release }}
+        STAGE_PARENTS: '{"native":"${{ needs.native-macos.outputs.identity }}","core":"${{ needs.core-macos.outputs.identity }}","desktop":"${{ needs.desktop-macos.outputs.identity }}"}'
+      run: |-
+        args=()
+        if [[ "$RELEASE_VALIDATION" == true ]]; then args+=(--release); fi
+        .venv/bin/python tools/run_ci_stage.py \
+          --platform macos --stage service --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
+          --parents-json "$STAGE_PARENTS" \
+          --cmake-arg=-G --cmake-arg=Ninja \
+          --cmake-arg="-DCMAKE_PREFIX_PATH=$PWD/build/sdk" \
+          --cmake-arg=-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+          --cmake-arg=-DCMAKE_OSX_ARCHITECTURES=arm64 \
+          --cmake-arg="-DICU_ROOT=$(brew --prefix icu4c)" \
+          --cmake-arg='-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local' --input native=build/ci-input/native --input core=build/ci-input/core --input desktop=build/ci-input/desktop "${args[@]}"
+    - name: Retain the independently qualified service stage
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ steps.stage.outputs.artifact_name }}
+        path: |-
+          build/ci-stage/macos-service/identity.json
+          build/ci-stage/macos-service/payload.tar.gz
+        if-no-files-found: error
+        retention-days: 14
+    - name: Retain service diagnostics
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: macos-service-evidence
+        path: |-
+          test-results/
+          coverage/
+          build/Testing/Temporary/LastTest.log
+        if-no-files-found: ignore
+    needs:
+    - native-macos
+    - core-macos
+    - desktop-macos

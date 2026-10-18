@@ -168,7 +168,7 @@ def test_main_schedule_and_manual_acceptance_force_validation():
     [
         ("native/worker.cpp", set(STAGES)),
         ("packages/foresight_core/lib/app.dart", {"core", "desktop", "service"}),
-        ("apps/desktop/lib/main.dart", {"desktop", "service"}),
+        ("apps/desktop/lib/main.dart", {"core", "desktop", "service"}),
         ("packaging/build.Dockerfile", set(STAGES)),
         ("docs/guide.md", set()),
         ("new-unclassified-build-input.xyz", set(STAGES)),
