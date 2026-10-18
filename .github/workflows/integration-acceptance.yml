@@ -135,7 +135,7 @@ jobs:
           python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
           mkdir -p artifacts
           cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
-          docker run --rm -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
+          docker run --rm --security-opt seccomp=unconfined --security-opt apparmor=unconfined -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
         id: models
         with:
