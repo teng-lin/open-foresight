@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build a local whisper.cpp checkout with Vulkan; never install system packages."""
+
 import argparse
 import hashlib
 import json
@@ -10,47 +11,78 @@ import subprocess
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', required=True, type=Path)
-    parser.add_argument('--build', required=True, type=Path)
-    parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--vulkan-include', type=Path)
-    parser.add_argument('--vulkan-library', type=Path)
-    parser.add_argument('--spirv-prefix', type=Path)
-    parser.add_argument('--jobs', type=int, default=4)
+    parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--build", required=True, type=Path)
+    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--vulkan-include", type=Path)
+    parser.add_argument("--vulkan-library", type=Path)
+    parser.add_argument("--spirv-prefix", type=Path)
+    parser.add_argument("--jobs", type=int, default=4)
     args = parser.parse_args()
-    command = ['cmake', '-S', str(Path(__file__).resolve().parents[1] / 'services/speech'), '-B', str(args.build),
-               '-DFORESIGHT_WHISPER_SOURCE=' + str(args.source.resolve()),
-               '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_SHARED_LIBS=OFF',
-               '-DGGML_VULKAN=ON', '-DGGML_NATIVE=OFF',
-               '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_BUILD_EXAMPLES=ON']
+    command = [
+        "cmake",
+        "-S",
+        str(Path(__file__).resolve().parents[1] / "services/speech"),
+        "-B",
+        str(args.build),
+        "-DFORESIGHT_WHISPER_SOURCE=" + str(args.source.resolve()),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DGGML_VULKAN=ON",
+        "-DGGML_NATIVE=OFF",
+        "-DWHISPER_BUILD_TESTS=OFF",
+        "-DWHISPER_BUILD_EXAMPLES=ON",
+    ]
     if args.vulkan_include:
-        command.append('-DVulkan_INCLUDE_DIR=' + str(args.vulkan_include))
+        command.append("-DVulkan_INCLUDE_DIR=" + str(args.vulkan_include))
     if args.vulkan_library:
-        command.append('-DVulkan_LIBRARY=' + str(args.vulkan_library))
+        command.append("-DVulkan_LIBRARY=" + str(args.vulkan_library))
     if args.spirv_prefix:
-        command.extend(['-DCMAKE_PREFIX_PATH=' + str(args.spirv_prefix),
-                        '-DCMAKE_CXX_FLAGS=-I' + str(args.spirv_prefix / 'include')])
+        command.extend(
+            [
+                "-DCMAKE_PREFIX_PATH=" + str(args.spirv_prefix),
+                "-DCMAKE_CXX_FLAGS=-I" + str(args.spirv_prefix / "include"),
+            ]
+        )
     subprocess.run(command, check=True)
-    subprocess.run(['cmake', '--build', str(args.build), '--target', 'whisper-cli', 'foresight-whisper-worker',
-                    '-j', str(args.jobs)], check=True)
-    executable = args.build / 'bin/whisper-cli'
-    dependencies = subprocess.check_output(['ldd', str(executable)], text=True)
-    if 'not found' in dependencies:
+    subprocess.run(
+        [
+            "cmake",
+            "--build",
+            str(args.build),
+            "--target",
+            "whisper-cli",
+            "foresight-whisper-worker",
+            "-j",
+            str(args.jobs),
+        ],
+        check=True,
+    )
+    executable = args.build / "bin/whisper-cli"
+    dependencies = subprocess.check_output(["ldd", str(executable)], text=True)
+    if "not found" in dependencies:
         raise RuntimeError(dependencies)
     args.output.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(executable, args.output / 'whisper-cli')
-    shutil.copy2(args.build / 'bin/foresight-whisper-worker', args.output / 'foresight-whisper-worker')
-    shutil.copy2(args.source / 'LICENSE', args.output / 'LICENSE')
+    shutil.copy2(executable, args.output / "whisper-cli")
+    shutil.copy2(
+        args.build / "bin/foresight-whisper-worker",
+        args.output / "foresight-whisper-worker",
+    )
+    shutil.copy2(args.source / "LICENSE", args.output / "LICENSE")
     provenance = {
-        'source': 'https://github.com/ggml-org/whisper.cpp',
-        'commit': subprocess.check_output(['git', '-C', str(args.source),
-                                          'rev-parse', 'HEAD'], text=True).strip(),
-        'configure': command, 'dependencies': dependencies,
-        'sha256': hashlib.sha256(executable.read_bytes()).hexdigest(),
-        'backend': 'Vulkan; CPU available with -ng',
+        "source": "https://github.com/ggml-org/whisper.cpp",
+        "commit": subprocess.check_output(
+            ["git", "-C", str(args.source), "rev-parse", "HEAD"], text=True
+        ).strip(),
+        "configure": command,
+        "dependencies": dependencies,
+        "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "backend": "Vulkan; CPU available with -ng",
     }
-    (args.output / 'provenance.json').write_text(json.dumps(provenance, indent=2) + '\n')
+    (args.output / "provenance.json").write_text(
+        json.dumps(provenance, indent=2) + "\n"
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
