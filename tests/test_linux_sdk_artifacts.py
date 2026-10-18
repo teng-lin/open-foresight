@@ -608,3 +608,175 @@ class RegistryDescriptorProvenanceTests(unittest.TestCase):
                 step["run"].index("linux_sdk_artifacts.py describe"),
                 step["run"].index("ci_artifacts.py pack"),
             )
+
+
+def oci_archive(prefix, *, nested=False, wrong_config=False, missing_layer=False):
+    """A Docker-save compatible OCI layout, including its legacy manifest.json."""
+    import hashlib
+    import io
+    import tarfile
+
+    files = {"oci-layout": b'{"imageLayoutVersion":"1.0.0"}'}
+
+    def blob(value, media):
+        data = json.dumps(value, separators=(",", ":")).encode()
+        digest = hashlib.sha256(data).hexdigest()
+        files["blobs/sha256/" + digest] = data
+        return {"mediaType": media, "digest": "sha256:" + digest, "size": len(data)}
+
+    layer_bytes = b"\0" * 1024  # A valid empty tar layer; no producer code executes.
+    layer_digest = "sha256:" + hashlib.sha256(layer_bytes).hexdigest()
+    if not missing_layer:
+        files["blobs/sha256/" + layer_digest[7:]] = layer_bytes
+    config = blob(
+        {
+            "os": "linux",
+            "architecture": "amd64",
+            "rootfs": {"type": "layers", "diff_ids": [layer_digest]},
+        },
+        "application/vnd.oci.image.config.v1+json",
+    )
+    manifest = blob(
+        {
+            "schemaVersion": 2,
+            "config": config,
+            "layers": [
+                {
+                    "mediaType": "application/vnd.oci.image.layer.v1.tar",
+                    "digest": layer_digest,
+                    "size": len(layer_bytes),
+                }
+            ],
+        },
+        "application/vnd.oci.image.manifest.v1+json",
+    )
+    target = manifest
+    if nested:
+        target = blob(
+            {"schemaVersion": 2, "manifests": [manifest]},
+            "application/vnd.oci.image.index.v1+json",
+        )
+    files["index.json"] = json.dumps(
+        {"schemaVersion": 2, "manifests": [target]}
+    ).encode()
+    files["manifest.json"] = json.dumps(
+        [
+            {
+                "Config": "blobs/sha256/" + config["digest"][7:],
+                "RepoTags": ["foresight-sdk:pr"],
+                "Layers": ["blobs/sha256/" + layer_digest[7:]],
+            }
+        ]
+    ).encode()
+    descriptor = write_archive(
+        prefix, image_id=(IMAGE_ID if wrong_config else config["digest"])
+    )
+    with tarfile.open(prefix / "image.tar", "w") as archive:
+        for name, data in files.items():
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    descriptor["archive_sha256"] = artifacts.digest(prefix / "image.tar")
+    (prefix / "image.json").write_text(json.dumps(descriptor))
+    return descriptor["image_id"], manifest["digest"], target["digest"]
+
+
+def missing_docker_image(image):
+    import subprocess
+
+    return subprocess.CalledProcessError(
+        1,
+        ["docker", "image", "inspect", image],
+        output=f"Error response from daemon: No such image: {image}\n",
+    )
+
+
+class ContainerdArchiveTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.prefix = Path(self.temporary.name) / "payload"
+
+    def test_receipt_config_id_resolves_verified_manifest_and_nested_index(self):
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                original, manifest, target = oci_archive(self.prefix, nested=nested)
+
+                def inspect(image, target=target):
+                    # Real Docker29's diagnostic: a legacy config ID is not an
+                    # image address; a loaded OCI index may be the only address.
+                    if image != target:
+                        raise missing_docker_image(image)
+                    return target
+
+                with (
+                    patch.object(sdk, "inspect", side_effect=inspect),
+                    patch.object(sdk, "run") as run,
+                ):
+                    self.assertEqual(
+                        sdk.load(self.prefix, "linux-sdk", "verified:pr"), "verified:pr"
+                    )
+                self.assertNotEqual(original, manifest)
+                self.assertEqual(
+                    run.call_args.args[0],
+                    ["docker", "image", "tag", target, "verified:pr"],
+                )
+
+    def test_archive_manifest_cannot_substitute_different_receipt_config(self):
+        original, _, _ = oci_archive(self.prefix, wrong_config=True)
+        with (
+            patch.object(sdk, "inspect", side_effect=missing_docker_image(original)),
+            patch.object(sdk, "run") as run,
+        ):
+            with self.assertRaisesRegex(ValueError, "unique manifest"):
+                sdk.load(self.prefix, "linux-sdk", "verified:pr")
+        self.assertEqual(run.call_count, 1)
+
+    def test_daemon_failure_does_not_enable_archive_fallback(self):
+        import subprocess
+
+        oci_archive(self.prefix)
+        failure = subprocess.CalledProcessError(
+            1, ["docker"], output="Cannot connect to Docker daemon"
+        )
+        with (
+            patch.object(sdk, "inspect", side_effect=failure),
+            patch.object(sdk, "archive_manifests") as read,
+            patch.object(sdk, "run"),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                sdk.load(self.prefix, "linux-sdk", "verified:pr")
+        read.assert_not_called()
+
+    def test_content_addressed_metadata_is_verified_even_in_receipted_archive(self):
+        import tarfile
+        import io
+
+        original, _, _ = oci_archive(self.prefix)
+        archive = self.prefix / "image.tar"
+        with tarfile.open(archive) as source:
+            files = [(member, source.extractfile(member).read()) for member in source]
+        with tarfile.open(archive, "w") as target:
+            for member, data in files:
+                if member.name == "blobs/sha256/" + original[7:]:
+                    data = data.replace(b"amd64", b"arm64")
+                target.addfile(member, io.BytesIO(data))
+        descriptor = json.loads((self.prefix / "image.json").read_text())
+        descriptor["archive_sha256"] = artifacts.digest(archive)
+        (self.prefix / "image.json").write_text(json.dumps(descriptor))
+        with (
+            patch.object(sdk, "inspect", side_effect=missing_docker_image(original)),
+            patch.object(sdk, "run"),
+        ):
+            with self.assertRaisesRegex(ValueError, "checksum"):
+                sdk.load(self.prefix, "linux-sdk", "verified:pr")
+
+    def test_missing_referenced_layer_is_not_a_qualified_loaded_image(self):
+        original, _, _ = oci_archive(self.prefix, missing_layer=True)
+        with (
+            patch.object(sdk, "inspect", side_effect=missing_docker_image(original)),
+            patch.object(sdk, "run") as run,
+        ):
+            with self.assertRaisesRegex(ValueError, "layer blob"):
+                sdk.load(self.prefix, "linux-sdk", "verified:pr")
+        self.assertEqual(run.call_count, 1)

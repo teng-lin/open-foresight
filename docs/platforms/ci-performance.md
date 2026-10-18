@@ -215,6 +215,15 @@ main-only Linux bundle job exports only its secret-free `application-dependencie
 layers referenced while both caches remain importable. Packaging
 stages containing distribution secrets never export caches.
 
+Older SDK archive receipts can name a Docker config ID while the containerd
+image store addresses the imported image by its manifest or index digest. Only
+the exact missing-image lookup permits a fallback. It derives eligible IDs from
+the checksum-verified archive's OCI graph, verifies metadata hashes and layer
+inventory, and requires a unique Linux/amd64 image bound to the original receipt.
+Load output and mutable tags do not establish identity. The retained original
+Linux SDK archive was checked against Docker 29's reported manifest ID before
+shipping this compatibility path; no SDK recompilation is involved.
+
 CI supplies the `appdeps_seed` named context with qualified existing dependency
 outputs. Their original provenance remains separate from the current build and
 its test result. Local developer Docker builds retain an empty default context
@@ -269,6 +278,13 @@ Remaining efficiency limits need separate evidence before narrowing them:
   the same locked wheels in different jobs.
 - Fresh Ubuntu jobs materialize the immutable dependency seed even when a
   registry layer is reusable; its downloaded blobs are currently job-local.
+- Sanitizer application jobs do not yet retain their own FlatBuffers and
+  SentencePiece object trees. Their previous uploads contain test evidence and
+  installed gRPC/protobuf SDKs, not those objects. Ordinary Release native
+  archives use different instrumentation/build flags and cannot supply them.
+  Until compatible instrumented objects are retained, these two application
+  dependencies need compilation; this does not justify rebuilding the installed
+  sanitizer SDK. Preserving that compiler work needs a separate verified cache.
 - GitHub SDK payloads and receipts expire. New publishers request 90 days, but
   the four original Linux artifacts expire on November 1, 2026; the verifier's
   24-hour reserve makes October 31 their reuse cutoff. The three macOS originals
