@@ -29,6 +29,8 @@ column repair occurs after the current version has been committed.
 | 7 | Nullable transcript origins and repeatable meeting questions |
 | 8 | Google source, folder and calendar tables owned by Store |
 | 9 | One-time normalized label conversion and malformed JSON repair |
+| 10 | Durable helper deletion retry queue |
+| 11 | Structured local-edit flag with legacy provenance backfill |
 
 Historical builds used version 1 for multiple additive schemas. Versions 2–6
 therefore probe for columns only while adopting those profiles. New stored-data

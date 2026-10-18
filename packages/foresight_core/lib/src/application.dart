@@ -625,6 +625,7 @@ class Application implements ModelGate {
             id: a['id'] as String?,
             modifiedAtMs: a['modifiedAtMs'] as int?,
             sourceUri: a['sourceUri'] as String?,
+            locallyEdited: a['locallyEdited'] == true,
           );
           if (a['index'] != false) await domain.index(id);
           return {'id': id};
@@ -1316,7 +1317,7 @@ class Application implements ModelGate {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
     final existing = store.sources
-        .where((s) => s['provenance'] == 'url:$uri')
+        .where((s) => s['source_uri'] == uri.toString())
         .firstOrNull;
     final id = store.importText(
       uri.host + uri.path,
@@ -1374,7 +1375,9 @@ class Application implements ModelGate {
       if (current != null && !current()) {
         throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
       }
-      if ((s['provenance'] as String).startsWith('user edit; ')) continue;
+      if (s['locally_edited'] == 1 ||
+          (s['provenance'] as String).startsWith('user edit; '))
+        continue;
       bool sourceCurrent() =>
           (current?.call() ?? true) &&
           store.rows(

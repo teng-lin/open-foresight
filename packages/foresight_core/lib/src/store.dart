@@ -24,7 +24,7 @@ void requireEmbeddingBundle(String path) {
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 10;
+  static const schemaVersion = 11;
 
   Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly) {
     try {
@@ -131,6 +131,25 @@ class Store {
         db.execute(
           'CREATE TABLE IF NOT EXISTS pending_helper_deletes(document_id TEXT PRIMARY KEY, queued_at INTEGER NOT NULL)',
         );
+      case 11:
+        if (!rows(
+          'PRAGMA table_info(sources)',
+        ).any((row) => row['name'] == 'locally_edited')) {
+          db.execute(
+            'ALTER TABLE sources ADD COLUMN locally_edited INTEGER NOT NULL DEFAULT 0',
+          );
+        }
+        for (final row in rows('SELECT id,provenance FROM sources')) {
+          var provenance = row['provenance'] as String;
+          if (!provenance.startsWith('user edit; ')) continue;
+          while (provenance.startsWith('user edit; ')) {
+            provenance = provenance.substring('user edit; '.length);
+          }
+          db.execute(
+            'UPDATE sources SET locally_edited=1,provenance=? WHERE id=?',
+            [provenance, row['id']],
+          );
+        }
       default:
         throw StateError('Missing application database migration $version');
     }
@@ -400,7 +419,7 @@ class Store {
     final revision = dataRevision;
     if (_summaryRevision != revision) {
       _sourceSummaries = rows(
-        'SELECT sources.id,sources.title,sources.mime,sources.provenance,sources.state,sources.error,sources.revision,sources.deleted,source_details.imported,source_details.changed,source_details.labels,source_details.source_uri FROM sources LEFT JOIN source_details ON sources.id=source_details.source_id WHERE deleted=0 ORDER BY title',
+        'SELECT sources.id,sources.title,sources.mime,sources.provenance,sources.locally_edited,sources.state,sources.error,sources.revision,sources.deleted,source_details.imported,source_details.changed,source_details.labels,source_details.source_uri FROM sources LEFT JOIN source_details ON sources.id=source_details.source_id WHERE deleted=0 ORDER BY title',
       );
       _summaryRevision = revision;
     }
@@ -416,13 +435,18 @@ class Store {
     // Null uses the local creation/edit time; zero means unknown external metadata.
     int? modifiedAtMs,
     String? sourceUri,
+    bool locallyEdited = false,
   }) {
+    while (provenance.startsWith('user edit; ')) {
+      locallyEdited = true;
+      provenance = provenance.substring('user edit; '.length);
+    }
     id ??= sha256
         .convert(utf8.encode('$title:${DateTime.now().microsecondsSinceEpoch}'))
         .toString();
     db.execute(
-      'INSERT INTO sources(id,title,content,mime,revision,state,provenance) VALUES(?,?,?,?,1,\'pending\',?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,mime=excluded.mime,revision=sources.revision+1,state=\'pending\',error=\'\',deleted=0,provenance=excluded.provenance',
-      [id, title, text, mime, provenance],
+      'INSERT INTO sources(id,title,content,mime,revision,state,provenance,locally_edited) VALUES(?,?,?,?,1,\'pending\',?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,content=excluded.content,mime=excluded.mime,revision=sources.revision+1,state=\'pending\',error=\'\',deleted=0,provenance=excluded.provenance,locally_edited=excluded.locally_edited',
+      [id, title, text, mime, provenance, locallyEdited ? 1 : 0],
     );
     final now = DateTime.now().millisecondsSinceEpoch;
     db.execute(

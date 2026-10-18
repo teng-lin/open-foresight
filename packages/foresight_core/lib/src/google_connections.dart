@@ -64,7 +64,7 @@ class GoogleConnections implements ConnectedSources {
     // Older profiles recorded local import time. Restore cached metadata only
     // for unedited external sources; source content/revisions stay unchanged.
     for (final row in store.rows(
-      "SELECT sources.id,google_sources.modified FROM google_sources JOIN sources ON sources.id=google_sources.source_id WHERE sources.deleted=0 AND sources.provenance NOT LIKE 'user edit; %'",
+      "SELECT sources.id,google_sources.modified FROM google_sources JOIN sources ON sources.id=google_sources.source_id WHERE sources.deleted=0 AND sources.locally_edited=0 AND sources.provenance NOT LIKE 'user edit; %'",
     )) {
       store.db.execute(
         'UPDATE source_details SET changed=? WHERE source_id=?',
@@ -72,7 +72,7 @@ class GoogleConnections implements ConnectedSources {
       );
     }
     for (final row in store.rows(
-      "SELECT sources.id,calendar_events.metadata FROM calendar_events JOIN sources ON sources.id=calendar_events.source_id WHERE sources.deleted=0 AND sources.provenance NOT LIKE 'user edit; %'",
+      "SELECT sources.id,calendar_events.metadata FROM calendar_events JOIN sources ON sources.id=calendar_events.source_id WHERE sources.deleted=0 AND sources.locally_edited=0 AND sources.provenance NOT LIKE 'user edit; %'",
     )) {
       Object? updated;
       try {
@@ -181,7 +181,10 @@ class GoogleConnections implements ConnectedSources {
     ]).firstOrNull;
     if (preserveDeleted &&
         (old?['deleted'] == 1 ||
-            (old?['provenance'] as String? ?? '').startsWith('user edit; '))) {
+            (old?['locally_edited'] == 1 ||
+                (old?['provenance'] as String? ?? '').startsWith(
+                  'user edit; ',
+                )))) {
       return;
     }
     final contentChanged =
@@ -189,9 +192,9 @@ class GoogleConnections implements ConnectedSources {
         old['deleted'] == 1 ||
         old['content'] != text ||
         old['title'] != title;
-    final locallyEdited = (old?['provenance'] as String? ?? '').startsWith(
-      'user edit; ',
-    );
+    final locallyEdited =
+        old?['locally_edited'] == 1 ||
+        (old?['provenance'] as String? ?? '').startsWith('user edit; ');
     if (contentChanged) {
       store.importText(
         title,
@@ -523,7 +526,7 @@ class GoogleConnections implements ConnectedSources {
         );
         _check(account);
         if (store.rows(
-          "SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0 AND provenance NOT LIKE 'user edit; %'",
+          "SELECT id FROM sources WHERE id=? AND revision=? AND deleted=0 AND locally_edited=0 AND provenance NOT LIKE 'user edit; %'",
           [source['source_id'], source['source_revision']],
         ).isEmpty) {
           continue;
