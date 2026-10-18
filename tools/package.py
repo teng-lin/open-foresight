@@ -58,7 +58,7 @@ def main():
         "--litert-library",
         type=Path,
         default=ROOT / "build/lib/liblitert-lm.so",
-        help="Pinned native LiteRT-LM 0.18.0 library from tools/prepare_litert.py",
+        help=f"Pinned native LiteRT-LM {LITERT_VERSION} library from tools/prepare_litert.py",
     )
     parser.add_argument(
         "--litert-extensions-manifest",

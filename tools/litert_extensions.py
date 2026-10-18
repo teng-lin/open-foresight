@@ -204,7 +204,9 @@ def verify_extensions_manifest(path, *, platform_name):
             raise ValueError("Incomplete LiteRT extension API wheel")
         metadata = BytesParser().parsebytes(archive.read(metadata_name))
         if metadata["Name"] != "litert-lm-api" or metadata["Version"] != LITERT_VERSION:
-            raise ValueError("LiteRT extension wheel metadata does not match 0.18.0")
+            raise ValueError(
+                f"LiteRT extension wheel metadata does not match {LITERT_VERSION}"
+            )
         tags = BytesParser().parsebytes(archive.read(wheel_metadata)).get_all("Tag", [])
         if tags != [tag]:
             raise ValueError(

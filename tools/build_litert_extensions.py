@@ -305,7 +305,7 @@ def main():
             raise RuntimeError("Expected exactly one wheel distribution metadata file")
         package = BytesParser().parsebytes(archive.read(metadata[0]))
         if package["Name"] != "litert-lm-api" or package["Version"] != LITERT_VERSION:
-            raise RuntimeError("Built wheel must be litert-lm-api==0.18.0")
+            raise RuntimeError(f"Built wheel must be litert-lm-api=={LITERT_VERSION}")
         vendor_libraries = wheel_vendor_hashes(archive, platform.system())
     args.output.mkdir(parents=True, exist_ok=True)
     retained_test_log = args.output / "native-stop-config-test.log"
