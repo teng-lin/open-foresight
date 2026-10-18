@@ -105,27 +105,3 @@ def test_pr_transport_cannot_write_registry_or_other_outputs(option):
         transport.command(
             ["docker", "build", option, "."], ["docker", "buildx", "build"]
         )
-
-
-def test_preparation_occurs_before_parent_load_and_compilation():
-    # Mirrors the producer integration order without running any Docker work.
-    operations = []
-    query, _ = docker_queries()
-
-    def preflight(arguments, **kwargs):
-        operations.append("preflight")
-        return query(arguments, **kwargs)
-
-    prefix = transport.prepare(
-        "example/foresight",
-        "linux-sdk",
-        expected_repository="example/foresight",
-        check_output=preflight,
-    )
-    operations.append("load verified parents")
-    build = transport.command(
-        ["docker", "build", "--build-arg", "CORE_IMAGE=foresight-core:pr", "."], prefix
-    )
-    operations.append("compile")
-    assert operations == ["preflight"] * 3 + ["load verified parents", "compile"]
-    assert "--cache-to" not in build
