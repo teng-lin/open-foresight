@@ -143,6 +143,15 @@ There is one application service per profile. It owns every database write, the 
 | `tests` | Contract, lifecycle, service, and grounding tests with controlled fixtures |
 | `tools` | Build, packaging, model setup, migration, and opt-in integration tests |
 
+## Python development environment
+
+Use Python 3.13, matching CI, and the hash-pinned development lock:
+
+```sh
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+```
+
 ## Build from source
 
 These commands target Linux. For macOS, see [Mac build, bundle, and MCP instructions](docs/platforms/macos-support.md); it uses a source-built dependency SDK and `tools/package_macos.py`.
@@ -152,7 +161,7 @@ These commands target Linux. For macOS, see [Mac build, bundle, and MCP instruct
 - a C++20 compiler and CMake
 - protobuf and gRPC development packages
 - SQLite3, nlohmann-json, OpenSSL, and ICU
-- Python, for build and test tooling
+- Python 3.13, for build and test tooling
 - Flutter, with the GTK3 Linux development dependencies
 
 Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 35.1, gRPC 1.83.1, and nlohmann-json 3.11.3.
@@ -276,6 +285,8 @@ Browse the [documentation index](docs/README.md).
 | Topic | Document |
 | --- | --- |
 | How this project started | [Replicating Foresight with REA on Linux and herdr on Mac](docs/research/rea-linux-and-herdr-mac.md) |
+| Schema migrations | [schema-migrations.md](docs/architecture/schema-migrations.md) |
+| Credentials at rest | [credentials-at-rest.md](docs/architecture/credentials-at-rest.md) |
 | Application service and MCP | [application-service.md](docs/architecture/application-service.md) |
 | Native inference | [services/inference](services/inference/README.md) |
 | Speech models | [speech-models.md](docs/models/speech-models.md) |
@@ -294,21 +305,3 @@ Open Foresight is released under the [MIT License](LICENSE). Third-party compone
 ## Disclaimer
 
 Open Foresight is an independent project. It is not affiliated with, endorsed by, or supported by Google. "Foresight" refers to the reference application this project studied.
-
-### Quality checks
-
-CI runs `ruff check .`, `mypy`, and `python tools/check_subprocess_timeouts.py`.
-Install the pinned development requirements first. Mypy checks every production
-Python script, including unannotated function bodies; tests with dynamic native
-API doubles are covered by ruff and the runtime suites.
-
-Format all tracked Dart sources with Flutter 3.35.7's Dart formatter and C/C++
-sources with clang-format 22.1.8 (configuration in `.clang-format`). CI rejects
-format differences across all tracked project sources, including fixtures; vendored C/C++ under
-`third_party` remains upstream-owned. Generated
-files should be formatted after regeneration.
-
-Synchronous Python subprocesses must pass an explicit finite `timeout` in seconds.
-Quick commands and probes generally allow 300 seconds; dependency builds allow
-3600 seconds. Long-lived `Popen` protocols use operation deadlines and bounded
-shutdown waits. Callers of build wrappers may override their bounded default.

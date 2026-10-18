@@ -8,11 +8,11 @@ and close the relevant issue. Report vulnerabilities through [SECURITY.md](SECUR
 
 The supported targets are Linux x86-64 and Apple Silicon macOS 15+. Install the
 native toolchain and pinned Flutter version described in [README.md](README.md#build-from-source)
-and the [macOS guide](docs/platforms/macos-support.md). Python is build/test tooling.
+and the [macOS guide](docs/platforms/macos-support.md). Python 3.13 is the supported build/test tooling version.
 Install its checked-in, hash-pinned development dependencies:
 
 ```sh
-python3 -m venv .venv
+python3.13 -m venv .venv
 .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
 ```
 
@@ -53,3 +53,35 @@ rollback/upgrade coverage. Add regression tests for behavior changes and record
 platform limitations honestly. CI and review findings must be resolved before
 merge. Do not publish installers from an unreviewed branch; releases use the
 exact-commit draft and acceptance workflow described in the README.
+
+## Quality checks
+
+CI runs `ruff check .`, `mypy`, and `python tools/check_subprocess_timeouts.py`.
+Install the pinned development requirements first. Mypy checks every production
+Python script, including unannotated function bodies; tests with dynamic native
+API doubles are covered by ruff and the runtime suites.
+
+Format all tracked Dart sources with Flutter 3.35.7's Dart formatter and C/C++
+sources with clang-format 22.1.8 (configuration in `.clang-format`). CI rejects
+format differences across all tracked project sources, including fixtures; vendored C/C++ under
+`third_party` remains upstream-owned. Generated
+files should be formatted after regeneration.
+
+Synchronous Python subprocesses must pass an explicit finite `timeout` in seconds.
+Quick commands and probes generally allow 300 seconds; dependency builds allow
+3600 seconds. Long-lived `Popen` protocols use operation deadlines and bounded
+shutdown waits. Callers of build wrappers may override their bounded default.
+
+
+Python locks are resolved for Python 3.13. When requirement inputs change, use:
+
+```sh
+uv pip compile --python-version 3.13 --generate-hashes requirements-dev.txt --output-file requirements-dev.lock
+uv pip compile --python-version 3.13 --generate-hashes requirements-format.txt --output-file requirements-format.lock
+uv pip compile --python-version 3.13 --generate-hashes requirements-litert.txt --output-file requirements-litert.lock
+```
+
+The protobuf runtime and `types-protobuf` stubs use the same major version. The
+Dart protobuf compiler is resolved separately with
+`(cd tools/protoc_plugin && dart pub get --enforce-lockfile)`; put its `bin`
+directory on PATH before running `tools/check_dart_bindings.py`.

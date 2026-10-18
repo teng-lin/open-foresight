@@ -6,6 +6,7 @@ name: Reusable CI dependencies
     paths:
     - .github/workflows/ci-dependencies.yml
     - tools/ci_artifacts.py
+    - tools/pins.json
     - tools/ci_registry.py
     - tools/build_linux_sdk_local.sh
     - tools/linux_sdk_artifacts.py
@@ -44,6 +45,7 @@ name: Reusable CI dependencies
     - .github/workflows/integration-acceptance.yml
     - .github/workflows/ci-dependencies.yml
     - tools/ci_artifacts.py
+    - tools/pins.json
     - tools/ci_registry.py
     - tools/build_linux_sdk_local.sh
     - tools/linux_sdk_artifacts.py

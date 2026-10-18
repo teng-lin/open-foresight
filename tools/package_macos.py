@@ -27,6 +27,9 @@ from litert_extensions import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+LITERT_VERSION = json.loads(Path(__file__).with_name("pins.json").read_text())[
+    "litert_lm"
+]
 PURPOSES = {
     "NSMicrophoneUsageDescription": "Transcribe your microphone during meetings you start.",
     "NSAudioCaptureUsageDescription": "Transcribe meeting audio playing on this Mac when you start recording.",
@@ -37,7 +40,7 @@ def write_litert_manifests(app, library, service):
     """Bind every runtime host to the relocated and signed library bytes."""
     with library.open("rb") as stream:
         runtime = {
-            "version": "0.18.0",
+            "version": LITERT_VERSION,
             "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
         }
     # UI/MCP and the nested service resolve identity from Contents/Resources;
