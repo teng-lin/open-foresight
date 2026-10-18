@@ -42,6 +42,35 @@ void validateHelperCompatibility(
   }
 }
 
+/// Bound crash loops without permanently exhausting recovery for a long-lived service.
+class HelperRestartBudget {
+  final DateTime Function() now;
+  final Duration window;
+  int attempts = 0;
+  DateTime? _began;
+  HelperRestartBudget({
+    DateTime Function()? now,
+    this.window = const Duration(minutes: 10),
+  }) : now = now ?? DateTime.now;
+  bool reserve() {
+    final time = now();
+    if (_began == null ||
+        time.difference(_began!) >= window ||
+        time.isBefore(_began!)) {
+      attempts = 0;
+      _began = time;
+    }
+    if (attempts >= 3) return false;
+    attempts++;
+    return true;
+  }
+
+  void reset() {
+    attempts = 0;
+    _began = null;
+  }
+}
+
 class Helper {
   final String socket, storage;
   late final grpc_api.ClientChannel channel;
@@ -54,7 +83,12 @@ class Helper {
   bool incompatible = false;
   bool shutdownVerified = true;
   bool _adopted = false;
-  int restarts = 0;
+  final HelperRestartBudget restartBudget = HelperRestartBudget();
+  int get restarts => restartBudget.attempts;
+  set restarts(int value) {
+    restartBudget.attempts = value;
+  }
+
   String state = 'disconnected';
   control.State? snapshot;
   StreamSubscription<control.State>? watch;
@@ -121,7 +155,7 @@ class Helper {
       );
     }
     if (!manageProcess) return;
-    restarts = 0;
+    restartBudget.reset();
     if (process == null || snapshot == null) await start();
   }
 
@@ -206,7 +240,7 @@ class Helper {
                 state = 'helper exited ($code)';
                 snapshot = null;
                 changed?.call();
-                if (!stopping && restarts++ < 3) {
+                if (!stopping && restartBudget.reserve()) {
                   await Future<void>.delayed(Duration(seconds: restarts));
                   try {
                     final starting = _starting;
