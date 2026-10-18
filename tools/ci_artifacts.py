@@ -2,6 +2,7 @@
 """Content-addressed CI dependencies and exact-commit application promotion."""
 
 import argparse
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -18,21 +19,22 @@ FILES = {
     "macos-sdk": ["tools/build_macos_sdk.py"],
     "macos-runtime": [
         "tools/build_macos_runtimes.py",
-        "tools/build_litert_extensions.py",
-        "tools/litert_extensions.py",
-        "tools/test_litert_status_abi.py",
-        "third_party/litert_lm/stop-token-sequences.patch",
-        "third_party/litert_lm/macos-trivial-abi.patch",
         "services/speech/CMakeLists.txt",
         "services/speech/worker.cpp",
         "services/inference/persistent_worker.h",
         "services/inference/output_budget.h",
     ],
+    "macos-vendor": [
+        "tools/build_macos_vendor.py",
+        "tools/build_litert_extensions.py",
+        "tools/litert_extensions.py",
+        "tools/test_litert_status_abi.py",
+        "third_party/litert_lm/stop-token-sequences.patch",
+        "third_party/litert_lm/macos-trivial-abi.patch",
+    ],
     "linux-core": [
         "packaging/sdk-core.Dockerfile",
         "packaging/minimal-grpc.cmake",
-        "requirements-dev.lock",
-        "requirements-litert.lock",
     ],
     "linux-litert": [
         "packaging/sdk-litert.Dockerfile",
@@ -45,14 +47,19 @@ FILES = {
     "linux-whisper": [
         "packaging/sdk-whisper.Dockerfile",
         "tools/build_whisper_vulkan.py",
+    ],
+    "linux-sdk": [
+        "packaging/sdk.Dockerfile",
+        "requirements-dev.lock",
+        "requirements-litert.lock",
         "services/speech/CMakeLists.txt",
         "services/speech/worker.cpp",
         "services/inference/persistent_worker.h",
         "services/inference/output_budget.h",
     ],
-    "linux-sdk": ["packaging/sdk.Dockerfile"],
 }
 PARENTS = {
+    "macos-runtime": ["macos-vendor"],
     "linux-litert": ["linux-core"],
     "linux-whisper": ["linux-core"],
     "linux-sdk": ["linux-core", "linux-litert", "linux-whisper"],
@@ -60,6 +67,7 @@ PARENTS = {
 JOBS = {
     "macos-sdk": "Build macOS sdk",
     "macos-runtime": "Build macOS runtime",
+    "macos-vendor": "Build macOS vendor",
     "linux-sdk": "Assemble Linux SDK",
     "linux-core": "Build Linux core",
     "linux-litert": "Build Linux litert",
@@ -72,12 +80,32 @@ def fingerprint(component, root=ROOT):
     record = {
         "schema": 1,
         "component": component,
-        "files": {name: digest(root / name) for name in FILES[component]},
+        "files": {name: input_digest(root / name) for name in FILES[component]},
         "parents": {
             name: fingerprint(name, root) for name in PARENTS.get(component, [])
         },
     }
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+def input_digest(path):
+    """Ignore pip comment-only lines; retain requirement order, flags and hashes.
+
+    Only whole comment lines are ignored. Inline comments and continuation syntax
+    remain byte-exact to avoid accidentally changing pip's parsing semantics.
+    """
+    path = Path(path)
+    if path.name.startswith("requirements-") and path.suffix == ".lock":
+        lines = []
+        continued = False
+        for line in path.read_bytes().splitlines(keepends=True):
+            if not continued and line.lstrip().startswith(b"#"):
+                continue
+            lines.append(line)
+            continued = line.rstrip().endswith(b"\\")
+        meaningful = b"".join(lines)
+        return hashlib.sha256(meaningful).hexdigest()
+    return digest(path)
 
 
 def digest(path):
@@ -211,6 +239,198 @@ def dependency_jobs(repository, run_id):
         page += 1
 
 
+def receipt_name(component, identity):
+    return "receipt-" + name(component, identity)
+
+
+def eligible_run(repository, run, component, own_head="", own_pr=0):
+    if trusted_run(run, component, own_head, repository, own_pr):
+        return True
+    return (
+        not component.endswith("-app")
+        and run.get("path") == ".github/workflows/ci-dependencies.yml"
+        and run.get("event") in ("pull_request", "workflow_dispatch")
+        and (run.get("head_repository") or {}).get("full_name") == repository
+        and merged_source(repository, run)
+    )
+
+
+def download_zip(repository, artifact, destination):
+    with destination.open("wb") as stream:
+        subprocess.run(
+            ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact['id']}/zip"],
+            stdout=stream,
+            check=True,
+            timeout=300,
+        )
+    expected = artifact.get("digest", "")
+    if (
+        not isinstance(expected, str)
+        or not re.fullmatch(r"sha256:[a-f0-9]{64}", expected)
+        or expected != "sha256:" + digest(destination)
+    ):
+        raise ValueError("Artifact ZIP digest mismatch")
+
+
+def optional_api(repository, route):
+    try:
+        return api(repository, route)
+    except subprocess.CalledProcessError as error:
+        try:
+            missing = json.loads(error.output or b"{}")
+        except (ValueError, TypeError):
+            raise error from None
+        if str(missing.get("status")) == "404":
+            return None
+        raise
+
+
+def valid_receipt(receipt, component, identity):
+    return (
+        isinstance(receipt, dict)
+        and type(receipt.get("schema")) is int
+        and receipt["schema"] == 1
+        and receipt.get("component") == component
+        and receipt.get("identity") == identity
+        and isinstance(receipt.get("sha256"), str)
+        and bool(re.fullmatch(r"[a-f0-9]{64}", receipt["sha256"]))
+        and isinstance(receipt.get("source_commit"), str)
+        and bool(re.fullmatch(r"[a-f0-9]{40}", receipt["source_commit"]))
+        and type(receipt.get("source_run_attempt")) is int
+        and receipt["source_run_attempt"] > 0
+    )
+
+
+def in_producer_attempt(artifact, job):
+    try:
+        created = datetime.fromisoformat(artifact["created_at"].replace("Z", "+00:00"))
+        started = datetime.fromisoformat(job["started_at"].replace("Z", "+00:00"))
+        completed = datetime.fromisoformat(job["completed_at"].replace("Z", "+00:00"))
+        return started <= created <= completed
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def publish_receipt(repository, component, identity, source, artifact_id, output):
+    """Bind a small receipt to this job's original immutable payload upload."""
+    receipt = json.loads((source / "identity.json").read_text())
+    if not valid_receipt(receipt, component, identity):
+        raise ValueError("Invalid source artifact receipt")
+    artifact = api(repository, f"actions/artifacts/{artifact_id}")
+    if (
+        artifact.get("expired")
+        or artifact.get("name") != name(component, identity)
+        or str(artifact["workflow_run"]["id"]) != os.environ.get("GITHUB_RUN_ID")
+        or receipt["source_run_attempt"]
+        != int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
+        or not re.fullmatch(r"sha256:[a-f0-9]{64}", artifact.get("digest", ""))
+    ):
+        raise ValueError("Payload upload does not match the current producer")
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "receipt.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "component": component,
+                "identity": identity,
+                "artifact_id": artifact_id,
+                "artifact_digest": artifact["digest"],
+                "source_receipt": receipt,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
+def probe(repository, component, identity, own_head="", own_pr=0):
+    """Find an original qualified payload without downloading its large bytes.
+
+    Receipts never forward other receipts. Both uploads must belong to the same
+    successful producer attempt. Consumers still verify the original full payload.
+    """
+    sidecar_name = receipt_name(component, identity)
+    candidates = api(repository, f"actions/artifacts?name={sidecar_name}&per_page=100")[
+        "artifacts"
+    ]
+    for sidecar in candidates:
+        if (
+            sidecar.get("expired")
+            or sidecar.get("name") != sidecar_name
+            or sidecar.get("size_in_bytes", 65537) > 65536
+        ):
+            continue
+        run = api(repository, f"actions/runs/{sidecar['workflow_run']['id']}")
+        if not eligible_run(repository, run, component, own_head, own_pr):
+            continue
+        jobs = dependency_jobs(repository, run["id"])
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "receipt.zip"
+            try:
+                download_zip(repository, sidecar, archive)
+                with zipfile.ZipFile(archive) as stream:
+                    if (
+                        stream.namelist() != ["receipt.json"]
+                        or stream.getinfo("receipt.json").file_size > 16384
+                    ):
+                        continue
+                    reference = json.loads(stream.read("receipt.json"))
+            except (ValueError, zipfile.BadZipFile):
+                continue
+        if not isinstance(reference, dict):
+            continue
+        receipt = reference.get("source_receipt", {})
+        if (
+            type(reference.get("schema")) is not int
+            or reference["schema"] != 1
+            or reference.get("component") != component
+            or reference.get("identity") != identity
+            or not valid_receipt(receipt, component, identity)
+            or type(reference.get("artifact_id")) is not int
+            or reference["artifact_id"] < 1
+            or not isinstance(reference.get("artifact_digest"), str)
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", reference["artifact_digest"])
+        ):
+            continue
+        payload = optional_api(
+            repository, f"actions/artifacts/{reference['artifact_id']}"
+        )
+        if (
+            not payload
+            or payload.get("expired")
+            or payload.get("name") != name(component, identity)
+        ):
+            continue
+        if (
+            payload.get("digest") != reference["artifact_digest"]
+            or payload.get("workflow_run", {}).get("id") != run["id"]
+        ):
+            continue
+        try:
+            expires = datetime.fromisoformat(
+                payload["expires_at"].replace("Z", "+00:00")
+            )
+            if expires < datetime.now(timezone.utc) + timedelta(hours=24):
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not any(
+            job["name"] == JOBS[component]
+            and job.get("conclusion") == "success"
+            and job.get("run_attempt", 1) == receipt["source_run_attempt"]
+            and in_producer_attempt(payload, job)
+            and in_producer_attempt(sidecar, job)
+            for job in jobs
+        ):
+            continue
+        print(
+            f"Reusing qualified original {payload['id']} from run {run['id']} without transferring its payload",
+            flush=True,
+        )
+        return True
+    return False
+
+
 def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0):
     artifact_name = name(component, identity)
     deadline = time.monotonic() + wait
@@ -222,18 +442,8 @@ def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0)
             if artifact["expired"] or artifact["name"] != artifact_name:
                 continue
             run = api(repository, f"actions/runs/{artifact['workflow_run']['id']}")
-            if not trusted_run(run, component, own_head, repository, own_pr):
-                # An approved dependency PR can be reused after merge without
-                # republishing/recompiling it in main's namespace. Forks and
-                # application candidates never use this exception.
-                if (
-                    component.endswith("-app")
-                    or run.get("path") != ".github/workflows/ci-dependencies.yml"
-                    or run.get("event") not in ("pull_request", "workflow_dispatch")
-                    or (run.get("head_repository") or {}).get("full_name") != repository
-                    or not merged_source(repository, run)
-                ):
-                    continue
+            if not eligible_run(repository, run, component, own_head, own_pr):
+                continue
             if component.endswith("-app"):
                 if run["head_sha"] != identity:
                     continue
@@ -294,11 +504,14 @@ def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0)
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("keys", "pack", "pull"))
+    parser.add_argument(
+        "command", choices=("keys", "pack", "pull", "probe", "publish-receipt")
+    )
     parser.add_argument("--component", choices=(*FILES, "macos-app", "linux-app"))
     parser.add_argument("--identity")
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--artifact-id", type=int)
     parser.add_argument(
         "--repository",
         default=os.environ.get("GITHUB_REPOSITORY", "teng-lin/open-foresight"),
@@ -315,6 +528,39 @@ def main():
         if output := os.environ.get("GITHUB_OUTPUT"):
             with open(output, "a") as stream:
                 stream.write("".join(f"{key}={value}\n" for key, value in keys.items()))
+        return
+    if args.command == "probe":
+        if args.component not in FILES:
+            parser.error("A dependency --component is required")
+        hit = probe(
+            args.repository,
+            args.component,
+            args.identity or fingerprint(args.component),
+            args.own_head,
+            args.own_pr,
+        )
+        if destination := os.environ.get("GITHUB_OUTPUT"):
+            with open(destination, "a") as stream:
+                stream.write(f"hit={str(hit).lower()}\n")
+        return
+    if args.command == "publish-receipt":
+        if (
+            not args.component
+            or not args.prefix
+            or not args.output
+            or not args.artifact_id
+        ):
+            parser.error(
+                "--component, --prefix, --output and --artifact-id are required"
+            )
+        publish_receipt(
+            args.repository,
+            args.component,
+            args.identity or fingerprint(args.component),
+            args.prefix,
+            args.artifact_id,
+            args.output,
+        )
         return
     if not args.component or not args.prefix:
         parser.error("--component and --prefix are required")
