@@ -16,6 +16,96 @@ spec = importlib.util.spec_from_file_location(
 )
 gpu = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gpu)
+CPU_METADATA = (ROOT / "tests/fixtures/software-vulkan-cpu.txt").read_text()
+
+
+def test_cpu_preflight_uses_metadata_retained_from_actual_ci_whisper_log():
+    # Exact enumeration lines retained from the failed 6f22cad acceptance job;
+    # the actual combined transcript/log is also replayed during validation.
+    diagnostic = (
+        "And so my fellow Americans" + "\n" + CPU_METADATA + "using Vulkan0 backend\n"
+    )
+    result = SimpleNamespace(
+        returncode=0, stdout="my fellow Americans", stderr=diagnostic
+    )
+    whisper = gpu.whisper_result(result, allow_unavailable=True)
+    skipped = gpu.litert_ci_preflight(whisper, diagnostic, allow_unavailable=True)
+    assert skipped["status"] == "skipped"
+    assert skipped["adapter"]["type"] == "cpu"
+    assert "llvmpipe" in skipped["adapter"]["name"]
+    assert gpu.litert_ci_preflight(whisper, diagnostic) is None
+    assert gpu.litert_ci_preflight({"status": "skipped"}, diagnostic, True) is None
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        CPU_METADATA.replace("Found 1", "Found 2"),
+        CPU_METADATA + "ggml_vulkan: Found 1 Vulkan devices:\n",
+        CPU_METADATA + "ggml_vulkan: 1 = NVIDIA GPU\n",
+        CPU_METADATA + CPU_METADATA.splitlines()[-1] + "\n",
+        "\n".join(CPU_METADATA.splitlines()[:-1]),
+        CPU_METADATA.replace("0 = llvmpipe", "0 = NVIDIA"),
+        CPU_METADATA.replace("0 = llvmpipe", "1 = llvmpipe"),
+        "unknown Vulkan adapter",
+    ],
+)
+def test_unknown_hardware_mixed_or_duplicate_metadata_never_skips(diagnostic):
+    assert gpu.litert_ci_preflight({"status": "passed"}, diagnostic, True) is None
+
+
+@pytest.mark.parametrize("allow_unavailable", [False, True])
+@pytest.mark.parametrize("hardware", [False, True])
+def test_only_explicit_ci_cpu_adapter_skips_before_litert_startup(
+    tmp_path, allow_unavailable, hardware
+):
+    output = tmp_path / "reports"
+    diagnostic = CPU_METADATA + "using Vulkan0 backend\n"
+    if hardware:
+        diagnostic = diagnostic.replace("0 = llvmpipe", "0 = NVIDIA")
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "probe",
+                "--bundle",
+                str(tmp_path),
+                "--models",
+                str(tmp_path),
+                "--output",
+                str(output),
+                *(["--allow-unavailable"] if allow_unavailable else []),
+            ],
+        ),
+        patch.object(gpu.Path, "glob", return_value=[tmp_path / "lvp_icd.x86_64.json"]),
+        patch.object(
+            gpu, "packaged_paths", return_value=(Path("runner"), Path("worker"), {})
+        ),
+        patch.object(gpu, "model_file", return_value="model") as model,
+        patch.object(
+            gpu.subprocess,
+            "run",
+            return_value=SimpleNamespace(
+                returncode=0, stdout="my fellow Americans", stderr=diagnostic
+            ),
+        ),
+        patch.object(
+            gpu, "litert_probe", side_effect=RuntimeError("GPU decode crashed -11")
+        ) as litert,
+    ):
+        if allow_unavailable and not hardware:
+            gpu.main()
+            litert.assert_not_called()
+            assert [call.args[1] for call in model.call_args_list] == ["speech"]
+            report = json.loads((output / "software-gpu.json").read_text())
+            assert report["whisper"]["status"] == "passed"
+            assert report["litert"]["status"] == "skipped"
+            assert report["physical_gpu_verified"] is False
+        else:
+            with pytest.raises(RuntimeError, match="decode crashed -11"):
+                gpu.main()
+            litert.assert_called_once()
 
 
 def test_whisper_requires_software_vulkan_and_a_transcript():

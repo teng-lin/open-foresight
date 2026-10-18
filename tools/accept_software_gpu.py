@@ -54,6 +54,36 @@ def whisper_result(result, allow_unavailable=False):
     }
 
 
+def litert_ci_preflight(whisper, diagnostic, allow_unavailable=False):
+    """Recognize a proven CPU adapter before optional CI LiteRT model startup.
+
+    In pinned whisper.cpp 0c7be696, ggml-vulkan.cpp emits the exact warning
+    below only for VkPhysicalDeviceProperties.deviceType == eCpu. Require one
+    unambiguous selected software device and a successful Vulkan transcript;
+    model failures, unknown adapters and mixed/duplicate evidence never skip.
+    """
+    if not allow_unavailable or whisper.get("status") != "passed":
+        return None
+    counts = re.findall(
+        r"^ggml_vulkan: Found (\d+) Vulkan devices:\r?$", diagnostic, re.M
+    )
+    devices = re.findall(r"^ggml_vulkan: (\d+) = ([^\r\n]+)\r?$", diagnostic, re.M)
+    warning = "ggml_vulkan: Warning: Device type is CPU. This is probably not the device you want."
+    if (
+        counts != ["1"]
+        or len(devices) != 1
+        or devices[0][0] != "0"
+        or not re.match(r"(?:llvmpipe|lavapipe)\b", devices[0][1], re.I)
+        or diagnostic.splitlines().count(warning) != 1
+    ):
+        return None
+    return {
+        "status": "skipped",
+        "reason": "CI selected only a CPU-type software Vulkan adapter; physical GPU coverage is unavailable. LiteRT GPU startup/decode was not attempted.",
+        "adapter": {"index": 0, "type": "cpu", "name": devices[0][1].split(" |", 1)[0]},
+    }
+
+
 def litert_probe(runner, model, env, output):
     command = [str(runner), "--model", model, "--backend", "gpu"]
     probe = subprocess.run(
@@ -204,9 +234,13 @@ def main():
             "physical_gpu_verified": False,
             "whisper": whisper_result(result, args.allow_unavailable),
         }
-        report["litert"] = litert_probe(
-            runner, model_file(args.models, "generation"), env, args.output
+        report["litert"] = litert_ci_preflight(
+            report["whisper"], result.stderr, args.allow_unavailable
         )
+        if report["litert"] is None:
+            report["litert"] = litert_probe(
+                runner, model_file(args.models, "generation"), env, args.output
+            )
         if (
             args.allow_unavailable
             and report["litert"]["status"] == "unsupported_software_driver"
