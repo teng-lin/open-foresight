@@ -62,6 +62,25 @@ void main() {
       );
       await tester.tap(find.text('Sources'));
       await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(Workspace));
+      Future<void> waitForSearch(int count) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 5));
+        while (state.sourceFeature.sourceSearchMatches.length != count &&
+            DateTime.now().isBefore(deadline)) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 10)),
+          );
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+        expect(
+          state.sourceFeature.sourceSearchMatches.length,
+          count,
+          reason:
+              'Background full-body search must finish and reflect committed edits',
+        );
+        await tester.pumpAndSettle();
+      }
+
       final before = store.bodyReads;
       final metadataBefore = store.metadataReads;
       final timer = Stopwatch()..start();
@@ -96,15 +115,25 @@ void main() {
       await tester.ensureVisible(find.byType(TextField));
       await tester.enterText(find.byType(TextField), 'needle');
       await tester.pumpAndSettle();
-      expect(store.bodyReads, 1);
+      await waitForSearch(847);
+      expect(
+        store.bodyReads,
+        0,
+        reason: 'Body searches run on a separate reader isolate',
+      );
+      final cachedMatches = state.sourceFeature.sourceSearchMatches;
       for (var i = 0; i < 20; i++) {
         helper.changed?.call();
         await tester.pump();
       }
       expect(
         store.bodyReads,
-        1,
-        reason: 'Unchanged searches reuse matching IDs across progress updates',
+        0,
+        reason: 'Unchanged searches reuse matching IDs without UI body reads',
+      );
+      expect(
+        identical(state.sourceFeature.sourceSearchMatches, cachedMatches),
+        isTrue,
       );
       store.importText(
         'Source 0000',
@@ -115,6 +144,7 @@ void main() {
       );
       helper.changed?.call();
       await tester.pumpAndSettle();
+      await waitForSearch(846);
       expect(find.text('846 of 847 shown'), findsOneWidget);
       final external = sqlite3.open(path);
       external.execute('UPDATE sources SET content=? WHERE id=?', [
@@ -124,6 +154,7 @@ void main() {
       external.dispose();
       helper.changed?.call();
       await tester.pumpAndSettle();
+      await waitForSearch(845);
       expect(find.text('845 of 847 shown'), findsOneWidget);
       store.db.execute('BEGIN');
       store.db.execute('UPDATE sources SET title=? WHERE id=?', [

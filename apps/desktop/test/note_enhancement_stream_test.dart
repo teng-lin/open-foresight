@@ -78,6 +78,19 @@ void main() {
         Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
       );
       final dynamic state = tester.state(find.byType(Workspace));
+      Future<void> waitForUi(bool Function() ready) async {
+        final elapsed = Stopwatch()..start();
+        while (!ready() && elapsed.elapsed < const Duration(seconds: 5)) {
+          await tester.runAsync(() => Future<void>(() {}));
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+        expect(
+          ready(),
+          isTrue,
+          reason: 'Throttled service state must reach the visible editor',
+        );
+      }
+
       state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
@@ -86,6 +99,12 @@ void main() {
         work = domain.application.enhanceNotes(id);
       });
       await pumpUntil(tester, () => generator.entered.isCompleted);
+      await waitForUi(
+        () => find
+            .byKey(const ValueKey('cancel-note-enhancement'))
+            .evaluate()
+            .isNotEmpty,
+      );
       expect(
         find.byKey(const ValueKey('cancel-note-enhancement')),
         findsOneWidget,
@@ -99,12 +118,15 @@ void main() {
       await tester.runAsync(() async {
         generator.events.add({'type': 'delta', 'text': '- Streamed first'});
       });
-      await pumpUntil(
-        tester,
-        () =>
-            (domain.application.captureState['note_enhancements']
-                as Map)['$id']['body'] ==
-            '- Streamed first',
+      await waitForUi(
+        () => find
+            .byWidgetPredicate(
+              (widget) =>
+                  widget is GeneratedContent &&
+                  widget.markdown == '- Streamed first',
+            )
+            .evaluate()
+            .isNotEmpty,
       );
       expect(
         find.byWidgetPredicate(
@@ -131,8 +153,7 @@ void main() {
       await tester.runAsync(() async {
         generator.events.add({'type': 'delta', 'text': ' ignored'});
       });
-      await pumpUntil(
-        tester,
+      await waitForUi(
         () => find
             .byKey(const ValueKey('cancel-note-enhancement'))
             .evaluate()

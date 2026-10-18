@@ -34,6 +34,7 @@ List<Map<String, Object?>> graphSceneSources(
       (source) =>
           (source['title'] as String? ?? '').trim().isNotEmpty &&
           ((vectors[source['id']]?.isNotEmpty ?? false) ||
+              !source.containsKey('content') ||
               (source['content'] as String? ?? '').trim().isNotEmpty),
     )
     .toList();

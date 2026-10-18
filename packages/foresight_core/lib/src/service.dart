@@ -5,6 +5,7 @@ import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'agent_access.dart';
 import 'domain.dart';
@@ -15,6 +16,14 @@ import 'profile_paths.dart';
 import 'store.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
+
+void _traceServiceTransport(String message) {
+  if (runtimeConfiguration['FORESIGHT_SERVICE_TRACE'] == '1') {
+    stderr.writeln(
+      'Service transport $pid ${DateTime.now().toIso8601String()} $message',
+    );
+  }
+}
 
 /// The profile lock is independent of runtime overrides. An endpoint record lets
 /// clients attach to that owner even when launched with a different runtime.
@@ -260,6 +269,7 @@ class ApplicationService {
   Timer? _heartbeat;
   bool _closing = false;
   Future<void>? _shutdown;
+  Future<void> Function()? _beforeReleaseOwnership;
   final _closed = Completer<void>();
   Future<void> get closed => _closed.future;
   int _connectionSequence = 0;
@@ -300,11 +310,17 @@ class ApplicationService {
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
+    bool internalWorker = false,
   }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
     try {
-      return await _start(profile, installationLock, webSearch: webSearch);
+      return await _start(
+        profile,
+        installationLock,
+        webSearch: webSearch,
+        internalWorker: internalWorker,
+      );
     } catch (_) {
       installationLock?.closeSync();
       rethrow;
@@ -315,6 +331,7 @@ class ApplicationService {
     ProfilePaths profile,
     RandomAccessFile? installationLock, {
     SearchCallbacks? webSearch,
+    bool internalWorker = false,
   }) async {
     privateDirectory(profile.data);
     // Configure native state only when a native installation is present. Tests
@@ -346,6 +363,8 @@ class ApplicationService {
       // Reuse that runtime until a clean shutdown releases its workers.
       path = serviceEndpoint(profile);
       profile = ProfilePaths(profile.data, File(path).parent.path);
+      // Every supported public socket path must also fit the private endpoint.
+      if (internalWorker) path = '${profile.runtime}/worker.sock';
       final stale = File(path);
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
         stale.deleteSync();
@@ -369,8 +388,7 @@ class ApplicationService {
         InternetAddress(path, type: InternetAddressType.unix),
         0,
       );
-      if ((await Process.run('chmod', ['600', path])).exitCode != 0)
-        throw StateError('Cannot protect application socket');
+      protectPrivateFile(path);
       final endpoint = File('${profile.data}/.application-endpoint.json');
       final temporary = File('${endpoint.path}.$pid');
       temporary.writeAsStringSync(
@@ -413,6 +431,10 @@ class ApplicationService {
 
   void _send(Socket client, Map<String, Object?> message) {
     try {
+      _traceServiceTransport(
+        'worker send peer=${identityHashCode(client)} id=${message['id']} '
+        'event=${message['event']} done=${message['done']}',
+      );
       client.writeln(jsonEncode(message));
     } catch (_) {
       client.destroy();
@@ -438,6 +460,7 @@ class ApplicationService {
   }
 
   void _accept(Socket client) {
+    _traceServiceTransport('worker accept peer=${identityHashCode(client)}');
     final conversation =
         'connection-$pid-${DateTime.now().microsecondsSinceEpoch}-${++_connectionSequence}';
     unawaited(client.done.catchError((Object _) {}));
@@ -459,6 +482,10 @@ class ApplicationService {
             bytes = 0;
             try {
               final request = jsonDecode(line) as Map<String, dynamic>;
+              _traceServiceTransport(
+                'worker request peer=${identityHashCode(client)} '
+                'id=${request['id']} method=${request['method']}',
+              );
               if (request['cancel'] is int) {
                 _cancel(client, request['cancel'] as int);
                 return;
@@ -802,10 +829,330 @@ class ApplicationService {
           endpoint.existsSync())
         endpoint.deleteSync();
     });
+    await attempt(() async {
+      await _beforeReleaseOwnership?.call();
+    });
     await attempt(lock.closeSync);
     await attempt(() => installationLock?.closeSync());
     if (failure != null)
       throw StateError('Application shutdown failed: $failure');
+  }
+}
+
+/// Public socket transport lives on the main service isolate. The complete
+/// Domain (SQLite connections, native handles, model ownership, approvals and
+/// request leases) lives in one long-lived worker isolate. Byte streams preserve
+/// multiplexed requests, events, cancellation and shutdown acknowledgements.
+class IsolatedApplicationService {
+  final String _dataPath;
+  final ReceivePort _messages;
+  final ReceivePort _errors;
+  final ReceivePort _exits;
+  final _ready = Completer<void>();
+  final _closed = Completer<void>();
+  final _peers = <Socket>{};
+  final _bridges = <Future<void>>{};
+  SendPort? _control;
+  ServerSocket? _listener;
+  String? _publicPath;
+  String? _workerPath;
+  Object? _failure;
+  bool _closing = false;
+  Future<void>? _shutdown;
+  Future<void>? _finishing;
+  final _workerExited = Completer<void>();
+  bool _publicRemoved = false;
+  Future<void> get closed => _closed.future;
+  IsolatedApplicationService._(
+    this._dataPath,
+    this._messages,
+    this._errors,
+    this._exits,
+  );
+
+  static Future<IsolatedApplicationService> start(ProfilePaths profile) async {
+    final host = IsolatedApplicationService._(
+      profile.data,
+      ReceivePort(),
+      ReceivePort(),
+      ReceivePort(),
+    );
+    host._messages.listen(host._message);
+    host._errors.listen((dynamic error) {
+      host._failure = StateError('Application worker failed: $error');
+      if (!host._ready.isCompleted) host._ready.completeError(host._failure!);
+    });
+    host._exits.listen((_) {
+      if (!host._workerExited.isCompleted) host._workerExited.complete();
+      if (!host._ready.isCompleted)
+        host._ready.completeError(
+          host._failure ??
+              StateError('Application worker exited during startup'),
+        );
+      unawaited(host._finish());
+    });
+    var spawned = false;
+    try {
+      await Isolate.spawn(
+        _applicationServiceWorker,
+        [
+          host._messages.sendPort,
+          profile.data,
+          profile.runtime,
+          Map<String, String>.from(runtimeConfiguration.environment),
+        ],
+        onError: host._errors.sendPort,
+        onExit: host._exits.sendPort,
+        debugName: 'foresight-domain',
+      );
+      spawned = true;
+      await host._ready.future;
+      return host;
+    } catch (_) {
+      host._control?.send('close');
+      if (spawned) await host._workerExited.future;
+      await host._finish();
+      rethrow;
+    }
+  }
+
+  void _message(dynamic message) {
+    if (message is SendPort) {
+      _control = message;
+      return;
+    }
+    final value = message as List;
+    if (value.first == 'ready') {
+      _workerPath = value[1] as String;
+      _publicPath = value[2] as String;
+      unawaited(
+        _listen().then(
+          (_) {
+            if (!_ready.isCompleted) _ready.complete();
+          },
+          onError: (Object error, StackTrace stack) {
+            if (!_ready.isCompleted) _ready.completeError(error, stack);
+          },
+        ),
+      );
+    } else if (value.first == 'closing') {
+      unawaited(
+        _removePublicSocket(workerOwnsLock: true).then(
+          (_) => _control?.send('frontend_closed'),
+          onError: (Object error) {
+            _failure ??= error;
+            _control?.send('frontend_failed');
+          },
+        ),
+      );
+    } else if (value.first == 'failure') {
+      _failure = StateError(value[1] as String);
+      if (!_ready.isCompleted) _ready.completeError(_failure!);
+    }
+  }
+
+  Future<void> _listen() async {
+    final path = _publicPath!;
+    _traceServiceTransport('frontend bind $path');
+    // The domain worker already holds both ownership locks. A competing
+    // launcher cannot remove the live owner's socket or endpoint record.
+    final stale = File(path);
+    if (await stale.exists()) await stale.delete();
+    _listener = await ServerSocket.bind(
+      InternetAddress(path, type: InternetAddressType.unix),
+      0,
+    );
+    _traceServiceTransport('frontend bound; setting permissions');
+    protectPrivateFile(path);
+    _listener!.listen((client) {
+      final bridge = _bridge(client);
+      _bridges.add(bridge);
+      unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
+    });
+    _traceServiceTransport('frontend listening');
+  }
+
+  Future<void> _bridge(Socket client) async {
+    final peer = identityHashCode(client);
+    _traceServiceTransport('frontend accept peer=$peer closing=$_closing');
+    if (_closing) {
+      client.destroy();
+      return;
+    }
+    _peers.add(client);
+    Socket? backend;
+    try {
+      _traceServiceTransport(
+        'frontend backend connect peer=$peer $_workerPath',
+      );
+      backend = await Socket.connect(
+        InternetAddress(_workerPath!, type: InternetAddressType.unix),
+        0,
+      );
+      _traceServiceTransport('frontend backend connected peer=$peer');
+      _peers.add(backend);
+      if (_closing) {
+        client.destroy();
+        backend.destroy();
+        return;
+      }
+      // pipe applies stream backpressure and flushes before closing. Keeping
+      // both directions alive is necessary for approval and cancel frames.
+      Future<void> copy(Socket source, Socket target, String direction) async {
+        try {
+          Stream<List<int>> chunks = source.cast<List<int>>();
+          if (runtimeConfiguration['FORESIGHT_SERVICE_TRACE'] == '1') {
+            var first = true;
+            chunks = chunks.map((chunk) {
+              if (first) {
+                first = false;
+                _traceServiceTransport(
+                  'frontend first bytes peer=$peer direction=$direction '
+                  'length=${chunk.length}',
+                );
+              }
+              return chunk;
+            });
+          }
+          await target.addStream(chunks);
+          await target.flush();
+        } finally {
+          _traceServiceTransport('frontend copy closed peer=$peer $direction');
+          // Socket.close only half-closes its write side. Once either peer
+          // reaches EOF, flush that direction and release both read sides.
+          source.destroy();
+          target.destroy();
+        }
+      }
+
+      await Future.wait<void>([
+        copy(client, backend, 'to-worker'),
+        copy(backend, client, 'from-worker'),
+      ]);
+    } catch (error) {
+      _traceServiceTransport('frontend bridge failed peer=$peer $error');
+      client.destroy();
+      backend?.destroy();
+    } finally {
+      _peers.remove(client);
+      if (backend != null) _peers.remove(backend);
+    }
+  }
+
+  Future<void> close() => _shutdown ??= () async {
+    _traceServiceTransport('frontend close closing=$_closing');
+    if (!_closing) {
+      _closing = true;
+      // An explicit stop must make cached clients observe EOF immediately.
+      // Keep worker cleanup and ownership release independent of frontend pipes;
+      // the worker-initiated idle-stop path still flushes its acknowledgement.
+      for (final peer in _peers.toList()) {
+        peer.destroy();
+      }
+      _control?.send('close');
+    }
+    await closed;
+    if (_failure != null) throw _failure!;
+  }();
+
+  Future<void> _removePublicSocket({bool workerOwnsLock = false}) async {
+    await _listener?.close();
+    if (_publicRemoved || _publicPath == null) return;
+    RandomAccessFile? ownership;
+    if (!workerOwnsLock) {
+      // An unexpected worker exit may release its lock before this isolate
+      // processes the exit message. A new process can already own the profile.
+      // Reacquire ownership before touching its public socket path.
+      try {
+        ownership = await File(
+          '$_dataPath/.application.lock',
+        ).open(mode: FileMode.append);
+        await ownership.lock(FileLock.exclusive);
+      } on FileSystemException {
+        await ownership?.close();
+        return;
+      }
+    }
+    try {
+      final path = File(_publicPath!);
+      if (await path.exists()) await path.delete();
+      _publicRemoved = true;
+    } finally {
+      await ownership?.close();
+    }
+  }
+
+  Future<void> _finish() => _finishing ??= _finishOnce();
+  Future<void> _finishOnce() async {
+    if (_closed.isCompleted) return;
+    _closing = true;
+    try {
+      await _removePublicSocket();
+      // The worker flushes an idle-stop acknowledgement before exiting.
+      await Future.wait(_bridges.toList()).timeout(const Duration(seconds: 5));
+    } on TimeoutException {
+      for (final peer in _peers.toList()) {
+        peer.destroy();
+      }
+    } catch (error) {
+      _failure ??= error;
+      for (final peer in _peers.toList()) {
+        peer.destroy();
+      }
+    } finally {
+      _messages.close();
+      _errors.close();
+      _exits.close();
+      if (!_closed.isCompleted) _closed.complete();
+    }
+  }
+}
+
+void _applicationServiceWorker(List<Object?> configuration) async {
+  final parent = configuration[0] as SendPort;
+  runtimeConfiguration.environment
+    ..clear()
+    ..addAll((configuration[3] as Map).cast<String, String>());
+  _traceServiceTransport('worker starting');
+  final control = ReceivePort();
+  parent.send(control.sendPort);
+  ApplicationService? service;
+  final stop = Completer<void>();
+  final frontendClosed = Completer<void>();
+  control.listen((message) {
+    if (message == 'frontend_closed') {
+      if (!frontendClosed.isCompleted) frontendClosed.complete();
+    } else if (message == 'frontend_failed') {
+      if (!frontendClosed.isCompleted)
+        frontendClosed.completeError(
+          StateError('Public service socket cleanup failed'),
+        );
+    } else if (!stop.isCompleted)
+      stop.complete();
+  });
+  try {
+    final profile = ProfilePaths(
+      configuration[1] as String,
+      configuration[2] as String,
+    );
+    service = await ApplicationService.start(profile, internalWorker: true);
+    _traceServiceTransport('worker ready ${service.path}');
+    service._beforeReleaseOwnership = () {
+      parent.send(['closing']);
+      return frontendClosed.future;
+    };
+    parent.send(['ready', service.path, serviceEndpoint(profile)]);
+    await Future.any([stop.future, service.closed]);
+    await service.close();
+    // Let an idle-stop request flush its final acknowledgement after close.
+    await Future<void>.delayed(Duration.zero);
+  } catch (error, stack) {
+    parent.send(['failure', '$error\n$stack']);
+    try {
+      await service?.close();
+    } catch (_) {}
+  } finally {
+    control.close();
   }
 }
 

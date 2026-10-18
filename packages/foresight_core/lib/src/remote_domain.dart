@@ -63,11 +63,15 @@ class RemoteDomain implements DesktopConnection {
   ) {
     _listen();
   }
+  String? _eventSignature;
   void _apply(Map<String, dynamic> event) {
     if (event['event'] == 'approval' || event['event'] == 'approval_closed') {
       _approvalEvents?.call(event);
       return;
     }
+    final signature = jsonEncode(event);
+    if (_eventSignature == signature) return;
+    _eventSignature = signature;
     _webSearchAvailable = event['web_search_available'] == true;
     googleStatus = Map<String, dynamic>.from(event['google'] as Map? ?? {});
     capture = Map<String, dynamic>.from(event['capture'] as Map? ?? {});

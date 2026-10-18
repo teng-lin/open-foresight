@@ -91,13 +91,15 @@ if(BUILD_TESTING)
   add_test(NAME native_model_type COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_model_type.py $<TARGET_FILE:foresight_native>)
   add_test(NAME native_lifecycle COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native.py $<TARGET_FILE:foresight_native>)
+  add_test(NAME native_persistent_speech COMMAND ${Python3_EXECUTABLE} -m pytest
+    ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_persistent_speech.py -q)
   if(NOT TARGET ForesightHelper)
     add_executable(native_test_supervisor ../tests/native/supervisor.cpp)
     target_compile_features(native_test_supervisor PRIVATE cxx_std_20)
-    set_tests_properties(native_lifecycle native_model_type PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:native_test_supervisor>")
+    set_tests_properties(native_lifecycle native_model_type native_persistent_speech PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:native_test_supervisor>;FORESIGHT_NATIVE_LIBRARY=$<TARGET_FILE:foresight_native>")
   endif()
   if(TARGET ForesightHelper)
-    set_tests_properties(native_lifecycle native_model_type PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:ForesightHelper>")
+    set_tests_properties(native_lifecycle native_model_type native_persistent_speech PROPERTIES ENVIRONMENT "FORESIGHT_HELPER=$<TARGET_FILE:ForesightHelper>;FORESIGHT_NATIVE_LIBRARY=$<TARGET_FILE:foresight_native>")
     add_test(NAME native_process_identity COMMAND ${Python3_EXECUTABLE}
       ${CMAKE_CURRENT_SOURCE_DIR}/../tests/integration/test_native_process.py
       $<TARGET_FILE:foresight_native> $<TARGET_FILE:ForesightHelper>)

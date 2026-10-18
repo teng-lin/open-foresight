@@ -22,9 +22,10 @@ def main():
     command = [
         "cmake",
         "-S",
-        str(args.source),
+        str(Path(__file__).resolve().parents[1] / "services/speech"),
         "-B",
         str(args.build),
+        "-DFORESIGHT_WHISPER_SOURCE=" + str(args.source.resolve()),
         "-DCMAKE_BUILD_TYPE=Release",
         "-DBUILD_SHARED_LIBS=OFF",
         "-DGGML_VULKAN=ON",
@@ -51,6 +52,7 @@ def main():
             str(args.build),
             "--target",
             "whisper-cli",
+            "foresight-whisper-worker",
             "-j",
             str(args.jobs),
         ],
@@ -65,6 +67,10 @@ def main():
         raise RuntimeError(dependencies)
     args.output.mkdir(parents=True, exist_ok=True)
     shutil.copy2(executable, args.output / "whisper-cli")
+    shutil.copy2(
+        args.build / "bin/foresight-whisper-worker",
+        args.output / "foresight-whisper-worker",
+    )
     shutil.copy2(args.source / "LICENSE", args.output / "LICENSE")
     provenance = {
         "source": "https://github.com/ggml-org/whisper.cpp",

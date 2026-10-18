@@ -36,6 +36,7 @@ class Recording implements RecordingStatus {
   final currentVolumes = <double>[];
   int _lastLevels = 0;
   final captures = <Pointer<Void>>[], speeches = <Pointer<Void>>[];
+  final _idleSpeeches = <int, Pointer<Void>>{};
   final sampleCounts = <int>[], peakVolumes = <double>[];
   final _buffers = <BytesBuilder>[], _starts = <int>[], _rates = <int>[];
   final _lastVoice = <int>[], _voiced = <bool>[], _nextSnapshot = <int>[];
@@ -128,7 +129,10 @@ class Recording implements RecordingStatus {
   }
 
   void _releaseSpeech(Pointer<Void> handle) {
-    if (!speeches.remove(handle)) return;
+    final active = speeches.remove(handle);
+    final idle = _idleSpeeches.values.contains(handle);
+    _idleSpeeches.removeWhere((_, value) => value == handle);
+    if (!active && !idle) return;
     lib.lookupFunction<
       Void Function(Pointer<Void>),
       void Function(Pointer<Void>)
@@ -482,8 +486,14 @@ class Recording implements RecordingStatus {
     while (epoch == _epoch && _queues[channel].isNotEmpty) {
       final segment = _queues[channel].removeAt(0);
       Pointer<Void>? handle;
+      var reusable = false;
       try {
-        handle = _speech();
+        handle = _idleSpeeches.remove(channel);
+        if (handle == null) {
+          handle = _speech();
+        } else {
+          speeches.add(handle);
+        }
         final samples = calloc<Int16>(segment.pcm.length ~/ 2);
         try {
           final bytes = ByteData.sublistView(segment.pcm);
@@ -552,6 +562,7 @@ class Recording implements RecordingStatus {
               throw StateError(
                 'ASR ${event['status']}: ${failure ?? 'runner failed'}',
               );
+            reusable = true;
             break;
           }
         }
@@ -568,7 +579,14 @@ class Recording implements RecordingStatus {
             });
         }
       } finally {
-        if (handle != null) _releaseSpeech(handle);
+        if (handle != null) {
+          if (reusable && epoch == _epoch) {
+            speeches.remove(handle);
+            _idleSpeeches[channel] = handle;
+          } else {
+            _releaseSpeech(handle);
+          }
+        }
       }
     }
   }
@@ -636,7 +654,7 @@ class Recording implements RecordingStatus {
       >('fs_capture_stop')(capture);
     }
     captures.clear();
-    for (final speech in List<Pointer<Void>>.from(speeches)) {
+    for (final speech in {...speeches, ..._idleSpeeches.values}) {
       _releaseSpeech(speech);
     }
     _workers.clear();

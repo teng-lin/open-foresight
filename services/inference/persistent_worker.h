@@ -69,6 +69,29 @@ public:
       : emit(std::move(writer)) {}
 };
 
+// Generator streaming writes complete chunks through xsputn. JSON quoting
+// keeps embedded newlines and partial Unicode chunks inside a single frame.
+class TextFrameBuffer : public std::streambuf {
+  std::ostream &frames;
+
+protected:
+  std::streamsize xsputn(const char *data, std::streamsize size) override {
+    if (size > 0)
+      frames << "text " << nlohmann::json(std::string(data, size)).dump()
+             << std::endl;
+    return frames ? size : 0;
+  }
+  int_type overflow(int_type value) override {
+    if (traits_type::eq_int_type(value, traits_type::eof()))
+      return traits_type::not_eof(value);
+    const char c = traits_type::to_char_type(value);
+    return xsputn(&c, 1) == 1 ? value : traits_type::eof();
+  }
+
+public:
+  explicit TextFrameBuffer(std::ostream &output) : frames(output) {}
+};
+
 // Generate receives request, routed control input, framed output, and a native
 // pointer registration hook. The hook must clear before deleting the pointer.
 // Its bool return means cancellation was already requested.

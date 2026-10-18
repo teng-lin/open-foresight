@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import re
 import os
 from pathlib import Path
 import shutil
@@ -645,10 +646,12 @@ class SpeechCpuBlockTest(unittest.TestCase):
         body = native[
             native.index("int fs_speech_finish") : native.index("int fs_speech_cancel")
         ]
-        self.assertLess(body.index("linux_speech_cpu_block"), body.index("run(s,"))
+        execution = re.search(r"\b(?:run|run_persistent)\s*\(", body)
+        self.assertIsNotNone(execution)
+        self.assertLess(body.index("linux_speech_cpu_block"), execution.start())
         self.assertIn(
             "speech_runtime_failure",
-            body[body.index("linux_speech_cpu_block") : body.index("run(s,")],
+            body[body.index("linux_speech_cpu_block") : execution.start()],
         )
 
 
