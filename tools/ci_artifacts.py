@@ -60,6 +60,16 @@ FILES = {
         "services/inference/worker_frame.h",
     ],
 }
+# Artifact identity includes the code and workflow that can change its outputs,
+# even when the underlying SDK recipe is unchanged.
+PRODUCER_INPUTS = (
+    ".github/workflows/ci-dependencies.yml",
+    "tools/ci_artifacts.py",
+    "tools/linux_sdk_artifacts.py",
+)
+for _component_inputs in FILES.values():
+    _component_inputs.extend(PRODUCER_INPUTS)
+
 PARENTS = {
     "macos-runtime": ["macos-vendor"],
     "linux-litert": ["linux-core"],
@@ -230,9 +240,25 @@ def trusted_run(
 
 
 def merged_source(repository, run):
-    """A source commit reachable from main has completed repository review."""
+    """Promote only reviewed main commits or the final head of a merged PR."""
     if not re.fullmatch(r"[a-f0-9]{40}", run.get("head_sha", "")):
         return False
+    if run.get("event") == "pull_request" or run.get("head_branch") != "main":
+        pulls = run.get("pull_requests") or api(
+            repository, f"commits/{run['head_sha']}/pulls"
+        )
+        final_head = False
+        for reference in pulls:
+            pull = api(repository, f"pulls/{reference['number']}")
+            if (
+                pull.get("merged_at")
+                and pull.get("head", {}).get("sha") == run["head_sha"]
+                and pull.get("base", {}).get("repo", {}).get("full_name") == repository
+            ):
+                final_head = True
+                break
+        if not final_head:
+            return False
     comparison = api(repository, f"compare/{run['head_sha']}...main")
     return comparison["status"] in ("ahead", "identical")
 

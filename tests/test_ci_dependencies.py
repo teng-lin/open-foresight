@@ -752,3 +752,43 @@ def test_macos_runtime_local_fallback_builds_vendor_before_worker(tmp_path):
         macos.ensure("macos-runtime", tmp_path / "runtime", "owner/repo")
     assert "build_macos_vendor.py" in build.call_args_list[0].args[0][1]
     assert "build_macos_runtimes.py" in build.call_args_list[1].args[0][1]
+
+
+@pytest.mark.parametrize("source,accepted", [("a" * 40, False), ("b" * 40, True)])
+def test_promotion_rejects_intermediate_pr_heads_even_when_reachable(source, accepted):
+    run = {
+        "head_sha": source,
+        "event": "pull_request",
+        "head_branch": "feature",
+        "pull_requests": [{"number": 23}],
+    }
+
+    def api(repository, route):
+        if route == "pulls/23":
+            return {
+                "merged_at": "2026-10-18",
+                "head": {"sha": "b" * 40},
+                "base": {"repo": {"full_name": repository}},
+            }
+        assert route == f"compare/{source}...main"
+        return {"status": "ahead"}
+
+    with patch.object(artifacts, "api", side_effect=api):
+        assert artifacts.merged_source("owner/repo", run) == accepted
+
+
+def test_producing_workflow_and_tools_change_every_component_identity(tmp_path):
+    for files in artifacts.FILES.values():
+        for name in files:
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
+    before = {
+        component: artifacts.fingerprint(component, tmp_path)
+        for component in artifacts.FILES
+    }
+    workflow = tmp_path / ".github/workflows/ci-dependencies.yml"
+    workflow.write_text("changed output-producing workflow")
+    for component in artifacts.FILES:
+        assert artifacts.fingerprint(component, tmp_path) != before[component]
+        assert set(artifacts.PRODUCER_INPUTS) <= set(artifacts.FILES[component])

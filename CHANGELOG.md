@@ -6,6 +6,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Security
+
+- Dependency artifact promotion binds output to the producing workflow and tools and accepts only the final reviewed PR head.
+
 ### Fixed
 
 - macOS CI consumes the same PR source as dependency producers and builds pinned dependencies locally when no trusted artifact is available, including fork PRs.
