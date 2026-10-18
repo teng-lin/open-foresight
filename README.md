@@ -41,7 +41,7 @@ The full method, including its limits and how evidence was kept, is in [Replicat
 Once the Linux reconstruction worked, the project stopped being only a copy and became an application of its own:
 
 1. **Reconstruct.** A Flutter interface, a C++ gRPC retrieval helper, SQLite persistence, and native model and capture workers rebuilt the reference's main workflows on Linux.
-2. **Own the stack.** Python inference was replaced with native C++ LiteRT and ONNX workers. Business logic moved into a Flutter-independent application service, which both the desktop and a new MCP server share. Linux gained `.deb`, `.rpm` and Arch packages.
+2. **Own the stack.** Python inference was replaced with native C++ LiteRT workers. Business logic moved into a Flutter-independent application service, which both the desktop and a new MCP server share. Linux gained `.deb`, `.rpm` and Arch packages.
 3. **Return to the Mac.** With the platform-specific parts behind small interfaces, macOS became a target again. Apple Silicon support now includes native Core Audio capture, a Mac runner, bundle tooling, and an ad-hoc development DMG workflow, all from the same codebase. The CI DMG does not yet include the full inference runtimes.
 
 The repository has a fresh history. Reference screenshots, reverse-engineering reports, evaluation results, machine-specific environments, downloaded models, application profiles and credentials are all excluded. Runtime fonts and images are kept because the interface uses them.
@@ -125,7 +125,7 @@ flowchart LR
   Desktop -. read-only snapshots .-> DB[(SQLite profile)]
   Service --> DB
   Service --> Helper[C++ gRPC retrieval helper]
-  Service --> Workers[Native LiteRT / ONNX / whisper.cpp workers]
+  Service --> Workers[Native LiteRT / whisper.cpp workers]
   Service --> Capture[PipeWire or Core Audio capture]
 ```
 
@@ -136,7 +136,7 @@ There is one application service per profile. It owns every database write, the 
 | `apps/desktop` | Flutter interface, with Linux and macOS runners |
 | `packages/foresight_core` | Application operations, service and MCP entry points, persistence, sources, meetings, cited answers |
 | `services/helper` | gRPC retrieval helper |
-| `services/inference` | Native LiteRT/ONNX worker and the Mac runtime adapter |
+| `services/inference` | Native LiteRT worker and the Mac runtime adapter |
 | `native` | Generation, speech, and audio capture adapters |
 | `proto` | Service definitions and the protocol descriptor |
 | `packaging` | Linux package builders, SDK/build containers, ABI checks |
@@ -161,7 +161,6 @@ Flutter package dependencies are pinned in the source. The reference toolchain i
 uv venv .venv
 uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.lock
 python3 tools/prepare_litert.py build/lib/liblitert-lm.so
-python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 ./tools/build.sh
 python3 tools/package.py
 ./tools/run_desktop.sh
@@ -180,8 +179,8 @@ Linux generation and embedding use native C++ inference without Python. The opti
 ```sh
 # Package Gemma GPU generation into a separate, unused output directory
 python3 tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
-# Optional native compatibility embedding model and CPU generation/speech runtimes
-python3 tools/download_embedding_fixture.py models/local/all-MiniLM-L6-v2 --native
+# Optional EmbeddingGemma fixture and CPU generation/speech runtimes
+python3 tools/download_embedding_fixture.py models/local
 python3 native/setup_models.py --directory models/local/native
 ```
 

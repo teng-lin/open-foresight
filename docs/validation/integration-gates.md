@@ -98,16 +98,17 @@ core build. `check_integration_inventory.py` fails when a registration is added,
 removed or changed without reviewing its path/reason. The scanner checks named
 `skip:` registrations, not arbitrary control flow inside test bodies.
 
-## Validation checkpoint
+## Reading validation evidence
 
-Local: 119 desktop tests pass with nine opt-in skips (the previous Linux-only
-failure test now executes on Mac); the strict fast group passes one selected
-Mac-compatible test with zero skips. Offline Python suite: 211 passed, 11
-pre-existing platform/optional skips and 102 subtests. Both Dart analyzers,
-workflow lint, skip inventory and diff checks pass. A local Ubuntu 24.04 ARM64
-container probe also passed private PipeWire startup, real virtual PCM
-playback/capture (44,344 samples) and owned-daemon cleanup with network and
-additional capabilities disabled; this does not validate Whisper. Linux native UI, CPU models
-and virtual audio require the new CI jobs; their outcomes must be reported
-separately from these local checks. Reference groups were not executed without
-their authorized inputs.
+The table above mirrors the exact executed-test counts enforced by
+[`tools/integration_gates.py`](../../tools/integration_gates.py): Linux fast 2,
+models 6 (5 desktop and 1 core), virtual audio 3 (2 desktop and 1 core), authorized
+reference-model checks 5, and tokenizer equivalence 1. The workflow invokes the
+model and virtual-audio groups separately. A green offline suite does not prove
+these build-dependent groups ran.
+
+Use the retained Dart JSON reports and summaries for the source revision under
+review. They distinguish executed passes, skips, and failures. The skip inventory
+currently validates 27 registrations; rerun `python tools/check_integration_inventory.py`
+when changing tests, rather than copying an older local pass count into this guide.
+Reference groups require their authorized inputs and must be reported separately.

@@ -14,35 +14,30 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class OptimizedVerificationTests(unittest.TestCase):
-    def test_package_rejects_each_corrupt_runtime_under_optimization(self):
+    def test_package_rejects_corrupt_litert_under_optimization(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             build, flutter = root / 'build', root / 'flutter'
             flutter.mkdir()
             for name in ('services/helper/ForesightHelper', 'native/libforesight_native.so',
                          'application/foresight-service', 'application/foresight-mcp',
-                         'services/inference/foresight-model', 'lib/liblitert-lm.so',
-                         'lib/libonnxruntime.so'):
+                         'services/inference/foresight-model', 'lib/liblitert-lm.so'):
                 path = build / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b'tampered')
-            fixture_hash = hashlib.sha256(b'tampered').hexdigest()
-            for runtime, diagnostic in [('litert', 'Native LiteRT-LM'), ('onnx', 'ONNX Runtime')]:
-                code = f'''import sys
+            code = f'''import sys
 sys.path.insert(0, {str(ROOT / 'tools')!r})
 import package
-package.LIBRARY_SHA256 = {'0' * 64 if runtime == 'litert' else fixture_hash!r}
+package.LIBRARY_SHA256 = {hashlib.sha256(b'expected').hexdigest()!r}
 package.main()
 '''
-                result = subprocess.run([sys.executable, '-O', '-c', code,
-                    '--build', str(build), '--flutter-bundle', str(flutter), '--output', str(root / 'dist'),
-                    '--litert-library', str(build / 'lib/liblitert-lm.so'),
-                    '--onnx-library', str(build / 'lib/libonnxruntime.so'), '--revision', 'a' * 40],
-                    capture_output=True, text=True)
-                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn(diagnostic + ' library checksum mismatch' if runtime == 'litert'
-                              else diagnostic + ' checksum mismatch', result.stderr)
-                self.assertFalse((root / 'dist').exists())
+            result = subprocess.run([sys.executable, '-O', '-c', code,
+                '--build', str(build), '--flutter-bundle', str(flutter), '--output', str(root / 'dist'),
+                '--litert-library', str(build / 'lib/liblitert-lm.so'), '--revision', 'a' * 40],
+                capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn('Native LiteRT-LM library checksum mismatch', result.stderr)
+            self.assertFalse((root / 'dist').exists())
 
     def test_descriptor_rejects_altered_identity_under_optimization(self):
         code = f'''import sys

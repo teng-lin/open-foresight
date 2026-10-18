@@ -97,10 +97,12 @@ It builds the same four recipes, sequentially for a single local builder. The
 hosted producer parallelizes the independent components. Using emulation on an
 ARM host does not qualify x86-64 runtime support.
 
-Local validation after merging current main: 198 offline Python tests passed (10 skipped),
-workflow actionlint passed, all embedded Python/shell blocks parsed, and the real
-macOS SDK/runtime prefixes survived archive extraction and verification at new
-paths. The local ARM Mac does not qualify the x86-64 container builds.
+Current gate selection comes from [macos.yml](../../.github/workflows/macos.yml)
+and [integration-acceptance.yml](../../.github/workflows/integration-acceptance.yml).
+Native CTest, core Dart, Flutter, service/MCP and installed/model acceptance are
+separate checks. Test totals change with the source revision; use each run's
+retained reporter output instead of interpreting historical counts below as the
+current suite size.
 
 No hosted speedup is claimed until comparable successful runs finish. Artifact
 transfer, runner queues, apt/base-image changes and first-time compilation still
@@ -130,9 +132,7 @@ qualified SDK digests when cleaning up this shared repository.
 The `tested` Docker target ends after native build/CTest, core and desktop
 analysis/tests/builds, and service integration. It enables the existing parallel
 core/desktop orchestrator, preserving failure propagation and the service
-integration prerequisite. The pinned ONNX download now precedes the repository
-copy and revision argument, so application-only changes reuse it. Its archive
-and library checksum checks are unchanged.
+integration prerequisite.
 
 CI exports only `tested` to the registry cache, then assembles the distribution
 bundle using the same local BuildKit result. Distribution secrets are supplied
@@ -149,7 +149,7 @@ boundaries and provenance checks, rather than replacing the commit with a stable
 content hash. The first registry cache export is also cold. Compare successful
 hosted runs before claiming an overall time reduction.
 
-Local verification: all workflows passed actionlint; Docker's build check passed
+Earlier local verification before the audit fixes: all workflows passed actionlint; Docker's build check passed
 without warnings; 11 CI dependency/provenance tests and three process-level
 parallel-gate tests passed. Packaging contracts passed on the host (five passed,
 two Linux-only skips) and in a Linux GCC container (six passed, one CMake-only
@@ -197,7 +197,7 @@ The verified SDK and inference-runtime caches remain important: parallel tests
 do not remove cold compiler work or runner queues. Splitting additional macOS
 jobs can increase queue pressure and artifact-transfer overhead.
 
-Local validation on the development Mac: native CTest 13/13; parallel core
+Historical local validation before the later audit fixes: native CTest 13/13; parallel core
 coverage run 642 passed / 8 skipped, desktop run 107 passed / 10 skipped; both
 AOT executables and the Flutter macOS release app built. The overlapping groups
 completed in 83.6 seconds. Subsequent service integration passed 14 tests with

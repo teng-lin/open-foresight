@@ -47,7 +47,6 @@ def packaged_paths(bundle):
     worker = own('bin/foresight-model')
     return worker, worker, {
         'FORESIGHT_LITERT_LIBRARY': str(own('lib/liblitert-lm.so')),
-        'FORESIGHT_ONNX_LIBRARY': str(own('lib/libonnxruntime.so')),
         'LD_LIBRARY_PATH': str(bundle / 'lib')}
 
 

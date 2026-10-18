@@ -23,7 +23,7 @@ def main():
     native_name = 'libforesight_native.dylib' if sys.platform == 'darwin' else 'libforesight_native.so'
     native = bundle / 'lib' / native_name if args.bundle else ROOT / 'build/native' / native_name
     runner = bundle / 'bin/foresight-model' if args.bundle else args.runner.resolve()
-    worker = runner
+    worker = bundle / 'bin/foresight-model' if args.bundle else ROOT / 'build/services/inference/foresight-model'
     helper = bundle / 'bin/ForesightHelper' if args.bundle else ROOT / 'build/services/helper/ForesightHelper'
     library_name = 'liblitert-lm.dylib' if sys.platform == 'darwin' else 'liblitert-lm.so'
     library = bundle / 'lib' / library_name if args.bundle else ROOT / 'build/lib' / library_name
