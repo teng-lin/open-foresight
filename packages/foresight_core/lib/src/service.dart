@@ -954,6 +954,10 @@ class IsolatedApplicationService {
   }
 
   Future<void> _bridge(Socket client) async {
+    if (_closing) {
+      client.destroy();
+      return;
+    }
     _peers.add(client);
     Socket? backend;
     try {
@@ -962,6 +966,11 @@ class IsolatedApplicationService {
         0,
       );
       _peers.add(backend);
+      if (_closing) {
+        client.destroy();
+        backend.destroy();
+        return;
+      }
       // pipe applies stream backpressure and flushes before closing. Keeping
       // both directions alive is necessary for approval and cancel frames.
       Future<void> copy(Socket source, Socket target) async {
@@ -989,6 +998,12 @@ class IsolatedApplicationService {
   Future<void> close() => _shutdown ??= () async {
     if (!_closing) {
       _closing = true;
+      // An explicit stop must make cached clients observe EOF immediately.
+      // Keep worker cleanup and ownership release independent of frontend pipes;
+      // the worker-initiated idle-stop path still flushes its acknowledgement.
+      for (final peer in _peers.toList()) {
+        peer.destroy();
+      }
       _control?.send('close');
     }
     await closed;
