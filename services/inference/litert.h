@@ -139,9 +139,26 @@ public:
       path = (foresight::executable_path().parent_path() /
               ("../../lib/" + std::string(library_name)))
                  .lexically_normal();
-    if (digest(path) != expected_digest(path))
+#ifndef __APPLE__
+    // Bind hashing and dlopen to one inode even if its installation path is
+    // atomically replaced between verification and loading.
+    const int descriptor = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (descriptor < 0)
+      throw std::runtime_error("Cannot open LiteRT-LM library");
+    struct CloseLibrary {
+      int descriptor;
+      ~CloseLibrary() {
+        close(descriptor);
+      }
+    } pinned{descriptor};
+    const auto load_path =
+        std::filesystem::path("/proc/self/fd") / std::to_string(descriptor);
+#else
+    const auto &load_path = path;
+#endif
+    if (digest(load_path) != expected_digest(path))
       throw std::runtime_error("LiteRT-LM 0.18.0 library checksum mismatch");
-    library_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    library_ = dlopen(load_path.c_str(), RTLD_NOW | RTLD_LOCAL);
     if (!library_)
       throw std::runtime_error("Cannot load native LiteRT-LM 0.18.0: " +
                                std::string(dlerror()));

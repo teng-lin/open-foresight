@@ -33,6 +33,10 @@ template <class Q, class R, class F> grpc::Status call(Q &q, R &r, F f) {
   return status;
 }
 int main(int argc, char **argv) {
+  if (argc != 2) {
+    std::cerr << "Usage: helper_contract_test HELPER_EXECUTABLE\n";
+    return 2;
+  }
   setenv("FORESIGHT_TEST_DELAY_MS", "2", 1);
   std::string dir = (std::filesystem::temp_directory_path().string() +
                      "/foresight-contract-") +

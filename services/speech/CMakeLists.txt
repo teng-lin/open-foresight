@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.22)
 project(foresight_speech LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_EXTENSIONS OFF)
+add_compile_options(-Wall -Wextra)
 find_package(nlohmann_json QUIET)
 if(NOT TARGET nlohmann_json::nlohmann_json)
   include(FetchContent)
