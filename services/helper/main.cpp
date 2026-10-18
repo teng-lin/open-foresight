@@ -906,6 +906,10 @@ public:
 };
 int main(int argc, char **argv) {
   signal(SIGPIPE, SIG_IGN);
+  if (argc == 2 && std::string(argv[1]) == "--build-id") {
+    std::cout << foresight_helper_build_id() << '\n';
+    return 0;
+  }
   int supervised = foresight::supervise_worker(argc, argv);
   if (supervised >= 0)
     return supervised;

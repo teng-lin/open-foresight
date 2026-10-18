@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 NATIVE_PATHS = (
     "build/CMakeCache.txt",
     "build/CMakeFiles",
+    "build/_deps",
+    "build/Testing",
     "build/build.ninja",
     "build/.ninja_deps",
     "build/.ninja_log",
