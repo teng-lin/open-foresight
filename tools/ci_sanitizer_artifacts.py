@@ -62,6 +62,10 @@ HEX = r"[a-f0-9]{64}"
 MAX_BYTES = 2 * 1024**3
 
 
+class CacheProducerNotFound(ValueError):
+    """A cache may contain copied SDK bytes without an original compile step."""
+
+
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -717,7 +721,7 @@ def cache_origin(root, kind, repository, own_pr, cache_key, abi):
                 }
         if len(batch) < 100:
             break
-    raise ValueError(
+    raise CacheProducerNotFound(
         "Restored cache has no independently verified successful SDK-build/cache-save producer; preserve it, do not rebuild"
     )
 
@@ -749,7 +753,7 @@ def unpack_verified(source, destination, receipt):
         prefix.rename(destination)
 
 
-def find(repository, kind, inputs, abi, root, own_pr, prefix):
+def find(repository, kind, inputs, abi, root, own_pr, prefix, *, verify_existing=False):
     expected = identity(inputs, abi)
     wanted = f"ci-sanitizer-{kind}-{expected}-attempt-"
     page = 1
@@ -826,7 +830,22 @@ def find(repository, kind, inputs, abi, root, own_pr, prefix):
                     with (directory / "payload.tar.gz").open("wb") as output:
                         with stream.open("payload.tar.gz") as payload:
                             shutil.copyfileobj(payload, output)
-                unpack_verified(directory, prefix, receipt)
+                if verify_existing:
+                    # A main cache can be saved after restoring an artifact, so
+                    # it has no successful compile step of its own. Bind every
+                    # cached byte/mode/link to the independently verified producer
+                    # instead; never execute or replace an unqualified prefix.
+                    if (
+                        artifacts.digest(directory / "payload.tar.gz")
+                        != receipt["sha256"]
+                    ):
+                        raise ValueError("Sanitizer payload digest mismatch")
+                    if inventory(prefix) != receipt["files"]:
+                        raise ValueError(
+                            "Restored sanitizer cache differs from verified artifact"
+                        )
+                else:
+                    unpack_verified(directory, prefix, receipt)
             return {
                 "kind": "verified-artifact",
                 "run_id": run["id"],
@@ -859,9 +878,25 @@ def restore(
             raise ValueError(
                 "Existing prefix was not restored by an exact scoped-cache hit"
             )
-        compiled = cache_origin(root, kind, repository, own_pr, cache_key, abi)
+        try:
+            compiled = cache_origin(root, kind, repository, own_pr, cache_key, abi)
+        except CacheProducerNotFound:
+            origin = find(
+                repository,
+                kind,
+                inputs,
+                abi,
+                root,
+                own_pr,
+                prefix,
+                verify_existing=True,
+            )
+            if origin is None:
+                raise
+            origin = {**origin, "kind": "existing-cache-verified-against-artifact"}
+        else:
+            origin = {"kind": "existing-scoped-cache", "compiled_from": compiled}
         verify_installed(root, kind, prefix, abi)
-        origin = {"kind": "existing-scoped-cache", "compiled_from": compiled}
     else:
         origin = find(repository, kind, inputs, abi, root, own_pr, prefix)
         if origin:
