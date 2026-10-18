@@ -31,14 +31,12 @@ class ReleaseSourceTest(unittest.TestCase):
             },
         ]
 
-    def test_new_tag_uses_current_main_without_matching_a_longer_tag_prefix(self):
+    def test_missing_admin_tag_is_rejected_without_matching_a_longer_prefix(self):
         with patch.object(
             release, "api", return_value=[{"ref": "refs/tags/v0.1.10"}]
         ) as api:
-            self.assertEqual(
-                release.release_source("owner/repo", self.tag, self.control),
-                self.control,
-            )
+            with self.assertRaisesRegex(ValueError, "administrator must create"):
+                release.release_source("owner/repo", self.tag, self.control)
             self.assertEqual(api.call_count, 1)
 
     def test_retry_uses_reviewed_tag_even_when_control_workflow_has_changed(self):

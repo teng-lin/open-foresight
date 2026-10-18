@@ -107,10 +107,14 @@ def package_release(body):
 
 
 def release_source(repository, tag, control_commit):
-    """Resume an immutable reviewed tag, or prepare the current main commit."""
+    """Resolve an administrator-created tag reachable from reviewed main."""
     refs = api(repository, f"git/matching-refs/tags/{tag}")
     if not any(ref["ref"] == f"refs/tags/{tag}" for ref in refs):
-        return control_commit
+        raise ValueError(
+            f"Release tag {tag} is missing. An administrator must create it at the "
+            f"reviewed intended product commit (current main: {control_commit}) and "
+            "push it before dispatching release.yml; protected v* tags cannot be created by the workflow token."
+        )
     commit = api(repository, f"commits/{tag}")["sha"]
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("Release tag must resolve to a full source commit")
