@@ -70,6 +70,12 @@ does not add a separate user-approval step for work already authorized.
   library and helper so native integration tests actually run. When moving data
   between argv and stdin, update and exercise every runner fixture and consumer;
   checking only the C++ side is insufficient. Check test counts and skip reasons.
+- For service, capture, native-launch, or desktop-boundary changes, also run the
+  compiled service/MCP subprocess suite and the real desktop/service integration
+  on an isolated display. Use the current service, MCP, helper, and native binaries.
+  Capture fixtures must honor the production output protocol, including pw-record
+  writing raw PCM to its owned FIFO while stdout carries diagnostics. Passing
+  unit tests alone does not verify these process and UI boundaries.
 - Test development hooks both disabled by default and explicitly enabled. Dart
   compile-time defines need a source-compiler test invocation where required;
   an ordinary kernel test run may not inherit the define. Verify release builds
