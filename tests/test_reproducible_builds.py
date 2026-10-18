@@ -28,7 +28,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
                 [sys.executable, "-O", "-c", code],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
             path.write_bytes(b"tampered")
@@ -36,7 +36,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
                 [sys.executable, "-O", "-c", code],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("SHA256 checksum mismatch", result.stderr)
@@ -74,7 +74,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
                 ],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Speech model checksum mismatch", result.stderr)
@@ -121,7 +121,7 @@ package.main()
                 ],
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=30,
             )
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("Native LiteRT-LM library checksum mismatch", result.stderr)
@@ -138,7 +138,7 @@ verify_descriptor.verify('must-not-execute-protoc')
             [sys.executable, "-O", "-c", code],
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=30,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Validation failed: recovered.package == PACKAGE", result.stderr)
