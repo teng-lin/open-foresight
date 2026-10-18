@@ -1,6 +1,3 @@
-import 'dart:ffi';
-import 'package:ffi/ffi.dart';
-import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -25,11 +22,11 @@ class UnavailableSecretStore implements SecretStore {
 
 /// macOS Keychain via Apple's system security utility, or Secret Service via
 /// libsecret's secret-tool. Absolute system paths avoid a PATH override.
-class CommandSecretStore implements SecretStore {
+class PlatformSecretStore implements SecretStore {
   static const service = 'org.open-foresight.google-refresh';
   final String? executable;
   final bool macOS;
-  CommandSecretStore()
+  PlatformSecretStore()
     : macOS = Platform.isMacOS,
       executable = Platform.isMacOS
           ? '/usr/bin/security'
@@ -113,132 +110,4 @@ class CommandSecretStore implements SecretStore {
       throw StateError('Could not remove platform authorization');
     }
   }
-}
-
-/// macOS credentials belong to the service executable's Keychain principal,
-/// never to the generally callable security command. Failures must not trigger
-/// GoogleAuth's legacy plaintext fallback.
-class PlatformSecretStore implements SecretStore {
-  late final SecretStore _delegate = Platform.isMacOS
-      ? MacKeychainSecretStore(NativeMacSecretStore(), CommandSecretStore())
-      : CommandSecretStore();
-  @override
-  Future<bool> write(String key, String value) => _delegate.write(key, value);
-  @override
-  Future<String?> read(String key) => _delegate.read(key);
-  @override
-  Future<void> delete(String key) => _delegate.delete(key);
-}
-
-class MacKeychainSecretStore implements SecretStore {
-  final SecretStore protected, legacy;
-  MacKeychainSecretStore(this.protected, this.legacy);
-  @override
-  Future<bool> write(String key, String value) async {
-    if (!await protected.write(key, value) ||
-        await protected.read(key) != value) {
-      throw StateError(
-        'Cannot protect macOS authorization in the service Keychain',
-      );
-    }
-    await legacy.delete(key);
-    return true;
-  }
-
-  @override
-  Future<String?> read(String key) async {
-    final current = await protected.read(key);
-    if (current != null) {
-      await legacy.delete(key);
-      return current;
-    }
-    final old = await legacy.read(key);
-    if (old == null) return null;
-    await write(key, old);
-    return old;
-  }
-
-  @override
-  Future<void> delete(String key) async {
-    await protected.delete(key);
-    await legacy.delete(key);
-  }
-}
-
-class NativeMacSecretStore implements SecretStore {
-  static const service = 'org.open-foresight.google-refresh.protected.v1';
-  late final _library = DynamicLibrary.open(runtimeConfiguration.nativeLibrary);
-  late final _read = _library
-      .lookupFunction<
-        Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Int32>),
-        Pointer<Utf8> Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Int32>)
-      >('fs_keychain_read');
-  late final _write = _library
-      .lookupFunction<
-        Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>),
-        int Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>)
-      >('fs_keychain_write');
-  late final _delete = _library
-      .lookupFunction<
-        Int32 Function(Pointer<Utf8>, Pointer<Utf8>),
-        int Function(Pointer<Utf8>, Pointer<Utf8>)
-      >('fs_keychain_delete');
-  late final _free = _library
-      .lookupFunction<
-        Void Function(Pointer<Utf8>),
-        void Function(Pointer<Utf8>)
-      >('fs_string_free');
-  T _withIdentity<T>(
-    String key,
-    T Function(Pointer<Utf8>, Pointer<Utf8>) operation,
-  ) {
-    final label = service.toNativeUtf8(), account = key.toNativeUtf8();
-    try {
-      return operation(label, account);
-    } finally {
-      calloc.free(label);
-      calloc.free(account);
-    }
-  }
-
-  @override
-  Future<bool> write(String key, String value) async =>
-      _withIdentity(key, (label, account) {
-        final encoded = base64UrlEncode(utf8.encode(value)).toNativeUtf8();
-        try {
-          final status = _write(label, account, encoded);
-          if (status != 0) {
-            throw StateError('Protected Keychain write failed ($status)');
-          }
-          return true;
-        } finally {
-          calloc.free(encoded);
-        }
-      });
-  @override
-  Future<String?> read(String key) async => _withIdentity(key, (
-    label,
-    account,
-  ) {
-    final status = calloc<Int32>();
-    Pointer<Utf8> value = nullptr;
-    try {
-      value = _read(label, account, status);
-      if (status.value == -25300) return null;
-      if (status.value != 0 || value == nullptr) {
-        throw StateError('Protected Keychain read failed (${status.value})');
-      }
-      return utf8.decode(base64Url.decode(value.toDartString()));
-    } finally {
-      if (value != nullptr) _free(value);
-      calloc.free(status);
-    }
-  });
-  @override
-  Future<void> delete(String key) async => _withIdentity(key, (label, account) {
-    final status = _delete(label, account);
-    if (status != 0 && status != -25300) {
-      throw StateError('Protected Keychain deletion failed ($status)');
-    }
-  });
 }
