@@ -9,7 +9,6 @@ import 'package:open_foresight/domain.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
-import 'package:foresight_test_support/test_paths.dart';
 
 class BrowsingStore extends Store {
   int bodyReads = 0;
