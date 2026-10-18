@@ -1,3 +1,4 @@
+import 'text_budget.dart';
 import 'web_search.dart';
 
 final _citation = RegExp(r'\[Source\s*[:\s]?\s*[^\]]+\]', caseSensitive: false);
@@ -7,9 +8,10 @@ final _leadingCitation = RegExp(
 );
 final _numbers = RegExp(r'\d+');
 
-String truncateChatToolResult(String text, int limit) => text.length <= limit
+String truncateChatToolResult(String text, int limit) =>
+    text.runes.length <= limit
     ? text
-    : '${text.substring(0, limit)}\n... [Content Truncated due to length] ...';
+    : '${runePrefix(text, limit)}\n... [Content Truncated due to length] ...';
 
 /// One ordered source set per send, shared by retrieved and web sources.
 class ReferenceChatSources {
