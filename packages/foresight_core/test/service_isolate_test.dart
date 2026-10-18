@@ -83,6 +83,12 @@ void main() {
       final host = await IsolatedApplicationService.start(profile);
       ServiceClient? client;
       try {
+        for (final name in ['application.sock', 'application-worker.sock']) {
+          expect(
+            File('${profile.runtime}/$name').statSync().mode & 0x1ff,
+            0x180,
+          );
+        }
         client = await ServiceClient.connect(serviceEndpoint(profile));
         final status = await client.call('status') as Map;
         expect(status['pid'], pid);

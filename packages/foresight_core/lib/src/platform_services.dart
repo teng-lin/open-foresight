@@ -75,6 +75,33 @@ class RuntimeConfiguration {
 
 final runtimeConfiguration = RuntimeConfiguration.resolve();
 
+// mode_t is unsigned short on Darwin and unsigned int on Linux. Calling libc
+// directly avoids starting a child process while publishing a local socket.
+final int Function(Pointer<Utf8>, int) _chmod = Platform.isMacOS
+    ? DynamicLibrary.process().lookupFunction<
+        Int32 Function(Pointer<Utf8>, Uint16),
+        int Function(Pointer<Utf8>, int)
+      >('chmod')
+    : DynamicLibrary.process().lookupFunction<
+        Int32 Function(Pointer<Utf8>, Uint32),
+        int Function(Pointer<Utf8>, int)
+      >('chmod');
+
+/// Set mode 0600 before exposing a private local endpoint to its clients.
+void protectPrivateFile(String path) {
+  if (path.contains('\u0000')) {
+    throw ArgumentError.value(path, 'path', 'Path contains a NUL character');
+  }
+  final nativePath = path.toNativeUtf8(allocator: calloc);
+  try {
+    if (_chmod(nativePath, 0x180) != 0) {
+      throw FileSystemException('Cannot protect private file', path);
+    }
+  } finally {
+    calloc.free(nativePath);
+  }
+}
+
 /// Refuse symlinks and foreign/public directories before using local RPC state.
 void privateDirectory(String path) {
   final dir = Directory(path);
