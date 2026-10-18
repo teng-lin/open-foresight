@@ -27,7 +27,9 @@
     "libgomp1",
     "ca-certificates",
     "libgl1",
-    "libegl1"
+    "libegl1",
+    "libsecret-tools",
+    "bubblewrap"
   ],
   "rpm_dependencies": [
     "bash",
@@ -53,7 +55,9 @@
     "libgomp",
     "ca-certificates",
     "libglvnd-glx",
-    "libglvnd-egl"
+    "libglvnd-egl",
+    "libsecret",
+    "bubblewrap"
   ],
   "arch_dependencies": [
     "bash",
@@ -77,6 +81,8 @@
     "perl",
     "vulkan-icd-loader",
     "ca-certificates",
-    "libglvnd"
+    "libglvnd",
+    "libsecret",
+    "bubblewrap"
   ]
 }

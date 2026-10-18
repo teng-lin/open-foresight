@@ -10,10 +10,10 @@ Future<void> main() async {
   );
   int? replacementPid;
   try {
-    final status = await domain.command('status') as Map;
+    final status = await domain.command(Operation.status) as Map;
     final firstPid = status['pid'] as int;
     final note =
-        await domain.command('notes.save', {
+        await domain.command(Operation.notesSave, {
               'title': 'Desktop facade',
               'body': 'service-owned',
             })
@@ -48,7 +48,7 @@ Future<void> main() async {
       await auth.signIn((uri) async {
         browserInvited =
             uri.scheme == 'https' && uri.host == 'accounts.google.com';
-        await domain.command('google.cancel_sign_in');
+        await domain.command(Operation.googleCancelSignIn);
       });
     } catch (error) {
       oauthCancelled = error.toString().toLowerCase().contains('cancel');
@@ -59,12 +59,19 @@ Future<void> main() async {
     domain.helper.changed = () {
       if (!update.isCompleted) update.complete();
     };
+    // Unchanged service heartbeats no longer rebuild the desktop. Observe an
+    // actual committed mutation after subscribing to the change callback.
+    await domain.command(Operation.notesSave, {
+      'id': note['id'],
+      'title': 'Desktop facade',
+      'body': 'service-owned',
+    });
     await update.future.timeout(const Duration(seconds: 5));
     Process.killPid(firstPid, ProcessSignal.sigterm);
     final deadline = DateTime.now().add(const Duration(seconds: 20));
     while (DateTime.now().isBefore(deadline)) {
       try {
-        final current = await domain.command('status') as Map;
+        final current = await domain.command(Operation.status) as Map;
         if (current['pid'] != firstPid) {
           replacementPid = current['pid'] as int;
           break;

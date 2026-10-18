@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -7,7 +8,7 @@ import 'package:foresight_core/src/remote_domain.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
-import 'fixtures/remote_service.dart';
+import 'package:foresight_test_support/remote_service.dart';
 
 void main() {
   late RemoteFixture f;
@@ -16,6 +17,20 @@ void main() {
     await f.start();
   });
   tearDown(() => f.close());
+
+  test('closing a paused workspace cancels its pending source wait', () async {
+    f.event({'sources_paused': true});
+    await eventually(() => f.remote.sourcesPaused);
+    final pending = f.remote.waitForSourceWork();
+    final cancelled = expectLater(
+      pending,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    f.remote.close();
+    await cancelled;
+  });
 
   test(
     'service snapshots update capture, model, Google and pause state together',
@@ -136,7 +151,7 @@ void main() {
     'cancelled commands cancel only their outstanding service request',
     () async {
       var current = true;
-      final result = f.remote.commandCurrent('sources.import_directory', {
+      final result = f.remote.commandCurrent(Operation.sourcesImportDirectory, {
         'path': '/fixture',
       }, () => current);
       final failure = expectLater(result, throwsStateError);
@@ -151,14 +166,15 @@ void main() {
       );
       f.handler = (socket, request) =>
           f.reply(socket, request, {'saved': true});
-      expect(await f.remote.commandCurrent('notes.save', {}, () => true), {
-        'saved': true,
-      });
+      expect(
+        await f.remote.commandCurrent(Operation.notesSave, {}, () => true),
+        {'saved': true},
+      );
       f.handler = (socket, request) => socket.writeln(
         jsonEncode({'id': request['id'], 'error': 'rejected', 'done': true}),
       );
       await expectLater(
-        f.remote.commandCurrent('notes.save', {}, () => true),
+        f.remote.commandCurrent(Operation.notesSave, {}, () => true),
         throwsStateError,
       );
     },
@@ -323,14 +339,20 @@ void main() {
       await connection.importAttachments(19);
       expect(f.requests.last['args'], {'id': 19});
       expect(connection.attachments(19), isEmpty);
-      f.owner.db.execute('INSERT INTO calendar_events VALUES(?,?)', [
-        19,
-        jsonEncode({
-          'attachments': [
-            {'fileId': 'doc'},
-          ],
-        }),
-      ]);
+      f.owner.db.execute(
+        "INSERT INTO meetings(id,title,state) VALUES(19,'Fixture','ready')",
+      );
+      f.owner.db.execute(
+        "INSERT INTO calendar_events(event_key,meeting_id,metadata,account,calendar_id,google_id,source_id,starts,ends,status,synced) VALUES('fixture',?,?,'fixture','fixture','fixture','fixture',0,0,'confirmed',0)",
+        [
+          19,
+          jsonEncode({
+            'attachments': [
+              {'fileId': 'doc'},
+            ],
+          }),
+        ],
+      );
       expect(connection.attachments(19).single['fileId'], 'doc');
       await connection.reminders(DateTime.now(), (_) async {
         fail('Service owns reminders');
@@ -343,7 +365,7 @@ void main() {
   test(
     'abrupt service loss reconnects and refreshes snapshots without replaying a write',
     () async {
-      final pending = f.remote.command('notes.save', {
+      final pending = f.remote.command(Operation.notesSave, {
         'title': 'uncertain',
         'body': 'body',
       });

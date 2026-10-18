@@ -7,6 +7,7 @@ name: Reusable CI dependencies
     - .github/workflows/ci-dependencies.yml
     - tools/ci_artifacts.py
     - tools/ci_registry.py
+    - tools/build_linux_sdk_local.sh
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
@@ -18,7 +19,9 @@ name: Reusable CI dependencies
     - packaging/minimal-grpc.cmake
     - requirements-dev.lock
     - requirements-litert.lock
-    - requirements-litert-macos.lock
+    - services/speech/**
+    - services/inference/persistent_worker.h
+    - services/inference/output_budget.h
     - third_party/litert_lm/**
   workflow_dispatch: {}
   schedule:
@@ -28,6 +31,7 @@ name: Reusable CI dependencies
     - .github/workflows/ci-dependencies.yml
     - tools/ci_artifacts.py
     - tools/ci_registry.py
+    - tools/build_linux_sdk_local.sh
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
@@ -39,7 +43,9 @@ name: Reusable CI dependencies
     - packaging/minimal-grpc.cmake
     - requirements-dev.lock
     - requirements-litert.lock
-    - requirements-litert-macos.lock
+    - services/speech/**
+    - services/inference/persistent_worker.h
+    - services/inference/output_budget.h
     - third_party/litert_lm/**
 permissions:
   contents: read
@@ -100,7 +106,7 @@ jobs:
     - name: Install verifier dependencies
       run: |-
         python -m venv .venv
-        .venv/bin/python -m pip install -r requirements-dev.txt
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - name: Restore an already verified shared prefix
       id: shared
       env:
@@ -127,7 +133,8 @@ jobs:
       with:
         path: build/macos-runtimes
         key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py',
-          'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'requirements-litert-macos.lock', 'third_party/litert_lm/*.patch')
+          'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'services/speech/**', 'services/inference/persistent_worker.h',
+          'services/inference/output_budget.h', 'third_party/litert_lm/*.patch')
           }}
     - name: Build or verify SDK
       if: matrix.component == 'sdk'
@@ -147,6 +154,7 @@ jobs:
         if-no-files-found: error
         compression-level: 0
   core:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Build Linux core
     needs:
     - plan
@@ -179,6 +187,7 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Reuse a qualified component from reviewed sources
+      if: github.event_name != 'schedule'
       id: shared
       env:
         GH_TOKEN: ${{ github.token }}
@@ -197,8 +206,8 @@ jobs:
       run: |-
         task_repository=${GITHUB_REPOSITORY,,}
         task_namespace="ghcr.io/$task_repository"
-        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
-          task_namespace="$task_namespace/preview-$OWN_PR"
+        if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+          IDENTITY="$IDENTITY-refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
         fi
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
@@ -229,6 +238,8 @@ jobs:
         context: .
         file: packaging/sdk-core.Dockerfile
         push: true
+        no-cache: ${{ github.event_name == 'schedule' }}
+        pull: true
         tags: ${{ steps.tag.outputs.image }}
         labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
         build-args: ''
@@ -256,6 +267,7 @@ jobs:
         if-no-files-found: error
         compression-level: 0
   litert:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Build Linux litert
     needs:
     - plan
@@ -289,6 +301,7 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Reuse a qualified component from reviewed sources
+      if: github.event_name != 'schedule'
       id: shared
       env:
         GH_TOKEN: ${{ github.token }}
@@ -307,8 +320,8 @@ jobs:
       run: |-
         task_repository=${GITHUB_REPOSITORY,,}
         task_namespace="ghcr.io/$task_repository"
-        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
-          task_namespace="$task_namespace/preview-$OWN_PR"
+        if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+          IDENTITY="$IDENTITY-refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
         fi
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
@@ -339,6 +352,8 @@ jobs:
         context: .
         file: packaging/sdk-litert.Dockerfile
         push: true
+        no-cache: ${{ github.event_name == 'schedule' }}
+        pull: true
         tags: ${{ steps.tag.outputs.image }}
         labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
         build-args: CORE_IMAGE=${{ needs.core.outputs.image }}
@@ -366,6 +381,7 @@ jobs:
         if-no-files-found: error
         compression-level: 0
   whisper:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Build Linux whisper
     needs:
     - plan
@@ -399,6 +415,7 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Reuse a qualified component from reviewed sources
+      if: github.event_name != 'schedule'
       id: shared
       env:
         GH_TOKEN: ${{ github.token }}
@@ -417,8 +434,8 @@ jobs:
       run: |-
         task_repository=${GITHUB_REPOSITORY,,}
         task_namespace="ghcr.io/$task_repository"
-        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
-          task_namespace="$task_namespace/preview-$OWN_PR"
+        if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+          IDENTITY="$IDENTITY-refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
         fi
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
@@ -449,6 +466,8 @@ jobs:
         context: .
         file: packaging/sdk-whisper.Dockerfile
         push: true
+        no-cache: ${{ github.event_name == 'schedule' }}
+        pull: true
         tags: ${{ steps.tag.outputs.image }}
         labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
         build-args: CORE_IMAGE=${{ needs.core.outputs.image }}
@@ -476,6 +495,7 @@ jobs:
         if-no-files-found: error
         compression-level: 0
   sdk:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Assemble Linux SDK
     needs:
     - plan
@@ -511,6 +531,7 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Reuse a qualified component from reviewed sources
+      if: github.event_name != 'schedule'
       id: shared
       env:
         GH_TOKEN: ${{ github.token }}
@@ -529,8 +550,8 @@ jobs:
       run: |-
         task_repository=${GITHUB_REPOSITORY,,}
         task_namespace="ghcr.io/$task_repository"
-        if [[ "$GITHUB_REF" != refs/heads/main ]]; then
-          task_namespace="$task_namespace/preview-$OWN_PR"
+        if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+          IDENTITY="$IDENTITY-refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
         fi
         echo "image=$task_namespace/linux-$COMPONENT:$IDENTITY" >> "$GITHUB_OUTPUT"
         echo "cache=$task_namespace/linux-$COMPONENT:buildcache" >> "$GITHUB_OUTPUT"
@@ -561,6 +582,8 @@ jobs:
         context: .
         file: packaging/sdk.Dockerfile
         push: true
+        no-cache: ${{ github.event_name == 'schedule' }}
+        pull: true
         tags: ${{ steps.tag.outputs.image }}
         labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
         build-args: |-
@@ -590,3 +613,20 @@ jobs:
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
+  linux-pr:
+    name: Validate Linux dependency builds without publication
+    if: github.event_name == 'pull_request'
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      contents: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha }}
+    - name: Free hosted-runner space for native dependency builds
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+    - name: Build and verify the entire SDK locally
+      run: tools/build_linux_sdk_local.sh

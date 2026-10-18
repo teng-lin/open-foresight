@@ -1,3 +1,7 @@
+import 'package:foresight_core/src/operations.dart';
+import 'package:foresight_core/src/application.dart';
+import 'desktop_connection_fixture.dart';
+import 'pump_until.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -43,6 +47,9 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'meeting-workspace-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final id = store.meeting('[New Meeting]');
       store.transcript(
@@ -75,9 +82,11 @@ void main() {
       );
       final generator = NotesRuntime();
       final domain = Domain(store, helper);
-      await tester.pumpWidget(Foresight(domain, deviceLoader: () async => []));
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       await tester.pumpAndSettle();
       domain.generator = generator;
       expect(find.text('Live enhanced notes'), findsOneWidget);
@@ -89,9 +98,13 @@ void main() {
         'Mira draft Tuesday',
       );
       await tester.pump(const Duration(seconds: 31));
-      await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
-      });
+      await pumpUntil(
+        tester,
+        () =>
+            generator.prompt.isNotEmpty &&
+            (domain.application.captureState['note_enhancements'] as Map).values
+                .every((value) => (value as Map)['active'] != true),
+      );
       await tester.pumpAndSettle();
       expect(
         store.rows('SELECT body FROM meeting_notes WHERE meeting_id=?', [
@@ -124,7 +137,8 @@ void main() {
         find.textContaining('Unknown\n', findRichText: true),
         findsOneWidget,
       );
-      final snapshot = await domain.command('meetings.get', {'id': id}) as Map;
+      final snapshot =
+          await domain.command(Operation.meetingsGet, {'id': id}) as Map;
       final transcript = snapshot['transcript'] as List;
       expect(transcript.map((t) => t['speaker_id']), [0, 1, null]);
       expect(transcript.map((t) => t['speaker_label']), [
@@ -172,6 +186,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final directory = Directory.systemTemp.createTempSync('meeting-layout-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final id = store.meeting('[New Meeting]');
       final helper = OfflineHelper(
@@ -182,11 +199,14 @@ void main() {
       await tester.pumpWidget(
         RepaintBoundary(
           key: boundary,
-          child: Foresight(Domain(store, helper), deviceLoader: () async => []),
+          child: Foresight(
+            TestDesktopConnection(Domain(store, helper)),
+            deviceLoader: () async => [],
+          ),
         ),
       );
       final dynamic state = tester.state(find.byType(Workspace));
-      state.update(() => state.meetingId = id);
+      state.update(() => state.meetingFeature.meetingId = id);
       for (final size in [
         const Size(1952, 1226),
         const Size(1280, 720),
@@ -250,17 +270,19 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            Domain(
-              store,
-              OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              ),
             ),
             deviceLoader: () async => [],
           ),
         );
         final dynamic state = tester.state(find.byType(Workspace));
         state.update(() {
-          state.meetingId = id;
-          state.meetingPanel = 'Transcript';
+          state.meetingFeature.meetingId = id;
+          state.meetingFeature.meetingPanel = 'Transcript';
         });
         await tester.pumpAndSettle();
         final notes = find.byKey(const ValueKey('meeting-notes-editor'));
@@ -297,7 +319,7 @@ void main() {
         tester.view.physicalSize = const Size(1280, 700);
         await tester.pumpAndSettle();
         expect(find.byTooltip('Copy full transcript'), findsOneWidget);
-        expect(state.meetingPanel, 'Transcript');
+        expect(state.meetingFeature.meetingPanel, 'Transcript');
         expect(tester.takeException(), isNull);
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());
@@ -336,21 +358,29 @@ void main() {
         try {
           await tester.pumpWidget(
             Foresight(
-              Domain(
-                store,
-                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              TestDesktopConnection(
+                Domain(
+                  store,
+                  OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+                ),
               ),
               deviceLoader: () async => [],
             ),
           );
           final dynamic state = tester.state(find.byType(Workspace));
-          state.update(() => state.meetingId = id);
+          state.update(() => state.meetingFeature.meetingId = id);
           await tester.pumpAndSettle();
           final notes = find.byKey(const ValueKey('meeting-notes-editor'));
           await tester.enterText(notes, 'Preserve the draft.');
           await tester.tap(find.byTooltip('Open assistant'));
           await tester.pump();
           await tester.pump(const Duration(milliseconds: 300));
+          await tester.pumpAndSettle();
+          expect(find.byTooltip('Close assistant'), findsOneWidget);
+          expect(notes, findsNothing);
+          // A compositor can apply a late resize capped below the requested
+          // width. Keep the fallback open until the sidecar actually fits.
+          tester.view.physicalSize = const Size(720, 700);
           await tester.pumpAndSettle();
           expect(find.byTooltip('Close assistant'), findsOneWidget);
           expect(notes, findsNothing);

@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/poll.dart';
 // Opt-in integration: production Recording/native capture, private PipeWire
 // devices, synthetic tones, and an ASR waveform inspector (not a speech model).
 import 'dart:async';
@@ -30,7 +31,7 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-pipewire-',
       );
-      final prefix = 'foresight-${pid}';
+      final prefix = 'foresight-$pid';
       final modules = <String>[];
       final players = <Process>[];
       final rows = <Map<String, Object>>[];
@@ -46,8 +47,9 @@ void main() {
       Recording? recording;
       Future<String> command(String name, List<String> arguments) async {
         final result = await Process.run(name, arguments);
-        if (result.exitCode != 0)
+        if (result.exitCode != 0) {
           throw StateError('$name failed: ${result.stderr}');
+        }
         return '${result.stdout}'.trim();
       }
 
@@ -154,7 +156,14 @@ void main() {
         var localSink = await sink('$prefix-local');
         final remoteSink = await sink('$prefix-remote');
         var localSource = await microphone();
-        await Future<void>.delayed(const Duration(milliseconds: 500));
+        await eventually(
+          () async => (await command('pactl', [
+            'list',
+            'short',
+            'sources',
+          ])).contains('$prefix-input'),
+          timeout: const Duration(seconds: 10),
+        );
         // Establish defaults only inside the caller's dedicated, hardware-free
         // server. This lets the pinned-route check detect accidental fallback.
         await command('pactl', ['set-default-sink', '$prefix-remote']);
@@ -204,7 +213,10 @@ print(' '.join(labels))
           () => recording!.peakVolumes.every((v) => v > .05),
           'both overlapping channels receive real PCM',
         );
-        await Future<void>.delayed(const Duration(seconds: 2));
+        await waitFor(
+          () => recording!.sampleCounts.every((count) => count >= 96000),
+          'two seconds of measured PCM are buffered',
+        );
         recording.pause();
         final pausedCounts = List<int>.from(recording.sampleCounts);
         expect(recording.captures, isEmpty);
@@ -212,10 +224,18 @@ print(' '.join(labels))
         await stopPlayer(remotePlayer);
         localPlayer = await play('$prefix-local', 1699);
         remotePlayer = await play('$prefix-remote', 1699);
-        await Future<void>.delayed(const Duration(seconds: 2));
+        // Observe the full paused playback window and fail on the first leak.
+        final pausedWindow = Stopwatch()..start();
+        while (pausedWindow.elapsed < const Duration(seconds: 2)) {
+          expect(recording.sampleCounts, pausedCounts);
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
         expect(recording.sampleCounts, pausedCounts);
         await stopPlayer(localPlayer);
         await stopPlayer(remotePlayer);
+        // This is waveform tail duration after the owned players have exited,
+        // not a readiness assumption: avoid mixing the paused 1699 Hz tone into
+        // the following resumed 437/997 Hz classification fixture.
         await Future<void>.delayed(const Duration(milliseconds: 400));
         recording.resume();
         localPlayer = await play('$prefix-local', 437);
@@ -235,7 +255,10 @@ print(' '.join(labels))
         // A different live default source is available. A pinned route must not
         // capture it while the selected device is absent.
         final lostCounts = List<int>.from(recording.sampleCounts);
-        await Future<void>.delayed(const Duration(milliseconds: 1200));
+        await waitFor(
+          () => recording!.sampleCounts[1] > lostCounts[1] + 48000,
+          'remote channel delivers another measured second while microphone is absent',
+        );
         expect(recording.sampleCounts[0], lostCounts[0]);
         expect(recording.sampleCounts[1], greaterThan(lostCounts[1]));
         await stopPlayer(localPlayer);
@@ -246,7 +269,12 @@ print(' '.join(labels))
           () => recording!.sampleCounts[0] > lostCounts[0] + 48000,
           'selected route recovers after return',
         );
-        await Future<void>.delayed(const Duration(seconds: 1));
+        await waitFor(
+          () =>
+              rows.any((row) => row['source'] == 'microphone') &&
+              rows.any((row) => row['source'] == 'playback'),
+          'both channel transcript fixtures complete',
+        );
         await recording.stop();
         expect(rows.where((r) => r['source'] == 'microphone'), isNotEmpty);
         expect(rows.where((r) => r['source'] == 'playback'), isNotEmpty);
@@ -286,10 +314,11 @@ print(' '.join(labels))
         report['final_defaults'] = await defaults();
         expect(report['final_defaults'], before);
         final output = Platform.environment['FORESIGHT_PIPEWIRE_REPORT'];
-        if (output != null)
+        if (output != null) {
           File(output).writeAsStringSync(
             '${const JsonEncoder.withIndent('  ').convert(report)}\n',
           );
+        }
         directory.deleteSync(recursive: true);
       }
     },

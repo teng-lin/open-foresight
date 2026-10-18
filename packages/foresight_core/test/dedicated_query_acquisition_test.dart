@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -26,8 +27,9 @@ class MetadataFixture implements ModelConfigService {
   Future<void> close() async {
     closed = true;
     final active = pending;
-    if (active != null && !active.isCompleted)
+    if (active != null && !active.isCompleted) {
       active.completeError(StateError('Fixture cancelled'));
+    }
   }
 }
 
@@ -144,7 +146,12 @@ void main() {
         ..pending = Completer();
       final active = operation(config);
       final result = active.run();
-      final rejected = expectLater(result, throwsStateError);
+      final rejected = expectLater(
+        result,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
       await active.close();
       await rejected;
       await active.done.catchError((Object _) {});
@@ -160,7 +167,9 @@ void main() {
     );
     await expectLater(
       operation(config).run(current: () => false),
-      throwsStateError,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
     );
     expect(config.version, isNull);
     previousUnchanged();

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -21,9 +22,10 @@ class BundledGoogleAuth extends GoogleAuth {
 
 class BundledGoogleDomain extends Domain {
   final GoogleAuth auth;
-  BundledGoogleDomain(super.store, super.helper, this.auth);
+  BundledGoogleDomain(super.store, super.helper, this.auth) {
+    _application;
+  }
   late final _application = Application(this, auth: auth);
-  @override
   Application get application => _application;
 }
 
@@ -32,6 +34,9 @@ void main() {
     'bundled Google setup goes directly to sign-in from Settings, Calendar and every Drive import',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('google-bundled-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final client = File('${root.path}/bundled-client.json')
         ..writeAsStringSync(
           jsonEncode({
@@ -53,7 +58,10 @@ void main() {
       final domain = BundledGoogleDomain(store, helper, auth);
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();
@@ -104,6 +112,9 @@ void main() {
     'unconfigured Calendar connection opens actionable setup and cancellation leaves it disconnected',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('google-setup-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final domain = Domain(
         store,
@@ -111,7 +122,10 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.tap(find.text('Settings'));
         await tester.pumpAndSettle();

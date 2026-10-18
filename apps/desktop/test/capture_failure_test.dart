@@ -29,10 +29,11 @@ void main() {
           await Future<void>.delayed(const Duration(milliseconds: 30));
         }
         expect(states.any((s) => s.contains('retries exhausted')), true);
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+        recorder.drain(flushAll: true);
         expect(recorder.lastError, contains('retries exhausted'));
         expect(states.last, contains('retries exhausted'));
         await expectLater(recorder.stop(), throwsStateError);
+        expect(recorder.lastError, contains('retries exhausted'));
         expect(recorder.captures, isEmpty);
         expect(recorder.speeches, isEmpty);
         expect(states, isNot(contains('Transcript saved')));

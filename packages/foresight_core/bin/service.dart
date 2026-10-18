@@ -6,13 +6,14 @@ import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/service.dart';
 
 Future<void> main(List<String> args) async {
-  ApplicationService? service;
+  IsolatedApplicationService? service;
   try {
     if (args.isNotEmpty) {
-      if (args.length != 1)
+      if (args.length != 1) {
         throw ArgumentError(
           'Usage: foresight-service [--status|--stop|--stop-if-idle[=PID]]',
         );
+      }
       final mode = args.single.split('=').first;
       final expectedPid = args.single.startsWith('--stop-if-idle=')
           ? int.tryParse(args.single.substring('--stop-if-idle='.length))
@@ -22,10 +23,11 @@ Future<void> main(List<String> args) async {
           (args.single.contains('=') &&
               (mode != '--stop-if-idle' ||
                   expectedPid == null ||
-                  expectedPid <= 0)))
+                  expectedPid <= 0))) {
         throw ArgumentError(
           'Usage: foresight-service [--status|--stop|--stop-if-idle[=PID]]',
         );
+      }
       final profile = ProfilePaths.resolve(Platform.environment);
       final client = await ServiceClient.connect(serviceEndpoint(profile));
       try {
@@ -44,10 +46,11 @@ Future<void> main(List<String> args) async {
                       .timeout(const Duration(minutes: 30))
                   as Map?;
           if (result?['stopped'] != true ||
-              result?['shutdown_verified'] != true)
+              result?['shutdown_verified'] != true) {
             throw StateError(
               'The service did not acknowledge a verified idle shutdown.',
             );
+          }
           stdout.writeln(jsonEncode(result));
           return;
         }
@@ -56,8 +59,9 @@ Future<void> main(List<String> args) async {
           stdout.writeln(jsonEncode(state));
         } else {
           final stopped = client.events.stream.drain<void>();
-          if (!Process.killPid(state['pid'] as int, ProcessSignal.sigterm))
+          if (!Process.killPid(state['pid'] as int, ProcessSignal.sigterm)) {
             throw StateError('Could not stop application service');
+          }
           await stopped.timeout(const Duration(minutes: 30));
         }
       } finally {
@@ -65,7 +69,7 @@ Future<void> main(List<String> args) async {
       }
       return;
     }
-    service = await ApplicationService.start(
+    service = await IsolatedApplicationService.start(
       ProfilePaths.resolve(Platform.environment),
     );
     final done = Completer<void>();

@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -11,6 +13,9 @@ void main() {
     'cancelled Calendar meetings keep their status and saved transcript badge',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('calendar-status-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final id = store.meeting('Cancelled review');
       store.transcript(
@@ -45,7 +50,10 @@ void main() {
       );
       try {
         await tester.pumpWidget(
-          Foresight(domain, deviceLoader: () async => []),
+          Foresight(
+            TestDesktopConnection(domain),
+            deviceLoader: () async => [],
+          ),
         );
         await tester.pumpAndSettle();
         expect(find.text('Calendar cancelled'), findsOneWidget);
@@ -67,6 +75,9 @@ void main() {
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       final root = Directory.systemTemp.createTempSync('meeting-collection-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final first = store.meeting('Product review');
       store.meeting('Planning session');
@@ -81,9 +92,11 @@ void main() {
       try {
         await tester.pumpWidget(
           Foresight(
-            Domain(
-              store,
-              OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+            TestDesktopConnection(
+              Domain(
+                store,
+                OfflineHelper('${root.path}/socket', '${root.path}/helper'),
+              ),
             ),
             deviceLoader: () async => [],
           ),

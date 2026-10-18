@@ -91,8 +91,9 @@ LabelPropagationPlan planLabelPropagation(
     assigned.add(label.documentId);
     if (loaded.contains(label.documentId) ||
         label.source == 'user_defined' ||
-        label.source == 'user_attached')
+        label.source == 'user_attached') {
       anchors.add(label.documentId);
+    }
   }
   List<double>? centroid;
   var contributors = 0;
@@ -100,14 +101,21 @@ LabelPropagationPlan planLabelPropagation(
     final vector = vectors[id];
     if (vector == null || vector.isEmpty) continue;
     centroid ??= List.filled(vector.length, 0.0);
-    for (var i = 0; i < math.min(centroid.length, vector.length); i++)
+    for (var i = 0; i < math.min(centroid.length, vector.length); i++) {
       centroid[i] += vector[i];
+    }
     contributors++;
   }
   if (centroid != null) {
-    for (var i = 0; i < centroid.length; i++) centroid[i] /= contributors;
+    for (var i = 0; i < centroid.length; i++) {
+      centroid[i] /= contributors;
+    }
     final norm = math.sqrt(centroid.fold<double>(0, (sum, v) => sum + v * v));
-    if (norm > 0) for (var i = 0; i < centroid.length; i++) centroid[i] /= norm;
+    if (norm > 0) {
+      for (var i = 0; i < centroid.length; i++) {
+        centroid[i] /= norm;
+      }
+    }
   }
   final unique = <GraphEdge>[];
   final pairs = <String>{};
@@ -129,8 +137,9 @@ LabelPropagationPlan planLabelPropagation(
     final titles = {for (final d in documents) d.id: d.title};
     for (final edge in unique) {
       if (!(anchors.contains(edge.source) || anchors.contains(edge.target)) ||
-          edge.similarity < .65)
+          edge.similarity < .65) {
         continue;
+      }
       final anchor = anchors.contains(edge.source) ? edge.source : edge.target;
       final candidate = anchor == edge.source ? edge.target : edge.source;
       if (assigned.contains(candidate)) continue;
@@ -157,8 +166,9 @@ LabelPropagationPlan planLabelPropagation(
         if (left == right) continue;
         final candidate = left ? edge.target : edge.source;
         final value = score(candidate, edge.similarity);
-        if (value > (candidates[candidate] ?? -1))
+        if (value > (candidates[candidate] ?? -1)) {
           candidates[candidate] = value;
+        }
       }
       final ranked = candidates.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));

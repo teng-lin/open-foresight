@@ -6,13 +6,16 @@ import 'package:foresight_core/src/domain.dart';
 import 'package:foresight_core/src/helper.dart';
 import 'package:foresight_core/src/store.dart';
 
-import 'fixtures/delayed_index_service.dart';
+import 'package:foresight_test_support/delayed_index_service.dart';
 
 void main() {
   test('embedding backend selection survives app database restart', () async {
     final temporary = Directory.systemTemp.createTempSync(
       'foresight-gpu-restore-',
     );
+    addTearDown(() {
+      if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+    });
     final model = File('${temporary.path}/model.litertlm')
       ..writeAsStringSync('registration fixture');
     final service = DelayedIndexService();
@@ -28,7 +31,6 @@ void main() {
       for (final backend in [
         'litert_lm_embedding_gpu',
         'litert_lm_embedding_cpu',
-        'llama_cpp',
       ]) {
         await store.register('embedding', model.path, '', backend: backend);
         store.close();
@@ -50,7 +52,7 @@ void main() {
         ),
         throwsArgumentError,
       );
-      expect(service.configurations.length, 3);
+      expect(service.configurations.length, 2);
     } finally {
       store.close();
       await helper.close();
@@ -65,6 +67,9 @@ void main() {
       final temporary = Directory.systemTemp.createTempSync(
         'foresight-source-pause-',
       );
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
       final service = DelayedIndexService();
       final server = Server.create(services: [service]);
       final socket = '${temporary.path}/helper.sock';
@@ -146,6 +151,9 @@ void main() {
       final temporary = Directory.systemTemp.createTempSync(
         'foresight-domain-close-',
       );
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
       final service = DelayedIndexService();
       final server = Server.create(services: [service]);
       final socket = '${temporary.path}/helper.sock';

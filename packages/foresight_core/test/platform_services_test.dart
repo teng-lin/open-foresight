@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:test/test.dart';
@@ -248,18 +250,22 @@ void main() {
       Process.runSync('/bin/chmod', ['700', script.path]);
       final previous = runtimeConfiguration.environment['FORESIGHT_HELPER'];
       runtimeConfiguration.environment['FORESIGHT_HELPER'] = script.path;
-      final runtime = Directory('/tmp').createTempSync('of-probe-');
+      final runtime = shortTestTempRoot.createTempSync('of-probe-');
       final socketPath = '${runtime.path}/helper.sock';
       final server = await ServerSocket.bind(
         InternetAddress(socketPath, type: InternetAddressType.unix),
         0,
       );
       final peers = <Socket>[];
-      server.listen(peers.add);
+      final probed = Completer<void>();
+      server.listen((peer) {
+        peers.add(peer);
+        if (!probed.isCompleted) probed.complete();
+      });
       final helper = Helper(socketPath, '${scratch.path}/helper-data');
       try {
         final startup = helper.start();
-        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await probed.future.timeout(const Duration(seconds: 2));
         await Future.wait([helper.close(), helper.close()]);
         await startup;
         expect(marker.existsSync(), false);
@@ -279,7 +285,8 @@ void main() {
   );
 
   test('physical memory is detected on supported hosts', () {
-    if (Platform.isMacOS || Platform.isLinux)
+    if (Platform.isMacOS || Platform.isLinux) {
       expect(physicalMemoryGb(), greaterThan(0));
+    }
   });
 }

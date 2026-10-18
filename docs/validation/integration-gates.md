@@ -13,6 +13,14 @@ capture and inference fixtures. The Mac job also explicitly enables that native
 UI fixture. A requested UI gate without a platform runner fails rather than
 skipping. Physical audio is not exercised by those fixtures.
 
+The separate `linux-document-imports` job requires one Python contract that
+imports both PDF and RTF fixtures through the production Dart parser on an
+Ubuntu host. It provisions the actual extractors, requires the sandbox to start,
+and fails on missing prerequisites. Its result is required by `platform-checks`;
+local runs missing required executables report a skip. See the
+[document sandbox](../platforms/linux-packaging.md#document-import-sandbox) for
+the host-policy setup and retained evidence.
+
 The generation-failure regression runs normally on both supported platforms.
 It uses a short private `/tmp` directory for Unix sockets. After the Linux build,
 `integration_gates.py --suite fast` runs that regression and the terminal capture
@@ -21,8 +29,11 @@ or physical microphone.
 
 ## Model and virtual-audio acceptance
 
-`integration-acceptance.yml` runs on relevant main changes, model/runtime-related
-PR changes, manual dispatch and a weekly schedule. It reuses the verified,
+`integration-acceptance.yml` runs on relevant main changes, on pull requests
+that change `apps/desktop/**`, `packages/foresight_core/**` (including
+`answer_contract.dart`, `store.dart`, and `application.dart`), `packaging/**`,
+or the existing model/runtime paths, on manual dispatch, and on a weekly
+schedule. It reuses the verified,
 immutable Linux SDK descriptor and application build cache. It builds the same
 application bundle with an extra disposable runner stage; it receives no Google
 account or distribution secrets. Public model fixtures reuse the checksum-pinned
@@ -40,7 +51,15 @@ separate from the read-only model fixture mount.
 | --- | --- | --- |
 | Linux fast | 2 desktop | Generation failure; terminal capture failure persists through stop. |
 | Models | 5 desktop + 1 core | Native load/late adoption, helper grounding/restart/deletion, meeting citation, local Google OAuth/API fixture into real retrieval, Gemma cancellation/reuse, controlled web-tool generation/memory. |
-| Virtual audio | 2 desktop + 1 core | Whisper partial/final text while capturing, virtual microphone disappearance/return, overlap/pause exclusion and pinned-route recovery. |
+| Virtual audio | 3 desktop + 1 core | Whisper partial/final text while capturing, virtual microphone disappearance/return, overlap/pause exclusion and pinned-route recovery, and the meeting workflow (record, transcribe, summarize, cite, restart). |
+
+That meeting workflow is `apps/desktop/integration_test/meeting_workflow_test.dart`,
+run by the virtual-audio gate inside the private PipeWire session. `captureWindow`
+returns immediately when `FORESIGHT_PRIVATE_PIPEWIRE=1`, so those assertions do not
+use grim or an Agent Desktop display. `tools/test_meeting_workflow.py` remains the
+local driver for an owned private display. Path filters that skip the job also skip
+this meeting workflow; changes under the desktop app, the application service, or
+packaging do not.
 
 The three older generation tests explicitly select LiteRT by default; an
 explicit `FORESIGHT_GENERATION_BACKEND` can select a legacy runtime. The load
@@ -92,22 +111,23 @@ python tools/integration_gates.py --suite reference-tokenizer \
   --port-socket /path/to/port.sock --output /tmp/foresight-tokenizer-evidence
 ```
 
-`tools/integration_skips.json` records all 27 Dart skip registrations, including
+`tools/integration_skips.json` records all 28 Dart skip registrations, including
 platform-only cases and native-library checks already enabled by the regular
 core build. `check_integration_inventory.py` fails when a registration is added,
 removed or changed without reviewing its path/reason. The scanner checks named
 `skip:` registrations, not arbitrary control flow inside test bodies.
 
-## Validation checkpoint
+## Reading validation evidence
 
-Local: 119 desktop tests pass with nine opt-in skips (the previous Linux-only
-failure test now executes on Mac); the strict fast group passes one selected
-Mac-compatible test with zero skips. Offline Python suite: 211 passed, 11
-pre-existing platform/optional skips and 102 subtests. Both Dart analyzers,
-workflow lint, skip inventory and diff checks pass. A local Ubuntu 24.04 ARM64
-container probe also passed private PipeWire startup, real virtual PCM
-playback/capture (44,344 samples) and owned-daemon cleanup with network and
-additional capabilities disabled; this does not validate Whisper. Linux native UI, CPU models
-and virtual audio require the new CI jobs; their outcomes must be reported
-separately from these local checks. Reference groups were not executed without
-their authorized inputs.
+The table above mirrors the exact executed-test counts enforced by
+[`tools/integration_gates.py`](../../tools/integration_gates.py): Linux fast 2,
+models 6 (5 desktop and 1 core), virtual audio 3 (2 desktop and 1 core), authorized
+reference-model checks 5, and tokenizer equivalence 1. The workflow invokes the
+model and virtual-audio groups separately. A green offline suite does not prove
+these build-dependent groups ran.
+
+Use the retained Dart JSON reports and summaries for the source revision under
+review. They distinguish executed passes, skips, and failures. The skip inventory
+currently validates 28 registrations; rerun `python tools/check_integration_inventory.py`
+when changing tests, rather than copying an older local pass count into this guide.
+Reference groups require their authorized inputs and must be reported separately.

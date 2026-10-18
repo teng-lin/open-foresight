@@ -11,6 +11,9 @@ void main() {
       tester,
     ) async {
       final root = Directory.systemTemp.createTempSync('embedding-prompt-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/profile.db');
       var downloads = 0;
       try {

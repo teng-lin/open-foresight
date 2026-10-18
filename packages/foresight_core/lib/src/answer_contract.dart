@@ -42,8 +42,9 @@ class GroundedAnswer {
         result['status'] ??
         (citations.isEmpty ? 'insufficient_context' : 'answered');
     if (status == 'insufficient_context') {
-      if (citations.isNotEmpty)
+      if (citations.isNotEmpty) {
         throw const FormatException('Invalid insufficient-context response');
+      }
       return GroundedAnswer('Insufficient context', [], false);
     }
     if (status != 'answered' ||
@@ -55,8 +56,9 @@ class GroundedAnswer {
       );
     }
     final inline = citationIds(text, citations.length);
-    if (inline.any((id) => !citations.contains(id)))
+    if (inline.any((id) => !citations.contains(id))) {
       throw const FormatException('The answer cites an unselected source');
+    }
     return GroundedAnswer(text, citations, true);
   }
   String get rendered {

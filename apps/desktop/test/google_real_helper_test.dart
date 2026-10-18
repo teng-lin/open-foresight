@@ -7,7 +7,7 @@ import 'package:open_foresight/google_connections.dart';
 import 'package:open_foresight/helper.dart';
 import 'package:open_foresight/store.dart';
 import 'package:open_foresight/generated/rag_service.pbgrpc.dart';
-import '../../../packages/foresight_core/test/fixtures/google_connections.dart'
+import 'package:foresight_test_support/google_connections.dart'
     show GoogleFixture;
 
 void main() {
@@ -17,11 +17,15 @@ void main() {
       final directory = Directory.systemTemp.createTempSync(
         'foresight-google-real-',
       );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       Process.runSync('chmod', ['700', directory.path]);
       final fixture = GoogleFixture();
       await fixture.start();
       final auth = GoogleAuth(
         Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
         endpoints: fixture.endpoints,
       );
       final store = Store('${directory.path}/app.db'),
@@ -125,7 +129,7 @@ void main() {
           File(report).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert({
               'workflow':
-                  'Loopback OAuth/Drive/Calendar protocol fixtures -> actual MiniLM helper -> filtered retrieval',
+                  'Loopback OAuth/Drive/Calendar protocol fixtures -> actual EmbeddingGemma helper -> filtered retrieval',
               'drive_and_calendar_sources_indexed': true,
               'remote_edit_replaced_old_retrieval': true,
               'cancelled_calendar_context_removed': true,

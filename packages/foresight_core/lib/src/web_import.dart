@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -15,8 +16,9 @@ const maxWebPageBytes = 5 * 1024 * 1024;
 /// IPv6 is limited to global unicast, excluding transition/documentation space.
 bool isGlobalWebAddress(InternetAddress address) {
   if (address.type != InternetAddressType.IPv4 &&
-      address.type != InternetAddressType.IPv6)
+      address.type != InternetAddressType.IPv6) {
     return false;
+  }
   final bytes = address.rawAddress;
   if (bytes.length == 16) {
     if (bytes.take(10).every((n) => n == 0) &&
@@ -29,11 +31,13 @@ bool isGlobalWebAddress(InternetAddress address) {
     if (bytes[0] & 0xe0 != 0x20) return false;
     if (bytes[0] == 0x20 &&
         bytes[1] == 0x01 &&
-        (bytes[2] < 2 || (bytes[2] == 0x0d && bytes[3] == 0xb8)))
+        (bytes[2] < 2 || (bytes[2] == 0x0d && bytes[3] == 0xb8))) {
       return false;
+    }
     if (bytes[0] == 0x20 && bytes[1] == 0x02) return false;
-    if (bytes[0] == 0x3f && bytes[1] == 0xff && bytes[2] & 0xf0 == 0)
+    if (bytes[0] == 0x3f && bytes[1] == 0xff && bytes[2] & 0xf0 == 0) {
       return false;
+    }
     return true;
   }
   if (bytes.length != 4) return false;
@@ -102,8 +106,9 @@ class WebPageImporter {
     final elapsed = Stopwatch()..start();
     var stopped = false;
     void checkCurrent() {
-      if (stopped || (current != null && !current()))
-        throw StateError('Operation cancelled');
+      if (stopped || (current != null && !current())) {
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
     }
 
     Future<String> download() async {
@@ -132,7 +137,9 @@ class WebPageImporter {
           Future<Socket> establish() async {
             for (var i = 0; i < addresses.length; i++) {
               checkCurrent();
-              if (cancelled) throw StateError('Operation cancelled');
+              if (cancelled) {
+                throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+              }
               try {
                 pending = await _connect(addresses[i], target.port);
                 if (cancelled || stopped) pending!.cancel();
@@ -140,7 +147,7 @@ class WebPageImporter {
                 socket = raw;
                 if (cancelled || stopped) {
                   raw.destroy();
-                  throw StateError('Operation cancelled');
+                  throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
                 }
                 if (target.scheme == 'https') {
                   socket = await SecureSocket.secure(
@@ -151,7 +158,7 @@ class WebPageImporter {
                 }
                 if (cancelled || stopped) {
                   socket!.destroy();
-                  throw StateError('Operation cancelled');
+                  throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
                 }
                 return socket!;
               } on SocketException {
@@ -175,13 +182,15 @@ class WebPageImporter {
           checkCurrent();
           if ([301, 302, 303, 307, 308].contains(response.statusCode)) {
             final location = response.headers.value(HttpHeaders.locationHeader);
-            if (location == null || hop == 5)
+            if (location == null || hop == 5) {
               throw StateError('URL has too many or invalid redirects.');
+            }
             uri = webImportRedirect(uri, location);
             continue;
           }
-          if (response.statusCode != 200)
+          if (response.statusCode != 200) {
             throw StateError('URL returned HTTP ${response.statusCode}');
+          }
           final type = response.headers.contentType;
           if (type == null || !type.mimeType.startsWith('text/')) {
             throw StateError(
@@ -191,14 +200,16 @@ class WebPageImporter {
           final bytes = BytesBuilder(copy: false);
           await for (final chunk in response) {
             checkCurrent();
-            if (bytes.length + chunk.length > maxWebPageBytes)
+            if (bytes.length + chunk.length > maxWebPageBytes) {
               throw StateError('Page exceeds 5 MB.');
+            }
             bytes.add(chunk);
           }
           checkCurrent();
           final remaining = timeout - elapsed.elapsed;
-          if (remaining <= Duration.zero)
+          if (remaining <= Duration.zero) {
             throw StateError('URL import exceeded its time limit.');
+          }
           final text = await parseWebPage(
             bytes.takeBytes(),
             mimeType: type.mimeType,
@@ -224,6 +235,11 @@ class WebPageImporter {
           throw StateError('URL import exceeded its time limit.');
         },
       );
+    } catch (_) {
+      if (current != null && !current()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+      }
+      rethrow;
     } finally {
       stopped = true;
       active?.close(force: true);
@@ -245,8 +261,9 @@ Future<String> parseWebPage(
   Isolate? worker;
   final timer = Timer(timeout, () {
     worker?.kill(priority: Isolate.immediate);
-    if (!result.isCompleted)
+    if (!result.isCompleted) {
       result.completeError(StateError('Page parsing exceeded its time limit.'));
+    }
   });
   final messages = port.listen((message) {
     if (result.isCompleted) return;
@@ -258,8 +275,9 @@ Future<String> parseWebPage(
     }
   });
   final failures = errors.listen((message) {
-    if (!result.isCompleted)
+    if (!result.isCompleted) {
       result.completeError(StateError('Unable to parse page: $message'));
+    }
   });
   unawaited(
     Isolate.spawn(_parseWebPage, [
@@ -304,14 +322,16 @@ void _parseWebPage(List<Object?> request) {
     } else {
       encoding = Charset.getByName(charset);
     }
-    if (encoding == null)
+    if (encoding == null) {
       throw StateError('Unsupported response charset: $charset');
+    }
     final decoded = encoding.decode(bytes);
     String text;
     if (request[2] == 'text/html') {
       // Bound parser work/memory before building the DOM; counting is linear.
-      if ('<'.allMatches(decoded).length > 100000)
+      if ('<'.allMatches(decoded).length > 100000) {
         throw StateError('Page has too much HTML markup.');
+      }
       final document = html.parse(decoded);
       final output = StringBuffer();
       final pending = <Node?>[...?document.body?.nodes.reversed];
@@ -328,8 +348,9 @@ void _parseWebPage(List<Object?> request) {
             'noscript',
             'template',
             'head',
-          ].contains(node.localName))
+          ].contains(node.localName)) {
             continue;
+          }
           output.write(' ');
           pending.add(null);
           pending.addAll(node.nodes.reversed);

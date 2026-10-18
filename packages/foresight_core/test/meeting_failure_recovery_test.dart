@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -6,11 +8,11 @@ import 'package:test/test.dart';
 
 class RecoveryHelper extends Helper {
   int launches = 0;
-  RecoveryHelper(String socket, String storage) : super(socket, storage);
+  RecoveryHelper(super.socket, super.storage);
   @override
   Future<void> start() async {
     launches++;
-    await Future<void>.delayed(const Duration(milliseconds: 10));
+    await Future<void>(() {});
   }
 }
 
@@ -42,7 +44,7 @@ void main() {
   late RecoveryHelper helper;
   late IndexingDomain domain;
   setUp(() {
-    temp = Directory('/tmp').createTempSync('of-meeting-recovery-');
+    temp = shortTestTempRoot.createTempSync('of-meeting-recovery-');
     store = Store('${temp.path}/application.db');
     helper = RecoveryHelper('${temp.path}/helper.sock', '${temp.path}/helper');
     domain = IndexingDomain(store, helper);
@@ -93,8 +95,8 @@ void main() {
       helper.restarts = 5;
       helper.state = 'unavailable';
       await Future.wait([
-        domain.command('application.resume'),
-        domain.command('application.resume'),
+        domain.command(Operation.applicationResume),
+        domain.command(Operation.applicationResume),
       ]);
       expect(helper.launches, 1);
       expect(helper.restarts, 0);
@@ -105,7 +107,10 @@ void main() {
     () async {
       helper.incompatible = true;
       helper.restarts = 5;
-      await expectLater(domain.command('application.resume'), throwsStateError);
+      await expectLater(
+        domain.command(Operation.applicationResume),
+        throwsStateError,
+      );
       expect(helper.launches, 0);
       expect(helper.restarts, 5);
     },

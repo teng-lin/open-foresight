@@ -1,11 +1,12 @@
 # Native inference
 
 `foresight-model` is a C++ worker shared by the retrieval helper and native
-generation adapter. Linux generation and embedding require no Python interpreter
-or inference packages. The optional legacy query detector uses its own Python worker and
-requires `tools/package.py --query-python-runtime PREFIX`; this is separate from
-the native generation/embedding runtime. macOS currently uses the pinned
-[compatibility runtime](macos/README.md).
+generation adapter. Linux and macOS build the same C++ worker for generation,
+embedding and grounded citation checks through the LiteRT-LM C API. macOS
+bundles native dylibs and the `foresight-query` dedicated legacy CPU detector;
+no Python interpreter or inference scripts are included in the Mac application.
+The optional Linux legacy query package can still use its explicitly supplied
+Python diagnostic runtime.
 
 - LiteRT-LM 0.18.0 uses Google's public C API for Gemma generation and
   EmbeddingGemma 2. Engine configuration, streaming, structured JSON, bounded
@@ -15,11 +16,8 @@ the native generation/embedding runtime. macOS currently uses the pinned
   and model-header parsing. Embedding task prefixes, special tokens, 768-element
   L2 normalization, 512-token chunk averaging and the checksum-specific reference
   preprocessing convention are preserved.
-- ONNX Runtime 1.31.0 supports local uncased BERT WordPiece directories with
-  mean pooling, including the pinned all-MiniLM-L6-v2 fixture. Its native tokenizer
-  uses ICU normalization. Long inputs retain the existing normalized window-mean
-  policy. Other SentenceTransformers architectures require a supported native
-  export/backend; arbitrary Python model implementations are not loaded.
+- Embedding models must be `.litertlm` files. Other formats and model directories
+  report an unsupported model format error.
 - Generation keeps the existing separate-process boundary. The application
   service owns its process group, cancellation and timeout. Desktop and MCP
   continue using that same service. No model or runtime download happens inside
@@ -30,24 +28,22 @@ the native generation/embedding runtime. macOS currently uses the pinned
 Build dependencies include OpenSSL and ICU development files. CMake fetches
 pinned SentencePiece 0.2.1 and FlatBuffers sources; cached/offline sources can be
 supplied with the standard `FETCHCONTENT_SOURCE_DIR_*` CMake options. Public
-LiteRT and ONNX headers/licenses are under `third_party`.
+LiteRT headers/licenses are under `third_party`.
 
 ```sh
 python3 tools/prepare_litert.py build/lib/liblitert-lm.so
-python3 tools/prepare_onnx.py build/lib/libonnxruntime.so
 ./tools/build.sh
 python3 tools/package.py --generation-backend gpu
 ```
 
 Preparation verifies pinned archive and library SHA-256 hashes. LiteRT's Python
 wheel is used only as a transport for its standalone C shared library. No Python
-files are extracted. Packaging checks both native library hashes, includes the
+files are extracted. Packaging checks the native library hash, includes the
 required native dependencies and licenses, and sets worker/library paths
 relative to the bundle.
 
 For source builds the worker also finds libraries under `build/lib`. Explicit
-paths are available through `FORESIGHT_LITERT_LIBRARY`, `FORESIGHT_ONNX_LIBRARY`
-and `FORESIGHT_MODEL_WORKER`. `FORESIGHT_LITERT_RUNNER` overrides old registered
+paths are available through `FORESIGHT_LITERT_LIBRARY` and `FORESIGHT_MODEL_WORKER`. `FORESIGHT_LITERT_RUNNER` overrides old registered
 LiteRT runner paths when restoring a packaged profile.
 
 ## Existing installations
@@ -58,17 +54,7 @@ identity and preprocessing fingerprint; CPU/GPU identity boundaries remain
 separate. Packaged generation restores through the bundled native worker even
 when the profile contains an obsolete Python runner path.
 
-An old MiniLM directory needs its matching native export once:
-
-```sh
-python3 tools/download_embedding_fixture.py /path/to/all-MiniLM-L6-v2 --native
-```
-
-This command verifies the pinned ONNX model. Re-register the directory afterward;
-the helper rebuilds the index atomically because the model directory digest and
-backend changed. A failed replacement preserves the previous active generation.
-The application recognizes a missing export as incomplete model setup. There is
-no interpreter fallback. All Gemma setup and downloads remain available normally.
+Embedding model setup accepts `.litertlm` bundles on CPU and GPU.
 
 ## Verification
 
@@ -79,13 +65,12 @@ cleanup and parent death. Existing helper, FFI and service/MCP tests remain in
 place.
 
 `tools/test_native_inference.py` exercises real models with an empty executable
-PATH, so inference cannot discover Python or shell commands. Its optional
-`--reference-python` runs the retired adapter separately as a test oracle only.
-Reference Python implementations live in `tests/reference/inference` and are
-never packaged. Real-model reports go under ignored `test-results`.
+PATH, so inference cannot discover Python or shell commands. The native checker
+also runs the shared adversarial corpus in `tests/inference/grounding_cases.json`.
+Real-model reports go under ignored `test-results`.
 
 Verified on the implementation host with CPU and GPU EmbeddingGemma bundles,
-MiniLM ONNX, GPU Gemma E2B, service/MCP restoration and a relocated desktop
+GPU Gemma E2B, service/MCP restoration and a relocated desktop
 bundle. Other Gemma sizes and independent clean machines require their own
 acceptance checks; the port does not establish new GPU/model compatibility.
 
@@ -94,11 +79,12 @@ acceptance checks; the port does not establish new GPU/model compatibility.
 The worker resolves executable paths through the shared Linux/macOS process
 adapter and writes its protocol to an owned POSIX descriptor without `/proc`.
 macOS library discovery uses `.dylib` names; explicit library paths also work.
-Finder resource configuration selects the native runner and forwards LiteRT/ONNX
+Finder resource configuration selects the native runner and forwards LiteRT
 library paths into native subprocess launches. macOS helper launch continues to
 use the owned supervisor and close-on-exec safeguards from the application core.
-The preparation and packaging scripts remain Linux x86_64 tools; this does not
-establish a packaged or real-model macOS release.
+Both release packagers select the verified source-built native library. Mac CI
+checks the assembled application with an isolated environment. Real-model
+acceptance remains a separate gate requiring explicit model fixtures.
 
 ## Conversation context admission
 
@@ -117,8 +103,8 @@ remain unverified.
 
 ## Persistent tool worker
 
-Both generation runners advertise `{"worker_protocol":1}` from `--probe` and
-accept `--serve --model MODEL`. They retain one engine until `shutdown` or input
+The shared generation worker advertises `{"worker_protocol":1}` from `--probe` and
+accepts `--serve --model MODEL`. It retains one engine until `shutdown` or input
 EOF. The first protocol line is `ready 1`. Request IDs are positive monotonically
 increasing integers, with one request active at a time:
 
@@ -129,7 +115,9 @@ cancel N
 shutdown
 ```
 
-Responses are `N delta|model|tool|answer <JSON>`, optionally
+Plain, schema-constrained and grounded requests use the same worker with a `schema` field (or `null`) instead of `tools`. Their streamed chunks use `N text <JSON string>`; JSON strings preserve embedded newlines. Grounded answers emit only their final verified result. Grounded evidence selection and verification reuse that worker’s loaded engine.
+
+Responses for tool conversations are `N delta|model|tool|answer <JSON>`, optionally
 `N error <JSON string>`, followed by `N done completed|cancelled|failed`.
 `model` remains the complete authoritative response used for delegated tool
 parsing; `delta` carries unparsed structured partial model text. `reply` keeps
@@ -152,12 +140,10 @@ prefilled tokens until a message is sent. Retaining the engine and reproducing
 base cloning therefore does not establish an initial-prefix KV speedup. A
 separate already-prefilled fixture confirmed that the native clone API copies
 KV state and isolates canceled/generated clones. No synthetic warmup message is
-sent. The Mac runner explicitly binds the clone function's pointer return type,
-which the pinned Python FFI omits.
+sent. Both platforms use the same typed C API clone function.
 
-Validation includes routed-reply/cancellation/disconnect fixtures in
-`tests/inference/tool_conversation.cpp`, base replacement/history/summary and
-native cancellation fixtures in `tests/inference/test_tool_runner.py`, and an
+Validation includes routed reply, cancellation, disconnect, base replacement,
+and history/summary fixtures in `tests/inference/tool_conversation.cpp`, and an
 ignored real GPU report at
 `test-results/reference-functions/streaming/persistent-worker-report.json`.
 The real report used one worker for two isolated requests, canceled a third

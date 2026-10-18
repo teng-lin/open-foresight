@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -57,8 +59,9 @@ int _createAndProbe(
     } else {
       throw ArgumentError.value(backend, 'backend');
     }
-    if (engine == nullptr)
+    if (engine == nullptr) {
       throw StateError('Native model initialization failed');
+    }
     final rc = lib
         .lookupFunction<
           Int32 Function(Pointer<Void>),
@@ -89,11 +92,12 @@ int _createAndProbe(
     }
     return engine.address;
   } catch (_) {
-    if (engine != nullptr)
+    if (engine != nullptr) {
       lib.lookupFunction<
         Int32 Function(Pointer<Void>),
         int Function(Pointer<Void>)
       >('fs_engine_destroy')(engine);
+    }
     rethrow;
   } finally {
     calloc.free(a);
@@ -110,7 +114,7 @@ class _GenerationRequest {
   _GenerationRequest(this.id, this.handle, this.epoch);
 }
 
-class NativeRuntime {
+class NativeRuntime implements GenerationStatus {
   late final DynamicLibrary lib;
   Pointer<Void> engine = nullptr, conversation = nullptr;
   String template = 'raw';
@@ -118,12 +122,14 @@ class NativeRuntime {
   final String libraryPath;
   int _epoch = 0;
   _GenerationRequest? _active;
+  @override
   bool get generating => _active != null;
   bool get loaded => engine != nullptr && conversation != nullptr;
   String _phase = 'unconfigured', _lastError = '';
   NativeRuntime(String path) : libraryPath = path {
     lib = DynamicLibrary.open(path);
   }
+  @override
   Map<String, dynamic> get effectiveState {
     if (engine == nullptr) return {'state': _phase, 'error': _lastError};
     final p = lib
@@ -148,8 +154,9 @@ class NativeRuntime {
     String backend = 'llama_cpp',
   }) async {
     if (backend == 'litert_lm') runtime = liteRtRunner(runtime);
-    if (!['llama_cpp', 'litert_lm'].contains(backend))
+    if (!['llama_cpp', 'litert_lm'].contains(backend)) {
       throw ArgumentError.value(backend);
+    }
     close();
     final epoch = _epoch;
     _phase = 'loading';
@@ -171,7 +178,10 @@ class NativeRuntime {
           Int32 Function(Pointer<Void>),
           int Function(Pointer<Void>)
         >('fs_engine_destroy')(loaded);
-        throw StateError('Model load cancelled before adoption');
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Model load cancelled before adoption',
+        );
       }
       engine = loaded;
       conversation = lib
@@ -231,6 +241,26 @@ class NativeRuntime {
     maxOutputTokens: maxOutputTokens,
   );
 
+  /// Web answers consume already-fetched results; model text has no tool path.
+  Stream<Map<String, dynamic>> generateWebAnswer(
+    String id,
+    String prompt, {
+    List<Map<String, dynamic>> messages = const [],
+    required String systemPrompt,
+    Duration timeout = const Duration(minutes: 5),
+    int maxOutputTokens = 1024,
+  }) => _generate(
+    id,
+    prompt,
+    tools: const [],
+    toolDispatcher: ReferenceToolDispatcher({}),
+    initialMessages: messages,
+    plainConversation: true,
+    systemPrompt: systemPrompt,
+    timeout: timeout,
+    maxOutputTokens: maxOutputTokens,
+  );
+
   /// A fresh local conversation without tools or an implicit system preface.
   /// A null output limit preserves the native default. The original serialized
   /// input setting is passed through without inventing a local token limit.
@@ -270,9 +300,11 @@ class NativeRuntime {
     int? maxOutputTokens = 256,
   }) async* {
     if (engine == nullptr || conversation == nullptr) {
-      throw StateError('Generation model unavailable');
+      throw RpcError(RpcErrorCode.unavailable, 'Generation model unavailable');
     }
-    if (_active != null) throw StateError('Generation already in progress');
+    if (_active != null) {
+      throw RpcError(RpcErrorCode.busy, 'Generation already in progress');
+    }
     if ((tools == null) != (toolDispatcher == null) ||
         (tools != null &&
             ((!plainConversation && tools.isEmpty) ||
@@ -309,8 +341,7 @@ class NativeRuntime {
           prompt = '$systemPrompt\n\n$prompt';
         }
       }
-      final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
-      final schema = tools != null
+      final encodedSchema = tools != null
           ? jsonEncode({
               'tools': tools,
               'system_message': systemPrompt,
@@ -319,10 +350,12 @@ class NativeRuntime {
               if (stopTokenIds.isNotEmpty) 'stop_token_ids': stopTokenIds,
               if (maxOutputTokens == null) 'use_default_output_limit': true,
               if (maxInputTokens != null) 'max_input_tokens': maxInputTokens,
-            }).toNativeUtf8()
+            })
           : responseSchema == null
-          ? nullptr.cast<Utf8>()
-          : jsonEncode(responseSchema).toNativeUtf8();
+          ? null
+          : jsonEncode(responseSchema);
+      final a = id.toNativeUtf8(), b = prompt.toNativeUtf8();
+      final schema = encodedSchema?.toNativeUtf8() ?? nullptr.cast<Utf8>();
       late int rc;
       try {
         if (tools != null) {
@@ -406,7 +439,10 @@ class NativeRuntime {
         // close/load may have destroyed this handle while awaiting the timer
         // or while a consumer was processing a yielded event.
         if (owner.released || owner.epoch != _epoch) {
-          throw StateError('Generation closed before completion');
+          throw RpcError(
+            RpcErrorCode.cancelled,
+            'Generation closed before completion',
+          );
         }
         if (clock.elapsed >= timeout) {
           throw TimeoutException('Native generation timed out', timeout);
@@ -450,8 +486,9 @@ class NativeRuntime {
         }
         if (event['type'] == 'tool_request' ||
             event['type'] == 'model_response') {
-          if (toolDispatcher == null)
+          if (toolDispatcher == null) {
             throw StateError('Unexpected tool request');
+          }
           final delegated = event['type'] == 'model_response';
           final payload = jsonDecode(event['text'] as String);
           final calls = delegated
@@ -477,7 +514,10 @@ class NativeRuntime {
               if (interrupted.isCompleted) return;
               if (owner.released || owner.epoch != _epoch || owner.cancelled) {
                 interrupted.completeError(
-                  StateError('Tool request is no longer current'),
+                  RpcError(
+                    RpcErrorCode.cancelled,
+                    'Tool request is no longer current',
+                  ),
                 );
               } else if (clock.elapsed >= timeout) {
                 interrupted.completeError(
@@ -496,22 +536,28 @@ class NativeRuntime {
             }
           }
           if (owner.released || owner.epoch != _epoch || owner.cancelled) {
-            throw StateError('Tool request is no longer current');
+            throw RpcError(
+              RpcErrorCode.cancelled,
+              'Tool request is no longer current',
+            );
           }
-          if (clock.elapsed >= timeout)
+          if (clock.elapsed >= timeout) {
             throw TimeoutException('Native generation timed out', timeout);
+          }
+          final encodedReply = jsonEncode(message);
           final request = id.toNativeUtf8();
-          final reply = jsonEncode(message).toNativeUtf8();
+          final reply = encodedReply.toNativeUtf8();
           try {
             final result = lib
                 .lookupFunction<
                   Int32 Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>),
                   int Function(Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>)
                 >('fs_generation_tool_reply')(handle, request, reply);
-            if (result != 0)
+            if (result != 0) {
               throw StateError(
                 'Tool request was cancelled or already answered',
               );
+            }
           } finally {
             calloc.free(request);
             calloc.free(reply);
@@ -521,8 +567,9 @@ class NativeRuntime {
         if (event['type'] == 'tool_answer') {
           final response =
               jsonDecode(event['text'] as String) as Map<String, dynamic>;
-          if (response['error'] != null)
+          if (response['error'] != null) {
             throw StateError(response['error'].toString());
+          }
           final content = response['content'];
           final String text;
           if (content is String) {
@@ -557,12 +604,14 @@ class NativeRuntime {
   }
 
   /// Supplying an ID prevents a stale UI/controller from cancelling a new task.
+  @override
   bool cancel({String? requestId}) {
     final owner = _active;
     if (owner == null ||
         owner.released ||
-        (requestId != null && owner.id != requestId))
+        (requestId != null && owner.id != requestId)) {
       return false;
+    }
     owner.cancelled = true;
     lib.lookupFunction<
       Int32 Function(Pointer<Void>),
@@ -571,6 +620,7 @@ class NativeRuntime {
     return true;
   }
 
+  @override
   void close() {
     _epoch++;
     _phase = 'unconfigured';

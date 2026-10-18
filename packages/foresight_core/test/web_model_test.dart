@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
@@ -10,6 +11,9 @@ void main() {
     'real model searches and persists a cited controlled answer',
     () async {
       final directory = Directory.systemTemp.createTempSync('web-model-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final helper = Helper(
         env['FORESIGHT_WEB_TOKENIZER_SOCKET'] ??
@@ -61,11 +65,13 @@ void main() {
         };
         final reportPath = env['FORESIGHT_WEB_MODEL_REPORT'];
         final reason = reportPath ?? 'Controlled web-model fixture';
-        if (reportPath != null)
+        if (reportPath != null) {
           File(reportPath).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert(report),
           );
-        expect(queries, isNotEmpty, reason: reason);
+        }
+        expect(queries, hasLength(1), reason: reason);
+        expect(queries.single, startsWith('Using Google search,'));
         expect(rows, hasLength(1));
         expect(rows.single['status'], 'completed', reason: reason);
         expect(rows.single['body'], contains('CEDAR-8492'), reason: reason);
@@ -91,7 +97,7 @@ void main() {
           );
         }
         expect(followup.last, contains('CEDAR-8492'), reason: reason);
-        expect(queries.length, searchCount, reason: reason);
+        expect(queries.length, searchCount + 1, reason: reason);
         expect(store.rows('SELECT id FROM answers'), hasLength(2));
         for (var i = 0; i < 6; i++) {
           final body = i < 3
@@ -106,6 +112,10 @@ void main() {
             'controlled fixture',
             conversation: 'controlled-compression-fixture',
           );
+          store.setPreference(
+            'webAnswer.v1.${store.db.lastInsertRowId}',
+            'true',
+          );
         }
         final compressedAnswer = await domain
             .askWithWebInConversation(
@@ -119,13 +129,14 @@ void main() {
             "SELECT question,status FROM answers WHERE conversation='controlled-compression-fixture'",
           ),
         };
-        if (reportPath != null)
+        if (reportPath != null) {
           File(reportPath).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert(report),
           );
+        }
         final checkpoint = store
             .rows(
-              "SELECT * FROM conversation_memory WHERE conversation='controlled-compression-fixture'",
+              "SELECT * FROM conversation_memory WHERE conversation='web-only-v1:controlled-compression-fixture'",
             )
             .single;
         final memory = List<Map<String, dynamic>>.from(
@@ -155,7 +166,7 @@ void main() {
           contains('violet'),
           reason: reason,
         );
-        expect(queries.length, searchCount, reason: reason);
+        expect(queries.length, searchCount + 2, reason: reason);
       } finally {
         domain.close();
         runtime.close();

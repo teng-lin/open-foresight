@@ -19,7 +19,7 @@ CMake, Ninja, Git, and CocoaPods. Enable Flutter's Swift Package Manager support
 ```sh
 flutter config --enable-swift-package-manager
 python3 -m venv .venv
-.venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
 ```
 
 Build the pinned static dependency SDK instead of linking current Homebrew
@@ -71,33 +71,36 @@ a new version. The DMG remains ad-hoc signed and is not
 Developer ID signed or notarized. Signed distribution still requires the setup
 and release validation below.
 
+The DMG includes its inference and speech runtimes; users do not install those
+runtimes separately. Runtime bundling is complete. The remaining distribution
+blocker is Developer ID signing and notarization, rather than missing runtimes.
+The manual permission and device checks below still describe the evidence needed
+to qualify a particular installed environment.
+
 ### Local assembly and signed distribution
 
-Prepare a relocatable standalone arm64 Python 3.13 prefix, not a virtual
-environment or Homebrew Python. Install `requirements-litert-macos.lock` into
-that prefix. The lock includes NumPy2.5.1 and SentencePiece0.2.1 for the
-reconstructed dedicated CPU query detector. Its three worker/executor/weights
-modules are copied beside the existing adapters, and runtime configuration
-points to those installed modules and the bundled interpreter. The dedicated
-model remains separately registered; original oracle binaries and model weights
-are never copied. Build the pinned Whisper runtime described in
-[speech-models.md](../models/speech-models.md) for arm64 with deployment target 15.0; retain
-its source license. Models themselves belong in the user profile and are not
-sealed into the application.
+Build the shared C++ `foresight-model` and `foresight-query` workers with the
+normal native build. Generation, embedding and citation checking use the same
+LiteRT-LM C API and checker as Linux. The dedicated legacy detector executes its
+authenticated weights in the native CPU worker with float16 cache storage;
+original packed-int8 GPU parity remains unverified. The application ships no
+Python runtime or inference scripts. Build the pinned Whisper runtime described
+in [speech-models.md](../models/speech-models.md) for arm64 with deployment target
+15.0; retain its source license and sibling `foresight-whisper-worker`. Models
+remain in the user profile outside the sealed application.
 
 Build the source-pinned LiteRT extension with Bazel 7.6.1 from a checkout at
 `b2f686e2ed4718fb84ec398a61dd59ca0f0aff27`. Materialize its
 `prebuilt/macos_arm64/*` Git LFS objects first. The builder applies the repository
 patch, runs the native regression, limits the C API's exported symbols and writes
-a verified wheel/library manifest. The packager overlays that wheel into its
-private Python copy; the source Python installation remains untouched. The stock
+a verified wheel/library manifest. The packager extracts only the native C library and verified arm64 vendor
+dylibs from that build; Python code in its build wheel is never shipped. The stock
 0.18.0 runtime lacks the native stop sequences required by note enhancement.
 
 ```sh
 .venv/bin/python tools/build_litert_extensions.py /path/to/LiteRT-LM \
   --output "$PWD/build/litert-extensions"
 .venv/bin/python tools/package_macos.py \
-  --python-runtime /path/to/standalone/python \
   --litert-extensions-manifest "$PWD/build/litert-extensions/build-manifest.json" \
   --sdk "$PWD/build/macos-sdk" \
   --whisper-runtime /path/to/whisper-cli \
@@ -107,13 +110,13 @@ private Python copy; the source Python installation remains untouched. The stock
 
 The default signing identity `-` produces an ad-hoc development artifact. For a
 development signature only, library validation is disabled because ad-hoc code
-has no Team ID to match its Python extensions and FFI libraries. Developer ID
+has no Team ID to match its native inference libraries. Developer ID
 release signing retains library validation and signs every nested binary with
 the same identity. The standalone Dart service and MCP executable require
 `allow-unsigned-executable-memory` for their embedded AOT snapshot loader, in both
 development and release signing. That exception is restricted to those two
 executables and the service bundle's executable signature; it is not applied to
-Flutter, Python, or native workers. `allow-jit` is not needed. For a
+Flutter or native workers. `allow-jit` is not needed. For a
 release, supply `--identity 'Developer ID Application: …'`, an existing
 `--notary-profile`, and `--archive /path/to/Open-Foresight.zip`. The packager
 relocates non-system Mach-O dependencies, audits arm64 and minimum OS metadata,
@@ -135,7 +138,7 @@ entrypoints to execute. Developer ID notarization remains its own release gate.
 `Contents/Resources/runtime.json` records bundle-relative resources, installation
 identity, and the source revision. The nested service receives the same runtime
 map. Packaged peers reject an incompatible running service rather than mixing
-versions. Python workers use isolated mode and suppress bytecode writes. Mutable
+versions. Native workers use owned process and protocol descriptors. Mutable
 models, databases, logs, credentials, and caches stay outside the bundle.
 
 ## MCP and profile ownership
@@ -225,14 +228,15 @@ stable helper bundle and explicit authorization. Scheduling remains in the
 application service. Google sign-in is explicit; install application OAuth
 configuration with `--google-client`, never account credentials or tokens.
 
-The packager copies the full NumPy distribution license hierarchy and the
-SentencePiece upstream notice. NumPy extension linkage participates in the same
-Mach-O relocation, architecture, minimum-OS and signing checks as other nested
-binaries. `tools/test_packaged_query_worker.py --python-runtime PREFIX --model
-REGISTERED_MODEL` copies and relocates the actual prefix, runs from a moved path
-containing spaces with poisoned working-directory imports, and checks both a
-positive and empty detector result. Its output report belongs under ignored
-`test-results`; it does not copy the registered model into the test bundle.
+The packager includes the SentencePiece upstream notice. The native detector
+participates in the Mach-O dependency relocation, architecture, minimum-OS, and
+signing checks. `tools/test_packaged_query_worker.py --worker
+build/services/inference/foresight-query` copies and relocates the native worker,
+runs its math self-check from a moved path containing spaces without a usable PATH,
+and checks unavailable-model rejection. Supplying `--model REGISTERED_MODEL`
+also checks a positive and an empty detector result using an explicitly provided,
+authenticated decrypted fixture. Its output report belongs under ignored
+`test-results`; the test bundle contains no Python runtime or registered model.
 
 ## Capture
 
@@ -282,7 +286,7 @@ is rejected. Probe output is a diagnostic. It is not an acceptance result.
 
 These gates are still open. A local development bundle does not close them.
 
-- The release CI artifact runs real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup. The current CI DMG omits the Python/LiteRT and Whisper runtimes.
+- Each release candidate must pass real embeddings, grounded generation, Whisper, cancellation, model setup, and worker cleanup checks. The DMG includes native LiteRT and Whisper runtimes without Python; runtime presence alone does not establish model acceptance.
 - Microphone and system audio work desktop-first and MCP-first, including denied or revoked permission, device changes, and closing the desktop.
 - Explicit stop flushes transcripts. Service crash recovery preserves committed data and marks an unfinished recording interrupted.
 - Shortcuts, app reopen, login, source links, imports, notifications, and Google authorization and sync work in a release build.

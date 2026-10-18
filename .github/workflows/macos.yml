@@ -36,7 +36,7 @@ jobs:
     - name: Install Python development dependencies
       run: |
         python -m venv .venv
-        .venv/bin/python -m pip install -r requirements-dev.txt
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
     - name: Offline Python tests and branch coverage
       run: tools/coverage.sh
     - name: Retain Python coverage
@@ -119,7 +119,6 @@ jobs:
         task_args=()
         if [[ "$REQUIRE_GOOGLE_CLIENT" == 'true' ]]; then task_args+=(--require-google-client); fi
         .venv/bin/python tools/package_macos.py "${task_args[@]}" --output 'dist/Open Foresight.app' --identity - --sdk build/sdk \
-          --python-runtime build/macos-runtimes/python \
           --litert-extensions-manifest build/macos-runtimes/litert-extensions/build-manifest.json \
           --whisper-runtime build/macos-runtimes/whisper/whisper-cli \
           --whisper-license build/macos-runtimes/whisper/LICENSE
@@ -174,18 +173,20 @@ jobs:
     if: needs.changes.outputs.build == 'true'
   linux-native:
     runs-on: ubuntu-24.04
-    container: archlinux:base-devel
+    container: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
     timeout-minutes: 60
     steps:
     - name: Install Linux native toolchain
-      run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf which
+      run: pacman -Syu --noconfirm cmake ninja gcc git grpc protobuf nlohmann-json sqlite python python-pip clang gtk3 pkgconf unzip xz mesa libglvnd xorg-server-xvfb xorg-xauth dbus poppler unrtf bubblewrap which
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
     - name: Install Python development dependencies
       run: |
         python -m venv .venv
-        .venv/bin/python -m pip install -r requirements-dev.txt
+        .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+    - name: Offline Python tests
+      run: .venv/bin/python -m pytest
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: /opt/foresight-flutter
@@ -224,6 +225,44 @@ jobs:
         path: test-results/
     needs: changes
     if: needs.changes.outputs.build == 'true'
+  linux-document-imports:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+    - name: Install document extractors and host policy tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends bubblewrap poppler-utils unrtf apparmor
+    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ runner.temp }}/foresight-document-flutter
+        key: flutter-linux-document-host-3.35.7-v1
+    - name: Install pinned Dart through the reviewed Flutter SDK
+      run: |
+        task_document_flutter="$RUNNER_TEMP/foresight-document-flutter"
+        if [[ ! -x "$task_document_flutter/bin/flutter" ]]; then
+          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$task_document_flutter"
+        fi
+        test "$(git -C "$task_document_flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
+        echo "$task_document_flutter/bin" >> "$GITHUB_PATH"
+        "$task_document_flutter/bin/dart" --disable-analytics
+    - name: Resolve locked core dependencies
+      working-directory: packages/foresight_core
+      run: dart pub get --enforce-lockfile
+    - name: Require real PDF and RTF imports through the shipped sandbox
+      run: bash tools/ci_document_sandbox.sh
+    - name: Retain document sandbox evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: linux-document-sandbox-evidence
+        path: test-results/document-sandbox/
+        if-no-files-found: error
   changes:
     runs-on: ubuntu-24.04
     outputs:
@@ -276,9 +315,10 @@ jobs:
       id: sdk
       env:
         GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400
+        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python - <<'PY'
         import json,os,re
         image=json.load(open('build/sdk-descriptor/image.json'))['image']
@@ -362,6 +402,7 @@ jobs:
     - changes
     - macos
     - linux-native
+    - linux-document-imports
     - linux-bundle
     runs-on: ubuntu-24.04
     steps:

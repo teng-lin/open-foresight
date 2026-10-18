@@ -1,3 +1,4 @@
+import 'fixtures/verified_model_files.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,9 @@ void main() {
     tester,
   ) async {
     final root = Directory.systemTemp.createTempSync('gemma-runner-repair-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     final store = Store('${root.path}/application.db');
     final model = gemmaModels.first;
     final file = File('${root.path}/custom.litertlm');
@@ -25,6 +29,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              findLocalModel: verifiedFixtureModelFile,
               store: store,
               directory: Directory('${root.path}/cache'),
               library: '',
@@ -36,6 +41,7 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
       expect(find.text('Use model'), findsOneWidget);
       final option = tester.widget<RadioListTile<GemmaModel>>(
         find.byWidgetPredicate(
@@ -55,6 +61,9 @@ void main() {
     'cached embedding setup offers reuse instead of another download',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('embedding-cache-ui-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/application.db');
       final model = embeddingGemmaModel;
       final file = File(
@@ -68,6 +77,7 @@ void main() {
           MaterialApp(
             home: Scaffold(
               body: GemmaSetupDialog(
+                findLocalModel: verifiedFixtureModelFile,
                 store: store,
                 directory: Directory('${root.path}/gemma4'),
                 library: '',
@@ -81,6 +91,7 @@ void main() {
             ),
           ),
         );
+        await tester.pumpAndSettle();
         expect(
           find.widgetWithText(FilledButton, 'Use EmbeddingGemma 2'),
           findsOneWidget,
@@ -102,12 +113,16 @@ void main() {
     tester,
   ) async {
     final root = Directory.systemTemp.createTempSync('gemma-chooser-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     final store = Store('${root.path}/app.db');
     try {
       await tester.pumpWidget(
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              findLocalModel: verifiedFixtureModelFile,
               store: store,
               directory: root,
               library: '',
@@ -119,6 +134,7 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
       final options = tester
           .widgetList<RadioListTile<GemmaModel>>(
             find.byType(RadioListTile<GemmaModel>),
@@ -155,6 +171,9 @@ void main() {
     'current E4B closes with Done without verification, loading or download',
     (tester) async {
       final root = Directory.systemTemp.createTempSync('gemma-current-');
+      addTearDown(() {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      });
       final store = Store('${root.path}/app.db');
       final model = gemmaModels[1];
       final file = File('${root.path}/${model.filename}');
@@ -177,6 +196,7 @@ void main() {
                   onPressed: () => showDialog<void>(
                     context: context,
                     builder: (_) => GemmaSetupDialog(
+                      findLocalModel: verifiedFixtureModelFile,
                       store: store,
                       directory: root,
                       library: '',
@@ -222,6 +242,9 @@ void main() {
     tester,
   ) async {
     final root = Directory.systemTemp.createTempSync('gemma-cached-');
+    addTearDown(() {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    });
     final store = Store('${root.path}/app.db');
     final model = gemmaModels.last;
     final file = File('${root.path}/${model.directory}/${model.filename}');
@@ -234,6 +257,7 @@ void main() {
         MaterialApp(
           home: Scaffold(
             body: GemmaSetupDialog(
+              findLocalModel: verifiedFixtureModelFile,
               store: store,
               directory: root,
               library: '',
@@ -245,6 +269,7 @@ void main() {
           ),
         ),
       );
+      await tester.pumpAndSettle();
       final cached = tester.widget<RadioListTile<GemmaModel>>(
         find.byWidgetPredicate(
           (w) => w is RadioListTile<GemmaModel> && w.value == model,

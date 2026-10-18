@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run after dart pub get; pass optional dart test arguments through unchanged.
+# Run after dart pub get --enforce-lockfile; pass optional dart test arguments through unchanged.
 set -euo pipefail
 task_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 task_dart=${FORESIGHT_DART:-dart}

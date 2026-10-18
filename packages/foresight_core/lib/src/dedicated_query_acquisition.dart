@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -30,24 +31,29 @@ class DedicatedQueryAcquisition {
 
   factory DedicatedQueryAcquisition.distribution(Store store) {
     final key = runtimeConfiguration['FORESIGHT_WEB_CONTENT_API_KEY'];
-    if (!Platform.isMacOS)
+    if (!Platform.isMacOS) {
       throw StateError('Automatic question model acquisition requires macOS.');
+    }
     if (key == null || key.isEmpty) {
       throw StateError(
         'Automatic question model download is unavailable in this distribution.',
       );
     }
-    for (final name in [
-      'FORESIGHT_LITERT_PYTHON',
-      'FORESIGHT_QUERY_WORKER',
-      'FORESIGHT_MODEL_CRYPTO',
-    ]) {
+    for (final name in ['FORESIGHT_QUERY_WORKER', 'FORESIGHT_MODEL_CRYPTO']) {
       final value = runtimeConfiguration[name];
       if (value == null || !File(value).existsSync()) {
         throw StateError(
           'The bundled automatic question runtime is unavailable.',
         );
       }
+    }
+    final queryRuntime =
+        runtimeConfiguration['FORESIGHT_QUERY_RUNTIME'] ??
+        runtimeConfiguration['FORESIGHT_LITERT_PYTHON'];
+    if (queryRuntime == null || !File(queryRuntime).existsSync()) {
+      throw StateError(
+        'The bundled automatic question runtime is unavailable.',
+      );
     }
     final config = ModelConfigService(apiKey: key);
     return DedicatedQueryAcquisition(
@@ -86,8 +92,9 @@ class DedicatedQueryAcquisition {
     bool Function()? current,
     void Function(int, int)? onProgress,
   }) {
-    if (_started || _closed)
+    if (_started || _closed) {
       throw StateError('Model acquisition is already used or closed.');
+    }
     _started = true;
     return _running = _run(current: current, onProgress: onProgress);
   }
@@ -98,7 +105,9 @@ class DedicatedQueryAcquisition {
   }) async {
     bool valid() => !_closed && (current == null || current());
     void check() {
-      if (!valid()) throw StateError('Model setup cancelled');
+      if (!valid()) {
+        throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
+      }
     }
 
     Directory? stage;
@@ -157,8 +166,9 @@ class DedicatedQueryAcquisition {
         '600',
         plaintext.path,
       ]);
-      if (protected.exitCode != 0)
+      if (protected.exitCode != 0) {
         throw StateError('Cannot protect the downloaded question model.');
+      }
       check();
       // The reference encrypts type 4 before persistence. The port uses its own
       // Keychain entry and retains plaintext only in operation-owned leases.
@@ -181,6 +191,9 @@ class DedicatedQueryAcquisition {
         await adopt(encrypted);
       }
       accepted = true;
+    } catch (_) {
+      check();
+      rethrow;
     } finally {
       try {
         await close();
@@ -188,8 +201,9 @@ class DedicatedQueryAcquisition {
         try {
           if (stage != null) await stage.delete(recursive: true);
         } finally {
-          if ((!accepted || catalog != null) && encrypted != null)
+          if ((!accepted || catalog != null) && encrypted != null) {
             await encrypted.parent.delete(recursive: true);
+          }
         }
       }
     }

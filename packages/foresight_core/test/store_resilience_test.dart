@@ -9,6 +9,7 @@ void main() {
     'busy writer preserves revisions and source caches recover after rollback',
     () {
       final root = Directory.systemTemp.createTempSync('store-resilience-');
+      addTearDown(() => root.deleteSync(recursive: true));
       final writer = Store('${root.path}/application.db');
       final other = Store(writer.path);
       try {
@@ -68,7 +69,6 @@ void main() {
         if (!writer.db.autocommit) writer.db.execute('ROLLBACK');
         other.close();
         writer.close();
-        root.deleteSync(recursive: true);
       }
     },
   );

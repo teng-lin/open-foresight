@@ -8,8 +8,14 @@ packagers after successful candidates exist for one reviewed main commit. It
 creates the tag and a draft, then every packaging job checks out that exact tag.
 The tag must be `v` followed by the version in `apps/desktop/pubspec.yaml`, for
 example `v0.1.1`; see [Versioning and releases](../../README.md#versioning-and-releases).
-Pull requests, tag pushes, and manually publishing a release do not invoke these
-reusable packagers. Publication follows installed-package acceptance.
+Tag pushes and manually publishing a release do not invoke these reusable packagers.
+Publication follows installed-package acceptance.
+A pull request that changes `apps/desktop/**`, `packages/foresight_core/**`,
+`packaging/**`, or this workflow builds the portable bundle on an `ubuntu-24.04`
+runner with `packaging/build.Dockerfile` and builds and installs the Debian
+package inside `ubuntu:24.04` using `packaging/ci/package-and-test.sh`. That job
+fails the pull request when the build or install fails. It does not publish
+release assets.
 
 ## Compatibility baseline
 
@@ -20,7 +26,7 @@ stop-sequence extension required by note enhancement. The SDK retains its wheel,
 native library, passing native regression log and checksum manifest; the application
 packager verifies those artifacts and copies the wheel's Linux vendor dependencies.
 The stock 0.18.0 library lacks that setter and is not selected by release CI.
-ONNX uses a pinned, SHA-verified upstream archive. The build pins
+The build pins
 Flutter, gRPC (including its protobuf submodule) and Whisper to full source
 commits. The modern protobuf toolchain is intentional: our authoritative
 descriptor uses Edition 2024, which older distro protoc packages cannot generate.
@@ -58,6 +64,31 @@ Older releases and ARM64 are outside this initial matrix.
 The container base and apt repositories receive updates; pinned source versions
 and normalized archives do not make the complete compiler build bit-for-bit
 reproducible. Build manifests and ABI reports record what was produced.
+
+## Document import sandbox
+
+PDF and RTF imports require `/usr/bin/bwrap` (bubblewrap), `/usr/bin/pdftotext`
+(poppler), and `/usr/bin/unrtf`, plus host permission for bubblewrap to create its
+user, mount, PID, and network namespaces. Package dependencies provide these
+executables; namespace permissions also depend on kernel, container, and host
+security policy.
+
+Ubuntu 24.04 mediates unprivileged user namespaces through AppArmor. If a sandbox
+startup error reports a namespace permission denial, an administrator must review
+the host policy and allow the necessary user-namespace access in the applicable
+AppArmor profile for bubblewrap. See [Ubuntu's AppArmor user-namespace
+guidance](https://documentation.ubuntu.com/security/security-features/privilege-restriction/apparmor/#apparmor-unprivileged-user-namespace-restrictions).
+Open Foresight reports the startup diagnostic and stops the import when its
+sandbox cannot start. Ordinary PDF/RTF parsing errors retain their document
+diagnostics.
+
+The `linux-document-imports` CI job runs the shipped parser against actual PDF
+and RTF fixtures directly on a disposable Ubuntu host. It requires all tools and
+fails on missing prerequisites or namespace errors. If the host initially denies
+the namespace probe, CI loads `packaging/ci/document-sandbox.apparmor` for that
+runner's bubblewrap executable and retries; this profile is never installed by
+the product packages. The initial denial and actual import output are retained
+as CI evidence. Local runs missing required executables report a skipped test.
 
 ## Build locally
 
@@ -205,10 +236,10 @@ tokens/profile file, verifies the bundle manifest, and refuses escaping symlinks
 CI does not currently inject application configuration; browser sign-in requires
 configuration through the app or a separately configured release build.
 
-Package metadata currently uses `LicenseRef-Unspecified`, reflecting the absence
-of a declared project license. Set the intended license in metadata when one is
-adopted; packaging does not choose a license for the project. Bundled dependency
-notices remain part of their payloads.
+The project uses the [MIT license](../../LICENSE), and
+`packaging/metadata.json` records the SPDX identifier `MIT`. Packages include the
+project license and the notices for bundled third-party dependencies. Model terms
+are separate from the application license.
 
 References: [GitHub Actions artifacts](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts),
 [Debian shared-library policy](https://www.debian.org/doc/debian-policy/ch-sharedlibs.html),

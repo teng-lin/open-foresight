@@ -1,4 +1,6 @@
+import 'rpc_error.dart';
 import 'dart:async';
+import 'text_budget.dart';
 import 'store.dart';
 
 import 'question_dispatch.dart';
@@ -136,7 +138,9 @@ class ProactiveQuestions {
     final question = store.rows('SELECT * FROM meeting_questions WHERE id=?', [
       questionId,
     ]).firstOrNull;
-    if (question == null) throw StateError('Question not found');
+    if (question == null) {
+      throw RpcError(RpcErrorCode.notFound, 'Question not found');
+    }
     if (![
       'failed',
       'insufficient_context',
@@ -164,8 +168,9 @@ class ProactiveQuestions {
   }
 
   bool _hasUnexaminedInput(int meetingId) {
-    if (_examinedVersions[meetingId] == (_inputVersions[meetingId] ?? 0))
+    if (_examinedVersions[meetingId] == (_inputVersions[meetingId] ?? 0)) {
       return false;
+    }
     if (_interim[meetingId]?.isNotEmpty ?? false) return true;
     return store.rows(
       'SELECT 1 FROM transcript t JOIN meeting_question_cursors c '
@@ -260,18 +265,11 @@ class ProactiveQuestions {
           if (queued != null) _pending.add(meetingId);
           return;
         }
-        // The recovered splitter is \s+ and the join separator is a space.
-        final units = RegExp(r'\S+').allMatches(history).toList();
-        final eligible = units.length - (isFinal ? 0 : 5);
-        if (eligible <= 0) {
+        final transcript = proactiveTranscriptWindow(history, isFinal: isFinal);
+        if (transcript.isEmpty) {
           if (queued != null) _pending.add(meetingId);
           return;
         }
-        final first = eligible > 200 ? eligible - 200 : 0;
-        final transcript = units
-            .sublist(first, eligible)
-            .map((unit) => unit.group(0)!)
-            .join(' ');
         // Failures remain retryable; only skipped or completed input is marked.
         _examinedVersions.remove(meetingId);
         _request =
@@ -349,11 +347,12 @@ class ProactiveQuestions {
       ); // Drain further answers/segments fairly, one model job per tick.
     } catch (error) {
       if (!_allowed) {
-        if (questionId != null)
+        if (questionId != null) {
           store.db.execute(
             "UPDATE meeting_questions SET state='queued' WHERE id=?",
             [questionId],
           );
+        }
         _pending.add(meetingId);
       } else {
         errors[meetingId] = error.toString();
@@ -363,11 +362,12 @@ class ProactiveQuestions {
           _examinedVersions[meetingId] = examinedInput;
           if (queuedWork) _pending.add(meetingId);
         }
-        if (questionId != null)
+        if (questionId != null) {
           store.db.execute(
             "UPDATE meeting_questions SET state='failed',error=? WHERE id=?",
             [error.toString(), questionId],
           );
+        }
         if (questionId != null) _pending.add(meetingId);
       }
     } finally {

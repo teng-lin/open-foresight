@@ -107,8 +107,14 @@ void main() {
           'expires_at': 1,
         }),
       );
+      await Process.run('/bin/chmod', ['700', authDirectory.path]);
+      await Process.run('/bin/chmod', [
+        '600',
+        '${authDirectory.path}/tokens.json',
+      ]);
       final auth = GoogleAuth(
         authDirectory,
+        secretStore: const UnavailableSecretStore(),
         endpoints: GoogleEndpoints(revoke: revoke),
       );
       await app.close();
@@ -175,6 +181,35 @@ void main() {
       }
     });
   }
+
+  test(
+    'clearing removes safe-web markers before local answer IDs can be reused',
+    () async {
+      await domain.askWithWebInConversation('Old web question', 'desktop').last;
+      expect(store.preference('webAnswer.v1.1'), 'true');
+      await app.call('workspace.clear', {});
+      expect(
+        store.rows(
+          "SELECT key FROM preferences WHERE key GLOB 'webAnswer.v1.*'",
+        ),
+        isEmpty,
+      );
+      store.answer(
+        'Local question',
+        'LOCAL_REUSED_ID_SECRET',
+        'completed',
+        [],
+        'local',
+        conversation: 'desktop',
+      );
+      expect(store.db.lastInsertRowId, 1);
+      runtime.answer = (_) async => 'Safe fresh answer';
+      await domain
+          .askWithWebInConversation('Fresh explicit web query', 'desktop')
+          .last;
+      expect(runtime.histories.last, isEmpty);
+    },
+  );
 
   test(
     'an in-flight answer cannot recreate cleared answers or checkpoints',
@@ -279,8 +314,14 @@ void main() {
           }),
         );
       final base = Uri.parse('http://127.0.0.1:${server.port}/');
+      await Process.run('/bin/chmod', ['700', authDirectory.path]);
+      await Process.run('/bin/chmod', [
+        '600',
+        '${authDirectory.path}/tokens.json',
+      ]);
       final auth = GoogleAuth(
         authDirectory,
+        secretStore: const UnavailableSecretStore(),
         endpoints: GoogleEndpoints(
           token: base.resolve('token'),
           revoke: base.resolve('revoke'),

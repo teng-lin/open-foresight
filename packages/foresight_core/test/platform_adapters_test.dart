@@ -30,7 +30,6 @@ void main() {
   test(
     'notification adapters preserve arguments and distinguish denial from failure',
     () async {
-      if (!Platform.isMacOS) return;
       runtimeConfiguration.environment.remove('FORESIGHT_NOTIFICATIONS');
       await expectLater(notificationCapabilities(), throwsStateError);
       await expectLater(
@@ -71,6 +70,7 @@ void main() {
         ),
       );
     },
+    skip: !Platform.isMacOS,
   );
 
   test(
@@ -108,7 +108,6 @@ int fs_set_runtime_environment(const char *key, const char *value) {
           'FORESIGHT_NATIVE': path,
           'FORESIGHT_HELPER': '/owned/helper',
           'UNRELATED_SECRET': 'do not forward',
-          'FORESIGHT_ONNX_LIBRARY': '',
         });
       expect(() => configureProfileRuntime(root.path), throwsStateError);
       final library = DynamicLibrary.open(path);
@@ -132,7 +131,6 @@ int fs_set_runtime_environment(const char *key, const char *value) {
       );
       expect(values, contains('PYTHONPYCACHEPREFIX=${root.path}/cache/python'));
       expect(values, isNot(contains('UNRELATED_SECRET')));
-      expect(values, isNot(contains('FORESIGHT_ONNX_LIBRARY')));
       configureNativeEnvironment();
       expect(count(), before);
     },

@@ -29,8 +29,9 @@ void main() {
     detect: (text, request) async {
       detectedText.add(text);
       if (failDetection) throw StateError('Detection fixture failure');
-      if (referenceDetector != null)
+      if (referenceDetector != null) {
         return referenceDetector!.detect(text, request);
+      }
       if (detectionGate != null) return detectionGate!.future;
       return detectionResult ??
           RegExp(
@@ -211,15 +212,20 @@ void main() {
   );
 
   test(
-    'detection bounds the growing window to its last 200 whitespace units',
+    'detection bounds the growing window to its last 1000 Unicode scalars',
     () async {
       queue.begin(meeting);
       append(List.generate(220, (i) => 'word$i').join(' '));
       detectionResult = [];
       await drain();
       expect(
-        detectedText.single.split(' '),
-        List.generate(200, (i) => 'word${i + 20}'),
+        detectedText.single,
+        String.fromCharCodes(
+          List.generate(
+            220,
+            (i) => 'word$i',
+          ).join(' ').runes.toList().reversed.take(1000).toList().reversed,
+        ),
       );
       // Capping model input does not consume undetected history.
       expect(
@@ -333,7 +339,7 @@ void main() {
     },
   );
 
-  test('interim tail exclusion occurs before the 200-unit cap', () async {
+  test('interim tail exclusion occurs before the scalar budget', () async {
     queue.begin(meeting);
     queue.updateInterim(
       meeting,
@@ -343,8 +349,13 @@ void main() {
     detectionResult = [];
     await drain();
     expect(
-      detectedText.single.split(' '),
-      List.generate(200, (i) => 'word${i + 15}'),
+      detectedText.single,
+      String.fromCharCodes(
+        List.generate(
+          215,
+          (i) => 'word$i',
+        ).join(' ').runes.toList().reversed.take(1000).toList().reversed,
+      ),
     );
   });
 
@@ -459,6 +470,7 @@ void main() {
             123,
           ],
         );
+        store.db.execute('PRAGMA user_version=6');
         final before = store.rows('SELECT * FROM meeting_questions').single;
         await queue.close();
         store.close();
@@ -721,7 +733,7 @@ void main() {
       );
       await queue.close();
       store.db.execute(
-        'DROP TABLE meeting_questions; DROP TABLE meeting_question_cursors; DROP INDEX answer_request_id; ALTER TABLE answers DROP COLUMN request_id;',
+        'DROP TABLE meeting_questions; DROP TABLE meeting_question_cursors; DROP INDEX answer_request_id; ALTER TABLE answers DROP COLUMN request_id; PRAGMA user_version=1;',
       );
       store.close();
       store = Store('${directory.path}/app.db');
@@ -823,7 +835,9 @@ void main() {
       'Can volunteers bring bicycles?',
       'Why were receipts rejected?',
     ];
-    for (final question in distinctQuestions) append(question);
+    for (final question in distinctQuestions) {
+      append(question);
+    }
     await queue.process(); // Detection commits durable jobs for the window.
     final first = store
         .rows('SELECT id FROM meeting_questions ORDER BY id LIMIT 1')

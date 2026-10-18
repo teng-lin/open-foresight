@@ -1,7 +1,11 @@
+import 'application.dart';
+import 'rpc_error.dart';
+import 'operations.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'agent_access.dart';
 import 'domain.dart';
@@ -51,8 +55,9 @@ class ServiceClient {
     socket
         .map((chunk) {
           bytes += chunk.length;
-          if (bytes > _maxMessageBytes)
+          if (bytes > _maxMessageBytes) {
             throw StateError('Service message too large');
+          }
           return chunk;
         })
         .cast<List<int>>()
@@ -82,7 +87,10 @@ class ServiceClient {
           },
           onError: (Object e, StackTrace st) => _fail(e, st),
           onDone: () => _fail(
-            StateError('Application service disconnected'),
+            RpcError(
+              RpcErrorCode.unavailable,
+              'Application service disconnected',
+            ),
             StackTrace.current,
           ),
         );
@@ -93,8 +101,9 @@ class ServiceClient {
     String path, {
     int maxMessageBytes = maxServiceMessage,
   }) async {
-    if (maxMessageBytes < 1)
+    if (maxMessageBytes < 1) {
       throw ArgumentError.value(maxMessageBytes, 'maxMessageBytes');
+    }
     return ServiceClient._(
       await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
@@ -129,24 +138,28 @@ class ServiceClient {
       onCancel: () {
         _methods.remove(id);
         _requestIds.remove(id);
-        if (_pending.remove(id) != null && !_closed)
+        if (_pending.remove(id) != null && !_closed) {
           socket.writeln(jsonEncode({'cancel': id}));
+        }
       },
     );
     if (_closed) {
-      controller.addError(StateError('Application service disconnected'));
+      controller.addError(
+        RpcError(RpcErrorCode.unavailable, 'Application service disconnected'),
+      );
       unawaited(controller.close());
     } else {
       _pending[id] = controller;
       _methods[id] = method;
-      if (args['requestId'] is String)
+      if (args['requestId'] is String) {
         _requestIds[id] = args['requestId'] as String;
+      }
       socket.writeln(jsonEncode({'id': id, 'method': method, 'args': args}));
     }
     return controller.stream
         .where((v) => v.containsKey('result') || v.containsKey('error'))
         .map((v) {
-          if (v['error'] != null) throw StateError(v['error'] as String);
+          if (v['error'] != null) throw RpcError.from(v['error'] as Object);
           return v['result'];
         });
   }
@@ -167,10 +180,10 @@ class ServiceClient {
         .where(
           (entry) =>
               {
-                'answer.stream',
-                'answer',
-                'meetings.generate',
-                'meetings.enhance',
+                Operation.answerStream.wire,
+                Operation.answer.wire,
+                Operation.meetingsGenerate.wire,
+                Operation.meetingsEnhance.wire,
               }.contains(entry.value) &&
               (requestId == null || _requestIds[entry.key] == requestId),
         )
@@ -181,7 +194,7 @@ class ServiceClient {
       final pending = _pending.remove(id);
       _methods.remove(id);
       _requestIds.remove(id);
-      pending?.addError(StateError('Answer cancelled'));
+      pending?.addError(RpcError(RpcErrorCode.cancelled, 'Answer cancelled'));
       if (pending != null) unawaited(pending.close());
     }
     return ids.isNotEmpty;
@@ -239,6 +252,7 @@ class _RequestLease {
 
 class ApplicationService {
   final Domain domain;
+  final Application application;
   late final AgentAccessGate access;
   final ServerSocket listener;
   final String path;
@@ -251,6 +265,7 @@ class ApplicationService {
   Timer? _heartbeat;
   bool _closing = false;
   Future<void>? _shutdown;
+  Future<void> Function()? _beforeReleaseOwnership;
   final _closed = Completer<void>();
   Future<void> get closed => _closed.future;
   int _connectionSequence = 0;
@@ -261,6 +276,7 @@ class ApplicationService {
     this.path,
     this.lock,
     this.installationLock,
+    this.application,
   ) {
     final token = base64Url.encode(
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
@@ -281,7 +297,7 @@ class ApplicationService {
       (host, event) => _send(host as Socket, event),
     );
     listener.listen(_accept);
-    _changes = domain.application.changes.stream.listen((_) => _broadcast());
+    _changes = application.changes.stream.listen((_) => _broadcast());
     _heartbeat = Timer.periodic(
       const Duration(seconds: 1),
       (_) => _broadcast(),
@@ -290,11 +306,17 @@ class ApplicationService {
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
+    bool internalWorker = false,
   }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
     try {
-      return await _start(profile, installationLock, webSearch: webSearch);
+      return await _start(
+        profile,
+        installationLock,
+        webSearch: webSearch,
+        internalWorker: internalWorker,
+      );
     } catch (_) {
       installationLock?.closeSync();
       rethrow;
@@ -305,12 +327,14 @@ class ApplicationService {
     ProfilePaths profile,
     RandomAccessFile? installationLock, {
     SearchCallbacks? webSearch,
+    bool internalWorker = false,
   }) async {
     privateDirectory(profile.data);
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
-    if (runtimeConfiguration['FORESIGHT_NATIVE'] != null)
+    if (runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
       configureProfileRuntime(profile.data);
+    }
     privateDirectory(profile.runtime);
     var path = '${profile.runtime}/application.sock';
     final lock = File(
@@ -321,8 +345,9 @@ class ApplicationService {
             '600',
             '${profile.data}/.application.lock',
           ]).exitCode !=
-          0)
+          0) {
         throw StateError('Cannot protect profile ownership lock');
+      }
       lock.lockSync(FileLock.exclusive);
     } catch (_) {
       lock.closeSync();
@@ -336,10 +361,13 @@ class ApplicationService {
       // Reuse that runtime until a clean shutdown releases its workers.
       path = serviceEndpoint(profile);
       profile = ProfilePaths(profile.data, File(path).parent.path);
+      if (internalWorker) path = '${profile.runtime}/application-worker.sock';
       final stale = File(path);
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         stale.deleteSync();
+      }
       store = Store('${profile.data}/application.db');
+      await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
       store.db.execute(
         "UPDATE meetings SET state='interrupted' WHERE state IN ('recording','transcribing','paused')",
       );
@@ -348,17 +376,19 @@ class ApplicationService {
         '${profile.data}/helper',
       );
       final domain = Domain(store, helper, webSearch: webSearch);
-      domain.application.importPolicy = ImportPolicy(profile.data, () {
+      final application = Application(domain);
+      application.importPolicy = ImportPolicy(profile.data, () {
         final saved = store!.preference('importRoots', '[]');
         return (jsonDecode(saved) as List).cast<String>();
       });
-      domain.application.startBackground();
+      application.startBackground();
       listener = await ServerSocket.bind(
         InternetAddress(path, type: InternetAddressType.unix),
         0,
       );
-      if ((await Process.run('chmod', ['600', path])).exitCode != 0)
+      if ((await Process.run('chmod', ['600', path])).exitCode != 0) {
         throw StateError('Cannot protect application socket');
+      }
       final endpoint = File('${profile.data}/.application-endpoint.json');
       final temporary = File('${endpoint.path}.$pid');
       temporary.writeAsStringSync(
@@ -375,6 +405,7 @@ class ApplicationService {
         path,
         lock,
         installationLock,
+        application,
       );
       final manifest = runtimeConfiguration['FORESIGHT_MODEL_MANIFEST'];
       if (manifest != null && File(manifest).existsSync()) {
@@ -410,12 +441,12 @@ class ApplicationService {
     if (_closing) return;
     final message = {
       'event': 'changed',
-      'capture': domain.application.captureState,
+      'capture': application.captureState,
       'revision': domain.store.dataRevision,
       'sources_paused': domain.sourcesPaused,
-      'generation': domain.application.generationState,
+      'generation': application.generationState,
       'web_search_available': domain.webSearchAvailable,
-      'google': domain.application.googleState,
+      'google': application.googleState,
       'helper': domain.helper.snapshot?.toProto3Json(),
       'helper_state': domain.helper.state,
     };
@@ -453,13 +484,16 @@ class ApplicationService {
               final id = request['id'];
               if (id is! int ||
                   request['method'] is! String ||
-                  request['args'] is! Map)
+                  request['args'] is! Map) {
                 throw FormatException('Invalid request');
+              }
               if (_closing) {
                 _send(client, {
                   'id': id,
-                  'error':
-                      'Application service is shutting down; retry after it exits.',
+                  'error': RpcError(
+                    RpcErrorCode.unavailable,
+                    'Application service is shutting down; retry after it exits.',
+                  ).toJson(),
                   'done': true,
                 });
                 return;
@@ -470,24 +504,30 @@ class ApplicationService {
               );
               if (method.startsWith('security.')) {
                 try {
-                  if (method == 'security.attach_desktop') {
+                  if (method == Operation.securityAttachDesktop.wire) {
                     access.attach(client, securityArgs['token'] as String);
-                  } else if (method == 'security.detach_desktop') {
-                    if (!access.isHost(client))
-                      throw StateError('Not the desktop approval connection');
+                  } else if (method == Operation.securityDetachDesktop.wire) {
+                    if (!access.isHost(client)) {
+                      throw RpcError(
+                        RpcErrorCode.denied,
+                        'Not the desktop approval connection',
+                      );
+                    }
                     access.detach(client);
-                    unawaited(domain.application.stopRecording());
-                  } else if (method == 'security.decide') {
+                    unawaited(application.stopRecording());
+                  } else if (method == Operation.securityDecide.wire) {
                     access.decide(
                       client,
                       securityArgs['approval_id'] as String,
                       securityArgs['allow'] == true,
                     );
-                  } else if (method == 'security.allow_import_root') {
-                    if (!access.isHost(client))
-                      throw StateError(
+                  } else if (method == Operation.securityAllowImportRoot.wire) {
+                    if (!access.isHost(client)) {
+                      throw RpcError(
+                        RpcErrorCode.denied,
                         'Only the desktop can select import folders',
                       );
+                    }
                     final root = Directory(
                       securityArgs['path'] as String,
                     ).resolveSymbolicLinksSync();
@@ -508,13 +548,13 @@ class ApplicationService {
                 } catch (e) {
                   _send(client, {
                     'id': id,
-                    'error': e.toString(),
+                    'error': RpcError.from(e).toJson(),
                     'done': true,
                   });
                 }
                 return;
               }
-              if (request['method'] == 'service.stop_if_idle') {
+              if (request['method'] == Operation.serviceStopIfIdle.wire) {
                 unawaited(
                   _stopIfIdle(
                     client,
@@ -527,7 +567,10 @@ class ApplicationService {
               if ((_subscriptions[client]?.length ?? 0) >= 32) {
                 _send(client, {
                   'id': id,
-                  'error': 'Too many active requests',
+                  'error': RpcError(
+                    RpcErrorCode.busy,
+                    'Too many active requests',
+                  ).toJson(),
                   'done': true,
                 });
                 return;
@@ -554,7 +597,7 @@ class ApplicationService {
                 onError: (Object e) {
                   _send(client, {
                     'id': id,
-                    'error': e.toString(),
+                    'error': RpcError.from(e).toJson(),
                     'done': true,
                   });
                   _subscriptions[client]?.remove(id);
@@ -568,7 +611,7 @@ class ApplicationService {
                 cancelOnError: true,
               );
             } catch (e) {
-              _send(client, {'error': e.toString(), 'done': true});
+              _send(client, {'error': RpcError.from(e).toJson(), 'done': true});
             }
           },
           onError: (Object _) => client.destroy(),
@@ -577,7 +620,7 @@ class ApplicationService {
             access.detach(client);
             if (wasHost) {
               unawaited(
-                domain.application.stopRecording().catchError((Object e) {
+                application.stopRecording().catchError((Object e) {
                   stderr.writeln('Stop capture after desktop closed: $e');
                 }),
               );
@@ -602,13 +645,17 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) {
-    if (lease.cancelled) return Stream.error(StateError('Operation cancelled'));
-    if (lease.method == 'answer.stream') {
+    if (lease.cancelled) {
+      return Stream.error(
+        RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
+      );
+    }
+    if (lease.method == Operation.answerStream.wire) {
       return Stream.fromFuture(_ready).asyncExpand(
         (_) =>
             (args['web_search'] == true
-            ? domain.askWithWebInConversation
-            : domain.askInConversation)(
+            ? application.askWithWebInConversation
+            : application.askInConversation)(
               args['question'] as String,
               args['conversation'] as String,
               requestId: lease.id,
@@ -617,8 +664,9 @@ class ApplicationService {
             ),
       );
     }
-    if (lease.method == 'google.sign_in')
-      return domain.application.signIn(lease.id);
+    if (lease.method == Operation.googleSignIn.wire) {
+      return application.signIn(lease.id);
+    }
     return Stream.fromFuture(_execute(lease.method, args, lease));
   }
 
@@ -634,13 +682,15 @@ class ApplicationService {
           (args['runtime_revision'] != null &&
               args['runtime_revision'] !=
                   runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'])) {
-        throw StateError(
+        throw RpcError(
+          RpcErrorCode.cancelled,
           'Application service ownership changed before idle shutdown; retry without replacing the app.',
         );
       }
-      final capture = domain.application.captureState;
+      final capture = application.captureState;
       if (capture['active'] == true || capture['finishing'] == true) {
-        throw StateError(
+        throw RpcError(
+          RpcErrorCode.busy,
           'Recording is active or finalizing. Stop recording and wait for the final transcript before upgrading.',
         );
       }
@@ -648,24 +698,31 @@ class ApplicationService {
       // particular, a recording-start request awaiting helper/model readiness
       // must not slip between an idle status check and shutdown acceptance.
       if (_leases.values.any(
-        (leases) => leases.values.any((lease) => lease.method != 'status'),
+        (leases) =>
+            leases.values.any((lease) => lease.method != Operation.status.wire),
       )) {
-        throw StateError(
+        throw RpcError(
+          RpcErrorCode.busy,
           'Application operations are in progress. Retry the upgrade after they finish.',
         );
       }
       await close(acknowledgementClient: client);
-      if (!domain.helper.shutdownVerified)
+      if (!domain.helper.shutdownVerified) {
         throw StateError(
           'Helper shutdown could not be verified. The application was not cleared for upgrade.',
         );
+      }
       _send(client, {
         'id': id,
         'result': {'stopped': true, 'shutdown_verified': true},
         'done': true,
       });
     } catch (error) {
-      _send(client, {'id': id, 'error': error.toString(), 'done': true});
+      _send(client, {
+        'id': id,
+        'error': RpcError.from(error).toJson(),
+        'done': true,
+      });
     }
     try {
       await client.flush();
@@ -680,46 +737,37 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) async {
-    if (_closing) throw StateError('Application service is shutting down');
-    if (!{
-      'status',
-      'audio.capabilities',
-      'notifications.capabilities',
-      'notifications.request_permission',
-      'audio.request_microphone',
-      'audio.request_system',
-      'sources.list',
-      'sources.get',
-      'notes.list',
-      'notes.save',
-      'meetings.list',
-      'meetings.get',
-      'meetings.create',
-      'meetings.notes',
-      'preferences.set',
-      'artifacts.edit',
-      'google.status',
-      'google.configure',
-    }.contains(method))
-      await _ready;
-    if (_closing) throw StateError('Application service is shutting down');
-    if ((method == 'meetings.start' || method == 'meetings.resume') &&
-        !access.hasHost) {
-      throw StateError('Recording requires an open desktop indicator');
+    if (_closing) {
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Application service is shutting down',
+      );
     }
-    return domain.application.call(
-      method,
-      args,
-      current: () => !lease.cancelled,
-    );
+    if (Operation.parse(method).requiresHelper) await _ready;
+    if (_closing) {
+      throw RpcError(
+        RpcErrorCode.unavailable,
+        'Application service is shutting down',
+      );
+    }
+    if ((method == Operation.meetingsStart.wire ||
+            method == Operation.meetingsResume.wire) &&
+        !access.hasHost) {
+      throw RpcError(
+        RpcErrorCode.denied,
+        'Recording requires an open desktop indicator',
+      );
+    }
+    return application.call(method, args, current: () => !lease.cancelled);
   }
 
   void _cancel(Socket client, int id) {
     final lease = _leases[client]?.remove(id);
     if (lease != null) {
       lease.cancelled = true;
-      if (lease.method == 'google.sign_in')
-        domain.application.cancelSignIn(lease.id);
+      if (lease.method == Operation.googleSignIn.wire) {
+        application.cancelSignIn(lease.id);
+      }
       domain.generator?.cancel(requestId: lease.id);
     }
     final subscription = _subscriptions[client]?.remove(id);
@@ -757,7 +805,7 @@ class ApplicationService {
 
     // Application.close synchronously rejects new business calls and cancels
     // background timers before its first await.
-    await attempt(domain.application.close);
+    await attempt(application.close);
     await attempt(() async {
       await _changes?.cancel();
     });
@@ -770,20 +818,302 @@ class ApplicationService {
     await attempt(listener.close);
     await attempt(domain.store.close);
     await attempt(() {
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound)
+      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         File(path).deleteSync();
+      }
       final endpoint = File(
         '${File(domain.store.path).parent.path}/.application-endpoint.json',
       );
       if (domain.helper.shutdownVerified &&
           failure == null &&
-          endpoint.existsSync())
+          endpoint.existsSync()) {
         endpoint.deleteSync();
+      }
+    });
+    await attempt(() async {
+      await _beforeReleaseOwnership?.call();
     });
     await attempt(lock.closeSync);
     await attempt(() => installationLock?.closeSync());
-    if (failure != null)
+    if (failure != null) {
       throw StateError('Application shutdown failed: $failure');
+    }
+  }
+}
+
+/// Public socket transport lives on the main service isolate. The complete
+/// Domain (SQLite connections, native handles, model ownership, approvals and
+/// request leases) lives in one long-lived worker isolate. Byte streams preserve
+/// multiplexed requests, events, cancellation and shutdown acknowledgements.
+class IsolatedApplicationService {
+  final String _dataPath;
+  final ReceivePort _messages;
+  final ReceivePort _errors;
+  final ReceivePort _exits;
+  final _ready = Completer<void>();
+  final _closed = Completer<void>();
+  final _peers = <Socket>{};
+  final _bridges = <Future<void>>{};
+  SendPort? _control;
+  ServerSocket? _listener;
+  String? _publicPath;
+  String? _workerPath;
+  Object? _failure;
+  bool _closing = false;
+  Future<void>? _shutdown;
+  Future<void>? _finishing;
+  final _workerExited = Completer<void>();
+  bool _publicRemoved = false;
+  Future<void> get closed => _closed.future;
+  IsolatedApplicationService._(
+    this._dataPath,
+    this._messages,
+    this._errors,
+    this._exits,
+  );
+
+  static Future<IsolatedApplicationService> start(ProfilePaths profile) async {
+    final host = IsolatedApplicationService._(
+      profile.data,
+      ReceivePort(),
+      ReceivePort(),
+      ReceivePort(),
+    );
+    host._messages.listen(host._message);
+    host._errors.listen((dynamic error) {
+      host._failure = StateError('Application worker failed: $error');
+      if (!host._ready.isCompleted) host._ready.completeError(host._failure!);
+    });
+    host._exits.listen((_) {
+      if (!host._workerExited.isCompleted) host._workerExited.complete();
+      if (!host._ready.isCompleted) {
+        host._ready.completeError(
+          host._failure ??
+              StateError('Application worker exited during startup'),
+        );
+      }
+      unawaited(host._finish());
+    });
+    var spawned = false;
+    try {
+      await Isolate.spawn(
+        _applicationServiceWorker,
+        [
+          host._messages.sendPort,
+          profile.data,
+          profile.runtime,
+          Map<String, String>.from(runtimeConfiguration.environment),
+        ],
+        onError: host._errors.sendPort,
+        onExit: host._exits.sendPort,
+        debugName: 'foresight-domain',
+      );
+      spawned = true;
+      await host._ready.future;
+      return host;
+    } catch (_) {
+      host._control?.send('close');
+      if (spawned) await host._workerExited.future;
+      await host._finish();
+      rethrow;
+    }
+  }
+
+  void _message(dynamic message) {
+    if (message is SendPort) {
+      _control = message;
+      return;
+    }
+    final value = message as List;
+    if (value.first == 'ready') {
+      _workerPath = value[1] as String;
+      _publicPath = value[2] as String;
+      unawaited(
+        _listen().then(
+          (_) {
+            if (!_ready.isCompleted) _ready.complete();
+          },
+          onError: (Object error, StackTrace stack) {
+            if (!_ready.isCompleted) _ready.completeError(error, stack);
+          },
+        ),
+      );
+    } else if (value.first == 'closing') {
+      unawaited(
+        _removePublicSocket(workerOwnsLock: true).then(
+          (_) => _control?.send('frontend_closed'),
+          onError: (Object error) {
+            _failure ??= error;
+            _control?.send('frontend_failed');
+          },
+        ),
+      );
+    } else if (value.first == 'failure') {
+      _failure = StateError(value[1] as String);
+      if (!_ready.isCompleted) _ready.completeError(_failure!);
+    }
+  }
+
+  Future<void> _listen() async {
+    final path = _publicPath!;
+    // The domain worker already holds both ownership locks. A competing
+    // launcher cannot remove the live owner's socket or endpoint record.
+    final stale = File(path);
+    if (await stale.exists()) await stale.delete();
+    _listener = await ServerSocket.bind(
+      InternetAddress(path, type: InternetAddressType.unix),
+      0,
+    );
+    if ((await Process.run('/bin/chmod', ['600', path])).exitCode != 0) {
+      throw StateError('Cannot protect application socket');
+    }
+    _listener!.listen((client) {
+      final bridge = _bridge(client);
+      _bridges.add(bridge);
+      unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
+    });
+  }
+
+  Future<void> _bridge(Socket client) async {
+    _peers.add(client);
+    Socket? backend;
+    try {
+      backend = await Socket.connect(
+        InternetAddress(_workerPath!, type: InternetAddressType.unix),
+        0,
+      );
+      _peers.add(backend);
+      // pipe applies stream backpressure and flushes before closing. Keeping
+      // both directions alive is necessary for approval and cancel frames.
+      Future<void> copy(Socket source, Socket target) async {
+        try {
+          await target.addStream(source.cast<List<int>>());
+          await target.flush();
+        } finally {
+          // Socket.close only half-closes its write side. Once either peer
+          // reaches EOF, flush that direction and release both read sides.
+          source.destroy();
+          target.destroy();
+        }
+      }
+
+      await Future.wait<void>([copy(client, backend), copy(backend, client)]);
+    } catch (_) {
+      client.destroy();
+      backend?.destroy();
+    } finally {
+      _peers.remove(client);
+      if (backend != null) _peers.remove(backend);
+    }
+  }
+
+  Future<void> close() => _shutdown ??= () async {
+    if (!_closing) {
+      _closing = true;
+      _control?.send('close');
+    }
+    await closed;
+    if (_failure != null) throw _failure!;
+  }();
+
+  Future<void> _removePublicSocket({bool workerOwnsLock = false}) async {
+    await _listener?.close();
+    if (_publicRemoved || _publicPath == null) return;
+    RandomAccessFile? ownership;
+    if (!workerOwnsLock) {
+      // An unexpected worker exit may release its lock before this isolate
+      // processes the exit message. A new process can already own the profile.
+      // Reacquire ownership before touching its public socket path.
+      try {
+        ownership = await File(
+          '$_dataPath/.application.lock',
+        ).open(mode: FileMode.append);
+        await ownership.lock(FileLock.exclusive);
+      } on FileSystemException {
+        await ownership?.close();
+        return;
+      }
+    }
+    try {
+      final path = File(_publicPath!);
+      if (await path.exists()) await path.delete();
+      _publicRemoved = true;
+    } finally {
+      await ownership?.close();
+    }
+  }
+
+  Future<void> _finish() => _finishing ??= _finishOnce();
+  Future<void> _finishOnce() async {
+    if (_closed.isCompleted) return;
+    _closing = true;
+    try {
+      await _removePublicSocket();
+      // The worker flushes an idle-stop acknowledgement before exiting.
+      await Future.wait(_bridges.toList()).timeout(const Duration(seconds: 5));
+    } on TimeoutException {
+      for (final peer in _peers.toList()) {
+        peer.destroy();
+      }
+    } catch (error) {
+      _failure ??= error;
+      for (final peer in _peers.toList()) {
+        peer.destroy();
+      }
+    } finally {
+      _messages.close();
+      _errors.close();
+      _exits.close();
+      if (!_closed.isCompleted) _closed.complete();
+    }
+  }
+}
+
+void _applicationServiceWorker(List<Object?> configuration) async {
+  final parent = configuration[0] as SendPort;
+  runtimeConfiguration.environment
+    ..clear()
+    ..addAll((configuration[3] as Map).cast<String, String>());
+  final control = ReceivePort();
+  parent.send(control.sendPort);
+  ApplicationService? service;
+  final stop = Completer<void>();
+  final frontendClosed = Completer<void>();
+  control.listen((message) {
+    if (message == 'frontend_closed') {
+      if (!frontendClosed.isCompleted) frontendClosed.complete();
+    } else if (message == 'frontend_failed') {
+      if (!frontendClosed.isCompleted) {
+        frontendClosed.completeError(
+          StateError('Public service socket cleanup failed'),
+        );
+      }
+    } else if (!stop.isCompleted) {
+      stop.complete();
+    }
+  });
+  try {
+    final profile = ProfilePaths(
+      configuration[1] as String,
+      configuration[2] as String,
+    );
+    service = await ApplicationService.start(profile, internalWorker: true);
+    service._beforeReleaseOwnership = () {
+      parent.send(['closing']);
+      return frontendClosed.future;
+    };
+    parent.send(['ready', service.path, serviceEndpoint(profile)]);
+    await Future.any([stop.future, service.closed]);
+    await service.close();
+    // Let an idle-stop request flush its final acknowledgement after close.
+    await Future<void>.delayed(Duration.zero);
+  } catch (error, stack) {
+    parent.send(['failure', '$error\n$stack']);
+    try {
+      await service?.close();
+    } catch (_) {}
+  } finally {
+    control.close();
   }
 }
 
@@ -791,7 +1121,9 @@ Future<ServiceClient> _connectCompatibleService(String path) async {
   final client = await ServiceClient.connect(path);
   if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
     try {
-      validateServiceCompatibility(await client.call('status') as Map);
+      validateServiceCompatibility(
+        await client.call(Operation.status.wire) as Map,
+      );
     } catch (_) {
       await client.close();
       rethrow;
@@ -852,10 +1184,11 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
   privateDirectory(profile.data);
   privateDirectory(profile.runtime);
   final executable = runtimeConfiguration['FORESIGHT_SERVICE'];
-  if (executable == null || !File(executable).existsSync())
+  if (executable == null || !File(executable).existsSync()) {
     throw StateError(
       'Set FORESIGHT_SERVICE to the application-service executable',
     );
+  }
   final environment = {
     ...runtimeConfiguration.environment,
     'FORESIGHT_DATA': profile.data,

@@ -12,6 +12,9 @@ void main() {
       final temporary = Directory.systemTemp.createTempSync(
         'foresight-model-install-',
       );
+      addTearDown(() {
+        if (temporary.existsSync()) temporary.deleteSync(recursive: true);
+      });
       final store = Store('${temporary.path}/app.db');
       final bundle = File('${temporary.path}/embedding.litertlm')
         ..writeAsStringSync('installation fixture');

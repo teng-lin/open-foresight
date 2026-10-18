@@ -26,7 +26,9 @@ class ForceRandom42 {
     state ^= state >> 28;
     state = (state + (state << 31)) & _mask;
     if (state == BigInt.zero) state = BigInt.from(0x5a17);
-    for (var i = 0; i < 4; i++) _next();
+    for (var i = 0; i < 4; i++) {
+      _next();
+    }
   }
   void _next() => state =
       (((state & _low) * BigInt.from(0xffffda61)) + (state >> 32)) & _mask;
@@ -41,8 +43,9 @@ class ForceRandom42 {
 
 GraphPoint forceLabelTarget(String name) {
   var hash = 5381;
-  for (final unit in name.toLowerCase().trim().codeUnits)
+  for (final unit in name.toLowerCase().trim().codeUnits) {
     hash = (hash * 33 + unit) & 0xffffffff;
+  }
   final j = hash & 31,
       y = .85 - 1.7 * j / 31,
       r = math.sqrt(1 - y * y),
@@ -79,14 +82,15 @@ forceLabelLayout(
   final flat = points.values.every((p) => p.z.abs() < .001);
   for (final id in ids) {
     final p = points[id]!;
-    if (p.x == 0 && p.y == 0 && p.z == 0)
+    if (p.x == 0 && p.y == 0 && p.z == 0) {
       points[id] = GraphPoint(
         (random.nextDouble() - .5) * 50,
         (random.nextDouble() - .5) * 50,
         (random.nextDouble() - .5) * 50,
       );
-    else if (flat)
+    } else if (flat) {
       points[id] = GraphPoint(p.x, p.y, (random.nextDouble() - .5) * 60);
+    }
   }
   bool member(String id, String label) =>
       (labels[id] ?? const []).contains(label);
@@ -100,21 +104,25 @@ forceLabelLayout(
   }
   Map<String, GraphPoint> sums() {
     final result = <String, GraphPoint>{};
-    for (final id in ids)
-      for (final name in labels[id] ?? const <String>[])
+    for (final id in ids) {
+      for (final name in labels[id] ?? const <String>[]) {
         result[name] = _add(result[name] ?? _zero, points[id]!);
+      }
+    }
     return result;
   }
 
   final counts = <String, int>{};
-  for (final id in ids)
-    for (final name in labels[id] ?? const <String>[])
+  for (final id in ids) {
+    for (final name in labels[id] ?? const <String>[]) {
       counts[name] = (counts[name] ?? 0) + 1;
+    }
+  }
   for (var iteration = 0; iteration < iterations; iteration++) {
     final forces = {for (final id in ids) id: _zero};
     void push(String id, GraphPoint force) =>
         forces[id] = _add(forces[id]!, force);
-    for (var a = 0; a < ids.length; a++)
+    for (var a = 0; a < ids.length; a++) {
       for (var b = a + 1; b < ids.length; b++) {
         final left = ids[a],
             right = ids[b],
@@ -130,9 +138,12 @@ forceLabelLayout(
         push(left, force);
         push(right, _mul(force, -1));
       }
+    }
     for (final edge in unique) {
-      if (!points.containsKey(edge.source) || !points.containsKey(edge.target))
+      if (!points.containsKey(edge.source) ||
+          !points.containsKey(edge.target)) {
         continue;
+      }
       final delta = _sub(points[edge.target]!, points[edge.source]!),
           distance = _norm(delta);
       final force = _mul(
@@ -160,39 +171,43 @@ forceLabelLayout(
     final t = iteration / (iterations == 0 ? 1 : iterations);
     for (final id in ids) {
       final names = labels[id] ?? const <String>[];
-      if (names.length == 1 && centers.containsKey(names.single))
+      if (names.length == 1 && centers.containsKey(names.single)) {
         push(id, _mul(_sub(centers[names.single]!, points[id]!), .15 + .5 * t));
-      else if (names.length > 1) {
+      } else if (names.length > 1) {
         var total = _zero, count = 0;
-        for (final name in names)
+        for (final name in names) {
           if (centers.containsKey(name)) {
             total = _add(total, centers[name]!);
             count++;
           }
-        if (count > 0)
+        }
+        if (count > 0) {
           push(
             id,
             _mul(_sub(_mul(total, 1 / count), points[id]!), .1 + .35 * t),
           );
+        }
       }
       for (final name in centers.keys) {
         if (member(id, name)) continue;
         final delta = _sub(points[id]!, centers[name]!),
             distance = _norm(delta);
-        if (distance > .001 && distance < radii[name]!)
+        if (distance > .001 && distance < radii[name]!) {
           push(id, _mul(delta, .85 * (radii[name]! - distance) / distance));
+        }
       }
     }
     final ordered = centers.keys.toList();
-    for (var a = 0; a < ordered.length; a++)
+    for (var a = 0; a < ordered.length; a++) {
       for (var b = a + 1; b < ordered.length; b++) {
         final left = ordered[a], right = ordered[b];
         var count = 0, both = 0;
-        for (final id in ids)
+        for (final id in ids) {
           if (member(id, left)) {
             count++;
             if (member(id, right)) both++;
           }
+        }
         if (count > 0 && both / count >= .45) continue;
         final delta = _sub(centers[left]!, centers[right]!),
             distance = math.max(_norm(delta), 25.0);
@@ -201,12 +216,14 @@ forceLabelLayout(
         final force = _mul(delta, .65 * (desired - distance) / distance);
         for (final id in ids) {
           final l = member(id, left), r = member(id, right);
-          if (l && !r)
+          if (l && !r) {
             push(id, force);
-          else if (r && !l)
+          } else if (r && !l) {
             push(id, _mul(force, -1));
+          }
         }
       }
+    }
     for (final id in ids) {
       final f = forces[id]!;
       points[id] = _add(
@@ -218,7 +235,7 @@ forceLabelLayout(
         ),
       );
     }
-    for (var a = 0; a < ids.length; a++)
+    for (var a = 0; a < ids.length; a++) {
       for (var b = a + 1; b < ids.length; b++) {
         final left = ids[a],
             right = ids[b],
@@ -230,6 +247,7 @@ forceLabelLayout(
           points[right] = _sub(points[right]!, correction);
         }
       }
+    }
   }
   final finalSums = sums();
   final clusters = <GraphCluster>[];
@@ -237,13 +255,14 @@ forceLabelLayout(
     final count = counts[name] ?? 0,
         mean = count > 0 ? _mul(finalSums[name]!, 1 / count) : _zero;
     var radius = 90.0;
-    if (count > 1)
+    if (count > 1) {
       radius =
           ([
             for (final id in ids)
               if (member(id, name)) _norm(_sub(points[id]!, mean)),
           ].reduce(math.max)) +
           50;
+    }
     clusters.add(GraphCluster(name, mean, radius));
   }
   return (points: points, clusters: clusters);

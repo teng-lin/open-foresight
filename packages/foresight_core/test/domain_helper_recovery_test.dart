@@ -1,3 +1,5 @@
+import 'package:foresight_core/src/application.dart';
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -66,7 +68,7 @@ void main() {
   late RecoveryControl controlService;
   late Server server;
   setUp(() async {
-    root = Directory('/tmp').createTempSync('of-recovery-');
+    root = shortTestTempRoot.createTempSync('of-recovery-');
     store = Store('${root.path}/app.db');
     rag = RecoveryRag();
     controlService = RecoveryControl();
@@ -146,21 +148,19 @@ void main() {
         await helper.hasActiveModel('/model.litertlm', 'digest', true),
         isTrue,
       );
-      controlService.value.model
-        ..backend = 'onnx-bert-cpu'
-        ..path = '/directory';
-      expect(
-        await helper.hasActiveModel('/directory', 'digest', false),
-        isTrue,
-      );
-      controlService.reject = true;
+      controlService.value.model.path = '/directory';
       expect(
         await helper.hasActiveModel('/directory', 'digest', false),
         isFalse,
       );
+      controlService.reject = true;
+      expect(
+        await helper.hasActiveModel('/model.litertlm', 'digest', false),
+        isFalse,
+      );
       helper.stopping = true;
       expect(
-        await helper.hasActiveModel('/directory', 'digest', false),
+        await helper.hasActiveModel('/model.litertlm', 'digest', false),
         isFalse,
       );
     },
@@ -175,8 +175,9 @@ void main() {
       };
       helper.changed = () {
         if (helper.state.startsWith('state stream unavailable') &&
-            !changed.isCompleted)
+            !changed.isCompleted) {
           changed.complete();
+        }
       };
       controlService.failWatch = true;
       await helper.start();
@@ -197,11 +198,11 @@ void main() {
       await failure;
       expect(domain.restoring, isFalse);
       final result =
-          await domain.command('meetings.create', {'title': 'Recovered'})
+          await domain.command(Operation.meetingsCreate, {'title': 'Recovered'})
               as Map;
       expect(result['id'], isA<int>());
       await expectLater(
-        domain.commandCurrent('notes.save', {}, () => false),
+        domain.commandCurrent(Operation.notesSave, {}, () => false),
         throwsStateError,
       );
       await domain.application.close();

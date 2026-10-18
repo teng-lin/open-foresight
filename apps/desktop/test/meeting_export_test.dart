@@ -1,3 +1,5 @@
+import 'desktop_connection_fixture.dart';
+import 'package:foresight_core/src/application.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -817,7 +819,10 @@ void main() {
         '${directory.path}/helper',
       );
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Meetings').first);
       await tester.pump(const Duration(milliseconds: 400));
@@ -836,22 +841,18 @@ void main() {
       expect(calls, 1);
       expect(output.existsSync(), false);
       expect(find.text('Meeting notes saved successfully'), findsNothing);
-      await tester.tap(find.text('Download markdown'));
-      // Let the real file write and close finish outside the widget fake clock.
-      for (
-        var i = 0;
-        i < 100 &&
-            find.text('Meeting notes saved successfully').evaluate().isEmpty;
-        i++
-      ) {
-        await tester.runAsync(
-          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      // Start and await the real file/process work outside the fake clock.
+      await tester.runAsync(() async {
+        final button = tester.widget<FilledButton>(
+          find.widgetWithText(FilledButton, 'Download markdown'),
         );
-        await tester.pump();
-      }
+        await Function.apply(button.onPressed!, const []);
+      });
+      await tester.pump(const Duration(milliseconds: 400));
       expect(calls, 2);
-      expect(output.readAsStringSync(), expected);
       expect(find.text('Meeting notes saved successfully'), findsOneWidget);
+      expect(output.readAsStringSync(), expected);
+      expect(output.statSync().mode & 0x1ff, 0x180);
       await tester.tap(find.text('Close'));
       await tester.pump(const Duration(milliseconds: 400));
       await tester.pumpWidget(const SizedBox.shrink());

@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,13 +22,19 @@ void main() {
     'meeting recording requires setup and opens speech setup instead of throwing',
     (tester) async {
       final directory = Directory.systemTemp.createTempSync('meeting-setup-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final helper = OfflineHelper(
         '${directory.path}/helper.sock',
         '${directory.path}/helper',
       );
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Meetings').first);
       await tester.pumpAndSettle();
@@ -61,6 +68,9 @@ void main() {
     'registered missing runner is reported as incomplete speech setup',
     () async {
       final directory = Directory.systemTemp.createTempSync('meeting-model-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
       final store = Store('${directory.path}/app.db');
       final model = File('${directory.path}/speech.model')
         ..writeAsStringSync('control flow fixture');

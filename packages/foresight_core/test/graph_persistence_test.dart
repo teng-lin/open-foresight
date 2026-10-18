@@ -10,6 +10,9 @@ void main() {
     'layout and float32 embeddings survive reopen and reject incompatible cache',
     () {
       final temp = Directory.systemTemp.createTempSync('graph-persistence-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       var store = Store('${temp.path}/app.db');
       final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture');
       final b = store.importText('Borealis', 'Budget', 'text/plain', 'fixture');
@@ -69,6 +72,9 @@ void main() {
     'source edits, deletions and additions invalidate stale publication',
     () {
       final temp = Directory.systemTemp.createTempSync('graph-revisions-');
+      addTearDown(() {
+        if (temp.existsSync()) temp.deleteSync(recursive: true);
+      });
       final store = Store('${temp.path}/app.db');
       final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture');
       final b = store.importText('Borealis', 'Budget', 'text/plain', 'fixture');
@@ -100,6 +106,9 @@ void main() {
 
   test('failed cache publication preserves the previous valid scene', () {
     final temp = Directory.systemTemp.createTempSync('graph-atomic-');
+    addTearDown(() {
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    });
     final store = Store('${temp.path}/app.db');
     final a = store.importText('Apollo', 'Launch', 'text/plain', 'fixture');
     final b = store.importText('Borealis', 'Budget', 'text/plain', 'fixture');

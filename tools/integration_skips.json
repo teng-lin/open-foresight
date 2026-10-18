@@ -144,6 +144,14 @@
       "reason": "Regular core build supplies FORESIGHT_NATIVE_LIBRARY."
     },
     {
+      "path": "packages/foresight_core/test/platform_adapters_test.dart",
+      "conditions": [
+        "!Platform.isMacOS"
+      ],
+      "gate": "platform",
+      "reason": "macOS notification adapters are exercised on the macOS platform runner; Linux explicitly skips this Apple-only contract."
+    },
+    {
       "path": "packages/foresight_core/test/proactive_model_test.dart",
       "conditions": [
         "env['FORESIGHT_PROACTIVE_MODEL_TEST'] != '1'"
@@ -166,6 +174,14 @@
       ],
       "gate": "reference-tokenizer",
       "reason": "Requires original and port helper sockets; CI cannot supply the original application."
+    },
+    {
+      "path": "packages/foresight_core/test/schema_migrations_test.dart",
+      "conditions": [
+        "Platform.isWindows ? 'Requires POSIX writer death and symlinks' : false"
+      ],
+      "gate": "platform",
+      "reason": "Forced writer death and symlink cases run on the supported Linux and macOS platforms in every regular core build."
     },
     {
       "path": "packages/foresight_core/test/web_model_test.dart",

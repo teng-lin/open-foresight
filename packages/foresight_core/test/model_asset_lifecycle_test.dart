@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/src/model_acquisition.dart';
@@ -19,7 +20,7 @@ void main() {
   setUp(() async {
     // The original full-path contains predicate also includes ancestor names.
     do {
-      root = await Directory('/tmp').createTemp('model-assets-');
+      root = await shortTestTempRoot.createTemp('model-assets-');
       if (root.path.contains('4')) await root.delete();
     } while (root.path.contains('4'));
     metadata = [];
@@ -250,8 +251,9 @@ void main() {
         root: root,
         fetch: () async => ForesightSharedConfig(),
         renameFile: (file, destination) {
-          if (file.path.endsWith('/previous'))
+          if (file.path.endsWith('/previous')) {
             throw FileSystemException('restore denied');
+          }
           return file.rename(destination);
         },
       );

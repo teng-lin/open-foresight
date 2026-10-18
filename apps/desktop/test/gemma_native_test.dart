@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/application.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,6 +15,9 @@ void main() {
       final dir = Directory.systemTemp.createTempSync(
         'foresight-gemma-native-',
       );
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
       Process.runSync('chmod', ['700', dir.path]);
       final store = Store('${dir.path}/app.db');
       final helper = Helper('${dir.path}/helper.sock', '${dir.path}/helper');
@@ -43,7 +47,7 @@ void main() {
           '',
           backend: env['FORESIGHT_EMBEDDING_GPU'] == '1'
               ? 'litert_lm_embedding_gpu'
-              : 'llama_cpp',
+              : 'litert_lm_embedding_cpu',
         );
         helper.onReady = domain.resume;
         await helper.start();

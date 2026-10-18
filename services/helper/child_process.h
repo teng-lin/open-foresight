@@ -9,20 +9,16 @@
 #include <memory>
 #include <mutex>
 #include <signal.h>
+#include <spawn.h>
 #include <stdexcept>
 #include <string>
-#ifdef __linux__
-#include <sys/prctl.h>
-#endif
-#include <spawn.h>
 extern char **environ;
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
 
-// Linux's parent-death signal belongs to the *creating thread*, not just
-// its process. Keep that thread alive until the owned adapter has been reaped.
-// In particular, a retired gRPC request thread must not terminate the model.
+// The supervisor owns the adapter's process group and watches a liveness pipe.
+// Keep its owning thread alive until the supervisor has reaped the adapter.
 class ChildProcess {
   std::thread creator_;
   std::mutex mutex_;
@@ -31,115 +27,65 @@ class ChildProcess {
   std::atomic<pid_t> pid_{-1};
   std::atomic<bool> alive_{false};
 
-  static void terminate(pid_t child) {
-    if (child <= 0)
-      return;
-    kill(child, SIGTERM);
-    for (int n = 0; n < 50; ++n) {
-      const auto result = waitpid(child, nullptr, WNOHANG);
-      if (result == child || (result < 0 && errno == ECHILD))
-        return;
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    kill(child, SIGKILL);
-    while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
-    }
-  }
-
 public:
   ChildProcess(std::string executable, std::string mode, std::string model,
                int input, int output, std::string option = {}) {
     auto started = std::make_shared<std::promise<pid_t>>();
     auto result = started->get_future();
-    const pid_t owner = getpid();
-    creator_ = std::thread([this, started, owner, input, output,
+    creator_ = std::thread([this, started, input, output,
                             executable = std::move(executable),
                             mode = std::move(mode), model = std::move(model),
                             option = std::move(option)]() mutable {
       try {
+        std::unique_lock launch(foresight::launch_mutex);
+        posix_spawn_file_actions_t actions;
+        posix_spawn_file_actions_init(&actions);
+        posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO);
+        posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO);
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
+                                         O_WRONLY, 0);
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        short flags = POSIX_SPAWN_SETPGROUP;
 #ifdef __APPLE__
-      posix_spawn_file_actions_t actions;
-      posix_spawn_file_actions_init(&actions);
-      posix_spawn_file_actions_adddup2(&actions, input, STDIN_FILENO);
-      posix_spawn_file_actions_adddup2(&actions, output, STDOUT_FILENO);
-      posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
-                                       O_WRONLY, 0);
-      posix_spawnattr_t attr;
-      posix_spawnattr_init(&attr);
-      posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETPGROUP |
-                                          POSIX_SPAWN_CLOEXEC_DEFAULT);
-      posix_spawnattr_setpgroup(&attr, 0);
-      std::vector<std::string> args{executable, mode, model};
-      if (!option.empty())
-        args.push_back(option);
-      pid_t child = -1;
-      foresight::OwnedSpawn owned;
-      const int error = owned.spawn(&child, &actions, &attr, args);
-      posix_spawn_file_actions_destroy(&actions);
-      posix_spawnattr_destroy(&attr);
-      if (error)
-        child = -1;
-#else
-      pid_t child = fork();
-      if (child == 0) {
-        if (prctl(PR_SET_PDEATHSIG, SIGKILL) || getppid() != owner)
-          _exit(127);
-        if (dup2(input, STDIN_FILENO) < 0 || dup2(output, STDOUT_FILENO) < 0)
-          _exit(127);
-        if (fcntl(STDIN_FILENO, F_SETFD, 0) < 0 ||
-            fcntl(STDOUT_FILENO, F_SETFD, 0) < 0)
-          _exit(127);
-        // The frontend may close its helper stderr reader while this model
-        // remains alive. Structured adapter failures use stdout; third-party
-        // progress/warnings must not depend on that former reader.
-        int quiet = open("/dev/null", O_WRONLY | O_CLOEXEC);
-        if (quiet < 0 || dup2(quiet, STDERR_FILENO) < 0)
-          _exit(127);
-        if (quiet != STDERR_FILENO)
-          close(quiet);
-        if (fcntl(STDERR_FILENO, F_SETFD, 0) < 0)
-          _exit(127);
-        if (option.empty())
-          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
-                 model.c_str(), static_cast<char *>(nullptr));
-        else
-          execlp(executable.c_str(), executable.c_str(), mode.c_str(),
-                 model.c_str(), option.c_str(), static_cast<char *>(nullptr));
-        _exit(127);
-      }
-
+        flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;
 #endif
-#ifdef __APPLE__
-      pid_.store(child > 0 ? owned.worker : -1);
-#else
-      pid_.store(child);
-#endif
-      alive_.store(child > 0);
-      started->set_value(child);
-      std::unique_lock lock(mutex_);
-      while (!stopping_) {
-        condition_.wait_for(lock, std::chrono::milliseconds(50),
-                            [this] { return stopping_; });
-        if (child > 0) {
-          const auto ended = waitpid(child, nullptr, WNOHANG);
-          if (ended == child || (ended < 0 && errno == ECHILD)) {
-            child = -1;
-            pid_.store(-1);
-            alive_.store(false);
+        posix_spawnattr_setflags(&attr, flags);
+        posix_spawnattr_setpgroup(&attr, 0);
+        std::vector<std::string> args{executable, mode, model};
+        if (!option.empty())
+          args.push_back(option);
+        pid_t child = -1;
+        foresight::OwnedSpawn owned;
+        const int error = owned.spawn(&child, &actions, &attr, args);
+        posix_spawn_file_actions_destroy(&actions);
+        posix_spawnattr_destroy(&attr);
+        if (error)
+          child = -1;
+        pid_.store(child > 0 ? owned.worker : -1);
+        launch.unlock();
+        alive_.store(child > 0);
+        started->set_value(child);
+        std::unique_lock lock(mutex_);
+        while (!stopping_) {
+          condition_.wait_for(lock, std::chrono::milliseconds(50),
+                              [this] { return stopping_; });
+          if (child > 0) {
+            const auto ended = waitpid(child, nullptr, WNOHANG);
+            if (ended == child || (ended < 0 && errno == ECHILD)) {
+              child = -1;
+              pid_.store(-1);
+              alive_.store(false);
+            }
           }
         }
-      }
-#ifdef __APPLE__
-      owned.stop();
-      // The supervisor owns worker reaping and exits after bounded cleanup.
-      if (child > 0)
-        while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
-        }
-#else
-      terminate(child);
-#endif
-      pid_.store(-1);
-      alive_.store(false);
+        owned.stop();
+        // The supervisor owns worker reaping and exits after bounded cleanup.
+        if (child > 0)
+          while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
+          }
+        pid_.store(-1);
+        alive_.store(false);
       } catch (...) {
         try {
           started->set_value(-1);
@@ -154,7 +100,9 @@ public:
   }
   ChildProcess(const ChildProcess &) = delete;
   ChildProcess &operator=(const ChildProcess &) = delete;
-  ~ChildProcess() { stop(); }
+  ~ChildProcess() {
+    stop();
+  }
   void stop() {
     {
       std::lock_guard lock(mutex_);
@@ -164,6 +112,10 @@ public:
     if (creator_.joinable())
       creator_.join();
   }
-  bool alive() const { return alive_.load(); }
-  pid_t pid() const { return pid_.load(); }
+  bool alive() const {
+    return alive_.load();
+  }
+  pid_t pid() const {
+    return pid_.load();
+  }
 };

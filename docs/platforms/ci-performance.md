@@ -10,7 +10,7 @@ not the application test requirements.
 | Output | Identity | Storage |
 | --- | --- | --- |
 | macOS static SDK | SDK builder and its pinned sources/flags | Actions artifact, 90 days |
-| macOS Python/LiteRT/Whisper prefix | runtime builders, lock and patches | Actions artifact, 90 days |
+| macOS native LiteRT/Whisper prefix | runtime builders, pinned wheel hashes, sources and patches | Actions artifact, 90 days |
 | Linux core | core Dockerfile, CMake hook, Python locks | GHCR image by digest |
 | Linux LiteRT | its Dockerfile, builder, patch, core identity | GHCR image by digest |
 | Linux Whisper | its Dockerfile, builder, core identity | GHCR image by digest |
@@ -18,9 +18,11 @@ not the application test requirements.
 | Tested macOS/Linux applications | exact successful main commit | Actions artifact, 30 days |
 
 The producer runs when dependency inputs change on main or a same-repository
-PR, on manual dispatch, and monthly to refresh expiring artifacts. Fork PRs do
-not get a publishing producer. Dependency jobs have their own concurrency groups
-with cancellation disabled. Application/docs pushes cannot cancel compilation.
+PR, on manual dispatch, and monthly to refresh expiring artifacts. Same-repository
+PRs can produce scoped macOS archives. Linux registry publication runs only on
+main; PR dependency checks build the complete Linux SDK locally with read-only
+credentials. Fork PRs do not get dependency producer jobs. Dependency jobs have
+their own concurrency groups with cancellation disabled. Application/docs pushes cannot cancel compilation.
 Linux LiteRT and Whisper run in separate jobs after core, then assembly copies
 their outputs. Registry layer caches are separate per component. A LiteRT recipe
 change leaves the core and Whisper identities intact. The initial migration to
@@ -28,11 +30,19 @@ these new component identities may require one Linux bootstrap; subsequent
 unchanged recipes reuse the image. macOS producers can bootstrap from existing
 exact main/PR caches.
 
+The monthly Linux dependency schedule bypasses qualified descriptors and Docker
+layer caches, rebuilds from digest-pinned base images, applies Ubuntu package
+upgrades, and publishes a fresh immutable SDK digest. Release candidates keep the
+exact digest recorded by their successful build. Update the checked-in base-image
+digests deliberately when advancing the OS baseline.
+
 Consumers verify the artifact's repository, workflow path, event, completed
 producer job, identity and archive checksum. Shared dependencies come from main
-or source commits reachable from main. A dependency PR may also consume its own
-completed producer; another unmerged PR cannot. An explicit manual build can be
-consumed by that same source head. Merged dependency PR outputs can be reused
+or source commits reachable from main. A macOS dependency PR may also consume its
+own completed producer; another unmerged PR cannot. Linux PR model acceptance
+reuses a qualified shared descriptor when available and otherwise builds its SDK
+locally without publishing. An explicit manual build can be consumed by that
+same source head. Merged dependency PR outputs can be reused
 without compiling again; squash/rebase merges may require a fresh producer if
 the original source commit is no longer reachable. Application candidates require
 a successful main workflow and the exact release commit. Archive extraction
@@ -45,8 +55,13 @@ No distribution credentials or user configuration are added to dependency archiv
 
 Documentation-only changes run the change/whitespace classifier, workflow lint,
 version checks and stable `platform-checks` aggregate without allocating macOS
-or Linux build runners. Code changes run both platform gates; main also builds
-the complete Linux portable candidate. The aggregate rejects failures,
+or Linux build runners. Code changes run both platform gates and a separate
+Ubuntu document-import check. The Linux gate runs the offline pytest suite;
+the document check requires actual PDF and RTF imports through the shipped
+sandbox and retains its evidence. Main also builds the complete Linux portable
+candidate. Pull requests that change the desktop, application service, or
+packaging additionally build and install the Ubuntu 24.04 package. The aggregate
+rejects failures,
 cancellations, and unexpectedly skipped selected jobs. If branch protection is
 introduced, require `platform-checks`; individual platform jobs intentionally
 skip on documentation changes. Classification errors fail that check.
@@ -86,7 +101,9 @@ v0.1.0 release.
 
 For missing dependencies, inspect or run **Reusable CI dependencies** on main
 (or the dependency PR). Consumers wait a bounded time and fail clearly if the
-qualified producer is unavailable; they do not fall back to compilation.
+qualified producer is unavailable. The Linux PR model-acceptance path instead
+performs a local SDK build when no qualified descriptor exists; this fallback
+applies only to an ordinary cache miss, not authentication or network errors.
 A registry digest deleted after qualification is also an error. Restore the
 producer output deliberately. Authentication/network errors must be fixed
 rather than treated as cache misses. Before a cold registry build, a tiny image
@@ -97,10 +114,12 @@ It builds the same four recipes, sequentially for a single local builder. The
 hosted producer parallelizes the independent components. Using emulation on an
 ARM host does not qualify x86-64 runtime support.
 
-Local validation after merging current main: 198 offline Python tests passed (10 skipped),
-workflow actionlint passed, all embedded Python/shell blocks parsed, and the real
-macOS SDK/runtime prefixes survived archive extraction and verification at new
-paths. The local ARM Mac does not qualify the x86-64 container builds.
+Current gate selection comes from [macos.yml](../../.github/workflows/macos.yml)
+and [integration-acceptance.yml](../../.github/workflows/integration-acceptance.yml).
+Native CTest, core Dart, Flutter, service/MCP and installed/model acceptance are
+separate checks. Test totals change with the source revision; use each run's
+retained reporter output instead of interpreting historical counts below as the
+current suite size.
 
 No hosted speedup is claimed until comparable successful runs finish. Artifact
 transfer, runner queues, apt/base-image changes and first-time compilation still
@@ -130,9 +149,7 @@ qualified SDK digests when cleaning up this shared repository.
 The `tested` Docker target ends after native build/CTest, core and desktop
 analysis/tests/builds, and service integration. It enables the existing parallel
 core/desktop orchestrator, preserving failure propagation and the service
-integration prerequisite. The pinned ONNX download now precedes the repository
-copy and revision argument, so application-only changes reuse it. Its archive
-and library checksum checks are unchanged.
+integration prerequisite.
 
 CI exports only `tested` to the registry cache, then assembles the distribution
 bundle using the same local BuildKit result. Distribution secrets are supplied
@@ -149,7 +166,7 @@ boundaries and provenance checks, rather than replacing the commit with a stable
 content hash. The first registry cache export is also cold. Compare successful
 hosted runs before claiming an overall time reduction.
 
-Local verification: all workflows passed actionlint; Docker's build check passed
+Earlier local verification before the audit fixes: all workflows passed actionlint; Docker's build check passed
 without warnings; 11 CI dependency/provenance tests and three process-level
 parallel-gate tests passed. Packaging contracts passed on the host (five passed,
 two Linux-only skips) and in a Linux GCC container (six passed, one CMake-only
@@ -197,7 +214,7 @@ The verified SDK and inference-runtime caches remain important: parallel tests
 do not remove cold compiler work or runner queues. Splitting additional macOS
 jobs can increase queue pressure and artifact-transfer overhead.
 
-Local validation on the development Mac: native CTest 13/13; parallel core
+Historical local validation before the later audit fixes: native CTest 13/13; parallel core
 coverage run 642 passed / 8 skipped, desktop run 107 passed / 10 skipped; both
 AOT executables and the Flutter macOS release app built. The overlapping groups
 completed in 83.6 seconds. Subsequent service integration passed 14 tests with
@@ -205,3 +222,11 @@ one opt-in native desktop integration skip. Offline Python validation passed
 159 tests with 10 skipped and 86 subtests, including process-level concurrency,
 failure propagation and partial-launch cleanup checks. These local timings do
 not predict GitHub runner timing or establish a hosted speedup.
+
+Dependency publication runs only on main. Pull requests build the full Linux SDK
+locally with read-only credentials and never export registry caches or images.
+The monthly dependency schedule bypasses qualified descriptors and Docker layer
+caches, rebuilds from digest-pinned base images, applies Ubuntu package upgrades,
+and publishes a fresh immutable SDK digest. Release candidates keep the exact
+digest recorded by their successful build. Update the checked-in base-image
+digests deliberately when advancing the OS baseline.

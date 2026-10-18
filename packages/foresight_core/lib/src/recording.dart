@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -23,7 +25,7 @@ class _AudioSegment {
 
 /// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
 /// ephemeral; completed speech segments are committed while capture continues.
-class Recording {
+class Recording implements RecordingStatus {
   final DynamicLibrary lib;
   final Duration speechTimeout, stopTimeout;
   final void Function(String) state;
@@ -31,20 +33,29 @@ class Recording {
   final void Function(String, int, int, String)? provisional;
   final void Function(Map<String, dynamic>)? interruption;
   final void Function()? levels;
+  @override
   final currentVolumes = <double>[];
   int _lastLevels = 0;
   final captures = <Pointer<Void>>[], speeches = <Pointer<Void>>[];
-  final sampleCounts = <int>[], peakVolumes = <double>[];
+  final _idleSpeeches = <int, Pointer<Void>>{};
+  @override
+  final sampleCounts = <int>[];
+  @override
+  final peakVolumes = <double>[];
   final _buffers = <BytesBuilder>[], _starts = <int>[], _rates = <int>[];
   final _lastVoice = <int>[], _voiced = <bool>[], _nextSnapshot = <int>[];
   final _provisionalEpochs = <int>[];
   final _queues = <List<_AudioSegment>>[];
   final _workers = <int, Future<void>>{};
   Timer? timer;
-  bool polling = false, finishing = false;
+  bool polling = false;
+  @override
+  bool finishing = false;
+  @override
   bool paused = false;
   bool _echoCancellation = false;
   final _echoState = <String, dynamic>{};
+  @override
   Map<String, dynamic> get echoCancellationState => {
     ..._echoState,
     'requested': _echoCancellation,
@@ -54,10 +65,11 @@ class Recording {
   void setEchoCancellation(bool enabled) {
     var pending = false;
     if (!lib.providesSymbol('fs_capture_set_echo_cancellation')) {
-      if (enabled)
+      if (enabled) {
         throw StateError(
           'Echo cancellation requires an updated native audio runtime',
         );
+      }
     } else if (captures.isNotEmpty) {
       final accepted = lib
           .lookupFunction<
@@ -67,10 +79,11 @@ class Recording {
             'fs_capture_set_echo_cancellation',
           )(captures.first, enabled ? 1 : 0);
       pending = accepted == 1;
-      if (accepted == 0 && enabled)
+      if (accepted == 0 && enabled) {
         throw StateError(
           'Echo cancellation is unavailable for this audio route',
         );
+      }
     }
     _echoCancellation = enabled;
     _echoState['pending'] = pending;
@@ -79,6 +92,7 @@ class Recording {
 
   final _targets = <String>[];
   String lastError = '', _runtime = '', _model = '';
+  @override
   DateTime lastAudioActivity = DateTime.now();
   int _epoch = 0, _transcriptCount = 0;
   Recording(
@@ -115,8 +129,9 @@ class Recording {
       final handle = lib.lookupFunction<CreateNative, CreateDart>(
         'fs_speech_create',
       )(runtime, model);
-      if (handle == nullptr)
+      if (handle == nullptr) {
         throw StateError('Speech runtime/model unavailable');
+      }
       speeches.add(handle);
       return handle;
     } finally {
@@ -126,7 +141,10 @@ class Recording {
   }
 
   void _releaseSpeech(Pointer<Void> handle) {
-    if (!speeches.remove(handle)) return;
+    final active = speeches.remove(handle);
+    final idle = _idleSpeeches.values.contains(handle);
+    _idleSpeeches.removeWhere((_, value) => value == handle);
+    if (!active && !idle) return;
     lib.lookupFunction<
       Void Function(Pointer<Void>),
       void Function(Pointer<Void>)
@@ -145,13 +163,16 @@ class Recording {
         speeches.isNotEmpty ||
         paused ||
         finishing ||
-        _workers.isNotEmpty)
-      throw StateError('A recording is already active');
-    if (!File(model).existsSync())
+        _workers.isNotEmpty) {
+      throw RpcError(RpcErrorCode.busy, 'A recording is already active');
+    }
+    if (!File(model).existsSync()) {
       throw StateError('Speech model file is missing: $model');
+    }
     if (!File(runtime).existsSync() ||
-        File(runtime).statSync().mode & 0x49 == 0)
+        File(runtime).statSync().mode & 0x49 == 0) {
       throw StateError('Speech runner is missing or not executable: $runtime');
+    }
     _runtime = runtime;
     _model = model;
     _echoCancellation = echoCancellation;
@@ -205,10 +226,11 @@ class Recording {
     try {
       if (channel == 0 &&
           _echoCancellation &&
-          !lib.providesSymbol('fs_capture_start_with_options'))
+          !lib.providesSymbol('fs_capture_start_with_options')) {
         throw StateError(
           'Echo cancellation requires an updated native audio runtime',
         );
+      }
       final capture = channel == 0 && _echoCancellation
           ? lib.lookupFunction<
               Pointer<Void> Function(Pointer<Utf8>, Int32, Int32, Int32),
@@ -232,9 +254,13 @@ class Recording {
   /// Stop acquisition, retain and finalize pre-pause PCM, and release devices.
   /// Speech workers may finish their existing segments while capture is paused.
   void pause() {
-    if (finishing) throw StateError('Transcription is finalizing');
+    if (finishing) {
+      throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
+    }
     if (paused) return;
-    if (captures.isEmpty) throw StateError('No active recording');
+    if (captures.isEmpty) {
+      throw RpcError(RpcErrorCode.notFound, 'No active recording');
+    }
     timer?.cancel();
     _finishCapture();
     for (var channel = 0; channel < _buffers.length; channel++) {
@@ -249,7 +275,9 @@ class Recording {
   }
 
   void resume() {
-    if (finishing) throw StateError('Transcription is finalizing');
+    if (finishing) {
+      throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
+    }
     if (!paused) throw StateError('Recording is not paused');
     _echoState
       ..clear()
@@ -334,10 +362,11 @@ class Recording {
               ...event,
               'source': channel == 0 ? 'microphone' : 'playback',
             };
-            if (lastError.isEmpty)
+            if (lastError.isEmpty) {
               state(
                 'Capture gap: ${event['reason']}; resuming live transcription',
               );
+            }
             interruption?.call(gap);
             continue;
           }
@@ -434,10 +463,11 @@ class Recording {
 
   void _flush(int channel) {
     final pcm = _buffers[channel].takeBytes();
-    if (_voiced[channel] && pcm.isNotEmpty)
+    if (_voiced[channel] && pcm.isNotEmpty) {
       _enqueue(
         _AudioSegment(channel, _starts[channel], _rates[channel], pcm, false),
       );
+    }
     _starts[channel] = sampleCounts[channel];
     _voiced[channel] = false;
     _nextSnapshot[channel] = _rates[channel] * 5;
@@ -477,8 +507,14 @@ class Recording {
     while (epoch == _epoch && _queues[channel].isNotEmpty) {
       final segment = _queues[channel].removeAt(0);
       Pointer<Void>? handle;
+      var reusable = false;
       try {
-        handle = _speech();
+        handle = _idleSpeeches.remove(channel);
+        if (handle == null) {
+          handle = _speech();
+        } else {
+          speeches.add(handle);
+        }
         final samples = calloc<Int16>(segment.pcm.length ~/ 2);
         try {
           final bytes = ByteData.sublistView(segment.pcm);
@@ -503,8 +539,9 @@ class Recording {
                 Int32 Function(Pointer<Void>, Pointer<Utf8>),
                 int Function(Pointer<Void>, Pointer<Utf8>)
               >('fs_speech_finish')(handle, request) !=
-              0)
+              0) {
             throw StateError('Speech request rejected');
+          }
         } finally {
           calloc.free(request);
         }
@@ -519,8 +556,9 @@ class Recording {
             await Future<void>.delayed(const Duration(milliseconds: 20));
             continue;
           }
-          if (event['type'] == 'state' && event['message'] is String)
+          if (event['type'] == 'state' && event['message'] is String) {
             state(event['message'] as String);
+          }
           if (event['type'] == 'error') failure = event['message'].toString();
           if (event['type'] == 'transcript') {
             final text = (event['text'] as String).trim();
@@ -543,10 +581,12 @@ class Recording {
             }
           }
           if (event['type'] == 'done') {
-            if (event['status'] != 'completed')
+            if (event['status'] != 'completed') {
               throw StateError(
                 'ASR ${event['status']}: ${failure ?? 'runner failed'}',
               );
+            }
+            reusable = true;
             break;
           }
         }
@@ -554,22 +594,32 @@ class Recording {
         if (epoch == _epoch) {
           lastError = error.toString();
           state('Live transcription failed: $lastError');
-          if (!segment.provisional)
+          if (!segment.provisional) {
             interruption?.call({
               'reason': 'speech_recognition_error',
               'message': lastError,
               'discarded_bytes': segment.pcm.length,
               'source': channel == 0 ? 'microphone' : 'playback',
             });
+          }
         }
       } finally {
-        if (handle != null) _releaseSpeech(handle);
+        if (handle != null) {
+          if (reusable && epoch == _epoch) {
+            speeches.remove(handle);
+            _idleSpeeches[channel] = handle;
+          } else {
+            _releaseSpeech(handle);
+          }
+        }
       }
     }
   }
 
   Future<void> stop() async {
-    if (finishing) throw StateError('Transcription is already in progress');
+    if (finishing) {
+      throw RpcError(RpcErrorCode.busy, 'Transcription is already in progress');
+    }
     finishing = true;
     final epoch = _epoch;
     timer?.cancel();
@@ -605,7 +655,9 @@ class Recording {
         }
         await Future<void>.delayed(Duration.zero);
       }
-      if (epoch != _epoch) throw StateError('Recording cancelled');
+      if (epoch != _epoch) {
+        throw RpcError(RpcErrorCode.cancelled, 'Recording cancelled');
+      }
       if (lastError.isNotEmpty) throw StateError(lastError);
       state(
         _transcriptCount == 0
@@ -618,6 +670,7 @@ class Recording {
     }
   }
 
+  @override
   void dispose() {
     _epoch++;
     paused = false;
@@ -629,7 +682,7 @@ class Recording {
       >('fs_capture_stop')(capture);
     }
     captures.clear();
-    for (final speech in List<Pointer<Void>>.from(speeches)) {
+    for (final speech in {...speeches, ..._idleSpeeches.values}) {
       _releaseSpeech(speech);
     }
     _workers.clear();

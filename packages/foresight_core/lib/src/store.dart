@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'model_integrity.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
@@ -5,18 +7,132 @@ import 'dart:convert';
 import 'agent_access.dart';
 import 'dart:io';
 import 'graph_labels.dart';
+import 'label_propagation.dart';
+import 'graph_layout.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
+
+void requireEmbeddingBundle(String path) {
+  if (!path.endsWith('.litertlm') || Directory(path).existsSync()) {
+    throw StateError(
+      'Unsupported model format: embedding requires a .litertlm file',
+    );
+  }
+}
 
 /// Linux application schema, independently versioned from helper databases.
 class Store {
   final Database db;
   final String path;
-  Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly);
-  Store(this.path) : db = sqlite3.open(path) {
-    db.execute('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON');
-    final version = db.select('PRAGMA user_version').first.values.first as int;
-    if (version > 1) throw StateError('Unsupported newer application database');
+  static const schemaVersion = 9;
+
+  Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly) {
+    try {
+      _checkVersion();
+    } catch (_) {
+      db.dispose();
+      rethrow;
+    }
+  }
+
+  Store(this.path) : db = _openForMigrations(path) {
+    try {
+      // Refuse newer profiles before even changing their journal mode.
+      _checkVersion();
+      // Migrations populate the WAL before readers open the fresh profile.
+      // Switching only after COMMIT leaves no WAL for macOS read-only clients.
+      db.execute('PRAGMA journal_mode=WAL');
+      db.execute('PRAGMA foreign_keys=ON');
+      db.execute('BEGIN IMMEDIATE');
+      try {
+        // Re-read while holding the writer lock: another opener may have migrated.
+        var version = _checkVersion();
+        while (version < schemaVersion) {
+          _migrateTo(++version);
+          db.execute('PRAGMA user_version=$version');
+        }
+        db.execute('COMMIT');
+      } catch (_) {
+        // SQLITE_FULL/IOERR can already roll back the transaction.
+        if (!db.autocommit) db.execute('ROLLBACK');
+        rethrow;
+      }
+    } catch (_) {
+      db.dispose();
+      rethrow;
+    }
+  }
+
+  // Even opening and closing a writable connection can checkpoint a WAL.
+  // Refuse future profiles through a separate read-only connection first.
+  static Database _openForMigrations(String path) {
+    if (path != ':memory:' && File(path).existsSync()) {
+      final canonical = File(path).resolveSymbolicLinksSync();
+      final hasWal = File('$canonical-wal').existsSync();
+      // A closed WAL profile may have no sidecars. The short immutable probe
+      // reads its main file without asking macOS SQLite to create a WAL.
+      // An existing WAL must instead be read normally: it can hold a newer
+      // user_version than the main file. Never make a live reader immutable.
+      final probePath = hasWal
+          ? canonical
+          : Uri.file(
+              canonical,
+            ).replace(queryParameters: {'immutable': '1'}).toString();
+      final probe = sqlite3.open(
+        probePath,
+        mode: OpenMode.readOnly,
+        uri: !hasWal,
+      );
+      try {
+        _supportedVersion(probe);
+      } finally {
+        probe.dispose();
+      }
+    }
+    return sqlite3.open(path);
+  }
+
+  int _checkVersion() => _supportedVersion(db);
+
+  static int _supportedVersion(Database database) {
+    final version =
+        database.select('PRAGMA user_version').single.values.single as int;
+    if (version > schemaVersion) {
+      throw StateError(
+        'Unsupported newer application database version $version '
+        '(maximum $schemaVersion)',
+      );
+    }
+    return version;
+  }
+
+  void _migrateTo(int version) {
+    switch (version) {
+      case 1:
+      case 2:
+        // Historical version-1 releases added tables without bumping the version.
+        // Adopt that baseline once before applying individually versioned changes.
+        _createLegacyTables();
+      case 3:
+        _migrateNoteHistory();
+      case 4:
+        _migrateModelMetadata();
+      case 5:
+        _migrateSourceUris();
+      case 6:
+        _migrateAnswerHistory();
+      case 7:
+        _migrateMeetingQuestions();
+      case 8:
+        _migrateGoogleTables();
+      case 9:
+        _reconcileLabelRecords();
+      default:
+        throw StateError('Missing application database migration $version');
+    }
+  }
+
+  void _createLegacyTables() {
     db.execute(
       '''CREATE TABLE IF NOT EXISTS sources(id TEXT PRIMARY KEY,title TEXT NOT NULL,content TEXT NOT NULL,mime TEXT NOT NULL,revision INTEGER NOT NULL,state TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',deleted INTEGER NOT NULL DEFAULT 0,provenance TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS notes(id INTEGER PRIMARY KEY,title TEXT NOT NULL,body TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 1,timestamp INTEGER);
@@ -41,8 +157,11 @@ class Store {
     CREATE TABLE IF NOT EXISTS meeting_question_cursors(meeting_id INTEGER PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS meeting_questions(id INTEGER PRIMARY KEY,meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,transcript_id INTEGER REFERENCES transcript(id) ON DELETE CASCADE,question TEXT NOT NULL,normalized TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',answer_id INTEGER REFERENCES answers(id) ON DELETE SET NULL,error TEXT NOT NULL DEFAULT '',created INTEGER NOT NULL);
     INSERT OR IGNORE INTO meeting_details(meeting_id,created) SELECT id,0 FROM meetings;
-    PRAGMA user_version=1;''',
+    ''',
     );
+  }
+
+  void _migrateNoteHistory() {
     // Legacy profiles did not record when a note was saved. Preserve unknown
     // timestamps instead of manufacturing them from meeting creation times.
     for (final table in ['notes', 'meeting_notes']) {
@@ -64,12 +183,16 @@ class Store {
         .any((row) => row['name'] == 'enhanced_body')) {
       db.execute('ALTER TABLE meeting_notes ADD COLUMN enhanced_body TEXT');
     }
+  }
+
+  void _migrateModelMetadata() {
     if (!db
         .select('PRAGMA table_info(models)')
-        .any((row) => row['name'] == 'backend'))
+        .any((row) => row['name'] == 'backend')) {
       db.execute(
         "ALTER TABLE models ADD COLUMN backend TEXT NOT NULL DEFAULT 'llama_cpp'",
       );
+    }
     if (!db
         .select('PRAGMA table_info(models)')
         .any((row) => row['name'] == 'model_type')) {
@@ -77,6 +200,9 @@ class Store {
         'ALTER TABLE models ADD COLUMN model_type INTEGER NOT NULL DEFAULT 0',
       );
     }
+  }
+
+  void _migrateSourceUris() {
     if (!db
         .select('PRAGMA table_info(source_details)')
         .any((row) => row['name'] == 'source_uri')) {
@@ -85,13 +211,17 @@ class Store {
       );
       for (final row in rows('SELECT id,provenance FROM sources')) {
         final uri = _legacySourceUri(row['provenance'] as String);
-        if (uri.isNotEmpty)
+        if (uri.isNotEmpty) {
           db.execute(
             'UPDATE source_details SET source_uri=? WHERE source_id=?',
             [uri, row['id']],
           );
+        }
       }
     }
+  }
+
+  void _migrateAnswerHistory() {
     if (!db
         .select('PRAGMA table_info(answers)')
         .any((r) => r['name'] == 'conversation')) {
@@ -122,8 +252,14 @@ class Store {
     db.execute(
       'CREATE INDEX IF NOT EXISTS answer_conversation_id ON answers(conversation,id)',
     );
-    _migrateMeetingQuestions();
-    _reconcileLabelRecords();
+  }
+
+  void _migrateGoogleTables() {
+    db.execute(
+      '''CREATE TABLE IF NOT EXISTS google_sources(source_id TEXT PRIMARY KEY REFERENCES sources(id),account TEXT NOT NULL,file_id TEXT NOT NULL,modified TEXT NOT NULL,mime TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS calendar_events(event_key TEXT PRIMARY KEY,account TEXT NOT NULL,calendar_id TEXT NOT NULL,google_id TEXT NOT NULL,meeting_id INTEGER NOT NULL REFERENCES meetings(id),source_id TEXT NOT NULL,starts INTEGER NOT NULL,ends INTEGER NOT NULL,status TEXT NOT NULL,metadata TEXT NOT NULL,synced INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS google_folders(account TEXT NOT NULL,folder_id TEXT NOT NULL,PRIMARY KEY(account,folder_id));''',
+    );
   }
 
   // Keep durable history while allowing interim origins and repeated questions
@@ -147,9 +283,7 @@ class Store {
                   'meeting_id,normalized',
         );
     if (!requiredOrigin && !lifetimeUnique) return;
-    db.execute('BEGIN IMMEDIATE');
-    try {
-      db.execute("""
+    db.execute("""
         CREATE TABLE meeting_questions_interim(
           id INTEGER PRIMARY KEY,
           meeting_id INTEGER NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
@@ -164,29 +298,35 @@ class Store {
         DROP TABLE meeting_questions;
         ALTER TABLE meeting_questions_interim RENAME TO meeting_questions;
       """);
-      db.execute('COMMIT');
-    } catch (_) {
-      db.execute('ROLLBACK');
-      rethrow;
+  }
+
+  // Version 9 imports legacy labels once. Repair malformed JSON from structured
+  // records without discarding their names or metadata. The migration owns the transaction.
+  void _reconcileLabelRecords() {
+    for (final row in rows('SELECT source_id,labels FROM source_details')) {
+      final id = row['source_id'] as String;
+      List<String> names;
+      try {
+        names = (jsonDecode(row['labels'] as String) as List)
+            .cast<String>()
+            .toList();
+      } on FormatException {
+        names = _storedLabelNames(id);
+      } on TypeError {
+        names = _storedLabelNames(id);
+      }
+      _writeLabelRecords(id, names);
+      db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
+        jsonEncode(names),
+        id,
+      ]);
     }
   }
 
-  // Reconcile the legacy JSON projection on opening so labels edited by an
-  // older Linux bundle retain their names and acquire persistent colors.
-  void _reconcileLabelRecords() {
-    db.execute('BEGIN IMMEDIATE');
-    try {
-      for (final row in rows('SELECT source_id,labels FROM source_details')) {
-        final names = (jsonDecode(row['labels'] as String) as List)
-            .cast<String>();
-        _writeLabelRecords(row['source_id'] as String, names);
-      }
-      db.execute('COMMIT');
-    } catch (_) {
-      db.execute('ROLLBACK');
-      rethrow;
-    }
-  }
+  List<String> _storedLabelNames(String id) => rows(
+    'SELECT label_name FROM document_labels WHERE document_id=?',
+    [id],
+  ).map((row) => row['label_name'] as String).toList();
 
   List<DocumentLabel> get documentLabels => rows(
     'SELECT l.* FROM document_labels l JOIN sources s ON s.id=l.document_id WHERE s.deleted=0',
@@ -210,8 +350,9 @@ class Store {
       if (rows(
         'SELECT 1 FROM document_labels WHERE document_id=? AND label_name=?',
         [id, name],
-      ).isNotEmpty)
+      ).isNotEmpty) {
         continue;
+      }
       final color = allocateGraphLabelColor(name, records);
       db.execute(
         'INSERT INTO document_labels(document_id,label_name,label_source,color_hex,rationale) VALUES(?,?,?,?,NULL)',
@@ -227,8 +368,9 @@ class Store {
     }
     if (provenance.startsWith('url:')) return provenance.substring(4);
     final marker = provenance.indexOf('; /');
-    if (marker >= 0)
+    if (marker >= 0) {
       return Uri.file(provenance.substring(marker + 2)).toString();
+    }
     return '';
   }
 
@@ -341,21 +483,26 @@ class Store {
 
   static const _runtimeResources = {
     'generation': 'FORESIGHT_LITERT_RUNNER',
-    'query-detection': 'FORESIGHT_LITERT_PYTHON',
+    'query-detection': 'FORESIGHT_QUERY_RUNTIME',
     'speech': 'FORESIGHT_WHISPER_RUNTIME',
   };
 
   String? _ownedRuntime(String resource) {
     final root = runtimeConfiguration['FORESIGHT_INSTALL_ROOT'];
-    final path = runtimeConfiguration[resource];
+    final path =
+        runtimeConfiguration[resource] ??
+        (resource == 'FORESIGHT_QUERY_RUNTIME'
+            ? runtimeConfiguration['FORESIGHT_LITERT_PYTHON']
+            : null);
     if (root == null || path == null) return null;
     try {
       final canonicalRoot = Directory(root).resolveSymbolicLinksSync();
       final file = File(path);
       final canonical = file.resolveSymbolicLinksSync();
       if (!canonical.startsWith('$canonicalRoot/') ||
-          (file.statSync().mode & 0x49) == 0)
+          (file.statSync().mode & 0x49) == 0) {
         return null;
+      }
       return canonical;
     } on FileSystemException {
       return null;
@@ -371,11 +518,14 @@ class Store {
     try {
       final record = jsonDecode(preference('modelRuntimeResource.$kind'));
       if (record is! Map ||
-          record['resource'] != resource ||
+          (record['resource'] != resource &&
+              !(kind == 'query-detection' &&
+                  record['resource'] == 'FORESIGHT_LITERT_PYTHON')) ||
           record['runtime'] != model['runtime'] ||
           record['digest'] != model['digest'] ||
-          record['backend'] != model['backend'])
+          record['backend'] != model['backend']) {
         return model;
+      }
       final current = _ownedRuntime(resource);
       if (current == null) return model;
       return {...model, 'runtime': current};
@@ -406,11 +556,61 @@ class Store {
   List<Map<String, Object?>> get models =>
       rows('SELECT * FROM models').map(resolveModelRuntime).toList();
 
+  /// Re-read stored bytes before any model worker is created. Startup rejects
+  /// invalid registrations while preserving their files so setup can repair them.
+  Future<List<String>> verifyRegisteredModels({
+    bool rejectInvalidRegistrations = false,
+  }) async {
+    final rejected = <Map<String, Object?>>[];
+    for (final model in rows('SELECT kind,path,digest FROM models')) {
+      String? actual;
+      try {
+        actual = await modelAssetDigest(model['path'] as String);
+      } on FileSystemException {
+        // Missing/unreadable files cannot retain trust from a stored digest.
+      } on StateError {
+        // An empty model directory is also an invalid registration.
+      }
+      if (actual != model['digest']) rejected.add(model);
+    }
+    if (rejected.isNotEmpty && !rejectInvalidRegistrations) {
+      throw StateError(
+        'The ${rejected.first['kind']} model no longer matches its stored digest. '
+        'Restore or replace the model.',
+      );
+    }
+    db.execute('SAVEPOINT verify_model_assets');
+    try {
+      for (final model in rejected) {
+        // Do not erase a replacement that was registered while hashing awaited IO.
+        db.execute('DELETE FROM models WHERE kind=? AND path=? AND digest=?', [
+          model['kind'],
+          model['path'],
+          model['digest'],
+        ]);
+        if (db.updatedRows == 0) continue;
+        db.execute('DELETE FROM preferences WHERE key=?', [
+          'modelRuntimeResource.${model['kind']}',
+        ]);
+        setPreference(
+          'modelIntegrityError.${model['kind']}',
+          'Stored ${model['kind']} model changed or is missing. Set up the model again.',
+        );
+      }
+      db.execute('RELEASE verify_model_assets');
+    } catch (_) {
+      db.execute('ROLLBACK TO verify_model_assets');
+      db.execute('RELEASE verify_model_assets');
+      rethrow;
+    }
+    return rejected.map((model) => model['kind'] as String).toList();
+  }
+
   Future<void> register(
     String kind,
     String path,
     String runtime, {
-    String backend = 'llama_cpp',
+    String? backend,
     String? expectedDigest,
     int? modelType,
     bool Function()? current,
@@ -418,53 +618,39 @@ class Store {
     if (modelType != null && (modelType < 0 || modelType > 17)) {
       throw ArgumentError.value(modelType, 'modelType');
     }
+    if (kind == 'embedding') requireEmbeddingBundle(path);
+    backend ??= kind == 'embedding' ? 'litert_lm_embedding_cpu' : 'llama_cpp';
     final backends = [
-      'llama_cpp',
-      'litert_lm',
+      if (kind != 'embedding') ...['llama_cpp', 'litert_lm'],
       if (kind == 'query-detection') ...[
         'legacy_query_cpu',
         'legacy_query_cpu_encrypted',
       ],
       if (kind == 'embedding') ...[
-        'sentence_transformers_cpu',
         'litert_lm_embedding_cpu',
         'litert_lm_embedding_gpu',
       ],
     ];
     if (!backends.contains(backend)) throw ArgumentError.value(backend);
-    String digest;
-    if (Directory(path).existsSync()) {
-      final files =
-          Directory(path)
-              .listSync(recursive: true, followLinks: false)
-              .whereType<File>()
-              .toList()
-            ..sort((a, b) => a.path.compareTo(b.path));
-      if (files.isEmpty) throw StateError('Empty model directory');
-      final manifest = StringBuffer();
-      for (final file in files) {
-        manifest.writeln(
-          '${file.path.substring(Directory(path).path.length)}:${await sha256.bind(file.openRead()).first}',
-        );
-      }
-      digest = sha256.convert(utf8.encode(manifest.toString())).toString();
-    } else {
-      digest = (await sha256.bind(File(path).openRead()).first).toString();
+    final digest = await modelAssetDigest(path);
+    if (current != null && !current()) {
+      throw RpcError(RpcErrorCode.cancelled, 'Model setup cancelled');
     }
-    if (current != null && !current())
-      throw StateError('Model setup cancelled');
-    if (expectedDigest != null && digest != expectedDigest)
+    if (expectedDigest != null && digest != expectedDigest) {
       throw StateError(
         'The $kind model does not match its installation digest',
       );
+    }
     String? resource = _runtimeResources[kind];
     if (resource != null) {
       final owned = _ownedRuntime(resource);
       try {
-        if (owned == null || File(runtime).resolveSymbolicLinksSync() != owned)
+        if (owned == null ||
+            File(runtime).resolveSymbolicLinksSync() != owned) {
           resource = null;
-        else
+        } else {
           runtime = File(runtime).absolute.path;
+        }
       } on FileSystemException {
         resource = null;
       }
@@ -485,6 +671,9 @@ class Store {
                   : 0),
         ],
       );
+      db.execute('DELETE FROM preferences WHERE key=?', [
+        'modelIntegrityError.$kind',
+      ]);
       final key = 'modelRuntimeResource.$kind';
       if (resource == null) {
         db.execute('DELETE FROM preferences WHERE key=?', [key]);
@@ -546,8 +735,9 @@ class Store {
   void _snapshotMeetingEvents(int meeting) {
     if (rows(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_events'",
-    ).isEmpty)
+    ).isEmpty) {
       return;
+    }
     for (final event in rows(
       'SELECT event_key,metadata FROM calendar_events WHERE meeting_id=? ORDER BY rowid',
       [meeting],
@@ -582,10 +772,11 @@ class Store {
       'INSERT INTO transcript(meeting_id,text,final,start_ms,end_ms,source) VALUES(?,?,?,?,?,?)',
       [meeting, text, finalText ? 1 : 0, start, end, source],
     );
-    if (finalText)
+    if (finalText) {
       db.execute('UPDATE meetings SET revision=revision+1 WHERE id=?', [
         meeting,
       ]);
+    }
   }
 
   void artifact(
@@ -659,8 +850,9 @@ class Store {
     try {
       if (rows('SELECT meeting_id FROM meeting_notes WHERE meeting_id=?', [
         meeting,
-      ]).isEmpty)
+      ]).isEmpty) {
         _snapshotMeetingEvents(meeting);
+      }
       final now = DateTime.now().millisecondsSinceEpoch;
       final column = manual ? 'last_manual_edit' : 'last_enhanced';
       final date = manual
@@ -694,7 +886,7 @@ class Store {
     [key, value],
   );
   void putDocumentLabel(DocumentLabel label) {
-    db.execute('BEGIN IMMEDIATE');
+    db.execute('SAVEPOINT put_document_label');
     try {
       db.execute(
         'REPLACE INTO document_labels(document_id,label_name,label_source,color_hex,rationale) VALUES(?,?,?,?,?)',
@@ -716,7 +908,54 @@ class Store {
         jsonEncode(names),
         label.documentId,
       ]);
+      db.execute('RELEASE put_document_label');
+    } catch (_) {
+      db.execute('ROLLBACK TO put_document_label');
+      db.execute('RELEASE put_document_label');
+      rethrow;
+    }
+  }
+
+  /// Planning and publication share one write transaction. The vectors were
+  /// acquired asynchronously, so reject any source snapshot that became stale.
+  int autoAssignLabel(
+    String name,
+    List<Map<String, Object?>> expectedSources,
+    Map<String, List<double>> vectors,
+  ) {
+    db.execute('BEGIN IMMEDIATE');
+    try {
+      final current = sources;
+      String revisions(List<Map<String, Object?>> rows) => jsonEncode(
+        rows.map((row) => [row['id'], row['revision'], row['state']]).toList(),
+      );
+      if (revisions(current) != revisions(expectedSources)) {
+        throw RpcError(
+          RpcErrorCode.cancelled,
+          'Sources changed while organizing labels; retry',
+        );
+      }
+      final plan = planLabelPropagation(
+        name,
+        [
+          for (final row in current)
+            LabelDocument(
+              row['id'] as String,
+              row['content'] as String,
+              title: row['title'] as String?,
+            ),
+        ],
+        documentLabels,
+        vectors,
+        semanticGraphEdges(vectors),
+      );
+      for (final label in plan.writes) {
+        putDocumentLabel(label);
+      }
+      saveLabelCluster(name);
+      invalidateGraphOrganization();
       db.execute('COMMIT');
+      return plan.writes.length;
     } catch (_) {
       db.execute('ROLLBACK');
       rethrow;
@@ -762,11 +1001,12 @@ class Store {
       for (final row in rows('SELECT source_id,labels FROM source_details')) {
         final names = (jsonDecode(row['labels'] as String) as List)
             .cast<String>();
-        if (names.remove(name))
+        if (names.remove(name)) {
           db.execute('UPDATE source_details SET labels=? WHERE source_id=?', [
             jsonEncode(names),
             row['source_id'],
           ]);
+        }
       }
       db.execute('DELETE FROM document_labels WHERE label_name=?', [name]);
       db.execute('DELETE FROM document_clusters WHERE label=?', [name]);
@@ -778,8 +1018,9 @@ class Store {
   }
 
   void labels(String id, List<String> labels) {
-    if (rows('SELECT 1 FROM source_details WHERE source_id=?', [id]).isEmpty)
+    if (rows('SELECT 1 FROM source_details WHERE source_id=?', [id]).isEmpty) {
       return;
+    }
     db.execute('BEGIN IMMEDIATE');
     try {
       _writeLabelRecords(id, labels);
@@ -794,24 +1035,198 @@ class Store {
     }
   }
 
+  String? _outputStatsRevision;
+  int _localOutputWords = 0;
+  List<({int created, int words})> _answerWordCounts = [];
+
+  void _refreshOutputStats() {
+    final revision = dataRevision;
+    if (_outputStatsRevision == revision) return;
+    int words(String text) => RegExp(r'\S+').allMatches(text).length;
+    _answerWordCounts = [
+      for (final row in completedAnswerHistory())
+        (created: row['created'] as int, words: words(row['body'] as String)),
+    ];
+    _localOutputWords =
+        _answerWordCounts.fold<int>(0, (sum, row) => sum + row.words) +
+        artifactBodies().fold<int>(
+          0,
+          (sum, row) => sum + words(row['generated'] as String),
+        );
+    _outputStatsRevision = revision;
+  }
+
+  /// Saved text has no tokenizer usage metadata. Report words honestly and cache
+  /// the scan across builds until the WAL snapshot or this connection changes.
+  int get localOutputWords {
+    _refreshOutputStats();
+    return _localOutputWords;
+  }
+
+  List<int> weeklyAnswerWords(DateTime now) {
+    _refreshOutputStats();
+    final weekly = List<int>.filled(5, 0);
+    for (final row in _answerWordCounts) {
+      final days = now
+          .difference(DateTime.fromMillisecondsSinceEpoch(row.created))
+          .inDays;
+      if (days >= 0 && days < 35) weekly[4 - days ~/ 7] += row.words;
+    }
+    return weekly;
+  }
+
+  // Typed desktop queries keep SQL and snapshot policy in core.
+  List<Map<String, Object?>> registeredEmbedding() =>
+      rows("SELECT * FROM models WHERE kind='embedding'");
+  List<Map<String, Object?>> sourceById(
+    String id, {
+    bool includeDeleted = false,
+  }) => rows('SELECT * FROM sources WHERE id=? AND (? OR deleted=0)', [
+    id,
+    includeDeleted ? 1 : 0,
+  ]);
+  List<Map<String, Object?>> notes() =>
+      rows('SELECT * FROM notes ORDER BY id DESC');
+  List<Map<String, Object?>> noteSummaries() =>
+      rows('SELECT id,title,revision FROM notes ORDER BY id DESC');
+  String noteBody(int id) =>
+      rows('SELECT body FROM notes WHERE id=?', [id]).single['body'] as String;
+  List<Map<String, Object?>> completedAnswerBodies() =>
+      rows('SELECT body FROM answers WHERE status=\'completed\'');
+  List<Map<String, Object?>> artifactBodies() =>
+      rows('SELECT generated FROM artifacts');
+  List<Map<String, Object?>> googleSourceMimes() =>
+      rows('SELECT source_id,mime FROM google_sources');
+  List<Map<String, Object?>> documentClusters() =>
+      rows('SELECT * FROM document_clusters');
+  List<Map<String, Object?>> documentClusterNames() =>
+      rows('SELECT label FROM document_clusters');
+  List<Map<String, Object?>> conversationAnswers(int? meetingId) => rows(
+    meetingId == null
+        ? "SELECT * FROM answers WHERE conversation='desktop' ORDER BY id"
+        : 'SELECT answers.* FROM answers JOIN meeting_answers ON answer_id=answers.id WHERE meeting_id=? ORDER BY answers.id',
+    meetingId == null ? [] : [meetingId],
+  );
+  List<Map<String, Object?>> meetingCollection() => rows(
+    'SELECT meetings.*,meeting_details.created,meeting_details.reminder,'
+    'calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
+    'calendar_events.status AS calendar_status,'
+    'COALESCE(saved.has_transcript,0) AS has_transcript,saved.duration_ms '
+    'FROM meetings LEFT JOIN meeting_details ON meetings.id=meeting_details.meeting_id '
+    'LEFT JOIN calendar_events ON meetings.id=calendar_events.meeting_id '
+    'LEFT JOIN (SELECT meeting_id,1 AS has_transcript,MAX(end_ms) AS duration_ms '
+    'FROM transcript WHERE final=1 GROUP BY meeting_id) AS saved ON saved.meeting_id=meetings.id '
+    'ORDER BY COALESCE(calendar_events.starts,meeting_details.created),meetings.id',
+  );
+  List<Map<String, Object?>> recordedMeetingCountRows() => rows(
+    'SELECT COUNT(DISTINCT meeting_id) AS n FROM transcript WHERE final=1',
+  );
+  List<Map<String, Object?>> completedAnswerCountRows() =>
+      rows("SELECT COUNT(*) AS n FROM answers WHERE status='completed'");
+  List<Map<String, Object?>> completedAnswerHistory() =>
+      rows("SELECT body,created FROM answers WHERE status='completed'");
+  List<Map<String, Object?>> meetingNoteRows(int id) =>
+      rows('SELECT * FROM meeting_notes WHERE meeting_id=?', [id]);
+  List<Map<String, Object?>> meetingPreviewRows(int id) => rows(
+    'SELECT meetings.*,meeting_details.created,calendar_events.starts AS calendar_starts,calendar_events.ends AS calendar_ends,'
+    '(SELECT MAX(end_ms) FROM transcript WHERE meeting_id=meetings.id AND final=1) AS duration_ms FROM meetings '
+    'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
+    'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
+    [id],
+  );
+  List<Map<String, Object?>> meetingWorkspaceRows(int id) => rows(
+    'SELECT meetings.*,meeting_details.created,calendar_events.starts,calendar_events.ends FROM meetings '
+    'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
+    'LEFT JOIN calendar_events ON calendar_events.meeting_id=meetings.id WHERE meetings.id=?',
+    [id],
+  );
+  List<Map<String, Object?>> enhancedNoteArtifacts(int id) => rows(
+    "SELECT * FROM artifacts WHERE meeting_id=? AND kind='enhanced_notes' ORDER BY id DESC LIMIT 1",
+    [id],
+  );
+  List<Map<String, Object?>> meetingQuestions(int id) => rows(
+    'SELECT q.*,a.body,a.citations FROM meeting_questions q '
+    'LEFT JOIN answers a ON a.id=q.answer_id WHERE q.meeting_id=? ORDER BY q.id',
+    [id],
+  );
+  List<Map<String, Object?>> finalTranscript(int id) => rows(
+    'SELECT text FROM transcript WHERE meeting_id=? AND final=1 ORDER BY id',
+    [id],
+  );
+  List<Map<String, Object?>> meetingTranscript(int id) =>
+      rows('SELECT * FROM transcript WHERE meeting_id=? ORDER BY id', [id]);
+  List<Map<String, Object?>> meetingArtifacts(int id, String kind) => rows(
+    'SELECT * FROM artifacts WHERE meeting_id=? AND kind=? ORDER BY id DESC',
+    [id, kind],
+  );
+  List<Map<String, Object?>> exportNotes() => rows(
+    'WITH candidates(note_type,note_id,timestamp) AS ('
+    'SELECT 0,meeting_id,timestamp FROM meeting_notes UNION ALL '
+    'SELECT 1,id,timestamp FROM notes), '
+    'acquired AS (SELECT * FROM candidates ORDER BY timestamp DESC LIMIT 1000) '
+    'SELECT * FROM ('
+    'SELECT meetings.id,meetings.title,meeting_notes.body,'
+    'COALESCE(meeting_notes.enhanced_body,(SELECT COALESCE(edited,generated) FROM artifacts '
+    "WHERE artifacts.meeting_id=meetings.id AND kind='enhanced_notes' "
+    'ORDER BY id DESC LIMIT 1)) AS enhanced_body,'
+    'COALESCE(calendar_events.starts,meeting_notes.timestamp,meeting_details.created,0) AS export_date,'
+    'calendar_events.ends AS export_end,calendar_events.metadata AS export_metadata,'
+    '(SELECT title FROM meeting_note_events WHERE meeting_id=meetings.id '
+    'AND event_key=note_event.event_key AND title!=\'\' ORDER BY id DESC LIMIT 1) AS association_title '
+    'FROM acquired JOIN meetings ON acquired.note_type=0 AND meetings.id=acquired.note_id '
+    'JOIN meeting_notes ON meeting_notes.meeting_id=meetings.id '
+    'LEFT JOIN meeting_details ON meeting_details.meeting_id=meetings.id '
+    'LEFT JOIN meeting_note_events AS note_event ON note_event.id=('
+    'SELECT id FROM meeting_note_events WHERE meeting_id=meetings.id '
+    'AND event_key!=\'\' ORDER BY id LIMIT 1) '
+    'LEFT JOIN calendar_events ON calendar_events.event_key=COALESCE(note_event.event_key,('
+    'SELECT event_key FROM calendar_events AS export_event '
+    'WHERE export_event.meeting_id=meetings.id ORDER BY export_event.rowid LIMIT 1'
+    ')) UNION ALL '
+    'SELECT notes.id,notes.title,notes.body,NULL AS enhanced_body,'
+    'COALESCE(notes.timestamp,0) AS export_date,NULL AS export_end,NULL AS export_metadata,NULL AS association_title '
+    'FROM acquired JOIN notes ON acquired.note_type=1 AND notes.id=acquired.note_id'
+    ') ORDER BY export_date DESC,id',
+  );
+  List<Map<String, Object?>> registeredSpeech() =>
+      rows("SELECT digest FROM models WHERE kind='speech'");
   void close() => db.dispose();
 }
 
 class Parser {
   final bool _macOS;
   final String? _macParser;
-  Parser({bool? macOS, String? macParser})
-    : _macOS = macOS ?? Platform.isMacOS,
-      _macParser = macParser;
+  final Duration extractionTimeout;
+  final Future<Process> Function(String, List<String>) _startProcess;
+  Parser({
+    bool? macOS,
+    String? macParser,
+    this.extractionTimeout = const Duration(seconds: 30),
+    Future<Process> Function(String, List<String>)? startProcess,
+  }) : _macOS = macOS ?? Platform.isMacOS,
+       _macParser = macParser,
+       _startProcess =
+           startProcess ??
+           ((executable, arguments) => Process.start(
+             executable,
+             arguments,
+             includeParentEnvironment: false,
+             environment: {'PATH': '/usr/bin:/bin', 'LANG': 'C.UTF-8'},
+           ));
+
   Future<ProcessResult> _extractProcess(
     String executable,
     List<String> arguments,
   ) async {
-    final process = await Process.start(executable, arguments);
-    final timer = Timer(
-      const Duration(seconds: 30),
-      () => process.kill(ProcessSignal.sigkill),
-    );
+    if (!executable.startsWith('/')) {
+      throw StateError('Extractor must use an absolute path');
+    }
+    final process = await _startProcess(executable, arguments);
+    var expired = false;
+    final timer = Timer(extractionTimeout, () {
+      expired = true;
+      process.kill(ProcessSignal.sigkill);
+    });
     Future<String> bounded(Stream<List<int>> stream) async {
       final bytes = <int>[];
       await for (final chunk in stream) {
@@ -821,7 +1236,7 @@ class Parser {
         }
         bytes.addAll(chunk);
       }
-      return utf8.decode(bytes);
+      return utf8.decode(bytes, allowMalformed: true);
     }
 
     try {
@@ -829,15 +1244,101 @@ class Parser {
         bounded(process.stdout),
         bounded(process.stderr),
       ]);
-      return ProcessResult(
-        process.pid,
-        await process.exitCode,
-        output[0],
-        output[1],
-      );
+      final code = await process.exitCode;
+      if (expired) {
+        throw TimeoutException(
+          'Document extraction timed out',
+          extractionTimeout,
+        );
+      }
+      return ProcessResult(process.pid, code, output[0], output[1]);
     } finally {
       timer.cancel();
     }
+  }
+
+  Future<ProcessResult> _linuxExtractor(
+    String tool,
+    String path,
+    List<String> options,
+  ) async {
+    final file = File(path).resolveSymbolicLinksSync();
+    final isolated = '/input/document${tool == 'pdftotext' ? '.pdf' : '.rtf'}';
+    // A fresh user/PID/network/mount namespace exposes only system runtime
+    // libraries and the one selected input. Profile files and credentials are
+    // absent. Failure to establish the sandbox fails the import closed.
+    ProcessResult result;
+    try {
+      result = await _extractProcess('/usr/bin/bwrap', [
+        '--unshare-all',
+        '--die-with-parent',
+        '--new-session',
+        '--cap-drop',
+        'ALL',
+        '--ro-bind',
+        '/usr',
+        '/usr',
+        '--ro-bind-try',
+        '/lib',
+        '/lib',
+        '--ro-bind-try',
+        '/lib64',
+        '/lib64',
+        '--ro-bind-try',
+        '/etc/fonts',
+        '/etc/fonts',
+        '--proc',
+        '/proc',
+        '--dev',
+        '/dev',
+        '--tmpfs',
+        '/tmp',
+        '--dir',
+        '/input',
+        '--ro-bind',
+        file,
+        isolated,
+        '--chdir',
+        '/input',
+        '--clearenv',
+        '--setenv',
+        'HOME',
+        '/tmp',
+        '--setenv',
+        'PATH',
+        '/nonexistent',
+        '--',
+        '/usr/bin/$tool',
+        ...options,
+        isolated,
+        if (tool == 'pdftotext') '-',
+      ]);
+    } on ProcessException catch (error) {
+      final dependency = tool == 'pdftotext' ? 'poppler-utils' : 'unrtf';
+      throw StateError(
+        'Cannot start the document sandbox at /usr/bin/bwrap. '
+        'Install the Linux import dependencies (bubblewrap and $dependency) '
+        'and check executable permissions: '
+        '${error.message}',
+      );
+    }
+    final diagnostic = result.stderr.toString().trim();
+    final namespaceFailure =
+        diagnostic.startsWith('bwrap:') &&
+        !RegExp(r'^bwrap:\s*exec\w*\b').hasMatch(diagnostic) &&
+        RegExp(
+          r'namespace|unshare|userns|[ug]id map|capset|^bwrap:\s*loopback:',
+          caseSensitive: false,
+        ).hasMatch(diagnostic);
+    if (result.exitCode != 0 && namespaceFailure) {
+      throw StateError(
+        'The document sandbox could not start. Check the bubblewrap installation '
+        'and host user-namespace permissions. On Ubuntu 24.04, an administrator '
+        'may need to allow bubblewrap user namespaces in its AppArmor profile. '
+        '$diagnostic',
+      );
+    }
+    return result;
   }
 
   Future<(String, String)> extract(String path) async {
@@ -849,10 +1350,11 @@ class Parser {
     if (_macOS && (lower.endsWith('.pdf') || lower.endsWith('.rtf'))) {
       final executable =
           _macParser ?? runtimeConfiguration['FORESIGHT_FILE_PARSER'];
-      if (executable == null || executable.isEmpty)
+      if (executable == null || executable.isEmpty) {
         throw StateError(
           'The bundled PDF/RTF extractor is unavailable. Reinstall Open Foresight.',
         );
+      }
       ProcessResult result;
       try {
         result = await _extractProcess(executable, [
@@ -864,13 +1366,15 @@ class Parser {
           'Cannot launch the bundled file extractor. Reinstall Open Foresight: ${error.message}',
         );
       }
-      if (result.exitCode != 0)
+      if (result.exitCode != 0) {
         throw StateError(
           'File extraction failed: ${result.stderr.toString().trim()}',
         );
+      }
       final text = result.stdout as String;
-      if (text.trim().isEmpty)
+      if (text.trim().isEmpty) {
         throw StateError('The selected document contains no extractable text.');
+      }
       return (
         text,
         lower.endsWith('.pdf')
@@ -879,16 +1383,26 @@ class Parser {
       );
     }
     if (lower.endsWith('.pdf')) {
-      final r = await _extractProcess('pdftotext', ['-layout', path, '-']);
-      if (r.exitCode != 0)
+      final r = await _linuxExtractor('pdftotext', path, ['-layout']);
+      if (r.exitCode != 0) {
         throw StateError('PDF extraction failed: ${r.stderr}');
+      }
       return (r.stdout as String, 'pdftotext -layout (Linux adapter)');
     }
     if (lower.endsWith('.rtf')) {
-      final r = await _extractProcess('unrtf', ['--text', path]);
-      if (r.exitCode != 0)
+      final r = await _linuxExtractor('unrtf', path, ['--text', '--quiet']);
+      if (r.exitCode != 0) {
         throw StateError('RTF extraction failed: ${r.stderr}');
-      return (r.stdout as String, 'unrtf --text (Linux adapter)');
+      }
+      // unrtf 0.21 emits metadata before this separator even in text mode.
+      var text = r.stdout as String;
+      const marker = '-----------------';
+      final banner = text.indexOf(marker);
+      if (banner >= 0 &&
+          text.substring(0, banner).contains('Translation from RTF')) {
+        text = text.substring(banner + marker.length).trimLeft();
+      }
+      return (text, 'unrtf --text (Linux adapter)');
     }
     final bytes = <int>[];
     await for (final chunk in File(
@@ -899,6 +1413,6 @@ class Parser {
       }
       bytes.addAll(chunk);
     }
-    return (utf8.decode(bytes), 'UTF-8 text');
+    return (utf8.decode(bytes, allowMalformed: true), 'UTF-8 text');
   }
 }

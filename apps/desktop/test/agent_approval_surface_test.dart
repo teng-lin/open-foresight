@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:open_foresight/agent_approval_surface.dart';
+import '../integration_test/meeting_workflow_test.dart' as workflow;
 
 class ApprovalClient implements ServiceClient {
   final decisions = <Map<String, dynamic>>[];
@@ -40,9 +41,9 @@ class ApprovalDomain implements RemoteDomain {
 
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
-  ]) => client.call(method, args);
+  ]) => client.call(operation.wire, args);
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
@@ -73,7 +74,7 @@ void main() {
         findsOneWidget,
       );
       expect(domain.client.decisions, isEmpty);
-      await tester.tap(find.text('Allow once'));
+      await workflow.allowRecording(tester);
       await tester.pumpAndSettle();
       expect(domain.client.decisions.single, {
         'approval_id': 'one',

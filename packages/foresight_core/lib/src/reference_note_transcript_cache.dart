@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 
 import 'reference_note_enhancement_chunking.dart';
 
@@ -20,7 +19,7 @@ class ReferenceNoteTranscriptCache {
   final Future<List<double>> Function(String text) computeEmbedding;
   final bool Function(int meetingId) currentIsLive;
   final Future<String> Function(int meetingId) loadSavedTranscript;
-  final _entries = LinkedHashMap<int, _TranscriptEntry>();
+  final _entries = <int, _TranscriptEntry>{};
 
   /// Discard ephemeral entries when the workspace or embedding model changes.
   int _epoch = 0;
