@@ -340,6 +340,33 @@ void main() {
     expect(result.$1, 'Real document body\n');
     expect(result.$1, isNot(contains('Translation from RTF')));
   });
+  test('Linux RTF import omits the quiet converter separator', () async {
+    final helper = executable(
+      "printf '%s\\r\\n' '-----------------' 'Installed RTF amber action.'",
+    );
+    final source = File('${directory.path}/notes.rtf')
+      ..writeAsStringSync('fixture');
+    final result = await Parser(
+      macOS: false,
+      startProcess: (_, _) => Process.start(helper.path, []),
+    ).extract(source.path);
+    expect(result.$1, 'Installed RTF amber action.\r\n');
+  });
+  test('Linux RTF import preserves separators in the document body', () async {
+    final helper = executable(
+      "printf '%s\\n' '-----------------' '-----------------' 'Body with Translation from RTF text' '-----------------' 'More body'",
+    );
+    final source = File('${directory.path}/notes.rtf')
+      ..writeAsStringSync('fixture');
+    final result = await Parser(
+      macOS: false,
+      startProcess: (_, _) => Process.start(helper.path, []),
+    ).extract(source.path);
+    expect(
+      result.$1,
+      '-----------------\nBody with Translation from RTF text\n-----------------\nMore body\n',
+    );
+  });
   test('malformed text and Markdown replace invalid UTF-8 bytes', () async {
     for (final extension in ['txt', 'md']) {
       final source = File('${directory.path}/notes.$extension')
