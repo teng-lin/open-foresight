@@ -164,6 +164,24 @@ class _SettingsController extends _FeatureController {
                         setState(() => queryModelDownloading = true);
                         try {
                           await shell.run(() async {
+                            final terms = dedicatedQueryTermsUri();
+                            if (terms == null)
+                              throw StateError(
+                                'This distribution has not supplied question model terms.',
+                              );
+                            if (d.store.preference(dedicatedQueryTermsKey) !=
+                                'accepted') {
+                              if (!await confirmQueryModelTerms(
+                                context,
+                                terms,
+                                dedicatedQueryModelDigest,
+                              ))
+                                return;
+                              await d.command(Operation.preferencesSet, {
+                                'key': dedicatedQueryTermsKey,
+                                'value': 'accepted',
+                              });
+                            }
                             await d.command(Operation.modelsAcquireQuery, {});
                             modelState = 'Automatic question model ready';
                           });

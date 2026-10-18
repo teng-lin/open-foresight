@@ -1,3 +1,6 @@
+import 'model_terms_dialog.dart';
+import 'package:foresight_core/foresight_core.dart'
+    show dedicatedQueryTermsKey, dedicatedQueryTermsUri;
 import 'background_store.dart';
 import 'service_edit_dialog.dart';
 import 'package:foresight_core/foresight_core.dart'

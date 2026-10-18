@@ -1029,6 +1029,13 @@ class Application implements ModelGate {
           await _queryAcquisition?.close();
           return null;
         case Operation.modelsAcquireQuery:
+          if (dedicatedQueryTermsUri() == null ||
+              store.preference(dedicatedQueryTermsKey) != 'accepted') {
+            throw RpcError(
+              RpcErrorCode.denied,
+              'Review and accept the configured question model terms for this revision before downloading.',
+            );
+          }
           final acquisition = DedicatedQueryAcquisition.distribution(store);
           _queryAcquisition = acquisition;
           _queryDownloadReceived = _queryDownloadTotal = 0;

@@ -70,3 +70,48 @@ Future<bool> confirmModelTerms(
   store.setPreference(key, 'accepted');
   return true;
 }
+
+/// The distribution must supply genuine publisher terms; no inferred license is
+/// displayed for the authenticated dedicated question asset.
+Future<bool> confirmQueryModelTerms(
+  BuildContext context,
+  Uri terms,
+  String revision,
+) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Automatic question model terms'),
+        content: SizedBox(
+          width: 480,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Review the distribution provider’s model license and usage terms before downloading this revision.',
+                ),
+                TextButton(
+                  onPressed: () => openPlatformUri(terms),
+                  child: const Text('Read model terms'),
+                ),
+                SelectableText(terms.toString()),
+                SelectableText('Model revision: $revision'),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Accept and download'),
+          ),
+        ],
+      ),
+    ) ??
+    false;
