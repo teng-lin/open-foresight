@@ -38,7 +38,8 @@ public:
                                std::string(dlerror()));
   }
   bool supports_native_stop_tokens() const {
-    return dlsym(library_, "litert_lm_session_config_add_stop_token_sequence") != nullptr;
+    return dlsym(library_,
+                 "litert_lm_session_config_add_stop_token_sequence") != nullptr;
   }
   template <class T> T symbol(const char *name) const {
     auto ptr = dlsym(library_, name);

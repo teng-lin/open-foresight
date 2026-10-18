@@ -278,9 +278,10 @@ jobs:
       id: sdk
       env:
         GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400
+        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 5400 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python - <<'PY'
         import json,os,re
         image=json.load(open('build/sdk-descriptor/image.json'))['image']

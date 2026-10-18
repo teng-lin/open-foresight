@@ -5,6 +5,7 @@ Only immutable executable bytes are read; profiles, accounts and Keychain are
 never inspected. Values are written privately or piped to GitHub secrets, never
 printed. The exact-build gate intentionally rejects other app versions.
 """
+
 import argparse
 import hashlib
 import json
@@ -14,21 +15,23 @@ import re
 import subprocess
 from google_client_release import SECRET_NAME, release_google_client
 
-REFERENCE_SHA256 = 'fa98b856bfbe9b40cdebfb9f975f7867ec5c0a3ca75b81214a096a60b6db8326'
+REFERENCE_SHA256 = "fa98b856bfbe9b40cdebfb9f975f7867ec5c0a3ca75b81214a096a60b6db8326"
 # Typed Dart pool reads, bound to IDA call sites in this exact executable.
 SETTINGS = {
-    'FORESIGHT_WEB_CONTENT_API_KEY': (9019, 0x5EF98B0),
-    'FORESIGHT_SEARCH_API_KEY': (27425, 0x5BBCB80),
+    "FORESIGHT_WEB_CONTENT_API_KEY": (9019, 0x5EF98B0),
+    "FORESIGHT_SEARCH_API_KEY": (27425, 0x5BBCB80),
 }
 GOOGLE_CLIENT_ID_OFFSET = 0x5D7DCA0
 GOOGLE_CLIENT_SECRET_OFFSET = 0x60A9B70
 
 
 def reference_bytes(app):
-    binary = app / 'Contents/MacOS/Foresight' if app.suffix == '.app' else app
+    binary = app / "Contents/MacOS/Foresight" if app.suffix == ".app" else app
     data = binary.read_bytes()
     if hashlib.sha256(data).hexdigest() != REFERENCE_SHA256:
-        raise ValueError('Reference build differs; retrace its configuration with IDA before importing')
+        raise ValueError(
+            "Reference build differs; retrace its configuration with IDA before importing"
+        )
     return data
 
 
@@ -40,12 +43,26 @@ def read_google_configuration(app):
     Neither observation establishes completed user consent or API access.
     """
     data = reference_bytes(app)
-    client_id = data[GOOGLE_CLIENT_ID_OFFSET:GOOGLE_CLIENT_ID_OFFSET + 72]
-    secret = data[GOOGLE_CLIENT_SECRET_OFFSET:GOOGLE_CLIENT_SECRET_OFFSET + 35]
-    if not re.fullmatch(rb'[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com', client_id) or not re.fullmatch(rb'GOCSPX-[A-Za-z0-9_-]{28}', secret):
-        raise ValueError('Verified Google application registration has an unexpected representation')
-    return release_google_client(environment={SECRET_NAME: json.dumps({
-        'installed': {'client_id': client_id.decode('ascii'), 'client_secret': secret.decode('ascii')}})})
+    client_id = data[GOOGLE_CLIENT_ID_OFFSET : GOOGLE_CLIENT_ID_OFFSET + 72]
+    secret = data[GOOGLE_CLIENT_SECRET_OFFSET : GOOGLE_CLIENT_SECRET_OFFSET + 35]
+    if not re.fullmatch(
+        rb"[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com", client_id
+    ) or not re.fullmatch(rb"GOCSPX-[A-Za-z0-9_-]{28}", secret):
+        raise ValueError(
+            "Verified Google application registration has an unexpected representation"
+        )
+    return release_google_client(
+        environment={
+            SECRET_NAME: json.dumps(
+                {
+                    "installed": {
+                        "client_id": client_id.decode("ascii"),
+                        "client_secret": secret.decode("ascii"),
+                    }
+                }
+            )
+        }
+    )
 
 
 def read_configuration(app):
@@ -53,10 +70,12 @@ def read_configuration(app):
     data = reference_bytes(app)
     values = {}
     for name, (_, offset) in SETTINGS.items():
-        raw = data[offset:offset + 39]
-        if re.fullmatch(rb'AIza[0-9A-Za-z_-]{35}', raw) is None:
-            raise ValueError('Verified reference setting has an unexpected representation')
-        values[name] = raw.decode('ascii')
+        raw = data[offset : offset + 39]
+        if re.fullmatch(rb"AIza[0-9A-Za-z_-]{35}", raw) is None:
+            raise ValueError(
+                "Verified reference setting has an unexpected representation"
+            )
+        values[name] = raw.decode("ascii")
     return values
 
 
@@ -64,48 +83,77 @@ def write_private(path, values):
     """Create an exclusive owner-only configuration file without printing values."""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(descriptor, 'w') as stream:
+    with os.fdopen(descriptor, "w") as stream:
         json.dump(values, stream)
-        stream.write('\n')
+        stream.write("\n")
 
 
 def store_github(values, repository, gh):
     """Pipe each setting to GitHub without exposing values in arguments or errors."""
     environment = dict(os.environ)
-    environment.pop('GH_DEBUG', None)
+    environment.pop("GH_DEBUG", None)
     for name, value in values.items():
-        result = subprocess.run([gh, 'secret', 'set', name, '--repo', repository],
-                                input=value, text=True, capture_output=True, env=environment)
+        result = subprocess.run(
+            [gh, "secret", "set", name, "--repo", repository],
+            input=value,
+            text=True,
+            capture_output=True,
+            env=environment,
+            timeout=300,
+        )
         if result.returncode:
-            raise RuntimeError('GitHub secret update failed: ' + name)
+            raise RuntimeError("GitHub secret update failed: " + name)
 
 
 def main():
     """Import verified distribution settings to the explicitly selected destination."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--app', type=Path, default=Path('/Applications/Foresight.app'))
+    parser.add_argument("--app", type=Path, default=Path("/Applications/Foresight.app"))
     destination = parser.add_mutually_exclusive_group(required=True)
-    destination.add_argument('--output', type=Path, help='New private runtime.json outside source control')
-    destination.add_argument('--google-output', type=Path, help='New private Desktop OAuth JSON outside source control')
-    destination.add_argument('--github-repository', help='Explicit owner/repo whose release secrets to update')
-    parser.add_argument('--google-only', action='store_true', help='Provision only the Google application registration to GitHub')
-    parser.add_argument('--gh', default='gh')
+    destination.add_argument(
+        "--output", type=Path, help="New private runtime.json outside source control"
+    )
+    destination.add_argument(
+        "--google-output",
+        type=Path,
+        help="New private Desktop OAuth JSON outside source control",
+    )
+    destination.add_argument(
+        "--github-repository",
+        help="Explicit owner/repo whose release secrets to update",
+    )
+    parser.add_argument(
+        "--google-only",
+        action="store_true",
+        help="Provision only the Google application registration to GitHub",
+    )
+    parser.add_argument("--gh", default="gh")
     args = parser.parse_args()
     if args.google_only and not args.github_repository:
-        parser.error('--google-only requires --github-repository')
-    values = {} if args.google_output or args.google_only else read_configuration(args.app)
+        parser.error("--google-only requires --github-repository")
+    values = (
+        {} if args.google_output or args.google_only else read_configuration(args.app)
+    )
     if args.google_output:
         write_private(args.google_output, read_google_configuration(args.app))
-        values = {SECRET_NAME: 'suppressed'}
+        values = {SECRET_NAME: "suppressed"}
     elif args.output:
         write_private(args.output, values)
     else:
         if args.google_only:
             values[SECRET_NAME] = json.dumps(read_google_configuration(args.app))
         store_github(values, args.github_repository, args.gh)
-    print(json.dumps({'status': 'imported', 'settings': sorted(values),
-                      'reference_sha256': REFERENCE_SHA256, 'values': 'suppressed'}))
+    print(
+        json.dumps(
+            {
+                "status": "imported",
+                "settings": sorted(values),
+                "reference_sha256": REFERENCE_SHA256,
+                "values": "suppressed",
+            }
+        )
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

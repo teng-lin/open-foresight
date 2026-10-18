@@ -30,7 +30,9 @@ protected:
 
 public:
   explicit FdStreamBuffer(int descriptor) : descriptor_(descriptor) {}
-  ~FdStreamBuffer() override { close(descriptor_); }
+  ~FdStreamBuffer() override {
+    close(descriptor_);
+  }
   FdStreamBuffer(const FdStreamBuffer &) = delete;
   FdStreamBuffer &operator=(const FdStreamBuffer &) = delete;
 };
