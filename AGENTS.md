@@ -41,7 +41,10 @@ existing verified artifacts or compatible cached work can be reused.
   producer repository, workflow, successful job and attempt, relevant build
   inputs, receipts, and artifact checksums. Do not relabel an old artifact as a
   newly compiled SDK or silently accept incompatible or untrusted bytes.
-- Batch related fixes and validate locally before pushing. Rerun only the
+- Before pushing follow-up commits to an open PR, fetch its current review
+  threads and CI results. Verify each finding against the code, address valid
+  findings together with related CI fixes, and validate the combined changes
+  locally before pushing. Check for new reviews while CI runs. Rerun only the
   affected jobs when possible; preserve successful expensive build results.
 
 This policy requires evidence and a concrete justification for rebuilding. It
