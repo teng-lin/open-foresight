@@ -10,6 +10,7 @@ name: Reusable CI dependencies
     - tools/ci_registry.py
     - tools/build_linux_sdk_local.sh
     - tools/linux_sdk_artifacts.py
+    - tools/sdk_build_recipe.py
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
@@ -49,6 +50,7 @@ name: Reusable CI dependencies
     - tools/ci_registry.py
     - tools/build_linux_sdk_local.sh
     - tools/linux_sdk_artifacts.py
+    - tools/sdk_build_recipe.py
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
@@ -119,30 +121,40 @@ jobs:
   macos:
     name: Build macOS ${{ matrix.component }}
     needs: plan
+    # sdk-recipe: macos-sdk begin
     runs-on: macos-15
+    # sdk-recipe: macos-sdk end
     timeout-minutes: 120
+    # sdk-recipe: macos-sdk begin
     strategy:
       fail-fast: false
       matrix:
         component:
         - sdk
+    # sdk-recipe: macos-sdk end
     concurrency:
       group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}-${{
         github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
       cancel-in-progress: false
+    # sdk-recipe: macos-sdk begin
     env:
       COMPONENT: ${{ matrix.component }}
       IDENTITY: ${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}
       PREFIX: ${{ matrix.component == 'sdk' && 'build/sdk' || 'build/macos-runtimes' }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
+    # sdk-recipe: macos-sdk end
     steps:
+    # sdk-recipe: macos-sdk begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    # sdk-recipe: macos-sdk end
+    # sdk-recipe: macos-sdk begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: macos-sdk end
     - name: Probe the qualified original before allocating build resources
       id: probe
       env:
@@ -151,9 +163,11 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: python tools/ci_artifacts.py probe --component "macos-${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
+    # sdk-recipe: macos-sdk begin
     - name: Install compiler tools
       run: brew install cmake ninja git-lfs
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: macos-sdk end
     - name: Install verifier dependencies
       run: |-
         python -m venv .venv
@@ -179,10 +193,12 @@ jobs:
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/sdk
-        key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
+        key: macos15-arm64-sdk-${{ env.IDENTITY }}
+    # sdk-recipe: macos-sdk begin
     - name: Build or verify SDK
       if: steps.probe.outputs.hit != 'true' && (matrix.component == 'sdk')
       run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
+    # sdk-recipe: macos-sdk end
     - name: Verify and archive the qualified prefix
       run: |-
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
@@ -218,7 +234,9 @@ jobs:
     name: Build Linux core
     needs:
     - plan
+    # sdk-recipe: linux-core begin
     runs-on: ubuntu-24.04
+    # sdk-recipe: linux-core end
     timeout-minutes: 120
     permissions:
       contents: read
@@ -230,18 +248,26 @@ jobs:
       cancel-in-progress: false
     outputs:
       image: ${{ steps.resolved.outputs.image }}
+    # sdk-recipe: linux-core begin
     env:
       COMPONENT: core
       IDENTITY: ${{ needs.plan.outputs['linux-core'] }}
+    # sdk-recipe: linux-core end
     steps:
+    # sdk-recipe: linux-core begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    # sdk-recipe: linux-core end
+    # sdk-recipe: linux-core begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: linux-core end
+    # sdk-recipe: linux-core begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    # sdk-recipe: linux-core end
     - name: Free hosted-runner space for retained image promotion
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
@@ -288,6 +314,7 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    # sdk-recipe: linux-core begin
     - name: Build and publish core
       if: steps.lookup.outputs.build == 'true'
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
@@ -302,6 +329,7 @@ jobs:
         build-args: ''
         cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
         cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    # sdk-recipe: linux-core end
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
@@ -344,7 +372,9 @@ jobs:
     needs:
     - plan
     - core
+    # sdk-recipe: linux-litert begin
     runs-on: ubuntu-24.04
+    # sdk-recipe: linux-litert end
     timeout-minutes: 120
     permissions:
       contents: read
@@ -356,18 +386,26 @@ jobs:
       cancel-in-progress: false
     outputs:
       image: ${{ steps.resolved.outputs.image }}
+    # sdk-recipe: linux-litert begin
     env:
       COMPONENT: litert
       IDENTITY: ${{ needs.plan.outputs['linux-litert'] }}
+    # sdk-recipe: linux-litert end
     steps:
+    # sdk-recipe: linux-litert begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    # sdk-recipe: linux-litert end
+    # sdk-recipe: linux-litert begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: linux-litert end
+    # sdk-recipe: linux-litert begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    # sdk-recipe: linux-litert end
     - name: Free hosted-runner space for retained image promotion
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
@@ -414,6 +452,7 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    # sdk-recipe: linux-litert begin
     - name: Build and publish litert
       if: steps.lookup.outputs.build == 'true'
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
@@ -428,6 +467,7 @@ jobs:
         build-args: CORE_IMAGE=${{ needs.core.outputs.image }}
         cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
         cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    # sdk-recipe: linux-litert end
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
@@ -470,7 +510,9 @@ jobs:
     needs:
     - plan
     - core
+    # sdk-recipe: linux-whisper begin
     runs-on: ubuntu-24.04
+    # sdk-recipe: linux-whisper end
     timeout-minutes: 120
     permissions:
       contents: read
@@ -482,18 +524,26 @@ jobs:
       cancel-in-progress: false
     outputs:
       image: ${{ steps.resolved.outputs.image }}
+    # sdk-recipe: linux-whisper begin
     env:
       COMPONENT: whisper
       IDENTITY: ${{ needs.plan.outputs['linux-whisper'] }}
+    # sdk-recipe: linux-whisper end
     steps:
+    # sdk-recipe: linux-whisper begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    # sdk-recipe: linux-whisper end
+    # sdk-recipe: linux-whisper begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: linux-whisper end
+    # sdk-recipe: linux-whisper begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    # sdk-recipe: linux-whisper end
     - name: Free hosted-runner space for retained image promotion
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
@@ -540,6 +590,7 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    # sdk-recipe: linux-whisper begin
     - name: Build and publish whisper
       if: steps.lookup.outputs.build == 'true'
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
@@ -554,6 +605,7 @@ jobs:
         build-args: CORE_IMAGE=${{ needs.core.outputs.image }}
         cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
         cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    # sdk-recipe: linux-whisper end
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
@@ -598,7 +650,9 @@ jobs:
     - core
     - litert
     - whisper
+    # sdk-recipe: linux-sdk begin
     runs-on: ubuntu-24.04
+    # sdk-recipe: linux-sdk end
     timeout-minutes: 120
     permissions:
       contents: read
@@ -610,18 +664,26 @@ jobs:
       cancel-in-progress: false
     outputs:
       image: ${{ steps.resolved.outputs.image }}
+    # sdk-recipe: linux-sdk begin
     env:
       COMPONENT: sdk
       IDENTITY: ${{ needs.plan.outputs['linux-sdk'] }}
+    # sdk-recipe: linux-sdk end
     steps:
+    # sdk-recipe: linux-sdk begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    # sdk-recipe: linux-sdk end
+    # sdk-recipe: linux-sdk begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: linux-sdk end
+    # sdk-recipe: linux-sdk begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    # sdk-recipe: linux-sdk end
     - name: Free hosted-runner space for retained image promotion
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
@@ -668,6 +730,7 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    # sdk-recipe: linux-sdk begin
     - name: Build and publish sdk
       if: steps.lookup.outputs.build == 'true'
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
@@ -685,6 +748,7 @@ jobs:
           WHISPER_IMAGE=${{ needs.whisper.outputs.image }}
         cache-from: type=registry,ref=${{ steps.tag.outputs.cache }}
         cache-to: type=registry,ref=${{ steps.tag.outputs.cache }},mode=max,image-manifest=true
+    # sdk-recipe: linux-sdk end
     - name: Resolve immutable component digest
       id: resolved
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}" --require
@@ -726,7 +790,9 @@ jobs:
     if: github.event_name == 'pull_request'
     needs:
     - plan
+    # sdk-recipe: linux-core begin
     runs-on: ubuntu-24.04
+    # sdk-recipe: linux-core end
     timeout-minutes: 240
     permissions:
       contents: read
@@ -735,6 +801,7 @@ jobs:
     concurrency:
       group: dependency-linux-core-${{ needs.plan.outputs['linux-core'] }}-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: false
+    # sdk-recipe: linux-core begin
     env:
       DOCKER_BUILDKIT: '1'
       COMPONENT: linux-core
@@ -742,14 +809,19 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       OWN_HEAD: ${{ github.event.pull_request.head.sha }}
       OWN_PR: ${{ github.event.pull_request.number }}
+    # sdk-recipe: linux-core end
     steps:
+    # sdk-recipe: linux-core begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
+    # sdk-recipe: linux-core end
+    # sdk-recipe: linux-core begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: linux-core end
     - name: Probe the qualified original before allocating build resources
       id: probe
       env:
@@ -766,10 +838,12 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: linux-core begin
     - name: Reuse or build and qualify the component
       run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: linux-core end
     - name: Retain the verified component immediately
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -803,22 +877,27 @@ jobs:
     needs:
     - plan
     - linux-pr-core
+    # sdk-recipe: linux-litert,linux-whisper begin
     runs-on: ubuntu-24.04
+    # sdk-recipe: linux-litert,linux-whisper end
     timeout-minutes: 240
     permissions:
       contents: read
       actions: read
       packages: read
+    # sdk-recipe: linux-litert,linux-whisper begin
     strategy:
       fail-fast: false
       matrix:
         component:
         - litert
         - whisper
+    # sdk-recipe: linux-litert,linux-whisper end
     concurrency:
       group: dependency-linux-${{ matrix.component }}-${{ needs.plan.outputs[format('linux-{0}', matrix.component)] }}-pr-${{
         github.event.pull_request.number }}
       cancel-in-progress: false
+    # sdk-recipe: linux-litert,linux-whisper begin
     env:
       DOCKER_BUILDKIT: '1'
       COMPONENT: linux-${{ matrix.component }}
@@ -826,14 +905,19 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       OWN_HEAD: ${{ github.event.pull_request.head.sha }}
       OWN_PR: ${{ github.event.pull_request.number }}
+    # sdk-recipe: linux-litert,linux-whisper end
     steps:
+    # sdk-recipe: linux-litert,linux-whisper begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
+    # sdk-recipe: linux-litert,linux-whisper end
+    # sdk-recipe: linux-litert,linux-whisper begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: linux-litert,linux-whisper end
     - name: Probe the qualified original before allocating build resources
       id: probe
       env:
@@ -850,10 +934,12 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: linux-litert,linux-whisper begin
     - name: Reuse or build and qualify the component
       run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: linux-litert,linux-whisper end
     - name: Retain the verified component immediately
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -888,7 +974,9 @@ jobs:
     - plan
     - linux-pr-core
     - linux-pr-runtime
+    # sdk-recipe: linux-sdk begin
     runs-on: ubuntu-24.04
+    # sdk-recipe: linux-sdk end
     timeout-minutes: 240
     permissions:
       contents: read
@@ -897,6 +985,7 @@ jobs:
     concurrency:
       group: dependency-linux-sdk-${{ needs.plan.outputs['linux-sdk'] }}-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: false
+    # sdk-recipe: linux-sdk begin
     env:
       DOCKER_BUILDKIT: '1'
       COMPONENT: linux-sdk
@@ -904,14 +993,19 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       OWN_HEAD: ${{ github.event.pull_request.head.sha }}
       OWN_PR: ${{ github.event.pull_request.number }}
+    # sdk-recipe: linux-sdk end
     steps:
+    # sdk-recipe: linux-sdk begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha }}
+    # sdk-recipe: linux-sdk end
+    # sdk-recipe: linux-sdk begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: linux-sdk end
     - name: Probe the qualified original before allocating build resources
       id: probe
       env:
@@ -928,10 +1022,12 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: linux-sdk begin
     - name: Reuse or build and qualify the component
       run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: linux-sdk end
     - name: Retain the verified component immediately
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -962,25 +1058,33 @@ jobs:
   macos-vendor:
     name: Build macOS vendor
     needs: plan
+    # sdk-recipe: macos-vendor begin
     runs-on: macos-15
+    # sdk-recipe: macos-vendor end
     timeout-minutes: 120
     concurrency:
       group: dependency-macos-vendor-${{ needs.plan.outputs['macos-vendor'] }}-${{ github.event_name == 'pull_request'
         && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
       cancel-in-progress: false
+    # sdk-recipe: macos-vendor begin
     env:
       COMPONENT: vendor
       IDENTITY: ${{ needs.plan.outputs['macos-vendor'] }}
       PREFIX: build/macos-vendor
       MACOSX_DEPLOYMENT_TARGET: '15.0'
+    # sdk-recipe: macos-vendor end
     steps:
+    # sdk-recipe: macos-vendor begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    # sdk-recipe: macos-vendor end
+    # sdk-recipe: macos-vendor begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: macos-vendor end
     - name: Probe the qualified original before allocating build resources
       id: probe
       env:
@@ -989,9 +1093,11 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: python tools/ci_artifacts.py probe --component "macos-${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
+    # sdk-recipe: macos-vendor begin
     - name: Install compiler tools
       run: brew install cmake ninja git-lfs
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: macos-vendor end
     - name: Restore an already verified shared prefix
       id: shared
       env:
@@ -1007,9 +1113,11 @@ jobs:
           echo 'hit=false' >> "$GITHUB_OUTPUT"
         fi
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: macos-vendor begin
     - name: Build or verify vendor runtimes
       run: python tools/build_macos_vendor.py --jobs 3
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: macos-vendor end
     - name: Verify and archive the qualified prefix
       run: |-
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
@@ -1045,30 +1153,40 @@ jobs:
     needs:
     - plan
     - macos-vendor
+    # sdk-recipe: macos-runtime begin
     runs-on: macos-15
+    # sdk-recipe: macos-runtime end
     timeout-minutes: 120
+    # sdk-recipe: macos-runtime begin
     strategy:
       fail-fast: false
       matrix:
         component:
         - runtime
+    # sdk-recipe: macos-runtime end
     concurrency:
       group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}-${{
         github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
       cancel-in-progress: false
+    # sdk-recipe: macos-runtime begin
     env:
       COMPONENT: ${{ matrix.component }}
       IDENTITY: ${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}
       PREFIX: ${{ matrix.component == 'sdk' && 'build/sdk' || 'build/macos-runtimes' }}
       MACOSX_DEPLOYMENT_TARGET: '15.0'
+    # sdk-recipe: macos-runtime end
     steps:
+    # sdk-recipe: macos-runtime begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    # sdk-recipe: macos-runtime end
+    # sdk-recipe: macos-runtime begin
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    # sdk-recipe: macos-runtime end
     - name: Probe the qualified original before allocating build resources
       id: probe
       env:
@@ -1077,9 +1195,11 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: python tools/ci_artifacts.py probe --component "macos-${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
+    # sdk-recipe: macos-runtime begin
     - name: Install compiler tools
       run: brew install cmake ninja git-lfs
       if: steps.probe.outputs.hit != 'true'
+    # sdk-recipe: macos-runtime end
     - name: Restore an already verified shared prefix
       id: shared
       env:
@@ -1103,9 +1223,11 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: python tools/ci_artifacts.py pull --component macos-vendor --prefix build/macos-vendor --own-head "$OWN_HEAD"
         --own-pr "$OWN_PR"
+    # sdk-recipe: macos-runtime begin
     - name: Build or verify inference runtimes
       if: steps.probe.outputs.hit != 'true' && (matrix.component == 'runtime')
       run: python tools/build_macos_runtimes.py --jobs 3
+    # sdk-recipe: macos-runtime end
     - name: Verify and archive the qualified prefix
       run: |-
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"

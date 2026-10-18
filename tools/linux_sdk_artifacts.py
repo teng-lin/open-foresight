@@ -13,6 +13,7 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
+from tools.sdk_build_recipe import docker_build_command  # noqa: E402
 
 COMPONENTS = ("linux-core", "linux-litert", "linux-whisper", "linux-sdk")
 REGISTRY_IMAGE = re.compile(r"ghcr\.io/[a-z0-9/_.-]+@sha256:[a-f0-9]{64}")
@@ -143,21 +144,7 @@ def produce(component, output, repository, own_head="", own_pr=0):
             artifacts.pack(component, identity, prefix, output)
             return
         else:
-            build = [
-                "docker",
-                "build",
-                "-f",
-                str(
-                    artifacts.ROOT
-                    / (
-                        "packaging/sdk.Dockerfile"
-                        if component == "linux-sdk"
-                        else f"packaging/sdk-{component.removeprefix('linux-')}.Dockerfile"
-                    )
-                ),
-                "-t",
-                image,
-            ]
+            parent_images = {}
             for parent in artifacts.PARENTS.get(component, []):
                 parent_prefix = temporary / parent
                 if not artifacts.pull(
@@ -172,10 +159,11 @@ def produce(component, output, repository, own_head="", own_pr=0):
                     raise RuntimeError(f"Qualified parent {parent} is unavailable")
                 parent_image = load(parent_prefix, parent, local_tag(parent))
                 shutil.rmtree(parent_prefix)
-                argument = parent.removeprefix("linux-").upper() + "_IMAGE"
-                build += ["--build-arg", f"{argument}={parent_image}"]
-            build.append(str(artifacts.ROOT))
-            run(build, timeout=10800)
+                parent_images[parent] = parent_image
+            run(
+                docker_build_command(component, image, parent_images, artifacts.ROOT),
+                timeout=10800,
+            )
         qualify(component, image)
         if not reused:
             prefix.mkdir()
