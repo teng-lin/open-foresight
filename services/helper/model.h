@@ -135,11 +135,8 @@ struct Model {
     }
     const bool litert =
         fs::is_regular_file(path) && fs::path(path).extension() == ".litertlm";
-    if (gpu && !litert)
-      throw std::runtime_error("GPU requires an EmbeddingGemma 2 bundle");
-    if (!litert && !fs::is_directory(path))
-      throw std::runtime_error("Embedding model must be a local directory or "
-                               "EmbeddingGemma 2 .litertlm bundle");
+    if (!litert)
+      throw std::runtime_error("Unsupported model format: embedding requires a .litertlm file");
     const char *configured = getenv("FORESIGHT_MODEL_WORKER");
     const std::string installed_worker =
         (foresight::executable_path().parent_path() / "foresight-model")

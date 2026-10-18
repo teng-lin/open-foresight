@@ -27,7 +27,7 @@ set(SCHEMA ${PROJECT_SOURCE_DIR}/third_party/litert_lm/litertlm_header_schema.fb
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/litertlm_header_schema_generated.h
  COMMAND flatc --cpp -o ${CMAKE_CURRENT_BINARY_DIR} ${SCHEMA} DEPENDS flatc ${SCHEMA})
 add_executable(foresight-model main.cpp ${CMAKE_CURRENT_BINARY_DIR}/litertlm_header_schema_generated.h)
-target_include_directories(foresight-model PRIVATE ${PROJECT_SOURCE_DIR}/third_party/onnxruntime ${PROJECT_SOURCE_DIR}/third_party/litert_lm ${CMAKE_CURRENT_BINARY_DIR} ${flatbuffers_SOURCE_DIR}/include ${sentencepiece_SOURCE_DIR}/src)
+target_include_directories(foresight-model PRIVATE ${PROJECT_SOURCE_DIR}/third_party/litert_lm ${CMAKE_CURRENT_BINARY_DIR} ${flatbuffers_SOURCE_DIR}/include ${sentencepiece_SOURCE_DIR}/src)
 target_link_libraries(foresight-model PRIVATE sentencepiece-static OpenSSL::Crypto ICU::uc ICU::i18n nlohmann_json::nlohmann_json Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_options(foresight-model PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(foresight-query legacy_query.cpp)

@@ -31,13 +31,11 @@ def main():
     p.add_argument('--worker', type=Path, required=True)
     p.add_argument('--library', type=Path, required=True)
     p.add_argument('--embedding', type=Path, required=True)
-    p.add_argument('--onnx-library', type=Path)
     p.add_argument('--generation', type=Path)
     p.add_argument('--backend', choices=['cpu', 'gpu'], default='cpu')
     p.add_argument('--output', type=Path, required=True)
     args = p.parse_args()
     environment = dict(os.environ, FORESIGHT_LITERT_LIBRARY=str(args.library.resolve()), PATH='/nonexistent')
-    if args.onnx_library: environment['FORESIGHT_ONNX_LIBRARY'] = str(args.onnx_library.resolve())
     worker = str(args.worker.resolve())
     subprocess.run([worker, '--check'], env=environment, check=True)
     texts = ['Mira sends the draft Tuesday.', 'Café 東京 — résumé.', '', 'A meeting about launch schedules. '*400]

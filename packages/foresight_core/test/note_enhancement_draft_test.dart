@@ -81,13 +81,9 @@ void main() {
     () {
       final id = store.meeting('Meeting');
       store.db.execute(
-        'CREATE TABLE calendar_events(event_key TEXT,meeting_id INTEGER,metadata TEXT)',
+        "INSERT INTO calendar_events(event_key,meeting_id,metadata,account,calendar_id,google_id,source_id,starts,ends,status,synced) VALUES(?,?,?,'fixture','fixture','fixture','fixture',0,0,'confirmed',0)",
+        ['event', id, '{"summary":"Captured"}'],
       );
-      store.db.execute('INSERT INTO calendar_events VALUES(?,?,?)', [
-        'event',
-        id,
-        '{"summary":"Captured"}',
-      ]);
       store.saveMeetingEnhancedDraft(id, 'Initial programmatic text');
       final note = store.rows('SELECT * FROM meeting_notes').single;
       expect(note['body'], '');

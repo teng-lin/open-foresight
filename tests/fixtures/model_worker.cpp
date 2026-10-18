@@ -13,7 +13,7 @@ int main(int argc, char **argv) {
     std::ofstream stream(log, std::ios::app);
     stream << getpid() << '\n';
   }
-  bool stubborn = std::filesystem::path(argv[2]).filename() == "stubborn";
+  bool stubborn = std::filesystem::path(argv[2]).filename() == "stubborn.litertlm";
   if (stubborn)
     signal(SIGTERM, SIG_IGN);
   using json = nlohmann::json;
@@ -22,7 +22,7 @@ int main(int argc, char **argv) {
                      {"digest", "fixture"},
                      {"tokenizer_digest", "fixture"},
                      {"preprocessing", "fixture"},
-                     {"backend", "onnx-bert-cpu"}})
+                     {"backend", "litert-lm-embedding-cpu"}})
                    .dump()
             << std::endl;
   const char *stall_after = std::getenv("FORESIGHT_FIXTURE_STALL_AFTER");

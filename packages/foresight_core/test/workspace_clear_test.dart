@@ -107,8 +107,14 @@ void main() {
           'expires_at': 1,
         }),
       );
+      await Process.run('/bin/chmod', ['700', authDirectory.path]);
+      await Process.run('/bin/chmod', [
+        '600',
+        '${authDirectory.path}/tokens.json',
+      ]);
       final auth = GoogleAuth(
         authDirectory,
+        secretStore: const UnavailableSecretStore(),
         endpoints: GoogleEndpoints(revoke: revoke),
       );
       await app.close();
@@ -279,8 +285,14 @@ void main() {
           }),
         );
       final base = Uri.parse('http://127.0.0.1:${server.port}/');
+      await Process.run('/bin/chmod', ['700', authDirectory.path]);
+      await Process.run('/bin/chmod', [
+        '600',
+        '${authDirectory.path}/tokens.json',
+      ]);
       final auth = GoogleAuth(
         authDirectory,
+        secretStore: const UnavailableSecretStore(),
         endpoints: GoogleEndpoints(
           token: base.resolve('token'),
           revoke: base.resolve('revoke'),

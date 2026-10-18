@@ -52,6 +52,21 @@ class MacModelProbeTests(unittest.TestCase):
                         run.assert_not_called()
 
 
+    def test_explicit_generation_runner_keeps_separate_embedding_worker(self):
+        with tempfile.TemporaryDirectory(prefix='model probe ') as temporary:
+            runner = Path(temporary) / 'generation runner'
+            with patch.object(sys, 'platform', 'darwin'), \
+                    patch.object(sys, 'argv', ['probe', '--runner', str(runner),
+                                              '--report', temporary + '/report.json']), \
+                    patch.object(gemma_probe.subprocess, 'run') as run:
+                gemma_probe.main()
+                env = run.call_args.kwargs['env']
+                self.assertEqual(env['FORESIGHT_LITERT_RUNNER'], str(runner.resolve()))
+                self.assertEqual(env['FORESIGHT_MODEL_WORKER'],
+                                 str(gemma_probe.ROOT / 'build/services/inference/foresight-model'))
+
+
+
 def bundle(path, version, identifier=installer.IDENTIFIER):
     (path/'Contents').mkdir(parents=True)
     with (path/'Contents/Info.plist').open('wb') as stream:

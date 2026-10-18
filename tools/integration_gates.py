@@ -70,7 +70,6 @@ def bundle_environment(bundle, inherited):
                    FORESIGHT_LITERT_RUNNER=str(bundle / 'bin/foresight-model'),
                    FORESIGHT_MODEL_WORKER=str(bundle / 'bin/foresight-model'),
                    FORESIGHT_LITERT_LIBRARY=str(bundle / 'lib/liblitert-lm.so'),
-                   FORESIGHT_ONNX_LIBRARY=str(bundle / 'lib/libonnxruntime.so'),
                    FORESIGHT_QUERY_WORKER=str(bundle / 'share/open-foresight/adapters/legacy_query_worker.py'),
                    FORESIGHT_LITERT_PYTHON=str(bundle / 'bin/query-python'),
                    LD_LIBRARY_PATH=str(bundle / 'lib') + ':' + str(bundle / 'app/lib'))

@@ -305,7 +305,7 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
             for rel in ('services/helper/ForesightHelper', 'native/libforesight_native.so',
                         'application/foresight-service', 'application/foresight-mcp',
                         'services/inference/foresight-model', 'lib/liblitert-lm.so',
-                        'lib/libonnxruntime.so', '_deps/sentencepiece-src/LICENSE',
+                        '_deps/sentencepiece-src/LICENSE',
                         '_deps/flatbuffers-src/LICENSE',
                         '_deps/sentencepiece-src/third_party/protobuf-lite/LICENSE',
                         '_deps/sentencepiece-src/third_party/esaxx/LICENSE',
@@ -318,9 +318,8 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
             litert_digest = hashlib.sha256(b'fixture').hexdigest()
             with patch.object(sys, 'argv', ['package.py', '--build', str(build), '--flutter-bundle', str(flutter),
                                             '--output', str(output), '--litert-library', str(build / 'lib/liblitert-lm.so'),
-                                            '--onnx-library', str(build / 'lib/libonnxruntime.so'), '--revision', revision]), \
+                                            '--revision', revision]), \
                     patch.object(package, 'LIBRARY_SHA256', litert_digest), \
-                    patch.object(package, 'ONNX_LIBRARY_SHA256', litert_digest), \
                     patch('package.subprocess.run'), \
                     patch('package.subprocess.check_output', return_value=''):
                 package.main()
