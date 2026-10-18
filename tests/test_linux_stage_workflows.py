@@ -329,3 +329,47 @@ def test_language_jobs_download_only_slim_native_runtime_and_service_omits_unuse
                     "STAGE_PARENTS"
                 ]
             )
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "integration-acceptance.yml",
+        "linux-packages.yml",
+        "preview-packages.yml",
+        "release-acceptance.yml",
+    ],
+)
+def test_disposable_installed_document_containers_can_initialize_isolated_loopback(
+    name,
+):
+    commands = [
+        step["run"]
+        for job in workflow(name)["jobs"].values()
+        for step in job.get("steps", [])
+        if "--security-opt seccomp=unconfined" in step.get("run", "")
+    ]
+    assert commands
+    for command in commands:
+        assert "--cap-add NET_ADMIN" in command
+        assert "--security-opt apparmor=unconfined" in command
+        assert "--privileged" not in command
+    # This configures the disposable outer container; the real parser retains
+    # its separate user/PID/network/mount namespaces and drops all capabilities.
+    parser = (ROOT / "packages/foresight_core/lib/src/store.dart").read_text()
+    assert "'--unshare-all'" in parser
+    assert "'--cap-drop',\n        'ALL'" in parser
+
+
+def test_optional_gpu_policy_is_confined_to_ci_emulator_acceptance():
+    jobs = workflow("integration-acceptance.yml")["jobs"]
+    step = next(
+        step
+        for step in jobs["ubuntu-package"]["steps"]
+        if step.get("name") == "Shipped GPU runtimes on software Vulkan"
+    )
+    assert "--allow-unavailable" in step["run"]
+    for name in ("release.yml", "release-acceptance.yml"):
+        assert (
+            "--allow-unavailable" not in (ROOT / ".github/workflows" / name).read_text()
+        )

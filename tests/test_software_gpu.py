@@ -109,3 +109,123 @@ def test_decode_executes_on_gpu_with_sixteen_token_bound(tmp_path, content, deco
                 gpu.litert_probe(Path("runner"), "model", {}, tmp_path)
     assert commands[0][-3:] == ["--backend", "gpu", "--serve"]
     assert '"max_output_tokens": 16' in commands[1]
+
+
+def test_absent_vulkan_device_is_skipped_only_by_explicit_ci_policy():
+    unavailable = SimpleNamespace(
+        returncode=0,
+        stdout="CPU fallback transcript",
+        stderr=(
+            "ggml_vulkan: No devices found.\nwhisper_backend_init_gpu: no GPU found\n"
+        ),
+    )
+    with pytest.raises(RuntimeError, match="failed to execute"):
+        gpu.whisper_result(unavailable)
+    skipped = gpu.whisper_result(unavailable, allow_unavailable=True)
+    assert skipped["status"] == "skipped"
+    assert "no supported GPU" in skipped["reason"]
+    assert skipped["diagnostic"] == unavailable.stderr
+    # Absence never excuses a failing process or an available backend regression.
+    unavailable.returncode = 1
+    with pytest.raises(RuntimeError):
+        gpu.whisper_result(unavailable, allow_unavailable=True)
+    unavailable.returncode = 0
+    unavailable.stderr += "using Vulkan0 backend\n0 = llvmpipe"
+    unavailable.stdout = ""
+    with pytest.raises(RuntimeError, match="no transcript"):
+        gpu.whisper_result(unavailable, allow_unavailable=True)
+
+
+@pytest.mark.parametrize("allow_unavailable", [False, True])
+def test_real_whisper_command_explicitly_selects_the_software_vulkan_device(
+    tmp_path, allow_unavailable
+):
+    icd = tmp_path / "lvp_icd.x86_64.json"
+    report = tmp_path / "reports"
+    calls = []
+
+    def run(command, **options):
+        calls.append((command, options))
+        assert options["env"]["GGML_VK_VISIBLE_DEVICES"] == "0"
+        assert options["env"]["VK_DRIVER_FILES"] == str(icd)
+        assert options["env"]["VK_ICD_FILENAMES"] == str(icd)
+        assert command[-2:] == ["-dev", "0"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="my fellow Americans",
+            stderr="0 = llvmpipe\nusing Vulkan0 backend",
+        )
+
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "probe",
+                "--bundle",
+                str(tmp_path),
+                "--models",
+                str(tmp_path),
+                "--output",
+                str(report),
+                *(["--allow-unavailable"] if allow_unavailable else []),
+            ],
+        ),
+        patch.object(gpu.Path, "glob", return_value=[icd]),
+        patch.object(
+            gpu, "packaged_paths", return_value=(Path("runner"), Path("worker"), {})
+        ),
+        patch.object(gpu, "model_file", return_value="model"),
+        patch.object(gpu.subprocess, "run", side_effect=run),
+        patch.object(
+            gpu,
+            "litert_probe",
+            return_value={
+                "status": "unsupported_software_driver",
+                "diagnostic": "No OpenCL platform",
+            },
+        ),
+    ):
+        gpu.main()
+    assert len(calls) == 1
+    evidence = json.loads((report / "software-gpu.json").read_text())
+    assert evidence["whisper"]["status"] == "passed"
+    assert evidence["litert"]["status"] == (
+        "skipped" if allow_unavailable else "unsupported_software_driver"
+    )
+    if allow_unavailable:
+        assert evidence["litert"]["reason"]
+    assert evidence["physical_gpu_verified"] is False
+
+
+def test_missing_driver_records_skip_without_starting_models_only_when_requested(
+    tmp_path,
+):
+    arguments = [
+        "probe",
+        "--bundle",
+        str(tmp_path),
+        "--models",
+        str(tmp_path),
+        "--output",
+        str(tmp_path),
+    ]
+    with (
+        patch.object(sys, "argv", arguments),
+        patch.object(gpu.Path, "glob", return_value=[]),
+        patch.object(gpu, "packaged_paths") as packaged,
+        pytest.raises(RuntimeError, match="Exactly one"),
+    ):
+        gpu.main()
+    packaged.assert_not_called()
+    with (
+        patch.object(sys, "argv", [*arguments, "--allow-unavailable"]),
+        patch.object(gpu.Path, "glob", return_value=[]),
+        patch.object(gpu, "packaged_paths") as packaged,
+    ):
+        gpu.main()
+    packaged.assert_not_called()
+    evidence = json.loads((tmp_path / "software-gpu.json").read_text())
+    assert evidence["status"] == "skipped"
+    assert "No Mesa lavapipe" in evidence["reason"]
+    assert evidence["physical_gpu_verified"] is False
