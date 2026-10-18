@@ -7,8 +7,10 @@ import sys
 import tempfile
 import unittest
 
-from package_macos import write_runtime
-from web_search_release import KEYS, release_web_search_keys, shell_web_search_keys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+
+from package_macos import write_runtime  # noqa: E402
+from web_search_release import KEYS, release_web_search_keys, shell_web_search_keys  # noqa: E402
 
 
 class WebSearchReleaseTest(unittest.TestCase):

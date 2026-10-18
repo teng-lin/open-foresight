@@ -116,3 +116,62 @@ def test_repeated_ui_protocol_observations_preserve_unique_semantic_checks():
     observations.append(dict(semantic))
     with pytest.raises(ValueError, match="transcript_persisted"):
         verify_service_ui_report(report)
+
+
+def verify_python_collection(root, collected):
+    """Require an explicit, reasoned exception for each uncollected module."""
+    import configparser
+    import json
+
+    config = configparser.ConfigParser()
+    config.read(root / "pytest.ini")
+    assert config["pytest"]["testpaths"].split() == ["tests"]
+    exclusions = json.loads((root / "pytest-exclusions.json").read_text())
+    ignored = config["pytest"]["norecursedirs"].split()
+    ignored += [
+        arg.removeprefix("--ignore=")
+        for arg in config["pytest"].get("addopts", "").split()
+        if arg.startswith("--ignore=")
+    ]
+    modules = {
+        str(path.relative_to(root)) for path in (root / "tests").rglob("test_*.py")
+    }
+    assert all(
+        path in modules and reason.strip() for path, reason in exclusions.items()
+    )
+    assert all(
+        any(Path(path).is_relative_to(folder) for folder in ignored)
+        for path in exclusions
+    )
+    missing = modules - collected - exclusions.keys()
+    assert not missing, (
+        f"Uncollected Python tests need an explicit reason: {sorted(missing)}"
+    )
+
+
+def test_every_python_module_is_collected_or_explicitly_excluded(request):
+    # Explicit targeted runs intentionally collect fewer modules. Check the
+    # complete discovery invariant during the default suite only.
+    if request.config.args != ["tests"]:
+        return
+    collected = {
+        str(Path(item.path).relative_to(ROOT)) for item in request.session.items
+    }
+    reporter = request.config.pluginmanager.getplugin("terminalreporter")
+    collected.update(
+        str(Path(report.fspath)) for report in reporter.stats.get("skipped", [])
+    )
+    verify_python_collection(ROOT, collected)
+
+
+def test_collection_guard_rejects_a_new_uncollected_module(tmp_path):
+    import json
+
+    (tmp_path / "tests/integration").mkdir(parents=True)
+    (tmp_path / "pytest.ini").write_text(
+        "[pytest]\ntestpaths = tests\nnorecursedirs = tests/integration\n"
+    )
+    (tmp_path / "pytest-exclusions.json").write_text(json.dumps({}))
+    (tmp_path / "tests/integration/test_new.py").write_text("def test_new(): pass\n")
+    with pytest.raises(AssertionError, match="test_new.py"):
+        verify_python_collection(tmp_path, set())

@@ -13,7 +13,7 @@ import sys
 import tempfile
 import unittest
 
-PARSER = Path(sys.argv.pop(1)).resolve()
+PARSER = Path(sys.argv.pop(1)).resolve() if __name__ == "__main__" else None
 TEXT = "Foresight café Ω — Tuesday 42"
 FIXTURE = r"""
 import Foundation
