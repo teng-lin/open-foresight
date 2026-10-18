@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -16,20 +17,20 @@ class QuickStartDomain extends CommandFixtureDomain {
   QuickStartDomain(super.store, super.helper);
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]) async {
-    operations.add(method);
-    if (method == 'audio.capabilities')
+    operations.add(operation.wire);
+    if (operation == Operation.audio_capabilities)
       return {
         'microphone': denyMicrophone ? 'not_determined' : 'authorized',
         'system_audio_request': needsSystemSetup
             ? 'not_requested'
             : 'completed',
       };
-    if (method == 'audio.request_microphone')
+    if (operation == Operation.audio_request_microphone)
       return {'granted': false, 'microphone': 'denied'};
-    if (method == 'audio.request_system')
+    if (operation == Operation.audio_request_system)
       return await (systemGate?.future ??
           Future.value({
             'system_audio': 'unknown',
@@ -39,14 +40,15 @@ class QuickStartDomain extends CommandFixtureDomain {
             'settings_url':
                 'x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture',
           }));
-    if (method == 'notifications.capabilities') return {'available': false};
-    if (method == 'meetings.create') {
+    if (operation == Operation.notifications_capabilities)
+      return {'available': false};
+    if (operation == Operation.meetings_create) {
       await createGate?.future;
       if (failCreate)
         throw StateError('Meeting creation failed. Please retry.');
     }
-    if (method == 'meetings.start') return {};
-    return super.command(method, args);
+    if (operation == Operation.meetings_start) return {};
+    return super.command(operation, args);
   }
 }
 

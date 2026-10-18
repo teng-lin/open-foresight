@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'desktop_connection_fixture.dart';
 import 'package:foresight_core/src/application.dart';
 import 'dart:io';
@@ -15,21 +16,22 @@ class PermissionDomain extends CommandFixtureDomain {
   PermissionDomain(super.store, super.helper);
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]) async {
-    requests.add(method);
-    if (method == 'audio.capabilities')
+    requests.add(operation.wire);
+    if (operation == Operation.audio_capabilities)
       return {
         'microphone': 'not_determined',
         'system_audio': 'permission_checked_on_capture',
       };
-    if (method == 'audio.request_microphone')
+    if (operation == Operation.audio_request_microphone)
       return {'granted': false, 'microphone': 'denied'};
-    if (method == 'notifications.request_permission') return {'granted': false};
-    if (method == 'notifications.capabilities')
+    if (operation == Operation.notifications_request_permission)
+      return {'granted': false};
+    if (operation == Operation.notifications_capabilities)
       return {'available': false, 'authorization': 0};
-    return super.command(method, args);
+    return super.command(operation, args);
   }
 }
 

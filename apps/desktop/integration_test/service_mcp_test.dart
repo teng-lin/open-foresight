@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/operations.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -93,7 +94,7 @@ void main() {
       );
       // A ready snapshot may precede the current restore transaction finishing.
       await workspace.d.resume();
-      final initial = await workspace.d.command('status') as Map;
+      final initial = await workspace.d.command(Operation.status) as Map;
       final mcp = Mcp(
         await Process.start(
           Platform.environment['FORESIGHT_MCP_EXECUTABLE']!,
@@ -144,7 +145,8 @@ void main() {
       );
       await mcp.close();
       expect(
-        (await workspace.d.command('status') as Map)['capture']['active'],
+        (await workspace.d.command(Operation.status)
+            as Map)['capture']['active'],
         true,
       );
       // Closing the desktop removes its visible indicator and must stop capture.
@@ -161,13 +163,13 @@ void main() {
       // client's restore/reconciliation to finish before requesting generation.
       await workspace.d.resume();
       expect(
-        (await workspace.d.command('status') as Map)['pid'],
+        (await workspace.d.command(Operation.status) as Map)['pid'],
         initial['pid'],
       );
       await workspace.meetingFeature.stopRecording();
       await waitFor(tester, () => workspace.meetingFeature.recording == null);
       final meeting =
-          await workspace.d.command('meetings.get', {'id': id}) as Map;
+          await workspace.d.command(Operation.meetings_get, {'id': id}) as Map;
       expect(
         (meeting['transcript'] as List).where(
           (dynamic t) =>
@@ -175,12 +177,12 @@ void main() {
         ),
         isNotEmpty,
       );
-      await workspace.d.command('meetings.generate', {
+      await workspace.d.command(Operation.meetings_generate, {
         'id': id,
         'kind': 'summary',
       });
       final content =
-          await workspace.d.command('meetings.get', {'id': id}) as Map;
+          await workspace.d.command(Operation.meetings_get, {'id': id}) as Map;
       expect(
         (content['artifacts'] as List).single['generated'],
         contains('Mira'),

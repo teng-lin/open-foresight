@@ -385,7 +385,7 @@ void main() {
         });
         expect(client.webSearchAvailable, isTrue);
         final id =
-            (await client.command('meetings.create', {
+            (await client.command(Operation.meetings_create, {
                       'title': 'Remote meeting',
                     })
                     as Map)['id']

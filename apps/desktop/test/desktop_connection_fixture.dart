@@ -35,17 +35,17 @@ class TestDesktopConnection implements DesktopConnection {
   bool get sourcesPaused => domain.sourcesPaused;
   @override
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
   ]) => domain is CommandFixtureDomain
-      ? (domain as CommandFixtureDomain).command(method, args)
-      : application.call(method, args);
+      ? (domain as CommandFixtureDomain).command(operation, args)
+      : application.call(operation.wire, args);
   @override
   Future<Object?> commandCurrent(
-    String method,
+    Operation operation,
     Map<String, dynamic> args,
     bool Function() current,
-  ) => application.call(method, args, current: current);
+  ) => application.call(operation.wire, args, current: current);
   @override
   Future<void> index(String id) => domain.index(id);
   @override
@@ -124,9 +124,9 @@ class TestDesktopConnection implements DesktopConnection {
 class CommandFixtureDomain extends Domain {
   CommandFixtureDomain(super.store, super.helper);
   Future<Object?> command(
-    String method, [
+    Operation operation, [
     Map<String, dynamic> args = const {},
-  ]) => application.call(method, args);
+  ]) => application.call(operation.wire, args);
 }
 
 class AnswerFixtureDomain extends Domain {
