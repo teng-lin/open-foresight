@@ -38,7 +38,8 @@ if [[ "${CI:-}" == true || "${FORESIGHT_REQUIRE_DART_GATES:-0}" == 1 ]]; then
     all|desktop) task_sdks=(dart flutter) ;;
     core|service) task_sdks=(dart) ;;
   esac
-  for task_sdk in "${task_sdks[@]}"; do
+  # macOS ships Bash 3, where an empty array is unset under nounset.
+  for task_sdk in ${task_sdks[@]+"${task_sdks[@]}"}; do
     if ! command -v "$task_sdk" >/dev/null; then
       echo "Required $task_sdk SDK is missing from PATH." >&2
       exit 1
@@ -56,7 +57,7 @@ fi
 if [[ "$task_stage" == all || "$task_stage" == native ]]; then
   "$task_python" "$task_root/tools/check_build_cache.py" "$task_build/CMakeCache.txt"
   "$task_python" "$task_root/tools/verify_descriptor.py"
-  ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" "${task_cmake_platform[@]}" "$@"
+  ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" ${task_cmake_platform[@]+"${task_cmake_platform[@]}"} "$@"
   ci_timed "native compile" cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
   ci_timed "native tests" ctest --test-dir "$task_build" --output-on-failure
 fi

@@ -26,3 +26,15 @@ function(foresight_build_revision output source_root)
   endif()
   set(${output} "${revision}" PARENT_SCOPE)
 endfunction()
+
+# Make on macOS can miss a rapid rewrite when source and object timestamps fall
+# in the same second. A new metadata content hash gives only this tiny unit a
+# new object path; the expensive helper and protocol objects remain reusable.
+function(foresight_build_identity_source output template output_directory)
+  set(staging "${output_directory}/build_identity.cpp")
+  configure_file("${template}" "${staging}" @ONLY)
+  file(SHA256 "${staging}" identity_hash)
+  set(identity_source "${output_directory}/build_identity_${identity_hash}.cpp")
+  configure_file("${template}" "${identity_source}" @ONLY)
+  set(${output} "${identity_source}" PARENT_SCOPE)
+endfunction()
