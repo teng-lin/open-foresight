@@ -1,16 +1,19 @@
 # Release preparation and installer acceptance
 
-Run `gh workflow run release.yml --ref main -f tag=vX.Y.Z` after merging the
-version update. This is the supported publication path. The coordinator requires
-successful exact-main Linux and macOS candidates before creating a tag. If
+After merging the version update, an administrator must create `vX.Y.Z` at the
+reviewed intended product commit (`git tag vX.Y.Z <commit>` and
+`git push origin vX.Y.Z`). The protected `v*` tag rules allow only administrators
+to create, move or delete release tags; the workflow token cannot create a missing
+tag. Then run `gh workflow run release.yml --ref main -f tag=vX.Y.Z`. This is the supported publication path. The coordinator requires
+successful exact-main Linux and macOS candidates for that tag. If
 candidates are missing, expired, or absent after a documentation-only commit, it
-forces the platform workflow and waits. A failed candidate build leaves no tag.
+forces the platform workflow and waits. A failed candidate build leaves the administrator-created tag unpublished.
 
 The release remains a draft while reusable Linux and macOS workflows check out
 `refs/tags/vX.Y.Z`, package the exact tested candidate, and upload installers.
 Acceptance requires all four installers plus checksum and provenance sidecars.
 Missing assets, failed tests, and skipped gates fail publication. Only a completely
-successful installed-package matrix publishes the draft as the latest release.
+successful installed-package matrix publishes the draft and marks it Latest only when its stable semantic version is the highest published version.
 Public releases cannot be rebuilt or overwritten; increment the app version.
 
 To retry a failed draft, rerun **all jobs** in the coordinator. Preparation removes
@@ -136,3 +139,14 @@ only after observing the check on that environment.
 Automated green results and completed manual records are separate evidence.
 Do not label the release fully validated from an installation-only pass or an
 uncompleted manual template.
+
+Verify installer attestations after downloading the exact release asset:
+
+```sh
+gh attestation verify ./open-foresight_VERSION_amd64.deb --repo teng-lin/open-foresight
+gh attestation verify ./open-foresight_VERSION_amd64.deb --repo teng-lin/open-foresight --predicate-type https://spdx.dev/Document
+```
+
+Repeat for RPM, Arch and DMG installers. Provenance and SBOM attestations bind
+SHA-256 installer bytes to the release workflow; checksum and `.build.json`
+verification remain mandatory for installer acceptance.

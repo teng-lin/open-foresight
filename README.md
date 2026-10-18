@@ -62,7 +62,7 @@ The repository has a fresh history. Reference screenshots, reverse-engineering r
 - **Notes.** Write personal notes, and start a new one with Ctrl+N (⌘N on the Mac).
 - **Stats.** A dashboard of sources added, meetings transcribed, answers given, and weekly local output tokens.
 - **MCP server.** Agents can import, search, ask, take notes, and record through the same application service the desktop uses.
-- **Desktop integration.** A global shortcut to quick-start a meeting, desktop notifications, a monitor for the local helper, and a background service that keeps recording after the window closes.
+- **Desktop integration.** A global shortcut to quick-start a meeting, desktop notifications, a monitor for the local helper, and a background service that keeps running and keeps models loaded after the window closes. Recording requires the visible desktop.
 
 ## Beyond the original
 
@@ -155,7 +155,7 @@ These commands target Linux. For macOS, see [Mac build, bundle, and MCP instruct
 - Python, for build and test tooling
 - Flutter, with the GTK3 Linux development dependencies
 
-Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 35.1, gRPC 1.83.1, and nlohmann-json 3.12.
+Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 35.1, gRPC 1.83.1, and nlohmann-json 3.11.3.
 
 ```sh
 uv venv .venv

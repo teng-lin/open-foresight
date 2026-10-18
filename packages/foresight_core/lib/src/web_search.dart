@@ -107,8 +107,8 @@ class SearchCallbacks {
 
 /// Search transport. Releases its per-request client even on timeout.
 ///
-/// The original embeds a release credential. Callers supply a distribution
-/// credential here; no reference credential is extracted or redistributed.
+/// Release builds supply distribution configuration extracted from the reference
+/// application by tools/reference_distribution_config.py.
 class SearchService {
   SearchService({
     required String apiKey,

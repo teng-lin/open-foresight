@@ -40,6 +40,13 @@ require independently authorized local inputs.
 
 ## Review and maintenance
 
+Update `CHANGELOG.md` `[Unreleased]` for user-visible changes.
+
+The offline Python suite discovers `tests/` automatically. Build/device suites in
+`tests/integration` and `tests/service` run explicitly; every excluded module and
+its reason is recorded in `pytest-exclusions.json`. A discovery guard rejects new
+uncollected test modules.
+
 Keep generated bindings, lockfiles, package notices, and user documentation in
 sync with behavior changes. Schema changes need an ordered Store migration and
 rollback/upgrade coverage. Add regression tests for behavior changes and record
