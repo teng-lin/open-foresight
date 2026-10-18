@@ -35,10 +35,17 @@ pathlib.Path(sys.argv[sys.argv.index('-o')+1]).write_bytes(source)
         compiler: compiler.path,
         cacheRoot: cache,
       );
-      await Future.wait([build(first), build(second)]);
+      final peers = [
+        for (var index = 0; index < 6; index++)
+          '${directory.path}/peer-$index.so',
+      ];
+      await Future.wait([build(first), build(second), ...peers.map(build)]);
       expect(counter.readAsStringSync(), 'x');
       File(first).writeAsStringSync('changed private copy');
       expect(File(second).readAsStringSync(), 'first source');
+      for (final peer in peers) {
+        expect(File(peer).readAsStringSync(), 'first source');
+      }
       source.writeAsStringSync('second source');
       await build(first);
       expect(counter.readAsStringSync(), 'xx');
@@ -48,6 +55,10 @@ pathlib.Path(sys.argv[sys.argv.index('-o')+1]).write_bytes(source)
       await expectLater(build(first), throwsStateError);
       expect(counter.readAsStringSync(), 'xxxx');
       expect(cache.listSync().whereType<Directory>(), isEmpty);
+      expect(
+        cache.listSync().where((entry) => entry.path.endsWith('.lock')),
+        isEmpty,
+      );
     },
     skip: Platform.isWindows ? 'Unix native fixture compiler' : false,
   );
