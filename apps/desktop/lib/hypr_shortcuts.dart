@@ -32,7 +32,7 @@ class HyprShortcuts {
       throw StateError('Install shortcuts from the packaged app.');
     if (!bindings.existsSync())
       throw StateError('Omarchy user bindings.lua is unavailable.');
-    final live = await Process.run('hyprctl', ['binds', '-j']);
+    final live = await Process.run('/usr/bin/hyprctl', ['binds', '-j']);
     if (live.exitCode != 0)
       throw StateError('Cannot inspect existing desktop shortcuts.');
     final parts = normalized.split(' + ');
@@ -72,13 +72,13 @@ class HyprShortcuts {
     );
     await backup.writeAsString(original);
     await bindings.writeAsString(updated);
-    final reload = await Process.run('hyprctl', ['reload']);
-    final errors = await Process.run('hyprctl', ['configerrors']);
+    final reload = await Process.run('/usr/bin/hyprctl', ['reload']);
+    final errors = await Process.run('/usr/bin/hyprctl', ['configerrors']);
     if (reload.exitCode != 0 ||
         errors.exitCode != 0 ||
         errors.stdout.toString().trim().isNotEmpty) {
       await bindings.writeAsString(original);
-      await Process.run('hyprctl', ['reload']);
+      await Process.run('/usr/bin/hyprctl', ['reload']);
       throw StateError(
         'Desktop rejected the shortcut configuration; previous bindings restored.',
       );

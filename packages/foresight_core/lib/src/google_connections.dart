@@ -257,7 +257,9 @@ class GoogleConnections implements ConnectedSources {
     if (mime == 'application/pdf' || mime == 'application/rtf') {
       final cache = Directory('${auth.directory.path}/downloads');
       await cache.create(recursive: true);
-      await Process.run('chmod', ['700', cache.path]);
+      final protection = await Process.run('/bin/chmod', ['700', cache.path]);
+      if (protection.exitCode != 0)
+        throw StateError('Cannot protect Google import cache');
       final path =
           '${cache.path}/${sha256.convert(utf8.encode(fileId))}-${DateTime.now().microsecondsSinceEpoch}.${mime == 'application/pdf' ? 'pdf' : 'rtf'}';
       final downloaded = File(path);

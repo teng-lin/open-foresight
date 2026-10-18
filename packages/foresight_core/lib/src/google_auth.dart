@@ -173,7 +173,7 @@ class GoogleAuth implements GoogleAccount {
     final temp = File('${directory.path}/.$name-${_random(8)}');
     try {
       await temp.create();
-      final mode = await Process.run('chmod', ['600', temp.path]);
+      final mode = await Process.run('/bin/chmod', ['600', temp.path]);
       if (mode.exitCode != 0 || _closed) {
         throw StateError('Cannot protect Google connection data');
       }
