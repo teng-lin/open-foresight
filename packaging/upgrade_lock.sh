@@ -47,7 +47,20 @@ refuse_upgrade_if_recording() {
       of-install-[0-9]*-"$identity") ;;
       *) continue ;;
     esac
+    uid=${dir##*/of-install-}
+    uid=${uid%-"$identity"}
+    case "$uid" in ''|*[!0-9]*)
+      printf '%s\n' "Ignoring untrusted install lock directory: $dir" >&2
+      continue ;;
+    esac
     lock=$dir/lock
+    if [ -L "$dir" ] || [ "$(stat -c %u -- "$dir")" != "$uid" ] ||
+       [ "$(stat -c %a -- "$dir")" != 700 ] ||
+       { [ -e "$lock" ] && [ "$(stat -c %u -- "$lock")" != "$uid" ]; } ||
+       [ -L "$lock" ]; then
+      printf '%s\n' "Ignoring untrusted install lock directory: $dir" >&2
+      continue
+    fi
     if [ -e "$lock" ] || [ -L "$lock" ]; then
       if ! upgrade_lock_decision "$lock" >/dev/null; then
         printf '%s\n' "Open Foresight holds the install lock at $lock. A recording or the application service is running. Package files were not changed and no process was stopped." >&2
