@@ -155,6 +155,40 @@ Core and desktop diagnostics also upload coverage separately. These jobs preserv
 the existing required aggregate checks: missing or failed selected stages cannot
 produce a successful platform or acceptance result.
 
+## Instrumented SDK reuse
+
+ASan/UBSan and TSan need separate instrumented gRPC/protobuf installations.
+The sanitizer workflow first restores its existing exact scoped cache, then
+looks for shared verified SDK artifacts. GitHub caches under another PR's merge
+ref are not a shared artifact store. The existing cache keys and builder files
+remain unchanged, preserving already running producers and their saved work.
+
+Shared identities bind the consumed recipes, compiler/runtime bytes, relevant
+system ABI packages, flags and install paths. Only definitions actually imported
+from the macOS SDK builder enter the sanitizer recipe: an unrelated JSON pin or
+macOS build setting does not invalidate these Linux SDKs. Executable controls
+are qualified separately against a reviewed source. Approved merged producers
+remain eligible when the consumer changes unrelated application tools. An
+intermediate PR producer needs equal recipes and controls at the approved final
+head, including authoritative rebase-merge proof.
+
+Consumers require the same repository/workflow, a successful qualifying job and
+exact attempt, upload bounds, original checkout, ZIP/payload digests and file
+manifest. A restored scoped cache must also identify its successful SDK build
+and cache-save steps. A later application failure preserves that work; a new
+successful qualifying job is still required before another PR can consume the
+shared artifact. Provenance distinguishes original compilation from subsequent
+qualification and publication. The initial migration pins PR #119's original
+run, reviewed source and workflow bytes, and verifies the actual merge checkout
+from its job log rather than relabeling it as the PR head.
+
+A cache miss, transport error or failed qualification stops before invoking the
+SDK builder. When a replacement is necessary after preserved outputs have been
+assessed, dispatch the sanitizer workflow with `allow_sdk_build` and a concrete
+`sdk_rebuild_reason`. This records the justification; it does not require a
+separate user approval for already authorized work. The workflow never cancels
+an active compatible SDK producer when another commit arrives.
+
 ## Distribution candidates and previews
 
 Ubuntu application builds keep FlatBuffers and SentencePiece in a separate layer
