@@ -47,6 +47,7 @@ def verified(run, receipt, job, artifact, **kwargs):
         job,
         artifact,
         fingerprint_at=kwargs.pop("fingerprint_at", lambda *args: IDENTITY),
+        qualified_control=kwargs.pop("qualified_control", lambda *args: True),
         **kwargs,
     )
 
@@ -57,6 +58,30 @@ def test_matching_receipt_requires_actual_source_recipe():
     assert not verified(*values, fingerprint_at=lambda *args: "c" * 64)
     values[1]["source_commit"] = "d" * 40
     assert not verified(*values)
+
+
+def test_unqualified_producer_is_not_silently_treated_as_cold_build_permission():
+    with pytest.raises(ValueError, match="does not authorize a cold SDK build"):
+        verified(*producer(), qualified_control=lambda *args: False)
+
+
+def test_control_identity_is_separate_from_build_recipe(tmp_path):
+    path = tmp_path / "pack.py"
+    path.write_bytes(b"reviewed producer")
+    assert trust.producer_controls_match(
+        "owner/repo",
+        HEAD,
+        api=git_api({"pack.py": b"reviewed producer"}),
+        root=tmp_path,
+        paths=("pack.py",),
+    )
+    assert not trust.producer_controls_match(
+        "owner/repo",
+        HEAD,
+        api=git_api({"pack.py": b"fabricate a receipt"}),
+        root=tmp_path,
+        paths=("pack.py",),
+    )
 
 
 @pytest.mark.parametrize(
