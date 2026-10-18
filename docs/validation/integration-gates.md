@@ -17,7 +17,7 @@ The separate `linux-document-imports` job requires one Python contract that
 imports both PDF and RTF fixtures through the production Dart parser on an
 Ubuntu host. It provisions the actual extractors, requires the sandbox to start,
 and fails on missing prerequisites. Its result is required by `platform-checks`;
-local runs without those prerequisites report a skip. See the
+local runs missing required executables report a skip. See the
 [document sandbox](../platforms/linux-packaging.md#document-import-sandbox) for
 the host-policy setup and retained evidence.
 
