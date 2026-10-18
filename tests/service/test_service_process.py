@@ -203,7 +203,7 @@ class McpPeer:
 
 
 @pytest.fixture
-def running(tmp_path):
+def running(tmp_path, request):
     assert SERVICE.is_file() and MCP.is_file(), (
         "Build service and MCP executables first"
     )
@@ -244,6 +244,39 @@ def running(tmp_path):
         FORESIGHT_DELAY_GENERATION=str(fixtures / "delay"),
         PATH=str(fixtures) + ":" + env["PATH"],
     )
+    if getattr(request, "param", None) == "capture_poll_gate":
+        wrapper = fixtures / (
+            "capture_poll_gate.dylib"
+            if sys.platform == "darwin"
+            else "capture_poll_gate.so"
+        )
+        link = (
+            ["-dynamiclib", f"-Wl,-needed_library,{NATIVE}"]
+            if sys.platform == "darwin"
+            else ["-shared", "-Wl,--no-as-needed", str(NATIVE), "-ldl"]
+        )
+        subprocess.run(
+            [
+                os.environ.get("CXX", "c++"),
+                "-std=c++17",
+                "-fPIC",
+                str(ROOT / "tests/fixtures/capture_poll_gate.cpp"),
+                *link,
+                f"-Wl,-rpath,{NATIVE.parent}",
+                "-o",
+                str(wrapper),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        env.update(
+            FORESIGHT_NATIVE=str(wrapper),
+            FORESIGHT_TEST_REAL_NATIVE=str(NATIVE),
+            FORESIGHT_TEST_CAPTURE_POLL_GATE=str(fixtures / "hold-capture-poll"),
+            FORESIGHT_TEST_CAPTURE_READY=str(fixtures / "capture-filled"),
+        )
     log = (tmp_path / "service.log").open("w+")
     process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
     peers = []
