@@ -89,6 +89,13 @@ def litert_probe(runner, model, env, output):
                         "LiteRT GPU decode did not complete successfully"
                     )
                 break
+        text = answer.get("content", "")
+        if isinstance(text, list):
+            text = "".join(
+                part.get("text", "") for part in text if isinstance(part, dict)
+            )
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("LiteRT GPU returned no decoded text")
         return {
             "status": "passed",
             "backend": "gpu",
