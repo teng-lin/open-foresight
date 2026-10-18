@@ -176,6 +176,14 @@
       "reason": "Requires original and port helper sockets; CI cannot supply the original application."
     },
     {
+      "path": "packages/foresight_core/test/schema_migrations_test.dart",
+      "conditions": [
+        "Platform.isWindows ? 'Requires POSIX writer death and symlinks' : false"
+      ],
+      "gate": "platform",
+      "reason": "Forced writer death and symlink cases run on the supported Linux and macOS platforms in every regular core build."
+    },
+    {
       "path": "packages/foresight_core/test/web_model_test.dart",
       "conditions": [
         "env['FORESIGHT_WEB_MODEL_TEST'] != '1'"
