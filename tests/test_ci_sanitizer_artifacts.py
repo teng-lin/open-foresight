@@ -1,6 +1,7 @@
 """Installed sanitizer migration must never silently invoke a library build."""
 
 from copy import deepcopy
+from pathlib import Path
 import io
 import json
 import os
@@ -312,7 +313,7 @@ def producer(source, abi, tmp_path):
     return receipt, run, artifact, job, tmp_path / "artifact"
 
 
-def find_fixture(source, abi, producer, destination, own_pr=110):
+def find_fixture(source, abi, producer, destination, own_pr=110, operation=None):
     receipt, run, artifact, job, output = producer
 
     def api(repository, path):
@@ -331,6 +332,8 @@ def find_fixture(source, abi, producer, destination, own_pr=110):
         patch.object(sdk.artifacts, "dependency_jobs", return_value=[job]),
         patch.object(sdk.artifacts, "download_zip", side_effect=download),
     ):
+        if operation is not None:
+            return operation()
         return sdk.find(
             REPOSITORY,
             "address",
@@ -340,6 +343,94 @@ def find_fixture(source, abi, producer, destination, own_pr=110):
             own_pr,
             destination,
         )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        None,
+        "cached-bytes",
+        "absent-artifact",
+        "api-error",
+        "cache-api-error",
+        "cache-provenance",
+        "payload-digest",
+    ],
+)
+def test_copied_cache_is_requalified_only_against_verified_artifact(
+    source, abi, producer, tmp_path, change
+):
+    receipt, _, artifact, _, output = producer
+    prefix = tmp_path / "copied-prefix"
+    shutil.copytree(tmp_path / "prefix", prefix, symlinks=True)
+    if change == "cached-bytes":
+        # Keep a valid stamp and executable; only receipt inventory detects this.
+        (prefix / "lib/libprotobufd.so.1").write_bytes(b"changed cached library")
+    elif change == "absent-artifact":
+        artifact["expired"] = True
+    elif change == "payload-digest":
+        (output / "payload.tar.gz").write_bytes(b"corrupt artifact payload")
+    before = sdk.inventory(prefix)
+
+    def restore():
+        if change == "api-error":
+            with patch.object(sdk.artifacts, "api", side_effect=OSError("network")):
+                return invoke_restore()
+        return invoke_restore()
+
+    def invoke_restore():
+        return sdk.restore(
+            source,
+            "address",
+            prefix,
+            REPOSITORY,
+            110,
+            "copied-cache-key",
+            allow_build=True,
+            reason="Must not rebuild or replace an existing prefix",
+            cache_hit="true",
+        )
+
+    with (
+        patch.object(sdk, "environment", return_value=abi),
+        patch.object(
+            sdk,
+            "cache_origin",
+            side_effect=(
+                OSError("cache API network")
+                if change == "cache-api-error"
+                else ValueError("Ambiguous cache upload provenance")
+                if change == "cache-provenance"
+                else sdk.CacheProducerNotFound
+            ),
+        ),
+        patch.object(sdk.subprocess, "run", wraps=sdk.subprocess.run) as command,
+    ):
+        if change is None:
+            result = find_fixture(source, abi, producer, prefix, operation=restore)
+            origin = json.loads(Path(result["qualification"]).read_text())["origin"]
+            assert origin["kind"] == "existing-cache-verified-against-artifact"
+            assert origin["run_id"] == 100 and origin["artifact_id"] == 1
+            assert origin["source_commit"] == receipt["source_commit"]
+            assert origin["compiled_from"] == receipt["compiled_from"]
+            assert command.call_args.args[0] == [
+                str(prefix / "bin/protoc"),
+                "--version",
+            ]
+        else:
+            error = (
+                OSError
+                if change in ("api-error", "cache-api-error")
+                else (ValueError, RuntimeError)
+            )
+            with pytest.raises(error):
+                find_fixture(source, abi, producer, prefix, operation=restore)
+            assert not any(
+                str(call.args[0][0]).startswith(str(prefix))
+                for call in command.call_args_list
+            )
+            assert not (prefix.parent / (prefix.name + "-qualification.json")).exists()
+    assert sdk.inventory(prefix) == before
 
 
 def test_verified_successful_main_artifact_crosses_pr_scope(
@@ -559,9 +650,7 @@ def test_arch_snapshot_retains_pacman_placeholders_without_shell_expansion(tmp_p
     script = profiles["profiles"]["address"]["repository_setup"].replace(
         "/etc/pacman.d/mirrorlist", str(target)
     )
-    subprocess.run(
-        ["sh", "-ec", script], capture_output=True, check=True, timeout=30
-    )
+    subprocess.run(["sh", "-ec", script], capture_output=True, check=True, timeout=30)
     assert target.read_text() == (
         "Server = https://archive.archlinux.org/repos/2026/10/18/$repo/os/$arch\n"
     )
@@ -690,6 +779,8 @@ def check_cache_origin(source, abi, fixture):
         return original(command, **kwargs)
 
     with (
+        # This fixture belongs to PR119, independently of the host CI run.
+        patch.dict(sdk.os.environ, {"GITHUB_REF": "refs/pull/119/merge"}),
         patch.object(sdk.artifacts, "api", side_effect=api),
         patch.object(sdk.artifacts, "dependency_jobs", return_value=[job]),
         patch.object(sdk.subprocess, "check_output", side_effect=request),
@@ -697,9 +788,11 @@ def check_cache_origin(source, abi, fixture):
         return sdk.cache_origin(source, "address", REPOSITORY, 119, key, abi)
 
 
+@pytest.mark.parametrize("ambient_ref", ["refs/pull/110/merge", "refs/heads/main", ""])
 def test_scoped_cache_keeps_original_source_even_if_later_application_failed(
-    source, abi
+    source, abi, monkeypatch, ambient_ref
 ):
+    monkeypatch.setenv("GITHUB_REF", ambient_ref)
     fixture = cache_origin_fixture(source, abi)
     origin = check_cache_origin(source, abi, fixture)
     assert origin["source_commit"] == fixture[-1]

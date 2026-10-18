@@ -65,6 +65,11 @@ does not add a separate user-approval step for work already authorized.
   Use checksum-verified frozen historical fixtures or narrowly scoped fixture
   revisions; unit tests must not accidentally depend on local HEAD or deep Git
   history. Preserve real archive, receipt, checksum, and provenance assertions.
+  Artifact/cache fixtures must also pass with an inherited PR ref different from
+  their fixture PR, a main ref, and no ref. Inject fixture CI metadata explicitly;
+  a local environment without GitHub variables does not verify hosted behavior.
+  Cover caches saved from verified artifact copies as well as original builds,
+  preserving byte-level verification and original producer provenance.
 - For native/protocol/application changes, run the complete native, Dart core,
   and desktop suites before pushing. Point Dart tests at the current native
   library and helper so native integration tests actually run. When moving data
