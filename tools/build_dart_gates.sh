@@ -23,7 +23,7 @@ case "$task_gate" in
     if [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
       ci_timed "core tests and coverage" "$task_root/tools/coverage_core.sh"
     else
-      ci_timed "core tests" dart test
+      ci_timed "core tests" dart -DFORESIGHT_ENABLE_TEST_HOOKS=true test
     fi
   )
   mkdir -p "$task_build/application"
@@ -35,7 +35,8 @@ case "$task_gate" in
       cd "$task_root/apps/desktop"
       ci_timed "desktop dependency resolution" flutter pub get --enforce-lockfile
       ci_timed "desktop analysis" flutter analyze
-      ci_timed "desktop tests" flutter test
+      ci_timed "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true --coverage
+      python3 "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 76.35
       ci_timed "desktop release compilation" flutter build "$task_platform" --release
     )
     ;;

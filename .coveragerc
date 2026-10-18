@@ -3,11 +3,14 @@ branch = True
 relative_files = True
 source =
     tools
+    packaging
 omit =
     tools/test_*.py
     tools/original_query_oracle/test_*.py
 
 [report]
+precision = 2
+fail_under = 48.70
 show_missing = True
 skip_empty = True
 
