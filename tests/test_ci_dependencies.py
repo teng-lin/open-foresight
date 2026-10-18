@@ -729,6 +729,7 @@ def test_macos_dependencies_build_locally_when_no_trusted_artifact_exists(
     with (
         patch.object(macos, "pull", return_value=artifact) as pull,
         patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "waiting_producers", return_value=[]),
         patch.object(macos, "verify") as verify,
         patch.object(macos.subprocess, "run") as build,
     ):
@@ -746,6 +747,7 @@ def test_macos_runtime_local_fallback_builds_vendor_before_worker(tmp_path):
     with (
         patch.object(macos, "pull", return_value=False),
         patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "waiting_producers", return_value=[]),
         patch.object(macos, "verify"),
         patch.object(macos.subprocess, "run") as build,
     ):
@@ -792,3 +794,72 @@ def test_producing_workflow_and_tools_change_every_component_identity(tmp_path):
     for component in artifacts.FILES:
         assert artifacts.fingerprint(component, tmp_path) != before[component]
         assert set(artifacts.PRODUCER_INPUTS) <= set(artifacts.FILES[component])
+
+
+def test_macos_consumer_waits_for_matching_inflight_producer_then_uses_artifact(
+    tmp_path,
+):
+    from tools import ci_macos_dependencies as macos
+
+    with (
+        patch.object(macos, "pull", side_effect=[False, True]),
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "waiting_producers", return_value=[123]),
+        patch.object(macos.time, "sleep"),
+        patch.object(macos, "verify"),
+        patch.object(macos.subprocess, "run") as build,
+    ):
+        assert (
+            macos.ensure("macos-sdk", tmp_path, "owner/repo", "a" * 40, 23)
+            == "artifact"
+        )
+        build.assert_not_called()
+
+
+def test_macos_consumer_falls_back_when_inflight_producer_stops_or_deadline_expires(
+    tmp_path,
+):
+    from tools import ci_macos_dependencies as macos
+
+    with (
+        patch.object(macos, "pull", return_value=False),
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "waiting_producers", side_effect=[[123], []]),
+        patch.object(macos.time, "sleep"),
+        patch.object(macos, "verify"),
+        patch.object(macos.subprocess, "run") as build,
+    ):
+        assert (
+            macos.ensure("macos-sdk", tmp_path, "owner/repo", "a" * 40, 23) == "local"
+        )
+        build.assert_called_once()
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_macos_inflight_selection_rejects_fork_and_failed_producers(failed):
+    from tools import ci_macos_dependencies as macos
+
+    base = {
+        "id": 123,
+        "head_sha": "a" * 40,
+        "head_branch": "feature",
+        "path": ".github/workflows/ci-dependencies.yml",
+        "event": "pull_request",
+        "status": "in_progress",
+        "pull_requests": [{"number": 23}],
+        "head_repository": {"full_name": "owner/repo"},
+    }
+    fork = {**base, "id": 124, "head_repository": {"full_name": "fork/repo"}}
+    with (
+        patch.object(macos, "api", return_value={"workflow_runs": [base, fork]}),
+        patch.object(
+            macos,
+            "dependency_jobs",
+            return_value=[
+                {"name": "Build macOS sdk", "conclusion": "failure" if failed else None}
+            ],
+        ),
+    ):
+        assert macos.waiting_producers("owner/repo", "macos-sdk", "a" * 40, 23) == (
+            [] if failed else [123]
+        )
