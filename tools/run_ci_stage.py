@@ -16,6 +16,9 @@ payloads = importlib.import_module(
 cache = importlib.import_module(
     "tools.ci_stage_cache" if __package__ else "ci_stage_cache"
 )
+stage_environment = importlib.import_module(
+    "tools.ci_stage_environment" if __package__ else "ci_stage_environment"
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -89,7 +92,7 @@ def execute(root, platform, stage, hit, cmake_args):
             "tools.app_version" if __package__ else "app_version"
         )
         revision = cache.git(root, "rev-parse", "HEAD").decode().strip()[:12]
-        expected = f"open-foresight-{versions.read_version()[0]}-{revision}"
+        expected = f"open-foresight-{versions.read_version(root)[0]}-{revision}"
         actual = subprocess.check_output(
             [str(root / "build/services/helper/ForesightHelper"), "--build-id"],
             text=True,
@@ -114,6 +117,7 @@ def run(
     release,
     cmake_args,
 ):
+    stage_environment.reject_compiler_overrides()
     source = cache.git(root, "rev-parse", "HEAD").decode().strip()
     for parent, directory in inputs.items():
         if parent not in parents:
@@ -160,6 +164,7 @@ def run(
         platform, stage, root, environment=environment, parents=parents
     )
     with tempfile.TemporaryDirectory(prefix="ci-stage-") as temporary:
+        compilation = {"hit": False}
         found = cache.find(
             repository,
             platform,
@@ -191,6 +196,58 @@ def run(
                 f"Run {stage}-{platform}: no reusable successful result for {identity}",
                 flush=True,
             )
+            if stage == "native":
+                compilation = cache.find_native_work(
+                    repository,
+                    platform,
+                    environment,
+                    root,
+                    own_pr,
+                    event,
+                    os.environ.get("GITHUB_HEAD_REF", ""),
+                    release,
+                    Path(temporary) / "compilation",
+                )
+                if compilation["hit"]:
+                    payloads.unpack(
+                        root,
+                        platform,
+                        "native",
+                        Path(compilation["download_dir"]) / "payload.tar.gz",
+                        compilation["receipt"]["content"],
+                        force_changed=True,
+                    )
+                    if compilation.get("configuration_changed"):
+                        # Recompute changed CMake defaults instead of inheriting
+                        # old cached values. Keep all objects, fetched dependency
+                        # trees and SDKs for the actual incremental build.
+                        (root / "build/CMakeCache.txt").unlink(missing_ok=True)
+                        print(
+                            "Refresh CMake configuration values because these "
+                            "recipe inputs changed: "
+                            + ", ".join(compilation["configuration_changed"]),
+                            flush=True,
+                        )
+                    print(
+                        "Reuse compatible native compilation work from run "
+                        f"{compilation['run_id']}; current configure/build/tests "
+                        "are still required",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        "Native compilation required: no retained verified "
+                        "successful producer matches the current compiler, SDK, "
+                        "system packages and build settings",
+                        flush=True,
+                    )
+                    if compilation.get("incompatible_environment_fields"):
+                        print(
+                            "Retained compilation artifacts differ in environment "
+                            "fields: "
+                            + ", ".join(compilation["incompatible_environment_fields"]),
+                            flush=True,
+                        )
         execute(root, platform, stage, found["hit"], cmake_args)
         output = root / "build/ci-stage" / f"{platform}-{stage}"
         manifest = payloads.pack(root, platform, stage, output)
@@ -213,6 +270,7 @@ def run(
             "identity": published["identity"],
             "artifact_name": published["artifact_name"],
             "cache_hit": found["hit"],
+            "compilation_cache_hit": compilation["hit"],
             "output": str(output),
         }
         if stage == "native":

@@ -36,6 +36,8 @@ def test_native_round_trip_keeps_modes_and_unchanged_source_times(tmp_path):
     binary = root / "build/native/libfixture.so"
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"native bytes")
+    os.utime(binary, ns=(1_792_349_811_324_446_623, 1_792_349_811_324_446_623))
+    exact_output_time = binary.stat().st_mtime_ns
     binary.chmod(0o755)
     binary.parent.chmod(0o700)
     link = binary.with_name("libalias.so")
@@ -52,6 +54,7 @@ def test_native_round_trip_keeps_modes_and_unchanged_source_times(tmp_path):
     assert restored.parent.stat().st_mode & 0o777 == 0o700
     assert (restored.parent / link.name).is_symlink()
     assert destination_source.stat().st_mtime_ns == source_time
+    assert restored.stat().st_mtime_ns == exact_output_time
 
 
 def test_changed_source_times_are_never_overwritten(tmp_path):
@@ -201,4 +204,19 @@ def test_runtime_manifest_cannot_restore_compiler_objects(tmp_path):
             "native-runtime",
             tmp_path / "unused",
             {"files": {"build/_deps/object.o": {}}},
+        )
+
+
+@pytest.mark.parametrize("value", [-1, True, "123", 2**63])
+def test_invalid_output_timestamp_inventory_is_rejected(tmp_path, value):
+    with pytest.raises(ValueError, match="output timestamp"):
+        module.unpack(
+            tmp_path,
+            "linux",
+            "native",
+            tmp_path / "unused",
+            {
+                "files": {"build/native/file.o": {"kind": "file"}},
+                "output_times": {"build/native/file.o": value},
+            },
         )

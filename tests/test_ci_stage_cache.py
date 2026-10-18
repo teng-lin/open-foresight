@@ -126,6 +126,29 @@ class FingerprintTests(SourceTree):
                         baseline[stage] != self.key(stage), stage in affected
                     )
 
+    def test_dart_test_support_never_invalidates_native(self):
+        baseline = {stage: self.key(stage) for stage in cache.STAGES}
+        self.write("packages/foresight_test_support/lib/native_fixture.dart", "changed")
+        self.assertEqual(baseline["native"], self.key("native"))
+        for stage in ("core", "desktop", "service"):
+            self.assertNotEqual(baseline[stage], self.key(stage))
+
+    def test_native_pubspec_consumes_version_without_dart_dependencies(self):
+        path = "apps/desktop/pubspec.yaml"
+        self.write(path, "name: desktop\nversion: 1.2.3+4\ndependencies: old\n")
+        self.save()
+        before = {stage: self.key(stage) for stage in cache.STAGES}
+        self.write(path, "name: desktop\nversion: 1.2.3+4\ndependencies: new\n")
+        self.assertEqual(before["native"], self.key("native"))
+        self.assertEqual(self.key(), self.key(ref=self.save()))
+        for stage in ("core", "desktop", "service"):
+            self.assertNotEqual(before[stage], self.key(stage))
+        self.write(path, "version: 1.2.3+5\n")
+        self.assertNotEqual(before["native"], self.key("native"))
+        for malformed in ("version: broken\n", "version: 1.2.3+4\nversion: 9.8.7+6\n"):
+            self.write(path, malformed)
+            self.assertNotEqual(before["native"], self.key("native"))
+
     def test_tools_workflows_locks_pins_and_shared_support_are_common_inputs(self):
         for path in (
             "tools/ci_stage_cache.py",
@@ -254,6 +277,129 @@ class ProducerTests(SourceTree):
             patch.object(cache.artifacts, "download_zip", side_effect=self.download),
         ):
             return cache.find(**args)
+
+    def find_work(self, **overrides):
+        args = {
+            "repository": REPOSITORY,
+            "platform": "linux",
+            "environment": ENVIRONMENT,
+            "root": self.root,
+            "own_pr": 110,
+            "event": "pull_request",
+        }
+        args.update(overrides)
+        with (
+            patch.object(cache.artifacts, "api", side_effect=self.api),
+            patch.object(cache.artifacts, "dependency_jobs", return_value=[self.job]),
+            patch.object(cache.artifacts, "download_zip", side_effect=self.download),
+            patch.object(
+                cache,
+                "native_work_candidates",
+                return_value=[(self.artifact, self.identity)],
+            ),
+        ):
+            return cache.find_native_work(**args)
+
+    def test_native_work_survives_new_sources_but_is_not_a_validation_hit(self):
+        self.write("native/main.cpp", "changed implementation")
+        self.write("tests/new_validation.py", "new test")
+        self.save()
+        self.assertFalse(self.find(identity=self.key())["hit"])
+        self.assertTrue(self.find_work()["hit"])
+
+    def test_native_work_can_ignore_date_but_no_actual_build_environment(self):
+        self.receipt["environment"] = {
+            **ENVIRONMENT,
+            "utc_validation_date": "2026-10-18",
+        }
+        self.identity = self.key(environment=self.receipt["environment"])
+        self.artifact["name"] = cache.name("linux", "native", self.identity)
+        self.receipt["identity"] = self.identity
+        current = {**ENVIRONMENT, "utc_validation_date": "2026-10-19"}
+        self.assertTrue(self.find_work(environment=current)["hit"])
+        for key in (
+            "compiler",
+            "packages",
+            "sdk",
+            "cmake_arguments",
+            "validation_flags",
+            "workspace",
+        ):
+            with self.subTest(key=key):
+                self.assertFalse(
+                    self.find_work(environment={**current, key: "different"})["hit"]
+                )
+
+    def test_native_work_verifies_frozen_legacy_recipe_independently(self):
+        self.write("apps/desktop/pubspec.yaml", "version: 1.2.3+4\ndependencies: old\n")
+        self.write("packages/foresight_test_support/lib/fixture.dart", "old support")
+        producer = self.save()
+        legacy_identity = cache.fingerprint(
+            "linux", "native", self.root, producer, ENVIRONMENT, {}, recipe=1
+        )
+        self.identity = legacy_identity
+        self.artifact["name"] = cache.name("linux", "native", legacy_identity)
+        self.run["head_sha"] = producer
+        self.receipt.update(identity=legacy_identity, source_commit=producer)
+        self.write("apps/desktop/pubspec.yaml", "version: 1.2.3+4\ndependencies: new\n")
+        self.save()
+        self.assertTrue(self.find_work()["hit"])
+        for recipe in (True, 0, 3, "1", 2):
+            self.receipt["identity_recipe"] = recipe
+            self.assertFalse(self.find_work()["hit"])
+
+    def test_native_work_rejects_wrong_receipts_attempts_and_failed_producers(self):
+        original = deepcopy(self.receipt)
+        for change in (
+            {"payload_kind": "native-runtime"},
+            {"reusable": False},
+            {"source_run_attempt": 2},
+            {"source_commit": "b" * 40},
+            {"parents": {"native": "a" * 64}},
+            {"identity": "0" * 64},
+            {"sha256": "0" * 64},
+            {"identity_recipe": 999},
+        ):
+            self.receipt = {**original, **change}
+            self.assertFalse(self.find_work()["hit"])
+        self.receipt = original
+        self.job["conclusion"] = "failure"
+        self.assertFalse(self.find_work()["hit"])
+        self.job["conclusion"] = "success"
+        self.run["head_repository"] = {"full_name": "attacker/fork"}
+        self.assertFalse(self.find_work()["hit"])
+
+    def test_native_work_rejects_changed_symlink_sources(self):
+        (self.root / "native/header.h").symlink_to("first.h")
+        self.assertFalse(self.find_work()["hit"])
+
+    def test_native_work_main_and_release_consumers_still_run_fresh(self):
+        for overrides in (
+            {"event": "push"},
+            {"release": True},
+            {"branch": "main"},
+            {"own_pr": 0},
+        ):
+            self.assertFalse(self.find_work(**overrides)["hit"])
+        self.assertEqual(self.transfers, 0)
+
+    def test_native_work_paginates_and_excludes_runtime_and_expired_payloads(self):
+        first = [{"name": "other-output", "expired": False}] * 100
+        second = [
+            self.artifact,
+            {**self.artifact, "name": self.artifact["name"] + "-runtime"},
+            {**self.artifact, "expired": True},
+        ]
+        with patch.object(
+            cache.artifacts,
+            "api",
+            side_effect=[{"artifacts": first}, {"artifacts": second}],
+        ) as api:
+            self.assertEqual(
+                list(cache.native_work_candidates(REPOSITORY, "linux")),
+                [(self.artifact, self.identity)],
+            )
+        self.assertIn("page=2", api.call_args.args[1])
 
     def test_realistic_large_content_manifest_and_nested_reusable_job(self):
         self.receipt["content"] = {"files": {"native-output": {"data": "x" * 70000}}}

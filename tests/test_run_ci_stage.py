@@ -202,6 +202,7 @@ def test_native_runner_publishes_distinct_runtime_and_compilation_archives(tmp_p
 
     with (
         patch.object(runner.cache, "find", return_value={"hit": False}),
+        patch.object(runner.cache, "find_native_work", return_value={"hit": False}),
         patch.object(runner, "execute", side_effect=build),
     ):
         result = runner.run(
