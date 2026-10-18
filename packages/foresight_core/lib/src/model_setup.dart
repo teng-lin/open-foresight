@@ -337,28 +337,20 @@ Future<int> registerInstalledModels(Store store, String manifestPath) async {
         : kind == 'generation' && entry['backend'] == 'litert_lm'
         ? liteRtRunner(entry['runtime'] as String)
         : entry['runtime'] as String;
-    String? expectedDigest;
-    if (kind == 'embedding' && Directory(model).existsSync()) {
-      // Legacy SentenceTransformers installations are directory manifests.
-    } else {
-      if (kind == 'embedding' && !model.endsWith('.litertlm'))
-        throw StateError(
-          'Embedding model directory or .litertlm bundle is missing',
-        );
-      if (kind != 'embedding' &&
-          (!File(runtime).existsSync() ||
-              (File(runtime).statSync().mode & 0x49) == 0)) {
-        throw StateError('The $kind runner is missing or not executable');
-      }
-      if (entry['sha256'] is! String)
-        throw StateError('The $kind installation digest is missing');
-      expectedDigest = entry['sha256'] as String;
+    if (kind == 'embedding') requireEmbeddingBundle(model);
+    if (kind != 'embedding' &&
+        (!File(runtime).existsSync() ||
+            (File(runtime).statSync().mode & 0x49) == 0)) {
+      throw StateError('The $kind runner is missing or not executable');
     }
+    if (entry['sha256'] is! String)
+      throw StateError('The $kind installation digest is missing');
+    final expectedDigest = entry['sha256'] as String;
     await store.register(
       kind,
       model,
       runtime,
-      backend: entry['backend'] as String? ?? 'llama_cpp',
+      backend: entry['backend'] as String?,
       expectedDigest: expectedDigest,
       modelType: entry['model_type'] as int?,
     );
@@ -388,14 +380,14 @@ bool needsModel(Store store, String kind) {
   final model = store.model(kind);
   if (model == null) return true;
   final path = model['path'] as String;
-  if (!Platform.isMacOS &&
-      kind == 'embedding' &&
-      Directory(path).existsSync() &&
-      !File('$path/onnx/model.onnx').existsSync())
+  if (kind == 'embedding' &&
+      (!path.endsWith('.litertlm') ||
+          !const [
+            'litert_lm_embedding_cpu',
+            'litert_lm_embedding_gpu',
+          ].contains(model['backend'])))
     return true;
-  if (!File(path).existsSync() &&
-      !(kind == 'embedding' && Directory(path).existsSync()))
-    return true;
+  if (!File(path).existsSync()) return true;
   if (kind == 'generation') {
     final registered = model['runtime'] as String;
     final runtime = File(

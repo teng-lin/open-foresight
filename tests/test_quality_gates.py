@@ -3,7 +3,6 @@
 import hashlib
 import importlib.util
 import io
-import json
 from pathlib import Path
 import subprocess
 import sys
@@ -35,44 +34,45 @@ def test_fixture_download_has_network_timeout_and_checks_existing_hash(tmp_path)
     )
     assert spec is not None and spec.loader is not None
     fixture = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(fixture)
+    with patch.object(sys, "path", [str(ROOT / "tools"), *sys.path]):
+        spec.loader.exec_module(fixture)
     content = b"verified fixture"
-    manifest = tmp_path / "models/minilm-manifest.json"
-    manifest.parent.mkdir()
-    manifest.write_text(
-        json.dumps(
-            {
-                "assets": [
-                    {
-                        "path": "fixture.bin",
-                        "sha256": hashlib.sha256(content).hexdigest(),
-                    }
-                ]
-            }
-        )
-    )
+    checksum = hashlib.sha256(content).hexdigest()
     destination = tmp_path / "download"
     with (
-        patch.object(fixture, "ROOT", tmp_path),
-        patch.object(sys, "argv", ["download", str(destination)]),
         patch.object(
-            fixture.urllib.request, "urlopen", return_value=io.BytesIO(content)
-        ) as opening,
+            fixture,
+            "MODELS",
+            {
+                "embedding": (
+                    "fixture/repository",
+                    "revision",
+                    "fixture.litertlm",
+                    checksum,
+                )
+            },
+        ),
+        patch.object(sys, "argv", ["download", str(destination)]),
+        patch("urllib.request.urlopen", return_value=io.BytesIO(content)) as opening,
     ):
         fixture.main()
         assert opening.call_args.kwargs["timeout"] == 120
-    (destination / "fixture.bin").write_bytes(b"corrupt")
+        assert (destination / "fixture.litertlm").read_bytes() == content
+    (destination / "fixture.litertlm").write_bytes(b"corrupt")
     script = """
 import importlib.util
+import io
 import pathlib
 import sys
-import pytest
+from unittest.mock import patch
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).parent))
 spec = importlib.util.spec_from_file_location('fixture', sys.argv[1])
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-module.ROOT = pathlib.Path(sys.argv[2])
-sys.argv = ['download', sys.argv[3]]
-module.main()
+module.MODELS = {'embedding': ('fixture/repository', 'revision', 'fixture.litertlm', sys.argv[3])}
+sys.argv = ['download', sys.argv[2]]
+with patch('urllib.request.urlopen', return_value=io.BytesIO(b'bad replacement')):
+    module.main()
 """
     result = subprocess.run(
         [
@@ -81,15 +81,16 @@ module.main()
             "-c",
             script,
             str(ROOT / "tools/download_embedding_fixture.py"),
-            str(tmp_path),
             str(destination),
+            checksum,
         ],
         capture_output=True,
         text=True,
         timeout=10,
     )
     assert result.returncode != 0
-    assert "Hash mismatch: fixture.bin" in result.stderr
+    assert "Downloaded artifact checksum mismatch" in result.stderr
+    assert not (destination / "fixture.download").exists()
 
 
 def test_stalled_build_command_expires_before_the_job_deadline():

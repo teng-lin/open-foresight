@@ -3,6 +3,7 @@ import 'package:foresight_core/foresight_core.dart'
     show
         runtimeConfiguration,
         privateDirectory,
+        writePrivateTextFile,
         configureProfileRuntime,
         openPlatformUri,
         openForesightBuildNumber,

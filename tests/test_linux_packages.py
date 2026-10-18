@@ -213,6 +213,9 @@ class LinuxPackagesTest(unittest.TestCase):
 
     def test_packages_declare_poppler_and_unrtf_and_ship_notices(self):
         metadata = json.loads((ROOT / "packaging/metadata.json").read_text())
+        self.assertIn("libsecret-tools", metadata["deb_dependencies"])
+        self.assertIn("libsecret", metadata["rpm_dependencies"])
+        self.assertIn("libsecret", metadata["arch_dependencies"])
         self.assertIn("poppler-utils", metadata["deb_dependencies"])
         self.assertIn("poppler-utils", metadata["rpm_dependencies"])
         self.assertIn("poppler", metadata["arch_dependencies"])
@@ -358,7 +361,7 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 "-shared",
                 "-fPIC",
             )
-            for name in ("native/libforesight_native.so", "lib/libonnxruntime.so"):
+            for name in ("native/libforesight_native.so",):
                 target = build / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(library, target)
@@ -383,8 +386,6 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 str(output),
                 "--litert-library",
                 str(library),
-                "--onnx-library",
-                str(build / "lib/libonnxruntime.so"),
                 "--litert-extensions-manifest",
                 str(root / "fixture-manifest.json"),
                 "--revision",
@@ -404,7 +405,6 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                     return_value=[output / "lib/liblitert-lm.so"],
                 ),
                 patch.object(package, "probe_native_extensions"),
-                patch.object(package, "ONNX_LIBRARY_SHA256", digest),
             ):
                 package.main()
             manifest = json.loads((output / "manifest.json").read_text())
