@@ -112,6 +112,45 @@ struct Worker : Events {
     join();
   }
 };
+// The probe is a synchronous FFI call. A separate timer must stop its owned
+// process even if stdout has closed and run() is waiting for the supervisor.
+struct ProbeDeadline {
+  Worker &worker;
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool finished = false;
+  std::atomic<bool> expired{false};
+  std::thread timer;
+  explicit ProbeDeadline(Worker &value) : worker(value) {
+    const char *configured = std::getenv("FORESIGHT_PROBE_TIMEOUT_MS");
+    char *end = nullptr;
+    const long parsed = configured ? std::strtol(configured, &end, 10) : 0;
+    const long timeout = configured && end != configured && *end == '\0' &&
+                                 parsed > 0 && parsed <= 2147483647
+                             ? parsed
+                             : 120000;
+    timer = std::thread([this, timeout] {
+      std::unique_lock lock(mutex);
+      if (!changed.wait_for(lock, std::chrono::milliseconds(timeout),
+                            [this] { return finished; })) {
+        expired = true;
+        worker.stop();
+      }
+    });
+  }
+  void finish() {
+    {
+      std::lock_guard lock(mutex);
+      finished = true;
+    }
+    changed.notify_all();
+    if (timer.joinable())
+      timer.join();
+  }
+  ~ProbeDeadline() {
+    finish();
+  }
+};
 // pw-record's stdout contains unconnected/error diagnostics even without -v.
 // A private raw FIFO gives libsndfile a separate PCM destination. Keep one
 // nonblocking writer open here so a slow child open cannot look like EOF.
@@ -736,11 +775,15 @@ int fs_engine_probe(void *h) {
       arguments.push_back("--backend");
       arguments.push_back("cpu");
     }
+    ProbeDeadline deadline(probe);
     int status =
         run(probe, std::move(arguments), [&](const char *data, size_t size) {
           if (e.backend == 1 && diagnostics.size() < 4096)
             diagnostics.append(data, std::min(size, 4096 - diagnostics.size()));
         });
+    deadline.finish();
+    if (deadline.expired)
+      status = -ETIMEDOUT;
     {
       std::lock_guard lock(e.mu);
       e.busy = false;
@@ -756,8 +799,10 @@ int fs_engine_probe(void *h) {
                std::string::npos);
       e.state = status == 0 ? "ready" : "failed";
       e.error = status == 0 ? ""
-                            : "Model initialization probe failed with status " +
-                                  std::to_string(status) + diagnostics;
+                : deadline.expired
+                    ? "Model initialization probe timed out"
+                    : "Model initialization probe failed with status " +
+                          std::to_string(status) + diagnostics;
     }
     return status == 0 ? 0 : -1;
 

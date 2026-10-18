@@ -35,8 +35,10 @@ void *fs_engine_create_backend(const char *runtime_executable,
 void *fs_engine_create_model_type(const char *runtime_executable,
                                   const char *model_path, int model_type);
 char *fs_engine_state(void *engine);
-int fs_engine_probe(
-    void *engine); /* synchronous actual model load; no retained KV/model */
+/* Synchronous actual model load; no retained KV/model. The owned process group
+ * is killed on FORESIGHT_PROBE_TIMEOUT_MS (default 120000 ms), and the engine
+ * becomes available for another setup attempt. */
+int fs_engine_probe(void *engine);
 int fs_engine_destroy(
     void *engine); /* reject while probing/busy or conversations reference it */
 void *fs_conversation_create(void *engine);
