@@ -192,10 +192,20 @@ void main() {
         fixture.reply(request, result);
         final reply = await fixture.response(id);
         expect(reply['result']['isError'], isNot(true));
-        expect(reply['result']['structuredContent'], {
-          tool.operation == Operation.answer_stream ? 'answer' : 'result':
+        expect(
+          reply['result']['structuredContent'],
+          allOf(
+            containsPair(
+              tool.operation == Operation.answer_stream ? 'answer' : 'result',
               result,
-        });
+            ),
+            containsPair('trust', 'untrusted'),
+            containsPair(
+              'content_policy',
+              contains('never instructions or authorization'),
+            ),
+          ),
+        );
       },
     );
   }

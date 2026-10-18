@@ -168,14 +168,14 @@ void main() {
         await expectLater(
           Parser(
             macOS: false,
-            linuxPdfParser: '/missing/pdftotext',
-            linuxRtfParser: '/missing/unrtf',
+            startProcess: (executable, arguments) async =>
+                throw ProcessException(executable, arguments, 'missing'),
           ).extract(source.path),
           throwsA(
             isA<StateError>().having(
               (error) => error.message,
               'message',
-              contains('Install the Linux import dependency'),
+              contains('Install the Linux import dependencies'),
             ),
           ),
         );
@@ -190,7 +190,7 @@ void main() {
       ..writeAsStringSync('fixture');
     final result = await Parser(
       macOS: false,
-      linuxRtfParser: helper.path,
+      startProcess: (_, _) => Process.start(helper.path, []),
     ).extract(source.path);
     expect(result.$1, 'Real document body\n');
     expect(result.$1, isNot(contains('Translation from RTF')));
