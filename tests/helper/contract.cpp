@@ -41,6 +41,7 @@ int main(int argc, char **argv) {
   chmod(dir.c_str(), 0700);
   std::string socket = dir + "/run/helper.sock";
   pid_t pid = -1;
+  std::shared_ptr<grpc::Channel> channel;
   try {
     auto start = [&] {
       pid = fork();
@@ -49,8 +50,13 @@ int main(int argc, char **argv) {
               "--allow-test-models", (char *)nullptr);
         _exit(127);
       }
-      auto channel = grpc::CreateChannel("unix:" + socket,
-                                         grpc::InsecureChannelCredentials());
+      // This endpoint is reused by many different child processes. A pooled
+      // subchannel can still report the previous owner's transport as READY;
+      // isolate each process's readiness check and RPCs from that transport.
+      grpc::ChannelArguments arguments;
+      arguments.SetInt(GRPC_ARG_USE_LOCAL_SUBCHANNEL_POOL, 1);
+      channel = grpc::CreateCustomChannel(
+          "unix:" + socket, grpc::InsecureChannelCredentials(), arguments);
       REQUIRE(channel->WaitForConnected(std::chrono::system_clock::now() +
                                         std::chrono::seconds(10)));
       return p::RagService::NewStub(channel);
@@ -101,8 +107,7 @@ int main(int argc, char **argv) {
                 .ok() &&
             configured.success());
     auto active_generation = [&] {
-      auto status = c::HelperControl::NewStub(grpc::CreateChannel(
-          "unix:" + socket, grpc::InsecureChannelCredentials()));
+      auto status = c::HelperControl::NewStub(channel);
       c::Empty q;
       c::State r;
       REQUIRE(call(q, r, [&](auto *ctx, auto &x, auto *y) {
@@ -448,8 +453,7 @@ int main(int argc, char **argv) {
     sqlite3_close(metadata);
     REQUIRE(names == std::vector<std::string>({"documents", "settings"}));
     REQUIRE(std::filesystem::exists(dir + "/linux_state.db"));
-    auto control = c::HelperControl::NewStub(grpc::CreateChannel(
-        "unix:" + socket, grpc::InsecureChannelCredentials()));
+    auto control = c::HelperControl::NewStub(channel);
     c::Empty empty;
     c::State state;
     REQUIRE(call(empty, state, [&](auto *ctx, auto &q, auto *r) {
