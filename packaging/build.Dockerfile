@@ -26,10 +26,14 @@ WORKDIR /src
 # The named context contains only qualified dependency outputs from an immutable
 # main-produced cache; it never contains application code or an old test result.
 FROM application-base AS application-dependencies
+ARG REQUIRE_DEPENDENCY_REUSE=0
 COPY --from=appdeps_seed /src/build/_deps /src/build/_deps
 COPY packaging/app-dependencies/CMakeLists.txt /src/CMakeLists.txt
 COPY cmake/ForesightInferenceDependencies.cmake /src/cmake/ForesightInferenceDependencies.cmake
-RUN cmake -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release && \
+COPY tools/verify_app_dependency_reuse.py /opt/foresight/verify_app_dependency_reuse.py
+RUN cmake -G "Unix Makefiles" -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release && \
+    test "$REQUIRE_DEPENDENCY_REUSE" = 0 -o "$REQUIRE_DEPENDENCY_REUSE" = 1 && \
+    if [[ "$REQUIRE_DEPENDENCY_REUSE" == 1 ]]; then python3 /opt/foresight/verify_app_dependency_reuse.py --build /src/build; fi && \
     cmake --build /src/build --parallel 4
 
 # Source revisions invalidate application work while the dependency tree above
@@ -37,7 +41,7 @@ RUN cmake -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release && \
 FROM application-dependencies AS tested
 COPY . .
 ARG SOURCE_REVISION
-ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python FORESIGHT_PARALLEL_GATES=1
+ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python FORESIGHT_PARALLEL_GATES=1 FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=${REQUIRE_DEPENDENCY_REUSE}
 RUN test -n "$SOURCE_REVISION" && \
     ./tools/build.sh "-DFORESIGHT_BUILD_REVISION=$SOURCE_REVISION"
 # Export only this tested, secret-free stage to the reusable registry cache.

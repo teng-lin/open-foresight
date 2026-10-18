@@ -58,6 +58,9 @@ if [[ "$task_stage" == all || "$task_stage" == native ]]; then
   "$task_python" "$task_root/tools/check_build_cache.py" "$task_build/CMakeCache.txt"
   "$task_python" "$task_root/tools/verify_descriptor.py"
   ci_timed "native configure" cmake -S "$task_root" -B "$task_build" -DCMAKE_BUILD_TYPE=Release -DPython3_EXECUTABLE="$task_python" ${task_cmake_platform[@]+"${task_cmake_platform[@]}"} "$@"
+  if [[ "${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-0}" == 1 ]]; then
+    "$task_python" "$task_root/tools/verify_app_dependency_reuse.py" --build "$task_build"
+  fi
   ci_timed "native compile" cmake --build "$task_build" --parallel "${FORESIGHT_BUILD_JOBS:-4}"
   ci_timed "native tests" ctest --test-dir "$task_build" --output-on-failure
 fi

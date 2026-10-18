@@ -80,7 +80,14 @@ def retained_identities(component, identity, manifest=None):
 def candidates(versions, identity, protected, retained=()):
     if not any(identity in tags(v) for v in versions):
         raise RuntimeError("Current identity is not published; refusing cleanup")
-    keep = {identity, "current", "buildcache", "app-buildcache-x86-64", *retained}
+    keep = {
+        identity,
+        "current",
+        "buildcache",
+        "app-buildcache-x86-64",
+        "app-deps-buildcache-v1",
+        *retained,
+    }
     return [
         v
         for v in versions
@@ -99,7 +106,14 @@ def protected_manifests(component, versions, identity, retained=()):
         v["name"]
         for v in versions
         if tags(v)
-        & {identity, "current", "buildcache", "app-buildcache-x86-64", *retained}
+        & {
+            identity,
+            "current",
+            "buildcache",
+            "app-buildcache-x86-64",
+            "app-deps-buildcache-v1",
+            *retained,
+        }
     }
     protected = set()
     while roots:

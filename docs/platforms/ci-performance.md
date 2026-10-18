@@ -135,22 +135,35 @@ before copying the application checkout. The normal native build and this layer
 share `cmake/ForesightInferenceDependencies.cmake`, including its exact source pins
 and options. Both use `/src/build/_deps`, so subsequent application configuration
 retains dependency objects, headers and licenses. A Dart edit or new source
-revision still runs the current application's build and tests.
+revision still runs the current application's build and tests. CI dry-runs the
+backend after configuring both projects and refuses any planned dependency
+compilation, archive creation or relinking before executing the build. A lost
+object or timestamp mismatch requires investigation rather than a silent library
+rebuild. Local developer builds can populate dependencies normally; CI always
+sets `REQUIRE_DEPENDENCY_REUSE=1`.
 
 Application cache transport uses the current Docker context's Docker driver with
 the containerd image store. Provisioning happens before loading a qualified SDK
 archive; a separate container driver cannot see that archive's local tag. The
-fixed same-repository application cache is imported even when the SDK comes from
+fixed same-repository application caches are imported even when the SDK comes from
 an approved legacy archive. Registry errors stop the job instead of silently
 starting an uncached dependency build. PR acceptance reads the cache; the existing
-main-only Linux bundle job exports only its secret-free `tested` stage. Packaging
+main-only Linux bundle job exports only its secret-free `application-dependencies` stage to
+`app-deps-buildcache-v1`. It never overwrites the original
+`app-buildcache-x86-64` tag: that tag keeps the reviewed migration manifest and
+layers referenced while both caches remain importable. Packaging
 stages containing distribution secrets never export caches.
 
 CI supplies the `appdeps_seed` named context with qualified existing dependency
 outputs. Their original provenance remains separate from the current build and
 its test result. Local developer Docker builds retain an empty default context
 and populate dependencies normally; they can provide a verified seed with
-`--build-context appdeps_seed=PATH`.
+`--build-context appdeps_seed=PATH`. A genuine dependency pin, option, compiler or
+consumed-header change requires an explicit compatibility review. Update the
+qualified seed and its original producer evidence when reuse is valid; otherwise
+document the exact incompatible input and the affected component before running
+its necessary replacement build. A missing tag or transport failure does not
+authorize that build.
 
 Main builds allocate a monotonic distribution number and stamp that version
 before building the Linux and macOS candidates. Nightly/manual previews use the
