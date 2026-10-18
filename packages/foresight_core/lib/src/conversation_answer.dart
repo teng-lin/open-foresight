@@ -46,8 +46,9 @@ class ConversationAnswer {
   SearchCallbacks _searchCallbacks() => domain.searchCallbacks();
   void ensureCurrent() {
     domain.checkWorkspace(generation);
-    if (current != null && !current!())
+    if (current != null && !current!()) {
       throw RpcError(RpcErrorCode.cancelled, 'Answer cancelled');
+    }
   }
 
   void saveAnswer(
@@ -169,8 +170,9 @@ class ConversationAnswer {
       conversation = 'meeting:$meetingId';
     }
 
-    if (modelBusy)
+    if (modelBusy) {
       throw RpcError(RpcErrorCode.busy, 'Model configuration is busy');
+    }
     yield* retrieve();
     if (terminal) return;
     await prepareGeneration();
@@ -284,8 +286,9 @@ class ConversationAnswer {
       if (live.isEmpty ||
           live.first['deleted'] != 0 ||
           live.first['revision'] != revisions[documentId] ||
-          live.first['state'] != 'indexed')
+          live.first['state'] != 'indexed') {
         continue;
+      }
       if (!useWeb && budget <= 0) break;
       final text = useWeb
           ? passage['excerpt'] as String
@@ -374,11 +377,12 @@ class ConversationAnswer {
       terminal = true;
       return;
     }
-    if (generator == null)
+    if (generator == null) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Generation model unavailable. Retrieved ${citations.length} excerpts; configure a local generator.',
       );
+    }
   }
 
   Future<void> prepareGeneration() async {
@@ -467,16 +471,20 @@ class ConversationAnswer {
             summaryPrompt,
           )) {
             ensureCurrent();
-            if (event['type'] == 'delta')
+            if (event['type'] == 'delta') {
               summary += event['text'] as String? ?? '';
-            if (event['type'] == 'error')
+            }
+            if (event['type'] == 'error') {
               throw StateError('Memory compression failed');
-            if (event['type'] == 'done')
+            }
+            if (event['type'] == 'done') {
               summaryStatus = event['status'] as String;
+            }
           }
           ensureCurrent();
-          if (summaryStatus != 'completed')
+          if (summaryStatus != 'completed') {
             throw StateError('Memory compression failed');
+          }
           return summary;
         },
       );
@@ -643,7 +651,7 @@ class ConversationAnswer {
     } catch (e) {
       if (!_closed &&
           generation == workspaceGeneration &&
-          (current == null || current!()))
+          (current == null || current!())) {
         saveAnswer(
           question,
           'Answer generation failed. Please retry.',
@@ -652,6 +660,7 @@ class ConversationAnswer {
           model,
           conversation: conversation,
         );
+      }
       rethrow;
     }
   }

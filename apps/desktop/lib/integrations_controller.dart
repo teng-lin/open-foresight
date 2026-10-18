@@ -117,7 +117,7 @@ class _IntegrationsController extends _FeatureController {
       );
       globalShortcutState = globalShortcuts!.state;
     }
-    await d.command(Operation.preferences_set, {
+    await d.command(Operation.preferencesSet, {
       'key': 'globalShortcut',
       'value': 'true',
     });
@@ -130,7 +130,7 @@ class _IntegrationsController extends _FeatureController {
         hyprShortcuts.installed)
       await hyprShortcuts.remove();
     await globalShortcuts?.disable();
-    await d.command(Operation.preferences_set, {
+    await d.command(Operation.preferencesSet, {
       'key': 'globalShortcut',
       'value': 'false',
     });
@@ -158,7 +158,7 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> refreshCaptureCapabilities() async {
     try {
-      final result = await d.command(Operation.audio_capabilities) as Map;
+      final result = await d.command(Operation.audioCapabilities) as Map;
       if (mounted)
         setState(() {
           captureCapabilities = Map<String, dynamic>.from(result);
@@ -175,7 +175,7 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> requestMicrophoneAccess() async {
     try {
-      final result = await d.command(Operation.audio_request_microphone) as Map;
+      final result = await d.command(Operation.audioRequestMicrophone) as Map;
       if (mounted)
         setState(() {
           captureCapabilities = Map<String, dynamic>.from(result);
@@ -191,7 +191,7 @@ class _IntegrationsController extends _FeatureController {
 
   Future<bool> ensureRecordingAccess() async {
     if (!Platform.isMacOS) return true;
-    final capabilities = await d.command(Operation.audio_capabilities) as Map;
+    final capabilities = await d.command(Operation.audioCapabilities) as Map;
     if (!mounted || !context.mounted) return false;
     if (capabilities['microphone_purpose_present'] == false ||
         capabilities['system_audio_purpose_present'] == false) {
@@ -298,7 +298,7 @@ class _IntegrationsController extends _FeatureController {
                       });
                       try {
                         final result =
-                            await d.command(Operation.audio_request_system)
+                            await d.command(Operation.audioRequestSystem)
                                 as Map;
                         if (!dialogContext.mounted) return;
                         updateDialog(() {
@@ -428,7 +428,7 @@ class _IntegrationsController extends _FeatureController {
   Future<void> setMeetingReminders(bool value) async {
     if (value && Platform.isMacOS) {
       final result =
-          await d.command(Operation.notifications_request_permission) as Map;
+          await d.command(Operation.notificationsRequestPermission) as Map;
       if (result['granted'] != true) {
         throw StateError(
           'Meeting reminders need notification access. Enable Open Foresight in System Settings > Notifications.',
@@ -442,7 +442,7 @@ class _IntegrationsController extends _FeatureController {
   Future<void> refreshNotifications() async {
     try {
       final result =
-          await d.command(Operation.notifications_capabilities) as Map;
+          await d.command(Operation.notificationsCapabilities) as Map;
       if (mounted)
         setState(
           () => notificationState = result['available'] == true
@@ -459,7 +459,7 @@ class _IntegrationsController extends _FeatureController {
   Future<void> setNotifications(bool value) async {
     if (value && Platform.isMacOS) {
       final result =
-          await d.command(Operation.notifications_request_permission) as Map;
+          await d.command(Operation.notificationsRequestPermission) as Map;
       if (result['granted'] != true) {
         if (mounted)
           setState(
@@ -469,7 +469,7 @@ class _IntegrationsController extends _FeatureController {
         return;
       }
     }
-    await d.command(Operation.preferences_set, {
+    await d.command(Operation.preferencesSet, {
       'key': 'notifications',
       'value': value.toString(),
     });

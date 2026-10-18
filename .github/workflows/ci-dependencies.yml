@@ -12,6 +12,7 @@ name: Reusable CI dependencies
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
+    - tools/build_macos_vendor.py
     - tools/build_litert_extensions.py
     - tools/litert_extensions.py
     - tools/test_litert_status_abi.py
@@ -48,6 +49,7 @@ name: Reusable CI dependencies
     - tools/ci_verify_dependency.py
     - tools/build_macos_sdk.py
     - tools/build_macos_runtimes.py
+    - tools/build_macos_vendor.py
     - tools/build_litert_extensions.py
     - tools/litert_extensions.py
     - tools/test_litert_status_abi.py
@@ -69,6 +71,7 @@ jobs:
     outputs:
       macos-sdk: ${{ steps.keys.outputs['macos-sdk'] }}
       macos-runtime: ${{ steps.keys.outputs['macos-runtime'] }}
+      macos-vendor: ${{ steps.keys.outputs['macos-vendor'] }}
       linux-core: ${{ steps.keys.outputs['linux-core'] }}
       linux-litert: ${{ steps.keys.outputs['linux-litert'] }}
       linux-whisper: ${{ steps.keys.outputs['linux-whisper'] }}
@@ -95,11 +98,9 @@ jobs:
       matrix:
         component:
         - sdk
-        - runtime
     concurrency:
-      group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)]
-        }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted'
-        }}
+      group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}-${{
+        github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
       cancel-in-progress: false
     env:
       COMPONENT: ${{ matrix.component }}
@@ -114,12 +115,22 @@ jobs:
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    - name: Probe the qualified original before allocating build resources
+      id: probe
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py probe --component "macos-${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
     - name: Install compiler tools
       run: brew install cmake ninja git-lfs
+      if: steps.probe.outputs.hit != 'true'
     - name: Install verifier dependencies
       run: |-
         python -m venv .venv
         .venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+      if: steps.probe.outputs.hit != 'true'
     - name: Restore an already verified shared prefix
       id: shared
       env:
@@ -134,31 +145,21 @@ jobs:
           test "$task_result" = 4
           echo 'hit=false' >> "$GITHUB_OUTPUT"
         fi
+      if: steps.probe.outputs.hit != 'true'
     - name: Bootstrap from existing sdk cache
-      if: matrix.component == 'sdk' && steps.shared.outputs.hit != 'true'
+      if: steps.probe.outputs.hit != 'true' && (matrix.component == 'sdk' && steps.shared.outputs.hit != 'true')
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/sdk
         key: macos15-arm64-sdk-${{ hashFiles('tools/build_macos_sdk.py') }}
-    - name: Bootstrap from existing runtime cache
-      if: matrix.component == 'runtime' && steps.shared.outputs.hit != 'true'
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-      with:
-        path: build/macos-runtimes
-        key: macos15-arm64-inference-${{ hashFiles('tools/build_macos_runtimes.py', 'tools/build_litert_extensions.py',
-          'tools/litert_extensions.py', 'tools/test_litert_status_abi.py', 'services/speech/**', 'services/inference/persistent_worker.h',
-          'services/inference/output_budget.h', 'third_party/litert_lm/*.patch')
-          }}
     - name: Build or verify SDK
-      if: matrix.component == 'sdk'
+      if: steps.probe.outputs.hit != 'true' && (matrix.component == 'sdk')
       run: .venv/bin/python tools/build_macos_sdk.py --jobs 3
-    - name: Build or verify inference runtimes
-      if: matrix.component == 'runtime'
-      run: .venv/bin/python tools/build_macos_runtimes.py --jobs 3
     - name: Verify and archive the qualified prefix
       run: |-
         python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
         python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
+      if: steps.probe.outputs.hit != 'true'
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: ci-macos-${{ matrix.component }}-${{ env.IDENTITY }}
@@ -166,6 +167,24 @@ jobs:
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
+      id: payload
+      if: steps.probe.outputs.hit != 'true'
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix
+        build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+      if: steps.probe.outputs.hit != 'true'
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-macos-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 90
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+      if: steps.probe.outputs.hit != 'true'
   core:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Build Linux core
@@ -178,8 +197,8 @@ jobs:
       packages: write
       actions: read
     concurrency:
-      group: dependency-linux-core-${{ needs.plan.outputs['linux-core'] }}-${{ github.event_name == 'pull_request'
-        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      group: dependency-linux-core-${{ needs.plan.outputs['linux-core'] }}-${{ github.event_name == 'pull_request' && format('pr-{0}',
+        github.event.pull_request.number) || 'trusted' }}
       cancel-in-progress: false
     outputs:
       image: ${{ steps.resolved.outputs.image }}
@@ -274,6 +293,21 @@ jobs:
         name: ci-linux-core-${{ env.IDENTITY }}
         path: build/published/
         retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+      id: payload
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
+        build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 90
+        overwrite: true
         if-no-files-found: error
         compression-level: 0
   litert:
@@ -387,6 +421,21 @@ jobs:
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
+      id: payload
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
+        build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 90
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
   whisper:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Build Linux whisper
@@ -498,6 +547,21 @@ jobs:
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
+      id: payload
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
+        build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 90
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
   sdk:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Assemble Linux SDK
@@ -513,8 +577,8 @@ jobs:
       packages: write
       actions: read
     concurrency:
-      group: dependency-linux-sdk-${{ needs.plan.outputs['linux-sdk'] }}-${{ github.event_name == 'pull_request'
-        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      group: dependency-linux-sdk-${{ needs.plan.outputs['linux-sdk'] }}-${{ github.event_name == 'pull_request' && format('pr-{0}',
+        github.event.pull_request.number) || 'trusted' }}
       cancel-in-progress: false
     outputs:
       image: ${{ steps.resolved.outputs.image }}
@@ -614,6 +678,21 @@ jobs:
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
+      id: payload
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "linux-${COMPONENT}" --identity "$IDENTITY" --prefix
+        build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-linux-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 90
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
   linux-pr-core:
     name: Build Linux core
     if: github.event_name == 'pull_request'
@@ -643,14 +722,26 @@ jobs:
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    - name: Probe the qualified original before allocating build resources
+      id: probe
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py probe --component "${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
     - name: Free hosted-runner space for native dependency builds
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      if: steps.probe.outputs.hit != 'true'
     - name: Authenticate read-only SDK registry access
       env:
         REGISTRY_TOKEN: ${{ github.token }}
       run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      if: steps.probe.outputs.hit != 'true'
     - name: Reuse or build and qualify the component
-      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
+      if: steps.probe.outputs.hit != 'true'
     - name: Retain the verified component immediately
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -660,6 +751,24 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
+      id: payload
+      if: steps.probe.outputs.hit != 'true'
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "${COMPONENT}" --identity "$IDENTITY" --prefix build/published
+        --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+      if: steps.probe.outputs.hit != 'true'
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 14
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+      if: steps.probe.outputs.hit != 'true'
   linux-pr-runtime:
     name: Build Linux ${{ matrix.component }}
     if: github.event_name == 'pull_request'
@@ -679,7 +788,8 @@ jobs:
         - litert
         - whisper
     concurrency:
-      group: dependency-linux-${{ matrix.component }}-${{ needs.plan.outputs[format('linux-{0}', matrix.component)] }}-pr-${{ github.event.pull_request.number }}
+      group: dependency-linux-${{ matrix.component }}-${{ needs.plan.outputs[format('linux-{0}', matrix.component)] }}-pr-${{
+        github.event.pull_request.number }}
       cancel-in-progress: false
     env:
       DOCKER_BUILDKIT: '1'
@@ -696,14 +806,26 @@ jobs:
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    - name: Probe the qualified original before allocating build resources
+      id: probe
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py probe --component "${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
     - name: Free hosted-runner space for native dependency builds
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      if: steps.probe.outputs.hit != 'true'
     - name: Authenticate read-only SDK registry access
       env:
         REGISTRY_TOKEN: ${{ github.token }}
       run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      if: steps.probe.outputs.hit != 'true'
     - name: Reuse or build and qualify the component
-      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
+      if: steps.probe.outputs.hit != 'true'
     - name: Retain the verified component immediately
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -713,6 +835,24 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
+      id: payload
+      if: steps.probe.outputs.hit != 'true'
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "${COMPONENT}" --identity "$IDENTITY" --prefix build/published
+        --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+      if: steps.probe.outputs.hit != 'true'
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 14
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+      if: steps.probe.outputs.hit != 'true'
   linux-pr:
     name: Assemble Linux SDK
     if: github.event_name == 'pull_request'
@@ -744,14 +884,26 @@ jobs:
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
+    - name: Probe the qualified original before allocating build resources
+      id: probe
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py probe --component "${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
     - name: Free hosted-runner space for native dependency builds
       run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      if: steps.probe.outputs.hit != 'true'
     - name: Authenticate read-only SDK registry access
       env:
         REGISTRY_TOKEN: ${{ github.token }}
       run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      if: steps.probe.outputs.hit != 'true'
     - name: Reuse or build and qualify the component
-      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+      run: python tools/linux_sdk_artifacts.py produce --component "$COMPONENT" --output build/published --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
+      if: steps.probe.outputs.hit != 'true'
     - name: Retain the verified component immediately
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -761,3 +913,198 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
+      id: payload
+      if: steps.probe.outputs.hit != 'true'
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "${COMPONENT}" --identity "$IDENTITY" --prefix build/published
+        --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+      if: steps.probe.outputs.hit != 'true'
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 14
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+      if: steps.probe.outputs.hit != 'true'
+  macos-vendor:
+    name: Build macOS vendor
+    needs: plan
+    runs-on: macos-15
+    timeout-minutes: 120
+    concurrency:
+      group: dependency-macos-vendor-${{ needs.plan.outputs['macos-vendor'] }}-${{ github.event_name == 'pull_request'
+        && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    env:
+      COMPONENT: vendor
+      IDENTITY: ${{ needs.plan.outputs['macos-vendor'] }}
+      PREFIX: build/macos-vendor
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Probe the qualified original before allocating build resources
+      id: probe
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py probe --component "macos-${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
+    - name: Install compiler tools
+      run: brew install cmake ninja git-lfs
+      if: steps.probe.outputs.hit != 'true'
+    - name: Restore an already verified shared prefix
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "macos-${COMPONENT}" --prefix "$PREFIX" --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+      if: steps.probe.outputs.hit != 'true'
+    - name: Build or verify vendor runtimes
+      run: python tools/build_macos_vendor.py --jobs 3
+      if: steps.probe.outputs.hit != 'true'
+    - name: Verify and archive the qualified prefix
+      run: |-
+        python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
+        python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
+      if: steps.probe.outputs.hit != 'true'
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-macos-vendor-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+      id: payload
+      if: steps.probe.outputs.hit != 'true'
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix
+        build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+      if: steps.probe.outputs.hit != 'true'
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-macos-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 90
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+      if: steps.probe.outputs.hit != 'true'
+  macos-runtime:
+    name: Build macOS ${{ matrix.component }}
+    needs:
+    - plan
+    - macos-vendor
+    runs-on: macos-15
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        component:
+        - runtime
+    concurrency:
+      group: dependency-macos-${{ matrix.component }}-${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}-${{
+        github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'trusted' }}
+      cancel-in-progress: false
+    env:
+      COMPONENT: ${{ matrix.component }}
+      IDENTITY: ${{ needs.plan.outputs[format('macos-{0}', matrix.component)] }}
+      PREFIX: ${{ matrix.component == 'sdk' && 'build/sdk' || 'build/macos-runtimes' }}
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.event.pull_request.head.sha || github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Probe the qualified original before allocating build resources
+      id: probe
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py probe --component "macos-${COMPONENT}" --identity "$IDENTITY" --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
+    - name: Install compiler tools
+      run: brew install cmake ninja git-lfs
+      if: steps.probe.outputs.hit != 'true'
+    - name: Restore an already verified shared prefix
+      id: shared
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: |-
+        if python tools/ci_artifacts.py pull --component "macos-${COMPONENT}" --prefix "$PREFIX" --optional --own-head "$OWN_HEAD" --own-pr "$OWN_PR"; then
+          echo 'hit=true' >> "$GITHUB_OUTPUT"
+        else
+          task_result=$?
+          test "$task_result" = 4
+          echo 'hit=false' >> "$GITHUB_OUTPUT"
+        fi
+      if: steps.probe.outputs.hit != 'true'
+    - name: Restore verified vendor libraries for worker assembly
+      if: steps.probe.outputs.hit != 'true' && (matrix.component == 'runtime' && steps.shared.outputs.hit != 'true')
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+      run: python tools/ci_artifacts.py pull --component macos-vendor --prefix build/macos-vendor --own-head "$OWN_HEAD"
+        --own-pr "$OWN_PR"
+    - name: Build or verify inference runtimes
+      if: steps.probe.outputs.hit != 'true' && (matrix.component == 'runtime')
+      run: python tools/build_macos_runtimes.py --jobs 3
+    - name: Verify and archive the qualified prefix
+      run: |-
+        python tools/ci_verify_dependency.py --component "macos-${COMPONENT}" --prefix "$PREFIX"
+        python tools/ci_artifacts.py pack --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix "$PREFIX" --output build/published
+      if: steps.probe.outputs.hit != 'true'
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-macos-${{ matrix.component }}-${{ env.IDENTITY }}
+        path: build/published/
+        retention-days: 90
+        if-no-files-found: error
+        compression-level: 0
+      id: payload
+      if: steps.probe.outputs.hit != 'true'
+    - name: Bind the original payload upload to a small cache receipt
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: python tools/ci_artifacts.py publish-receipt --component "macos-${COMPONENT}" --identity "$IDENTITY" --prefix
+        build/published --artifact-id "${{ steps.payload.outputs.artifact-id }}" --output build/receipt
+      if: steps.probe.outputs.hit != 'true'
+    - name: Retain small cache receipt
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: receipt-ci-macos-${{ env.COMPONENT }}-${{ env.IDENTITY }}
+        path: build/receipt/
+        retention-days: 90
+        overwrite: true
+        if-no-files-found: error
+        compression-level: 0
+      if: steps.probe.outputs.hit != 'true'

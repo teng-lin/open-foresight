@@ -89,10 +89,11 @@ Future<void> configureSpeech(
     final code = await process.exitCode.timeout(const Duration(minutes: 3));
     await Future.wait([stdout, stderr]);
     if (!current()) throw const ModelDownloadCancelled();
-    if (code != 0)
+    if (code != 0) {
       throw StateError(
         'Whisper could not load this model on the configured device. Your previous model is unchanged.',
       );
+    }
     await store.register(
       'speech',
       asset.path,

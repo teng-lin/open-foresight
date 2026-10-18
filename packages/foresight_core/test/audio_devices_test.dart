@@ -187,12 +187,13 @@ void main() {
           String executable,
           List<String> arguments,
         ) async {
-          if (++calls == 1)
+          if (++calls == 1) {
             throw ProcessException(
               executable,
               arguments,
               'adapter disappeared',
             );
+          }
           return ProcessResult(0, 0, '[]', '');
         }
 

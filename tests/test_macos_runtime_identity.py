@@ -49,6 +49,7 @@ class MacRuntimeIdentityTests(unittest.TestCase):
                     library.write_bytes(b"signed relocated library")
                     events.append("library signed")
                 elif target.is_dir():
+                    self.assertFalse(list(app.rglob("Contents/manifest.json")))
                     for host in hosts:
                         contents = host.parent.parent
                         if host.parent.name == "MacOS":

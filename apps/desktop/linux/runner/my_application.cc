@@ -1,5 +1,6 @@
 #include "my_application.h"
 
+#include <cmath>
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -25,6 +26,41 @@ static void first_frame_cb(MyApplication *self, FlView *view) {
 static void window_method(FlMethodChannel *, FlMethodCall *call,
                           gpointer data) {
   GtkWindow *window = GTK_WINDOW(data);
+  if (g_strcmp0(fl_method_call_get_name(call), "ensureWidth") == 0) {
+    FlValue *args = fl_method_call_get_args(call);
+    FlValue *value = args && fl_value_get_type(args) == FL_VALUE_TYPE_MAP
+                         ? fl_value_lookup_string(args, "width")
+                         : nullptr;
+    const double requested =
+        value && fl_value_get_type(value) == FL_VALUE_TYPE_FLOAT
+            ? fl_value_get_float(value)
+        : value && fl_value_get_type(value) == FL_VALUE_TYPE_INT
+            ? static_cast<double>(fl_value_get_int(value))
+            : 0;
+    if (!std::isfinite(requested) || requested <= 0 || requested > G_MAXINT) {
+      fl_method_call_respond_error(call, "invalid_width",
+                                   "Expected a positive window width", nullptr,
+                                   nullptr);
+      return;
+    }
+    gint width, height;
+    gtk_window_get_size(window, &width, &height);
+    gint target = MAX(width, static_cast<gint>(std::ceil(requested)));
+    GdkWindow *surface = gtk_widget_get_window(GTK_WIDGET(window));
+    GdkMonitor *monitor =
+        surface ? gdk_display_get_monitor_at_window(
+                      gtk_widget_get_display(GTK_WIDGET(window)), surface)
+                : nullptr;
+    if (monitor) {
+      GdkRectangle workarea;
+      gdk_monitor_get_workarea(monitor, &workarea);
+      target = MIN(target, MAX(width, workarea.width));
+    }
+    if (target > width)
+      gtk_window_resize(window, target, height);
+    fl_method_call_respond_success(call, nullptr, nullptr);
+    return;
+  }
   if (g_strcmp0(fl_method_call_get_name(call), "activate") != 0) {
     fl_method_call_respond_not_implemented(call, nullptr);
     return;

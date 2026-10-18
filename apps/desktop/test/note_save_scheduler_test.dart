@@ -21,10 +21,10 @@ class GatedNoteDomain extends CommandFixtureDomain {
     Operation operation, [
     Map<String, dynamic> args = const {},
   ]) async {
-    if (operation == Operation.meetings_notes && rejectNotes)
+    if (operation == Operation.meetingsNotes && rejectNotes)
       throw StateError('Service disconnected');
-    if (operation == Operation.artifacts_edit) artifactEdit = Map.of(args);
-    if (operation == Operation.meetings_notes && saveGate != null)
+    if (operation == Operation.artifactsEdit) artifactEdit = Map.of(args);
+    if (operation == Operation.meetingsNotes && saveGate != null)
       await saveGate!.future;
     return super.command(operation, args);
   }

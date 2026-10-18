@@ -224,7 +224,7 @@ void main() {
           await domain.application.enhanceNotes(id);
           final model = File('${directory.path}/embedding.litertlm');
           model.writeAsStringSync('ABI fixture model');
-          final change = domain.command(Operation.models_embedding, {
+          final change = domain.command(Operation.modelsEmbedding, {
             'path': model.path,
             if (!registrySucceeds) 'digest': 'incorrect-digest',
           });
@@ -242,7 +242,7 @@ void main() {
 
           embeddings.modelUpdateSucceeds = false;
           await expectLater(
-            domain.command(Operation.models_embedding, {'path': model.path}),
+            domain.command(Operation.modelsEmbedding, {'path': model.path}),
             throwsStateError,
           );
           await domain.application.enhanceNotes(id);
@@ -276,8 +276,8 @@ void main() {
           expect(runtime.generating, isFalse);
           expect(runtime.prompts, isEmpty);
           for (final method in [
-            Operation.models_embedding,
-            Operation.models_generation,
+            Operation.modelsEmbedding,
+            Operation.modelsGeneration,
           ]) {
             await expectLater(
               domain.command(method, {'path': '/unused'}),
@@ -317,7 +317,7 @@ void main() {
               domain.application.captureState['note_enhancements'] as Map;
           final state = states['$id'] as Map;
           expect(
-            await domain.command(Operation.meetings_cancel_enhance, {
+            await domain.command(Operation.meetingsCancelEnhance, {
               'id': id,
               'request_id': state['request_id'],
             }),
@@ -453,7 +453,7 @@ void main() {
         expect(runtime.prompts.first, isNot(contains('Novel evidence')));
         expect(embeddings.texts, ['Original evidence', 'Raw note']);
 
-        await domain.command(Operation.meetings_transcript, {
+        await domain.command(Operation.meetingsTranscript, {
           'id': id,
           'text': 'Novel evidence',
         });

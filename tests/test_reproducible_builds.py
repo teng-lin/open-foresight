@@ -1,6 +1,7 @@
 """Supply-chain gates must reject tampering even with optimized Python."""
 
 import hashlib
+import fnmatch
 import json
 from pathlib import Path
 import re
@@ -226,6 +227,90 @@ class BuildPolicyTests(unittest.TestCase):
         self.assertNotIn("--push", local_build)
         for component in ("sdk-core", "sdk-litert", "sdk-whisper", "sdk"):
             self.assertIn(f"packaging/{component}.Dockerfile", local_build)
+
+    def test_dependency_workflow_triggers_cover_every_artifact_input(self):
+        from tools.ci_artifacts import FILES
+
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        for event in ("push", "pull_request"):
+            patterns = workflow["on"][event]["paths"]
+            for component, names in FILES.items():
+                for name in names:
+                    self.assertTrue(
+                        any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns),
+                        (event, component, name),
+                    )
+
+    def test_macos_worker_assembly_depends_on_vendor_but_static_sdk_stays_parallel(
+        self,
+    ):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        jobs = workflow["jobs"]
+        self.assertEqual(jobs["macos"]["needs"], "plan")
+        self.assertEqual(jobs["macos-vendor"]["needs"], "plan")
+        self.assertIn("macos-vendor", jobs["macos-runtime"]["needs"])
+        commands = "\n".join(
+            step.get("run", "") for step in jobs["macos-runtime"]["steps"]
+        )
+        self.assertIn("--component macos-vendor", commands)
+        self.assertIn("tools/build_macos_runtimes.py", commands)
+
+    def test_cheap_dependency_probe_skips_heavy_resources_and_duplicate_uploads(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        for name in (
+            "linux-pr-core",
+            "linux-pr-runtime",
+            "linux-pr",
+            "macos",
+            "macos-vendor",
+            "macos-runtime",
+        ):
+            steps = workflow["jobs"][name]["steps"]
+            probe = next(
+                index for index, step in enumerate(steps) if step.get("id") == "probe"
+            )
+            self.assertIn("tools/ci_artifacts.py probe", steps[probe]["run"])
+            for step in steps[probe + 1 :]:
+                self.assertIn(
+                    "steps.probe.outputs.hit != 'true'", step["if"], (name, step)
+                )
+            self.assertTrue(any(step.get("id") == "payload" for step in steps))
+        for name in ("core", "litert", "whisper", "sdk"):
+            steps = workflow["jobs"][name]["steps"]
+            self.assertFalse(any(step.get("id") == "probe" for step in steps))
+            commands = "\n".join(step.get("run", "") for step in steps)
+            self.assertIn("tools/linux_sdk_artifacts.py promote", commands)
+            self.assertIn("tools/ci_artifacts.py publish-receipt", commands)
+
+    def test_macos_vendor_and_worker_jobs_need_no_python_development_environment(self):
+        workflow = yaml.safe_load(
+            (ROOT / ".github/workflows/ci-dependencies.yml").read_text()
+        )
+        for name in ("macos-vendor", "macos-runtime"):
+            commands = "\n".join(
+                step.get("run", "") for step in workflow["jobs"][name]["steps"]
+            )
+            self.assertNotIn("pip install", commands)
+            self.assertNotIn(".venv/bin/python", commands)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-c",
+                "import sys; sys.path.insert(0, 'tools'); import build_macos_vendor, build_macos_runtimes, ci_verify_dependency",
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_monthly_builds_bypass_descriptor_and_layer_caches(self):
         text = (ROOT / ".github/workflows/ci-dependencies.yml").read_text()

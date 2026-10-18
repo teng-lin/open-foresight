@@ -35,8 +35,3 @@ ARG FLUTTER_COMMIT=adc901062556672b4138e18a4dc62a4be8f4b3c2
 RUN git init /opt/flutter && cd /opt/flutter && git remote add origin https://github.com/flutter/flutter.git && \
     git fetch --depth=1 origin "$FLUTTER_COMMIT" && git checkout --detach FETCH_HEAD && \
     flutter config --no-analytics && flutter precache --linux
-
-WORKDIR /src
-COPY requirements-dev.lock requirements-litert.lock ./
-RUN python3 -m venv /opt/dev-python && /opt/dev-python/bin/pip install --no-cache-dir --require-hashes -r requirements-dev.lock && \
-    python3 -m venv /opt/litert-python && /opt/litert-python/bin/pip install --no-cache-dir --require-hashes -r requirements-litert.lock

@@ -83,13 +83,15 @@ class EncryptedDedicatedQueryRuntime implements QueryCompletionRuntime {
 
   @override
   Future<String> complete(String prompt, String requestId) async {
-    if (_closed)
+    if (_closed) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Encrypted question detector is closed',
       );
-    if (_active != null)
+    }
+    if (_active != null) {
       throw RpcError(RpcErrorCode.busy, 'Encrypted question detector is busy');
+    }
     final request = _active = _EncryptedRequest(requestId);
     try {
       await _retiring;

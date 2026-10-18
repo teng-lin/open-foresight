@@ -124,8 +124,9 @@ class SearchService {
   final Duration timeout;
 
   Future<List<WebSearchItem>?> search(String query) async {
-    if (_apiKey.isEmpty)
+    if (_apiKey.isEmpty) {
       throw StateError('Search release credential is missing.');
+    }
     final client = HttpClient();
     try {
       return await _request(client, query).timeout(timeout);

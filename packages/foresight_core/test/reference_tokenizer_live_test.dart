@@ -54,16 +54,18 @@ void main() {
           });
         }
         final report = env['FORESIGHT_TOKENIZER_REPORT'];
-        if (report != null)
+        if (report != null) {
           File(report).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert(observed),
           );
-        for (final row in observed)
+        }
+        for (final row in observed) {
           expect(
             row['port_tokens'],
             row['original_tokens'],
             reason: 'Controlled text: ${row['text']}',
           );
+        }
       } finally {
         await original.shutdown();
         await port.shutdown();

@@ -51,8 +51,9 @@ class RpcError extends StateError {
         error is ArgumentError ? error.message.toString() : error.toString(),
       );
     }
-    if (error is StateError)
+    if (error is StateError) {
       return RpcError(RpcErrorCode.internal, error.message);
+    }
     return RpcError(RpcErrorCode.internal, error.toString());
   }
 }

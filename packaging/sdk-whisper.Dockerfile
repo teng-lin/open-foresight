@@ -13,7 +13,5 @@ RUN git init /opt/spirv-source && cd /opt/spirv-source && \
       -DSPIRV_HEADERS_ENABLE_TESTS=OFF -DSPIRV_HEADERS_ENABLE_INSTALL=ON && \
     cmake --install build && rm -rf /opt/spirv-source
 COPY tools/build_whisper_vulkan.py /opt/tools/build_whisper_vulkan.py
-COPY services/speech /opt/services/speech
-COPY services/inference/persistent_worker.h services/inference/output_budget.h /opt/services/inference/
 RUN python3 /opt/tools/build_whisper_vulkan.py --source /opt/whisper --build /opt/whisper-build --output /opt/whisper-runtime --spirv-prefix /opt/spirv-headers --jobs 2 && \
     rm -rf /opt/whisper-build /opt/whisper

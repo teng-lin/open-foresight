@@ -8,6 +8,11 @@ import subprocess
 
 
 def verify(component, prefix):
+    if component == "macos-vendor":
+        from build_macos_vendor import verify as verify_vendor
+
+        verify_vendor(prefix)
+        return
     if component == "macos-runtime":
         from build_macos_runtimes import verify as verify_runtime
 
@@ -45,7 +50,9 @@ def verify(component, prefix):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--component", choices=("macos-sdk", "macos-runtime"), required=True
+        "--component",
+        choices=("macos-sdk", "macos-runtime", "macos-vendor"),
+        required=True,
     )
     parser.add_argument("--prefix", type=Path, required=True)
     args = parser.parse_args()

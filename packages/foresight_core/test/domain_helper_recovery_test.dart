@@ -175,8 +175,9 @@ void main() {
       };
       helper.changed = () {
         if (helper.state.startsWith('state stream unavailable') &&
-            !changed.isCompleted)
+            !changed.isCompleted) {
           changed.complete();
+        }
       };
       controlService.failWatch = true;
       await helper.start();
@@ -197,13 +198,11 @@ void main() {
       await failure;
       expect(domain.restoring, isFalse);
       final result =
-          await domain.command(Operation.meetings_create, {
-                'title': 'Recovered',
-              })
+          await domain.command(Operation.meetingsCreate, {'title': 'Recovered'})
               as Map;
       expect(result['id'], isA<int>());
       await expectLater(
-        domain.commandCurrent(Operation.notes_save, {}, () => false),
+        domain.commandCurrent(Operation.notesSave, {}, () => false),
         throwsStateError,
       );
       await domain.application.close();

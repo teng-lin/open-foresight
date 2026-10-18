@@ -102,8 +102,9 @@ extension GraphPersistence on Store {
       if (current[id] != row['source_revision']) continue;
       final blob = row['embedding'];
       if (blob is! Uint8List ||
-          (blob.length != dimensions * 4 && !(forceIdentity && blob.isEmpty)))
+          (blob.length != dimensions * 4 && !(forceIdentity && blob.isEmpty))) {
         continue;
+      }
       final data = ByteData.sublistView(blob);
       final vector = List.generate(
         blob.length ~/ 4,
@@ -116,8 +117,9 @@ extension GraphPersistence on Store {
                 value is! num ||
                 !value.isFinite ||
                 (!forceIdentity && value.abs() > 1.1),
-          ))
+          )) {
         continue;
+      }
       if (vector.isNotEmpty) vectors[id] = vector;
       points[id] = GraphPoint(
         (coordinates[0] as num).toDouble(),
@@ -173,8 +175,9 @@ extension GraphPersistence on Store {
       final vector = vectors[id];
       if (forceIdentity && vector == null && source['state'] != 'indexed') {
         if (point == null ||
-            [point.x, point.y, point.z].any((v) => !v.isFinite))
+            [point.x, point.y, point.z].any((v) => !v.isFinite)) {
           throw ArgumentError('Invalid graph coordinates');
+        }
         blobs[id] = Uint8List(0);
         continue;
       }
@@ -186,8 +189,9 @@ extension GraphPersistence on Store {
           [point.x, point.y, point.z].any(
             (value) => !value.isFinite || (!forceIdentity && value.abs() > 1.1),
           ) ||
-          vector.any((value) => !value.isFinite))
+          vector.any((value) => !value.isFinite)) {
         throw ArgumentError('Invalid graph coordinates or embedding');
+      }
       dimensions = vector.length;
       final bytes = ByteData(vector.length * 4);
       for (var i = 0; i < vector.length; i++) {
@@ -235,18 +239,20 @@ extension GraphPersistence on Store {
         identity,
         documentSet,
       ]);
-      if (labelSet != null)
+      if (labelSet != null) {
         db.execute(
           'INSERT INTO graph_force_state(model_identity,label_set) VALUES(?,?)',
           [identity, labelSet],
         );
-      for (final cluster in clusters)
+      }
+      for (final cluster in clusters) {
         saveLabelCluster(
           cluster.label,
           x: cluster.center.x,
           y: cluster.center.y,
           radius: cluster.radius,
         );
+      }
       db.execute('COMMIT');
       return true;
     } catch (_) {

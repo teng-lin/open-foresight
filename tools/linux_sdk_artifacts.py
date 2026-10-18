@@ -135,13 +135,13 @@ def produce(component, output, repository, own_head="", own_pr=0):
             repository, component, identity, prefix, own_head=own_head, own_pr=own_pr
         )
         if reused:
-            if record(prefix, component).get("transport", "registry") == "registry":
-                # A successful trusted publisher already qualified this immutable
-                # image. Retain its small descriptor without pulling gigabytes
-                # merely to hand the same reference to the next job.
-                artifacts.pack(component, identity, prefix, output)
-                return
-            load(prefix, component, image)
+            # pull() has verified the trusted, successful producer attempt and
+            # envelope checksum. Validate component/platform/image metadata and
+            # the saved-image checksum before forwarding its qualified output.
+            # Consumers still inspect the actual image after loading it.
+            record(prefix, component)
+            artifacts.pack(component, identity, prefix, output)
+            return
         else:
             build = [
                 "docker",

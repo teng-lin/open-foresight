@@ -207,7 +207,7 @@ void main() {
       await workspace.meetingFeature.stopRecording();
       await waitFor(tester, () => workspace.meetingFeature.recording == null);
       final meeting =
-          await workspace.d.command(Operation.meetings_get, {'id': id}) as Map;
+          await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
       observed.expect(
         'transcript_persisted',
         (meeting['transcript'] as List).where(
@@ -216,12 +216,12 @@ void main() {
         ),
         isNotEmpty,
       );
-      await workspace.d.command(Operation.meetings_generate, {
+      await workspace.d.command(Operation.meetingsGenerate, {
         'id': id,
         'kind': 'summary',
       });
       final content =
-          await workspace.d.command(Operation.meetings_get, {'id': id}) as Map;
+          await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
       observed.expect(
         'artifact_persisted',
         (content['artifacts'] as List).single['generated'],

@@ -8,7 +8,7 @@ import 'package:test/test.dart';
 
 class RecoveryHelper extends Helper {
   int launches = 0;
-  RecoveryHelper(String socket, String storage) : super(socket, storage);
+  RecoveryHelper(super.socket, super.storage);
   @override
   Future<void> start() async {
     launches++;
@@ -95,8 +95,8 @@ void main() {
       helper.restarts = 5;
       helper.state = 'unavailable';
       await Future.wait([
-        domain.command(Operation.application_resume),
-        domain.command(Operation.application_resume),
+        domain.command(Operation.applicationResume),
+        domain.command(Operation.applicationResume),
       ]);
       expect(helper.launches, 1);
       expect(helper.restarts, 0);
@@ -108,7 +108,7 @@ void main() {
       helper.incompatible = true;
       helper.restarts = 5;
       await expectLater(
-        domain.command(Operation.application_resume),
+        domain.command(Operation.applicationResume),
         throwsStateError,
       );
       expect(helper.launches, 0);

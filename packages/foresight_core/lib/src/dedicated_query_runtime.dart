@@ -107,15 +107,17 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
     ) {
       if (!identical(_process, process)) return;
       _stderr += text;
-      if (_stderr.length > 4096)
+      if (_stderr.length > 4096) {
         _stderr = _stderr.substring(_stderr.length - 4096);
+      }
     }, onError: streamError);
     void frame(String line) {
       final frame = jsonDecode(line);
       if (frame is! Map) throw const FormatException('Invalid detector frame');
       if (frame['type'] == 'ready') {
-        if (ready.isCompleted)
+        if (ready.isCompleted) {
           throw const FormatException('Repeated detector ready');
+        }
         ready.complete();
       } else if (frame['type'] == 'fatal') {
         _stop(
@@ -151,15 +153,17 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
         while (true) {
           final end = pending.indexOf('\n');
           if (end < 0) break;
-          if (end > maxFrame)
+          if (end > maxFrame) {
             throw const FormatException('Detector frame exceeds 1 MiB');
+          }
           final line = pending.substring(0, end);
           pending = pending.substring(end + 1);
           frame(line);
           if (!identical(_process, process)) return;
         }
-        if (pending.length > maxFrame)
+        if (pending.length > maxFrame) {
           throw const FormatException('Detector frame exceeds 1 MiB');
+        }
       } catch (error) {
         streamError(error);
       }
@@ -176,13 +180,15 @@ class DedicatedQueryRuntime implements QueryCompletionRuntime {
 
   @override
   Future<String> complete(String prompt, String requestId) async {
-    if (_closed)
+    if (_closed) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Dedicated query detector is closed',
       );
-    if (_active != null)
+    }
+    if (_active != null) {
       throw RpcError(RpcErrorCode.busy, 'Dedicated query detector is busy');
+    }
     final request = _active = _QueryRequest(requestId);
     final timer = Timer(timeout, () {
       if (identical(_active, request)) {
