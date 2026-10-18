@@ -82,8 +82,11 @@ installs it in Ubuntu 24.04 to test dependencies, file layout, service lifecycle
 and installed document parsing. Documentation-only main pushes skip this work;
 manual and scheduled acceptance still run. Those installation checks remain necessary for
 application or packaging changes, but no longer compile a duplicate application.
-The disposable installer-test container permits the nested parser sandbox to create namespaces and grants `NET_ADMIN` so bubblewrap can initialize its private loopback interface; the actual
-parser sandbox is still required and checked. Release package publication retains
+The disposable installer-test container explicitly selects the CI AppArmor
+profile that permits user namespaces; generic `apparmor=unconfined` still receives
+Ubuntu user-namespace capability restrictions. An ordinary-user bubblewrap probe
+runs before expensive installer prerequisites. The actual parser retains its
+restricted mount layout, isolated namespaces and dropped capabilities. Release package publication retains
 its separate main-only workflow and credentials.
 
 Only the native job fetches and hashes the macOS compiler SDK. Native cache
