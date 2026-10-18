@@ -15,7 +15,12 @@ def build_tree(tmp_path):
     root = tmp_path / "repo"
     tools = root / "tools"
     tools.mkdir(parents=True)
-    for name in ("build.sh", "build_service_gate.sh", "ci_timing.sh"):
+    for name in (
+        "build.sh",
+        "build_service_gate.sh",
+        "ci_timing.sh",
+        "check_build_cache.py",
+    ):
         shutil.copy2(ROOT / "tools" / name, tools / name)
     (tools / "verify_descriptor.py").write_text("print('descriptor checked')\n")
     for name in ("build_dart_gates.sh",):

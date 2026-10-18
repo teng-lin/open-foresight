@@ -118,7 +118,13 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
         'docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/'
         in commands
     )
-    assert "package-and-test.sh deb" in commands
+    package_step = next(
+        step
+        for step in job["steps"]
+        if "package-and-test.sh deb" in step.get("run", "")
+    )
+    assert "--security-opt seccomp=unconfined" in package_step["run"]
+    assert "--security-opt apparmor=unconfined" in package_step["run"]
     assert "--suite models" in commands and "--suite virtual-audio" in commands
     assert "--max-glibc 2.39" in (ROOT / "packaging/build.Dockerfile").read_text()
     assert "pull_request" not in workflow("linux-packages.yml")["on"]
