@@ -136,6 +136,16 @@ class FileParserTest(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertIn("Usage:", result.stderr)
 
+    def test_reader_bounds_concurrently_growing_input_and_keeps_short_reads(self):
+        result = subprocess.run(
+            [str(PARSER), "--bounded-reader-self-test"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "bounded reader passed")
+
 
 if __name__ == "__main__":
     unittest.main()
