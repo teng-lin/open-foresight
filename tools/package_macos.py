@@ -2,6 +2,7 @@
 """Assemble the Mac application, standalone service/MCP, and local runtimes."""
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,23 @@ PURPOSES = {
     "NSMicrophoneUsageDescription": "Transcribe your microphone during meetings you start.",
     "NSAudioCaptureUsageDescription": "Transcribe meeting audio playing on this Mac when you start recording.",
 }
+
+
+def write_litert_manifests(app, library, service):
+    """Bind every runtime host to the relocated and signed library bytes."""
+    with library.open("rb") as stream:
+        runtime = {
+            "version": "0.18.0",
+            "sha256": hashlib.file_digest(stream, "sha256").hexdigest(),
+        }
+    # LiteRt anchors release identity at executable.parent / ../manifest.json.
+    # Main UI/MCP, resource workers/helper, and the service have distinct hosts.
+    for manifest in (
+        app / "Contents/manifest.json",
+        app / "Contents/Resources/manifest.json",
+        service.parent.parent / "manifest.json",
+    ):
+        manifest.write_text(json.dumps({"gemma_runtime": runtime}, indent=2) + "\n")
 
 
 def helper_bundle(path, executable, identifier):
@@ -237,7 +255,14 @@ def main(argv=None):
         plistlib.dump(metadata, stream)
     relocate_dependencies(app)
     entitlements = ROOT / "packaging/macos/Release.entitlements"
-    sign_application(app, args.identity, entitlements)
+    sign_application(
+        app,
+        args.identity,
+        entitlements,
+        before_seal=lambda: write_litert_manifests(
+            app, values["FORESIGHT_LITERT_LIBRARY"], service_path
+        ),
+    )
     environment = dict(
         os.environ, FORESIGHT_LITERT_LIBRARY=str(values["FORESIGHT_LITERT_LIBRARY"])
     )
