@@ -1,7 +1,11 @@
 # syntax=docker/dockerfile:1
 # Reusable SDK is built separately; pass its immutable registry digest in CI.
 ARG SDK_IMAGE=open-foresight-sdk:local
-FROM ${SDK_IMAGE} AS tested
+# Local developer builds may populate dependencies normally. CI replaces this
+# empty context with verified existing outputs before any application build.
+FROM scratch AS appdeps_seed
+COPY packaging/app-dependencies/empty-seed/.keep /src/build/_deps/.keep
+FROM ${SDK_IMAGE} AS application-base
 ARG UBUNTU_SNAPSHOT=20261001T000000Z
 ENV FORESIGHT_UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT}
 LABEL org.openforesight.ubuntu-snapshot="${UBUNTU_SNAPSHOT}"
@@ -18,7 +22,19 @@ RUN git -C /opt/flutter fetch --depth=1 origin refs/tags/3.35.7:refs/tags/3.35.7
     rm -f /opt/flutter/bin/cache/flutter.version.json && \
     flutter --version --machine | python3 -c 'import json, sys; sys.exit(0 if json.load(sys.stdin)["frameworkVersion"] == "3.35.7" else "Unexpected Flutter framework version")'
 WORKDIR /src
-# Fetch this pinned runtime independently of application/source-revision changes.
+
+# The named context contains only qualified dependency outputs from an immutable
+# main-produced cache; it never contains application code or an old test result.
+FROM application-base AS application-dependencies
+COPY --from=appdeps_seed /src/build/_deps /src/build/_deps
+COPY packaging/app-dependencies/CMakeLists.txt /src/CMakeLists.txt
+COPY cmake/ForesightInferenceDependencies.cmake /src/cmake/ForesightInferenceDependencies.cmake
+RUN cmake -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build /src/build --parallel 4
+
+# Source revisions invalidate application work while the dependency tree above
+# stays reusable. Reconfiguration retains the same _deps paths and compiler flags.
+FROM application-dependencies AS tested
 COPY . .
 ARG SOURCE_REVISION
 ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python FORESIGHT_PARALLEL_GATES=1

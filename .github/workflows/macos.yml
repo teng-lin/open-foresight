@@ -306,6 +306,19 @@ jobs:
         BUILD_LABEL: ${{ inputs.label }}
         SOURCE: ${{ inputs.source || github.sha }}
       run: python tools/preview_packages.py stamp --version "$VERSION" --build-number "$BUILD_NUMBER" --label "$BUILD_LABEL" --source "$SOURCE"
+    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      with:
+        daemon-config: '{"features":{"containerd-snapshotter":true}}'
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        driver: docker
+    - name: Authenticate application cache registry
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Validate shared-daemon application cache transport
+      id: app-cache
+      run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY"
     - name: Fetch verified Linux SDK descriptor
       id: sdk
       env:
@@ -332,29 +345,31 @@ jobs:
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
             output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
         PY
-    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-      with:
-        driver: ${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}
-    - name: Authenticate private SDK registry
+    - name: Restore qualified application dependency outputs without compilation
       env:
-        REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        GH_TOKEN: ${{ github.token }}
+        SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+      run: python tools/ci_app_dependency_seed.py --sdk-image "$SDK_IMAGE" --output build/app-dependency-seed
     - name: Build, test and cache application
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:
         context: .
         file: packaging/build.Dockerfile
+        build-contexts: appdeps_seed=./build/app-dependency-seed
+        builder: ${{ steps.app-cache.outputs.builder }}
         target: tested
         build-args: |
           SDK_IMAGE=${{ steps.sdk.outputs.image }}
           SOURCE_REVISION=${{ inputs.source || github.sha }}
-        cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
-        cache-to: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0},mode=max,image-manifest=true', steps.sdk.outputs.cache) || '' }}
+        cache-from: ${{ format('type=registry,ref={0}', steps.app-cache.outputs.cache) }}
+        cache-to: ${{ format('type=registry,ref={0},mode=max,image-manifest=true', steps.app-cache.outputs.cache) }}
     - name: Assemble and verify distribution bundle
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:
         context: .
         file: packaging/build.Dockerfile
+        build-contexts: appdeps_seed=./build/app-dependency-seed
+        builder: ${{ steps.app-cache.outputs.builder }}
         target: artifact
         outputs: type=local,dest=build/portable
         build-args: |
@@ -366,7 +381,7 @@ jobs:
           google_client=${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
           foresight_search_api_key=${{ secrets.FORESIGHT_SEARCH_API_KEY }}
           foresight_web_content_api_key=${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
-        cache-from: ${{ steps.sdk.outputs.cache && format('type=registry,ref={0}', steps.sdk.outputs.cache) || '' }}
+        cache-from: ${{ format('type=registry,ref={0}', steps.app-cache.outputs.cache) }}
     - name: Archive executable permissions and record checksums
       env:
         VERSION: ${{ inputs.preview && format('{0}~{1}', inputs.version, inputs.label) || steps.version.outputs.version }}
