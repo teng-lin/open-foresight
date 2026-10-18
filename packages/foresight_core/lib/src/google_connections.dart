@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:convert';
 import 'dart:io';
@@ -89,7 +90,10 @@ class GoogleConnections implements ConnectedSources {
 
   void _check(String account) {
     if (_closed || !auth.connected || auth.account != account)
-      throw StateError('Google connection changed. Retry after signing in.');
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Google connection changed. Retry after signing in.',
+      );
   }
 
   Future<void> _checkpoint(String account) async {

@@ -1,4 +1,5 @@
 import 'package:foresight_test_support/poll.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -151,7 +152,11 @@ set -C
       var checks = 0;
       await expectLater(
         store.persist(input, version: '4', current: () => checks++ == 0),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e.message, 'message', 'Model setup cancelled'),
+        ),
       );
       expect(await models.list().toList(), isEmpty);
     },

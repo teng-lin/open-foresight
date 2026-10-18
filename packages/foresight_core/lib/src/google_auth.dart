@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'platform_services.dart';
 import 'dart:async';
@@ -141,7 +142,7 @@ class GoogleAuth implements GoogleAccount {
         throw StateError('Cannot protect Google connection data');
       if (authorizationGeneration != null &&
           authorizationGeneration != _authorizationGeneration)
-        throw StateError('Google connection changed');
+        throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
       temp.renameSync('${directory.path}/$name');
     } finally {
       if (temp.existsSync()) await temp.delete();
@@ -222,7 +223,8 @@ class GoogleAuth implements GoogleAccount {
       );
     if (client == null)
       throw StateError('Import a Desktop OAuth client configuration first.');
-    if (signingIn) throw StateError('Google sign-in is already open.');
+    if (signingIn)
+      throw RpcError(RpcErrorCode.busy, 'Google sign-in is already open.');
     final nonce = _random(32), verifier = _random(64);
     final authorization = Completer<String>();
     _authorization = authorization;
@@ -321,12 +323,14 @@ class GoogleAuth implements GoogleAccount {
         );
       await _save('tokens.json', saved, authorizationGeneration: generation);
       if (generation != _authorizationGeneration)
-        throw StateError('Google connection changed');
+        throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
       _tokens = saved;
       loadError = '';
     } finally {
       if (!authorization.isCompleted)
-        authorization.completeError(StateError('Google sign-in cancelled'));
+        authorization.completeError(
+          RpcError(RpcErrorCode.cancelled, 'Google sign-in cancelled'),
+        );
       await listener.cancel();
       await server.close(force: true);
       if (identical(_callback, server)) _callback = null;
@@ -336,7 +340,9 @@ class GoogleAuth implements GoogleAccount {
 
   void cancelSignIn() {
     if (_authorization?.isCompleted == false)
-      _authorization!.completeError(StateError('Google sign-in cancelled'));
+      _authorization!.completeError(
+        RpcError(RpcErrorCode.cancelled, 'Google sign-in cancelled'),
+      );
   }
 
   Future<String> accessToken({bool forceRefresh = false}) async {
@@ -364,7 +370,10 @@ class GoogleAuth implements GoogleAccount {
       ),
     );
     if (_disconnecting || _closed || generation != _authorizationGeneration)
-      throw StateError('Google connection changed during refresh');
+      throw RpcError(
+        RpcErrorCode.cancelled,
+        'Google connection changed during refresh',
+      );
     final saved = {
       ..._tokens!,
       ...token,
@@ -374,7 +383,7 @@ class GoogleAuth implements GoogleAccount {
     };
     await _save('tokens.json', saved, authorizationGeneration: generation);
     if (generation != _authorizationGeneration)
-      throw StateError('Google connection changed');
+      throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
     _tokens = saved;
     return saved['access_token'] as String;
   }

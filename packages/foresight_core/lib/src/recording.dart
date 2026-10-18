@@ -1,3 +1,4 @@
+import 'rpc_error.dart';
 import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -570,7 +571,8 @@ class Recording implements RecordingStatus {
   }
 
   Future<void> stop() async {
-    if (finishing) throw StateError('Transcription is already in progress');
+    if (finishing)
+      throw RpcError(RpcErrorCode.busy, 'Transcription is already in progress');
     finishing = true;
     final epoch = _epoch;
     timer?.cancel();
@@ -606,7 +608,8 @@ class Recording implements RecordingStatus {
         }
         await Future<void>.delayed(Duration.zero);
       }
-      if (epoch != _epoch) throw StateError('Recording cancelled');
+      if (epoch != _epoch)
+        throw RpcError(RpcErrorCode.cancelled, 'Recording cancelled');
       if (lastError.isNotEmpty) throw StateError(lastError);
       state(
         _transcriptCount == 0

@@ -1,4 +1,5 @@
 import 'package:foresight_test_support/poll.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -125,7 +126,12 @@ void main() {
     await runtime.close();
     expect(File(path).existsSync(), isFalse);
     expect(encrypted.existsSync(), isTrue);
-    await expectLater(runtime.complete('closed', '3'), throwsStateError);
+    await expectLater(
+      runtime.complete('closed', '3'),
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.unavailable),
+      ),
+    );
   });
 
   test(
@@ -136,7 +142,12 @@ void main() {
       worker.pending = Completer<String>();
       final pending = runtime.complete('active', 'owned');
       await eventually(() => worker.calls.contains('owned'));
-      await expectLater(runtime.complete('other', 'other'), throwsStateError);
+      await expectLater(
+        runtime.complete('other', 'other'),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
       runtime.cancel('other');
       expect(worker.cancellations, isEmpty);
       worker.pending!.complete('raw');
@@ -151,7 +162,12 @@ void main() {
       final worker = workers.single;
       worker.pending = Completer<String>();
       final pending = runtime.complete('active', 'owned');
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
       await eventually(() => worker.calls.contains('owned'));
       runtime.cancel('owned');
       await failed;
@@ -171,7 +187,12 @@ void main() {
     () async {
       await helperBody(blocking);
       final pending = runtime.complete('first', 'owned');
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
       await started();
       runtime.cancel('other');
       expect(workers, isEmpty);
@@ -196,7 +217,12 @@ void main() {
       final worker = workers.single;
       worker.pending = Completer<String>();
       final pending = runtime.complete('active', 'owned');
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
       await eventually(() => worker.calls.contains('owned'));
       worker.closeGate = Completer<void>();
       final closing = runtime.close();
@@ -216,7 +242,12 @@ void main() {
     () async {
       await helperBody(blocking);
       final pending = runtime.complete('first', 'owned');
-      final failed = expectLater(pending, throwsStateError);
+      final failed = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
       await started();
       await runtime.close().timeout(const Duration(seconds: 2));
       await failed;

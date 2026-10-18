@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -10,6 +11,72 @@ import 'package:foresight_core/src/store.dart';
 import 'package:foresight_test_support/google_connections.dart';
 
 void main() {
+  test(
+    'sign-in reentry is busy and owned cancellation returns cancelled',
+    () async {
+      final directory = Directory.systemTemp.createTempSync('google-cancel-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      final auth = GoogleAuth(Directory('${directory.path}/google'))
+        ..client = GoogleClient('fixture.apps.googleusercontent.com', '');
+      addTearDown(auth.close);
+      final opened = Completer<void>();
+      final pending = auth.signIn((_) async => opened.complete());
+      final rejected = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      await opened.future;
+      await expectLater(
+        auth.signIn((_) async => fail('must not open a second browser')),
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.busy),
+        ),
+      );
+      auth.cancelSignIn();
+      await rejected;
+      expect(auth.signingIn, isFalse);
+      expect(auth.connected, isFalse);
+    },
+  );
+
+  test(
+    'forgetting an account during sign-in prevents late credential adoption',
+    () async {
+      final directory = Directory.systemTemp.createTempSync(
+        'google-late-signin-',
+      );
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      final fixture = GoogleFixture();
+      await fixture.start();
+      addTearDown(fixture.close);
+      final auth = GoogleAuth(
+        Directory('${directory.path}/google'),
+        endpoints: fixture.endpoints,
+      )..client = GoogleClient('fixture.apps.googleusercontent.com', '');
+      addTearDown(auth.close);
+      fixture.beforeUserInfo = auth.forget;
+      await expectLater(
+        auth.signIn(fixture.consent),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e.message, 'message', 'Google connection changed'),
+        ),
+      );
+      expect(auth.connected, isFalse);
+      expect(
+        File('${directory.path}/google/tokens.json').existsSync(),
+        isFalse,
+      );
+    },
+  );
+
   test(
     'Drive pause retains an active export and resumes the folder queue',
     () async {
@@ -417,11 +484,13 @@ void main() {
             await auth.signIn(fixture.consent);
           }),
           throwsA(
-            isA<StateError>().having(
-              (error) => error.message,
-              'message',
-              contains('connection changed'),
-            ),
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.cancelled)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  contains('connection changed'),
+                ),
           ),
         );
         expect(auth.account, 'replacement-account');

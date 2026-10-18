@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -122,7 +123,11 @@ void main() {
           '/missing',
           current: () => false,
         ),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e.message, 'message', 'Model setup cancelled'),
+        ),
       );
       await expectLater(
         configureEncryptedDedicatedQuery(store, file.path),
