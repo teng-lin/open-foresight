@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shutil
 import signal
 import socket
 import subprocess
@@ -956,6 +957,18 @@ def test_unexpected_service_death_interrupts_capture_and_reuses_profile(running)
 
 @pytest.mark.parametrize("helper_exits_first", [False, True])
 def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_first):
+    for extra_status in (False, True, False, True):
+        print(f"Adopted-helper timing: extra_status={extra_status}")
+        assert_idle_shutdown_verifies_a_real_adopted_helper(
+            tmp_path, helper_exits_first, extra_status=extra_status
+        )
+        for name in ("data", "run"):
+            shutil.rmtree(tmp_path / name)
+
+
+def assert_idle_shutdown_verifies_a_real_adopted_helper(
+    tmp_path, helper_exits_first, *, extra_status
+):
     """A predecessor's surviving helper is stopped and positively acknowledged."""
     data, runtime = tmp_path / "data", tmp_path / "run"
     data.mkdir(mode=0o700)
@@ -1008,6 +1021,8 @@ def test_idle_shutdown_verifies_a_real_adopted_helper(tmp_path, helper_exits_fir
                     break
                 assert time.monotonic() < deadline, state
                 poll_delay(deadline)
+            if extra_status:
+                peer.call("status")
             if helper_exits_first:
                 helper.terminate()
                 helper.wait(timeout=10)
@@ -1081,10 +1096,34 @@ def profile_failure_diagnostics(process, log):
 
 
 def test_two_live_profiles_keep_notes_private(running, tmp_path):
+    for _ in range(2):
+        for poll_interval, eager_status in (
+            (0.02, False),
+            (0.001, True),
+            (0.001, False),
+            (0.02, True),
+        ):
+            print(
+                f"Two-profile timing: poll={poll_interval}, eager_status={eager_status}"
+            )
+            assert_two_live_profiles_keep_notes_private(
+                running,
+                tmp_path,
+                poll_interval=poll_interval,
+                eager_status=eager_status,
+            )
+            for name in ("first-profile", "second-profile"):
+                shutil.rmtree(tmp_path / name)
+
+
+def assert_two_live_profiles_keep_notes_private(
+    running, tmp_path, *, poll_interval, eager_status
+):
     """Separate owners and databases must isolate actual writes, not just paths."""
     processes = []
     peers = []
     logs = []
+    initial_requests = []
     try:
         for name in ("first-profile", "second-profile"):
             profile = tmp_path / name
@@ -1104,14 +1143,22 @@ def test_two_live_profiles_keep_notes_private(running, tmp_path):
                 try:
                     peer = Peer(profile / "run/application.sock")
                     peers.append(peer)
+                    if eager_status:
+                        initial_requests.append(peer.send("status"))
                     break
                 except (FileNotFoundError, ConnectionRefusedError):
                     if process.poll() is not None or time.monotonic() >= deadline:
                         log.seek(0)
                         pytest.fail("Profile failed to start: " + log.read())
-                    threading.Event().wait(min(0.02, deadline - time.monotonic()))
+                    threading.Event().wait(
+                        min(poll_interval, deadline - time.monotonic())
+                    )
         first, second = peers
-        first_status, second_status = first.call("status"), second.call("status")
+        if eager_status:
+            first_status = first.result(initial_requests[0])
+            second_status = second.result(initial_requests[1])
+        else:
+            first_status, second_status = first.call("status"), second.call("status")
         assert first_status["pid"] != second_status["pid"]
         assert first.call("notes.list") == second.call("notes.list") == []
         first.call(
