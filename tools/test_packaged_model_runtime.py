@@ -6,6 +6,10 @@ catalog; SDK test models cannot satisfy this acceptance. This does not establish
 Developer ID, notarization, physical audio, or a production GPU on another host.
 """
 
+from typing import Any, IO, cast
+
+from model_pins import release_models
+
 import argparse
 import hashlib
 import json
@@ -16,8 +20,8 @@ import subprocess
 import tempfile
 import threading
 
-GENERATION_SHA256 = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
-EMBEDDING_SHA256 = "e7a8a2204b91e0f96e92960e84a09a89212e1633dcb7575a9bf3378b4df77f4c"
+GENERATION_SHA256 = release_models()["generation"][3]
+EMBEDDING_SHA256 = release_models()["embedding"][3]
 
 
 def digest(path):
@@ -66,7 +70,7 @@ def packaged_paths(bundle):
 class Peer:
     def __init__(self, command, environment, cwd, log, timeout):
         self.timeout = timeout
-        self.lines = queue.Queue()
+        self.lines: queue.Queue[Any] = queue.Queue()
         self.log = log.open("wb")
         self.process = subprocess.Popen(
             command,
@@ -81,7 +85,7 @@ class Peer:
 
         def read():
             try:
-                for line in self.process.stdout:
+                for line in cast(IO[str], self.process.stdout):
                     self.lines.put(line.rstrip("\n"))
             finally:
                 self.lines.put(None)
@@ -93,37 +97,39 @@ class Peer:
         try:
             value = self.lines.get(timeout=self.timeout)
         except queue.Empty:
-            raise TimeoutError(f"No protocol frame for {self.timeout} seconds")
+            raise TimeoutError(
+                f"No protocol frame for {self.timeout} seconds"
+            ) from None
         if value is None:
             raise EOFError(f"Worker closed stdout (exit={self.process.poll()})")
         return value
 
     def send(self, value):
-        self.process.stdin.write(value + "\n")
-        self.process.stdin.flush()
+        cast(IO[str], self.process.stdin).write(value + "\n")
+        cast(IO[str], self.process.stdin).flush()
 
     def close(self, shutdown=None):
         try:
             if self.process.poll() is None:
                 if shutdown:
                     self.send(shutdown)
-                self.process.stdin.close()
+                cast(IO[str], self.process.stdin).close()
                 try:
                     self.process.wait(timeout=30)
                 except subprocess.TimeoutExpired:
                     self.process.terminate()
                     self.process.wait(timeout=15)
-                    raise RuntimeError("Worker failed graceful shutdown")
+                    raise RuntimeError("Worker failed graceful shutdown") from None
             if self.process.returncode:
                 raise RuntimeError(f"Worker exited {self.process.returncode}")
         finally:
             if self.process.poll() is None:
                 self.process.kill()
-                self.process.wait()
-            if not self.process.stdin.closed:
-                self.process.stdin.close()
+                self.process.wait(timeout=30)
+            if not cast(IO[str], self.process.stdin).closed:
+                cast(IO[str], self.process.stdin).close()
             self.reader.join(timeout=2)
-            self.process.stdout.close()
+            cast(IO[str], self.process.stdout).close()
             self.log.close()
             trailing = []
             while not self.lines.empty():
@@ -135,7 +141,7 @@ class Peer:
 
 
 def finish_peer(peer, output, name, primary_error, shutdown=None):
-    cleanup = {"graceful_shutdown": False}
+    cleanup: dict[str, Any] = {"graceful_shutdown": False}
     try:
         peer.close(shutdown)
         cleanup["graceful_shutdown"] = True

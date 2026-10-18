@@ -42,10 +42,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   void initState() {
     super.initState();
     currentDigest =
-        widget.store
-                .rows("SELECT digest FROM models WHERE kind='speech'")
-                .firstOrNull?['digest']
-            as String?;
+        widget.store.registeredSpeech().firstOrNull?['digest'] as String?;
     registration = widget.store.model('speech');
     currentPath = registration?['path'] as String?;
     currentRunner = registration?['runtime'] as String?;

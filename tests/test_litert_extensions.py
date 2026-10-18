@@ -1,4 +1,3 @@
-import importlib.util
 import hashlib
 import json
 from pathlib import Path
@@ -11,7 +10,7 @@ import zipfile
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
-import litert_extensions as extensions
+import litert_extensions as extensions  # noqa: E402 - Imports follow the local tools path setup.
 
 
 class ExtensionArtifactsTest(unittest.TestCase):

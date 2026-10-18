@@ -14,10 +14,16 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.request
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from model_pins import release_models  # noqa: E402 - repository acceptance tooling
+
+SPEECH_PIN = release_models()["speech"]
 
 # These reconstructed worker sources are shipped deliberately. They do not add
 # a Python interpreter or enable a fallback to host Python in native releases.
@@ -92,7 +98,8 @@ def verify_sha256(path, expected):
 
 def main():
     root = Path("/opt/open-foresight")
-    assert os.getuid() != 0, "Run the application smoke test as a normal user"
+    if not (os.getuid() != 0):
+        raise RuntimeError("Run the application smoke test as a normal user")
     env = dict(
         os.environ,
         LD_LIBRARY_PATH=f"{root}/lib:{root}/app/lib",
@@ -113,15 +120,19 @@ def main():
             if stream.read(4) != b"\x7fELF":
                 continue
         linked = subprocess.run(
-            ["ldd", str(file)], env=env, capture_output=True, text=True
+            ["ldd", str(file)], env=env, capture_output=True, text=True, timeout=300
         )
-        assert "not found" not in linked.stdout + linked.stderr, (
-            file,
-            linked.stdout,
-            linked.stderr,
-        )
+        if not ("not found" not in linked.stdout + linked.stderr):
+            raise RuntimeError(
+                (
+                    file,
+                    linked.stdout,
+                    linked.stderr,
+                )
+            )
         count += 1
-    assert count > 0
+    if not (count > 0):
+        raise RuntimeError("Verification failed")
     validate_native_python_payload(root)
     subprocess.run(
         [str(root / "bin/foresight-model"), "--check"], env=env, check=True, timeout=30
@@ -137,19 +148,16 @@ def main():
         private = Path(temp)
         model = private / "ggml-tiny.bin"
         request = urllib.request.Request(
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/"
-            "5359861c739e955e79d9a303bcbc70fb988958b1/ggml-tiny.bin",
+            f"https://huggingface.co/{SPEECH_PIN[0]}/resolve/{SPEECH_PIN[1]}/{SPEECH_PIN[2]}",
             headers={"User-Agent": "open-foresight-ci"},
         )
         with (
-            urllib.request.urlopen(request, timeout=90) as response,
+            urllib.request.urlopen(request, timeout=90) as response,  # noqa: S310 - URL scheme is fixed or validated before opening.
             model.open("wb") as output,
         ):
             while block := response.read(1024 * 1024):
                 output.write(block)
-        verify_sha256(
-            model, "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21"
-        )
+        verify_sha256(model, SPEECH_PIN[3])
         fixture = Path(__file__).resolve().parents[1] / "tests/fixtures/audio/jfk.wav"
         decoded = subprocess.run(
             [
@@ -171,7 +179,8 @@ def main():
             text=True,
             timeout=90,
         )
-        assert "country" in decoded.stdout.lower(), decoded.stdout + decoded.stderr
+        if "country" not in decoded.stdout.lower():
+            raise RuntimeError(decoded.stdout + decoded.stderr)
         data, runtime = private / "data", private / "run"
         env.update(FORESIGHT_DATA=str(data), FORESIGHT_RUNTIME=str(runtime))
         log = private / "desktop.log"
@@ -187,7 +196,8 @@ def main():
             try:
                 deadline = time.monotonic() + 45
                 while time.monotonic() < deadline:
-                    assert app.poll() is None, log.read_text()
+                    if app.poll() is not None:
+                        raise RuntimeError(log.read_text())
                     if (data / "application.db").exists() and (
                         runtime / "helper.sock"
                     ).exists():
@@ -199,14 +209,22 @@ def main():
                     command.settimeout(5)
                     command.connect(str(runtime / "commands.sock"))
                     command.sendall(b'{"version":1,"command":"activate"}\n')
-                    assert command.recv(128).strip() in {b"queued", b"accepted"}
+                    if command.recv(128).strip() not in {b"queued", b"accepted"}:
+                        raise RuntimeError("Verification failed")
                 with sqlite3.connect(data / "application.db") as db:
-                    assert db.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-                    assert db.execute("SELECT count(*) FROM models").fetchone()[0] == 0
-                assert data.stat().st_mode & 0o077 == 0
-                assert runtime.stat().st_mode & 0o077 == 0
+                    if not (db.execute("PRAGMA quick_check").fetchone()[0] == "ok"):
+                        raise RuntimeError("Verification failed")
+                    if not (
+                        db.execute("SELECT count(*) FROM models").fetchone()[0] == 0
+                    ):
+                        raise RuntimeError("Verification failed")
+                if not (data.stat().st_mode & 0o077 == 0):
+                    raise RuntimeError("Verification failed")
+                if not (runtime.stat().st_mode & 0o077 == 0):
+                    raise RuntimeError("Verification failed")
                 time.sleep(3)
-                assert app.poll() is None, log.read_text()
+                if app.poll() is not None:
+                    raise RuntimeError(log.read_text())
                 print(
                     json.dumps(
                         {
@@ -230,7 +248,7 @@ def main():
                         app.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         os.killpg(app.pid, signal.SIGKILL)
-                        app.wait()
+                        app.wait(timeout=30)
                 # The GUI is gone, so it cannot launch another service over the
                 # idle shutdown that releases the installation lock.
                 stop_installed_service(root / "bin/foresight-service", env)

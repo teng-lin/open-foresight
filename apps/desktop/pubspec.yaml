@@ -20,6 +20,9 @@ dependencies:
   flutter_markdown_plus: 1.0.12
   intl: 0.20.2
 dev_dependencies:
+  foresight_test_support:
+    path: ../../packages/foresight_test_support
+  fake_async: ^1.3.3
   integration_test:
     sdk: flutter
   flutter_test:

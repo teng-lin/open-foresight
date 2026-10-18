@@ -132,6 +132,7 @@ class SdkSourceTests(unittest.TestCase):
                     ["git", "-C", str(repository), *args],
                     text=True,
                     stderr=subprocess.DEVNULL,
+                    timeout=300,
                 ).strip()
 
             git("init")
@@ -161,6 +162,7 @@ class SdkSourceTests(unittest.TestCase):
                     ["git", "-C", str(root), *args],
                     text=True,
                     stderr=subprocess.DEVNULL,
+                    timeout=300,
                 ).strip()
 
             git("init")
@@ -316,6 +318,7 @@ except Deferred:
             env={**os.environ, "PYTHONPATH": str(Path(installer.__file__).parent)},
             capture_output=True,
             text=True,
+            timeout=300,
         )
 
     def test_live_service_shared_lock_defers_concurrent_installer_subprocess(self):
@@ -518,6 +521,7 @@ except Deferred:
                 str(self.source),
             ],
             check=True,
+            timeout=300,
         )
         subprocess.run(
             [
@@ -528,6 +532,7 @@ except Deferred:
                 str(self.source),
             ],
             check=True,
+            timeout=300,
         )
         copied = self.root / "Copied.app"
         installer.copy_application(self.source, copied)
@@ -535,11 +540,14 @@ except Deferred:
             subprocess.check_output(
                 ["/usr/bin/xattr", "-p", "com.openforesight.test", str(copied)],
                 text=True,
+                timeout=300,
             ).strip(),
             "retained",
         )
         quarantine = subprocess.check_output(
-            ["/usr/bin/xattr", "-p", "com.apple.quarantine", str(copied)], text=True
+            ["/usr/bin/xattr", "-p", "com.apple.quarantine", str(copied)],
+            text=True,
+            timeout=300,
         ).strip()
         # macOS may normalize provenance/time fields when propagating quarantine.
         self.assertTrue(int(quarantine.split(";")[0], 16) & 1, quarantine)
@@ -599,7 +607,7 @@ for line in sys.stdin:
         finally:
             if process.poll() is None:
                 process.kill()
-                process.wait()
+                process.wait(timeout=30)
             process.stdout.close()
 
     def test_optimized_python_cannot_skip_smoke_assertions(self):
@@ -613,6 +621,7 @@ for line in sys.stdin:
             env={**os.environ, "PYTHONPATH": str(Path(installer.__file__).parent)},
             capture_output=True,
             text=True,
+            timeout=300,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("run Python without -O", result.stderr)

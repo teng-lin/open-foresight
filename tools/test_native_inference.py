@@ -4,6 +4,7 @@
 Python here drives tests only; the native child has no Python executable in PATH.
 """
 
+from typing import Any
 import argparse
 import json
 import math
@@ -48,14 +49,14 @@ def main():
         PATH="/nonexistent",
     )
     worker = str(args.worker.resolve())
-    subprocess.run([worker, "--check"], env=environment, check=True)
+    subprocess.run([worker, "--check"], env=environment, check=True, timeout=300)
     texts = [
         "Mira sends the draft Tuesday.",
         "Café 東京 — résumé.",
         "",
         "A meeting about launch schedules. " * 400,
     ]
-    requests = [{"op": "encode", "text": text} for text in texts]
+    requests: list[dict[str, Any]] = [{"op": "encode", "text": text} for text in texts]
     requests += [{"op": "decode", "tokens": [2, 10, 2364]}]
     requests += [
         {"op": "embed", "text": text, "task": task}

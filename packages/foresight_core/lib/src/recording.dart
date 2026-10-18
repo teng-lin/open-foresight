@@ -1,3 +1,5 @@
+import 'rpc_error.dart';
+import 'desktop_connection.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
@@ -23,7 +25,7 @@ class _AudioSegment {
 
 /// Continuous capture with bounded real Whisper jobs. Rolling hypotheses are
 /// ephemeral; completed speech segments are committed while capture continues.
-class Recording {
+class Recording implements RecordingStatus {
   final DynamicLibrary lib;
   final Duration speechTimeout, stopTimeout;
   final void Function(String) state;
@@ -150,7 +152,7 @@ class Recording {
         paused ||
         finishing ||
         _workers.isNotEmpty)
-      throw StateError('A recording is already active');
+      throw RpcError(RpcErrorCode.busy, 'A recording is already active');
     if (!File(model).existsSync())
       throw StateError('Speech model file is missing: $model');
     if (!File(runtime).existsSync() ||
@@ -236,9 +238,11 @@ class Recording {
   /// Stop acquisition, retain and finalize pre-pause PCM, and release devices.
   /// Speech workers may finish their existing segments while capture is paused.
   void pause() {
-    if (finishing) throw StateError('Transcription is finalizing');
+    if (finishing)
+      throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     if (paused) return;
-    if (captures.isEmpty) throw StateError('No active recording');
+    if (captures.isEmpty)
+      throw RpcError(RpcErrorCode.notFound, 'No active recording');
     timer?.cancel();
     _finishCapture();
     for (var channel = 0; channel < _buffers.length; channel++) {
@@ -253,7 +257,8 @@ class Recording {
   }
 
   void resume() {
-    if (finishing) throw StateError('Transcription is finalizing');
+    if (finishing)
+      throw RpcError(RpcErrorCode.busy, 'Transcription is finalizing');
     if (!paused) throw StateError('Recording is not paused');
     _echoState
       ..clear()
@@ -587,7 +592,8 @@ class Recording {
   }
 
   Future<void> stop() async {
-    if (finishing) throw StateError('Transcription is already in progress');
+    if (finishing)
+      throw RpcError(RpcErrorCode.busy, 'Transcription is already in progress');
     finishing = true;
     final epoch = _epoch;
     timer?.cancel();
@@ -623,7 +629,8 @@ class Recording {
         }
         await Future<void>.delayed(Duration.zero);
       }
-      if (epoch != _epoch) throw StateError('Recording cancelled');
+      if (epoch != _epoch)
+        throw RpcError(RpcErrorCode.cancelled, 'Recording cancelled');
       if (lastError.isNotEmpty) throw StateError(lastError);
       state(
         _transcriptCount == 0

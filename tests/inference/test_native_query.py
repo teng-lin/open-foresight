@@ -15,7 +15,7 @@ import tempfile
 
 def verify(worker):
     environment = dict(os.environ, PATH="/nonexistent")
-    subprocess.run([worker, "--check"], env=environment, check=True)
+    subprocess.run([worker, "--check"], env=environment, check=True, timeout=30)
     with tempfile.TemporaryDirectory() as directory:
         invalid = Path(directory) / "bad-model"
         invalid.write_bytes(b"untrusted model")
@@ -66,7 +66,7 @@ def verify(worker):
     if len(frames) != len(requests) + 1 or frames[0]["type"] != "ready":
         raise AssertionError(frames)
     oracle = Path(__file__).resolve().parents[2] / "tools/legacy_query_executor.py"
-    for request, frame in zip(requests, frames[1:]):
+    for request, frame in zip(requests, frames[1:], strict=True):
         reference = subprocess.run(
             [
                 python,

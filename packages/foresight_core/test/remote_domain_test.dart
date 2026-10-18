@@ -1,3 +1,4 @@
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -7,7 +8,7 @@ import 'package:foresight_core/src/remote_domain.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
-import 'fixtures/remote_service.dart';
+import 'package:foresight_test_support/remote_service.dart';
 
 void main() {
   late RemoteFixture f;
@@ -16,6 +17,20 @@ void main() {
     await f.start();
   });
   tearDown(() => f.close());
+
+  test('closing a paused workspace cancels its pending source wait', () async {
+    f.event({'sources_paused': true});
+    await eventually(() => f.remote.sourcesPaused);
+    final pending = f.remote.waitForSourceWork();
+    final cancelled = expectLater(
+      pending,
+      throwsA(
+        isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+      ),
+    );
+    f.remote.close();
+    await cancelled;
+  });
 
   test(
     'service snapshots update capture, model, Google and pause state together',
@@ -136,9 +151,11 @@ void main() {
     'cancelled commands cancel only their outstanding service request',
     () async {
       var current = true;
-      final result = f.remote.commandCurrent('sources.import_directory', {
-        'path': '/fixture',
-      }, () => current);
+      final result = f.remote.commandCurrent(
+        Operation.sources_import_directory,
+        {'path': '/fixture'},
+        () => current,
+      );
       final failure = expectLater(result, throwsStateError);
       await eventually(
         () => f.requests.any((r) => r['method'] == 'sources.import_directory'),
@@ -151,14 +168,15 @@ void main() {
       );
       f.handler = (socket, request) =>
           f.reply(socket, request, {'saved': true});
-      expect(await f.remote.commandCurrent('notes.save', {}, () => true), {
-        'saved': true,
-      });
+      expect(
+        await f.remote.commandCurrent(Operation.notes_save, {}, () => true),
+        {'saved': true},
+      );
       f.handler = (socket, request) => socket.writeln(
         jsonEncode({'id': request['id'], 'error': 'rejected', 'done': true}),
       );
       await expectLater(
-        f.remote.commandCurrent('notes.save', {}, () => true),
+        f.remote.commandCurrent(Operation.notes_save, {}, () => true),
         throwsStateError,
       );
     },
@@ -349,7 +367,7 @@ void main() {
   test(
     'abrupt service loss reconnects and refreshes snapshots without replaying a write',
     () async {
-      final pending = f.remote.command('notes.save', {
+      final pending = f.remote.command(Operation.notes_save, {
         'title': 'uncertain',
         'body': 'body',
       });

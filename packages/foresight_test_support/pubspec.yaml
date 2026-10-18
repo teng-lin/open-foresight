@@ -1,0 +1,12 @@
+name: foresight_test_support
+description: Shared test fakes for Open Foresight core and desktop.
+publish_to: none
+version: 0.1.0
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+dependencies:
+  foresight_core:
+    path: ../foresight_core
+  crypto: 3.0.7
+  grpc: 4.3.1
+  matcher: ^0.12.17

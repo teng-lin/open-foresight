@@ -1,3 +1,5 @@
+import 'package:foresight_test_support/poll.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'dart:async';
 import 'dart:io';
 
@@ -150,7 +152,11 @@ set -C
       var checks = 0;
       await expectLater(
         store.persist(input, version: '4', current: () => checks++ == 0),
-        throwsStateError,
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.cancelled)
+              .having((e) => e.message, 'message', 'Model setup cancelled'),
+        ),
       );
       expect(await models.list().toList(), isEmpty);
     },
@@ -198,9 +204,7 @@ set -C
       final pending = store.persist(input, version: '4');
       final failed = expectLater(pending, throwsStateError);
       final marker = File('${input.path}.started');
-      for (var attempt = 0; !marker.existsSync() && attempt < 200; attempt++) {
-        await Future<void>.delayed(const Duration(milliseconds: 5));
-      }
+      await eventually(marker.existsSync);
       expect(marker.existsSync(), isTrue);
       await Future.wait([
         store.close(),
@@ -245,7 +249,7 @@ set -C
         final closing = store.close().then((_) {
           closed = true;
         });
-        await Future<void>.delayed(const Duration(milliseconds: 10));
+        await Future<void>(() {});
         expect(closed, isFalse);
         release.complete(owned);
         await closing.timeout(const Duration(seconds: 2));

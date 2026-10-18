@@ -54,6 +54,7 @@ class BuildSnapshotTest(unittest.TestCase):
             ["git", "-c", "diff.mnemonicprefix=false", *args],
             cwd=self.source,
             stderr=subprocess.PIPE,
+            timeout=300,
         )
 
     def diff(self):
@@ -302,16 +303,18 @@ class LinuxExportGateTest(unittest.TestCase):
                 str(library),
             ]
             subprocess.run(
-                [*command, "-Wl,--version-script=" + str(export_map)], check=True
+                [*command, "-Wl,--version-script=" + str(export_map)],
+                check=True,
+                timeout=300,
             )
             raw_symbols = subprocess.check_output(
-                ["nm", "-D", "--defined-only", str(library)], text=True
+                ["nm", "-D", "--defined-only", str(library)], text=True, timeout=300
             )
             self.assertIn(" b private_tls", raw_symbols)
             report = builder.verify_linux_library_abi(library)
             self.assertNotIn("private_tls", report)
             self.assertIn("litert_lm_engine_create", report)
-            subprocess.run(command, check=True)
+            subprocess.run(command, check=True, timeout=300)
             with self.assertRaisesRegex(
                 RuntimeError, "unexpected exports: private_tls"
             ):

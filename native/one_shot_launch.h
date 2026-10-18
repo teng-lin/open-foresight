@@ -6,7 +6,32 @@ namespace foresight {
 
 inline std::string quote(const std::string &s) {
   std::string out = "\"";
-  for (unsigned char c : s) {
+  for (size_t i = 0; i < s.size();) {
+    const auto c = static_cast<unsigned char>(s[i]);
+    if (c >= 0x80) {
+      const size_t width = c >= 0xc2 && c <= 0xdf   ? 2
+                           : c >= 0xe0 && c <= 0xef ? 3
+                           : c >= 0xf0 && c <= 0xf4 ? 4
+                                                    : 0;
+      bool valid = width && i + width <= s.size();
+      for (size_t j = 1; valid && j < width; ++j)
+        valid = (static_cast<unsigned char>(s[i + j]) & 0xc0) == 0x80;
+      if (valid && width >= 3) {
+        const auto second = static_cast<unsigned char>(s[i + 1]);
+        valid = !(c == 0xe0 && second < 0xa0) &&
+                !(c == 0xed && second >= 0xa0) &&
+                !(c == 0xf0 && second < 0x90) && !(c == 0xf4 && second >= 0x90);
+      }
+      if (valid) {
+        out.append(s, i, width);
+        i += width;
+      } else {
+        out += "\\ufffd";
+        ++i;
+      }
+      continue;
+    }
+    ++i;
     if (c == '"' || c == '\\') {
       out += '\\';
       out += c;
@@ -42,7 +67,8 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
   OneShotLaunch launch;
   const auto budget = std::to_string(max_output_tokens);
   if (backend == 1) {
-    launch.arguments = {runtime, "--model", model, "--max-output-tokens", budget};
+    launch.arguments = {runtime, "--model", model, "--max-output-tokens",
+                        budget};
     if (model_type) {
       launch.arguments.push_back("--model-type");
       launch.arguments.push_back(std::to_string(model_type));
@@ -50,21 +76,11 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
     launch.standard_input = "{\"prompt\":" + quote(prompt) +
                             ",\"max_output_tokens\":" + budget + "}\n";
   } else {
-    launch.arguments = {runtime,
-                        "-m",
-                        model,
-                        "-n",
-                        budget,
-                        "-c",
-                        "4096",
-                        "--temp",
-                        "0",
-                        "-t",
-                        "4",
-                        "--no-display-prompt",
-                        "--simple-io",
-                        "--no-warmup",
-                        "-no-cnv"};
+    launch.arguments = {runtime,       "-m",          model,
+                        "-n",          budget,        "-c",
+                        "4096",        "--temp",      "0",
+                        "-t",          "4",           "--no-display-prompt",
+                        "--simple-io", "--no-warmup", "-no-cnv"};
     launch.standard_input = prompt;
     if (launch.standard_input.empty() || launch.standard_input.back() != '\n')
       launch.standard_input.push_back('\n');

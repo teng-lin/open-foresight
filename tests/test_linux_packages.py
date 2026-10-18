@@ -158,7 +158,9 @@ class LinuxPackagesTest(unittest.TestCase):
             ["cmake", "--build", str(build)],
             ["cmake", "--install", str(build)],
         ):
-            subprocess.run(command, check=True, capture_output=True, text=True)
+            subprocess.run(
+                command, check=True, capture_output=True, text=True, timeout=300
+            )
         suffix = ".dylib" if sys.platform == "darwin" else ".so"
         self.assertTrue((prefix / f"lib/libgrpc{suffix}").exists())
         self.assertFalse((build / f"libgrpc_unsecure{suffix}").exists())
@@ -177,16 +179,19 @@ class LinuxPackagesTest(unittest.TestCase):
             ["cmake", "-S", str(consumer), "-B", str(consumer / "build")],
             check=True,
             capture_output=True,
+            timeout=300,
         )
         subprocess.run(
             ["cmake", "--build", str(consumer / "build")],
             check=True,
             capture_output=True,
+            timeout=300,
         )
         subprocess.run(
             [str(consumer / "build/consumer")],
             check=True,
             env={**os.environ, "LD_LIBRARY_PATH": str(prefix / "lib")},
+            timeout=300,
         )
 
     @unittest.skipUnless(
@@ -200,7 +205,9 @@ class LinuxPackagesTest(unittest.TestCase):
         )
         binary = self.root / "elf"
         binary.mkdir()
-        subprocess.run(["cc", str(source), "-o", str(binary / "probe")], check=True)
+        subprocess.run(
+            ["cc", str(source), "-o", str(binary / "probe")], check=True, timeout=300
+        )
         self.assertTrue(abi.inspect(binary, "99.0", "99.0")["passed"])
         self.assertFalse(abi.inspect(binary, "2.0", "3.0")["passed"])
 
@@ -311,6 +318,7 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                     text=True,
                     check=True,
                     capture_output=True,
+                    timeout=300,
                 )
 
             # RUNPATH finds a direct dependency but does not apply to its child.
@@ -366,7 +374,12 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text("fixture license")
             digest = hashlib.sha256(library.read_bytes()).hexdigest()
-            extensions = SimpleNamespace(manifest={"library_sha256": digest})
+            extensions = SimpleNamespace(
+                manifest={
+                    "library_sha256": digest,
+                    "upstream_commit": "b2f686e2ed4718fb84ec398a61dd59ca0f0aff27",
+                }
+            )
             output = root / "bundle"
             arguments = [
                 "package.py",
@@ -409,6 +422,7 @@ class LinuxDependencyCollectionTest(unittest.TestCase):
                 [str(output / "bin/ForesightHelper")],
                 check=True,
                 env={**os.environ, "LD_LIBRARY_PATH": str(output / "lib")},
+                timeout=300,
             )
 
 
@@ -490,14 +504,10 @@ class LinuxDocumentImportTest(unittest.TestCase):
             if shutil.which(name) is None
         ]
         if missing:
-            print(
-                "PDF/RTF import was not executed; missing: "
-                + ", ".join(missing)
-                + ". Package metadata declares poppler-utils (deb, rpm), poppler (arch), and unrtf. "
-                + "No successful import was fabricated.",
-                flush=True,
-            )
-            return
+            diagnostic = "PDF/RTF import prerequisites missing: " + ", ".join(missing)
+            if os.environ.get("FORESIGHT_REQUIRE_DOCUMENT_SANDBOX") == "1":
+                self.fail(diagnostic)
+            self.skipTest(diagnostic)
         phrase = "Foresight import fixture"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -515,6 +525,7 @@ class LinuxDocumentImportTest(unittest.TestCase):
                     check=False,
                     capture_output=True,
                     text=True,
+                    timeout=300,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 parsed = json.loads(result.stdout)
@@ -586,9 +597,14 @@ class SpeechCpuBlockTest(unittest.TestCase):
                 str(binary),
             ],
             check=True,
+            timeout=300,
         )
         probe = subprocess.run(
-            [str(binary), "--probe"], check=True, capture_output=True, text=True
+            [str(binary), "--probe"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         print(
             "Host speech CPU probe (not required to lack AVX2): "
@@ -596,7 +612,11 @@ class SpeechCpuBlockTest(unittest.TestCase):
             flush=True,
         )
         allow = subprocess.run(
-            [str(binary), "1", "1", "1"], check=False, capture_output=True, text=True
+            [str(binary), "1", "1", "1"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         self.assertEqual(allow.returncode, 0)
         self.assertEqual(allow.stdout.strip(), "allow")
@@ -607,7 +627,11 @@ class SpeechCpuBlockTest(unittest.TestCase):
             (("0", "0", "0"), "AVX2, FMA, F16C"),
         ):
             result = subprocess.run(
-                [str(binary), *flags], check=False, capture_output=True, text=True
+                [str(binary), *flags],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
             self.assertEqual(result.returncode, 1, result.stdout)
             self.assertIn("this CPU is missing " + missing + ".", result.stdout)
@@ -621,10 +645,13 @@ class SpeechCpuBlockTest(unittest.TestCase):
         body = native[
             native.index("int fs_speech_finish") : native.index("int fs_speech_cancel")
         ]
-        self.assertLess(body.index("linux_speech_cpu_block"), body.index("run(s,"))
+        self.assertLess(
+            body.index("linux_speech_cpu_block"), body.index("run_persistent(")
+        )
+        self.assertLess(body.index("linux_speech_cpu_block"), body.index("return run("))
         self.assertIn(
             "speech_runtime_failure",
-            body[body.index("linux_speech_cpu_block") : body.index("run(s,")],
+            body[body.index("linux_speech_cpu_block") : body.index("run_persistent(")],
         )
 
 
@@ -656,6 +683,7 @@ class UpgradeLockDecisionTest(unittest.TestCase):
                 check=False,
                 capture_output=True,
                 text=True,
+                timeout=300,
             )
             return result.returncode, result.stdout.strip(), result.stderr
 
@@ -688,6 +716,7 @@ class UpgradeLockDecisionTest(unittest.TestCase):
             check=True,
             capture_output=True,
             text=True,
+            timeout=300,
         ).stdout.strip()
         self.assertEqual(
             identity, hashlib.sha256(str(directory.resolve()).encode()).hexdigest()[:24]

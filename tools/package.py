@@ -86,7 +86,7 @@ def main():
     commit = (
         args.revision
         or subprocess.check_output(
-            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True, timeout=300
         ).strip()
     )
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
@@ -129,7 +129,9 @@ def main():
         os.environ, FORESIGHT_LITERT_LIBRARY=str(args.litert_library.resolve())
     )
     if extensions is None:
-        subprocess.run([str(worker), "--check"], env=environment, check=True)
+        subprocess.run(
+            [str(worker), "--check"], env=environment, check=True, timeout=300
+        )
     shutil.copytree(args.flutter_bundle, args.output / "app")
     (args.output / "bin").mkdir()
     (args.output / "lib").mkdir()
@@ -154,6 +156,18 @@ def main():
     shutil.copy2(worker, args.output / "bin/foresight-model")
     shutil.copy2(args.litert_library, args.output / "lib/liblitert-lm.so")
     if extensions is not None:
+        # Bind the copied worker's preflight to the artifact verified above.
+        # The final bundle manifest becomes authoritative once packaging ends.
+        (args.output / "lib/litert-identity.json").write_text(
+            json.dumps(
+                {
+                    "version": "0.18.0",
+                    "upstream_commit": extensions.manifest["upstream_commit"],
+                    "library_sha256": extensions.manifest["library_sha256"],
+                }
+            )
+            + "\n"
+        )
         extension_libraries = copy_linux_extension_dependencies(
             extensions, args.output / "lib"
         )
@@ -164,7 +178,9 @@ def main():
             (args.output / "lib/liblitert-lm.so").resolve()
         )
         probe_native_extensions(args.output / "lib/liblitert-lm.so")
-        subprocess.run([str(worker), "--check"], env=extension_environment, check=True)
+        subprocess.run(
+            [str(worker), "--check"], env=extension_environment, check=True, timeout=300
+        )
         # The isolated vendor check must not discard SDK search paths needed by
         # the helper's transitive gRPC/Protobuf dependencies during collection.
         environment["LD_LIBRARY_PATH"] = os.pathsep.join(
@@ -227,6 +243,7 @@ def main():
         ["ldd", str(helper), str(native), str(worker), str(args.litert_library)],
         text=True,
         env=environment,
+        timeout=300,
     )
     if "not found" in dependencies:
         raise ValueError(dependencies)

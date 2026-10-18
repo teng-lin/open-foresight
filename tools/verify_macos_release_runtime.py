@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Reject incomplete Mac releases and exercise their own isolated runtimes."""
 
+from typing import Any
 import argparse
 import json
 from pathlib import Path
@@ -53,7 +54,7 @@ def runtime_paths(app):
 
 def verify(app, output):
     paths = runtime_paths(app)
-    report = {"status": "failed", "checks": {}}
+    report: dict[str, Any] = {"status": "failed", "checks": {}}
     with tempfile.TemporaryDirectory(prefix="foresight-release-runtime-") as home:
         env = {
             "PATH": "/usr/bin:/bin",

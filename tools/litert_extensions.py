@@ -406,7 +406,7 @@ def validate_linux_extension_dependencies(libraries, destination):
     destination = Path(destination).resolve(strict=True)
     environment = dict(os.environ, LD_LIBRARY_PATH=str(destination))
     output = subprocess.check_output(
-        ["ldd", *map(str, libraries)], text=True, env=environment
+        ["ldd", *map(str, libraries)], text=True, env=environment, timeout=300
     )
     if "not found" in output:
         raise ValueError("LiteRT extension has missing bundled dependencies: " + output)

@@ -1,6 +1,9 @@
 #pragma once
 #include <fstream>
 #include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <sstream>
 #include <unicode/locid.h>
@@ -13,12 +16,21 @@ inline std::string utf8(const icu::UnicodeString &s) {
   s.toUTF8String(r);
   return r;
 }
-inline auto pattern(const std::string &s) {
+// RegexPattern is immutable; matchers remain local to each call. The lock only
+// protects compilation/cache access, so concurrent grounding uses separate
+// state.
+inline std::shared_ptr<const icu::RegexPattern> pattern(const std::string &s) {
+  static std::mutex mutex;
+  static std::map<std::string, std::shared_ptr<const icu::RegexPattern>> cache;
+  std::lock_guard lock(mutex);
+  if (auto found = cache.find(s); found != cache.end())
+    return found->second;
   UErrorCode error = U_ZERO_ERROR;
-  auto p = std::unique_ptr<icu::RegexPattern>(
+  auto p = std::shared_ptr<const icu::RegexPattern>(
       icu::RegexPattern::compile(icu::UnicodeString::fromUTF8(s), 0, error));
   if (U_FAILURE(error))
     throw std::runtime_error("Invalid grounding expression");
+  cache.emplace(s, p);
   return p;
 }
 inline std::vector<std::vector<std::string>> matches(const std::string &text,
@@ -99,22 +111,26 @@ inline bool subset(const Strings &a, const Strings &b) {
 }
 
 inline const std::string citation_group = R"(\[[^\[\]]*\bS[0-9]+[^\[\]]*\])";
-inline const std::string citation_item = R"(S([1-9][0-9]*)(?:\s*[-–—]\s*S?([1-9][0-9]*))?)";
+inline const std::string citation_item =
+    R"(S([1-9][0-9]*)(?:\s*[-–—]\s*S?([1-9][0-9]*))?)";
 inline Strings citation_ids(const std::string &text, size_t limit = 6) {
   Strings ids;
   for (auto &bracket : matches(text, citation_group)) {
     auto content = trim(bracket[0].substr(1, bracket[0].size() - 2));
-    if (!has(content, "^" + citation_item + "(?:(?:\\s*,\\s*|\\s+)" + citation_item + ")*$"))
+    if (!has(content, "^" + citation_item + "(?:(?:\\s*,\\s*|\\s+)" +
+                          citation_item + ")*$"))
       return {"INVALID_CITATION"};
     for (auto &item : matches(content, citation_item)) {
       try {
         auto first = std::stoll(item[1]);
         auto last = std::stoll(item[2].empty() ? item[1] : item[2]);
-        if (last < first || static_cast<unsigned long long>(last - first) >= limit)
+        if (last < first ||
+            static_cast<unsigned long long>(last - first) >= limit)
           return {"INVALID_CITATION"};
-        for (auto n = first; ; ++n) {
+        for (auto n = first;; ++n) {
           ids.insert("S" + std::to_string(n));
-          if (n == last) break;
+          if (n == last)
+            break;
         }
       } catch (const std::exception &) {
         return {"INVALID_CITATION"};

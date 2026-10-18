@@ -5,6 +5,8 @@ are relative to the actual loading binary, including nested service/Python
 executables, so Finder and MCP hosts need no DYLD_* environment variables.
 """
 
+from typing import Any
+
 from pathlib import Path
 import ctypes
 from functools import lru_cache
@@ -29,7 +31,7 @@ MACHO = {
 
 
 def run(*args):
-    return subprocess.check_output([str(x) for x in args], text=True)
+    return subprocess.check_output([str(x) for x in args], text=True, timeout=300)
 
 
 def is_macho(path):
@@ -144,7 +146,7 @@ def relocate_dependencies(app):
     library_dir.mkdir(parents=True, exist_ok=True)
     pending = [(p, p, executable_context(p, app), ()) for p in binaries(app)]
     known = {p: p for p, _, _, _ in pending}
-    claimed = {}
+    claimed: dict[str, Any] = {}
     visited = set()
     while pending:
         source, target, executable, inherited = pending.pop()
@@ -276,8 +278,8 @@ def _sign_application(app, identity, entitlements):
         # the Mach-O image. This is required even without JIT compilation.
         values["com.apple.security.cs.allow-unsigned-executable-memory"] = True
         aot = Path(folder) / "AOT.entitlements"
-        with aot.open("wb") as stream:
-            plistlib.dump(values, stream)
+        with aot.open("wb") as output_stream:
+            plistlib.dump(values, output_stream)
 
         def sign(path):
             selected = aot if path.resolve() in aot_paths else entitlements

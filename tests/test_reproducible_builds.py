@@ -25,12 +25,18 @@ verify = runpy.run_path({str(ROOT / "packaging/smoke_installed.py")!r})['verify_
 verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
 """
             accepted = subprocess.run(
-                [sys.executable, "-O", "-c", code], capture_output=True, text=True
+                [sys.executable, "-O", "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
             self.assertEqual(accepted.returncode, 0, accepted.stderr)
             path.write_bytes(b"tampered")
             result = subprocess.run(
-                [sys.executable, "-O", "-c", code], capture_output=True, text=True
+                [sys.executable, "-O", "-c", code],
+                capture_output=True,
+                text=True,
+                timeout=300,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("SHA256 checksum mismatch", result.stderr)
@@ -68,6 +74,7 @@ verify(Path({str(path)!r}), {hashlib.sha256(b"expected").hexdigest()!r})
                 ],
                 capture_output=True,
                 text=True,
+                timeout=300,
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Speech model checksum mismatch", result.stderr)
@@ -114,6 +121,7 @@ package.main()
                 ],
                 capture_output=True,
                 text=True,
+                timeout=300,
             )
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("Native LiteRT-LM library checksum mismatch", result.stderr)
@@ -127,7 +135,10 @@ verify_descriptor.PACKAGE = 'tampered.package'
 verify_descriptor.verify('must-not-execute-protoc')
 """
         result = subprocess.run(
-            [sys.executable, "-O", "-c", code], capture_output=True, text=True
+            [sys.executable, "-O", "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=300,
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Validation failed: recovered.package == PACKAGE", result.stderr)
@@ -148,6 +159,20 @@ class BuildPolicyTests(unittest.TestCase):
                 self.assertRegex(
                     requirement, r"^\S+==\S+ .*--hash=sha256:[0-9a-f]{64}", str(path)
                 )
+
+    def test_quality_jobs_install_only_hashed_locks(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/quality.yml").read_text())
+        for name, lock in (
+            ("python", "requirements-dev.lock"),
+            ("format", "requirements-format.lock"),
+        ):
+            steps = workflow["jobs"][name]["steps"]
+            installs = [
+                step["run"] for step in steps if "pip install" in step.get("run", "")
+            ]
+            self.assertEqual(
+                installs, [f"python -m pip install --require-hashes -r {lock}"]
+            )
 
     def test_publication_jobs_are_unreachable_from_pull_requests(self):
         for path in (ROOT / ".github/workflows").glob("*.yml"):
@@ -210,7 +235,10 @@ class BuildPolicyTests(unittest.TestCase):
                     for step in steps
                     if "docker/setup-buildx-action@" in step.get("uses", "")
                 )
-                self.assertEqual(driver["with"]["driver"], "docker")
+                self.assertEqual(
+                    driver["with"]["driver"],
+                    "${{ steps.sdk.outputs.cache && 'docker-container' || 'docker' }}",
+                )
                 build = next(
                     step
                     for step in steps

@@ -53,6 +53,7 @@ def main():
             env=environment,
             stdout=log,
             stderr=subprocess.STDOUT,
+            timeout=300,
         )
     if result.returncode:
         print(args.log.read_text()[-6000:])

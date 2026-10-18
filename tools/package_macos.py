@@ -242,13 +242,18 @@ def main(argv=None):
         os.environ, FORESIGHT_LITERT_LIBRARY=str(values["FORESIGHT_LITERT_LIBRARY"])
     )
     subprocess.run(
-        [str(values["FORESIGHT_MODEL_WORKER"]), "--check"], env=environment, check=True
+        [str(values["FORESIGHT_MODEL_WORKER"]), "--check"],
+        env=environment,
+        check=True,
+        timeout=300,
     )
     notarized = False
     if args.notary_profile:
         submission = app.parent / (app.stem + ".notary.zip")
         subprocess.run(
-            ["ditto", "-c", "-k", "--keepParent", str(app), str(submission)], check=True
+            ["ditto", "-c", "-k", "--keepParent", str(app), str(submission)],
+            check=True,
+            timeout=300,
         )
         try:
             result = json.loads(
@@ -279,6 +284,7 @@ def main(argv=None):
         subprocess.run(
             ["ditto", "-c", "-k", "--keepParent", str(app), str(args.archive)],
             check=True,
+            timeout=300,
         )
     report = {
         "app": str(app),

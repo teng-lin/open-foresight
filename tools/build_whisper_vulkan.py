@@ -44,7 +44,7 @@ def main():
                 "-DCMAKE_CXX_FLAGS=-I" + str(args.spirv_prefix / "include"),
             ]
         )
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, timeout=3600)
     subprocess.run(
         [
             "cmake",
@@ -57,9 +57,12 @@ def main():
             str(args.jobs),
         ],
         check=True,
+        timeout=3600,
     )
     executable = args.build / "bin/whisper-cli"
-    dependencies = subprocess.check_output(["ldd", str(executable)], text=True)
+    dependencies = subprocess.check_output(
+        ["ldd", str(executable)], text=True, timeout=300
+    )
     if "not found" in dependencies:
         raise RuntimeError(dependencies)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -72,7 +75,7 @@ def main():
     provenance = {
         "source": "https://github.com/ggml-org/whisper.cpp",
         "commit": subprocess.check_output(
-            ["git", "-C", str(args.source), "rev-parse", "HEAD"], text=True
+            ["git", "-C", str(args.source), "rev-parse", "HEAD"], text=True, timeout=300
         ).strip(),
         "configure": command,
         "dependencies": dependencies,

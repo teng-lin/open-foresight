@@ -51,7 +51,9 @@ struct Model {
   bool available() const {
     return test || (healthy.load() && process && process->alive());
   }
-  pid_t worker_pid() const { return process ? process->pid() : -1; }
+  pid_t worker_pid() const {
+    return process ? process->pid() : -1;
+  }
   // Serialized by call() except the constructor's banner read, which happens
   // before the model is shared. A stalled adapter is killed at the deadline.
   json receive() {
@@ -62,8 +64,9 @@ struct Model {
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(adapter_deadline_ms());
     while (output_pending.find('\n') == std::string::npos) {
-      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-          deadline - std::chrono::steady_clock::now());
+      const auto remaining =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              deadline - std::chrono::steady_clock::now());
       if (remaining.count() <= 0) {
         healthy.store(false);
         if (process)
@@ -136,7 +139,8 @@ struct Model {
     const bool litert =
         fs::is_regular_file(path) && fs::path(path).extension() == ".litertlm";
     if (!litert)
-      throw std::runtime_error("Unsupported model format: embedding requires a .litertlm file");
+      throw std::runtime_error(
+          "Unsupported model format: embedding requires a .litertlm file");
     const char *configured = getenv("FORESIGHT_MODEL_WORKER");
     const std::string installed_worker =
         (foresight::executable_path().parent_path() / "foresight-model")
@@ -159,6 +163,9 @@ struct Model {
       close(in[1]);
       throw std::runtime_error("Adapter output pipe failed");
     }
+    // ChildProcess serializes the spawn on its creator thread. Release the
+    // pipe-creation lock before waiting for that thread to report startup.
+    launch.unlock();
     try {
       process = std::make_unique<ChildProcess>(
           worker, "--embedding", path, in[0], out[1], gpu ? "--gpu" : "");
@@ -171,7 +178,6 @@ struct Model {
     }
     close(in[0]);
     close(out[1]);
-    launch.unlock();
     input = fdopen(in[1], "w");
     output_fd = out[0];
     if (!input) {

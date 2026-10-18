@@ -12,8 +12,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
-import integration_gates as gates
-import check_integration_inventory as inventory
+import integration_gates as gates  # noqa: E402 - Imports follow the local tools path setup.
+import check_integration_inventory as inventory  # noqa: E402 - Imports follow the local tools path setup.
 
 
 def write_events(path, **changes):

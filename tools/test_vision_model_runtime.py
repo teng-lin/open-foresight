@@ -8,7 +8,6 @@ profile. No downloads, credentials, original application data or shared caches.
 import argparse
 import hashlib
 import os
-import subprocess
 import json
 from pathlib import Path
 import struct
@@ -89,9 +88,11 @@ def main():
             if peer.receive() != "ready 1":
                 raise RuntimeError("Native worker did not become ready")
 
+            active_peer = peer
+
             def request(token, prompt, messages=None, cancel=False):
                 tools = {"tools": [], "system_message": "", "messages": messages or []}
-                peer.send(
+                active_peer.send(
                     f"generate {token} "
                     + json.dumps(
                         {
@@ -103,12 +104,12 @@ def main():
                 )
                 answer, cancelled = None, False
                 while True:
-                    line = peer.receive()
+                    line = active_peer.receive()
                     owner, kind, value = line.split(" ", 2)
                     if owner != str(token):
                         raise RuntimeError("Cross-request native frame: " + line)
                     if kind == "delta" and cancel and not cancelled:
-                        peer.send(f"cancel {token}")
+                        active_peer.send(f"cancel {token}")
                         cancelled = True
                     if kind == "answer":
                         answer = json.loads(value)

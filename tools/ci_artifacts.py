@@ -144,7 +144,9 @@ def api(repository, route):
     env = dict(os.environ)
     env.pop("GH_DEBUG", None)
     return json.loads(
-        subprocess.check_output(["gh", "api", f"repos/{repository}/{route}"], env=env)
+        subprocess.check_output(
+            ["gh", "api", f"repos/{repository}/{route}"], env=env, timeout=300
+        )
     )
 
 
@@ -239,6 +241,7 @@ def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0)
                         ],
                         stdout=stream,
                         check=True,
+                        timeout=300,
                     )
                 source = Path(temporary) / "download"
                 source.mkdir()
@@ -248,7 +251,7 @@ def pull(repository, component, identity, prefix, wait=0, own_head="", own_pr=0)
                         "payload.tar.gz",
                     }:
                         raise ValueError("Unexpected artifact download members")
-                    stream.extractall(source)
+                    stream.extractall(source)  # noqa: S202 - Archive members are validated immediately above; links are retained.
                 unpack(component, identity, source, prefix)
             print(
                 f"Using {artifact_name} from verified workflow run {run['id']}",

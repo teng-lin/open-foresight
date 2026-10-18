@@ -1,3 +1,4 @@
+import 'desktop_connection_fixture.dart';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -38,38 +39,48 @@ void main() {
         '${temporary.path}/helper',
       );
       await tester.pumpWidget(
-        Foresight(Domain(store, helper), deviceLoader: () async => []),
+        Foresight(
+          TestDesktopConnection(Domain(store, helper)),
+          deviceLoader: () async => [],
+        ),
       );
       await tester.tap(find.text('Stats').first);
       await tester.pumpAndSettle();
       final dynamic state = tester.state(find.byType(Workspace));
       Future<void> waitForCount(int expected) async {
-        for (var i = 0; i < 100 && state.localOutputCount != expected; i++) {
+        for (
+          var i = 0;
+          i < 100 && state.settingsFeature.localOutputCount != expected;
+          i++
+        ) {
           await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 10)),
           );
           await tester.pump();
         }
-        expect(state.localOutputCount, expected);
+        expect(state.settingsFeature.localOutputCount, expected);
       }
 
       await waitForCount(3);
       await tester.pumpAndSettle();
-      expect(state.localOutputWeekly, [0, 0, 0, 0, 3]);
+      expect(state.settingsFeature.localOutputWeekly, [0, 0, 0, 0, 3]);
       expect(store.outputBodyReads, 0);
-      final cachedWeeks = state.localOutputWeekly;
+      final cachedWeeks = state.settingsFeature.localOutputWeekly;
       for (var i = 0; i < 20; i++) {
         helper.changed?.call();
       }
       await tester.pump(const Duration(milliseconds: 100));
       await tester.pumpAndSettle();
-      expect(identical(state.localOutputWeekly, cachedWeeks), true);
+      expect(
+        identical(state.settingsFeature.localOutputWeekly, cachedWeeks),
+        true,
+      );
       expect(store.outputBodyReads, 0);
       store.db.execute("UPDATE answers SET body='one two three four'");
       helper.changed?.call();
       await tester.pump(const Duration(milliseconds: 100));
       await waitForCount(4);
-      expect(state.localOutputWeekly, [0, 0, 0, 0, 4]);
+      expect(state.settingsFeature.localOutputWeekly, [0, 0, 0, 0, 4]);
       expect(store.outputBodyReads, 0);
       await tester.pumpWidget(const SizedBox.shrink());
       temporary.deleteSync(recursive: true);

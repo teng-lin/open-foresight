@@ -7,8 +7,8 @@ it, verify native math self-checks and rejection of an unavailable model.
 
 import argparse
 import json
-from pathlib import Path
 import shutil
+from pathlib import Path
 import subprocess
 import sys
 import tempfile
@@ -29,13 +29,16 @@ def verify(worker, model=None):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 check=True,
+                timeout=300,
             )
         moved = root / "moved directory with spaces/Relocated.app"
         moved.parent.mkdir()
         app.rename(moved)
         worker = moved / "Contents/Resources/bin/foresight-query"
         environment = {"PATH": "/nonexistent", "HOME": str(root)}
-        subprocess.run([str(worker), "--check"], env=environment, cwd="/", check=True)
+        subprocess.run(
+            [str(worker), "--check"], env=environment, cwd="/", check=True, timeout=300
+        )
         requests = [
             {
                 "id": "positive",

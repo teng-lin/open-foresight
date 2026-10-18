@@ -22,7 +22,12 @@ LITERT_COMMIT = "b2f686e2ed4718fb84ec398a61dd59ca0f0aff27"
 
 
 def run(*args, **kwargs):
-    subprocess.run([str(arg) for arg in args], check=True, **kwargs)
+    subprocess.run(
+        [str(arg) for arg in args],
+        check=True,
+        timeout=kwargs.pop("timeout", 3600),
+        **kwargs,
+    )
 
 
 def digest(path):
@@ -36,7 +41,7 @@ def download(url, destination, expected):
         partial = destination.with_suffix(".download")
         try:
             with (
-                urllib.request.urlopen(url, timeout=120) as response,
+                urllib.request.urlopen(url, timeout=120) as response,  # noqa: S310 - URL scheme is fixed or validated before opening.
                 partial.open("wb") as output,
             ):
                 shutil.copyfileobj(response, output)
@@ -62,7 +67,7 @@ def checkout(path, repository, commit):
             env=dict(os.environ, GIT_LFS_SKIP_SMUDGE="1"),
         )
     actual = subprocess.check_output(
-        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True
+        ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, timeout=300
     ).strip()
     if actual != commit:
         raise ValueError("Wrong source revision: " + str(path))
@@ -147,7 +152,8 @@ def main():
     whisper = sources / "whisper"
     checkout(whisper, "https://github.com/ggml-org/whisper.cpp.git", WHISPER_COMMIT)
     if subprocess.check_output(
-        ["git", "-C", str(whisper), "status", "--porcelain", "--untracked-files=no"]
+        ["git", "-C", str(whisper), "status", "--porcelain", "--untracked-files=no"],
+        timeout=300,
     ):
         raise ValueError("Whisper source must be clean")
     build = sources / "whisper-build"
