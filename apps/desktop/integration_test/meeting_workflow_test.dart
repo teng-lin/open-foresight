@@ -15,6 +15,7 @@ import 'package:open_foresight/graph_rendering.dart';
 import 'package:open_foresight/cluster_rendering.dart';
 import 'package:open_foresight/graph_persistence.dart';
 import 'package:foresight_core/src/model_setup.dart';
+import '../test_support/meeting_panel.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,
@@ -435,8 +436,7 @@ void main() {
         ['meeting-$meeting'],
       ).single;
       expect(source['state'], 'indexed');
-      await tester.tap(find.text('Summary').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.byTooltip('Generate Summary'));
       await waitUntil(tester, () => workspace.busy == false);
       expect(workspace.error, isEmpty);
@@ -457,8 +457,7 @@ void main() {
       );
       await tester.tap(find.text('Save edit'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Summary').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.byTooltip('Generate Summary'));
       await waitUntil(tester, () => workspace.busy == false);
       expect(workspace.error, isEmpty);
@@ -547,8 +546,7 @@ void main() {
         ).single['body'],
         'Ask what you can do for your country.',
       );
-      await tester.tap(find.text('Summary').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Summary');
       await tester.tap(find.text('Previous versions'));
       await tester.pumpAndSettle();
       expect(
@@ -558,10 +556,9 @@ void main() {
       await tester.pumpAndSettle();
       await waitUntil(tester, () => true);
       await captureWindow(tester, env['FORESIGHT_MEETING_SCREENSHOT']!);
-      await tester.tap(find.text('Ask').first);
-      await tester.pumpAndSettle();
+      await selectMeetingPanel(tester, 'Chat');
       await tester.enterText(
-        find.byType(TextField),
+        find.byKey(ValueKey('chat-input:meeting:$meeting')),
         'What does the speaker ask Americans to do? Cite [S1].',
       );
       await tester.pumpAndSettle();

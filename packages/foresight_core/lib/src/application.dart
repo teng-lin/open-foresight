@@ -40,6 +40,13 @@ import 'google_connections.dart';
 import 'generated/rag_service.pb.dart';
 import 'package:grpc/grpc.dart';
 
+typedef _MeetingIndexKey = ({
+  int meeting,
+  int revision,
+  int workspace,
+  String model,
+});
+
 /// Application operations shared by the desktop and external clients.
 /// This object, its database, and its capture/model handles belong to one owner.
 class Application implements ModelGate {
@@ -59,6 +66,7 @@ class Application implements ModelGate {
   final _noteEnhancements = <int, _NoteEnhancement>{};
   final _noteEditMappings = <int, ReferenceNoteEditMapping>{};
   final _pendingNoteTargets = <int, Set<int>>{};
+  final _meetingIndexes = <_MeetingIndexKey, Future<void>>{};
   late final ReferenceNoteTranscriptCache _noteTranscriptCache =
       ReferenceNoteTranscriptCache(
         computeEmbedding: _computeNoteEmbedding,
@@ -1412,7 +1420,31 @@ class Application implements ModelGate {
             'meeting:$id',
             id: 'meeting-$id',
           );
-    final indexing = domain.index(source);
+    final revision =
+        store.rows('SELECT revision FROM sources WHERE id=?', [
+              source,
+            ]).single['revision']
+            as int;
+    final snapshot = domain.helper.snapshot;
+    final key = (
+      meeting: id,
+      revision: revision,
+      workspace: domain.workspaceGeneration,
+      model: jsonEncode([
+        snapshot?.instanceId,
+        snapshot?.activeGeneration.toString(),
+        snapshot?.pendingGeneration.toString(),
+        snapshot?.model.writeToJson(),
+      ]),
+    );
+    // The live timer and Stop can queue the same finalized transcript while
+    // imports are paused. Share only identical in-flight work: otherwise Resume
+    // embeds it twice and immediately turns the first indexed result back into
+    // indexing. New source/model/workspace generations still get their own job.
+    final indexing = _meetingIndexes.putIfAbsent(
+      key,
+      () => _indexMeetingSource(key, source),
+    );
     if (domain.sourcesPaused) {
       unawaited(
         indexing.catchError((Object e) {
@@ -1422,6 +1454,14 @@ class Application implements ModelGate {
       );
     } else {
       await indexing;
+    }
+  }
+
+  Future<void> _indexMeetingSource(_MeetingIndexKey key, String source) async {
+    try {
+      await domain.index(source);
+    } finally {
+      _meetingIndexes.remove(key);
     }
   }
 

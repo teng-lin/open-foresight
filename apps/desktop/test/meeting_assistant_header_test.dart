@@ -3,12 +3,51 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/app_theme.dart';
 import 'package:open_foresight/meeting_visuals.dart';
+import '../test_support/meeting_panel.dart';
 
 void main() {
   setUp(() async {
     await (FontLoader(
       'GoogleSans',
     )..addFont(rootBundle.load('assets/fonts/GoogleSans-Medium.ttf'))).load();
+  });
+
+  testWidgets('workflow selects Summary and Chat through tabs or overflow', (
+    tester,
+  ) async {
+    for (final width in [400.0, 700.0]) {
+      var selected = 'Transcript';
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: foresightTheme(),
+          home: Scaffold(
+            body: Align(
+              alignment: Alignment.topLeft,
+              child: SizedBox(
+                width: width,
+                child: StatefulBuilder(
+                  builder: (context, setState) => MeetingAssistantHeader(
+                    selectedPanel: selected,
+                    onPanelSelected: (panel) =>
+                        setState(() => selected = panel),
+                    onFontSizeChanged: (_) {},
+                    onClose: () {},
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      if (width == 400) expect(find.text('Summary'), findsNothing);
+      for (final panel in ['Summary', 'Chat', 'Transcript', 'Summary']) {
+        await selectMeetingPanel(tester, panel);
+        expect(selected, panel);
+        expect(find.widgetWithText(TextButton, panel), findsOneWidget);
+      }
+      expect(tester.takeException(), isNull);
+    }
   });
 
   testWidgets(
