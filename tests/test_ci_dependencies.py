@@ -81,7 +81,7 @@ class FingerprintTests(unittest.TestCase):
                 for name in files:
                     path = root / name
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(name)
+                    path.write_bytes((artifacts.ROOT / name).read_bytes())
             before = {
                 name: artifacts.fingerprint(name, root) for name in artifacts.FILES
             }
@@ -109,7 +109,7 @@ class FingerprintTests(unittest.TestCase):
                 for name in files:
                     path = root / name
                     path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text(name)
+                    path.write_bytes((artifacts.ROOT / name).read_bytes())
             before = {
                 name: artifacts.fingerprint(name, root) for name in artifacts.FILES
             }
@@ -778,23 +778,6 @@ def test_promotion_rejects_intermediate_pr_heads_even_when_reachable(source, acc
 
     with patch.object(artifacts, "api", side_effect=api):
         assert artifacts.merged_source("owner/repo", run) == accepted
-
-
-def test_producing_workflow_and_tools_change_every_component_identity(tmp_path):
-    for files in artifacts.FILES.values():
-        for name in files:
-            path = tmp_path / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(name)
-    before = {
-        component: artifacts.fingerprint(component, tmp_path)
-        for component in artifacts.FILES
-    }
-    workflow = tmp_path / ".github/workflows/ci-dependencies.yml"
-    workflow.write_text("changed output-producing workflow")
-    for component in artifacts.FILES:
-        assert artifacts.fingerprint(component, tmp_path) != before[component]
-        assert set(artifacts.PRODUCER_INPUTS) <= set(artifacts.FILES[component])
 
 
 def test_macos_consumer_waits_for_matching_inflight_producer_then_uses_artifact(

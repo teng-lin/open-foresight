@@ -14,6 +14,11 @@ import tempfile
 import time
 import zipfile
 
+try:
+    from .sdk_workflow_recipe import validate as validate_recipe_workflow
+except ImportError:  # Direct bootstrap invocation, before installing dependencies.
+    from sdk_workflow_recipe import validate as validate_recipe_workflow
+
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
     "macos-sdk": ["tools/build_macos_sdk.py"],
@@ -60,16 +65,58 @@ FILES = {
         "services/inference/worker_frame.h",
     ],
 }
-# Artifact identity includes the code and workflow that can change its outputs,
-# even when the underlying SDK recipe is unchanged.
-PRODUCER_INPUTS = (
-    ".github/workflows/ci-dependencies.yml",
-    "tools/ci_artifacts.py",
-    "tools/linux_sdk_artifacts.py",
-    "tools/pins.json",
-)
-for _component_inputs in FILES.values():
-    _component_inputs.extend(PRODUCER_INPUTS)
+# Build recipes and provenance are separate: promotion/receipt implementation and
+# unrelated pin metadata cannot change compiler outputs. The workflow regions
+# contain only the component's runner, build environment and build/setup steps.
+WORKFLOW = ".github/workflows/ci-dependencies.yml"
+PIN_KEYS = {"linux-litert": ("litert_lm",), "macos-vendor": ("litert_lm",)}
+for _component, _inputs in FILES.items():
+    _inputs.append(WORKFLOW)
+    if _component.startswith("linux-"):
+        _inputs.append("tools/sdk_build_recipe.py")
+    if _component in PIN_KEYS:
+        _inputs.append("tools/pins.json")
+
+
+def recipe_regions(path, component):
+    """Read explicitly delimited build behavior using only the bootstrap stdlib."""
+    regions = []
+    active = None
+    lines = path.read_text().splitlines(keepends=True)
+    coverage = []
+    for line in lines:
+        marker = re.fullmatch(r"\s*# sdk-recipe: ([a-z,-]+) (begin|end)\s*", line)
+        coverage.append(set(active.split(",")) if active else set())
+        if marker:
+            owner, direction = marker.groups()
+            if direction == "begin":
+                if active is not None:
+                    raise ValueError("Nested SDK recipe region")
+                active = owner
+                if component in owner.split(","):
+                    regions.append([])
+            else:
+                if active != owner:
+                    raise ValueError("Unmatched SDK recipe region")
+                active = None
+        elif active is not None and component in active.split(","):
+            regions[-1].append(line)
+    if active is not None or not regions:
+        raise ValueError("Missing or unfinished SDK recipe regions: " + component)
+    validate_recipe_workflow(lines, coverage)
+    return ["".join(region) for region in regions]
+
+
+def component_input(component, name, root):
+    if name == WORKFLOW:
+        value = recipe_regions(root / name, component)
+    elif name == "tools/pins.json":
+        pins = json.loads((root / name).read_text())
+        value = {key: pins[key] for key in PIN_KEYS[component]}
+    else:
+        return input_digest(root / name)
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
 
 PARENTS = {
     "macos-runtime": ["macos-vendor"],
@@ -91,14 +138,33 @@ JOBS = {
 def fingerprint(component, root=ROOT):
     """Bind a component to its recipe, source pins, flags and parent identities."""
     record = {
-        "schema": 1,
+        "schema": 2,
         "component": component,
-        "files": {name: input_digest(root / name) for name in FILES[component]},
+        "files": {
+            name: component_input(component, name, root) for name in FILES[component]
+        },
+        "source_trees": {"services/speech": source_tree(root / "services/speech")}
+        if component in ("linux-sdk", "macos-runtime")
+        else {},
         "parents": {
             name: fingerprint(name, root) for name in PARENTS.get(component, [])
         },
     }
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode()).hexdigest()
+
+
+def source_tree(path):
+    """Bind the entire bounded source directory consumed by COPY/CMake."""
+    result = {}
+    for item in sorted(path.rglob("*")):
+        if item.is_symlink():
+            raise ValueError("SDK source tree must not contain symlinks")
+        if item.is_file():
+            result[item.relative_to(path).as_posix()] = {
+                "sha256": digest(item),
+                "executable": bool(item.stat().st_mode & 0o111),
+            }
+    return result
 
 
 def input_digest(path):
