@@ -177,7 +177,7 @@ Replace the AGENTS.md section "Reuse SDKs, libraries, and build caches before re
 > - the workflow path and event;
 > - the producer source commit, component/build-input identity, and artifact upload window;
 > - that the producer job **succeeded in the attempt that uploaded the artifact**, as recorded by the receipt;
-> - the receipt, including its tier and label;
+> - the receipt, including tier and label where its producer contract defines them; legacy schema-1 producer rows remain valid only within their documented transition and expiry;
 > - the content checksum.
 >
 > Never present stamped or older bytes, including SDKs, as a new compilation.
