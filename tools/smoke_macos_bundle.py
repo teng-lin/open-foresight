@@ -9,7 +9,7 @@ Only disposable application/profile copies are changed; the input is untouched.
 from typing import Any, IO, cast
 
 import argparse
-from contextlib import closing
+from contextlib import closing, ExitStack
 import json
 from pathlib import Path
 import queue
@@ -317,8 +317,10 @@ def graph_rows(database):
         ).fetchall()
 
 
-def source_graph_probe(endpoint, mcp, database):
-    peer = ApplicationPeer(endpoint)
+def source_graph_probe(endpoint, mcp, database, *, application_peer=None):
+    peer = (
+        application_peer if application_peer is not None else ApplicationPeer(endpoint)
+    )
     try:
         peer.attach_test_desktop(Path(database).parent)
         first = peer.call(
@@ -384,7 +386,8 @@ def source_graph_probe(endpoint, mcp, database):
             raise RuntimeError("Verification failed")
         return {"sources": sources, "graph_rows": rows, "label_source": first}
     finally:
-        peer.close()
+        if application_peer is None:
+            peer.close()
 
 
 def verify_source_graph_restart(mcp, database, evidence):
@@ -531,7 +534,10 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
             )
         }
     }
-    with tempfile.TemporaryDirectory(prefix="of-smoke-", dir="/tmp") as temporary:
+    with (
+        tempfile.TemporaryDirectory(prefix="of-smoke-", dir="/tmp") as temporary,
+        ExitStack() as connections,
+    ):
         root = Path(temporary)
         app = root / "Relocated App With Spaces" / "Open Foresight.app"
         app.parent.mkdir()
@@ -640,8 +646,18 @@ def smoke(bundle, output, desktop=False, expected_revision=None):
                 report["gates"]["desktop"] = (
                     "passed_desktop_first_mcp_attach_and_desktop_process_exit"
                 )
+            # This authenticated desktop peer owns the graph writes. Closing it
+            # schedules the production desktop-close shutdown after one second.
+            # Keep it attached through both live-upgrade deferral and explicit
+            # idle shutdown, so installer checks cannot race that timer.
+            graph_peer = connections.enter_context(
+                closing(ApplicationPeer(runtime / "application.sock"))
+            )
             source_graph = source_graph_probe(
-                runtime / "application.sock", second, data / "application.db"
+                runtime / "application.sock",
+                second,
+                data / "application.db",
+                application_peer=graph_peer,
             )
             for peer in peers:
                 peer.close()
