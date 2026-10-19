@@ -84,11 +84,12 @@ def record(prefix, component):
 
 
 def archive_manifests(archive, original):
-    """Bind a containerd manifest ID to the receipt's original saved config ID.
+    """Bind loaded image addresses to the receipt's original saved image ID.
 
     Docker's containerd store addresses images by manifest, unlike the classic
-    store's config ID. Read only content-addressed OCI metadata from the already
-    checksum-verified archive; load stdout and mutable tags are not authority.
+    store's config ID; archives can travel in either direction. Read only
+    content-addressed OCI metadata from the already checksum-verified archive;
+    load stdout and mutable tags are not authority.
     """
     with tarfile.open(archive, "r:") as saved:
         members = {}
@@ -161,7 +162,7 @@ def archive_manifests(archive, original):
                 config.get("os"),
                 config.get("architecture"),
             ) == ("linux", "amd64"):
-                matches.append([digest, *ancestors])
+                matches.append([digest, *ancestors, config_descriptor["digest"]])
 
         descriptors = index.get("manifests", [])
         if not isinstance(descriptors, list):

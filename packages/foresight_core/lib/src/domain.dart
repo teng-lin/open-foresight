@@ -93,8 +93,18 @@ class Domain {
             [id],
           );
         }
+      } on GrpcError catch (error) {
+        // Keep unacknowledged rows. A transport failure affects the entire
+        // helper, so do not spend another RPC deadline on each queued row.
+        if (error.code == StatusCode.deadlineExceeded ||
+            error.code == StatusCode.unavailable ||
+            error.code == StatusCode.cancelled) {
+          break;
+        }
+        // Document-level errors must not starve the remaining rows.
       } catch (_) {
-        // Keep the durable row until the helper acknowledges a retry.
+        // Unknown failures cannot establish that further RPCs are safe.
+        break;
       }
     }
   });

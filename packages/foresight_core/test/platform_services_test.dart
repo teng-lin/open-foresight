@@ -62,6 +62,19 @@ void main() {
     },
   );
 
+  test('Linux file reveal encodes commas without changing file identity', () {
+    final uri = Uri.file('/home/user/notes, budget %2C.md');
+    final launch = platformUriLaunch(uri, macOS: false);
+    expect(launch.executable, '/usr/bin/dbus-send');
+    expect(
+      launch.arguments[5],
+      'array:string:file:///home/user/notes%2C%20budget%20%252C.md',
+    );
+    final encoded = launch.arguments[5].substring('array:string:'.length);
+    expect(encoded.split(','), hasLength(1));
+    expect(Uri.parse(encoded).toFilePath(), uri.toFilePath());
+  });
+
   late Directory scratch;
   setUp(() {
     scratch = Directory(

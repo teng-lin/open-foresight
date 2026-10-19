@@ -719,16 +719,59 @@ void main() {
           2,
           reason: 'Rescheduling rearms the reminder on the existing meeting',
         );
+        // Calendar sync must leave existing documents alone, including ones
+        // whose identifiers match a calendar event from an older profile.
+        final calendarId =
+            store
+                    .rows('SELECT event_key FROM calendar_events')
+                    .single['event_key']
+                as String;
+        final indexedBeforeCancellation = domain.indexed.length;
+        store.importText(
+          '[Calendar] Planning',
+          'MY CANCELLED MEETING EDIT',
+          'text/plain',
+          'calendar',
+          id: calendarId,
+          locallyEdited: true,
+        );
         fixture.cancelledEvent = true;
+        await connection.syncCalendar(preserveLocal: true);
+        expect(
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          'MY CANCELLED MEETING EDIT',
+        );
+        expect(
+          store.rows('SELECT status FROM calendar_events').single['status'],
+          'cancelled',
+        );
+        // Manual sync also updates metadata without deleting documents.
         await connection.syncCalendar();
+        expect(
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          'MY CANCELLED MEETING EDIT',
+        );
+        // The same holds for existing documents without local edits.
+        store.importText(
+          '[Calendar] Planning',
+          'Existing meeting document',
+          'text/plain',
+          'calendar',
+          id: calendarId,
+        );
+        fixture.cancelledEvent = false;
+        await connection.syncCalendar();
+        fixture.cancelledEvent = true;
+        await connection.syncCalendar(preserveLocal: true);
         expect(
           store.rows('SELECT status FROM calendar_events').single['status'],
           'cancelled',
         );
         expect(
-          store.sources.any((row) => row['title'] == '[Calendar] Planning'),
-          false,
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          'Existing meeting document',
         );
+        expect(domain.indexed, hasLength(indexedBeforeCancellation));
         expect(
           domain.indexed,
           contains(doc['id']),

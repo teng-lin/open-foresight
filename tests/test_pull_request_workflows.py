@@ -371,9 +371,12 @@ jobs:
         )
         tools = next(step for step in steps if step.get("id") == "acceptance-image")
         self.assertIn("'product'", tools["with"]["context"])
+        producer = self.workflow("integration-acceptance.yml")["jobs"][
+            "ubuntu-application"
+        ]
         seed = next(
             step
-            for step in steps
+            for step in producer["steps"]
             if "tools/ci_app_dependency_seed.py" in step.get("run", "")
         )
         self.assertEqual(seed["if"], "github.event_name == 'pull_request'")
@@ -400,16 +403,17 @@ jobs:
         self.assertNotIn("pull_request", self.workflow("linux-packages.yml")["on"])
         job = workflow["jobs"]["ubuntu-package"]
         self.assertEqual(job["runs-on"], "ubuntu-24.04")
-        self.assertEqual(job["needs"], "changes")
+        self.assertEqual(job["needs"], ["changes", "ubuntu-application"])
+        producer = workflow["jobs"]["ubuntu-application"]
         builds = [
             step
-            for step in job["steps"]
+            for step in producer["steps"]
             if "packaging/build.Dockerfile" in json.dumps(step)
         ]
         self.assertEqual(len(builds), 1)
         self.assertEqual(builds[0]["with"]["target"], "builder")
         self.assertEqual(builds[0]["if"], "github.event_name == 'pull_request'")
-        blob = json.dumps(job)
+        blob = json.dumps(producer) + json.dumps(job)
         self.assertIn("docker cp", blob)
         self.assertIn("/src/dist/open-foresight", blob)
         self.assertIn("packaging/ci/package-and-test.sh deb", blob)
@@ -422,7 +426,10 @@ jobs:
         self.assertNotIn("paths", workflow["on"].get("pull_request") or {})
         from tools.ci_changes import select_gates
 
-        self.assertEqual(workflow["jobs"]["ubuntu-package"]["needs"], "changes")
+        self.assertEqual(
+            workflow["jobs"]["ubuntu-package"]["needs"],
+            ["changes", "ubuntu-application"],
+        )
         self.assertEqual(workflow["jobs"]["acceptance-checks"]["if"], "always()")
         for path in (
             "apps/desktop/lib/main.dart",
@@ -585,6 +592,7 @@ jobs:
             consumers,
             {
                 ("integration-acceptance.yml", "ubuntu-package"),
+                ("integration-acceptance.yml", "ubuntu-application"),
                 ("macos.yml", "linux-bundle"),
             },
         )

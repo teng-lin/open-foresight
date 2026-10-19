@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:io';
 import 'dart:convert';
 import 'package:foresight_test_support/poll.dart';
@@ -7,7 +8,94 @@ import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
+void diagnosticWorker(SendPort parent) {
+  final commands = ReceivePort();
+  // Fatal failures outside the worker's guarded zone still reach onError.
+  commands.listen((message) {
+    if (message == 'fatal') throw StateError('fatal fixture');
+    commands.close();
+  });
+  runApplicationWorkerZone(() async {
+    parent.send(commands.sendPort);
+    scheduleMicrotask(() => throw StateError('recoverable fixture'));
+    await Future<void>.delayed(Duration.zero);
+    parent.send('still healthy');
+  });
+}
+
 void main() {
+  test(
+    'recoverable worker diagnostics preserve operation and clean exit',
+    () async {
+      final messages = ReceivePort();
+      final errors = ReceivePort();
+      final exits = ReceivePort();
+      final observedErrors = <dynamic>[];
+      errors.listen(observedErrors.add);
+      final iterator = StreamIterator<dynamic>(messages);
+      try {
+        await Isolate.spawn(
+          diagnosticWorker,
+          messages.sendPort,
+          onError: errors.sendPort,
+          onExit: exits.sendPort,
+        );
+        expect(await iterator.moveNext(), isTrue);
+        final commands = iterator.current as SendPort;
+        expect(await iterator.moveNext(), isTrue);
+        expect(iterator.current, 'still healthy');
+        final exited = exits.first;
+        commands.send('close');
+        await exited;
+        expect(observedErrors, isEmpty);
+      } finally {
+        await iterator.cancel();
+        messages.close();
+        errors.close();
+        exits.close();
+      }
+    },
+  );
+
+  test('fatal isolate failures retain their separate error channel', () async {
+    final messages = ReceivePort();
+    final errors = ReceivePort();
+    final exits = ReceivePort();
+    final iterator = StreamIterator<dynamic>(messages);
+    try {
+      await Isolate.spawn(
+        diagnosticWorker,
+        messages.sendPort,
+        onError: errors.sendPort,
+        onExit: exits.sendPort,
+      );
+      expect(await iterator.moveNext(), isTrue);
+      final commands = iterator.current as SendPort;
+      expect(await iterator.moveNext(), isTrue);
+      final failed = errors.first;
+      final exited = exits.first;
+      commands.send('fatal');
+      expect((await failed as List).first, contains('fatal fixture'));
+      await exited;
+    } finally {
+      await iterator.cancel();
+      messages.close();
+      errors.close();
+      exits.close();
+    }
+  });
+
+  test('isolated startup failures still propagate to the host', () async {
+    final directory = createTestTempDirectorySync('of-start-fail-');
+    final blocked = File('${directory.path}/file')..writeAsStringSync('file');
+    await expectLater(
+      IsolatedApplicationService.start(
+        ProfilePaths(blocked.path, '${directory.path}/run'),
+      ),
+      throwsA(anything),
+    );
+  });
+
   test(
     'startup handoff reaches the real worker and custom profile controls',
     () async {

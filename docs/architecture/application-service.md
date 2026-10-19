@@ -185,10 +185,14 @@ with another runtime cannot acquire a competing profile writer. An unclean shutd
 
 Installed executables discover `Contents/Resources/runtime.json` in the nearest
 enclosing `.app`. It maps `FORESIGHT_*` resource-path keys to paths relative to that
-Resources directory; absolute explicit environment overrides win. Nested service
-bundles can refer to the outer app through relative `../` paths. This map must
-contain the service, helper, native library, model runners, audio-device adapter,
-and notification adapter as applicable. All resolved values propagate to detached
+Resources directory. For bundled executables, this manifest owns resource and
+code paths, the runtime revision, and the query terms URL; environment values or
+a startup handoff cannot override them. Profile/runtime paths and allowlisted
+scalar settings, such as backend/device choices and distribution API keys, remain
+overridable. Development executables may use explicit resource and code paths.
+Nested service bundles can refer to the outer app through relative `../` paths.
+This map must contain the service, helper, native library, model runners,
+audio-device adapter, and notification adapter as applicable. All resolved values propagate to detached
 service launches and helper subprocesses. Packaged Mac services launch through
 LaunchServices with a single `FORESIGHT_STARTUP_ENV` path in argv. Runtime and
 profile overrides, including distribution keys, travel through a private 0600
