@@ -13,7 +13,7 @@ case "$task_format" in
     apt-get install -y --no-install-recommends python3 binutils xz-utils xvfb xauth dbus-x11 libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils
     ;;
   rpm)
-    dnf install -y python3 python3-rpm rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
+    dnf install -y python3 python3-rpm perl rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
     ;;
   arch)
     pacman -S --noconfirm --needed python binutils xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils
@@ -42,9 +42,9 @@ if [[ "$task_mode" == build ]]; then
   exit 0
 fi
 case "$task_format" in
-  deb) sha256sum --check dist/packages/*.deb.sha256; apt-get install -y "$(realpath dist/packages/*.deb)";;
-  rpm) sha256sum --check dist/packages/*.rpm.sha256; dnf install -y dist/packages/*.rpm;;
-  arch) sha256sum --check dist/packages/*.pkg.tar.zst.sha256; pacman -U --noconfirm dist/packages/*.pkg.tar.zst;;
+  deb) (cd dist/packages && sha256sum --check ./*.deb.sha256); apt-get install -y "$(realpath dist/packages/*.deb)";;
+  rpm) (cd dist/packages && sha256sum --check ./*.rpm.sha256); dnf install -y dist/packages/*.rpm;;
+  arch) (cd dist/packages && sha256sum --check ./*.pkg.tar.zst.sha256); pacman -U --noconfirm dist/packages/*.pkg.tar.zst;;
 esac
 desktop-file-validate /usr/share/applications/io.openforesight.App.desktop
 install -d -o package-test -g package-test /home/package-test/.local/share/open-foresight

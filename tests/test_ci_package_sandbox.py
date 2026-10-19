@@ -1,5 +1,6 @@
 """CI-only namespace policy and ordinary-user preflight; no Docker or apt runs."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,58 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize(
+    "kind,suffix,installer",
+    [
+        ("deb", ".deb", "apt-get"),
+        ("rpm", ".rpm", "dnf"),
+        ("arch", ".pkg.tar.zst", "pacman"),
+    ],
+)
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_install_verifies_basename_checksum_from_package_directory(
+    tmp_path, kind, suffix, installer, corrupt
+):
+    source = (ROOT / "packaging/ci/package-and-test.sh").read_text()
+    # Execute the real install branch with a package-manager double, leaving
+    # sha256sum and its filesystem resolution intact.
+    install = source.split('case "$task_format" in\n')[-2].split("\nesac", 1)[0]
+    directory = tmp_path / "dist/packages"
+    directory.mkdir(parents=True)
+    package = directory / ("fixture" + suffix)
+    package.write_bytes(b"original installer bytes")
+    checksum = hashlib.sha256(package.read_bytes()).hexdigest()
+    Path(str(package) + ".sha256").write_text(f"{checksum}  {package.name}\n")
+    if corrupt:
+        package.write_bytes(b"different installer bytes")
+    env = fake_commands(tmp_path, [installer])
+    env["task_format"] = kind
+    result = subprocess.run(
+        [
+            "bash",
+            "-euo",
+            "pipefail",
+            "-c",
+            'case "$task_format" in\n' + install + "\nesac",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert (result.returncode == 0) == (not corrupt), result.stdout + result.stderr
+    log = tmp_path / "commands"
+    if corrupt:
+        assert not log.exists()
+        assert "FAILED" in result.stdout
+    else:
+        assert f"{package.name}: OK" in result.stdout
+        command = json.loads(log.read_text())
+        assert command[0] == installer
+        assert Path(command[-1]).name == package.name
 
 
 def fake_commands(tmp_path, names):
