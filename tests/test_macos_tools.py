@@ -18,6 +18,7 @@ import install_macos as installer
 import test_gemma_models as gemma_probe
 from smoke_macos_bundle import (
     McpPeer,
+    verify_runtime_revision,
     stop_desktop,
     parser_probe,
     source_graph_probe,
@@ -27,6 +28,30 @@ from smoke_macos_bundle import (
 )
 
 SIGNATURE = {"team": "test-team", "adhoc": False}
+
+
+class RuntimeRevisionTests(unittest.TestCase):
+    def test_relocated_revision_matches_verified_installer_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            app = Path(temporary) / "Relocated App With Spaces.app"
+            runtime = app / "Contents/Resources/runtime.json"
+            runtime.parent.mkdir(parents=True)
+            output = Path(temporary) / "reports/smoke.json"
+            revision = "a" * 40
+            for actual in (revision, None, "b" * 40):
+                with self.subTest(actual=actual):
+                    runtime.write_text(json.dumps({"FORESIGHT_RUNTIME_REVISION": actual}))
+                    report = {}
+                    if actual == revision:
+                        verify_runtime_revision(app, revision, report, output)
+                        self.assertEqual(report["runtime_revision"], revision)
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "installer source commit"):
+                            verify_runtime_revision(app, revision, report, output)
+                        evidence = json.loads(output.read_text())
+                        self.assertEqual(evidence["status"], "failed")
+                        self.assertEqual(evidence["runtime_revision"], actual)
+                        self.assertEqual(evidence["expected_revision"], revision)
 
 
 class MacModelProbeTests(unittest.TestCase):
