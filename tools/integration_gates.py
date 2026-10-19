@@ -160,7 +160,9 @@ def bundle_environment(bundle, inherited):
                 bundle / "share/open-foresight/adapters/legacy_query_worker.py"
             ),
             FORESIGHT_LITERT_PYTHON=str(bundle / "bin/query-python"),
-            LD_LIBRARY_PATH=str(bundle / "lib") + ":" + str(bundle / "app/lib"),
+            # The compiled debug integration application owns its Flutter engine.
+            # Loading the packaged release engine here prevents VM startup.
+            LD_LIBRARY_PATH=str(bundle / "lib"),
         )
     for key in ["FORESIGHT_NATIVE", "FORESIGHT_HELPER", "FORESIGHT_LITERT_RUNNER"]:
         if not Path(env[key]).is_file():
@@ -456,7 +458,7 @@ def private_x11(env, output):
         os.close(read_fd)
         if write_fd != -1:
             os.close(write_fd)
-        if process is not None:
+        if process is not None and process.poll() is None:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:

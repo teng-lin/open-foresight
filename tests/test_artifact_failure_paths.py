@@ -27,6 +27,46 @@ def ci_context(request, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    "failure", ["server", "timeout", "forbidden", "missing", "malformed", "exhausted"]
+)
+def test_metadata_transport_retries_transient_failures_without_bypassing_validation(
+    monkeypatch, capsys, failure
+):
+    calls, delays = [], []
+    monkeypatch.setenv("GH_DEBUG", "api")
+
+    def request(command, **kwargs):
+        calls.append(command)
+        assert "GH_DEBUG" not in kwargs["env"]
+        assert kwargs["stderr"] == subprocess.PIPE
+        if failure == "malformed":
+            return b"not json"
+        if len(calls) == 2 and failure in ("server", "timeout"):
+            return b'{"jobs":[]}'
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(command, 300, stderr=b"request timed out\n")
+        status = {"forbidden": 403, "missing": 404}.get(failure, 502)
+        raise subprocess.CalledProcessError(
+            1,
+            command,
+            output=json.dumps({"status": status}).encode(),
+            stderr=f"gh: Server Error (HTTP {status})\n".encode(),
+        )
+
+    monkeypatch.setattr(artifacts.subprocess, "check_output", request)
+    monkeypatch.setattr(artifacts.time, "sleep", delays.append)
+    if failure in ("server", "timeout"):
+        assert artifacts.api(REPOSITORY, "actions/runs/1/jobs") == {"jobs": []}
+        assert len(calls) == 2 and delays == [1]
+        assert "Retrying" in capsys.readouterr().err
+    else:
+        with pytest.raises((subprocess.CalledProcessError, ValueError)):
+            artifacts.api(REPOSITORY, "actions/runs/1/jobs")
+        assert len(calls) == (3 if failure == "exhausted" else 1)
+        assert delays == ([1, 2] if failure == "exhausted" else [])
+
+
+@pytest.mark.parametrize(
     "text",
     [
         "# sdk-recipe: linux-core begin\n# sdk-recipe: linux-sdk begin\n",

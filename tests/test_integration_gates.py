@@ -342,7 +342,10 @@ def test_native_runner_executes_original_integration_source(tmp_path, device):
 
 
 @pytest.mark.parametrize("broken", [False, True])
-def test_private_x_server_is_owned_and_stopped_on_failure(tmp_path, broken):
+def test_private_x_server_is_owned_and_stopped_on_failure(
+    tmp_path, monkeypatch, broken
+):
+    monkeypatch.setattr(gates.sys, "platform", "linux")
     binary = tmp_path / "Xvfb"
     binary.write_text(
         "#!" + sys.executable + "\n"
@@ -421,7 +424,7 @@ def test_private_x_server_startup_failures_and_forced_shutdown(
     def launch(*args, **kwargs):
         process = original(*args, **kwargs)
         processes.append(process)
-        if failure == "exited":
+        if failure in ("empty", "exited"):
             process.wait(timeout=5)
         return process
 
@@ -443,6 +446,21 @@ def test_private_x_server_startup_failures_and_forced_shutdown(
                 pytest.fail("a server without a valid readiness handshake must fail")
     assert processes and processes[0].poll() is not None
     assert (tmp_path / "xvfb.log").exists()
+
+
+def test_packaged_runtime_does_not_replace_the_debug_flutter_engine(tmp_path):
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "app/lib").mkdir(parents=True)
+    for name in (
+        "lib/libforesight_native.so",
+        "bin/ForesightHelper",
+        "bin/foresight-model",
+    ):
+        (tmp_path / name).touch()
+    env = gates.bundle_environment(tmp_path, {"LD_LIBRARY_PATH": "/host/lib"})
+    assert env["LD_LIBRARY_PATH"] == str(tmp_path / "lib")
+    assert env["FORESIGHT_NATIVE"] == str(tmp_path / "lib/libforesight_native.so")
 
 
 def test_missing_x_server_closes_readiness_descriptors(tmp_path, monkeypatch):
