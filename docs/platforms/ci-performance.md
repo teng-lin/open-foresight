@@ -1085,6 +1085,13 @@ GitHub may expose the skipped main-registry job before its PR-archive counterpar
 is created after parent jobs finish. That placeholder is not proof that the
 component finished. Linux application consumers use `ci_dependency_wait.py` to
 share the qualified source/identity wait with macOS, capped at 1,800 seconds.
-Network and provenance failures remain fatal. This consumer-only correction
-preserves every SDK producer-control byte, allowing the already running producer
-and its eventual original artifact to remain qualified without recompilation.
+Network and provenance failures remain fatal. The foundation's consumer-only
+correction preserved every SDK producer-control byte, allowing its running
+producer and eventual original artifact to remain qualified without recompilation.
+This shadow follow-up also corrects the internal `ci_artifacts.pull(wait>0)`
+completion race: when the producer finishes or the deadline expires, it performs
+one final qualified artifact read without another sleep or a fresh deadline.
+Every candidate still passes the original source, successful-attempt, receipt and
+checksum checks, and rejected candidates retain their qualification error. The
+follow-up lands after the foundation's merged-final approval so its unchanged SDK
+recipes can reuse those original verified bytes despite consumer-control edits.
