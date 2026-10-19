@@ -38,7 +38,7 @@ case "$task_gate" in
       ci_timed "desktop analysis" flutter analyze
       ci_timed "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true --coverage
       if [[ "$task_platform" == linux ]]; then
-        python3 "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 76.35
+        python3 "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 90
       fi
       ci_timed "desktop release compilation" flutter build "$task_platform" --release
     )
