@@ -23,12 +23,11 @@ Dependency producers and macOS consumers check out the PR head. Advancing main
 therefore cannot make consumers request a merge-tree identity that no producer
 built. A trusted completed artifact is used when available. Consumers wait for a
 compatible running producer across application-only commits instead of starting
-a duplicate build. A source build is a last resort when no compatible verified
-output can be obtained. Fork PRs retain local validation without publishing
+a duplicate build. Prefer compatible verified outputs before source builds. Fork PRs retain local validation without publishing
 artifacts with repository credentials. Follow [AGENTS.md](../../AGENTS.md):
-identify the affected input or artifact problem and justify a rebuild before
-triggering it. A network error or cache-key migration alone does not justify
-recompilation.
+preserve artifact integrity and prefer reuse. A content-addressed miss or expiry
+may cause one rebuild; justify SDK or toolchain input changes in the PR.
+Preserve successful dependency outputs when unrelated application checks fail.
 
 Component identities include consumed recipes, source trees, relevant pins,
 build settings and parent identities. Receipt handling, cache transport and
@@ -698,7 +697,7 @@ across these transitions before changing dependency jobs:
 | A new PR after an earlier PR merged | A shared artifact or registry layer is accessible and its original source is approved. A cache under another PR's merge ref alone is insufficient. |
 | Rebase or merge to main | Relevant build inputs remain compatible, original receipts stay intact, and main runs current validation. |
 | An application test or upload fails | Successful dependency outputs remain saved and reusable independently of the failed operation. |
-| Transport or receipt code changes | Existing bytes have a verified qualification or migration path without changing their build identity. |
+| Transport or receipt code changes | Existing bytes may be reused only through verified qualification; expiry or a key change may cause one rebuild without a migration bridge. |
 | A dependency, compiler or ABI changes | Identify the exact incompatibility and rebuild only affected components after checking preserved compatible outputs. |
 
 Exercise the external interfaces too: consult the installed CLI's supported
@@ -750,3 +749,7 @@ provenance. Debian, Fedora and Arch acceptance use current distribution packages
 on purpose. See [Linux packaging](linux-packaging.md).
 
 The minimal Ubuntu base bootstraps HTTPS with a dated Mozilla CA bundle fetched by BuildKit under an explicit SHA256 checksum, then installs the archive snapshot's own `ca-certificates` package. The bootstrap URL and digest are reviewed in `tools/pins.json` and guarded against the Dockerfile. TLS and apt Release-signature verification remain enabled.
+
+### WS-P policy adoption (2026-10-19)
+
+The [restructuring plan](../plans/2026-10-19-ci-restructure-plan.md) keeps repository, source, input identity, original producer attempt, upload-window and checksum checks mandatory. Cost rules are defaults; dedicated producers stay non-cancelling and normal producer waits are bounded at 30 minutes. Main-only publication and removal of stage-result reuse roll out with WS2b/WS2c; the current guarded workflows remain during that transition. This documentation change modifies no SDK input and compiles nothing. Runtime measurements remain at the plan baseline until implementation lands.

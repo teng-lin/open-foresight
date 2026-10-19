@@ -167,32 +167,36 @@ Replace the AGENTS.md section "Reuse SDKs, libraries, and build caches before re
 > - SDKs and dependency outputs may come from:
 >   - `main`;
 >   - the consumer's own PR;
->   - the final head of a merged same-repository PR, if its producer-control files are byte-identical to reviewed source and its component identity matches. This exception lapses under decision 7.
-> - Application candidates come only from stamped `release`-tier runs of reviewed main source. Transition: until WS5b-1 lands, today's per-merge main-push candidates remain the release source. Between WS5b-1 and WS5b-3, they remain the source only for sources below `RELEASE_SOURCE_FLOOR`, through a legacy trust row that expires at WS5b-3.
+>   - the final head of a merged same-repository PR, if its producer-control files are byte-identical (including file modes) to reviewed main source and its component identity matches. Verify the authoritative merged-tree and main-reachability proof. This exception lapses if [decision 7](docs/plans/2026-10-19-ci-restructure-plan.md#8-owner-decisions) drops PR-produced SDK promotion.
+> - Application candidates come only from stamped `release`-tier runs of reviewed main source. Transition ([WS5b](docs/plans/2026-10-19-ci-restructure-plan.md#ws5b-candidates-on-demand-and-release-gates-three-prs-before-ws5a)): until WS5b-1 lands, today's per-merge main-push candidates remain the release source. Between WS5b-1 and WS5b-3, they remain the source only for sources below `RELEASE_SOURCE_FLOOR`, through a legacy trust row that expires at WS5b-3.
 > - Preview bytes never become release bytes.
 > - PR bundles serve only that PR's checks.
 >
 > **Verification.** For every consumed artifact, check:
 > - the repository;
 > - the workflow path and event;
-> - that the producer job **succeeded, in its original attempt**;
+> - the producer source commit, component/build-input identity, and artifact upload window;
+> - that the producer job **succeeded in the attempt that uploaded the artifact**, as recorded by the receipt;
 > - the receipt, including its tier and label;
 > - the content checksum.
 >
+> Never present stamped or older bytes, including SDKs, as a new compilation.
+>
 > **Who may write.**
-> - Only main-ref runs (dependency-SDK producers on main push, main sweeps, cache-publish dispatches, nightly schedule, release, preview) write to shared registries, registry caches, or caches that main reads.
+> - Only main-ref runs (dependency-SDK producers on main push, dispatch or monthly refresh; main sweeps; cache-publish dispatches; the scheduled nightly preview; release; preview) write to shared registries, registry caches, or caches that main reads.
 > - They do so only from dedicated publish jobs.
 > - Every PR run, same-repository included, is read-only toward those.
-> - This is enforced by job permissions: no job that can run on `pull_request` declares any `write` scope.
+> - The target enforcement is job permissions: no job that can actually execute on `pull_request` declares any `write` scope. Main-only jobs in PR-triggered workflows must have explicit main-ref and event guards. Other scheduled drift runs are consume-only.
 >
 > **Release bytes.**
 > - Release publishes exactly the bytes that passed pre-release acceptance.
 > - Identity stamping is recorded as its own step, carrying the original producer's provenance.
-> - Never present stamped or older bytes as a new compilation.
 >
 > **Compatibility.**
 > - Fail on incompatible bytes (ABI, toolchain or version).
 > - Keep each component's cache key limited to its real inputs.
+>
+> **Rollout.** Existing guarded publish jobs and stage-result caches remain until their replacements land in WS2b and WS2c. Do not remove PR checks before the plan's hosted safety gates pass. The dependency-seed legacy attempt-1 qualification remains until its verifier is deliberately migrated.
 >
 > **Cost (defaults).**
 > - **Reuse.** Prefer reuse. A miss on a content-addressed key is sufficient reason for CI to rebuild; investigate only if the miss rate rises.
