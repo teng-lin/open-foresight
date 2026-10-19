@@ -353,7 +353,7 @@ class BuildPolicyTests(unittest.TestCase):
                 )
                 self.assertEqual(
                     checkout["with"]["ref"],
-                    "${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}",
+                    "${{ github.event.pull_request.head.sha || github.sha }}",
                 )
                 driver = next(
                     step

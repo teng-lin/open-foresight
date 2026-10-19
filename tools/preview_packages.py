@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tools.app_version import read_version, set_version, stale  # noqa: E402
 from tools.build_sequence import allocate, request  # noqa: E402
-from tools.preview_reuse import retained, recovery_identity
+from tools.preview_reuse import retained, recovery_identity, has_applications
 from tools.release_asset_acceptance import verify_checksum  # noqa: E402
 
 IDENTITY = ".distribution-build.json"
@@ -61,7 +61,7 @@ def plan(repository, force, validation, reason="", candidate_run=0):
     matching = [
         run
         for run in runs
-        if run["head_sha"] == commit and run["id"] != int(os.environ["GITHUB_RUN_ID"])
+        if run["head_sha"] == commit and run["id"] < int(os.environ["GITHUB_RUN_ID"])
     ]
     existing = next(
         (
@@ -72,10 +72,38 @@ def plan(repository, force, validation, reason="", candidate_run=0):
         None,
     )
     if matching and not existing and not force:
-        return {
-            **recovery_identity(repository, matching[0]["id"], commit),
-            "validation": validation,
-        }
+        recoverable = next(
+            (
+                run
+                for run in matching
+                if has_applications(repository, run, request=request)
+            ),
+            None,
+        )
+        if recoverable is not None:
+            return {
+                **recovery_identity(repository, recoverable["id"], commit),
+                "validation": validation,
+            }
+        if any(run.get("status") != "completed" for run in matching):
+            raise ValueError(
+                "Preserve the running preview producer; wait for its outputs instead of starting a replacement"
+            )
+        for run in matching:
+            items = request(
+                repository, f"actions/runs/{run['id']}/artifacts?per_page=100"
+            )["artifacts"]
+            if any(not item.get("expired") for item in items):
+                raise ValueError(
+                    "No complete retained preview application pair is available. "
+                    "Preserve partial outputs and inspect compatible artifacts "
+                    "before requesting an explicit replacement with a rebuild reason."
+                )
+        print(
+            f"Preview producers {[run['id'] for run in matching]} have no retained outputs. "
+            "A replacement preview identity needs application bundles; retain compatible SDKs and compiler work.",
+            flush=True,
+        )
     if existing and not force:
         url = existing.get(
             "html_url", f"https://github.com/{repository}/actions/runs/{existing['id']}"

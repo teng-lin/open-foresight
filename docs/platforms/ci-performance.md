@@ -116,8 +116,11 @@ Ubuntu package lifecycle and model/audio acceptance share the exact application
 bundle. PR acceptance builds it once, exports it, and mounts it read-only into
 an acceptance-tools image. On main, acceptance starts after a successful
 `linux-bundle` producer job and downloads its verified exact-source candidate;
-manual and scheduled acceptance also consume candidates without compiling an
-application. The tools image installs test prerequisites but has no application
+manual and scheduled acceptance select the newest retained verified candidate
+on reviewed main without compiling an application. Historical dispatches resolve
+the product source from the producer artifact, independently of its controller
+commit. Acceptance checks out that original product for its Dart/Flutter test
+packages while retaining the current acceptance-image recipe. The tools image installs test prerequisites but has no application
 or SDK build step. The package job creates the DEB and installs it in Ubuntu
 24.04 to test dependencies, layout, service lifecycle and document parsing.
 Documentation-only main pushes skip this work. Those installation checks remain necessary for

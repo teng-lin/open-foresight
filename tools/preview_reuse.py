@@ -15,6 +15,46 @@ from tools import ci_artifacts
 WORKFLOW = ".github/workflows/preview-packages.yml"
 
 
+def has_applications(repository, run, request=ci_artifacts.api):
+    """Inspect retained successful application jobs before selecting recovery."""
+    if (
+        run.get("status") != "completed"
+        or run.get("path") != WORKFLOW
+        or run.get("head_branch") != "main"
+        or run.get("event") not in ("workflow_dispatch", "schedule")
+        or run.get("head_repository", {}).get("full_name") != repository
+    ):
+        return False
+    items = request(repository, f"actions/runs/{run['id']}/artifacts?per_page=100")[
+        "artifacts"
+    ]
+    bindings = []
+    for artifact_name, job_name in (
+        ("preview-linux-portable", "build / linux-bundle"),
+        ("preview-macos-application", "build / macos"),
+    ):
+        matches = [
+            item
+            for item in items
+            if item.get("name") == artifact_name
+            and not item.get("expired")
+            and re.fullmatch(r"sha256:[a-f0-9]{64}", item.get("digest", ""))
+        ]
+        if len(matches) != 1:
+            return False
+        bindings.append((matches[0], job_name))
+    jobs = ci_artifacts.dependency_jobs(repository, run["id"])
+    return all(
+        any(
+            job.get("name") == name
+            and job.get("conclusion") == "success"
+            and ci_artifacts.in_producer_attempt(artifact, job)
+            for job in jobs
+        )
+        for artifact, name in bindings
+    )
+
+
 def retained(repository, run, request=ci_artifacts.api):
     if (
         run.get("path") != WORKFLOW

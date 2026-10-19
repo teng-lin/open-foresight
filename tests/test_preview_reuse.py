@@ -42,6 +42,7 @@ def transport(monkeypatch, members, names, jobs):
         "event": "schedule",
         "head_repository": {"full_name": REPO},
         "conclusion": "success",
+        "status": "completed",
     }
     records = [
         {
@@ -154,6 +155,7 @@ def test_partial_preview_recovers_same_identity_instead_of_allocating_build(
             os.environ, {"GITHUB_RUN_ID": "43", "GITHUB_REF": "refs/heads/main"}
         ),
         patch.object(preview, "request", side_effect=api),
+        patch.object(preview, "has_applications", return_value=True),
         patch.object(preview.subprocess, "check_output", return_value=SHA),
         patch.object(
             preview,
@@ -244,3 +246,113 @@ def test_packaging_recovery_reads_matching_original_application_identities(
             and result["label"] == LABEL
         )
         assert result["source"] == SHA and result["recovery_run"] == "42"
+
+
+def test_planner_skips_newer_artifactless_run_for_retained_applications(monkeypatch):
+    older, items, jobs, original = transport(
+        monkeypatch,
+        installer_members(),
+        ["preview-linux-portable", "preview-macos-application"],
+        ["build / linux-bundle", "build / macos"],
+    )
+    older["conclusion"] = "failure"
+    newer = {**older, "id": 43}
+
+    def api(repository, route, **kwargs):
+        if "preview-packages.yml/runs?" in route:
+            return {"workflow_runs": [newer, older]}
+        if route == "actions/runs/43/artifacts?per_page=100":
+            return {"artifacts": []}
+        return original(repository, route, **kwargs)
+
+    with (
+        patch.dict(
+            os.environ, {"GITHUB_RUN_ID": "44", "GITHUB_REF": "refs/heads/main"}
+        ),
+        patch.object(preview, "request", side_effect=api),
+        patch.object(preview.subprocess, "check_output", return_value=SHA),
+        patch.object(
+            preview,
+            "recovery_identity",
+            return_value={"build": "false", "recovery_run": "42"},
+        ) as recover,
+        patch.object(preview, "allocate") as allocate,
+    ):
+        assert preview.plan(REPO, False, "full")["recovery_run"] == "42"
+    recover.assert_called_once_with(REPO, 42, SHA)
+    allocate.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["running", "expired", "missing", "digest", "job"])
+def test_preview_application_inspection_does_not_authorize_unqualified_recovery(
+    monkeypatch, invalid
+):
+    run, items, jobs, api = transport(
+        monkeypatch,
+        installer_members(),
+        ["preview-linux-portable", "preview-macos-application"],
+        ["build / linux-bundle", "build / macos"],
+    )
+    if invalid == "running":
+        run["status"] = "in_progress"
+    elif invalid == "expired":
+        items[0]["expired"] = True
+    elif invalid == "missing":
+        items.pop()
+    elif invalid == "digest":
+        items[0]["digest"] = "unverified"
+    else:
+        jobs[0]["conclusion"] = "failure"
+    assert not reuse.has_applications(REPO, run, request=api)
+
+
+def test_missing_preview_applications_preserve_partial_outputs_without_allocating(
+    monkeypatch,
+):
+    run, items, jobs, api = transport(
+        monkeypatch,
+        installer_members(),
+        ["preview-installer-linux-deb"],
+        ["linux (deb, ubuntu)"],
+    )
+    run["conclusion"] = "failure"
+    with (
+        patch.dict(
+            os.environ, {"GITHUB_RUN_ID": "43", "GITHUB_REF": "refs/heads/main"}
+        ),
+        patch.object(preview, "request", side_effect=api),
+        patch.object(preview.subprocess, "check_output", return_value=SHA),
+        patch.object(preview, "allocate") as allocate,
+    ):
+        with pytest.raises(ValueError, match="Preserve partial outputs"):
+            preview.plan(REPO, False, "standard")
+    allocate.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["completed", "in_progress"])
+def test_artifactless_attempt_does_not_hide_a_first_preview_build(monkeypatch, status):
+    run, items, jobs, original = transport(monkeypatch, {}, [], [])
+    run.update(conclusion="failure", status=status)
+
+    def api(repository, route, **kwargs):
+        if route == "releases/latest":
+            return {"tag_name": "v0.1.1"}
+        return original(repository, route, **kwargs)
+
+    with (
+        patch.dict(
+            os.environ, {"GITHUB_RUN_ID": "43", "GITHUB_REF": "refs/heads/main"}
+        ),
+        patch.object(preview, "request", side_effect=api),
+        patch.object(preview.subprocess, "check_output", return_value=SHA),
+        patch.object(preview, "stale", return_value=[]),
+        patch.object(preview, "read_version", return_value=("0.1.2", 3)),
+        patch.object(preview, "allocate", return_value=12) as allocate,
+    ):
+        if status == "completed":
+            assert preview.plan(REPO, False, "standard")["build_number"] == "12"
+            allocate.assert_called_once_with(REPO, 3)
+        else:
+            with pytest.raises(ValueError, match="Preserve the running"):
+                preview.plan(REPO, False, "standard")
+            allocate.assert_not_called()

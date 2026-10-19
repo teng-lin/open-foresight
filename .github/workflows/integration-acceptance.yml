@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Select integration acceptance
         id: select
         env:
@@ -86,7 +86,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Allow isolated document namespaces in package-test containers
         run: bash tools/ci_package_sandbox.sh
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
@@ -122,6 +122,7 @@ jobs:
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
       - name: Restore qualified application dependency outputs without compilation
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           SDK_IMAGE: ${{ steps.sdk.outputs.image }}
@@ -147,27 +148,41 @@ jobs:
             type=registry,ref=${{ steps.app-cache.outputs.cache }}
       - name: Retrieve the verified main application instead of compiling it again
         if: github.event_name != 'pull_request'
+        id: candidate
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE: ${{ github.event.workflow_run.head_sha || github.sha }}
+          BASE: ${{ github.event.workflow_run.head_sha || github.sha }}
           PRODUCER_RUN: ${{ github.event.workflow_run.id || '0' }}
         run: |
-          python tools/ci_artifacts.py pull --component linux-app --identity "$SOURCE" --prefix artifacts --wait 0 --run-id "$PRODUCER_RUN"
+          python -m tools.package_contract_candidate --base "$BASE" --run-id "$PRODUCER_RUN" --directory artifacts
           (cd artifacts && sha256sum --check ./*.tar.gz.sha256)
           mkdir -p build/portable/dist
           tar -xzf artifacts/*.tar.gz -C build/portable/dist
+      - name: Check out the original application source for acceptance tools
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ steps.candidate.outputs.source }}
+          path: product
       - name: Package version
         id: version
+        env:
+          PRODUCT: ${{ github.event_name == 'pull_request' && '.' || 'product' }}
+          CANDIDATE_VERSION: ${{ steps.candidate.outputs.version }}
         run: |
           python3 - <<'PY'
           import os, subprocess, sys
           sys.path.insert(0, 'tools')
           from app_version import read_version, stale
-          if paths := stale():
+          product = os.environ['PRODUCT']
+          if paths := stale(product):
               raise SystemExit('Out of date with apps/desktop/pubspec.yaml: ' + ', '.join(paths))
-          version, _ = read_version()
+          version, _ = read_version(product)
+          if os.environ['CANDIDATE_VERSION'] and version != os.environ['CANDIDATE_VERSION']:
+              raise ValueError('Candidate version differs from its original source')
           release = '1'
-          epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          epoch = subprocess.check_output(['git', '-C', product, 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
           PY
@@ -178,11 +193,27 @@ jobs:
           task_container=$(docker create foresight-built-application:local /bin/true)
           trap 'docker rm "$task_container" >/dev/null' EXIT
           docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/
+      - name: Archive the original application before acceptance setup
+        if: github.event_name == 'pull_request'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+        run: python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
+      - name: Retain the original application independently of acceptance results
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ubuntu-acceptance-application-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: dist/packages/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
       - name: Prepare acceptance tools without application compilation
         id: acceptance-image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
-          context: .
+          context: ${{ github.event_name == 'pull_request' && '.' || 'product' }}
           file: packaging/acceptance.Dockerfile
           load: true
           tags: foresight-integration:local
@@ -192,10 +223,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           RELEASE: ${{ steps.version.outputs.release }}
           SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+          BUILT_APPLICATION: ${{ github.event_name == 'pull_request' }}
         run: |
-          python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
-          mkdir -p artifacts
-          cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
+          if [[ "$BUILT_APPLICATION" == true ]]; then
+            mkdir -p artifacts
+            cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
+          fi
           docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
       # Package, CPU, GPU and audio checks share the image but report failures
       # independently, so an installer failure does not hide later diagnostics.

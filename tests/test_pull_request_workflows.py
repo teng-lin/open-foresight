@@ -357,6 +357,43 @@ jobs:
         self.assertEqual(caller["permissions"]["actions"], "read")
         self.assertEqual(recovery["permissions"]["actions"], "read")
 
+    def test_main_acceptance_uses_the_selected_product_source(self):
+        steps = self.workflow("integration-acceptance.yml")["jobs"]["ubuntu-package"][
+            "steps"
+        ]
+        candidate = next(step for step in steps if step.get("id") == "candidate")
+        self.assertIn('--run-id "$PRODUCER_RUN"', candidate["run"])
+        checkout = next(
+            step for step in steps if step.get("with", {}).get("path") == "product"
+        )
+        self.assertEqual(
+            checkout["with"]["ref"], "${{ steps.candidate.outputs.source }}"
+        )
+        tools = next(step for step in steps if step.get("id") == "acceptance-image")
+        self.assertIn("'product'", tools["with"]["context"])
+        seed = next(
+            step
+            for step in steps
+            if "tools/ci_app_dependency_seed.py" in step.get("run", "")
+        )
+        self.assertEqual(seed["if"], "github.event_name == 'pull_request'")
+
+    def test_candidate_receipts_replace_their_matching_payload_on_rerun(self):
+        jobs = self.workflow("macos.yml")["jobs"]
+        for component, job in (("macos", "macos"), ("linux", "linux-bundle")):
+            uploads = [
+                step["with"]
+                for step in jobs[job]["steps"]
+                if "actions/upload-artifact@" in step.get("uses", "")
+            ]
+            for prefix in ("ci-", "receipt-ci-"):
+                upload = next(
+                    item
+                    for item in uploads
+                    if item["name"].startswith(prefix + component + "-app-")
+                )
+                self.assertIs(upload["overwrite"], True)
+
     def test_ubuntu_package_job_shares_the_acceptance_build(self):
         workflow = self.workflow("integration-acceptance.yml")
         self.assertIn("pull_request", workflow["on"])

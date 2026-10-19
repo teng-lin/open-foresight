@@ -5,9 +5,52 @@ from unittest.mock import patch
 import pytest
 
 from tools import package_contract_candidate as contract
+from test_ci_promotion import candidate
 
 SHA = "a" * 40
 BASE = "b" * 40
+
+
+@pytest.mark.parametrize("ref", ["refs/pull/987/merge", "refs/heads/main", ""])
+@pytest.mark.parametrize("producer", [0, 42])
+def test_acceptance_selects_original_product_not_controller_head(
+    tmp_path, monkeypatch, ref, producer
+):
+    monkeypatch.setenv("GITHUB_REF", ref)
+    artifact, run, job = candidate(tmp_path, monkeypatch)
+    run.update(head_sha=BASE, event="workflow_dispatch")
+    original = contract.ci_artifacts.api
+
+    def api(repository, route):
+        if route.startswith("compare/"):
+            assert route == f"compare/{SHA}...{BASE}"
+            return {"status": "ahead"}
+        if route.startswith("actions/runs/42/artifacts?"):
+            return {"artifacts": [artifact]}
+        return original(repository, route)
+
+    monkeypatch.setattr(contract.ci_artifacts, "api", api)
+    result = contract.retrieve("owner/repo", BASE, tmp_path / "restored", producer)
+    assert result == {"source": SHA, "version": "0.1.2", "producer_run": "42"}
+    assert (
+        tmp_path / "restored/application"
+    ).read_bytes() == b"verified compiled fixture"
+
+
+def test_explicit_producer_cannot_select_another_run(tmp_path, monkeypatch):
+    artifact, run, job = candidate(tmp_path, monkeypatch)
+    original = contract.ci_artifacts.api
+
+    def api(repository, route):
+        if route.startswith("compare/"):
+            return {"status": "ahead"}
+        if route.startswith("actions/runs/43/artifacts?"):
+            return {"artifacts": [artifact]}
+        return original(repository, route)
+
+    monkeypatch.setattr(contract.ci_artifacts, "api", api)
+    with pytest.raises(ValueError, match="never compile"):
+        contract.retrieve("owner/repo", BASE, tmp_path / "restored", 43)
 
 
 def test_fixture_is_the_original_successful_candidate_on_reviewed_main(tmp_path):
