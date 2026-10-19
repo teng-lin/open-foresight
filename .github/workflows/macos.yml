@@ -4,8 +4,8 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: platform-checks-${{ inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha)) }}
-  cancel-in-progress: false
+  group: platform-checks-${{ github.workflow }}-${{ inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha)) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   macos-stages:
     needs:
@@ -110,7 +110,7 @@ jobs:
         .venv/bin/python tools/verify_macos_release_runtime.py 'dist/Open Foresight.app' \
           --output test-results/macos-release-runtime.json
     - name: Installed application tooling tests
-      run: .venv/bin/python -m unittest discover -s tests -p test_macos_tools.py -v
+      run: .venv/bin/python -m unittest tests.test_macos_tools.CompiledMacComponentTests -v
     - name: Relocated application MCP smoke with minimal environment
       run: |
         .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
@@ -267,8 +267,12 @@ jobs:
           task_args+=(--force)
         fi
         python tools/ci_changes.py "${task_args[@]}" --platforms "$PLATFORMS"
-    - name: Validate explicit integration paths
-      run: python tools/check_integration_inventory.py
+    - name: Retain platform selection
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-selection-platform
+        path: ci-selection.json
+        if-no-files-found: error
     - name: Validate release version copies
       run: python tools/app_version.py --check
   workflow-lint:
@@ -327,6 +331,10 @@ jobs:
       release: ${{ steps.version.outputs.release }}
       epoch: ${{ steps.version.outputs.epoch }}
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
@@ -362,7 +370,7 @@ jobs:
         OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive
     - name: Packaging contracts
       run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
@@ -512,6 +520,11 @@ jobs:
         retention-days: 14
         if-no-files-found: error
         compression-level: 0
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
     if: '!cancelled() && needs.changes.outputs.linux_bundle == ''true'' && github.ref == ''refs/heads/main'' && (inputs.preview || needs.distribution-number.result == ''success'')'
   packaging:
     needs: changes

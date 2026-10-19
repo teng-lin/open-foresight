@@ -176,6 +176,7 @@ def test_pull_retries_until_deadline_before_raising_qualification_error(
     clock = iter([0, 0, 0, 2])
     monkeypatch.setattr(artifacts.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(artifacts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(artifacts, "waiting_for_dependency", lambda *args: [71])
     with pytest.raises(ValueError, match="require requalification"):
         lookup("pull", candidates, wait=1)
     assert candidates["lists"] == 2
@@ -192,7 +193,7 @@ def test_only_bad_artifacts_never_reach_local_compilation(candidates, monkeypatc
         macos.ensure(COMPONENT, candidates["destination"], "owner/repo", wait=0)
 
 
-def test_incompatible_older_running_source_does_not_hide_compatible_producer(
+def test_other_head_producer_is_ignored_when_current_head_has_a_live_producer(
     monkeypatch,
 ):
     runs = [
@@ -210,7 +211,7 @@ def test_incompatible_older_running_source_does_not_hide_compatible_producer(
         return IDENTITY
 
     monkeypatch.setattr(macos, "source_fingerprint", source)
-    assert macos.waiting_producers("owner/repo", "macos-sdk", "3" * 40, 112) == [2]
+    assert macos.waiting_producers("owner/repo", "macos-sdk", "2" * 40, 112) == [2]
 
 
 @pytest.mark.parametrize(
@@ -239,4 +240,4 @@ def test_running_source_api_failure_does_not_become_incompatible_miss(
 
     monkeypatch.setattr(macos, "source_fingerprint", source)
     with pytest.raises(type(error)):
-        macos.waiting_producers("owner/repo", "macos-sdk", "3" * 40, 112)
+        macos.waiting_producers("owner/repo", "macos-sdk", "1" * 40, 112)

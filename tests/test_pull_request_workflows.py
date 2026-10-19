@@ -510,7 +510,7 @@ jobs:
         install = next(run for run in runs if "protoc-35.1-linux-x86_64.zip" in run)
         reference = next(
             step["run"]
-            for step in self.workflow("rpc-contracts.yml")["jobs"]["contracts"]["steps"]
+            for step in self.workflow("quality.yml")["jobs"]["contracts"]["steps"]
             if step.get("name") == "Install pinned protobuf toolchain"
         )
         self.assertEqual(
@@ -710,7 +710,7 @@ def test_every_flutter_clone_verifies_the_reviewed_framework_commit():
 
 
 def test_protobuf_plugin_uses_a_locked_local_tool_package():
-    workflow = (WORKFLOWS / "rpc-contracts.yml").read_text()
+    workflow = (WORKFLOWS / "quality.yml").read_text()
     assert "dart pub global activate" not in workflow
     assert "cd tools/protoc_plugin && dart pub get --enforce-lockfile" in workflow
     assert (ROOT / "tools/protoc_plugin/pubspec.lock").is_file()

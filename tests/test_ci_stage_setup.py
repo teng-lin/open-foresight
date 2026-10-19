@@ -158,7 +158,7 @@ def test_linux_fast_ui_checks_are_fresh_in_desktop_and_identity_stays_native():
     )["jobs"]
     native = jobs["native-linux"]["steps"]
     desktop = jobs["desktop-linux"]["steps"]
-    assert any("test_native_process.py" in step.get("run", "") for step in native)
+    assert not any("test_native_process.py" in step.get("run", "") for step in native)
     assert not any("--suite fast" in step.get("run", "") for step in native)
     fast = next(
         i for i, step in enumerate(desktop) if "--suite fast" in step.get("run", "")

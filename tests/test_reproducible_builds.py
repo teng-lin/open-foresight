@@ -277,6 +277,10 @@ class BuildPolicyTests(unittest.TestCase):
             )
             self.assertIn("tools/ci_artifacts.py probe", steps[probe]["run"])
             for step in steps[probe + 1 :]:
+                if step.get("name") == "Record final runner storage":
+                    self.assertEqual(step["if"], "always()")
+                    self.assertEqual(step["run"], "df -h / /mnt\ndocker system df\n")
+                    continue
                 self.assertIn(
                     "steps.probe.outputs.hit != 'true'", step["if"], (name, step)
                 )
@@ -348,7 +352,7 @@ class BuildPolicyTests(unittest.TestCase):
                         "tools.integration_application --component linux-sdk", resolve
                     )
                 self.assertNotIn("--optional", resolve)
-                self.assertIn("--wait 12600", resolve)
+                self.assertIn("--wait 1800", resolve)
                 self.assertIn("tools/linux_sdk_artifacts.py resolve", resolve)
                 sdk_step = next(step for step in steps if step.get("id") == "sdk")
                 self.assertIn(

@@ -4,7 +4,7 @@
 import argparse
 import json
 import os
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 import subprocess
 
 
@@ -130,9 +130,7 @@ def select_gates(paths, force=False):
             ("apps/desktop/macos/", "packaging/macos/")
         ):
             selected["macos"] = True
-        elif path in LINUX_FILES or path.startswith(
-            ("apps/desktop/linux/", "packaging/ci/")
-        ):
+        elif path in LINUX_FILES or path.startswith("apps/desktop/linux/"):
             for gate in GATES[1:]:
                 selected[gate] = True
         else:
@@ -167,9 +165,74 @@ def check_gates(jobs, selected, main):
             )
 
 
+def selection_report(paths, *, force=False, platforms="all", revision_range=""):
+    selected = select_gates(paths, force=force)
+    if platforms == "linux":
+        selected["macos"] = False
+    elif platforms == "macos":
+        for gate in ("linux-native", "linux-document-imports", "linux-bundle"):
+            selected[gate] = False
+    return {
+        "range": revision_range,
+        "force": force,
+        "platforms": platforms,
+        "selection": selected,
+        "paths": [
+            {
+                "path": path,
+                "gates": [
+                    gate for gate, value in select_gates([path]).items() if value
+                ],
+            }
+            for path in paths
+        ],
+    }
+
+
+def write_report(report, destination):
+    Path(destination).write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    selected = report["selection"]
+    lines = [
+        "## CI selection",
+        "",
+        f"Range: `{report['range']}`",
+        "",
+        f"Forced: `{report['force']}`; platform scope: `{report['platforms']}`",
+        "",
+        "| Gate | Selected |",
+        "| --- | --- |",
+    ]
+    lines.extend(
+        f"| {gate} | {str(value).lower()} |" for gate, value in selected.items()
+    )
+    lines.extend(["", "### Changed paths", ""])
+    for item in report["paths"]:
+        # Keep path newlines and Markdown delimiters literal in logs and summaries.
+        display_path = json.dumps(item["path"]).replace("`", "\\u0060")
+        lines.append(
+            "`" + display_path + "`: " + (", ".join(item["gates"]) or "quality only")
+        )
+    summary = "\n".join(lines) + "\n"
+    print(summary)
+    if summary_file := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary_file, "a") as stream:
+            stream.write(summary)
+    if output := os.environ.get("GITHUB_OUTPUT"):
+        with open(output, "a") as stream:
+            stream.write(
+                "selection=" + json.dumps(selected, separators=(",", ":")) + "\n"
+            )
+            for name, required in selected.items():
+                stream.write(f"{name.replace('-', '_')}={str(required).lower()}\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base")
+    parser.add_argument(
+        "--explain", metavar="RANGE", help="Explain selection for a Git revision range"
+    )
+    parser.add_argument("--json-output", default="ci-selection.json")
     parser.add_argument("--check-gates", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--platforms", choices=("all", "linux", "macos"), default="all")
@@ -182,33 +245,33 @@ def main():
         )
         print("All selected platform gates passed.")
         return
-    if not args.base:
-        parser.error("--base is required for change classification")
-    base = args.base
-    if not base.strip("0"):
-        base = subprocess.check_output(
+    if not args.base and not args.explain:
+        parser.error("--base or --explain is required for change classification")
+    if args.base and args.explain:
+        parser.error("--base and --explain are mutually exclusive")
+    revisions = [args.explain] if args.explain else [args.base, "HEAD"]
+    if args.base and not args.base.strip("0"):
+        revisions[0] = subprocess.check_output(
             ["git", "hash-object", "-t", "tree", "/dev/null"], text=True, timeout=300
         ).strip()
     paths = (
         subprocess.check_output(
-            ["git", "diff", "--name-only", "--no-renames", "-z", base, "HEAD"],
+            ["git", "diff", "--name-only", "--no-renames", "-z", *revisions, "--"],
             timeout=300,
         )
         .decode()
         .split("\0")
     )
-    subprocess.run(["git", "diff", "--check", base, "HEAD"], check=True, timeout=300)
-    selected = select_gates([path for path in paths if path], force=args.force)
-    if args.platforms == "linux":
-        selected["macos"] = False
-    elif args.platforms == "macos":
-        for gate in ("linux-native", "linux-document-imports", "linux-bundle"):
-            selected[gate] = False
-    print("Selected platform checks: " + json.dumps(selected, sort_keys=True))
-    with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
-        stream.write("selection=" + json.dumps(selected, separators=(",", ":")) + "\n")
-        for name, required in selected.items():
-            stream.write(f"{name.replace('-', '_')}={str(required).lower()}\n")
+    subprocess.run(
+        ["git", "diff", "--check", *revisions, "--"], check=True, timeout=300
+    )
+    report = selection_report(
+        [path for path in paths if path],
+        force=args.force,
+        platforms=args.platforms,
+        revision_range=args.explain or f"{revisions[0]}..HEAD",
+    )
+    write_report(report, args.json_output)
 
 
 if __name__ == "__main__":

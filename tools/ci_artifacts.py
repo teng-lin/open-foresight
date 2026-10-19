@@ -514,7 +514,11 @@ def download_zip(repository, artifact, destination):
         # Each retry truncates partial bytes from the preceding failed transfer.
         with destination.open("wb") as stream:
             subprocess.run(
-                ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact['id']}/zip"],
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repository}/actions/artifacts/{artifact['id']}/zip",
+                ],
                 stdout=stream,
                 stderr=subprocess.PIPE,
                 check=True,
@@ -808,6 +812,59 @@ def probe(repository, component, identity, own_head="", own_pr=0):
     return False
 
 
+def waiting_for_dependency(repository, component, identity, own_head, own_pr):
+    """Wait only for this head's live dedicated producer, never unrelated work."""
+    if component not in FILES or not own_head:
+        return []
+    result = []
+    for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+        page = 1
+        while True:
+            runs = api(
+                repository,
+                f"actions/workflows/ci-dependencies.yml/runs?head_sha={own_head}&status={status}&per_page=100&page={page}",
+            )["workflow_runs"]
+            for run in runs:
+                if (
+                    run.get("head_sha") != own_head
+                    or run.get("status") != status
+                    or not trusted_run(run, component, own_head, repository, own_pr)
+                ):
+                    continue
+                jobs = [
+                    job
+                    for job in dependency_jobs(repository, run["id"])
+                    if job.get("name") == JOBS[component]
+                    and job.get("run_attempt", 1) == run.get("run_attempt", 1)
+                ]
+                if jobs and all(job.get("conclusion") is not None for job in jobs):
+                    continue
+                if source_fingerprint_at(repository, own_head, component) == identity:
+                    result.append(run["id"])
+            if len(runs) < 100:
+                break
+            page += 1
+    return sorted(set(result))
+
+
+def unavailable_message(component, identity):
+    producer = "ci-dependencies.yml" if component in FILES else "macos.yml"
+    return (
+        f"Verified {component} identity {identity} unavailable from {producer}. "
+        "No same-head producer is running, or the 1800-second wait expired. "
+        "Run the producer on the reviewed source and retry the failed consumer."
+    )
+
+
+def report_unavailable(component, identity):
+    message = unavailable_message(component, identity)
+    print("::error::" + message)
+    if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary, "a") as stream:
+            stream.write("## Missing verified dependency\n\n" + message + "\n")
+    return message
+
+
 def pull(
     repository, component, identity, prefix, wait=0, own_head="", own_pr=0, source_run=0
 ):
@@ -846,7 +903,7 @@ def pull(
                 )
         return True
     artifact_name = name(component, identity)
-    deadline = time.monotonic() + wait
+    deadline = time.monotonic() + max(0, min(wait, 1800))
     qualification_errors: list[ValueError] = []
     while True:
         artifacts = api(
@@ -952,7 +1009,9 @@ def pull(
                 flush=True,
             )
             return True
-        if time.monotonic() >= deadline:
+        if time.monotonic() >= deadline or not waiting_for_dependency(
+            repository, component, identity, own_head, own_pr
+        ):
             if qualification_errors:
                 raise qualification_errors[-1]
             return False
@@ -1106,9 +1165,7 @@ def main():
     ):
         if args.optional:
             raise SystemExit(4)
-        raise SystemExit(
-            "Verified artifact unavailable. Run ci-dependencies.yml on main (or manually on this reviewed dependency PR), or finish the exact-commit main candidate build. No implicit compilation was started."
-        )
+        raise SystemExit(report_unavailable(args.component, identity))
 
 
 if __name__ == "__main__":

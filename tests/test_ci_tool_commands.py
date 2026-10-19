@@ -92,9 +92,7 @@ def test_artifact_miss_has_distinct_exit_and_does_not_compile(
     with pytest.raises(SystemExit) as error:
         artifacts.main()
     assert error.value.code == (
-        4
-        if optional
-        else "Verified artifact unavailable. Run ci-dependencies.yml on main (or manually on this reviewed dependency PR), or finish the exact-commit main candidate build. No implicit compilation was started."
+        4 if optional else artifacts.unavailable_message("linux-core", "a" * 64)
     )
 
 
@@ -426,6 +424,7 @@ def test_macos_consumer_cli_keeps_running_producer_parameters(
 def test_change_cli_preserves_nul_paths_and_platform_selection(
     tmp_path, monkeypatch, platform
 ):
+    monkeypatch.chdir(tmp_path)
     destination = tmp_path / "outputs"
     monkeypatch.setenv("GITHUB_OUTPUT", str(destination))
     calls = []
@@ -446,4 +445,4 @@ def test_change_cli_preserves_nul_paths_and_platform_selection(
     assert selected["packaging"] is True
     assert selected["macos"] == (platform != "linux")
     assert selected["linux-native"] == (platform != "macos")
-    assert calls[1][-2] == "a" * 40
+    assert calls[1][-3:] == ["a" * 40, "HEAD", "--"]

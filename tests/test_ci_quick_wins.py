@@ -1,0 +1,279 @@
+"""Quick CI controls preserve trust while bounding waits and reporting selection."""
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+from unittest.mock import patch
+
+import pytest
+import yaml
+
+from tools import ci_artifacts as artifacts
+from tools import ci_changes as changes
+from tools import ci_macos_dependencies as macos
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("wait", [0, 60, 9000])
+def test_artifact_miss_stops_without_a_live_same_head_producer(tmp_path, wait):
+    with (
+        patch.object(artifacts, "approved_original", return_value=None),
+        patch.object(artifacts, "api", return_value={"artifacts": []}),
+        patch.object(artifacts, "waiting_for_dependency", return_value=[]),
+        patch.object(artifacts.time, "sleep") as sleep,
+    ):
+        assert not artifacts.pull(
+            "owner/repo",
+            "linux-sdk",
+            "a" * 64,
+            tmp_path,
+            wait=wait,
+            own_head="b" * 40,
+            own_pr=23,
+        )
+    sleep.assert_not_called()
+
+
+def test_artifact_wait_has_a_hard_thirty_minute_cap(tmp_path):
+    now = [0]
+
+    def advance(seconds):
+        now[0] += seconds
+
+    with (
+        patch.object(artifacts, "approved_original", return_value=None),
+        patch.object(artifacts, "api", return_value={"artifacts": []}),
+        patch.object(artifacts, "waiting_for_dependency", return_value=[71]),
+        patch.object(artifacts.time, "monotonic", side_effect=lambda: now[0]),
+        patch.object(artifacts.time, "sleep", side_effect=advance),
+    ):
+        assert not artifacts.pull(
+            "owner/repo",
+            "linux-sdk",
+            "a" * 64,
+            tmp_path,
+            wait=9000,
+            own_head="b" * 40,
+            own_pr=23,
+        )
+    assert now[0] == 1800
+
+
+def test_waiting_producer_requires_current_head_repository_identity_and_active_job():
+    head = "a" * 40
+    base = {
+        "id": 71,
+        "head_sha": head,
+        "head_repository": {"full_name": "owner/repo"},
+        "head_branch": "feature",
+        "pull_requests": [{"number": 23}],
+        "event": "pull_request",
+        "path": ".github/workflows/ci-dependencies.yml",
+        "status": "in_progress",
+        "run_attempt": 2,
+    }
+    runs = [
+        base,
+        {**base, "id": 72, "head_sha": "b" * 40},
+        {**base, "id": 73, "head_repository": {"full_name": "fork/repo"}},
+        {**base, "id": 74},
+        {**base, "id": 75},
+        {**base, "id": 76, "status": "completed"},
+    ]
+
+    def api(repository, route):
+        assert repository == "owner/repo"
+        assert f"head_sha={head}" in route
+        return {"workflow_runs": runs if "status=in_progress" in route else []}
+
+    def jobs(repository, run):
+        return [
+            {
+                "name": "Assemble Linux SDK",
+                "run_attempt": 2,
+                "conclusion": "failure" if run == 74 else None,
+            }
+        ]
+
+    with (
+        patch.object(artifacts, "api", side_effect=api),
+        patch.object(artifacts, "dependency_jobs", side_effect=jobs),
+        patch.object(artifacts, "source_fingerprint_at", return_value="identity"),
+    ):
+        assert artifacts.waiting_for_dependency(
+            "owner/repo", "linux-sdk", "identity", head, 23
+        ) == [71, 75]
+        assert (
+            artifacts.waiting_for_dependency(
+                "owner/repo", "linux-sdk", "other", head, 23
+            )
+            == []
+        )
+        assert (
+            artifacts.waiting_for_dependency(
+                "owner/repo", "linux-sdk", "identity", "", 23
+            )
+            == []
+        )
+
+
+def test_dependabot_missing_sdk_is_red_and_actionable(tmp_path, monkeypatch, capsys):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_ACTOR", "dependabot[bot]")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    with (
+        patch.object(macos, "pull", return_value=False),
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "waiting_producers", return_value=[]),
+        patch.object(macos.subprocess, "run") as build,
+        pytest.raises(RuntimeError, match="ci-dependencies.yml"),
+    ):
+        macos.ensure("macos-sdk", tmp_path, "owner/repo", "a" * 40, 23)
+    build.assert_not_called()
+    assert "::error::" in capsys.readouterr().out
+    assert "identity" in summary.read_text()
+    assert "retry the failed consumer" in summary.read_text()
+
+
+def test_macos_deadline_expires_without_duplicate_build(tmp_path):
+    with (
+        patch.object(macos, "pull", return_value=False),
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "waiting_producers", return_value=[71]),
+        patch.object(macos.time, "monotonic", side_effect=[0, 1800]),
+        patch.object(macos.subprocess, "run") as build,
+        pytest.raises(RuntimeError, match="1800-second"),
+    ):
+        macos.ensure("macos-sdk", tmp_path, "owner/repo", "a" * 40, 23, wait=9000)
+    build.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "inherited_ref", ["refs/pull/999/merge", "refs/heads/main", ""]
+)
+def test_explain_cli_and_ci_outputs_agree_without_relying_on_github_ref(
+    tmp_path, inherited_ref
+):
+    def git(*args):
+        return subprocess.check_output(
+            ["git", *args], cwd=tmp_path, text=True, timeout=30
+        ).strip()
+
+    git("init", "-q")
+    (tmp_path / "README.md").write_text("base\n")
+    git("add", ".")
+    git(
+        "-c",
+        "user.name=CI",
+        "-c",
+        "user.email=ci@example.test",
+        "commit",
+        "-qm",
+        "base",
+    )
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "native").mkdir()
+    (tmp_path / "native/source.cpp").write_text("// change\n")
+    git("add", ".")
+    git(
+        "-c",
+        "user.name=CI",
+        "-c",
+        "user.email=ci@example.test",
+        "commit",
+        "-qm",
+        "native",
+    )
+    output = tmp_path / "outputs"
+    summary = tmp_path / "summary"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "tools/ci_changes.py"),
+            "--explain",
+            f"{base}...HEAD",
+        ],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "GITHUB_REF": inherited_ref,
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_STEP_SUMMARY": str(summary),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    report = json.loads((tmp_path / "ci-selection.json").read_text())
+    assert report["paths"] == [
+        {"path": "native/source.cpp", "gates": list(changes.GATES)}
+    ]
+    assert all(report["selection"].values())
+    assert report["range"] == f"{base}...HEAD"
+    assert "native/source.cpp" in result.stdout
+    assert "| linux-native | true |" in summary.read_text()
+    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert json.loads(values["selection"]) == report["selection"]
+
+
+def test_workflow_cleanup_and_deduplication_keep_the_required_gates():
+    def workflow(name):
+        return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+
+    quality = workflow("quality.yml")["jobs"]
+    assert "contracts" in quality
+    contracts = json.dumps(quality["contracts"])
+    assert "check_dart_bindings.py" in contracts
+    assert "test_owned_descriptors.py" in contracts
+    assert "dart analyze" not in contracts
+    assert "operation_registry_test.dart" not in contracts
+    assert not (ROOT / ".github/workflows/rpc-contracts.yml").exists()
+    for name in ("macos.yml", "integration-acceptance.yml"):
+        assert (
+            workflow(name)["concurrency"]["cancel-in-progress"]
+            == "${{ github.event_name == 'pull_request' }}"
+        )
+    jobs = workflow("ci-dependencies.yml")["jobs"]
+    for job in jobs.values():
+        if "concurrency" in job:
+            assert job["concurrency"]["cancel-in-progress"] is False
+    for name in ("core", "litert", "whisper", "sdk"):
+        steps = jobs[name]["steps"]
+        cleanup = next(
+            step for step in steps if "Free hosted-runner space" in step.get("name", "")
+        )
+        lookup = next(step for step in steps if step.get("id") == "lookup")
+        shared = next(step for step in steps if step.get("id") == "shared")
+        assert steps.index(shared) < steps.index(lookup) < steps.index(cleanup)
+        assert "steps.lookup.outputs.build == 'true'" in cleanup["if"]
+    application = workflow("integration-acceptance.yml")["jobs"]["ubuntu-application"]
+    assert not any(
+        "sudo rm -rf" in step.get("run", "") for step in application["steps"]
+    )
+    for name in ("linux-platform-stages.yml", "macos-platform-stages.yml"):
+        assert "test_native_process.py" not in json.dumps(workflow(name))
+    macos_steps = json.dumps(workflow("macos.yml")["jobs"]["macos"]["steps"])
+    assert "tests.test_macos_tools.CompiledMacComponentTests" in macos_steps
+
+
+def test_explain_works_locally_without_github_metadata(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    for key in tuple(os.environ):
+        if key.startswith("GITHUB_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setattr(
+        sys, "argv", ["ci_changes", "--explain", "main...HEAD", "--force"]
+    )
+    with (
+        patch.object(changes.subprocess, "check_output", return_value=b"README.md\0"),
+        patch.object(changes.subprocess, "run"),
+    ):
+        changes.main()
+    report = json.loads((tmp_path / "ci-selection.json").read_text())
+    assert all(report["selection"].values())
+    assert report["paths"] == [{"path": "README.md", "gates": []}]
+    assert "quality only" in capsys.readouterr().out

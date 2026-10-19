@@ -28,6 +28,49 @@ artifacts with repository credentials. Follow [AGENTS.md](../../AGENTS.md):
 preserve artifact integrity and prefer reuse. A content-addressed miss or expiry
 may cause one rebuild; justify SDK or toolchain input changes in the PR.
 Preserve successful dependency outputs when unrelated application checks fail.
+same-head queued or running producer for at most 1,800 seconds instead of starting
+a duplicate build. Linux consumers fail immediately when no matching producer
+is live; the error and step summary identify the missing component identity and
+producer workflow. macOS consumers may build pinned sources locally after a
+miss with no matching producer; Dependabot fails with the same actionable
+summary instead of compiling inline. A wait timeout never restarts or cancels
+the dedicated SDK producer. Fork PRs retain local validation without publishing
+artifacts with repository credentials. Follow [AGENTS.md](../../AGENTS.md) for
+integrity and reuse policy.
+
+### WS1 quick wins (2026-10-19)
+
+Platform `changes` publishes `ci-selection.json` and a step summary listing the
+revision range, force/platform overrides, selected gates and each changed path's
+contribution. Locally, run `python tools/ci_changes.py --explain origin/main...HEAD`;
+it needs no GitHub environment. Unknown paths select full validation; explicit packaging files and `packaging/ci/`
+retain their narrower selection. The unreachable duplicate `packaging/ci/` branch
+in the Linux-only rule is removed.
+
+Quality owns the required `contracts` job: generated Dart binding drift and
+protobuf descriptors. The separate RPC workflow, repeated RPC Dart analysis and
+subset tests are deleted; full core suites retain those Dart tests. Native
+process integration remains covered by CTest, without separate repeat steps.
+The macOS assembly job runs only `CompiledMacComponentTests` from the tooling
+file; the host inventory owns the remaining tooling tests. The duplicate explicit
+integration inventory command is removed; its quality test remains.
+
+Superseded PR platform and acceptance runs cancel, with platform groups scoped
+to the caller workflow. Main, release and preview work stays non-cancelling;
+dedicated dependency producers remain non-cancelling. `ubuntu-application`
+no longer deletes preinstalled toolchains. The four Linux registry producers
+clean only after both the verified reuse probe and immutable-image lookup miss.
+Linux compile jobs and `ubuntu-package` record `df -h / /mnt` and `docker system df`
+at start and end, including failed jobs. Compile cleanup remains on cold builds;
+Docker relocation to `/mnt` is reserved for measured low-space runs.
+
+The baseline records 96 seconds median (354 seconds maximum, 36 runs) for
+`ubuntu-application` cleanup, and 47–344 seconds of promotion cleanup. Removing
+these steps is structurally verified, while the before/after runner-minute and
+latency comparison still requires at least five completed hosted runs. No SDK
+input or component identity changed in this workstream. Transport allowlisting
+explicitly accounts for storage probes and conditional cleanup without making
+them compilation inputs. The net change and test evidence are recorded in the PR.
 
 Component identities include consumed recipes, source trees, relevant pins,
 build settings and parent identities. Receipt handling, cache transport and

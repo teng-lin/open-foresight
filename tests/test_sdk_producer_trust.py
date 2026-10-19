@@ -225,12 +225,12 @@ def test_compatible_producer_deadline_never_starts_duplicate_compiler(tmp_path):
         patch.object(macos, "waiting_producers", return_value=[10]),
         patch.object(macos.subprocess, "run") as build,
     ):
-        with pytest.raises(RuntimeError, match="preserving their work"):
+        with pytest.raises(RuntimeError, match="1800-second wait expired"):
             macos.ensure("macos-sdk", tmp_path, "owner/repo", HEAD, 23, wait=0)
         build.assert_not_called()
 
 
-def test_waiting_producers_queries_other_heads_and_verifies_their_recipe():
+def test_waiting_producers_ignores_other_heads_without_fetching_their_recipe():
     run = {
         "id": 10,
         "head_sha": "c" * 40,
@@ -246,6 +246,7 @@ def test_waiting_producers_queries_other_heads_and_verifies_their_recipe():
         patch.object(macos, "source_fingerprint", return_value=IDENTITY) as source,
         patch.object(macos, "dependency_jobs", return_value=[]),
     ):
-        assert macos.waiting_producers("owner/repo", "macos-sdk", HEAD, 23) == [10]
-        assert all("head_sha=" not in call.args[1] for call in api.call_args_list)
-        assert source.call_args.args[1] == "c" * 40
+        assert macos.waiting_producers("owner/repo", "macos-sdk", HEAD, 23) == []
+        assert api.call_count == 5
+        assert all(f"head_sha={HEAD}" in call.args[1] for call in api.call_args_list)
+        source.assert_not_called()

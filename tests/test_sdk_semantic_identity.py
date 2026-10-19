@@ -292,6 +292,10 @@ def test_sdk_retry_uploads_and_original_forwarding_are_explicit():
             == '{"features":{"containerd-snapshotter":true}}'
         )
         for step in steps[produce + 1 :]:
+            if step.get("name") == "Record final runner storage":
+                assert step["if"] == "always()"
+                assert step["run"] == "df -h / /mnt\ndocker system df\n"
+                continue
             assert "steps.component.outputs.original != 'true'" in step["if"]
 
 

@@ -20,6 +20,7 @@ from tools.ci_artifacts import (
     trusted_run,
     FILES,
     PARENTS,
+    report_unavailable,
 )  # noqa: E402
 from tools.ci_verify_dependency import verify  # noqa: E402
 from tools.sdk_producer_trust import compatible_producers, source_fingerprint  # noqa: E402
@@ -49,9 +50,13 @@ def waiting_producers(repository, component, own_head, own_pr):
         while True:
             batch = api(
                 repository,
-                f"actions/workflows/ci-dependencies.yml/runs?status={status}&per_page=100&page={page}",
+                f"actions/workflows/ci-dependencies.yml/runs?head_sha={own_head}&status={status}&per_page=100&page={page}",
             )["workflow_runs"]
-            runs.update((run["id"], run) for run in batch)
+            runs.update(
+                (run["id"], run)
+                for run in batch
+                if run.get("head_sha") == own_head and run.get("status") == status
+            )
             if len(batch) < 100:
                 break
             page += 1
@@ -84,8 +89,8 @@ def waiting_producers(repository, component, own_head, own_pr):
     )
 
 
-def ensure(component, prefix, repository, own_head="", own_pr=0, wait=5400):
-    deadline = time.monotonic() + wait
+def ensure(component, prefix, repository, own_head="", own_pr=0, wait=1800):
+    deadline = time.monotonic() + max(0, min(wait, 1800))
     while True:
         if pull(
             repository,
@@ -101,12 +106,11 @@ def ensure(component, prefix, repository, own_head="", own_pr=0, wait=5400):
         if not waiting:
             break
         if time.monotonic() >= deadline:
-            raise RuntimeError(
-                f"Compatible {component} producer(s) {waiting} are still running; "
-                "preserving their work instead of starting a duplicate build. Retry retrieval later."
-            )
+            raise RuntimeError(report_unavailable(component, fingerprint(component)))
         # Bound GitHub API traffic while a long-running dependency compiles.
         time.sleep(min(60, max(0, deadline - time.monotonic())))
+    if os.environ.get("GITHUB_ACTOR", "").startswith("dependabot"):
+        raise RuntimeError(report_unavailable(component, fingerprint(component)))
     if component == "macos-runtime":
         vendor = prefix.parent / "macos-vendor"
         ensure("macos-vendor", vendor, repository, own_head, own_pr, wait)
@@ -147,7 +151,7 @@ def main():
     )
     parser.add_argument("--own-head", default="")
     parser.add_argument("--own-pr", type=int, default=0)
-    parser.add_argument("--wait", type=int, default=5400)
+    parser.add_argument("--wait", type=int, default=1800)
     args = parser.parse_args()
     print(
         ensure(

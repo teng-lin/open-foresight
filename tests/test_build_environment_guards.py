@@ -103,6 +103,7 @@ def test_output_affecting_paths_select_all_required_platform_gates(path, expecte
 def test_initial_commit_classification_uses_empty_tree_and_limits_platform(
     tmp_path, monkeypatch, platform
 ):
+    monkeypatch.chdir(tmp_path)
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     monkeypatch.setattr(
@@ -120,10 +121,19 @@ def test_initial_commit_classification_uses_empty_tree_and_limits_platform(
     changes.main()
     assert commands == [
         ["git", "hash-object", "-t", "tree", "/dev/null"],
-        ["git", "diff", "--name-only", "--no-renames", "-z", "empty-tree", "HEAD"],
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "empty-tree",
+            "HEAD",
+            "--",
+        ],
     ]
     check.assert_called_once_with(
-        ["git", "diff", "--check", "empty-tree", "HEAD"], check=True, timeout=300
+        ["git", "diff", "--check", "empty-tree", "HEAD", "--"], check=True, timeout=300
     )
     fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
     selected = json.loads(fields["selection"])
