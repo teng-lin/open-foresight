@@ -454,6 +454,8 @@ except Deferred:
             stderr="",
         )
         with (
+            patch("install_macos.sys.platform", "darwin"),
+            patch.dict(os.environ, {"TMPDIR": str(self.root)}),
             patch.object(
                 installer.subprocess, "run", side_effect=[status, acknowledgement]
             ) as run,
@@ -471,6 +473,9 @@ except Deferred:
             [call.args[0][-1] for call in run.call_args_list],
             ["--status", "--stop-if-idle=42"],
         )
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["env"]["TMPDIR"], str(self.root))
+            self.assertNotIn("FORESIGHT_RUNTIME", call.kwargs["env"])
 
     def test_failed_service_shutdown_never_reaches_staging_or_swap(self):
         self.options.update(
@@ -628,8 +633,37 @@ for line in sys.stdin:
 
     def test_minimal_environment_has_no_developer_runtime_leaks(self):
         env = installer.minimal_environment("/tmp/home", "/tmp/profile")
-        self.assertEqual(set(env), {"HOME", "PATH", "FORESIGHT_DATA"})
+        self.assertEqual(
+            set(env),
+            {"HOME", "PATH", "FORESIGHT_DATA"}
+            | ({"TMPDIR"} if sys.platform == "darwin" else set()),
+        )
         self.assertEqual(env["PATH"], "/usr/bin:/bin:/usr/sbin:/sbin")
+
+
+class InstallerTemporaryNamespaceTests(unittest.TestCase):
+    def test_mac_sanitizer_retains_only_tmpdir_for_canonical_service_lookup(self):
+        with (
+            patch("install_macos.sys.platform", "darwin"),
+            patch.dict(
+                os.environ,
+                {
+                    "TMPDIR": "/private/var/folders/private-user/T/",
+                    "FORESIGHT_RUNTIME": "/developer/run",
+                    "DYLD_LIBRARY_PATH": "/developer/libraries",
+                },
+            ),
+        ):
+            env = installer.minimal_environment("/clean/home", "/clean/data")
+        self.assertEqual(
+            env,
+            {
+                "HOME": "/clean/home",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+                "FORESIGHT_DATA": "/clean/data",
+                "TMPDIR": "/private/var/folders/private-user/T/",
+            },
+        )
 
 
 class CompiledMacComponentTests(unittest.TestCase):
