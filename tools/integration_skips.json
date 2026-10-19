@@ -215,6 +215,22 @@
       ],
       "gate": "platform",
       "reason": "macOS menu channel routing and recording permission flows run in the regular macOS desktop suite; Linux skips only these Apple-specific contracts."
+    },
+    {
+      "path": "packages/foresight_core/test/domain_helper_recovery_test.dart",
+      "conditions": [
+        "native == null ? 'Requires the native runtime supplied by the core CI gate' : false"
+      ],
+      "gate": "core-native",
+      "reason": "The core CI gate supplies both FORESIGHT_NATIVE_LIBRARY and FORESIGHT_HELPER; these tests run native process ownership and runtime reacquisition without downloaded models."
+    },
+    {
+      "path": "packages/foresight_core/test/helper_process_recovery_test.dart",
+      "conditions": [
+        "native == null || executable == null ? 'Requires the built native library and helper supplied by the core CI gate' : false"
+      ],
+      "gate": "core-native",
+      "reason": "The core CI gate supplies both FORESIGHT_NATIVE_LIBRARY and FORESIGHT_HELPER; these tests run native process ownership and runtime reacquisition without downloaded models."
     }
   ]
 }
