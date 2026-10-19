@@ -479,3 +479,98 @@ def test_shadow_sdk_transport_preserves_original_reuse_provenance(tmp_path):
             shadow=True,
             source_prefix=prefix,
         )
+
+
+def test_hardlinked_pub_packages_survive_exact_runner_handoff(tmp_path):
+    import os
+
+    root = tmp_path / "src"
+    package = root / ".pub-cache/hosted/pub.dev/fixture-1.0.0/lib"
+    package.mkdir(parents=True)
+    (package / "fixture.dart").write_text("int answer() => 42;\n")
+    os.link(package / "fixture.dart", package / "hardlink.dart")
+    config = root / ".dart_tool/package_config.json"
+    config.parent.mkdir()
+    config.write_text(
+        json.dumps(
+            {
+                "configVersion": 2,
+                "packages": [
+                    {
+                        "name": "fixture",
+                        "rootUri": (package.parent).as_uri(),
+                        "packageUri": "lib/",
+                        "languageVersion": "3.0",
+                    }
+                ],
+            }
+        )
+    )
+    (root / "package-link").symlink_to(".pub-cache/hosted/pub.dev/fixture-1.0.0")
+    inputs = tmp_path / "inputs.json"
+    inputs.write_text("{}")
+    archive = tmp_path / "handoff"
+    handoff.pack(root, archive, "a" * 40, inputs)
+    shutil.rmtree(root)
+    handoff.restore(archive, root, "a" * 40, inputs)
+    from urllib.parse import urlparse
+
+    resolved = Path(
+        urlparse(json.loads(config.read_text())["packages"][0]["rootUri"]).path
+    )
+    assert (resolved / "lib/fixture.dart").read_text() == "int answer() => 42;\n"
+    assert (resolved / "lib/hardlink.dart").read_bytes() == (
+        resolved / "lib/fixture.dart"
+    ).read_bytes()
+    assert (root / "package-link/lib/fixture.dart").read_bytes() == (
+        package / "fixture.dart"
+    ).read_bytes()
+    with pytest.raises(ValueError, match="Untrusted absolute"):
+        handoff.safe_link("old-cache", "/root/.pub-cache/package")
+
+
+def test_source_copy_preserves_root_configuration_and_nested_source_names(tmp_path):
+    source, destination = tmp_path / "checkout", tmp_path / "src"
+    source.mkdir()
+    destination.mkdir()
+    retained = [
+        ".coveragerc",
+        "source/dist/data",
+        "source/coverage/data",
+        "source/test-results/data",
+        "source/.venv/data",
+        "source/.env.example",
+    ]
+    excluded = [
+        ".git/config",
+        "build/old",
+        "dist/old",
+        ".venv/cache",
+        ".env",
+        ".coverage",
+        ".coverage.parallel",
+        ".pub-cache/local",
+        "source/build/old",
+        "source/.dart_tool/old",
+        "source/__pycache__/old",
+    ]
+    for name in retained + excluded:
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(name)
+    subprocess.run(
+        [
+            "bash",
+            str(Path(__file__).resolve().parents[1] / "tools/copy_linux_source.sh"),
+            str(source),
+            str(destination),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert {
+        p.relative_to(destination).as_posix()
+        for p in destination.rglob("*")
+        if p.is_file()
+    } == set(retained)

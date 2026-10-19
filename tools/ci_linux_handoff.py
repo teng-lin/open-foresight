@@ -23,7 +23,7 @@ import tempfile
 import zipfile
 
 EXCLUDED = {".git", ".venv", "build/_deps"}
-EXTERNAL_LINK_ROOTS = ("/opt/", "/root/.pub-cache/", "/usr/")
+EXTERNAL_LINK_ROOTS = ("/opt/", "/usr/")
 
 
 def digest(path):
@@ -147,6 +147,7 @@ def pack(root, output, revision, inputs, tier="pr", label=""):
             if record["kind"] == "file":
                 # Never represent repeated file inodes as archive hardlinks.
                 info.type, info.linkname = tarfile.REGTYPE, ""
+                info.size = record["size"]
                 with path.open("rb") as source:
                     stream.addfile(info, source)
             else:

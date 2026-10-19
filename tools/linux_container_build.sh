@@ -10,10 +10,7 @@ mkdir -p /out
 trap 'chown -R "$OUT_UID:$OUT_GID" /out' EXIT
 # Match the source exclusions of .dockerignore. In particular, local account
 # data and .env files must not enter the container or portable bundle.
-tar -C /workspace --exclude=.git --exclude='build' --exclude=dist --exclude='.venv*' \
-  --exclude=.dart_tool --exclude=test-results --exclude=coverage --exclude=models/local \
-  --exclude=__pycache__ --exclude='*.pyc' --exclude='*.db*' --exclude='*.log' \
-  --exclude='.env*' --exclude='google-client*.json' --exclude='.coverage*' -cf - . | tar -C /src -xf -
+bash /workspace/tools/copy_linux_source.sh /workspace /src
 cd /src
 export FORESIGHT_PYTHON=${FORESIGHT_PYTHON:-/opt/dev-python/bin/python}
 export FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-1}
@@ -21,8 +18,8 @@ bash tools/build.sh --build-only "-DFORESIGHT_BUILD_REVISION=$SOURCE_REVISION"
 task_args=()
 if [[ "${REQUIRE_GOOGLE_CLIENT:-0}" == 1 ]]; then task_args+=(--require-google-client); fi
 if [[ -f /run/secrets/google_client ]]; then task_args+=(--google-client /run/secrets/google_client); fi
-if [[ -f /run/secrets/foresight_search_api_key ]]; then export FORESIGHT_SEARCH_API_KEY="$(cat /run/secrets/foresight_search_api_key)"; fi
-if [[ -f /run/secrets/foresight_web_content_api_key ]]; then export FORESIGHT_WEB_CONTENT_API_KEY="$(cat /run/secrets/foresight_web_content_api_key)"; fi
+if [[ -f /run/secrets/foresight_search_api_key ]]; then FORESIGHT_SEARCH_API_KEY="$(cat /run/secrets/foresight_search_api_key)"; export FORESIGHT_SEARCH_API_KEY; fi
+if [[ -f /run/secrets/foresight_web_content_api_key ]]; then FORESIGHT_WEB_CONTENT_API_KEY="$(cat /run/secrets/foresight_web_content_api_key)"; export FORESIGHT_WEB_CONTENT_API_KEY; fi
 "$FORESIGHT_PYTHON" tools/package.py --output dist/open-foresight --revision "$SOURCE_REVISION" \
   --litert-library /opt/litert-extensions/liblitert-lm.so \
   --litert-extensions-manifest /opt/litert-extensions/build-manifest.json \
