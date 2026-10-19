@@ -380,6 +380,14 @@ jobs:
             if "tools/ci_app_dependency_seed.py" in step.get("run", "")
         )
         self.assertEqual(seed["if"], "github.event_name == 'pull_request'")
+        sdk = next(step for step in producer["steps"] if step.get("id") == "sdk")
+        # Dependency inspection needs the image in this fresh job's daemon;
+        # resolving a registry descriptor alone does not pull its layers.
+        self.assertIn(
+            "linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive",
+            sdk["run"],
+        )
+        self.assertLess(producer["steps"].index(sdk), producer["steps"].index(seed))
 
     def test_candidate_receipts_replace_their_matching_payload_on_rerun(self):
         jobs = self.workflow("macos.yml")["jobs"]

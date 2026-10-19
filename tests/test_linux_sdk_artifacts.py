@@ -66,6 +66,77 @@ class RetainedImageTests(unittest.TestCase):
         run.assert_not_called()
         inspect.assert_not_called()
 
+    def test_registry_resolution_loads_cold_daemon_and_keeps_immutable_reference(self):
+        self.registry()
+        available = False
+        commands = []
+
+        def run(command):
+            nonlocal available
+            commands.append(command)
+            if command == ["docker", "pull", REGISTRY_IMAGE]:
+                available = True
+
+        def output(command, **kwargs):
+            self.assertTrue(available, "SDK inspected before loading the cold daemon")
+            return docker_output(command, **kwargs)
+
+        with (
+            patch.object(sdk, "run", side_effect=run),
+            patch.object(sdk.subprocess, "check_output", side_effect=output),
+        ):
+            self.assertEqual(
+                sdk.resolve(self.prefix, load_registry=True), REGISTRY_IMAGE
+            )
+        self.assertEqual(
+            commands,
+            [
+                ["docker", "pull", REGISTRY_IMAGE],
+                ["docker", "image", "tag", REGISTRY_IMAGE, "foresight-sdk:pr"],
+            ],
+        )
+
+    def test_registry_resolve_load_rejects_wrong_platform_before_tagging(self):
+        self.registry()
+        with (
+            patch.object(sdk, "run") as run,
+            patch.object(
+                sdk.subprocess,
+                "check_output",
+                return_value=json.dumps(
+                    {"Id": IMAGE_ID, "Os": "linux", "Architecture": "arm64"}
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "linux/amd64"):
+                sdk.resolve(self.prefix, load_registry=True)
+        run.assert_called_once_with(["docker", "pull", REGISTRY_IMAGE])
+
+    def test_resolve_cli_loads_registry_and_exports_original_digest(self):
+        self.registry()
+        output = self.prefix.parent / "github-output"
+        with (
+            patch(
+                "sys.argv",
+                [
+                    "linux_sdk_artifacts.py",
+                    "resolve",
+                    "--prefix",
+                    str(self.prefix),
+                    "--load",
+                    "--discard-archive",
+                ],
+            ),
+            patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}),
+            patch.object(sdk, "run") as run,
+            patch.object(sdk.subprocess, "check_output", side_effect=docker_output),
+        ):
+            sdk.main()
+        self.assertIn("image=" + REGISTRY_IMAGE + "\n", output.read_text())
+        self.assertEqual(
+            run.call_args_list[0].args[0], ["docker", "pull", REGISTRY_IMAGE]
+        )
+
     def test_unpinned_registry_reference_is_rejected_without_docker(self):
         for image in (
             "ghcr.io/example/foresight-sdk:latest",
