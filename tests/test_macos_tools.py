@@ -580,6 +580,19 @@ for line in sys.stdin:
         path.chmod(0o755)
         return path
 
+    def test_initialization_failure_retains_subprocess_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            runner = root / "failed-mcp"
+            runner.write_text(
+                "#!" + sys.executable + "\n"
+                "import sys\nsys.stderr.write('model startup failed\\n')\nsys.exit(1)\n"
+            )
+            runner.chmod(0o755)
+            with self.assertRaises(EOFError) as caught:
+                McpPeer(runner, installer.minimal_environment(root))
+            self.assertIn("model startup failed", "\n".join(caught.exception.__notes__))
+
     def test_real_subprocess_transport_closes_cleanly(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

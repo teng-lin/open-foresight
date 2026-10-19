@@ -59,13 +59,18 @@ class McpPeer:
                     "capabilities": {},
                     "clientInfo": {"name": "macos-installed-smoke", "version": "1"},
                 },
+                # The installed launcher verifies registered multi-GB models
+                # before MCP starts reading initialization requests.
+                timeout=240,
             )
             self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
-        except BaseException:
+        except BaseException as error:
             try:
                 self.close()
-            except Exception:  # noqa: S110 - Best effort cleanup after process exit.
-                pass
+            except Exception as cleanup_error:
+                error.add_note(f"MCP startup cleanup: {cleanup_error}")
+            if self.errors:
+                error.add_note(self.errors.decode(errors="replace"))
             raise
 
     def _read(self):
