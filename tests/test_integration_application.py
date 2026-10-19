@@ -108,7 +108,15 @@ def producer(tmp_path, request):
     return payload, saved, checksum, run, artifact, job
 
 
-def restore(tmp_path, producer, *, head_repository=REPOSITORY, component="linux-app"):
+def restore(
+    tmp_path,
+    producer,
+    *,
+    head_repository=REPOSITORY,
+    component="linux-app",
+    producer_wait=0,
+    refresh=None,
+):
     payload, saved, checksum, run, artifact, job = producer
 
     def api(repository, route):
@@ -117,6 +125,8 @@ def restore(tmp_path, producer, *, head_repository=REPOSITORY, component="linux-
             return run
         if route == f"actions/artifacts/{ARTIFACT}":
             return artifact
+        if route == f"actions/jobs/{JOB}" and refresh is not None:
+            return refresh()
         if route == f"actions/runs/{RUN}/jobs?filter=all&per_page=100&page=1":
             return {
                 "jobs": [
@@ -150,6 +160,7 @@ def restore(tmp_path, producer, *, head_repository=REPOSITORY, component="linux-
             checksum,
             destination,
             component=component,
+            producer_wait=producer_wait,
         )
     return payload, destination, result
 
@@ -322,6 +333,195 @@ def test_duplicate_successful_producer_attempt_is_rejected(tmp_path, producer):
     ):
         with pytest.raises(ValueError, match="one successful original"):
             restore(tmp_path, producer)
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.fixture
+def visibility_clock(monkeypatch):
+    now, sleeps = [100.0], []
+    monkeypatch.setattr(application.time, "monotonic", lambda: now[0])
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        now[0] += seconds
+
+    monkeypatch.setattr(application.time, "sleep", sleep)
+    return now, sleeps
+
+
+@pytest.mark.parametrize("ref", ["refs/pull/98765/merge", "refs/heads/main", None])
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+def test_pending_list_refreshes_exact_original_job_before_verified_restore(
+    tmp_path, producer, monkeypatch, visibility_clock, capsys, ref, status
+):
+    if ref is None:
+        monkeypatch.delenv("GITHUB_REF", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF", ref)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    complete = dict(producer[5])
+    producer[5].update(status=status, conclusion=None, completed_at=None)
+    refreshes = []
+
+    def refresh():
+        refreshes.append(JOB)
+        return complete
+
+    original, restored, qualification = restore(
+        tmp_path, producer, refresh=refresh, producer_wait=60
+    )
+    assert refreshes == [JOB]
+    assert not visibility_clock[1]  # Direct endpoint resolves lag without a sleep.
+    assert qualification["producer_job"] == JOB
+    assert qualification["producer_attempt"] == 1
+    assert qualification["source_receipt"]["source_run_attempt"] == 1
+    assert (restored / "application.tar.gz").read_bytes() == (
+        original / "application.tar.gz"
+    ).read_bytes()
+    assert f"Refresh original producer job {JOB}" in capsys.readouterr().err
+
+
+def test_pending_direct_endpoint_waits_only_until_exact_producer_is_visible(
+    tmp_path, producer, visibility_clock
+):
+    complete = dict(producer[5])
+    producer[5].update(status="in_progress", conclusion=None, completed_at=None)
+    refreshes = iter([dict(producer[5]), complete])
+    restore(tmp_path, producer, refresh=lambda: next(refreshes), producer_wait=60)
+    assert visibility_clock[1] == [5]
+
+
+def test_missing_producer_list_row_is_refetched_within_visibility_window(
+    tmp_path, producer, visibility_clock
+):
+    with patch.object(
+        artifacts, "dependency_jobs", side_effect=[[], [producer[5]]]
+    ) as query:
+        restore(tmp_path, producer, producer_wait=60)
+    assert query.call_count == 2
+    assert visibility_clock[1] == [5]
+
+
+def test_missing_producer_row_is_bounded_without_downloading(
+    tmp_path, producer, visibility_clock
+):
+    with patch.object(artifacts, "dependency_jobs", return_value=[]) as query:
+        with pytest.raises(
+            ValueError, match="found 0 matching producer jobs after 60s"
+        ):
+            restore(tmp_path, producer, producer_wait=60)
+    assert query.call_count == 13
+    assert visibility_clock[1] == [5] * 12
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize(
+    "field,value", [("run_id", RUN + 1), ("head_sha", "b" * 40), ("run_attempt", 3)]
+)
+def test_mismatched_named_producer_is_not_treated_as_missing(
+    tmp_path, producer, visibility_clock, field, value
+):
+    producer[5][field] = value
+    with pytest.raises(ValueError, match="mismatched"):
+        restore(tmp_path, producer, producer_wait=60)
+    assert not visibility_clock[1]
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_missing_completed_timestamp_gets_only_one_direct_refresh(
+    tmp_path, producer, visibility_clock, valid
+):
+    complete = dict(producer[5])
+    producer[5]["completed_at"] = None
+    refreshes = []
+
+    def refresh():
+        refreshes.append(JOB)
+        return complete if valid else producer[5]
+
+    if valid:
+        restore(tmp_path, producer, refresh=refresh, producer_wait=60)
+    else:
+        with pytest.raises(ValueError, match="no completion timestamp"):
+            restore(tmp_path, producer, refresh=refresh, producer_wait=60)
+        assert not (tmp_path / "restored").exists()
+    assert refreshes == [JOB]
+    assert not visibility_clock[1]
+
+
+def test_permanently_pending_producer_is_bounded_and_never_downloads(
+    tmp_path, producer, visibility_clock
+):
+    producer[5].update(status="queued", conclusion=None, completed_at=None)
+    refreshes = []
+
+    def refresh():
+        refreshes.append(JOB)
+        return producer[5]
+
+    with pytest.raises(ValueError, match="still queued after 60s"):
+        restore(tmp_path, producer, refresh=refresh, producer_wait=60)
+    assert len(refreshes) == 12
+    assert visibility_clock[1] == [5] * 12
+    assert visibility_clock[0] == [160]
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("id", JOB + 1, "changed producer identity"),
+        ("name", "other-job", "changed producer identity"),
+        ("run_id", RUN + 1, "changed producer identity"),
+        ("head_sha", "b" * 40, "changed producer identity"),
+        ("run_attempt", 2, "changed producer identity"),
+        ("conclusion", "failure", "completed with 'failure'"),
+        ("completed_at", "2025-01-01T00:00:30Z", "not created during"),
+        ("status", "unknown", "invalid status"),
+    ],
+)
+def test_direct_refresh_revalidates_identity_completion_and_artifact_interval(
+    tmp_path, producer, visibility_clock, field, value, reason
+):
+    refreshed = {**producer[5], field: value}
+    producer[5].update(status="queued", conclusion=None, completed_at=None)
+    with pytest.raises(ValueError, match=reason):
+        restore(tmp_path, producer, refresh=lambda: refreshed, producer_wait=60)
+    assert not visibility_clock[1]
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "skipped"])
+def test_terminal_failed_producer_is_never_refreshed(
+    tmp_path, producer, visibility_clock, conclusion
+):
+    producer[5]["conclusion"] = conclusion
+    with pytest.raises(ValueError, match="completed with"):
+        restore(tmp_path, producer, producer_wait=60)
+    assert not visibility_clock[1]
+    assert not (tmp_path / "restored").exists()
+
+
+def test_pending_and_successful_duplicate_original_attempt_remains_ambiguous(
+    tmp_path, producer, visibility_clock
+):
+    job = producer[5]
+    duplicate = {**job, "id": JOB + 1, "status": "queued", "conclusion": None}
+    with patch.object(artifacts, "dependency_jobs", return_value=[job, duplicate]):
+        with pytest.raises(ValueError, match="found 2 matching producer jobs"):
+            restore(tmp_path, producer, producer_wait=60)
+    assert not visibility_clock[1]
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize("identity", [None, True, -1])
+def test_invalid_original_job_id_never_authorizes_a_refresh(
+    tmp_path, producer, visibility_clock, identity
+):
+    producer[5].update(id=identity, status="queued", conclusion=None)
+    with pytest.raises(ValueError, match="job ID is invalid"):
+        restore(tmp_path, producer, producer_wait=60)
+    assert not visibility_clock[1]
     assert not (tmp_path / "restored").exists()
 
 

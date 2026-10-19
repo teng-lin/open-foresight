@@ -46,6 +46,14 @@ def test_focused_commands_keep_all_assigned_host_contracts_and_junit(platform):
     [
         ("result.name", False),
         ("os.name", True),
+        ("import os\nos.name", True),
+        ("import os as host_os\nhost_os.name", True),
+        ("import pathlib, os as host_os\nhost_os.name", True),
+        ("import os as first_os, os as second_os\nsecond_os.name", True),
+        ("import os as host_os\nresult.name", False),
+        ("import os as host_os\nhost_os.path", False),
+        ("import pathlib as host_os\nhost_os.name", False),
+        ("import os as host_os, pathlib as paths\npaths.name", False),
         ("sys.platform", True),
         ("platform.machine()", True),
         ("platform.uname()", True),
@@ -69,7 +77,15 @@ def test_inventory_recognizes_host_and_tool_conditions(tmp_path, source, sensiti
     assert contracts.host_sensitive(path) == sensitive
 
 
-@pytest.mark.parametrize("probe", ["sys.platform", "shutil.which('cmake')", "os.name"])
+@pytest.mark.parametrize(
+    "probe",
+    [
+        "sys.platform",
+        "shutil.which('cmake')",
+        "os.name",
+        "import os as host_os\nhost_os.name",
+    ],
+)
 def test_unassigned_host_contract_fails_closed(repository, probe):
     (repository / "tests/test_new.py").write_text(probe)
     with pytest.raises(ValueError, match="Assign host-sensitive.*test_new.py"):

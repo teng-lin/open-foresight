@@ -11,11 +11,94 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
+import time
 
 from tools import ci_artifacts as artifacts
 from tools.ci_stage_cache import read_zip
 from tools import linux_sdk_artifacts as sdk
+
+
+def original_producer(repository, source, run_id, attempt, artifact, *, wait=60):
+    """Refresh a uniquely identified pending producer without relaxing its proof."""
+    deadline = time.monotonic() + wait
+
+    def matches(job):
+        return (
+            job.get("name") == "ubuntu-application"
+            and job.get("run_id") == run_id
+            and job.get("head_sha") == source
+            and job.get("run_attempt") == attempt
+        )
+
+    def reject(reason):
+        raise ValueError(
+            "Application requires one successful original producer attempt: " + reason
+        )
+
+    while True:
+        listed = artifacts.dependency_jobs(repository, run_id)
+        jobs = [job for job in listed if matches(job)]
+        if len(jobs) == 1:
+            break
+        if len(jobs) > 1 or any(
+            job.get("name") == "ubuntu-application" for job in listed
+        ):
+            reject(
+                f"found {len(jobs)} matching producer jobs; identity is ambiguous or mismatched"
+            )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            reject(f"found 0 matching producer jobs after {wait}s")
+        print(
+            "Wait for original producer to appear in the job list",
+            file=sys.stderr,
+            flush=True,
+        )
+        time.sleep(min(5, remaining))
+    job = jobs[0]
+    job_id = job.get("id")
+    if type(job_id) is not int or job_id < 1:
+        reject("producer job ID is invalid")
+    completion_refreshed = False
+    while True:
+        if not matches(job) or job.get("id") != job_id:
+            reject(f"refreshed job {job_id} changed producer identity")
+        if job.get("status") == "completed":
+            if job.get("conclusion") != "success":
+                reject(
+                    f"producer job {job_id} completed with {job.get('conclusion')!r}"
+                )
+            if job.get("completed_at") in (None, ""):
+                if completion_refreshed or time.monotonic() >= deadline:
+                    reject(f"producer job {job_id} has no completion timestamp")
+                completion_refreshed = True
+                job = artifacts.api(repository, f"actions/jobs/{job_id}")
+                continue
+            if not artifacts.in_producer_attempt(artifact, job):
+                reject(f"artifact was not created during producer job {job_id}")
+            return job
+        if job.get("status") not in ("queued", "in_progress"):
+            reject(f"producer job {job_id} has invalid status {job.get('status')!r}")
+        if time.monotonic() >= deadline:
+            reject(f"producer job {job_id} is still {job['status']} after {wait}s")
+        print(
+            f"Refresh original producer job {job_id}: list/API status is {job['status']}",
+            file=sys.stderr,
+            flush=True,
+        )
+        job = artifacts.api(repository, f"actions/jobs/{job_id}")
+        # A direct lookup commonly resolves lagging list metadata immediately.
+        # If it remains pending, wait only within this bounded visibility window.
+        if (
+            matches(job)
+            and job.get("id") == job_id
+            and job.get("status") in ("queued", "in_progress")
+        ):
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(5, remaining))
 
 
 def save_sdk(source, image, output):
@@ -62,6 +145,7 @@ def retrieve(
     destination,
     *,
     component="linux-app",
+    producer_wait=60,
 ):
     if (
         component not in ("linux-app", "linux-sdk")
@@ -101,21 +185,9 @@ def retrieve(
         or (artifact.get("workflow_run") or {}).get("head_sha") != source
     ):
         raise ValueError("Application artifact differs from its producer output")
-    jobs = [
-        job
-        for job in artifacts.dependency_jobs(repository, run_id)
-        if job.get("name") == "ubuntu-application"
-        and job.get("run_id") == run_id
-        and job.get("head_sha") == source
-        and job.get("status") == "completed"
-        and job.get("conclusion") == "success"
-        and job.get("run_attempt") == attempt
-        and artifacts.in_producer_attempt(artifact, job)
-    ]
-    if len(jobs) != 1:
-        raise ValueError(
-            "Application requires one successful original producer attempt"
-        )
+    job = original_producer(
+        repository, source, run_id, attempt, artifact, wait=producer_wait
+    )
     with tempfile.TemporaryDirectory(
         prefix="foresight-integration-application-"
     ) as temporary:
@@ -151,7 +223,7 @@ def retrieve(
         "source_repository": head_repository,
         "producer_workflow": run["path"],
         "producer_run": run_id,
-        "producer_job": jobs[0]["id"],
+        "producer_job": job["id"],
         "producer_attempt": attempt,
         "artifact_id": artifact_id,
         "artifact_digest": artifact["digest"],

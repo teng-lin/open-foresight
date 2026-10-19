@@ -37,6 +37,14 @@ qualification is checked separately from build compatibility. Consumers verify
 repository, workflow, event, actual producer source, successful job and attempt,
 upload times, ZIP digest, component identity and archive contents.
 
+PR acceptance restores its successful application's original artifact and attempt.
+If GitHub's job list still shows that exact producer as pending, the consumer
+refreshes the same job ID within a bounded visibility window before deciding
+whether it qualifies. Repository, source, attempt, completion, upload interval and
+checksum checks remain mandatory. An acceptance failure should retry the consumer
+against those saved bytes rather than rerunning the successful application or SDK
+producer.
+
 The reviewed SDK approval manifest preserves compatible existing artifacts
 across the identity migration and stacked/rebased PRs. Each entry pins the
 original run, source, artifact, receipt and checksums, and proves that its full
@@ -164,15 +172,23 @@ FORESIGHT_CORE_COVERAGE_BENCHMARK=1 \
 ```
 
 Use `--platform macos` on a Mac with its current native prerequisites. This opt-in
-mode runs the complete plain suite, then the complete suite with coverage. It
+mode runs the complete plain suite and the complete suite with coverage. It
 enforces the existing core coverage minimum (90% unless explicitly configured),
 requires matching test identities and skip outcomes, and still runs the source
 compiler hook regression and service/MCP compilation. Reports are retained as
 `plain.events.jsonl` and `coverage.events.jsonl`. Any test, coverage or comparison
 failure stops the gate. Ordinary CI does not enable the extra benchmark run.
 
-Repeat comparisons on the same revision and record runner/toolchain versions and
-cache warmth: the fixed plain-then-covered order can affect warm-up costs.
+The benchmark logs its execution order and alternates which suite runs first
+using the parity of `GITHUB_RUN_NUMBER` and `GITHUB_RUN_ATTEMPT`. Consecutive runs
+at the same attempt number reverse the order, as do retries of one run. Intervening
+non-benchmark runs and reset attempt numbers can change which samples alternate.
+These counters must contain decimal
+digits, and the attempt must be positive. Local runs default to plain then
+covered; set `GITHUB_RUN_NUMBER=1` to exercise covered then plain. Report names
+always identify the suite, regardless of execution order. Repeat both orders on
+the same revision and record runner/toolchain versions and cache warmth: order
+alternation reduces systematic warm-up bias but does not remove it.
 Cross-platform timings alone cannot isolate instrumentation overhead. Keep the
 existing macOS coverage gate until a replacement has passed its unchanged
 threshold and platform-dependent execution has been accounted for. Report PR

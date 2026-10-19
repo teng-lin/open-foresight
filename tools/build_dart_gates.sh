@@ -27,8 +27,34 @@ case "$task_gate" in
       # Compare the full suite on the same host/native binaries. Keep coverage
       # enforcement and reject changed test/skip outcomes between the two runs.
       export FORESIGHT_CORE_COVERAGE_MIN=${FORESIGHT_CORE_COVERAGE_MIN:-90}
-      ci_timed "core benchmark without coverage" "${FORESIGHT_DART:-dart}" test --file-reporter="json:$task_reports/plain.events.jsonl"
-      FORESIGHT_PYTHON="$task_python" ci_timed "core benchmark with coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/coverage.events.jsonl"
+      task_benchmark_run=${GITHUB_RUN_NUMBER:-0}
+      task_benchmark_attempt=${GITHUB_RUN_ATTEMPT:-1}
+      for task_benchmark_value in "$task_benchmark_run" "$task_benchmark_attempt"; do
+        if [[ ! "$task_benchmark_value" =~ ^[0-9]+$ ]]; then
+          echo 'Core benchmark requires decimal GITHUB_RUN_NUMBER and GITHUB_RUN_ATTEMPT values.' >&2
+          exit 2
+        fi
+      done
+      if [[ "$task_benchmark_attempt" =~ ^0+$ ]]; then
+        echo 'Core benchmark GITHUB_RUN_ATTEMPT must be positive.' >&2
+        exit 2
+      fi
+      # Only validated single digits enter arithmetic: long/zero-padded run
+      # counters cannot overflow or be interpreted as octal or shell expressions.
+      task_benchmark_run_digit=${task_benchmark_run: -1}
+      task_benchmark_attempt_digit=${task_benchmark_attempt: -1}
+      task_benchmark_modes=(plain coverage)
+      if (( (task_benchmark_run_digit + task_benchmark_attempt_digit) % 2 == 0 )); then
+        task_benchmark_modes=(coverage plain)
+      fi
+      printf 'Core benchmark order: %s then %s (run %s, attempt %s)\n' "${task_benchmark_modes[0]}" "${task_benchmark_modes[1]}" "$task_benchmark_run" "$task_benchmark_attempt"
+      for task_benchmark_mode in "${task_benchmark_modes[@]}"; do
+        if [[ "$task_benchmark_mode" == plain ]]; then
+          ci_timed "core benchmark without coverage" "${FORESIGHT_DART:-dart}" test --file-reporter="json:$task_reports/plain.events.jsonl"
+        else
+          FORESIGHT_PYTHON="$task_python" ci_timed "core benchmark with coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/coverage.events.jsonl"
+        fi
+      done
       ci_timed "core benchmark outcome comparison" "$task_python" "$task_root/tools/compare_test_runs.py" "$task_reports/plain.events.jsonl" "$task_reports/coverage.events.jsonl"
     elif [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
       ci_timed "core tests and coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/core.events.jsonl"

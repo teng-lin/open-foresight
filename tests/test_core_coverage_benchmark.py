@@ -129,7 +129,10 @@ elif args[:2] == ['run', 'coverage:format_coverage']:
         if not key.startswith("FORESIGHT_")
     }
     environment.update(
-        PATH=f"{binary}:{os.defpath}", COMMANDS=str(tmp_path / "commands")
+        PATH=f"{binary}:{os.defpath}",
+        COMMANDS=str(tmp_path / "commands"),
+        GITHUB_RUN_NUMBER="0",
+        GITHUB_RUN_ATTEMPT="1",
     )
     return root, environment
 
@@ -179,20 +182,59 @@ def test_default_runs_full_suite_once_and_keeps_native_and_hook_gates(gate, cove
 
 
 @pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize(
+    "run_number,attempt,coverage_first",
+    [
+        ("0", "1", False),
+        ("1", "1", True),
+        ("2", "1", False),
+        ("1", "2", False),
+        ("00008", "00003", False),
+        ("00009", "00003", True),
+        ("9" * 100 + "8", "7" * 100 + "2", True),
+    ],
+)
 def test_benchmark_runs_both_full_suites_and_preserves_coverage_threshold(
-    gate, platform
+    gate, platform, run_number, attempt, coverage_first
 ):
-    result, commands = run(gate, platform, FORESIGHT_CORE_COVERAGE_BENCHMARK="1")
+    result, commands = run(
+        gate,
+        platform,
+        FORESIGHT_CORE_COVERAGE_BENCHMARK="1",
+        GITHUB_RUN_NUMBER=run_number,
+        GITHUB_RUN_ATTEMPT=attempt,
+    )
     assert result.returncode == 0, result.stdout + result.stderr
     tests = [command for command in commands if command["args"][0] == "test"]
     assert len(tests) == 2
-    assert not any(arg.startswith("--coverage=") for arg in tests[0]["args"])
-    assert any(arg.startswith("--coverage=") for arg in tests[1]["args"])
+    assert not any(
+        arg.endswith(".dart") for command in tests for arg in command["args"]
+    )
+    assert [
+        any(arg.startswith("--coverage=") for arg in command["args"])
+        for command in tests
+    ] == [coverage_first, not coverage_first]
+    modes = ["coverage", "plain"] if coverage_first else ["plain", "coverage"]
+    for command, mode in zip(tests, modes, strict=True):
+        assert any(arg.endswith(f"/{mode}.events.jsonl") for arg in command["args"])
+    assert f"Core benchmark order: {' then '.join(modes)}" in result.stdout
     assert "minimum 90%" in result.stdout
     assert "Core benchmark matched: 1 passed, 0 skipped" in result.stdout
 
 
-def test_benchmark_uses_the_same_overridden_dart_and_supplied_python(gate):
+def test_local_benchmark_without_github_counters_defaults_to_plain_first(gate):
+    _, environment = gate
+    environment.pop("GITHUB_RUN_NUMBER")
+    environment.pop("GITHUB_RUN_ATTEMPT")
+    result, _ = run(gate, FORESIGHT_CORE_COVERAGE_BENCHMARK="1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "Core benchmark order: plain then coverage (run 0, attempt 1)" in result.stdout
+    )
+
+
+@pytest.mark.parametrize("run_number", ["0", "1"])
+def test_benchmark_uses_the_same_overridden_dart_and_supplied_python(gate, run_number):
     _, environment = gate
     binary = Path(environment["PATH"].split(":")[0])
     override = binary / "alternate dart"
@@ -202,6 +244,7 @@ def test_benchmark_uses_the_same_overridden_dart_and_supplied_python(gate):
         FORESIGHT_CORE_COVERAGE_BENCHMARK="1",
         FORESIGHT_DART=str(override),
         FORESIGHT_PYTHON="/missing/inherited-python",
+        GITHUB_RUN_NUMBER=run_number,
     )
     assert result.returncode == 0, result.stdout + result.stderr
     tests = [command for command in commands if command["args"][0] == "test"]
@@ -257,10 +300,49 @@ def test_failed_analysis_removes_only_current_stage_old_events(gate, stage):
         ({"CHANGED_SKIP": "1"}, "changed test identities or skip outcomes"),
     ],
 )
+@pytest.mark.parametrize("run_number", ["0", "1"])
 def test_failed_baseline_coverage_or_outcome_comparison_stops_compilation(
-    gate, settings, expected
+    gate, settings, expected, run_number
 ):
-    result, commands = run(gate, FORESIGHT_CORE_COVERAGE_BENCHMARK="1", **settings)
+    result, commands = run(
+        gate,
+        FORESIGHT_CORE_COVERAGE_BENCHMARK="1",
+        GITHUB_RUN_NUMBER=run_number,
+        **settings,
+    )
     assert result.returncode != 0
     assert expected in result.stdout + result.stderr
     assert all(command["args"][0] != "compile" for command in commands)
+    tests = [command for command in commands if command["args"][0] == "test"]
+    if "PLAIN_EXIT" in settings:
+        assert len(tests) == (2 if run_number == "1" else 1)
+    elif "COVERED_EXIT" in settings or "COVERED_LINES" in settings:
+        assert len(tests) == (1 if run_number == "1" else 2)
+    else:
+        assert len(tests) == 2
+
+
+@pytest.mark.parametrize("counter", ["GITHUB_RUN_NUMBER", "GITHUB_RUN_ATTEMPT"])
+@pytest.mark.parametrize(
+    "value", ["-1", "1+1", " 2", "not-a-number", "a[$(touch unsafe)]"]
+)
+def test_benchmark_rejects_nonnumeric_counters_before_running_tests(
+    gate, counter, value
+):
+    result, commands = run(
+        gate, FORESIGHT_CORE_COVERAGE_BENCHMARK="1", **{counter: value}
+    )
+    assert result.returncode == 2
+    assert "requires decimal GITHUB_RUN_NUMBER and GITHUB_RUN_ATTEMPT" in result.stderr
+    assert all(command["args"][0] not in {"test", "compile"} for command in commands)
+    assert not list(gate[0].rglob("unsafe"))
+
+
+@pytest.mark.parametrize("attempt", ["0", "000"])
+def test_benchmark_rejects_zero_attempts_before_running_tests(gate, attempt):
+    result, commands = run(
+        gate, FORESIGHT_CORE_COVERAGE_BENCHMARK="1", GITHUB_RUN_ATTEMPT=attempt
+    )
+    assert result.returncode == 2
+    assert "GITHUB_RUN_ATTEMPT must be positive" in result.stderr
+    assert all(command["args"][0] not in {"test", "compile"} for command in commands)

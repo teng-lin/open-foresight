@@ -201,12 +201,14 @@ def test_observer_is_uploaded_and_never_controls_phase_execution():
     outputs = workflow["jobs"]["changes"]["outputs"]
     assert set(outputs) == {"linux_bundle"}
     phases = workflow["jobs"]["ubuntu-package"]["steps"]
-    for name in (
-        "Real CPU model, helper, citation and cancellation gates",
-        "Shipped GPU runtimes on software Vulkan",
-        "Private virtual-audio and device-recovery gates",
+    for command in (
+        "--suite models",
+        "tools/accept_software_gpu.py",
+        "--suite virtual-audio",
     ):
-        step = next(step for step in phases if step.get("name") == name)
+        matching = [step for step in phases if command in step.get("run", "")]
+        assert len(matching) == 1, f"Expected one acceptance command: {command}"
+        step = matching[0]
         assert (
             step["if"]
             == "${{ !cancelled() && steps.acceptance-image.outcome == 'success' && steps.fixtures.outcome == 'success' }}"

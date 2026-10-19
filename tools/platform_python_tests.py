@@ -58,7 +58,15 @@ QUALITY_ONLY = {
 
 def host_sensitive(path):
     """Recognize existing host/tool conditions; newly found files need ownership."""
-    for node in ast.walk(ast.parse(path.read_text())):
+    tree = ast.parse(path.read_text())
+    os_names = {"os"} | {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "os"
+    }
+    for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and (
             node.module in {"platform", "sys", "os", "shutil"}
             and any(
@@ -101,7 +109,7 @@ def host_sensitive(path):
         }:
             # Avoid treating unrelated object.name attributes as host checks.
             if node.attr != "name" or (
-                isinstance(node.value, ast.Name) and node.value.id == "os"
+                isinstance(node.value, ast.Name) and node.value.id in os_names
             ):
                 return True
     return False
