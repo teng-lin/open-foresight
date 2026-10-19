@@ -89,7 +89,12 @@ def test_fixture_is_the_original_successful_candidate_on_reviewed_main(tmp_path)
             "producer_run": "42",
         }
     pull.assert_called_once_with(
-        "owner/repo", "linux-app", SHA, tmp_path, source_run=42
+        "owner/repo",
+        "linux-app",
+        SHA,
+        tmp_path,
+        source_run=42,
+        consumer="pr-package-contract",
     )
 
 

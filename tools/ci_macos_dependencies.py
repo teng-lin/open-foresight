@@ -45,17 +45,27 @@ def waiting_producers(repository, component, own_head, own_pr):
     if not own_head:
         return []
     runs: dict[int, dict] = {}
-    for status in ("in_progress", "queued", "waiting", "pending", "requested"):
+    for status, scope in (
+        (status, scope)
+        for status in ("in_progress", "queued", "waiting", "pending", "requested")
+        for scope in (f"head_sha={own_head}", "branch=main")
+    ):
         page = 1
         while True:
             batch = api(
                 repository,
-                f"actions/workflows/ci-dependencies.yml/runs?head_sha={own_head}&status={status}&per_page=100&page={page}",
+                f"actions/workflows/ci-dependencies.yml/runs?{scope}&status={status}&per_page=100&page={page}",
             )["workflow_runs"]
             runs.update(
                 (run["id"], run)
                 for run in batch
-                if run.get("head_sha") == own_head and run.get("status") == status
+                if run.get("status") == status
+                and (
+                    run.get("head_sha") == own_head
+                    if scope.startswith("head_sha=")
+                    else run.get("head_branch") == "main"
+                    and run.get("event") != "pull_request"
+                )
             )
             if len(batch) < 100:
                 break

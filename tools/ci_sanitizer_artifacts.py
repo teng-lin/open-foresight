@@ -782,7 +782,7 @@ def find(repository, kind, inputs, abi, root, own_pr, prefix, *, verify_existing
                         "recipe": inputs,
                         "environment": abi,
                     }
-                    if any(
+                    if not PRODUCERS["sanitizer-sdk"].matches_receipt(receipt) or any(
                         receipt.get(key) != value
                         for key, value in expected_fields.items()
                     ):

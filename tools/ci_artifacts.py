@@ -357,12 +357,18 @@ def api(repository, route):
 
 
 def trusted_run(
-    run, component, own_head="", repository="teng-lin/open-foresight", own_pr=0
+    run,
+    component,
+    own_head="",
+    repository="teng-lin/open-foresight",
+    own_pr=0,
+    *,
+    consumer="artifact-pull",
 ):
     """Dependencies come from main, merged sources, or this repository's own PR."""
     producer = PRODUCERS[
-        "release-candidate"
-        if component.endswith("-app")
+        consumer
+        if component.endswith("-app") or consumer != "artifact-pull"
         else "dependency-sdk"
     ]
     if (
@@ -482,8 +488,10 @@ def approved_final_sdk_source(repository, run, component):
         api=api,
         merged_source=merged_source,
         fingerprint_at=source_fingerprint_at,
-        read_source=lambda repo, commit, **kwargs: producer_trust.read_producer_controls(
-            repo, commit, api=partial(immutable_source_api, api), **kwargs
+        read_source=lambda repo, commit, **kwargs: (
+            producer_trust.read_producer_controls(
+                repo, commit, api=partial(immutable_source_api, api), **kwargs
+            )
         ),
         controls=(*producer_trust.PRODUCER_CONTROLS, WORKFLOW),
     )
@@ -494,13 +502,14 @@ def approved_final_sdk_source(repository, run, component):
     return approved
 
 
-def eligible_run(repository, run, component, own_head="", own_pr=0):
-    if trusted_run(run, component, own_head, repository, own_pr):
+def eligible_run(
+    repository, run, component, own_head="", own_pr=0, *, consumer="artifact-pull"
+):
+    if trusted_run(run, component, own_head, repository, own_pr, consumer=consumer):
         return True
     return (
         not component.endswith("-app")
-        and run.get("path") == ".github/workflows/ci-dependencies.yml"
-        and run.get("event") in ("pull_request", "workflow_dispatch")
+        and PRODUCERS["sdk-promoted-source"].matches_run(run)
         and (run.get("head_repository") or {}).get("full_name") == repository
         and (
             merged_source(repository, run)
@@ -574,14 +583,14 @@ def in_producer_attempt(artifact, job):
         return False
 
 
-def application_jobs(repository, run, component, artifact):
+def application_jobs(repository, run, component, artifact, *, consumer="artifact-pull"):
     """Qualify a completed platform producer independently of sibling jobs."""
-    if not trusted_run(run, component, repository=repository):
+    if not trusted_run(run, component, repository=repository, consumer=consumer):
         return []
     return [
         job
         for job in dependency_jobs(repository, run["id"])
-        if PRODUCERS["release-candidate"].matches_job(job, component)
+        if PRODUCERS[consumer].matches_job(job, component)
         and job.get("conclusion") == "success"
         and in_producer_attempt(artifact, job)
     ]
@@ -813,20 +822,29 @@ def probe(repository, component, identity, own_head="", own_pr=0):
 
 
 def waiting_for_dependency(repository, component, identity, own_head, own_pr):
-    """Wait only for this head's live dedicated producer, never unrelated work."""
+    """Wait for this head or compatible reviewed main, never another PR."""
     if component not in FILES or not own_head:
         return []
     result = []
-    for status in ("queued", "in_progress", "waiting", "pending", "requested"):
+    for status, scope in (
+        (status, scope)
+        for status in ("queued", "in_progress", "waiting", "pending", "requested")
+        for scope in (f"head_sha={own_head}", "branch=main")
+    ):
         page = 1
         while True:
             runs = api(
                 repository,
-                f"actions/workflows/ci-dependencies.yml/runs?head_sha={own_head}&status={status}&per_page=100&page={page}",
+                f"actions/workflows/ci-dependencies.yml/runs?{scope}&status={status}&per_page=100&page={page}",
             )["workflow_runs"]
             for run in runs:
                 if (
-                    run.get("head_sha") != own_head
+                    not (
+                        run.get("head_sha") == own_head
+                        if scope.startswith("head_sha=")
+                        else run.get("head_branch") == "main"
+                        and run.get("event") != "pull_request"
+                    )
                     or run.get("status") != status
                     or not trusted_run(run, component, own_head, repository, own_pr)
                 ):
@@ -839,7 +857,10 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
                 ]
                 if jobs and all(job.get("conclusion") is not None for job in jobs):
                     continue
-                if source_fingerprint_at(repository, own_head, component) == identity:
+                if (
+                    source_fingerprint_at(repository, run["head_sha"], component)
+                    == identity
+                ):
                     result.append(run["id"])
             if len(runs) < 100:
                 break
@@ -851,7 +872,7 @@ def unavailable_message(component, identity):
     producer = "ci-dependencies.yml" if component in FILES else "macos.yml"
     return (
         f"Verified {component} identity {identity} unavailable from {producer}. "
-        "No same-head producer is running, or the 1800-second wait expired. "
+        "No same-head or compatible main producer is running, or the 1800-second wait expired. "
         "Run the producer on the reviewed source and retry the failed consumer."
     )
 
@@ -866,7 +887,16 @@ def report_unavailable(component, identity):
 
 
 def pull(
-    repository, component, identity, prefix, wait=0, own_head="", own_pr=0, source_run=0
+    repository,
+    component,
+    identity,
+    prefix,
+    wait=0,
+    own_head="",
+    own_pr=0,
+    source_run=0,
+    *,
+    consumer="artifact-pull",
 ):
     original = approved_original(repository, component, identity)
     if original:
@@ -916,7 +946,9 @@ def pull(
                 continue
             run = api(repository, f"actions/runs/{artifact['workflow_run']['id']}")
             try:
-                eligible = eligible_run(repository, run, component, own_head, own_pr)
+                eligible = eligible_run(
+                    repository, run, component, own_head, own_pr, consumer=consumer
+                )
             except json.JSONDecodeError:
                 raise
             except ValueError as error:
@@ -929,7 +961,9 @@ def pull(
                     run.get("event") == "workflow_dispatch"
                 ):
                     continue
-                jobs = application_jobs(repository, run, component, artifact)
+                jobs = application_jobs(
+                    repository, run, component, artifact, consumer=consumer
+                )
                 if not jobs:
                     continue
             else:
@@ -953,9 +987,13 @@ def pull(
                     stream.extractall(source)  # noqa: S202 - Archive members are validated immediately above; links are retained.
                 receipt = json.loads((source / "identity.json").read_text())
                 if component.endswith("-app"):
-                    if not valid_receipt(receipt, component, identity) or not any(
-                        job.get("run_attempt", 1) == receipt["source_run_attempt"]
-                        for job in jobs
+                    if (
+                        not valid_receipt(receipt, component, identity)
+                        or not PRODUCERS[consumer].matches_receipt(receipt)
+                        or not any(
+                            job.get("run_attempt", 1) == receipt["source_run_attempt"]
+                            for job in jobs
+                        )
                     ):
                         raise ValueError(
                             "Application receipt differs from successful producer attempt"
@@ -1019,7 +1057,9 @@ def pull(
         time.sleep(min(20, max(0, deadline - time.monotonic())))
 
 
-def application_descriptor(repository, component, source, run_id):
+def application_descriptor(
+    repository, component, source, run_id, *, consumer="artifact-pull"
+):
     """Prefer a small verified receipt; legacy candidates retain full verification."""
     run = api(repository, f"actions/runs/{run_id}")
     metadata_name = receipt_name(component, source)
@@ -1047,6 +1087,7 @@ def application_descriptor(repository, component, source, run_id):
         receipt = record.get("source_receipt")
         if (
             not valid_receipt(receipt, component, source)
+            or not PRODUCERS[consumer].matches_receipt(receipt)
             or receipt["source_commit"] != source
             or record.get("component") != component
             or record.get("identity") != source
@@ -1056,7 +1097,7 @@ def application_descriptor(repository, component, source, run_id):
             or payload.get("workflow_run", {}).get("id") != run_id
         ):
             raise ValueError("Application metadata does not bind the original payload")
-        jobs = application_jobs(repository, run, component, payload)
+        jobs = application_jobs(repository, run, component, payload, consumer=consumer)
         if not any(
             job.get("run_attempt", 1) == receipt["source_run_attempt"]
             and in_producer_attempt(item, job)
@@ -1074,7 +1115,10 @@ def application_descriptor(repository, component, source, run_id):
         return distribution
     with tempfile.TemporaryDirectory() as temporary:
         prefix = Path(temporary) / "candidate"
-        if not pull(repository, component, source, prefix, source_run=run_id):
+        options = {"consumer": consumer} if consumer != "artifact-pull" else {}
+        if not pull(
+            repository, component, source, prefix, source_run=run_id, **options
+        ):
             raise ValueError("Verified surviving candidate became unavailable")
         return application_distribution(prefix, component, source)
 

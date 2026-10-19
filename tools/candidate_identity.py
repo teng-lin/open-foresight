@@ -30,7 +30,7 @@ def source_version(source):
 
 def number(repository, source, platforms="all", reason=""):
     version, minimum = source_version(source)
-    runs = candidate_runs(repository, source)
+    runs = candidate_runs(repository, source, consumer="artifact-pull")
     requested = (
         {"linux-app", "macos-app"} if platforms == "all" else {platforms + "-app"}
     )

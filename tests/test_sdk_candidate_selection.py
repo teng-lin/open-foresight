@@ -104,7 +104,11 @@ def candidates(tmp_path, monkeypatch):
 
     monkeypatch.setattr(artifacts, "api", api)
     monkeypatch.setattr(artifacts, "approved_original", lambda *args: None)
-    monkeypatch.setattr(artifacts, "eligible_run", lambda *args: True)
+    monkeypatch.setattr(
+        artifacts,
+        "eligible_run",
+        lambda *args, consumer="artifact-pull": consumer == "artifact-pull",
+    )
     monkeypatch.setattr(
         artifacts,
         "dependency_jobs",

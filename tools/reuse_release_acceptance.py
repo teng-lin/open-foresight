@@ -55,9 +55,14 @@ def restore(repository, tag, run_id, evidence=""):
             ):
                 raise ValueError("Invalid acceptance archive")
             report = json.loads(bundle.read("release-acceptance.json"))
-    if report.get("tag") != tag or report.get("status") not in (
-        "passed",
-        "automated_passed_manual_pending",
+    if (
+        not PRODUCERS["release-acceptance"].matches_receipt(report)
+        or report.get("tag") != tag
+        or report.get("status")
+        not in (
+            "passed",
+            "automated_passed_manual_pending",
+        )
     ):
         raise ValueError(
             "Original automated acceptance is incomplete or for another release"

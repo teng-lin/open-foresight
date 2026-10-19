@@ -21,7 +21,8 @@ selects every platform.
 
 Dependency producers and macOS consumers check out the PR head, so advancing
 main cannot request an identity that no producer built. Consumers try verified
-artifacts first, then wait for a same-head live producer for at most 1,800
+artifacts first, then wait for a same-head live producer or a trusted main
+producer with the same verified component identity for at most 1,800
 seconds. If none remains, they fail with the missing identity and producer;
 they do not silently compile replacement SDKs. Explicit fork validation may
 build pinned sources locally, without publishing shared outputs. Dependabot
@@ -86,6 +87,14 @@ The rows retain today's names and events. In particular, neither PR artifacts
 nor preview producers qualify as release candidates, and scheduled sanitizer
 runs do not qualify as SDK producers. Future producer names and tier requirements
 must be introduced with their consumer's proof and negative fixtures.
+
+Application rows are separate for artifact pulls, release preparation and PR
+package fixtures; SDK registry aliases have their own dependency-producer row.
+Release-only requirements can therefore tighten without affecting unrelated
+consumers. Every receipt consumer enforces its row's `receipt_tier` when set;
+`None` preserves the legacy schema-1 behavior. SDK approval helpers derive their
+workflow identity from the same table, retaining their separate merged-source
+and exact-manifest proof. These rows introduce no new producer names or events.
 
 The table only identifies producers. Consumers retain their repository and source
 policy, successful original-attempt proof, upload-window binding, receipt checks
@@ -929,7 +938,9 @@ runner-minute savings remain unclaimed until measured over five hosted runs.
 ### WS1 explicit fork-local validation
 
 Ordinary macOS consumers now fail with the missing identity and producer when
-no same-head producer remains, instead of silently compiling dependencies.
+neither a same-head producer nor a compatible trusted main producer remains,
+instead of silently compiling dependencies. An application-only head can thus
+retain main's earlier dependency producer without waiting for another PR.
 Fork PR validation may explicitly pass `--allow-local-build`; both compiler-SDK
 and runtime steps derive that flag from nonempty head/base repository metadata
 on an actual fork `pull_request` event. The explicit permission propagates to

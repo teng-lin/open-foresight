@@ -7,8 +7,10 @@ and immutable Git-object reader; no producer Python or workflow is executed.
 
 import re
 
+from tools.ci_producer_trust import PRODUCERS
+
 SHA = re.compile(r"[a-f0-9]{40}")
-WORKFLOW = ".github/workflows/ci-dependencies.yml"
+WORKFLOW = PRODUCERS["dependency-sdk"].workflows[0]
 MAX_COMMIT_PAGES = 3  # GitHub's PR commits endpoint returns at most 250 commits.
 
 

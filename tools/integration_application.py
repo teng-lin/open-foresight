@@ -210,6 +210,7 @@ def retrieve(
         receipt = read_zip(archive, root / "receipt")
         if (
             not artifacts.valid_receipt(receipt, component, identity)
+            or not PRODUCERS[consumer].matches_receipt(receipt)
             or receipt["source_commit"] != source
             or receipt["source_run_attempt"] != attempt
         ):

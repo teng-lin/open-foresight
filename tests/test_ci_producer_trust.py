@@ -1,12 +1,19 @@
 """Producer identities are consumer-scoped before any workflow renaming."""
 
 import itertools
+import ast
+from dataclasses import replace
+import hashlib
+import json
+from pathlib import Path
+import zipfile
 
 import pytest
 
 from tools import ci_artifacts
 from tools import sdk_producer_trust
 from tools.ci_producer_trust import PRODUCERS
+from test_ci_promotion import candidate, SOURCE, REPO
 
 
 # Freeze the migration boundary: future jobs/tiers must be enabled deliberately
@@ -22,7 +29,7 @@ EXPECTED = {
         ("pull_request",),
         {"": ("ubuntu-application",)},
     ),
-    "release-candidate": (
+    "artifact-pull": (
         ("macos.yml",),
         ("push", "workflow_dispatch"),
         {"linux-app": ("linux-bundle",), "macos-app": ("macos",)},
@@ -56,6 +63,32 @@ EXPECTED = {
         {"": ("acceptance", "acceptance / acceptance")},
     ),
 }
+
+EXPECTED.update(
+    {
+        name: EXPECTED["artifact-pull"]
+        for name in ("release-preparation", "pr-package-contract")
+    }
+)
+EXPECTED["pr-package-contract"] = (
+    EXPECTED["artifact-pull"][0],
+    EXPECTED["artifact-pull"][1],
+    {"linux-app": EXPECTED["artifact-pull"][2]["linux-app"]},
+)
+EXPECTED["package-alias"] = (
+    EXPECTED["dependency-sdk"][0],
+    EXPECTED["dependency-sdk"][1],
+    {
+        name: jobs
+        for name, jobs in EXPECTED["dependency-sdk"][2].items()
+        if name.startswith("linux-")
+    },
+)
+EXPECTED["sdk-promoted-source"] = (
+    EXPECTED["dependency-sdk"][0],
+    ("pull_request", "workflow_dispatch"),
+    EXPECTED["dependency-sdk"][2],
+)
 
 
 def test_exact_legacy_rows_have_no_tier_requirement_yet():
@@ -124,3 +157,76 @@ def test_sdk_job_names_share_the_single_table_without_changing_recipe_inputs():
         "tools/ci_producer_trust.py" not in inputs
         for inputs in ci_artifacts.FILES.values()
     )
+
+
+def test_receipt_tier_is_optional_but_enforced_when_a_consumer_specifies_it():
+    legacy = PRODUCERS["release-preparation"]
+    assert legacy.matches_receipt({})
+    strict = replace(legacy, receipt_tier="release")
+    assert strict.matches_receipt({"tier": "release"})
+    for receipt in (None, {}, {"tier": "pr"}, {"tier": "preview"}):
+        assert not strict.matches_receipt(receipt)
+    assert not PRODUCERS["pr-package-contract"].matches_job(
+        {"name": "macos"}, "macos-app"
+    )
+    assert not PRODUCERS["package-alias"].matches_job(
+        {"name": "Build macOS sdk"}, "macos-sdk"
+    )
+
+
+@pytest.mark.parametrize("tier", [None, "preview", "release"])
+def test_release_tier_restriction_does_not_change_other_consumers(
+    tmp_path, monkeypatch, tier
+):
+    artifact, _, _ = candidate(tmp_path, monkeypatch)
+    monkeypatch.setitem(
+        PRODUCERS,
+        "release-preparation",
+        replace(PRODUCERS["release-preparation"], receipt_tier="release"),
+    )
+    # Real ZIP/receipt/payload hashes remain authoritative when adding a tier.
+    archive = tmp_path / "artifact.zip"
+    with zipfile.ZipFile(archive) as stream:
+        files = {name: stream.read(name) for name in stream.namelist()}
+    receipt = json.loads(files["identity.json"])
+    if tier is not None:
+        receipt["tier"] = tier
+    files["identity.json"] = json.dumps(receipt).encode()
+    with zipfile.ZipFile(archive, "w") as stream:
+        for name, data in files.items():
+            stream.writestr(name, data)
+    artifact["digest"] = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
+    for consumer in ("artifact-pull", "pr-package-contract"):
+        assert ci_artifacts.pull(
+            REPO, "linux-app", SOURCE, tmp_path / consumer, consumer=consumer
+        )
+    if tier == "release":
+        assert ci_artifacts.application_descriptor(
+            REPO, "linux-app", SOURCE, 42, consumer="release-preparation"
+        ) == {"version": "0.1.2", "build_number": 10}
+    else:
+        with pytest.raises(ValueError, match="receipt differs"):
+            ci_artifacts.application_descriptor(
+                REPO, "linux-app", SOURCE, 42, consumer="release-preparation"
+            )
+
+
+def test_producer_workflow_allowlists_are_only_declared_in_the_table():
+    root = Path(__file__).resolve().parents[1]
+    for name in (
+        "ci_artifacts.py",
+        "sdk_producer_trust.py",
+        "sdk_approval_bridge.py",
+        "sdk_final_approval.py",
+        "create_sdk_approval.py",
+        "prepare_release.py",
+        "package_contract_candidate.py",
+        "publish_linux_package_aliases.py",
+    ):
+        tree = ast.parse((root / "tools" / name).read_text())
+        assert not any(
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.startswith(".github/workflows/")
+            for node in ast.walk(tree)
+        ), name

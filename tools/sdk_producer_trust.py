@@ -227,6 +227,7 @@ def verify_producer_source(
     head = run.get("head_sha", "")
     if (
         run.get("path") != WORKFLOW
+        or not PRODUCERS["dependency-sdk"].matches_receipt(receipt)
         or (run.get("head_repository") or {}).get("full_name") != repository
         or not isinstance(head, str)
         or not COMMIT.fullmatch(head)
@@ -268,7 +269,7 @@ def compatible_producers(
             job for job in component_jobs if job.get("run_attempt", 1) == attempt
         ]
         if current and all(
-            job.get("conclusion") in ("failure", "cancelled", "timed_out", "skipped")
+            job.get("conclusion") is not None
             for job in current
         ):
             continue

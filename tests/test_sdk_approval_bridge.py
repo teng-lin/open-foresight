@@ -1,6 +1,7 @@
 """Exercise original bytes through approval, probing, pulling and Linux loading."""
 
 import copy
+from dataclasses import replace
 import hashlib
 import io
 import json
@@ -12,6 +13,7 @@ import pytest
 from tools import ci_artifacts as artifacts
 from tools import linux_sdk_artifacts as linux
 from tools import sdk_approval_bridge as bridge
+from tools.ci_producer_trust import PRODUCERS
 
 REPOSITORY = "owner/repo"
 PRODUCER = "a" * 40
@@ -19,6 +21,20 @@ FINAL = "b" * 40
 MERGE = "c" * 40
 SEMANTIC = "d" * 64
 IMAGE = "sha256:" + "e" * 64
+
+
+def test_explicit_sdk_tier_is_not_bypassed_by_the_legacy_approval_bridge(
+    original, monkeypatch
+):
+    assert artifacts.approved_original(REPOSITORY, "linux-core", SEMANTIC)
+    original["downloads"].clear()
+    monkeypatch.setitem(
+        PRODUCERS,
+        "dependency-sdk",
+        replace(PRODUCERS["dependency-sdk"], receipt_tier="release"),
+    )
+    assert artifacts.approved_original(REPOSITORY, "linux-core", SEMANTIC) is None
+    assert original["downloads"] == []
 
 
 @pytest.mark.parametrize(

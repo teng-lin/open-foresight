@@ -1,6 +1,7 @@
 """Alias publication must use qualified current-main images and preserve digests."""
 
 import copy
+from dataclasses import replace
 import hashlib
 import io
 import json
@@ -13,6 +14,7 @@ import zipfile
 import pytest
 
 from tools import publish_linux_package_aliases as aliases
+from tools.ci_producer_trust import PRODUCERS
 
 REPOSITORY = "teng-lin/open-foresight"
 HEAD = "a" * 40
@@ -241,6 +243,28 @@ def resolve(published):
     return aliases.published_descriptor(
         REPOSITORY, published["component"], published["identity"]
     )
+
+
+def test_alias_receipt_tier_is_independent_and_enforced(published, monkeypatch):
+    monkeypatch.setitem(
+        PRODUCERS,
+        "package-alias",
+        replace(PRODUCERS["package-alias"], receipt_tier="release"),
+    )
+    with pytest.raises(ValueError, match="alias receipt tier"):
+        resolve(published)
+    published["receipt"]["tier"] = "release"
+    published["seal"]()
+    assert resolve(published)
+
+
+def test_alias_consumer_checks_its_own_producer_job(published, monkeypatch):
+    row = PRODUCERS["package-alias"]
+    jobs = dict(row.jobs)
+    jobs[published["component"]] = ("new reviewed alias publisher",)
+    monkeypatch.setitem(PRODUCERS, "package-alias", replace(row, jobs=jobs))
+    with pytest.raises(RuntimeError, match="descriptor unavailable"):
+        resolve(published)
 
 
 def test_real_registry_envelope_preserves_history_and_avoids_original_archives(

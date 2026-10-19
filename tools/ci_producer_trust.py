@@ -19,7 +19,12 @@ class Producer:
         return run.get("path") in self.workflows and run.get("event") in self.events
 
     def matches_job(self, job, component=""):
-        return job.get("name") in self.jobs[component]
+        return job.get("name") in self.jobs.get(component, ())
+
+    def matches_receipt(self, receipt):
+        return self.receipt_tier is None or (
+            isinstance(receipt, dict) and receipt.get("tier") == self.receipt_tier
+        )
 
 
 # Repository, reviewed-source/own-PR policy, original successful attempt, upload
@@ -36,7 +41,7 @@ PRODUCERS = {
         ("pull_request",),
         {"": ("ubuntu-application",)},
     ),
-    "release-candidate": Producer(
+    "artifact-pull": Producer(
         (".github/workflows/macos.yml",),
         ("push", "workflow_dispatch"),
         {"linux-app": ("linux-bundle",), "macos-app": ("macos",)},
@@ -76,3 +81,30 @@ PRODUCERS = {
         {"": ("acceptance", "acceptance / acceptance")},
     ),
 }
+
+# Separate consumer rows permit release-only tier tightening without changing
+# the legacy fixtures used by PR packages or generic artifact restoration.
+PRODUCERS["release-preparation"] = Producer(
+    PRODUCERS["artifact-pull"].workflows,
+    PRODUCERS["artifact-pull"].events,
+    dict(PRODUCERS["artifact-pull"].jobs),
+)
+PRODUCERS["pr-package-contract"] = Producer(
+    PRODUCERS["artifact-pull"].workflows,
+    PRODUCERS["artifact-pull"].events,
+    {"linux-app": PRODUCERS["artifact-pull"].jobs["linux-app"]},
+)
+PRODUCERS["package-alias"] = Producer(
+    PRODUCERS["dependency-sdk"].workflows,
+    PRODUCERS["dependency-sdk"].events,
+    {
+        name: jobs
+        for name, jobs in PRODUCERS["dependency-sdk"].jobs.items()
+        if name.startswith("linux-")
+    },
+)
+PRODUCERS["sdk-promoted-source"] = Producer(
+    PRODUCERS["dependency-sdk"].workflows,
+    ("pull_request", "workflow_dispatch"),
+    dict(PRODUCERS["dependency-sdk"].jobs),
+)
