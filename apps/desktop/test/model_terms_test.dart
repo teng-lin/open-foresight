@@ -34,7 +34,9 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('${model.name} terms'), findsOneWidget);
         expect(accepted, isNull);
-        expect(find.byType(SelectableText), findsOneWidget);
+        expect(find.byType(SelectableText), findsNothing);
+        expect(find.textContaining('https://'), findsNothing);
+        expect(find.byType(TextButton), findsWidgets);
         await tester.tap(find.text('Cancel'));
         await tester.pumpAndSettle();
         expect(accepted, false);

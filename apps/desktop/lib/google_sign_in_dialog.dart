@@ -20,9 +20,11 @@ class GoogleSignInDialog extends StatefulWidget {
     super.key,
     required this.auth,
     required this.openBrowser,
+    this.returnToApp,
   });
   final GoogleAccount auth;
   final Future<void> Function(Uri) openBrowser;
+  final Future<void> Function()? returnToApp;
 
   @override
   State<GoogleSignInDialog> createState() => _GoogleSignInDialogState();
@@ -52,6 +54,14 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
         await widget.openBrowser(uri);
         if (mounted) setState(() => browserOpened = true);
       });
+      if (widget.auth.connected && mounted) {
+        // Focus failure must not discard an otherwise successful account login.
+        try {
+          await widget.returnToApp?.call();
+        } catch (_) {
+          // Desktop focus policies may refuse activation; login still succeeded.
+        }
+      }
       // If consent already completed before Cancel, retain the actual account
       // outcome rather than presenting a connected account as cancelled.
       outcome = GoogleSignInOutcome(
@@ -100,7 +110,7 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
                 cancelling
                     ? 'Cancelling Google sign-in…'
                     : browserOpened
-                    ? 'Complete Google sign-in in your browser, then return here.'
+                    ? 'Complete Google sign-in in your browser. If Open Foresight does not reopen, return to the app manually.'
                     : 'Opening Google sign-in in your browser…',
               ),
               const SizedBox(height: 16),

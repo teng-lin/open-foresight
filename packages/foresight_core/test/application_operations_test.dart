@@ -58,8 +58,11 @@ class OperationsRag extends RagServiceBase {
 class OperationsDomain extends AdapterDomain {
   final deleted = <String>[];
   bool rejectIndex = false;
+  Completer<void>? indexEntered, indexRelease;
   @override
   Future<void> index(String id) async {
+    if (indexEntered?.isCompleted == false) indexEntered!.complete();
+    await indexRelease?.future;
     if (rejectIndex) throw StateError('index worker disconnected');
     await super.index(id);
   }
@@ -607,6 +610,12 @@ void main() {
     () async {
       final model = File('${root.path}/embedding.litertlm')
         ..writeAsStringSync('fixture');
+      final queued = domain.store.importText(
+        'Saved during setup',
+        'Keep this document',
+        'text/plain',
+        'fixture',
+      );
       rag.entered = Completer<void>();
       rag.release = Completer<void>();
       final pending = app.call('models.embedding', {
@@ -626,7 +635,22 @@ void main() {
         ),
       );
       rag.release!.complete();
-      await pending;
+      domain.indexEntered = Completer<void>();
+      final indexRelease = domain.indexRelease = Completer<void>();
+      addTearDown(() {
+        if (!indexRelease.isCompleted) indexRelease.complete();
+      });
+      await pending.timeout(const Duration(seconds: 2));
+      await domain.indexEntered!.future.timeout(const Duration(seconds: 1));
+      expect(app.modelBusy, isFalse);
+      await app.call('models.register', {'kind': 'speech', 'path': model.path});
+      expect(domain.store.model('speech'), isNotNull);
+      indexRelease.complete();
+      await domain.indexPendingSources();
+      domain.indexEntered = domain.indexRelease = null;
+      expect(domain.indexed, contains(queued));
+      expect(domain.store.sources.single['state'], 'indexed');
+      expect(domain.store.sources.single['revision'], 1);
       expect(
         domain.store.model('embedding')!['backend'],
         'litert_lm_embedding_gpu',
@@ -640,6 +664,17 @@ void main() {
       );
       expect(app.modelBusy, isFalse);
       expect(domain.store.model('embedding')!['path'], model.absolute.path);
+      rag.reject = false;
+      domain.rejectIndex = true;
+      domain.store.importText(
+        'Needs an indexing retry',
+        'Retained',
+        'text/plain',
+        'fixture',
+      );
+      await app.call('models.embedding', {'path': model.path});
+      expect(domain.store.model('embedding')!['path'], model.absolute.path);
+      expect(app.modelBusy, isFalse);
       await app.call('models.register', {'kind': 'speech', 'path': model.path});
       expect(domain.store.model('speech'), isNotNull);
       await app.call('models.cancel_query_acquisition', {});

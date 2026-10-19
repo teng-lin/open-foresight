@@ -218,10 +218,12 @@ def load(prefix, component, tag):
     return tag
 
 
-def resolve(prefix, component="linux-sdk"):
+def resolve(prefix, component="linux-sdk", *, load_registry=False):
     """Keep registry manifests immutable; load retained PR images locally."""
     value = record(prefix, component)
     if value.get("transport", "registry") == "registry":
+        if load_registry:
+            load(prefix, component, local_tag(component))
         return value["image"]
     return load(prefix, component, local_tag(component))
 
@@ -422,12 +424,17 @@ def main():
     parser.add_argument("--source-prefix", type=Path)
     parser.add_argument("--discard-archive", action="store_true")
     parser.add_argument(
+        "--load", action="store_true", help="Load the resolved image into Docker"
+    )
+    parser.add_argument(
         "--repository",
         default=os.environ.get("GITHUB_REPOSITORY", "teng-lin/open-foresight"),
     )
     parser.add_argument("--own-head", default="")
     parser.add_argument("--own-pr", type=int, default=0)
     args = parser.parse_args()
+    if args.load and args.command != "resolve":
+        parser.error("--load requires resolve")
     if args.command == "describe":
         if args.prefix is None or args.tag is None:
             parser.error("describe requires --prefix and --tag")
@@ -450,7 +457,7 @@ def main():
                 parser.error("promote requires --tag")
             image = promote(args.prefix, args.component, args.tag)
         else:
-            image = resolve(args.prefix, args.component)
+            image = resolve(args.prefix, args.component, load_registry=args.load)
         write_outputs(image, application_cache=args.command == "resolve")
         if args.discard_archive:
             (args.prefix / "image.tar").unlink(missing_ok=True)

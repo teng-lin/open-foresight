@@ -32,7 +32,7 @@ void _traceServiceTransport(String message) {
 /// The profile lock is independent of runtime overrides. An endpoint record lets
 /// clients attach to that owner even when launched with a different runtime.
 String serviceEndpoint(ProfilePaths profile) {
-  privateDirectory(profile.data);
+  privateDirectory(profile.data, repairOwnedPermissions: true);
   final record = File('${profile.data}/.application-endpoint.json');
   if (FileSystemEntity.typeSync(record.path, followLinks: false) ==
       FileSystemEntityType.link) {
@@ -276,6 +276,8 @@ class ApplicationService {
   StreamSubscription<void>? _changes;
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
+  Timer? _desktopShutdown;
+  final _desktopClients = <Socket>{};
   bool _closing = false;
   Future<void>? _shutdown;
   Future<void> Function()? _beforeReleaseOwnership;
@@ -351,7 +353,7 @@ class ApplicationService {
     SearchCallbacks? webSearch,
     bool internalWorker = false,
   }) async {
-    privateDirectory(profile.data);
+    privateDirectory(profile.data, repairOwnedPermissions: true);
     // Configure native state only when a native installation is present. Tests
     // and administration may use the storage-only service without model workers.
     if (runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
@@ -552,6 +554,8 @@ class ApplicationService {
                 try {
                   if (method == Operation.securityAttachDesktop.wire) {
                     access.attach(client, securityArgs['token'] as String);
+                    _desktopClients.add(client);
+                    _desktopShutdown?.cancel();
                   } else if (method == Operation.securityDetachDesktop.wire) {
                     if (!access.isHost(client)) {
                       throw RpcError(
@@ -688,6 +692,21 @@ class ApplicationService {
               unawaited(_cancelSubscription(s));
             }
             client.destroy();
+            if (_desktopClients.remove(client) &&
+                !access.hasHost &&
+                !_closing) {
+              // Allow a transient socket reconnect. Once the desktop has gone,
+              // agent connections must not keep its helper/models alive forever.
+              _desktopShutdown?.cancel();
+              _desktopShutdown = Timer(const Duration(seconds: 1), () {
+                if (access.hasHost || _closing) return;
+                unawaited(
+                  close().catchError((Object error) {
+                    stderr.writeln('Shutdown after desktop closed: $error');
+                  }),
+                );
+              });
+            }
           },
         );
   }
@@ -846,6 +865,12 @@ class ApplicationService {
   Future<void> _close({Socket? acknowledgementClient}) async {
     _closing = true;
     _heartbeat?.cancel();
+    _desktopShutdown?.cancel();
+    for (final client in _leases.keys.toList()) {
+      for (final id in _leases[client]!.keys.toList()) {
+        _cancel(client, id);
+      }
+    }
     Object? failure;
     Future<void> attempt(FutureOr<void> Function() action) async {
       try {
@@ -1356,7 +1381,7 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
   } on SocketException {
     /* launch */
   }
-  privateDirectory(profile.data);
+  privateDirectory(profile.data, repairOwnedPermissions: true);
   privateDirectory(profile.runtime);
   final executable = runtimeConfiguration['FORESIGHT_SERVICE'];
   if (executable == null || !File(executable).existsSync()) {

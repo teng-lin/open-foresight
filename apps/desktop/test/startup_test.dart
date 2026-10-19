@@ -14,6 +14,10 @@ void main() {
       final root = createTestTempDirectorySync('of-start-');
       addTearDown(() => root.deleteSync(recursive: true));
       final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
+      Directory(profile.data).createSync();
+      Process.runSync('/bin/chmod', ['755', profile.data]);
+      final retained = File('${profile.data}/retained-model')
+        ..writeAsStringSync('keep existing data');
       var attempts = 0;
       var quit = false;
       await tester.runAsync(() async {
@@ -24,6 +28,8 @@ void main() {
             configureRuntime: (_) {},
             connect: (_) async {
               attempts++;
+              expect(Directory(profile.data).statSync().mode & 0x1ff, 0x1c0);
+              expect(retained.readAsStringSync(), 'keep existing data');
               // This runs after the actual AppCommands.bind used by production.
               expect(
                 FileSystemEntity.typeSync('${profile.runtime}/commands.sock'),

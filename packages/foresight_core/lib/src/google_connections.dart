@@ -33,18 +33,6 @@ class GoogleConnections implements ConnectedSources {
 
   GoogleConnections(this.domain, this.auth) {
     _restoreModificationTimes();
-    for (final row in store.rows(
-      "SELECT calendar_events.source_id,calendar_events.metadata FROM calendar_events JOIN source_details ON source_details.source_id=calendar_events.source_id WHERE source_details.source_uri=''",
-    )) {
-      try {
-        final metadata = jsonDecode(row['metadata'] as String);
-        if (metadata is Map) {
-          _setSourceUri(row['source_id'] as String, metadata['htmlLink']);
-        }
-      } on FormatException {
-        // Invalid cached metadata cannot recover an original link.
-      }
-    }
   }
 
   void _setSourceUri(String source, Object? uri) {
@@ -69,21 +57,6 @@ class GoogleConnections implements ConnectedSources {
       store.db.execute(
         'UPDATE source_details SET changed=? WHERE source_id=?',
         [_modifiedTime(row['modified']), row['id']],
-      );
-    }
-    for (final row in store.rows(
-      "SELECT sources.id,calendar_events.metadata FROM calendar_events JOIN sources ON sources.id=calendar_events.source_id WHERE sources.deleted=0 AND sources.locally_edited=0 AND sources.provenance NOT LIKE 'user edit; %'",
-    )) {
-      Object? updated;
-      try {
-        final metadata = jsonDecode(row['metadata'] as String);
-        if (metadata is Map) updated = metadata['updated'];
-      } on FormatException {
-        // Unknown cached metadata is displayed as unknown rather than now.
-      }
-      store.db.execute(
-        'UPDATE source_details SET changed=? WHERE source_id=?',
-        [_modifiedTime(updated), row['id']],
       );
     }
   }
@@ -133,7 +106,7 @@ class GoogleConnections implements ConnectedSources {
         _drive('files', {
           'q': filters.join(' and '),
           'fields':
-              'nextPageToken,files(id,name,mimeType,modifiedTime,parents,size,webViewLink)',
+              'nextPageToken,files(id,name,mimeType,modifiedTime,parents,size,webViewLink,capabilities(canDownload))',
           'pageSize': '1000',
           'orderBy': 'folder,name',
           'supportsAllDrives': 'true',
@@ -164,6 +137,9 @@ class GoogleConnections implements ConnectedSources {
         'application/vnd.google-apps.spreadsheet',
         'application/vnd.google-apps.presentation',
       ].contains(mime);
+  static bool canDownload(Map<String, dynamic> file) =>
+      (file['capabilities'] as Map?)?['canDownload'] != false;
+
   Future<void> _publish(
     String id,
     String title,
@@ -228,7 +204,8 @@ class GoogleConnections implements ConnectedSources {
         metadata ??
         await auth.apiJson(
           _drive('files/${Uri.encodeComponent(fileId)}', {
-            'fields': 'id,name,mimeType,modifiedTime,trashed,webViewLink',
+            'fields':
+                'id,name,mimeType,modifiedTime,trashed,webViewLink,capabilities(canDownload)',
             'supportsAllDrives': 'true',
           }),
         );
@@ -240,18 +217,28 @@ class GoogleConnections implements ConnectedSources {
     if (!supported(mime)) {
       throw StateError('$name uses an unsupported file type ($mime).');
     }
+    if (!canDownload(file)) {
+      throw StateError(
+        '$name: Google Drive does not allow downloading this file.',
+      );
+    }
     final native = mime.startsWith('application/vnd.google-apps.');
     final export = mime == 'application/vnd.google-apps.spreadsheet'
         ? 'text/csv'
         : 'text/plain';
-    final response = await auth.api(
-      _drive(
-        'files/${Uri.encodeComponent(fileId)}${native ? '/export' : ''}',
-        native
-            ? {'mimeType': export}
-            : {'alt': 'media', 'supportsAllDrives': 'true'},
-      ),
-    );
+    late final Uint8ListResponse response;
+    try {
+      response = await auth.api(
+        _drive(
+          'files/${Uri.encodeComponent(fileId)}${native ? '/export' : ''}',
+          native
+              ? {'mimeType': export}
+              : {'alt': 'media', 'supportsAllDrives': 'true'},
+        ),
+      );
+    } on StateError catch (error) {
+      throw StateError('$name: ${error.message}');
+    }
     _check(account);
     String text;
     if (mime == 'application/pdf' || mime == 'application/rtf') {
@@ -290,6 +277,15 @@ class GoogleConnections implements ConnectedSources {
       'INSERT INTO google_sources VALUES(?,?,?,?,?) ON CONFLICT(source_id) DO UPDATE SET modified=excluded.modified,mime=excluded.mime',
       [id, account, fileId, file['modifiedTime'] as String? ?? '', mime],
     );
+  }
+
+  String _importFailure(String name, Object error) {
+    final message = error is StateError
+        ? error.message.toString()
+        : error.toString();
+    return message.startsWith('$name:') || message.startsWith('$name ')
+        ? message
+        : '$name: $message';
   }
 
   @override
@@ -346,7 +342,7 @@ class GoogleConnections implements ConnectedSources {
             );
             count++;
           } catch (error) {
-            failures.add('${file['name']}: $error');
+            failures.add(_importFailure('${file['name']}', error));
           }
         }
       }
@@ -371,7 +367,7 @@ class GoogleConnections implements ConnectedSources {
       try {
         await importDriveFile(file['id'] as String, metadata: file);
       } catch (error) {
-        failures.add('${file['name']}: $error');
+        failures.add(_importFailure('${file['name']}', error));
       }
     }
     if (failures.isNotEmpty) throw StateError(failures.join('\n'));
@@ -427,12 +423,6 @@ class GoogleConnections implements ConnectedSources {
               "UPDATE calendar_events SET status='cancelled',synced=? WHERE event_key=?",
               [DateTime.now().millisecondsSinceEpoch, key],
             );
-            if (store.rows(
-              "SELECT id FROM sources WHERE id=? AND deleted=0 AND (?=0 OR (locally_edited=0 AND provenance NOT LIKE 'user edit; %'))",
-              [key, preserveLocal ? 1 : 0],
-            ).isNotEmpty) {
-              await domain.delete(key);
-            }
           }
           continue;
         }
@@ -458,41 +448,13 @@ class GoogleConnections implements ConnectedSources {
             calendarId,
             event['id'],
             meeting,
-            key,
+            '', // Calendar events are meeting metadata, not knowledge sources.
             start.millisecondsSinceEpoch,
             end.millisecondsSinceEpoch,
             event['status'] as String? ?? 'confirmed',
             jsonEncode(event),
             DateTime.now().millisecondsSinceEpoch,
           ],
-        );
-        final weekday = [
-          'Monday',
-          'Tuesday',
-          'Wednesday',
-          'Thursday',
-          'Friday',
-          'Saturday',
-          'Sunday',
-        ][start.toLocal().weekday - 1];
-        final description = await calendarDescriptionText(
-          event['description'] as String? ?? '',
-        );
-        final attendees = (event['attendees'] as List? ?? [])
-            .map((row) => (row as Map)['displayName'] ?? row['email'])
-            .whereType<String>()
-            .join(', ');
-        final text =
-            '$title\nStarts: $weekday ${start.toLocal().toIso8601String()}\nEnds: ${end.toLocal().toIso8601String()}\n$description\n${attendees.isEmpty ? '' : 'Participants: $attendees'}';
-        await _publish(
-          key,
-          '[Calendar] $title',
-          text,
-          'text/plain',
-          'google-calendar:$account:$calendarId:${event['id']}',
-          modifiedAtMs: _modifiedTime(event['updated']),
-          sourceUri: event['htmlLink'] as String?,
-          preserveDeleted: preserveLocal,
         );
         _check(account);
       }
@@ -524,7 +486,8 @@ class GoogleConnections implements ConnectedSources {
         }
         final file = await auth.apiJson(
           _drive('files/${Uri.encodeComponent(source['file_id'] as String)}', {
-            'fields': 'id,name,mimeType,modifiedTime,trashed,webViewLink',
+            'fields':
+                'id,name,mimeType,modifiedTime,trashed,webViewLink,capabilities(canDownload)',
             'supportsAllDrives': 'true',
           }),
         );
@@ -601,7 +564,7 @@ class GoogleConnections implements ConnectedSources {
       try {
         await importDriveFile(id);
       } catch (error) {
-        failures.add('${attachment['title']}: $error');
+        failures.add(_importFailure('${attachment['title']}', error));
       }
     }
     if (failures.isNotEmpty) throw StateError(failures.join('\n'));

@@ -24,6 +24,7 @@ class GoogleFixture {
   String linkSuffix = '';
   final queries = <String>[], exports = <String>[];
   final fieldQueries = <String>[];
+  final restrictedFiles = <String>{}, exportDeniedFiles = <String>{};
   void Function()? onExport;
   Future<void> Function()? beforeUserInfo;
   late GoogleEndpoints endpoints;
@@ -144,6 +145,18 @@ class GoogleFixture {
             final mime = request.uri.queryParameters['mimeType']!;
             exports.add(mime);
             onExport?.call();
+            if (exportDeniedFiles.contains(path.split('/')[3])) {
+              request.response.statusCode = 403;
+              request.response.headers.contentType = ContentType.json;
+              request.response.write(
+                jsonEncode({
+                  'error': {
+                    'message': 'This file cannot be downloaded by the user.',
+                  },
+                }),
+              );
+              return;
+            }
             request.response.headers.contentType = ContentType.text;
             request.response.write(
               mime == 'text/csv'
@@ -215,6 +228,7 @@ class GoogleFixture {
     'mimeType': mime,
     'modifiedTime': modified,
     'trashed': false,
+    'capabilities': {'canDownload': !restrictedFiles.contains(id)},
     'webViewLink': 'https://drive.example.test/$id$linkSuffix',
   };
   Future<void> consent(Uri uri, {bool deny = false}) async {

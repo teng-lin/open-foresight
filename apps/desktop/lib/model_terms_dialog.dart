@@ -3,13 +3,16 @@ import 'gemma_download.dart';
 import 'package:foresight_core/foresight_core.dart' show openPlatformUri;
 import 'store.dart';
 
+typedef ModelPreferenceWriter = Future<void> Function(String key, String value);
+
 /// Acknowledgment is scoped to the exact publisher revision, independently for
 /// generation, embedding and speech. It happens before any model HTTP request.
 Future<bool> confirmModelTerms(
   BuildContext context,
   Store store,
-  GemmaModel model,
-) async {
+  GemmaModel model, {
+  ModelPreferenceWriter? savePreference,
+}) async {
   final key = 'modelTerms.${model.repository}.${model.revision}';
   if (store.preference(key) == 'accepted') return true;
   final card = Uri.https(
@@ -43,7 +46,6 @@ Future<bool> confirmModelTerms(
                   whisper ? 'Read MIT License' : 'Read publisher model terms',
                 ),
               ),
-              SelectableText(license.toString()),
               if (whisper) ...[
                 TextButton(
                   onPressed: () => openPlatformUri(card),
@@ -67,7 +69,13 @@ Future<bool> confirmModelTerms(
     ),
   );
   if (accepted != true) return false;
-  store.setPreference(key, 'accepted');
+  if (savePreference != null) {
+    // Packaged desktops read the profile through a read-only connection; the
+    // application service owns all preference writes.
+    await savePreference(key, 'accepted');
+  } else {
+    store.setPreference(key, 'accepted');
+  }
   return true;
 }
 

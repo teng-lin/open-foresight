@@ -48,6 +48,32 @@ class _IntegrationsController extends _FeatureController {
 
   bool get googleSyncing => d.googleStatus['syncing'] == true;
 
+  bool get systemAudioSetupComplete =>
+      captureCapabilities['system_audio'] != 'denied' &&
+      captureCapabilities['system_audio_request'] != 'failed' &&
+      (meetingFeature.systemAudioSetupReviewed ||
+          captureCapabilities['permission_verified'] == true);
+
+  String get systemAudioAccessLabel {
+    if (captureCapabilities['system_audio'] == 'denied') {
+      return 'Not allowed · Enable Open Foresight in System Settings.';
+    }
+    if (captureCapabilities['system_audio_request'] == 'failed') {
+      return 'Setup needs attention · Retry the access request.';
+    }
+    if (captureCapabilities['permission_verified'] == true) return 'Allowed';
+    if (meetingFeature.systemAudioSetupReviewed) {
+      return 'Setup complete · Access is checked when recording starts.';
+    }
+    if (captureCapabilities['system_audio_request'] == 'completed') {
+      return 'Request completed · Finish system audio setup.';
+    }
+    if (captureCapabilities['system_audio_request'] == 'requesting') {
+      return 'Waiting for the macOS access request…';
+    }
+    return 'Request access for audio playing on your Mac.';
+  }
+
   HyprShortcuts get hyprShortcuts =>
       HyprShortcuts(desktopSettings.config, desktopSettings.launcher);
 
@@ -87,8 +113,31 @@ class _IntegrationsController extends _FeatureController {
 
   Future<void> activateQuickMeeting(String? token) async {
     await activateWindow(token);
-    if (mounted && !shell.busy && meetingFeature.recording == null)
+    if (mounted &&
+        !shell.onboardingFeature.active &&
+        !shell.busy &&
+        meetingFeature.recording == null)
       await meetingFeature.quickStart();
+  }
+
+  Future<void> activateMenuCommand(String command) async {
+    try {
+      if (command == 'quick-meeting') {
+        await activateQuickMeeting(null);
+        return;
+      }
+      await activateWindow(null);
+      if (!mounted || shell.onboardingFeature.active) return;
+      final destination = const {
+        'meetings': 3,
+        'ask': 1,
+        'sources': 0,
+        'settings': 6,
+      }[command];
+      if (destination != null) setState(() => shell.tab = destination);
+    } catch (failure) {
+      shell.reportAsyncError(failure);
+    }
   }
 
   Future<void> enableGlobalShortcuts() async {
@@ -244,105 +293,33 @@ class _IntegrationsController extends _FeatureController {
   }
 
   Future<bool> setupSystemAudioAccess({bool forRecording = false}) async {
-    var requesting = false;
-    var completed = false;
-    var message =
-        'Allow Open Foresight under System Settings > Privacy & Security > Screen & System Audio Recording > System Audio Recording Only. The exact wording varies by macOS version.';
-    String? settingsUrl;
     final proceed = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (dialogContext, updateDialog) => AlertDialog(
-          title: const Text('Allow system audio recording'),
-          content: SizedBox(
-            width: 460,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Permission requested: System Audio Recording Only. This lets Foresight transcribe audio playing on your Mac.',
-                ),
-                const SizedBox(height: 12),
-                Text(message),
-                if (requesting) ...[
-                  const SizedBox(height: 12),
-                  const LinearProgressIndicator(),
-                  const Text('Waiting for the macOS audio access request…'),
-                ],
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Cancel'),
-            ),
-            if (settingsUrl != null)
-              TextButton(
-                onPressed: () async {
-                  try {
-                    await openPlatformUri(Uri.parse(settingsUrl!));
-                  } catch (error) {
-                    if (dialogContext.mounted)
-                      updateDialog(() => message = error.toString());
-                  }
-                },
-                child: const Text('Open System Settings'),
-              ),
-            TextButton(
-              onPressed: requesting
-                  ? null
-                  : () async {
-                      updateDialog(() {
-                        requesting = true;
-                        completed = false;
-                      });
-                      try {
-                        final result =
-                            await d.command(Operation.audioRequestSystem)
-                                as Map;
-                        if (!dialogContext.mounted) return;
-                        updateDialog(() {
-                          requesting = false;
-                          completed =
-                              result['system_audio_request'] == 'completed';
-                          settingsUrl = result['settings_url'] as String?;
-                          message =
-                              '${result['message'] ?? 'The request was sent to macOS.'}\nTurn on Open Foresight under System Audio Recording Only, then return and continue. Permission is checked by actual capture.';
-                        });
-                        if (mounted)
-                          setState(
-                            () => captureCapabilities = {
-                              ...captureCapabilities,
-                              ...Map<String, dynamic>.from(result),
-                            },
-                          );
-                      } catch (error) {
-                        if (dialogContext.mounted)
-                          updateDialog(() {
-                            requesting = false;
-                            message = error.toString();
-                          });
-                      }
-                    },
-              child: Text(
-                settingsUrl == null ? 'Request access' : 'Retry request',
-              ),
-            ),
-            FilledButton(
-              onPressed: !completed || requesting
-                  ? null
-                  : () => Navigator.pop(dialogContext, true),
-              child: Text(forRecording ? 'Continue recording' : 'Done'),
-            ),
-          ],
+      builder: (_) => SystemAudioSetupDialog(
+        forRecording: forRecording,
+        requestAccess: () async => Map<String, dynamic>.from(
+          await d.command(Operation.audioRequestSystem) as Map,
         ),
+        readCapabilities: () async => Map<String, dynamic>.from(
+          await d.command(Operation.audioCapabilities) as Map,
+        ),
+        openSettings: openSystemAudioSettings,
+        capabilitiesChanged: (result) {
+          if (mounted)
+            setState(
+              () => captureCapabilities = {...captureCapabilities, ...result},
+            );
+        },
       ),
     );
     if (proceed == true && mounted) {
-      meetingFeature.systemAudioSetupReviewed = true;
+      await d.command(Operation.preferencesSet, {
+        'key': 'audio.systemSetupReviewed',
+        'value': 'true',
+      });
+      if (!mounted) return false;
+      setState(() => meetingFeature.systemAudioSetupReviewed = true);
       return true;
     }
     return false;
@@ -361,59 +338,20 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
-  Future<void> importGoogleClient() async {
-    final file = await openFile(
-      acceptedTypeGroups: [
-        const XTypeGroup(
-          label: 'Google Desktop OAuth client',
-          extensions: ['json'],
-        ),
-      ],
-    );
-    if (file != null) await googleAuth.configure(File(file.path));
-    if (mounted) setState(() {});
-  }
-
   Future<void> connectGoogle() async {
     if (googleAuth.client == null) {
-      final configure = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Set up Google Drive and Calendar'),
-          content: const SizedBox(
-            width: 480,
-            child: SingleChildScrollView(
-              child: SelectableText(
-                'This build needs a Google sign-in configuration before it can connect.\n\n'
-                '1. In Google Cloud Console, enable the Google Drive API and Google Calendar API.\n'
-                '2. Configure the OAuth consent screen and add your account as a test user if the app is in testing.\n'
-                '3. Create an OAuth client with application type Desktop app and download its JSON file.\n'
-                '4. Import that JSON here, then sign in with Google in your browser.\n\n'
-                'Open Foresight requests read-only access to Drive and Calendar. Your Google password stays in your browser.',
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Import client JSON'),
-            ),
-          ],
-        ),
+      throw StateError(
+        'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
       );
-      if (configure != true || !mounted) return;
-      await importGoogleClient();
-      if (!mounted || !context.mounted || googleAuth.client == null) return;
     }
     final outcome = await showDialog<GoogleSignInOutcome>(
       context: context,
       barrierDismissible: false,
-      builder: (_) =>
-          GoogleSignInDialog(auth: googleAuth, openBrowser: openPlatformUri),
+      builder: (_) => GoogleSignInDialog(
+        auth: googleAuth,
+        openBrowser: openPlatformUri,
+        returnToApp: () => activateWindow(null),
+      ),
     );
     if (!mounted) return;
     if (outcome == null || outcome.cancelled) {
@@ -507,10 +445,25 @@ class _IntegrationsController extends _FeatureController {
           await google.importDriveFile(id);
         }
       } catch (error) {
-        failures.add(error.toString());
+        failures.add(
+          error is StateError ? error.message.toString() : error.toString(),
+        );
       }
     }
-    if (failures.isNotEmpty) throw StateError(failures.join('\n'));
+    final kind = folder ? 'folders' : 'files';
+    if (failures.isNotEmpty) {
+      throw StateError(
+        'Imported ${selection.length - failures.length} of ${selection.length} $kind from Drive.\n'
+        'Could not import:\n${failures.join('\n')}',
+      );
+    }
+    if (mounted && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Imported ${selection.length} $kind from Drive.'),
+        ),
+      );
+    }
   }
 
   SingleActivator get quickActivator {

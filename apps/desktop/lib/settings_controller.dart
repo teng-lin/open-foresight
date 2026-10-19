@@ -21,6 +21,10 @@ class _SettingsController extends _FeatureController {
 
   bool modelSetupShown = false;
 
+  Future<void> saveModelPreference(String key, String value) async {
+    await d.command(Operation.preferencesSet, {'key': key, 'value': value});
+  }
+
   Future<void> chooseGemma({
     bool firstRun = false,
     bool embeddingOnly = false,
@@ -28,51 +32,60 @@ class _SettingsController extends _FeatureController {
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => GemmaSetupDialog(
-        store: d.store,
-        firstRun: firstRun,
-        needsEmbedding: needsModel(d.store, 'embedding'),
-        needsGeneration:
-            !embeddingOnly && (!firstRun || needsModel(d.store, 'generation')),
-        installEmbedding: (asset, current) async {
-          await d.commandCurrent(Operation.modelsEmbedding, {
-            'path': asset.path,
-            'gpu': true,
-            'digest': embeddingGemmaModel.digest,
-          }, current);
-          if (!current()) return;
-          if (mounted)
-            setState(() {
-              embeddingGpu = true;
-              modelState = 'EmbeddingGemma 2 ready for local source search';
-            });
-        },
-        directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
-        library: runtimeConfiguration.nativeLibrary,
-        runner: runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? '',
-        memoryGb: physicalMemoryGb(),
-        installGeneration: (path, runtime, current) async {
-          await d.commandCurrent(Operation.modelsGeneration, {
-            'path': path,
-            'runtime': runtime,
-            'backend': 'litert_lm',
-          }, current);
-          return d.runtime;
-        },
-        installed: (runtime, model) {
-          if (mounted)
-            setState(() {
-              shell.error = '';
-              modelState = '${model.name} ready';
-            });
-        },
-        localSetup: () {
-          if (mounted) setState(() => shell.tab = 4);
-        },
-      ),
+      builder: (_) =>
+          gemmaSetup(firstRun: firstRun, embeddingOnly: embeddingOnly),
     );
     if (mounted) setState(() {});
   }
+
+  Widget gemmaSetup({
+    bool firstRun = false,
+    bool embeddingOnly = false,
+    VoidCallback? onDone,
+  }) => GemmaSetupDialog(
+    store: d.store,
+    savePreference: saveModelPreference,
+    onDone: onDone,
+    firstRun: firstRun,
+    needsEmbedding: needsModel(d.store, 'embedding'),
+    needsGeneration:
+        !embeddingOnly && (!firstRun || needsModel(d.store, 'generation')),
+    installEmbedding: (asset, current) async {
+      await d.commandCurrent(Operation.modelsEmbedding, {
+        'path': asset.path,
+        'gpu': true,
+        'digest': embeddingGemmaModel.digest,
+      }, current);
+      if (!current()) return;
+      if (mounted)
+        setState(() {
+          embeddingGpu = true;
+          modelState = 'EmbeddingGemma 2 ready for local source search';
+        });
+    },
+    directory: Directory('${File(d.store.path).parent.path}/models/gemma4'),
+    library: runtimeConfiguration.nativeLibrary,
+    runner: runtimeConfiguration['FORESIGHT_LITERT_RUNNER'] ?? '',
+    memoryGb: physicalMemoryGb(),
+    installGeneration: (path, runtime, current) async {
+      await d.commandCurrent(Operation.modelsGeneration, {
+        'path': path,
+        'runtime': runtime,
+        'backend': 'litert_lm',
+      }, current);
+      return d.runtime;
+    },
+    installed: (runtime, model) {
+      if (mounted)
+        setState(() {
+          shell.error = '';
+          modelState = '${model.name} ready';
+        });
+    },
+    localSetup: () {
+      if (mounted) setState(() => shell.tab = 4);
+    },
+  );
 
   String speechModelName() {
     final registration = d.store.model('speech');
@@ -86,36 +99,40 @@ class _SettingsController extends _FeatureController {
   }
 
   Future<void> chooseSpeech() async {
-    final registration = d.store.model('speech');
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (_) => SpeechSetupDialog(
-        store: d.store,
-        directory: Directory(
-          '${File(d.store.path).parent.path}/models/whisper',
-        ),
-        runner:
-            runtimeConfiguration['FORESIGHT_WHISPER_RUNTIME'] ??
-            registration?['runtime'] as String? ??
-            '',
-        installSpeech: (asset, runner, digest, current) async {
-          await d.commandCurrent(Operation.modelsSpeech, {
-            'path': asset.path,
-            'runtime': runner,
-            'digest': digest,
-          }, current);
-        },
-        installed: () {
-          if (mounted)
-            setState(
-              () => modelState =
-                  '${speechModelName()} ready; automatic language detection',
-            );
-        },
-      ),
+      builder: (_) => speechSetup(),
     );
     if (mounted) setState(() {});
+  }
+
+  Widget speechSetup({VoidCallback? onDone}) {
+    final registration = d.store.model('speech');
+    return SpeechSetupDialog(
+      store: d.store,
+      savePreference: saveModelPreference,
+      onDone: onDone,
+      directory: Directory('${File(d.store.path).parent.path}/models/whisper'),
+      runner:
+          runtimeConfiguration['FORESIGHT_WHISPER_RUNTIME'] ??
+          registration?['runtime'] as String? ??
+          '',
+      installSpeech: (asset, runner, digest, current) async {
+        await d.commandCurrent(Operation.modelsSpeech, {
+          'path': asset.path,
+          'runtime': runner,
+          'digest': digest,
+        }, current);
+      },
+      installed: () {
+        if (mounted)
+          setState(
+            () => modelState =
+                '${speechModelName()} ready; automatic language detection',
+          );
+      },
+    );
   }
 
   Widget models() => SingleChildScrollView(
@@ -1021,7 +1038,7 @@ class _SettingsController extends _FeatureController {
                   subtitle: Text(
                     integrationFeature.captureCapabilityError.isNotEmpty
                         ? integrationFeature.captureCapabilityError
-                        : 'Microphone: $integrationFeature.microphoneAccessLabel\nSystem audio access is checked when you explicitly start recording. Enable Open Foresight under Privacy & Security > Screen & System Audio Recording > System Audio Recording Only if access is denied.',
+                        : 'Microphone: ${integrationFeature.microphoneAccessLabel}\nSystem audio: ${integrationFeature.systemAudioAccessLabel}',
                   ),
                 ),
                 Wrap(
@@ -1114,7 +1131,7 @@ class _SettingsController extends _FeatureController {
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
                     child: Text(
-                      'Google sign-in setup required. Choose Connect Google to get started.',
+                      'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
                     ),
                   ),
                 if (integrationFeature.googleState.isNotEmpty)
@@ -1127,18 +1144,6 @@ class _SettingsController extends _FeatureController {
                   runSpacing: 8,
                   children: [
                     if (!integrationFeature.googleAuth.connected) ...[
-                      TextButton(
-                        onPressed: shell.busy
-                            ? null
-                            : () => shell.run(
-                                integrationFeature.importGoogleClient,
-                              ),
-                        child: Text(
-                          integrationFeature.googleAuth.client == null
-                              ? 'Import Desktop client configuration'
-                              : 'Advanced OAuth configuration',
-                        ),
-                      ),
                       FilledButton(
                         onPressed: shell.busy
                             ? null
@@ -1152,8 +1157,8 @@ class _SettingsController extends _FeatureController {
                             title: Text('Google connection setup'),
                             content: SelectableText(
                               integrationFeature.googleAuth.client != null
-                                  ? 'Choose Connect Google, select your account in the browser, and grant Drive and Calendar read access. This app already has its application sign-in configuration.\n\nYour Google password is never entered into Foresight. Advanced OAuth configuration is optional.'
-                                  : 'This build has no application sign-in configuration. Import a complete Google OAuth Desktop app client JSON, then choose Connect Google. Enable Drive and Calendar APIs in that client’s project.\n\nSign-in opens your browser and asks for read access. Your Google password is never entered into Foresight.',
+                                  ? 'Choose Connect Google, select your account in the browser, and grant Drive and Calendar read access. This app already has its application sign-in configuration.\n\nYour Google password is never entered into Foresight. After signing in, you return to the app automatically.'
+                                  : 'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.\n\nSign-in opens your default browser and asks for read access. Your Google password is never entered into Foresight.',
                             ),
                           ),
                         ),

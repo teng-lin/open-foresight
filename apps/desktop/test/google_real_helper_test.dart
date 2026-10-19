@@ -13,7 +13,7 @@ import 'package:foresight_test_support/google_connections.dart'
 
 void main() {
   test(
-    'OAuth Drive and Calendar adapter feed real helper retrieval and remove canceled context',
+    'OAuth Drive retrieval excludes calendar metadata',
     () async {
       final directory = createTestTempDirectorySync('foresight-google-real-');
       addTearDown(() {
@@ -55,6 +55,13 @@ void main() {
         await connection.importDriveFolder('folder');
         await connection.syncCalendar();
         expect(store.sources.every((row) => row['state'] == 'indexed'), true);
+        expect(
+          store.sources.any(
+            (row) =>
+                row['provenance'].toString().startsWith('google-calendar:'),
+          ),
+          isFalse,
+        );
         final doc = store.sources
             .where((row) => row['title'] == 'Apollo')
             .single;
@@ -109,29 +116,24 @@ void main() {
           refreshed.chunks.first.text.toLowerCase(),
           isNot(contains('friday')),
         );
-        final calendar = store.sources
-            .where((row) => row['title'] == '[Calendar] Planning')
-            .single;
         fixture.cancelledEvent = true;
         await connection.syncCalendar();
-        final removed = await helper.client.retrieveContext(
-          RetrieveRequest(
-            query: Query(textQuery: 'Planning meeting'),
-            userId: 'local_user',
-            allowedDocumentIds: [calendar['id'] as String],
-            maxResults: 3,
-          ),
+        expect(
+          store.sources.map((source) => source['title']),
+          unorderedEquals(['Apollo', 'Sheet']),
         );
-        expect(removed.chunks, isEmpty);
+        expect(
+          store.rows('SELECT status FROM calendar_events').single['status'],
+          'cancelled',
+        );
         final report = Platform.environment['FORESIGHT_GOOGLE_REPORT'];
         if (report != null)
           File(report).writeAsStringSync(
             const JsonEncoder.withIndent('  ').convert({
               'workflow':
                   'Loopback OAuth/Drive/Calendar protocol fixtures -> actual EmbeddingGemma helper -> filtered retrieval',
-              'drive_and_calendar_sources_indexed': true,
+              'drive_sources_indexed_calendar_metadata_excluded': true,
               'remote_edit_replaced_old_retrieval': true,
-              'cancelled_calendar_context_removed': true,
               'folder_refresh_discovered_new_file_and_indexed_it': true,
               'folder_refresh_preserved_user_deletion_and_excluded_retrieval':
                   true,

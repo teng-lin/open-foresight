@@ -328,12 +328,12 @@ void main() {
       domain.systemGate = Completer<Map<String, dynamic>>();
       await show(tester);
       await tester.tap(find.text('Start transcribing'));
-      await tester.pumpAndSettle();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Allow system audio recording'), findsOneWidget);
       expect(find.textContaining('System Audio Recording Only'), findsWidgets);
-      expect(domain.operations, isNot(contains('audio.request_system')));
-      await tester.tap(find.text('Request access'));
-      await tester.pump();
+      expect(domain.operations, contains('audio.request_system'));
+      expect(find.text('Request access'), findsNothing);
       expect(
         find.text('Waiting for the macOS audio access request…'),
         findsOneWidget,
@@ -370,8 +370,7 @@ void main() {
       await show(tester);
       await tester.tap(find.text('Start transcribing'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Request access'));
-      await tester.pumpAndSettle();
+
       final dynamic state = tester.state(find.byType(Workspace));
       expect(
         state.integrationFeature.captureCapabilities['microphone'],

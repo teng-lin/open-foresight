@@ -19,6 +19,7 @@ import 'package:open_foresight/graph_persistence.dart';
 import 'package:foresight_core/src/model_setup.dart';
 import '../test_support/meeting_panel.dart';
 import '../test_support/file_manager_fixture.dart';
+import '../test_support/onboarding.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,
@@ -85,6 +86,7 @@ Future<dynamic> startedWorkspace(WidgetTester tester) async {
   if (startupFailure != null) {
     throw StateError('Desktop did not start: $startupFailure');
   }
+  await finishOnboarding(tester);
   return tester.state(find.byType(app.Workspace));
 }
 

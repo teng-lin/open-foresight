@@ -3,6 +3,7 @@ import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'pump_until.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,12 +19,20 @@ class PendingGoogleAuth extends GoogleAuth {
   PendingGoogleAuth(super.directory, {super.defaultClient});
   Completer<void>? pending;
   int invitations = 0;
+  int calendarQueries = 0;
   bool signedIn = false;
   bool inviteBrowser = false;
   @override
   bool get connected => signedIn;
   @override
   bool get signingIn => pending != null;
+  @override
+  Future<Map<String, dynamic>> apiJson(Uri uri) async {
+    expectSync(uri.path, contains('/calendars/'));
+    calendarQueries++;
+    return {'items': []};
+  }
+
   @override
   Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
     invitations++;
@@ -50,6 +59,21 @@ void main() {
   testWidgets(
     'Google sign-in can be cancelled and retried from every entry point',
     (tester) async {
+      var activations = 0;
+      const windowChannel = MethodChannel('foresight/window');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        windowChannel,
+        (call) async {
+          if (call.method == 'activate') activations++;
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          windowChannel,
+          null,
+        ),
+      );
       tester.view.physicalSize = const Size(1280, 850);
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
@@ -131,6 +155,23 @@ void main() {
           await cancel();
         }
         expect(auth.invitations, 5);
+        // Calendar sync stores meeting metadata and needs no embedding model.
+        final connecting =
+            state.run(state.integrationFeature.connectGoogle) as Future<void>;
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+        auth.signedIn = true;
+        auth.pending!.complete();
+        await pumpUntil(tester, () => !state.busy);
+        await connecting;
+        expect(auth.connected, true);
+        expect(state.error, isEmpty);
+        expect(activations, 1);
+        expect(
+          state.integrationFeature.googleState,
+          startsWith('Connected as '),
+        );
+        expect(auth.calendarQueries, 1);
         expect(tester.takeException(), isNull);
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());
@@ -196,6 +237,7 @@ void main() {
       final auth = PendingGoogleAuth(root)..inviteBrowser = true;
       GoogleSignInOutcome? outcome;
       Uri? invitation;
+      var returnedToApp = false;
       try {
         await tester.pumpWidget(
           MaterialApp(
@@ -213,6 +255,9 @@ void main() {
                       builder: (_) => GoogleSignInDialog(
                         auth: auth,
                         openBrowser: (uri) async => invitation = uri,
+                        returnToApp: () async {
+                          returnedToApp = true;
+                        },
                       ),
                     ),
                 child: const Text('Connect'),
@@ -226,7 +271,7 @@ void main() {
         expect(invitation!.host, 'accounts.example.test');
         expect(
           find.text(
-            'Complete Google sign-in in your browser, then return here.',
+            'Complete Google sign-in in your browser. If Open Foresight does not reopen, return to the app manually.',
           ),
           findsOneWidget,
         );
@@ -237,6 +282,7 @@ void main() {
         expect(outcome!.cancelled, false);
         expect(outcome!.error, isNull);
         expect(auth.connected, true);
+        expect(returnedToApp, true);
         expect(find.byType(GoogleSignInDialog), findsNothing);
         expect(tester.takeException(), isNull);
       } finally {

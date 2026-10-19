@@ -12,7 +12,129 @@ import 'package:foresight_core/src/store.dart';
 
 import 'package:foresight_test_support/google_connections.dart';
 
+class FailingImportDomain extends AdapterDomain {
+  FailingImportDomain(super.store, super.helper);
+  bool rejectIndex = false;
+  @override
+  Future<void> index(String id) async {
+    if (rejectIndex) throw StateError('Indexing unavailable');
+    await super.index(id);
+  }
+}
+
 void main() {
+  test(
+    'Drive rejects restricted downloads and names each file once across batch imports',
+    () async {
+      final directory = createTestTempDirectorySync('drive-restrictions-');
+      final fixture = GoogleFixture()
+        ..restrictedFiles.add('sheet')
+        ..exportDeniedFiles.add('slides');
+      await fixture.start();
+      final auth = GoogleAuth(
+        Directory('${directory.path}/google'),
+        secretStore: const UnavailableSecretStore(),
+        endpoints: fixture.endpoints,
+      )..client = GoogleClient('fixture.apps.googleusercontent.com', '');
+      final store = Store('${directory.path}/app.db');
+      final helper = Helper(
+        '${directory.path}/socket',
+        '${directory.path}/helper',
+      );
+      final domain = FailingImportDomain(store, helper);
+      final connection = GoogleConnections(domain, auth);
+      try {
+        await auth.signIn(fixture.consent);
+        final files = await connection.driveFiles(parent: 'nested');
+        expect(GoogleConnections.canDownload(files.single), false);
+        expect(
+          fixture.fieldQueries.last,
+          contains('capabilities(canDownload)'),
+        );
+        await expectLater(
+          connection.importDriveFile('sheet'),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'Sheet: Google Drive does not allow downloading this file.',
+            ),
+          ),
+        );
+        expect(fixture.exports, isEmpty);
+        await expectLater(
+          connection.importDriveFile('slides'),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'Slides: This file cannot be downloaded by the user.',
+            ),
+          ),
+        );
+        await connection.importDriveFile('doc');
+        expect(store.sources.single['title'], 'Apollo');
+        expect(domain.indexed, hasLength(1));
+        await expectLater(
+          connection.importDriveFolder('folder'),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Imported 0 files; Sheet: Google Drive does not allow downloading this file.',
+            ),
+          ),
+        );
+        await expectLater(
+          connection.importLastYear(),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Slides: This file cannot be downloaded by the user.',
+            ),
+          ),
+        );
+        await connection.syncCalendar();
+        fixture.exportDeniedFiles.add('doc');
+        final meeting =
+            store
+                    .rows('SELECT meeting_id FROM calendar_events')
+                    .single['meeting_id']
+                as int;
+        await expectLater(
+          connection.importAttachments(meeting),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Apollo: This file cannot be downloaded by the user.',
+            ),
+          ),
+        );
+        fixture.exportDeniedFiles.clear();
+        fixture.document = 'Changed upstream';
+        domain.rejectIndex = true;
+        await expectLater(
+          connection.importAttachments(meeting),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Apollo: Indexing unavailable',
+            ),
+          ),
+        );
+      } finally {
+        connection.close();
+        await auth.close();
+        await helper.close();
+        store.close();
+        await fixture.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+  );
   test(
     'sign-in reentry is busy and owned cancellation returns cancelled',
     () async {
@@ -274,7 +396,7 @@ void main() {
   );
 
   test(
-    'Drive and Calendar retain original modification time separately from import time',
+    'Drive retains modification time and Calendar metadata stays out of sources',
     () async {
       final directory = createTestTempDirectorySync('foresight-source-dates-');
       addTearDown(() {
@@ -317,12 +439,16 @@ void main() {
           true,
         );
         expect(initial['source_uri'], 'https://drive.example.test/doc');
-        expect(
-          store.sources.singleWhere(
-            (row) => row['title'] == '[Calendar] Planning',
-          )['source_uri'],
-          'https://calendar.example.test/event-1',
-        );
+        expect(store.sources, hasLength(1));
+        final event =
+            jsonDecode(
+                  store
+                          .rows('SELECT metadata FROM calendar_events')
+                          .single['metadata']
+                      as String,
+                )
+                as Map;
+        expect(event['htmlLink'], 'https://calendar.example.test/event-1');
         expect(
           initial['changed'],
           DateTime.parse(fixture.modified).millisecondsSinceEpoch,
@@ -331,12 +457,7 @@ void main() {
           initial['imported'] as int,
           greaterThan(initial['changed'] as int),
         );
-        expect(
-          store.sources.singleWhere(
-            (row) => row['title'] == '[Calendar] Planning',
-          )['changed'],
-          DateTime.parse(fixture.eventUpdated).millisecondsSinceEpoch,
-        );
+        expect(event['updated'], fixture.eventUpdated);
         fixture.modified = '2021-01-01T00:00:00Z';
         await connection.importDriveFile('doc');
         expect(
@@ -366,9 +487,6 @@ void main() {
         );
         // Repair previously imported profiles without modifying their content/revisions.
         store.db.execute('UPDATE source_details SET changed=123');
-        store.db.execute(
-          "UPDATE source_details SET source_uri='' WHERE source_id IN (SELECT source_id FROM calendar_events)",
-        );
         connection.close();
         connection = GoogleConnections(AdapterDomain(store, helper), auth);
         expect(
@@ -377,12 +495,7 @@ void main() {
         );
         expect(document()['revision'], initial['revision']);
         expect(document()['imported'], initial['imported']);
-        expect(
-          store.sources.singleWhere(
-            (row) => row['title'] == '[Calendar] Planning',
-          )['source_uri'],
-          'https://calendar.example.test/event-1',
-        );
+        expect(store.sources, hasLength(1));
         final id = document()['id'] as String;
         store.importText(
           'Apollo',
@@ -571,16 +684,25 @@ void main() {
         expect(store.rows('SELECT * FROM meetings').length, 1);
         expect(
           store.sources.any((row) => row['title'] == '[Calendar] Planning'),
-          true,
+          false,
         );
-        final calendar = store.sources.firstWhere(
-          (row) => row['title'] == '[Calendar] Planning',
+        final indexedBeforeCalendarRefresh = domain.indexed.length;
+        expect(
+          store
+              .rows('SELECT source_id FROM calendar_events')
+              .single['source_id'],
+          isEmpty,
         );
-        final calendarId = calendar['id'] as String;
         fixture.eventDescription = 'Changed upstream';
         await connection.syncCalendar(preserveLocal: true);
         expect(
-          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          (jsonDecode(
+                store
+                        .rows('SELECT metadata FROM calendar_events')
+                        .single['metadata']
+                    as String,
+              )
+              as Map)['description'],
           contains('Changed upstream'),
         );
         fixture.eventDescription = '<a' * 40000;
@@ -593,23 +715,10 @@ void main() {
         await sync;
         expect(watch.elapsed, lessThan(const Duration(seconds: 1)));
         fixture.eventDescription = 'Review Apollo.';
-        store.importText(
-          '[Calendar] Planning',
-          'MY LOCAL EDIT',
-          'text/plain',
-          'user edit; calendar',
-          id: calendarId,
-        );
         await connection.syncCalendar(preserveLocal: true);
-        expect(
-          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
-          'MY LOCAL EDIT',
-        );
-        await domain.delete(calendarId);
-        await connection.syncCalendar(preserveLocal: true);
-        expect(store.sources.any((row) => row['id'] == calendarId), isFalse);
         await connection.syncCalendar();
-        expect(store.sources.any((row) => row['id'] == calendarId), isTrue);
+        expect(store.sources, hasLength(2));
+        expect(domain.indexed, hasLength(indexedBeforeCalendarRefresh));
         final meeting =
             store.rows('SELECT * FROM meetings').single['id'] as int;
         expect(connection.attachments(meeting).single['fileId'], 'doc');
@@ -670,6 +779,14 @@ void main() {
           2,
           reason: 'Rescheduling rearms the reminder on the existing meeting',
         );
+        // Calendar sync must leave existing documents alone, including ones
+        // whose identifiers match a calendar event from an older profile.
+        final calendarId =
+            store
+                    .rows('SELECT event_key FROM calendar_events')
+                    .single['event_key']
+                as String;
+        final indexedBeforeCancellation = domain.indexed.length;
         store.importText(
           '[Calendar] Planning',
           'MY CANCELLED MEETING EDIT',
@@ -688,10 +805,20 @@ void main() {
           store.rows('SELECT status FROM calendar_events').single['status'],
           'cancelled',
         );
-        // Explicit manual sync retains its destructive cancellation behavior.
+        // Manual sync also updates metadata without deleting documents.
         await connection.syncCalendar();
-        expect(store.sources.any((row) => row['id'] == calendarId), isFalse);
-        // An automatic cancellation still removes an unedited source.
+        expect(
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          'MY CANCELLED MEETING EDIT',
+        );
+        // The same holds for existing documents without local edits.
+        store.importText(
+          '[Calendar] Planning',
+          'Existing meeting document',
+          'text/plain',
+          'calendar',
+          id: calendarId,
+        );
         fixture.cancelledEvent = false;
         await connection.syncCalendar();
         fixture.cancelledEvent = true;
@@ -701,9 +828,10 @@ void main() {
           'cancelled',
         );
         expect(
-          store.sources.any((row) => row['title'] == '[Calendar] Planning'),
-          false,
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          'Existing meeting document',
         );
+        expect(domain.indexed, hasLength(indexedBeforeCancellation));
         expect(
           domain.indexed,
           contains(doc['id']),

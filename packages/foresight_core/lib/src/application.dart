@@ -1130,6 +1130,9 @@ class Application implements ModelGate {
             expectedDigest: a['digest'] as String?,
             current: () => !_closed && (current?.call() ?? true),
           );
+          // Model registration succeeded independently of individual imports.
+          // Drain sources queued during onboarding without requiring a restart.
+          domain.schedulePendingSources();
           return null;
         case Operation.applicationResume:
           await domain.helper.recover();

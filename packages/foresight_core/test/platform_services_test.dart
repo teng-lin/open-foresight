@@ -478,6 +478,40 @@ void main() {
   });
 
   test(
+    'owned legacy profile permissions are repaired without changing data',
+    () {
+      final path = '${scratch.path}/legacy-profile';
+      Directory(path).createSync();
+      final model = File('$path/model.bin')..writeAsStringSync('keep model');
+      Process.runSync('/bin/chmod', ['755', path]);
+      privateDirectory(path, repairOwnedPermissions: true);
+      expect(Directory(path).statSync().mode & 0x1ff, 0x1c0);
+      expect(model.readAsStringSync(), 'keep model');
+      privateDirectory(path, repairOwnedPermissions: true);
+      final alias = Link('${scratch.path}/legacy-alias')..createSync(path);
+      expect(
+        () => privateDirectory(alias.path, repairOwnedPermissions: true),
+        throwsStateError,
+      );
+      Process.runSync('/bin/chmod', ['777', path]);
+      expect(
+        () => privateDirectory(path, repairOwnedPermissions: true),
+        throwsStateError,
+      );
+      expect(Directory(path).statSync().mode & 0x1ff, 0x1ff);
+      expect(model.readAsStringSync(), 'keep model');
+      // A caller cannot adopt another user's directory, even in repair mode.
+      if (Process.runSync('/usr/bin/id', ['-u']).stdout.toString().trim() !=
+          '0') {
+        expect(
+          () => privateDirectory('/usr', repairOwnedPermissions: true),
+          throwsStateError,
+        );
+      }
+    },
+  );
+
+  test(
     'profile endpoint attaches across runtime overrides and validates privacy',
     () {
       final data = '${scratch.path}/data', runtime = '${scratch.path}/owner';

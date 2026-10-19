@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:open_foresight/main.dart' as app;
+import '../test_support/onboarding.dart';
 
 final observed = ObservedExpectations();
 
@@ -107,6 +108,7 @@ void main() {
         tester,
         () => find.byType(app.Workspace).evaluate().isNotEmpty,
       );
+      await finishOnboarding(tester);
       dynamic workspace = tester.state(find.byType(app.Workspace));
       await waitFor(
         tester,

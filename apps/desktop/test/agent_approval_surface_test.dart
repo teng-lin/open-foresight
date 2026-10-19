@@ -52,6 +52,54 @@ class ApprovalDomain implements RemoteDomain {
 
 void main() {
   testWidgets(
+    'setup keeps the desktop authenticated while denying external agent requests',
+    (tester) async {
+      final domain = ApprovalDomain();
+      Widget app(bool ready) => MaterialApp(
+        home: AgentApprovalSurface(
+          domain: domain,
+          allowAgentRequests: ready,
+          child: const Scaffold(body: Text('Setup')),
+        ),
+      );
+      await tester.pumpWidget(app(false));
+      await tester.pumpAndSettle();
+      expect(domain.attached, isTrue);
+      domain.events!({
+        'event': 'approval',
+        'approval_id': 'during-setup',
+        'method': 'meetings.start',
+        'args': {},
+      });
+      await tester.pumpAndSettle();
+      expect(domain.client.decisions.single, {
+        'approval_id': 'during-setup',
+        'allow': false,
+      });
+      expect(
+        find.text('Allow microphone and system audio recording?'),
+        findsNothing,
+      );
+      await tester.pumpWidget(app(true));
+      await tester.pumpAndSettle();
+      expect(domain.attached, isTrue);
+      domain.events!({
+        'event': 'approval',
+        'approval_id': 'after-setup',
+        'method': 'meetings.start',
+        'args': {},
+      });
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Allow microphone and system audio recording?'),
+        findsOneWidget,
+      );
+      await tester.tap(find.text('Deny'));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  testWidgets(
     'external recording still requires explicit approval without a duplicate capture bar',
     (tester) async {
       final domain = ApprovalDomain();

@@ -126,7 +126,7 @@ jobs:
             exit 0
           fi
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
-          python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
+          python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive
       - name: Restore qualified application dependency outputs without compilation
         if: github.event_name == 'pull_request'
         env:

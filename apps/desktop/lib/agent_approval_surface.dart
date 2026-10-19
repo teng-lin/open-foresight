@@ -6,10 +6,12 @@ import 'package:foresight_core/remote.dart';
 class AgentApprovalSurface extends StatefulWidget {
   final DesktopConnection domain;
   final Widget child;
+  final bool allowAgentRequests;
   const AgentApprovalSurface({
     super.key,
     required this.domain,
     required this.child,
+    this.allowAgentRequests = true,
   });
   @override
   State<AgentApprovalSurface> createState() => _AgentApprovalSurfaceState();
@@ -64,6 +66,13 @@ class _AgentApprovalSurfaceState extends State<AgentApprovalSurface>
   Future<void> _show(Map<String, dynamic> event) async {
     final id = event['approval_id'] as String;
     if (!mounted || _closed.remove(id)) return;
+    if (!widget.allowAgentRequests) {
+      await widget.domain.command(Operation.securityDecide, {
+        'approval_id': id,
+        'allow': false,
+      });
+      return;
+    }
     _activeId = id;
     final args = Map<String, dynamic>.from(event['args'] as Map)
       ..remove('requestId')

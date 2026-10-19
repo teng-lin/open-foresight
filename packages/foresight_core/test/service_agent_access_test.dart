@@ -58,6 +58,59 @@ void main() {
     ).readAsStringSync(),
   });
   test(
+    'desktop socket closure shuts down service and persists committed data',
+    () async {
+      await attach();
+      await desktop.call('notes.save', {'title': 'Retained', 'body': 'Saved'});
+      await desktop.close();
+      await service.closed.timeout(const Duration(seconds: 10));
+      expect(File(service.path).existsSync(), isFalse);
+      final store = Store('${temp.path}/profile/application.db');
+      try {
+        expect(
+          store.rows('SELECT title FROM notes').single['title'],
+          'Retained',
+        );
+      } finally {
+        store.close();
+      }
+    },
+  );
+  test('desktop reconnect during grace period keeps service alive', () async {
+    await attach();
+    await desktop.close();
+    // Client.close destroys the local socket; the service observes EOF later.
+    // Reconnect after that transition, while its one-second grace is active.
+    final disconnect = Stopwatch()..start();
+    while (service.access.hasHost &&
+        disconnect.elapsed < const Duration(milliseconds: 750)) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(service.access.hasHost, isFalse);
+    desktop = await ServiceClient.connect(service.path);
+    await attach();
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+    expect((await desktop.call('status') as Map)['pid'], pid);
+  });
+  test(
+    'explicit detach followed by desktop closure still shuts down',
+    () async {
+      await attach();
+      await desktop.call('security.detach_desktop');
+      await desktop.close();
+      await service.closed.timeout(const Duration(seconds: 10));
+      expect(File(service.path).existsSync(), isFalse);
+    },
+  );
+  test(
+    'headless agent connections do not acquire the desktop lifetime',
+    () async {
+      await desktop.close();
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
+      expect((await agent.call('status') as Map)['pid'], pid);
+    },
+  );
+  test(
     'desktop detach observes a failing stop and leaves service responsive',
     () async {
       await attach();

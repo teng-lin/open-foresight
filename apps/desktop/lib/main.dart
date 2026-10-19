@@ -1,3 +1,5 @@
+import 'system_audio_setup_dialog.dart';
+import 'onboarding_view.dart';
 import 'model_terms_dialog.dart';
 import 'package:foresight_core/foresight_core.dart'
     show dedicatedQueryTermsKey, dedicatedQueryTermsUri;
@@ -40,6 +42,7 @@ import 'desktop_settings.dart';
 import 'desktop_visuals.dart';
 import 'commands.dart';
 import 'global_shortcuts.dart';
+import 'desktop_menu.dart';
 import 'hypr_shortcuts.dart';
 import 'google_picker.dart';
 import 'google_sign_in_dialog.dart';
@@ -61,6 +64,7 @@ import 'meeting_note_state.dart';
 import 'generated_content.dart';
 import 'agent_approval_surface.dart';
 
+part 'onboarding_controller.dart';
 part 'workspace_controller.dart';
 part 'workspace_visuals.dart';
 part 'sources_controller.dart';
@@ -119,7 +123,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
     try {
       final profile =
           widget.profile ?? ProfilePaths.resolve(Platform.environment);
-      ensurePrivateDirectory(profile.data);
+      privateDirectory(profile.data, repairOwnedPermissions: true);
       ensurePrivateDirectory(profile.runtime);
       widget.configureRuntime(profile.data);
       final commandPath = '${profile.runtime}/commands.sock';
@@ -286,6 +290,7 @@ class Workspace extends StatefulWidget {
 
 class _WorkspaceState extends State<Workspace>
     with TickerProviderStateMixin, WidgetsBindingObserver {
+  late final onboardingFeature = _OnboardingController(this);
   late final sourceFeature = _SourcesController(this);
   late final chatFeature = _ChatController(this);
   late final meetingFeature = _MeetingsController(this);
@@ -299,6 +304,7 @@ class _WorkspaceState extends State<Workspace>
   final serviceUiRevision = ValueNotifier<int>(0);
   final captureVolumes = ValueNotifier<List<double>>(const []);
   StreamSubscription<List<double>>? captureLevels;
+  late final DesktopMenu desktopMenu;
 
   Timer? serviceUiTimer;
   void serviceChanged() {
@@ -324,6 +330,7 @@ class _WorkspaceState extends State<Workspace>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    desktopMenu = DesktopMenu(integrationFeature.activateMenuCommand);
     sourceFeature.graphMotionTicker = createTicker(
       sourceFeature.tickGraphMotion,
     );
@@ -341,6 +348,8 @@ class _WorkspaceState extends State<Workspace>
     settingsFeature.embeddingGpu =
         d.store.registeredEmbedding().firstOrNull?['backend'] ==
         'litert_lm_embedding_gpu';
+    meetingFeature.systemAudioSetupReviewed =
+        d.store.preference('audio.systemSetupReviewed') == 'true';
     integrationFeature.commands = widget.commands;
     integrationFeature.commands?.onError =
         integrationFeature.reportShortcutFailure;
@@ -398,7 +407,9 @@ class _WorkspaceState extends State<Workspace>
       try {
         await d.resume();
       } finally {
+        if (mounted) setState(() => onboardingFeature.ready = true);
         if (mounted &&
+            !onboardingFeature.active &&
             widget.commands != null &&
             !settingsFeature.modelSetupShown &&
             (needsModel(d.store, 'embedding') ||
@@ -422,6 +433,13 @@ class _WorkspaceState extends State<Workspace>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (Platform.isMacOS && state == AppLifecycleState.resumed) {
+      unawaited(integrationFeature.refreshCaptureCapabilities());
+    }
+  }
+
+  @override
   void didChangeMetrics() {
     if (!meetingFeature.meetingAssistantFallback) return;
     // Measure the workspace after layout; a compositor may cap the requested
@@ -437,6 +455,7 @@ class _WorkspaceState extends State<Workspace>
 
   @override
   void dispose() {
+    desktopMenu.close();
     WidgetsBinding.instance.removeObserver(this);
     serviceUiTimer?.cancel();
     serviceUiRevision.dispose();
@@ -530,14 +549,20 @@ class _WorkspaceState extends State<Workspace>
   @override
   Widget build(BuildContext context) {
     sourceFeature.syncGraphMotion();
-    final workspace =
-        meetingFeature.meetingImmersive && meetingFeature.meetingId != null
+    final onboarding = onboardingFeature.active;
+    final workspace = onboarding
+        ? onboardingFeature.build()
+        : meetingFeature.meetingImmersive && meetingFeature.meetingId != null
         ? ValueListenableBuilder<int>(
             valueListenable: serviceUiRevision,
             builder: (_, __, ___) => meetingFeature.immersiveMeetingWorkspace(),
           )
         : screenshotWorkspace(context);
-    return AgentApprovalSurface(domain: d, child: workspace);
+    return AgentApprovalSurface(
+      domain: d,
+      allowAgentRequests: !onboarding,
+      child: workspace,
+    );
   }
 
   Widget screenshotWorkspace(BuildContext context) => CallbackShortcuts(

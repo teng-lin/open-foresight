@@ -197,7 +197,7 @@ void protectPrivateFile(String path) {
 }
 
 /// Refuse symlinks and foreign/public directories before using local RPC state.
-void privateDirectory(String path) {
+void privateDirectory(String path, {bool repairOwnedPermissions = false}) {
   final dir = Directory(path);
   if (FileSystemEntity.typeSync(path, followLinks: false) ==
       FileSystemEntityType.link) {
@@ -216,8 +216,22 @@ void privateDirectory(String path) {
   final user = Process.runSync('/usr/bin/id', ['-u']);
   if (owner.exitCode != 0 ||
       user.exitCode != 0 ||
-      owner.stdout.toString().trim() != user.stdout.toString().trim() ||
-      (dir.statSync().mode & 0x3f) != 0) {
+      owner.stdout.toString().trim() != user.stdout.toString().trim()) {
+    throw StateError('Requires private user-owned directory: $path');
+  }
+  final mode = dir.statSync().mode;
+  // Older installations created the application profile with the normal 0755
+  // umask. Tighten that owned profile without touching its data or descendants.
+  // Never adopt a directory other users could have modified, or relax checks
+  // for arbitrary RPC/runtime/handoff directories.
+  if (repairOwnedPermissions && (mode & 0x3f) != 0 && (mode & 0x12) == 0) {
+    if (Process.runSync('/bin/chmod', ['700', path]).exitCode != 0) {
+      throw StateError('Cannot protect $path');
+    }
+    privateDirectory(path);
+    return;
+  }
+  if ((mode & 0x3f) != 0) {
     throw StateError('Requires private user-owned directory: $path');
   }
 }

@@ -70,7 +70,7 @@ void main() {
           find.textContaining('Google sign-in setup required.'),
           findsNothing,
         );
-        expect(find.text('Advanced OAuth configuration'), findsOneWidget);
+        expect(find.text('Advanced OAuth configuration'), findsNothing);
         final connect = find.widgetWithText(FilledButton, 'Connect Google');
         await tester.ensureVisible(connect);
         await tester.tap(connect);
@@ -110,7 +110,7 @@ void main() {
     },
   );
   testWidgets(
-    'unconfigured Calendar connection opens actionable setup and cancellation leaves it disconnected',
+    'an unconfigured build reports missing distribution support without a JSON import flow',
     (tester) async {
       final root = createTestTempDirectorySync('google-setup-ui-');
       addTearDown(() {
@@ -135,28 +135,21 @@ void main() {
         expect(tester.widget<FilledButton>(connect).onPressed, isNotNull);
         expect(
           find.text(
-            'Google sign-in setup required. Choose Connect Google to get started.',
+            'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
           ),
           findsOneWidget,
         );
         await tester.tap(connect);
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
-        expect(find.text('Set up Google Drive and Calendar'), findsOneWidget);
-        expect(find.textContaining('Google Calendar API'), findsOneWidget);
-        expect(find.text('Import client JSON'), findsOneWidget);
-        tester.view.physicalSize = const Size(640, 400);
-        tester.view.devicePixelRatio = 1;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-        await tester.pump(const Duration(milliseconds: 300));
-        expect(tester.takeException(), isNull);
+        expect(find.text('Set up Google Drive and Calendar'), findsNothing);
+        expect(find.text('Import client JSON'), findsNothing);
+        expect(find.text('Import Desktop client configuration'), findsNothing);
+        final dynamic state = tester.state(find.byType(Workspace));
         expect(
-          tester.getSize(find.byType(AlertDialog)).height,
-          lessThanOrEqualTo(400),
+          state.error,
+          contains('Google sign-in is unavailable in this build.'),
         );
-        await tester.tap(find.text('Cancel'));
-        await tester.pumpAndSettle();
         expect(domain.application.googleAuth.connected, false);
         expect(domain.application.googleAuth.signingIn, false);
         expect(tester.takeException(), isNull);
