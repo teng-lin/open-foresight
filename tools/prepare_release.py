@@ -39,7 +39,20 @@ def candidates_ready(repository, commit, run_id=None):
     return True
 
 
-def require_candidates(repository, commit, wait, fresh=False):
+def require_candidates(repository, commit, wait, fresh=False, candidate_run=0):
+    if candidate_run < 0:
+        raise ValueError("Candidate run must be a positive run ID")
+    if candidate_run:
+        if not candidates_ready(repository, commit, run_id=candidate_run):
+            raise ValueError(
+                "Requested candidate run has no successful trusted Linux and macOS "
+                "candidates for the tagged product commit"
+            )
+        print(
+            f"Reuse verified exact-source candidates from run {candidate_run}",
+            flush=True,
+        )
+        return candidate_run
     if not fresh and candidates_ready(repository, commit):
         return None
     current_main = api(repository, "commits/main")["sha"]
@@ -169,7 +182,19 @@ def create_draft(repository, tag, commit):
             check=True,
             timeout=300,
         )
-        release = release_for_tag(repository, tag, request=api)
+        # Newly created drafts can lag in the authenticated list API. Keep the
+        # existing tag and candidates intact while discovery catches up.
+        for attempt in range(6):
+            release = release_for_tag(repository, tag, optional=True, request=api)
+            if release is not None:
+                break
+            if attempt < 5:
+                time.sleep(2)
+        if release is None:
+            raise ValueError(
+                "Created draft is not yet visible; resume with --candidate-run "
+                "after draft discovery recovers instead of rebuilding candidates"
+            )
     if not release["draft"]:
         raise ValueError("Public releases are immutable; cut a new version")
     body = release.get("body") or ""
@@ -231,6 +256,12 @@ def main():
         "--repo", default=os.environ.get("GITHUB_REPOSITORY", "teng-lin/open-foresight")
     )
     parser.add_argument("--wait", type=int, default=10800)
+    parser.add_argument(
+        "--candidate-run",
+        type=int,
+        default=0,
+        help="Resume packaging from both verified candidates in this successful main run",
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"v\d+\.\d+\.\d+", args.tag) or stale():
         raise ValueError(
@@ -246,7 +277,9 @@ def main():
         raise ValueError(
             "A new release tag must match the synchronized application version"
         )
-    candidate_run = require_candidates(args.repo, commit, args.wait, fresh=True)
+    candidate_run = require_candidates(
+        args.repo, commit, args.wait, fresh=True, candidate_run=args.candidate_run
+    )
     release = create_draft(args.repo, args.tag, commit)
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         stream.write(

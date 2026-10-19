@@ -13,6 +13,144 @@ from tools import prepare_release as release
 
 
 class PrepareReleaseTest(unittest.TestCase):
+    def test_created_draft_waits_for_authenticated_list_visibility(self):
+        draft = {
+            "tag_name": "v0.1.1",
+            "id": 42,
+            "draft": True,
+            "assets": [],
+            "body": "",
+        }
+        with (
+            patch.object(
+                release,
+                "api",
+                side_effect=[[{"ref": "refs/tags/v0.1.1"}], {"sha": "a" * 40}],
+            ),
+            patch.object(
+                release, "release_for_tag", side_effect=[None, None, None, draft]
+            ),
+            patch.object(release.time, "sleep") as sleep,
+            patch.object(
+                release.subprocess,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    [], 0, json.dumps({**draft, "target_commitish": "a" * 40})
+                ),
+            ) as command,
+        ):
+            self.assertEqual(
+                release.create_draft("owner/repo", "v0.1.1", "a" * 40), "1"
+            )
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(command.call_count, 2)
+
+    def test_invisible_created_draft_has_bounded_retries_and_no_asset_mutations(self):
+        with (
+            patch.object(
+                release,
+                "api",
+                side_effect=[[{"ref": "refs/tags/v0.1.1"}], {"sha": "a" * 40}],
+            ),
+            patch.object(release, "release_for_tag", return_value=None) as lookup,
+            patch.object(release.time, "sleep") as sleep,
+            patch.object(release.subprocess, "run") as command,
+        ):
+            with self.assertRaisesRegex(ValueError, "resume with --candidate-run"):
+                release.create_draft("owner/repo", "v0.1.1", "a" * 40)
+        self.assertEqual(lookup.call_count, 7)
+        self.assertEqual(sleep.call_count, 5)
+        self.assertEqual(command.call_count, 1)
+        self.assertEqual(command.call_args.args[0][:3], ["gh", "release", "create"])
+
+    def test_verified_candidate_resume_never_dispatches_a_new_build(self):
+        with (
+            patch.object(release, "candidates_ready", return_value=True) as ready,
+            patch.object(release, "api") as request,
+            patch.object(release.subprocess, "run") as command,
+        ):
+            self.assertEqual(
+                release.require_candidates(
+                    "owner/repo", "a" * 40, 0, fresh=True, candidate_run=42
+                ),
+                42,
+            )
+        ready.assert_called_once_with("owner/repo", "a" * 40, run_id=42)
+        request.assert_not_called()
+        command.assert_not_called()
+
+    def test_unqualified_resume_fails_without_dispatching_a_replacement(self):
+        for candidate_run in (-1, 42):
+            with (
+                self.subTest(candidate_run=candidate_run),
+                patch.object(release, "candidates_ready", return_value=False),
+                patch.object(release.subprocess, "run") as command,
+            ):
+                with self.assertRaises(ValueError):
+                    release.require_candidates(
+                        "owner/repo",
+                        "a" * 40,
+                        0,
+                        fresh=True,
+                        candidate_run=candidate_run,
+                    )
+                command.assert_not_called()
+
+    def test_resume_requires_both_artifacts_from_the_requested_trusted_run(self):
+        run = {
+            "head_sha": "a" * 40,
+            "path": ".github/workflows/macos.yml",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "conclusion": "success",
+            "head_repository": {"full_name": "owner/repo"},
+        }
+        artifact_overrides = {}
+        missing = set()
+
+        def response(repository, route):
+            if route.startswith("actions/artifacts?"):
+                if any(component in route for component in missing):
+                    return {"artifacts": []}
+                return {
+                    "artifacts": [
+                        {
+                            "name": route.split("name=")[1].split("&")[0],
+                            "expired": False,
+                            "workflow_run": {"id": 42},
+                            **artifact_overrides,
+                        }
+                    ]
+                }
+            self.assertEqual(route, "actions/runs/42")
+            return run
+
+        with patch.object(release, "api", side_effect=response):
+            self.assertTrue(release.candidates_ready("owner/repo", "a" * 40, 42))
+            for component in ("linux-app", "macos-app"):
+                missing.add(component)
+                self.assertFalse(release.candidates_ready("owner/repo", "a" * 40, 42))
+                missing.clear()
+            for change in (
+                {"expired": True},
+                {"workflow_run": {"id": 43}},
+                {"name": "ci-macos-app-" + "b" * 40},
+            ):
+                artifact_overrides.update(change)
+                self.assertFalse(release.candidates_ready("owner/repo", "a" * 40, 42))
+                artifact_overrides.clear()
+            for change in (
+                {"conclusion": "failure"},
+                {"head_branch": "unreviewed"},
+                {"path": ".github/workflows/other.yml"},
+                {"head_repository": {"full_name": "untrusted/repo"}},
+            ):
+                original = dict(run)
+                run.update(change)
+                self.assertFalse(release.candidates_ready("owner/repo", "a" * 40, 42))
+                run.clear()
+                run.update(original)
+
     def test_created_draft_uses_list_lookup_when_tag_endpoint_is_unavailable(self):
         draft = {
             "tag_name": "v0.1.1",

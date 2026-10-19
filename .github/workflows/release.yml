@@ -6,6 +6,11 @@ on:
         description: New stable tag matching main's application version
         type: string
         required: true
+      candidate_run:
+        description: Existing successful main candidate run to verify and reuse; 0 creates fresh candidates
+        type: string
+        required: false
+        default: '0'
       publish_only:
         description: Publish existing tested draft bytes after release-day GPU checks; do not rebuild installers
         type: boolean
@@ -45,7 +50,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: python tools/prepare_release.py --tag "$RELEASE_TAG"
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+        run: python tools/prepare_release.py --tag "$RELEASE_TAG" --candidate-run "$CANDIDATE_RUN"
   linux:
     needs: prepare
     permissions:
