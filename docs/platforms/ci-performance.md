@@ -855,6 +855,16 @@ it does not equate the workflow's own `head_sha` with the candidate it tested.
 Missing or conflicting candidate evidence is reported as unattributed. Missing
 merge runs and missing tree identities remain explicit unknowns, never zero-cost
 merges. Historical repeated successful jobs are counted once across attempts.
+Per-merge cost includes direct main pushes and the known
+`integration-acceptance.yml` `workflow_run` chain with a logged candidate source.
+Scheduled drift, nightly, release and cache-publish dispatch work is reported
+separately in `non_merge_runs` and `non_merge_runner_minutes`, even when it shares
+a merge SHA. Each excluded run records its workflow, event, minutes and reason.
+Unsupported downstream workflows and missing source evidence also stay explicit.
+Dispatches are not identified as main sweeps from their display title: these
+snapshots do not contain the selection receipts required to prove sweep identity.
+WS5a must add verified sweep evidence before those dispatch costs enter the
+per-merge KPI. A shared commit SHA alone never proves that a merge caused a run.
 Use a snapshot bounded to the measurement window and `--current-since TIMESTAMP`
 to distinguish shapes observed in the current configuration from older shapes
 not observed since that cutoff. A shape's absence is an observation, not proof

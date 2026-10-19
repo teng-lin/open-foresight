@@ -34,7 +34,9 @@ def run(identity=1, event="pull_request", sha=A, jobs=None):
         "head_sha": sha,
         "source": sha,
         "head_branch": "feature" if event == "pull_request" else "main",
-        "path": ".github/workflows/quality.yml",
+        "path": ".github/workflows/integration-acceptance.yml"
+        if event == "workflow_run"
+        else ".github/workflows/quality.yml",
         "created_at": "2026-10-19T00:00:00Z",
         "pull_requests": [1],
         "jobs": jobs if jobs is not None else [job()],
@@ -212,3 +214,88 @@ def test_merged_run_empty_pr_association_uses_only_unique_branch():
     assert report([sample], [first])["pushes"][0]["pr"] == 1
     second = pull(number=2) | {"headRefName": "feature"}
     assert report([sample], [first, second])["pushes"] == []
+
+
+def test_independent_daily_and_release_spend_does_not_make_a_merge_observed():
+    samples = [
+        run(10, "schedule", B)
+        | {
+            "path": ".github/workflows/native-sanitizers.yml",
+            "minutes": 50,
+        },
+        run(11, "workflow_dispatch", B)
+        | {
+            "path": ".github/workflows/release.yml",
+            "minutes": 75,
+        },
+    ]
+    result = report(samples)
+    assert result["mean_per_merge"] is None
+    assert result["identical_tree_merge_minutes"]["n"] == 0
+    assert result["unobserved_merge_count"] == 1
+    assert result["merges"][0]["runner_minutes"] is None
+    assert result["non_merge_runner_minutes"] == 125
+    assert [sample["id"] for sample in result["non_merge_runs"]] == [10, 11]
+
+
+def test_only_main_push_and_known_acceptance_chain_contribute_to_merge_cost():
+    direct = run(10, "push", B)
+    acceptance = run(11, "workflow_run", C) | {"source": B}
+    nightly = run(12, "schedule", B) | {"minutes": 100}
+    release = run(13, "workflow_dispatch", B) | {"minutes": 200}
+    result = report([direct, acceptance, nightly, release])
+    assert result["mean_per_merge"] == 4
+    assert result["identical_tree_merge_minutes"]["p50"] == 4
+    assert result["merges"][0]["runner_minutes"] == 4
+    assert result["non_merge_runner_minutes"] == 300
+    assert result["unattributed_workflow_run_ids"] == []
+
+
+@pytest.mark.parametrize(
+    "workflow,title",
+    [
+        ("macos.yml", "Main sweep " + B),
+        ("macos.yml", "Cache publish " + B),
+        ("macos.yml", "Release candidate " + B),
+        ("release.yml", "Main sweep " + B),
+    ],
+)
+def test_dispatch_title_alone_cannot_prove_a_merge_sweep(workflow, title):
+    sample = run(12, "workflow_dispatch", B) | {
+        "path": ".github/workflows/" + workflow,
+        "display_title": title,
+    }
+    result = report([sample])
+    assert result["mean_per_merge"] is None
+    assert (
+        result["non_merge_runs"][0]["reason"]
+        == "dispatch-without-verified-sweep-evidence"
+    )
+
+
+@pytest.mark.parametrize(
+    "sample,reason",
+    [
+        (run(10, "push", B) | {"head_branch": "feature"}, "not-main"),
+        (run(10, "push", B) | {"source": None}, "missing-push-source"),
+        (run(10, "workflow_run", B) | {"source": None}, "missing-candidate-source"),
+        (
+            run(10, "workflow_run", B)
+            | {"path": ".github/workflows/linux-registry.yml"},
+            "unverified-downstream-workflow",
+        ),
+    ],
+)
+def test_incomplete_or_unverified_sources_keep_their_cost_explicit(sample, reason):
+    result = report([sample])
+    assert result["non_merge_runs"] == [
+        {
+            "id": 10,
+            "event": sample["event"],
+            "workflow": sample["path"],
+            "head_sha": B,
+            "runner_minutes": 2,
+            "reason": reason,
+        }
+    ]
+    assert result["mean_per_merge"] is None

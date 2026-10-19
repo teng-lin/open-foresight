@@ -105,6 +105,26 @@ def load(directory):
     return list(runs.values()), prs, trees
 
 
+def merge_attribution(run):
+    """Identify merge-triggered work without treating a shared SHA as causality.
+
+    Dispatch inputs/selection receipts are absent from the REST snapshots. A
+    future ``Main sweep`` display title is only a filter, so dispatches remain
+    independent spend until their actual sweep selection can be verified.
+    """
+    if run.get("head_branch") != "main":
+        return "not-main"
+    if run["event"] == "push":
+        return None if run["source"] else "missing-push-source"
+    if run["event"] == "workflow_run":
+        if run["path"] != ".github/workflows/integration-acceptance.yml":
+            return "unverified-downstream-workflow"
+        return None if run["source"] else "missing-candidate-source"
+    if run["event"] == "workflow_dispatch":
+        return "dispatch-without-verified-sweep-evidence"
+    return "independent-event"
+
+
 def report(runs, prs, trees, current_since):
     pulls = {pull["number"]: pull for pull in prs}
     branches = defaultdict(list)
@@ -123,6 +143,7 @@ def report(runs, prs, trees, current_since):
         for job in run["jobs"]
     }
     unattributed = []
+    non_merge = []
     for run in runs:
         for job in run["jobs"]:
             shape = (run["path"], job["name"])
@@ -140,11 +161,23 @@ def report(runs, prs, trees, current_since):
             for pull in assignments:
                 number = pull["number"] if isinstance(pull, dict) else pull
                 pushes[number, run["head_sha"]].append(run)
-        elif run.get("head_branch") == "main":
-            if run["source"]:
+        else:
+            reason = merge_attribution(run)
+            if reason is None:
                 main[run["source"]].append(run)
             else:
-                unattributed.append(run["id"])
+                non_merge.append(
+                    {
+                        "id": run["id"],
+                        "event": run["event"],
+                        "workflow": run["path"],
+                        "head_sha": run["head_sha"],
+                        "runner_minutes": run["minutes"],
+                        "reason": reason,
+                    }
+                )
+                if run["event"] == "workflow_run" and not run["source"]:
+                    unattributed.append(run["id"])
     per_push = []
     for (number, sha), group in sorted(pushes.items()):
         pull = pulls.get(number, {})
@@ -250,6 +283,8 @@ def report(runs, prs, trees, current_since):
         "unobserved_merge_count": len(per_merge) - len(observed),
         "unknown_tree_count": len(per_merge) - len(known),
         "unattributed_workflow_run_ids": unattributed,
+        "non_merge_runner_minutes": sum(run["runner_minutes"] for run in non_merge),
+        "non_merge_runs": non_merge,
         "job_shapes": dict(sorted(shapes.items())),
         "pushes": per_push,
         "merges": per_merge,
