@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: warn
   drift-issue:
     needs: arch
-    if: always() && github.ref == 'refs/heads/main'
+    if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     concurrency:
       group: ci-arch-drift-issue
       cancel-in-progress: false

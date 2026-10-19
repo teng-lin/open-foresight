@@ -19,14 +19,27 @@ WORKFLOWS = {
 }
 
 
-def result(repository, run_id, expected, *, allow_missing=False, request=request):
+def result(
+    repository,
+    run_id,
+    expected,
+    *,
+    allow_missing=False,
+    cancelled=False,
+    request=request,
+):
     """Read actual job conclusions, including failures hidden by probation."""
     selected = [
         job
         for job in jobs(repository, run_id, request=request)
         if job.get("name") in expected
     ]
-    if any(job.get("status") != "completed" for job in selected):
+    if not selected or any(
+        job.get("status") != "completed" or job.get("conclusion") in (None, "cancelled")
+        for job in selected
+    ):
+        return None
+    if cancelled and all(job.get("conclusion") == "skipped" for job in selected):
         return None
     found = {job["name"] for job in selected}
     if not allow_missing and set(expected).difference(found):
@@ -62,26 +75,34 @@ def reconcile(repository, workflow, run_id, source, *, request=request):
         "workflow_runs",
         request=request,
     )
-    for candidate in runs:
-        if (
-            candidate["id"] > run_id
-            and qualified(candidate, repository, workflow)
-            and result(
-                repository,
-                candidate["id"],
-                expected,
-                allow_missing=candidate.get("status") == "completed",
-                request=request,
-            )
-            is not None
-        ):
-            print(
-                f"Ignore stale drift result {run_id}; newer run {candidate['id']} reports it."
-            )
-            return
-    failures = result(repository, run_id, expected, allow_missing=True, request=request)
-    if failures is None:
-        raise ValueError("Drift issue ran before its selected suites completed")
+    # Concurrency may replace a pending issue job, including that of a newer
+    # run. The invocation that survives must report the newest actual suites,
+    # rather than assume another issue job will eventually report them.
+    candidates = {candidate["id"]: candidate for candidate in runs}
+    candidates[run_id] = current
+    for candidate in sorted(
+        candidates.values(), key=lambda item: item["id"], reverse=True
+    ):
+        if not qualified(candidate, repository, workflow) or candidate.get(
+            "status"
+        ) not in ("completed", "in_progress"):
+            continue
+        failures = result(
+            repository,
+            candidate["id"],
+            expected,
+            allow_missing=candidate.get("status") == "completed",
+            cancelled=candidate.get("conclusion") == "cancelled",
+            request=request,
+        )
+        if failures is not None:
+            run_id, source = candidate["id"], candidate["head_sha"]
+            break
+    else:
+        print(
+            "No completed drift suites to report; pending or cancelled runs are not evidence."
+        )
+        return
     issues = [
         item
         for item in pages(

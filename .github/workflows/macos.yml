@@ -124,6 +124,7 @@ jobs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: macos-development-evidence
+        overwrite: true
         path: |
           dist/*.manifest.json
           build/macos-runtimes/runtime-manifest.json
@@ -228,6 +229,7 @@ jobs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: linux-document-sandbox-evidence
+        overwrite: true
         path: test-results/document-sandbox/
         if-no-files-found: error
   changes:

@@ -49,7 +49,7 @@ def api_fixture(*, current=None, newer=(), job_rows=None, issues=(), label=True)
         if route.startswith("issues?"):
             return list(issues)
         if route.startswith("labels/"):
-            return {} if label else None
+            return {"name": route} if label else None
         raise AssertionError(route)
 
     return request, calls
@@ -105,26 +105,38 @@ def test_labeled_pr_is_never_mutated_by_drift_tracking(success, real_issue):
 
 
 @pytest.mark.parametrize("conclusion", ["success", "failure", "skipped"])
-def test_newer_authoritative_run_suppresses_stale_success_and_failure(conclusion):
+def test_surviving_issue_job_reconciles_newest_actual_suites(conclusion):
+    newer_source = "b" * 40
     request, calls = api_fixture(
-        newer=[run(200)],
+        newer=[run(200, head_sha=newer_source)],
+        issues=[{"number": 7}],
         job_rows={
             200: [{"name": "arch", "status": "completed", "conclusion": conclusion}]
         },
     )
     drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
-    assert all(method == "GET" for _, method, _ in calls)
+    body = calls[-2][2]["body"] if conclusion == "success" else calls[-1][2]["body"]
+    assert "/runs/200" in body and newer_source in body
+    assert "/runs/100" not in body
+    if conclusion == "success":
+        assert calls[-1] == ("issues/7", "PATCH", {"state": "closed"})
+    else:
+        assert "arch" in body
 
 
 @pytest.mark.parametrize("new_jobs", [[], [{"name": "arch", "status": "queued"}]])
 def test_newer_pending_run_does_not_hide_current_failure(new_jobs):
     request, calls = api_fixture(
         newer=[run(200, status="in_progress")],
-        job_rows={100: [], 200: new_jobs},
+        job_rows={
+            100: [{"name": "arch", "status": "completed", "conclusion": "failure"}],
+            200: new_jobs,
+        },
     )
     drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
     assert calls[-1][0:2] == ("issues", "POST")
     assert "missing suites: arch" in calls[-1][2]["body"]
+    assert "/runs/100" in calls[-1][2]["body"]
 
 
 @pytest.mark.parametrize(
@@ -164,12 +176,11 @@ def test_probation_does_not_mask_actual_thread_failure():
     assert "native-thread-sanitizer" in calls[-1][2]["body"]
 
 
-def test_incomplete_current_job_fails_instead_of_closing_an_issue():
+def test_incomplete_current_job_cannot_close_an_issue():
     request, calls = api_fixture(
         job_rows={100: [{"name": "arch", "status": "in_progress"}]}
     )
-    with pytest.raises(ValueError, match="before its selected suites completed"):
-        drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
+    drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
     assert all(method == "GET" for _, method, _ in calls)
 
 
@@ -270,3 +281,168 @@ def test_arch_daily_probe_inlines_toolchain_and_runs_existing_full_gates():
         )
         assert issue["permissions"]["issues"] == "write"
         assert issue["concurrency"]["cancel-in-progress"] is False
+
+
+@pytest.mark.parametrize("current", [True, False])
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [{"name": "arch", "status": "completed", "conclusion": "cancelled"}],
+        [{"name": "arch", "status": "completed", "conclusion": "skipped"}],
+    ],
+)
+def test_cancelled_or_unstarted_suites_never_count_as_drift_evidence(current, rows):
+    old_failure = [{"name": "arch", "status": "completed", "conclusion": "failure"}]
+    request, calls = api_fixture(
+        current=run(conclusion="cancelled") if current else run(),
+        newer=() if current else [run(200, conclusion="cancelled")],
+        job_rows={100: rows if current else old_failure, 200: rows},
+        issues=[{"number": 7}],
+    )
+    drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
+    if current:
+        assert all(method == "GET" for _, method, _ in calls)
+    else:
+        assert calls[-1][0:2] == ("issues/7", "PATCH")
+        assert "/runs/100" in calls[-1][2]["body"]
+
+
+def test_replaced_newer_issue_job_does_not_lose_its_successful_test_evidence():
+    request, calls = api_fixture(
+        newer=[run(200, conclusion="cancelled")],
+        issues=[{"number": 7}],
+        job_rows={
+            200: [
+                {"name": "arch", "status": "completed", "conclusion": "success"},
+                {
+                    "name": "drift-issue",
+                    "status": "completed",
+                    "conclusion": "cancelled",
+                },
+            ]
+        },
+    )
+    drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
+    assert calls[-1] == ("issues/7", "PATCH", {"state": "closed"})
+    assert "/runs/200" in calls[-2][2]["body"]
+
+
+def test_untrusted_newer_run_cannot_supplant_actual_main_failure():
+    request, calls = api_fixture(newer=[run(200, event="pull_request")])
+    drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
+    assert "/runs/100" in calls[-1][2]["body"]
+    assert not any(route.startswith("actions/runs/200/jobs") for route, _, _ in calls)
+
+
+def test_partial_completed_evidence_still_reports_missing_suites():
+    request, calls = api_fixture(
+        current=run(path=".github/workflows/native-sanitizers.yml"),
+        job_rows={
+            100: [
+                {
+                    "name": "native-sanitizers",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            ]
+        },
+    )
+    drift.reconcile(REPOSITORY, "native-sanitizers.yml", 100, SOURCE, request=request)
+    assert "native-thread-sanitizer" in calls[-1][2]["body"]
+    assert "thread-policy" in calls[-1][2]["body"]
+
+
+def test_every_always_upload_in_the_nightly_called_workflow_closure_is_retry_safe():
+    visited = set()
+    evidence = set()
+
+    def visit(filename):
+        if filename in visited:
+            return
+        visited.add(filename)
+        for name, job in workflow(filename)["jobs"].items():
+            if job.get("uses", "").startswith("./.github/workflows/"):
+                visit(Path(job["uses"]).name)
+            for step in job.get("steps", []):
+                if step.get("uses", "").startswith(
+                    "actions/upload-artifact@"
+                ) and "always()" in str(step.get("if", "")):
+                    assert step["with"].get("overwrite") is True, (filename, name, step)
+                    evidence.add(filename)
+
+    visit("preview-packages.yml")
+    assert {
+        "macos.yml",
+        "macos-platform-stages.yml",
+        "linux-platform-stages.yml",
+        "package-contracts.yml",
+    } <= visited
+    assert {
+        "macos.yml",
+        "macos-platform-stages.yml",
+        "linux-platform-stages.yml",
+        "package-contracts.yml",
+    } <= evidence
+
+
+def test_main_drift_issue_permissions_have_explicit_event_and_ref_guards():
+    for filename in ("arch-drift.yml", "native-sanitizers.yml"):
+        issue = workflow(filename)["jobs"]["drift-issue"]
+        assert "github.ref == 'refs/heads/main'" in issue["if"]
+        assert "github.event_name == 'schedule'" in issue["if"]
+        assert "github.event_name == 'workflow_dispatch'" in issue["if"]
+        assert "github.event_name == 'push'" in issue["if"]
+        assert "pull_request" not in issue["if"]
+
+
+def test_buildkit_fixture_own_path_selects_its_actual_docker_consumer():
+    from tools.ci_changes import select_gates
+
+    selected = select_gates(["tests/test_acceptance_image_cache.py"])
+    assert selected["linux-bundle"] and selected["linux-native"]
+    acceptance = workflow("integration-acceptance.yml")["jobs"]
+    assert (
+        "needs.changes.outputs.linux_bundle == 'true'"
+        in acceptance["ubuntu-package"]["if"]
+    )
+    fixture = next(
+        step
+        for step in acceptance["ubuntu-package"]["steps"]
+        if "pytest tests/test_acceptance_image_cache.py" in step.get("run", "")
+    )
+    assert fixture["env"]["FORESIGHT_DOCKER_CACHE_TEST"] == "1"
+
+
+def test_partial_newer_suites_do_not_replace_complete_sanitizer_evidence():
+    filename = "native-sanitizers.yml"
+    expected = drift.WORKFLOWS[filename][1]
+    request, calls = api_fixture(
+        current=run(path=".github/workflows/" + filename),
+        newer=[run(200, path=".github/workflows/" + filename, status="in_progress")],
+        issues=[{"number": 7}],
+        job_rows={
+            100: [
+                {"name": name, "status": "completed", "conclusion": "success"}
+                for name in expected
+            ],
+            200: [
+                {"name": expected[0], "status": "completed", "conclusion": "failure"}
+            ],
+        },
+    )
+    drift.reconcile(REPOSITORY, filename, 100, SOURCE, request=request)
+    assert calls[-1] == ("issues/7", "PATCH", {"state": "closed"})
+    assert "/runs/100" in calls[-2][2]["body"]
+
+
+def test_queued_run_cannot_promote_copied_job_rows_to_new_authoritative_evidence():
+    request, calls = api_fixture(
+        newer=[run(200, status="queued")],
+        job_rows={
+            100: [{"name": "arch", "status": "completed", "conclusion": "failure"}],
+            200: [{"name": "arch", "status": "completed", "conclusion": "success"}],
+        },
+    )
+    drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
+    assert "/runs/100" in calls[-1][2]["body"]

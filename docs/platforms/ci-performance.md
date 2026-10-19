@@ -971,3 +971,14 @@ latency comparison still requires at least five completed hosted runs. No SDK
 input or component identity changed in this workstream. Transport allowlisting
 explicitly accounts for storage probes and conditional cleanup without making
 them compilation inputs. The net change and test evidence are recorded in the PR.
+
+Retry diagnostics now allow replacement throughout the nightly's called-workflow
+closure, including development packages, document sandbox evidence and distro
+installer evidence. A fixture-only BuildKit PR selects the Linux consumer that
+runs its opt-in Docker proof rather than leaving that file wholly skipped.
+Drift issue writers require an explicit main-ref and allowed-event guard. Their
+serialized surviving invocation reconciles the newest completed actual suites;
+empty, pending and cancelled suite jobs provide no result. A cancelled/replaced
+issue job does not discard its run's otherwise completed test evidence, and a
+stale queued writer reports the newer tests instead of assuming a replacement
+writer will run.

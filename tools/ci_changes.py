@@ -94,6 +94,7 @@ LINUX_FILES = {
     "tools/build_linux_sdk.sh",
     "tools/build_linux_sdk_local.sh",
     "tools/linux_sdk_artifacts.py",
+    "tests/test_acceptance_image_cache.py",
 }
 
 
@@ -117,6 +118,7 @@ def select_gates(paths, force=False):
             and PurePosixPath(path).name.startswith("test_")
             and PurePosixPath(path).suffix == ".py"
             and path not in MACOS_FILES
+            and path not in LINUX_FILES
         ):
             continue
         if (
