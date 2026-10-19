@@ -770,6 +770,44 @@ void main() {
   );
 
   test(
+    'Google account switching and individual signout preserve one shared knowledge base',
+    () async {
+      await connectGoogle();
+      final first = auth.account;
+      final source = domain.store.importText(
+        'Shared source',
+        'Shared knowledge',
+        'text/plain',
+        'fixture',
+      );
+      domain.store.saveNote(
+        null,
+        'Shared note',
+        'Available to every connected account',
+      );
+      final notes = domain.store.rows('SELECT * FROM notes');
+      google.accountSub = 'second-account';
+      await auth.addAccount(google.consent);
+      expect(auth.accounts, hasLength(2));
+      await app.call('google.switch_account', {'id': first});
+      expect(auth.account, first);
+      expect(domain.store.sources.any((row) => row['id'] == source), isTrue);
+      expect(domain.store.rows('SELECT * FROM notes'), notes);
+      await app.call('google.sign_out_account', {'id': 'second-account'});
+      expect(auth.account, first);
+      expect(domain.store.rows('SELECT * FROM notes'), notes);
+      google.accountSub = 'third-account';
+      await auth.addAccount(google.consent);
+      await app.call('google.sign_out_account', {'id': 'third-account'});
+      expect(auth.account, first);
+      await app.call('google.sign_out_account', {'id': first});
+      expect(auth.accounts, isEmpty);
+      expect(domain.store.sources.any((row) => row['id'] == source), isTrue);
+      expect(domain.store.rows('SELECT * FROM notes'), notes);
+    },
+  );
+
+  test(
     'label and graph operations keep organization scoped to current sources',
     () async {
       final id = domain.store.importText(

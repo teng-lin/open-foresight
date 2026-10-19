@@ -462,6 +462,10 @@ class RemoteGoogleAuth implements GoogleAccount {
   @override
   String get email => domain.googleStatus['email'] as String? ?? '';
   @override
+  String get displayName => domain.googleStatus['displayName'] as String? ?? '';
+  @override
+  String get photoUrl => domain.googleStatus['photoUrl'] as String? ?? '';
+  @override
   String get account => domain.googleStatus['account'] as String? ?? '';
   @override
   String get loadError => domain.googleStatus['loadError'] as String? ?? '';
@@ -483,11 +487,29 @@ class RemoteGoogleAuth implements GoogleAccount {
   Future<void> configure(File file) =>
       _call(Operation.googleConfigure, {'path': file.path});
   @override
-  Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
+  Future<void> signIn(Future<void> Function(Uri) openBrowser) =>
+      _signIn(openBrowser, Operation.googleSignIn);
+  @override
+  Future<void> addAccount(Future<void> Function(Uri) openBrowser) =>
+      _signIn(openBrowser, Operation.googleAddAccount);
+  @override
+  List<Map<String, Object?>> get accounts =>
+      (domain.googleStatus['accounts'] as List? ?? [])
+          .map((value) => Map<String, Object?>.from(value as Map))
+          .toList();
+  @override
+  Future<void> switchAccount(String id) =>
+      _call(Operation.googleSwitchAccount, {'id': id});
+  @override
+  Future<void> signOutAccount(String id) =>
+      _call(Operation.googleSignOutAccount, {'id': id});
+
+  Future<void> _signIn(
+    Future<void> Function(Uri) openBrowser,
+    Operation operation,
+  ) async {
     try {
-      await for (final value in domain.client.stream(
-        Operation.googleSignIn.wire,
-      )) {
+      await for (final value in domain.client.stream(operation.wire)) {
         final state = Map<String, dynamic>.from(value as Map);
         if (state['authorization_url'] is String) {
           await openBrowser(Uri.parse(state['authorization_url'] as String));

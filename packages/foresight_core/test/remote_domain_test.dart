@@ -89,6 +89,8 @@ void main() {
         'google': {
           'connected': true,
           'email': 'fixture@example.test',
+          'displayName': 'Fixture Person',
+          'photoUrl': 'https://lh3.googleusercontent.com/fixture',
           'account': 'account',
           'configured': true,
           'signingIn': true,
@@ -109,6 +111,8 @@ void main() {
       final auth = RemoteGoogleAuth(f.remote);
       expect(auth.connected, isTrue);
       expect(auth.email, 'fixture@example.test');
+      expect(auth.displayName, 'Fixture Person');
+      expect(auth.photoUrl, 'https://lh3.googleusercontent.com/fixture');
       expect(auth.account, 'account');
       expect(auth.client, isNotNull);
       expect(auth.signingIn, isTrue);
@@ -122,6 +126,8 @@ void main() {
       expect(f.remote.webSearchAvailable, isFalse);
       expect(auth.client, isNull);
       expect(auth.email, isEmpty);
+      expect(auth.displayName, isEmpty);
+      expect(auth.photoUrl, isEmpty);
       expect(auth.account, isEmpty);
       expect(auth.loadError, isEmpty);
       expect(auth.signingIn, isFalse);
@@ -343,6 +349,46 @@ void main() {
         f.requests.where((r) => r['method'] == 'google.cancel_sign_in').length,
         greaterThanOrEqualTo(2),
       );
+    },
+  );
+
+  test(
+    'Google account facade streams additions and selects or signs out only requested id',
+    () async {
+      final auth = RemoteGoogleAuth(f.remote);
+      f.handler = (socket, request) {
+        if (request['method'] == 'google.add_account') {
+          f.reply(socket, request, {
+            'authorization_url': 'https://example.invalid/add',
+          }, done: false);
+          f.reply(socket, request, {
+            'connected': true,
+            'account': 'second',
+            'accounts': [
+              {'id': 'second', 'email': 'second@example.test', 'current': true},
+              {'id': 'first', 'email': 'first@example.test', 'current': false},
+            ],
+          });
+        } else if (request['method'] == 'google.switch_account') {
+          expect((request['args'] as Map)['id'], 'first');
+          f.reply(socket, request, {'connected': true, 'account': 'first'});
+        } else if (request['method'] == 'google.sign_out_account') {
+          expect((request['args'] as Map)['id'], 'second');
+          f.reply(socket, request, {'connected': true, 'account': 'first'});
+        }
+      };
+      final opened = <Uri>[];
+      await auth.addAccount((uri) async => opened.add(uri));
+      expect(opened.single.path, '/add');
+      expect(auth.accounts.map((account) => account['id']), [
+        'second',
+        'first',
+      ]);
+      await auth.switchAccount('first');
+      expect(auth.account, 'first');
+      await auth.signOutAccount('second');
+      expect(auth.connected, isTrue);
+      expect(auth.account, 'first');
     },
   );
 

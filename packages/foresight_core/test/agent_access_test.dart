@@ -143,6 +143,9 @@ void main() {
           'sources.delete',
           'workspace.clear',
           'google.sign_in',
+          'google.add_account',
+          'google.switch_account',
+          'google.sign_out_account',
           'preferences.set',
           'models.register',
         ]) {

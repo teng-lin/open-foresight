@@ -26,6 +26,8 @@ enum Operation {
   googleConfigure('google.configure'),
   googleCancelSignIn('google.cancel_sign_in'),
   googleDisconnect('google.disconnect'),
+  googleSwitchAccount('google.switch_account'),
+  googleSignOutAccount('google.sign_out_account'),
   googleDriveFiles('google.drive_files'),
   googleImportFile('google.import_file'),
   googleImportFolder('google.import_folder'),
@@ -72,6 +74,7 @@ enum Operation {
   graphSave('graph.save'),
   answerStream('answer.stream'),
   googleSignIn('google.sign_in'),
+  googleAddAccount('google.add_account'),
   securityAttachDesktop('security.attach_desktop'),
   securityDetachDesktop('security.detach_desktop'),
   securityDecide('security.decide'),
@@ -149,6 +152,12 @@ enum Operation {
     Operation.artifactsEdit,
     Operation.googleStatus,
     Operation.googleConfigure,
+    Operation.googleSignIn,
+    Operation.googleAddAccount,
+    Operation.googleCancelSignIn,
+    Operation.googleDisconnect,
+    Operation.googleSwitchAccount,
+    Operation.googleSignOutAccount,
   }.contains(this);
 
   static Operation parse(String method) => values.firstWhere(
