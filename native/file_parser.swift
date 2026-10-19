@@ -62,7 +62,8 @@ func boundedDocumentData(limit: Int = 10 * 1024 * 1024,
 }
 
 func extract(_ kind: String, _ path: String) throws -> String {
-    let descriptor = open(path, O_RDONLY | O_NOFOLLOW)
+    // Let fstat reject a FIFO without waiting for another process to open it.
+    let descriptor = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
     guard descriptor >= 0 else {
         throw fail("Cannot open the selected document safely. Check Files and Folders access in System Settings, or choose a readable copy.")
     }

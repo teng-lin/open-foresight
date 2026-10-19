@@ -67,12 +67,12 @@ class FileParserTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.temporary.cleanup()
 
-    def extract(self, flag, name):
+    def extract(self, flag, name, timeout=300):
         result = subprocess.run(
             [str(PARSER), flag, str(self.root / name)],
             capture_output=True,
             text=True,
-            timeout=300,
+            timeout=timeout,
         )
         if result.returncode < 0 and not getattr(type(self), "crash_diagnosed", False):
             type(self).crash_diagnosed = True
@@ -179,6 +179,16 @@ class FileParserTest(unittest.TestCase):
                 self.assertIn("readable copy", result.stderr)
             finally:
                 denied.chmod(0o600)
+
+    def test_fifo_without_writer_is_rejected_without_blocking(self):
+        fifo = self.root / "document.fifo"
+        os.mkfifo(fifo, mode=0o600)
+        for flag in ("--pdf", "--rtf"):
+            with self.subTest(flag=flag):
+                result = self.extract(flag, fifo.name, timeout=5)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("regular file", result.stderr)
 
     def test_invalid_arguments_are_stderr_only(self):
         result = subprocess.run(
