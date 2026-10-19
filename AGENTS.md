@@ -2,53 +2,49 @@
 
 ## Reuse SDKs, libraries, and build caches before rebuilding
 
-Treat reuse as the default for SDKs, LiteRT, Whisper, gRPC/protobuf, and all other
-libraries, toolchains, dependency downloads, and build caches. These builds are
-expensive. Before changing CI, pushing a change that affects dependency jobs,
-dispatching a workflow, or rerunning a failed job, think carefully about whether
-existing verified artifacts or compatible cached work can be reused.
+**Integrity (mandatory).**
 
-- Inspect the existing artifacts, receipts, producer jobs, and relevant build
-  inputs first. Prefer a completed, compatible artifact. Preserve a running
-  compatible producer instead of canceling it and starting again.
-- Rebuilding is a last resort. First assess compatible artifacts, cache
-  restoration, incremental builds, and retrying only the failed step. Rebuild
-  only when those options cannot produce the required compatible, verified
-  output, and explain why. Recompile only the affected components; retain
-  unchanged libraries, downloaded dependencies, and valid compiler outputs.
-- A rebuild can be necessary when a concrete dependency, source, recipe, toolchain,
-  architecture, ABI, or output-affecting build setting changed, or when a
-  compatible verified artifact is genuinely unavailable or invalid.
-- Justify a necessary rebuild before triggering it. State the affected component,
-  the exact input change or artifact problem, why existing artifacts cannot be
-  reused, and which dependent components actually need rebuilding. Record this
-  in the work update and PR description where applicable. A cache miss alone
-  does not establish that recompilation is necessary; investigate its cause.
-- Do not delete caches, clean dependency builds, disable cache restoration, or
-  restart successful library builds merely to troubleshoot an unrelated
-  failure. Identify the incompatible or corrupt entries and justify any cleanup;
-  preserve the rest. A test failure, upload failure, or transient network error
-  does not by itself justify recompiling already successful dependencies.
-- Application changes, Dart tests, documentation, logging, timeouts, upload
-  settings, job organization, and receipt or promotion plumbing should reuse
-  SDKs when their actual build inputs match. Commit IDs and rebase merges alone
-  do not justify rebuilding an SDK.
-- Keep invalidation specific to each component and its real dependencies. A
-  change to an unrelated version in a shared pins file must not invalidate every
-  SDK. Changing cache-key code must not force a cold build of compatible SDKs;
-  provide a verified reuse or migration path for existing artifacts.
-- Keep provenance and integrity checks intact when broadening reuse: verify the
-  producer repository, workflow, successful job and attempt, relevant build
-  inputs, receipts, and artifact checksums. Do not relabel an old artifact as a
-  newly compiled SDK or silently accept incompatible or untrusted bytes.
-- Before pushing follow-up commits to an open PR, fetch its current review
-  threads and CI results. Verify each finding against the code, address valid
-  findings together with related CI fixes, and validate the combined changes
-  locally before pushing. Check for new reviews while CI runs. Rerun only the
-  affected jobs when possible; preserve successful expensive build results.
+**Sources.**
+- SDKs and dependency outputs may come from:
+  - `main`;
+  - the consumer's own PR;
+  - the final head of a merged same-repository PR, if its producer-control files are byte-identical to reviewed source and its component identity matches. This exception lapses under decision 7.
+- Application candidates come only from stamped `release`-tier runs of reviewed main source. Transition: until WS5b-1 lands, today's per-merge main-push candidates remain the release source. Between WS5b-1 and WS5b-3, they remain the source only for sources below `RELEASE_SOURCE_FLOOR`, through a legacy trust row that expires at WS5b-3.
+- Preview bytes never become release bytes.
+- PR bundles serve only that PR's checks.
 
-This policy requires evidence and a concrete justification for rebuilding. It
-does not add a separate user-approval step for work already authorized.
+**Verification.** For every consumed artifact, check:
+- the repository;
+- the workflow path and event;
+- that the producer job **succeeded, in its original attempt**;
+- the receipt, including its tier and label;
+- the content checksum.
+
+**Who may write.**
+- Only main-ref runs (dependency-SDK producers on main push, main sweeps, cache-publish dispatches, nightly schedule, release, preview) write to shared registries, registry caches, or caches that main reads.
+- They do so only from dedicated publish jobs.
+- Every PR run, same-repository included, is read-only toward those.
+- This is enforced by job permissions: no job that can run on `pull_request` declares any `write` scope.
+
+**Release bytes.**
+- Release publishes exactly the bytes that passed pre-release acceptance.
+- Identity stamping is recorded as its own step, carrying the original producer's provenance.
+- Never present stamped or older bytes as a new compilation.
+
+**Compatibility.**
+- Fail on incompatible bytes (ABI, toolchain or version).
+- Keep each component's cache key limited to its real inputs.
+
+**Cost (defaults).**
+- **Reuse.** Prefer reuse. A miss on a content-addressed key is sufficient reason for CI to rebuild; investigate only if the miss rate rises.
+- **Cancellation.** Superseded PR runs may be cancelled, including in-flight application builds. Dedicated SDK and instrumented-SDK producer jobs stay non-cancelling.
+- **Waiting.** Do not wait more than 30 minutes for another run's producer; build, or fail with an actionable message. Release coordination is exempt.
+- **Test results.** Per-stage test results are not cached across runs; compiler outputs and SDKs are. Main skips re-testing only through a verified, per-job chained identical-tree receipt.
+- **Expiry.** Artifact expiry or a cache-key change may cause one rebuild. Do not build migration paths to avoid it.
+
+**Agent hygiene.**
+- Do not delete caches, clean builds or restart successful dependency jobs to troubleshoot an unrelated failure. Rerun only failed jobs first.
+- Justify SDK or toolchain input changes in one line of the PR description.
 
 ## Verify changes before pushing
 
