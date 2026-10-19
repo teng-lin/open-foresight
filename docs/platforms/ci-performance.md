@@ -896,3 +896,36 @@ latency or runner-minute savings; no after-value is claimed from local tests.
 `ci-nightly` issues track failing jobs, the range since the last green aggregate and PRs in that range. Older reruns cannot overwrite or close newer results. Dispatch `exercise_failure_path: true` to fail without reserving a build number, building or publishing; `exercise_recovery: true` closes the separate `ci-nightly-exercise` issue. Exercise runs are excluded from real-night selection and retry. The preview group is `preview-packages`; release serialization moves to its draft and publish jobs, allowing release preparation to start while a nightly is active.
 
 Deleted: cross-run preview recovery/revalidation jobs, `preview_reuse.py` and obsolete recovery-only tests. Retry uploads replace only their original run's own artifacts. No SDK recipe or compiled dependency input changes. Offline contract tests cover green/skip/failure evidence, original-run retry, pagination, stale results and isolated issue open/update/close. Hosted exercises, a real failed-job retry, two consecutive green nights and release/nightly concurrency still need proof; no latency savings are claimed before the five-run measurement gate.
+
+### WS-Nb daily drift safety net (2026-10-19)
+
+Sanitizers run daily even when main is unchanged. Scheduled jobs restore and
+verify existing instrumented SDKs; they skip the SDK build, cache save, SDK pack
+and SDK upload steps. A missing verified SDK fails with the existing restoration
+diagnostic and cannot authorize compilation. The verifier continues rejecting
+scheduled runs as producers. Push and explicit dispatch producer paths remain
+non-cancelling, in concurrency groups separate from scheduled consumers. TSan
+probation remains available for PRs and explicit runs, while scheduled races fail
+the job. The issue tracker reads actual job conclusions in every case.
+
+`arch-drift.yml` runs the full `tools/build.sh` gate and Linux host Python
+contracts daily in the pinned Arch container, with its rolling pacman toolchain
+list inlined. It records the compiler and complete package inventory before the
+build, restores existing compatible Flutter/pub caches and verifies Flutter's
+exact commit. It uses Arch's installed gRPC/protobuf and never builds an SDK.
+The fresh Arch application build can compile its FlatBuffers/SentencePiece
+closure; compatible Ubuntu SDK objects have a different compiler/environment
+and cannot supply that work. Before a manual hosted probe, inspect existing
+verified artifacts and identify any actual toolchain/input drift or missing
+compatible work. This workflow neither deletes dependency caches nor publishes
+compiler outputs. Its temporary PR trigger selects only its own workflow path;
+remove that trigger after the rollout probe passes.
+
+Main-ref-only final jobs open/update `ci-sanitizers` and `ci-arch-drift` issues on
+failure and close them on a passing run. Missing or skipped suites fail closed;
+older reruns cannot overwrite newer results. No PR job receives an issue-write
+token. Contract fixtures cover these paths, the schedule's read-only SDK policy,
+the unchanged recipe/cache keys and the Arch toolchain/gate inventory. Hosted
+scheduled SDK restoration and the Arch runtime gate still require proof before
+removing any existing PR checks. These jobs add independent drift coverage;
+runner-minute savings remain unclaimed until measured over five hosted runs.
