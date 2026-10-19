@@ -6,3 +6,6 @@ apt-get install -y --no-install-recommends python3 binutils xvfb xauth dbus-x11 
 apt-get install -y /packages/*.deb
 runuser -u package-test -- xvfb-run -a dbus-run-session -- python3 /work/packaging/smoke_installed.py
 apt-get remove -y open-foresight
+test ! -e /usr/bin/open-foresight
+test ! -e /opt/open-foresight
+test ! -e /usr/share/applications/io.openforesight.App.desktop
