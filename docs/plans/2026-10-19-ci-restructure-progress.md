@@ -234,3 +234,45 @@ Together with the three prior audio probes, every requested real virtual-audio
 case passed using current Dart binaries and the qualified original runtimes.
 This is actual isolated Linux host execution; the hosted Ubuntu container path
 remains a required gate rather than a locally claimed Docker result.
+
+Final startup review found additional transport and ownership boundaries worth
+covering before the follow-up push. Startup retries only locally observed EOF or
+socket loss during its read-only status probe; server-sent errors, malformed
+frames and compatibility failures remain fatal. Endpoint disappearance is handled
+without an exists/read race, lock contention is caught only at lock acquisition,
+and the original failure survives an already-closed client's next call. Explicit
+client close retains its public unavailable-error contract and does not authorize
+a replacement. Shared startup deadlines retain useful diagnostics after handoff.
+Claude's final close-error finding is fixed in `151878f1`; Agy and independent
+team review found no remaining blocker. Fifteen handoff cases cover real child
+process locks, status EOF, direct/isolated local ownership and child cleanup.
+
+Final product export `9371f20c` matches foundation `151878f1` across application,
+native, service, protocol and integration-runner inputs. It passed the complete
+core suite: 1,082 tests, 10 expected skips, 93.00% line coverage; desktop again
+passed 253 tests, 17 expected skips, 92.20%. Both existing 90% thresholds were
+enforced. The explicit enabled hook passed through the source compiler, while
+default-disabled hooks passed in the full suite. SkyWalker ran the final source's
+65 service/handoff/MCP cases with no skips, using pinned Dart 3.9.2 and the locked
+offline cache. All 990 tracked export entries remained unchanged.
+
+The final real-model meeting replay also passed the unchanged test in 1m47s,
+including the previously failing pending-ASR restart. It used current service/MCP
+AOT binaries over the same qualified original runtime, with only those two binary
+differences recorded. The successful standalone audio probes were retained.
+The final subprocess harness initially failed before app startup because Xvfb's
+hardcoded `/tmp/server-0.xkm` hit the host tmpfs quota. Its failure log is retained;
+the affected suite then passed all 21 compiled service/MCP subprocess tests with
+no skips, including the real desktop boundary, using a private disk-backed `/tmp`
+and the task-scoped Mesa software vendor. No caches were deleted or dependencies
+rebuilt; all 990 tracked export entries remained unchanged.
+
+The four PR review findings were checked against current source: Debian's
+independent condition, bounded producer polling, consumer final qualified reads,
+and frozen stats snapshot fields. The internal `ci_artifacts.pull(wait>0)`
+counterpart remains explicitly staged in `18e4259`, with its thread open until
+the follow-up lands after merged-final approval. All 11 producer controls plus
+the dependency workflow still match the original producer in bytes and modes;
+all seven SDK fingerprints are unchanged. Actionlint 1.7.7 ran with ShellCheck
+0.11.0 on PATH, and pinned Dart formatting passed. No further SDK rebuild or
+manual producer dispatch is needed.
