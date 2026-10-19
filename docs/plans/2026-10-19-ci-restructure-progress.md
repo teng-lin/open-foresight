@@ -147,3 +147,31 @@ in a changed-source fixture. The corrected source copy preserves the verified
 seed, tracked `.coveragerc`, nested source directories and transferred Dart cache;
 a real Dart import from that restored cache passed without dependency resolution.
 Actual Docker runtime and five hosted shadow measurements remain pending.
+
+At hosted head `f936af9`, dependency run `39332714668` reused every SDK component
+in 14–29 seconds. Quality, sanitizers, Arch drift and platform run `39332714692`
+passed, including the compiled macOS application/service checks. Acceptance run
+`39332714680` passed its model gates and failed on the third desktop launch,
+while transcription remained pending: the preceding service was still closing
+and answered the new launch's status probe with its explicit shutdown error.
+The original failure log and small diagnostic artifact are retained. A separate
+process holding the actual profile lock reproduces that response locally; the
+meeting test's pending-transcription and restart assertions remain unchanged.
+
+Native verification first qualified original main artifact `12214226069` from
+run `39305527517`, rather than downloading the larger SDK or recompiling its
+libraries. Its native/helper/protocol/inference source inputs match the current
+source, and its receipt inventories the complete 29-test root CMake suite.
+The original successful attempt, upload window, payload digest and 3,115 extracted
+entries were verified. Its Arch gRPC 1.84 runtime was restored from a signed
+matching package; these producer runtime versions are distinct from Ubuntu SDK
+pins. One self-referential test harness requires recompilation because its
+`FORESIGHT_PW_RECORD_EXECUTABLE` embeds the original runner's absolute path.
+Only that test's path input changes; all native/helper/inference/vendor libraries
+remain the verified original outputs. Initial relocated execution failures and
+the final verification results are retained separately.
+The corrected complete root CTest inventory passed all 29 tests with no CTest
+skips, including all five inference tests and `native_probe_failure`. Its
+internal lifecycle suite ran 30 cases with one expected Darwin-only permission
+skip and no failures. The release-hook-disabled check and enabled helper contracts
+also passed. The optional detector-model parity experiment was not run.
