@@ -5,62 +5,28 @@ from unittest.mock import Mock
 
 import pytest
 from tools import preview_packages as preview
-from test_preview_reuse import transport, installer_members, REPO, SHA, LABEL
-from test_preview_packages import installers
+from test_preview_packages import SHA, LABEL, installers
+
+REPO = "owner/repo"
 
 
-@pytest.mark.parametrize("status", ["ahead", "diverged"])
-def test_explicit_recovery_preserves_reviewed_source_without_allocating(
-    tmp_path, monkeypatch, status
-):
-    monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
-    monkeypatch.setattr(preview.subprocess, "check_output", lambda *a, **kw: SHA)
-
-    def request(repo, route):
-        return (
-            {"sha": SHA}
-            if route == "commits/main"
-            else {"head_sha": "b" * 40}
-            if route == "actions/runs/42"
-            else {"status": status}
-        )
-
-    monkeypatch.setattr(preview, "request", request)
-    monkeypatch.setattr(
-        preview, "recovery_identity", lambda *a: {"source": "b" * 40, "build": "false"}
-    )
-    allocate = Mock(side_effect=AssertionError("must not allocate new build"))
-    monkeypatch.setattr(preview, "allocate", allocate)
-    if status == "ahead":
-        assert preview.plan(REPO, False, "full", candidate_run=42)["source"] == "b" * 40
-    else:
-        with pytest.raises(ValueError, match="reviewed main"):
-            preview.plan(REPO, False, "full", candidate_run=42)
-    allocate.assert_not_called()
-
-
-def test_existing_preview_writes_reuse_summary_and_stale_version_aborts_new_build(
+def test_existing_preview_writes_summary_and_stale_version_aborts_new_build(
     tmp_path, monkeypatch
 ):
-    _, _, _, api = transport(
-        monkeypatch,
-        installer_members(),
-        [
-            "preview-installer-linux-deb",
-            "preview-installer-linux-rpm",
-            "preview-installer-linux-arch",
-            "preview-installer-macos",
-        ],
-        [],
-    )
     monkeypatch.setenv("GITHUB_REF", "refs/heads/main")
     monkeypatch.setenv("GITHUB_RUN_ID", "43")
     summary = tmp_path / "summary"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    monkeypatch.setattr(preview, "request", api)
+    monkeypatch.setattr(preview, "request", lambda *a, **kw: {"sha": SHA})
     monkeypatch.setattr(preview.subprocess, "check_output", lambda *a, **kw: SHA)
+    monkeypatch.setattr(
+        preview,
+        "previous_nightly",
+        lambda *a, **kw: {"summary": "green nightly-checks"},
+    )
     assert preview.plan(REPO, False, "full")["build"] == "false"
-    assert "original source, build number and checksums" in summary.read_text()
+    assert "green nightly-checks" in summary.read_text()
+    monkeypatch.setattr(preview, "previous_nightly", lambda *a, **kw: None)
     monkeypatch.setattr(preview, "stale", lambda: ["version copies disagree"])
     allocate = Mock()
     monkeypatch.setattr(preview, "allocate", allocate)

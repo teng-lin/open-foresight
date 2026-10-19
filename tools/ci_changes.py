@@ -61,8 +61,6 @@ PACKAGING_FILES = {
     "tests/test_release_upload.py",
     "tools/candidate_identity.py",
     "tests/test_candidate_identity.py",
-    "tools/preview_reuse.py",
-    "tests/test_preview_reuse.py",
     "tests/test_ci_promotion.py",
     ".github/workflows/linux-packages.yml",
     ".github/workflows/macos-release.yml",
