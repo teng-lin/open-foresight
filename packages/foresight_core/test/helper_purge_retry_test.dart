@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 
 class PurgeService extends RagServiceBase {
   bool fail = true;
+  String? invalidDocument;
   final requested = <String>[];
   final indexed = <String>[];
   Completer<void>? deleteGate, deleteEntered;
@@ -32,6 +33,9 @@ class PurgeService extends RagServiceBase {
     if (gate != null) {
       if (!deleteEntered!.isCompleted) deleteEntered!.complete();
       await gate.future;
+    }
+    if (request.documentId == invalidDocument) {
+      throw GrpcError.invalidArgument('invalid document');
     }
     if (fail) throw GrpcError.unavailable('helper offline');
     return DeleteResponse(success: true);
@@ -113,6 +117,68 @@ void main() {
       directory.deleteSync(recursive: true);
     }
   });
+  for (final unresponsive in [false, true]) {
+    test(
+      'transport failure bounds retries (unresponsive=$unresponsive)',
+      () async {
+        final directory = createTestTempDirectorySync('purge-bound-');
+        final store = Store('${directory.path}/app.db');
+        final service = PurgeService();
+        final server = Server.create(services: [service]);
+        final socket = '${directory.path}/helper.sock';
+        await server.serve(
+          address: InternetAddress(socket, type: InternetAddressType.unix),
+          port: 0,
+        );
+        final helper = Helper(
+          socket,
+          '${directory.path}/helper',
+          manageProcess: false,
+        );
+        final domain = Domain(store, helper);
+        try {
+          for (final id in ['first', 'second', 'third']) {
+            store.db.execute('INSERT INTO pending_helper_deletes VALUES(?,?)', [
+              id,
+              1,
+            ]);
+          }
+          if (unresponsive) {
+            service.deleteGate = Completer<void>();
+            service.deleteEntered = Completer<void>();
+          }
+          // The entire serialized pass takes at most one five-second deadline.
+          await domain.retryPendingHelperDeletes().timeout(
+            const Duration(seconds: 8),
+          );
+          expect(service.requested, ['first']);
+          expect(
+            store.rows('SELECT * FROM pending_helper_deletes'),
+            hasLength(3),
+          );
+          service.deleteGate?.complete();
+          service.deleteGate = null;
+          service.fail = false;
+          service.invalidDocument = 'first';
+          await domain.retryPendingHelperDeletes();
+          expect(store.rows('SELECT document_id FROM pending_helper_deletes'), [
+            {'document_id': 'first'},
+          ]);
+          expect(service.requested, ['first', 'first', 'second', 'third']);
+          service.invalidDocument = null;
+          await domain.retryPendingHelperDeletes();
+          expect(store.rows('SELECT * FROM pending_helper_deletes'), isEmpty);
+        } finally {
+          domain.close();
+          await helper.close();
+          await server.shutdown();
+          store.close();
+          directory.deleteSync(recursive: true);
+        }
+      },
+    );
+  }
+
   test('speech sweep refuses a symlinked speech root', () {
     final directory = createTestTempDirectorySync('speech-link-');
     final outside = createTestTempDirectorySync('speech-external-');
