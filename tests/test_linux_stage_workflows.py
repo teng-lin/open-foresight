@@ -140,7 +140,10 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
     ]
     assert len(builds) == 1
     assert builds[0]["with"]["target"] == "builder"
-    assert builds[0]["if"] == "github.event_name == 'pull_request'"
+    assert (
+        builds[0]["if"]
+        == "github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'"
+    )
     assert builds[0]["with"]["load"] is True
     assert (
         "SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}"
@@ -388,8 +391,10 @@ def test_disposable_installed_document_containers_can_initialize_isolated_loopba
 def test_hosted_relocated_macos_smoke_checks_the_actual_checkout_revision():
     job = workflow("macos.yml")["jobs"]["macos"]
     step = next(
-        step for step in job["steps"]
-        if step.get("name") == "Relocated application MCP smoke with minimal environment"
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Relocated application MCP smoke with minimal environment"
     )
     assert "tools/smoke_macos_bundle.py" in step["run"]
     assert '--expected-revision "$(git rev-parse HEAD)"' in step["run"]
@@ -407,7 +412,8 @@ def test_optional_litert_gpu_policy_is_confined_to_ci_emulator_acceptance():
     assert "--allow-unavailable" not in step["run"]
     for name in ("release.yml", "release-acceptance.yml"):
         assert (
-            "--allow-litert-unavailable" not in (ROOT / ".github/workflows" / name).read_text()
+            "--allow-litert-unavailable"
+            not in (ROOT / ".github/workflows" / name).read_text()
         )
 
 

@@ -376,7 +376,10 @@ jobs:
             for step in steps
             if "tools/ci_app_dependency_seed.py" in step.get("run", "")
         )
-        self.assertEqual(seed["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(
+            seed["if"],
+            "github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'",
+        )
 
     def test_candidate_receipts_replace_their_matching_payload_on_rerun(self):
         jobs = self.workflow("macos.yml")["jobs"]
@@ -408,7 +411,10 @@ jobs:
         ]
         self.assertEqual(len(builds), 1)
         self.assertEqual(builds[0]["with"]["target"], "builder")
-        self.assertEqual(builds[0]["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(
+            builds[0]["if"],
+            "github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'",
+        )
         blob = json.dumps(job)
         self.assertIn("docker cp", blob)
         self.assertIn("/src/dist/open-foresight", blob)
