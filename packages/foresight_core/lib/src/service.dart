@@ -60,16 +60,27 @@ String serviceEndpoint(ProfilePaths profile) {
       FileSystemEntityType.link) {
     throw StateError('Service endpoint record must not be a symbolic link');
   }
-  if (record.existsSync()) {
-    final value = jsonDecode(record.readAsStringSync()) as Map;
-    if (value['data'] != profile.data || value['runtime'] is! String) {
-      throw StateError('Invalid application service endpoint record');
-    }
-    final runtime = value['runtime'] as String;
-    privateDirectory(runtime);
-    return '$runtime/application.sock';
+  final String contents;
+  try {
+    contents = record.readAsStringSync();
+  } on PathNotFoundException {
+    // A closing owner may remove its record between the type check and read.
+    return '${profile.runtime}/application.sock';
   }
-  return '${profile.runtime}/application.sock';
+  final value = jsonDecode(contents) as Map;
+  if (value['data'] != profile.data || value['runtime'] is! String) {
+    throw StateError('Invalid application service endpoint record');
+  }
+  final runtime = value['runtime'] as String;
+  privateDirectory(runtime);
+  return '$runtime/application.sock';
+}
+
+// Only the local transport can create this marker. A peer's serialized error
+// remains an ordinary RpcError, even if it copies the disconnect message.
+class _ServiceTransportLost extends RpcError {
+  _ServiceTransportLost()
+    : super(RpcErrorCode.unavailable, 'Application service disconnected');
 }
 
 /// Newline framed, multiplexed local RPC. No network listener is opened.
@@ -120,13 +131,7 @@ class ServiceClient {
             }
           },
           onError: (Object e, StackTrace st) => _fail(e, st),
-          onDone: () => _fail(
-            RpcError(
-              RpcErrorCode.unavailable,
-              'Application service disconnected',
-            ),
-            StackTrace.current,
-          ),
+          onDone: () => _fail(_ServiceTransportLost(), StackTrace.current),
         );
   }
 
@@ -179,9 +184,7 @@ class ServiceClient {
       },
     );
     if (_closed) {
-      controller.addError(
-        RpcError(RpcErrorCode.unavailable, 'Application service disconnected'),
-      );
+      controller.addError(_ServiceTransportLost());
       unawaited(controller.close());
     } else {
       _pending[id] = controller;
@@ -1383,7 +1386,7 @@ bool _profileOwnerAvailable(
   if (!closingOwner && type == FileSystemEntityType.notFound) return true;
   if (type != FileSystemEntityType.file) {
     throw StateError(
-      'Closing service ownership lock is missing or unsafe: $path',
+      'Application service ownership lock is missing or unsafe: $path',
     );
   }
   // POSIX record locks belong to the process. Keep this probe synchronous:
@@ -1393,9 +1396,11 @@ bool _profileOwnerAvailable(
     try {
       ownership.lockSync(FileLock.exclusive);
     } on FileSystemException catch (error) {
-      // EAGAIN/EWOULDBLOCK on Linux and Darwin indicate the known owner (or
-      // another legitimate launcher) still holds the lock. Other IO errors fail.
-      if (error.osError?.errorCode == 11 || error.osError?.errorCode == 35) {
+      // F_SETLK may report contention as EACCES or EAGAIN/EWOULDBLOCK.
+      // This catch only covers lockSync; opening an inaccessible file still fails.
+      if (error.osError?.errorCode == 11 ||
+          error.osError?.errorCode == 13 ||
+          error.osError?.errorCode == 35) {
         return false;
       }
       rethrow;
@@ -1503,11 +1508,13 @@ Future<ServiceClient> ensureService(
     final left = startupTimeout - startup.elapsed;
     if (left <= Duration.zero) {
       throw TimeoutException(
-        startupLog != null
-            ? 'Application service did not start. Inspect $startupLog.'
+        launched
+            ? startupLog != null
+                  ? 'Application service did not start. Inspect $startupLog.'
+                  : 'Application service did not start. Run $executable directly to inspect the startup error.'
             : closingOwner
             ? 'Application service owner handoff did not finish'
-            : 'Application service did not start. Run $executable directly to inspect the startup error.',
+            : 'Application service profile lock is still held; its owner is not serving the endpoint.',
       );
     }
     return left;
@@ -1590,6 +1597,9 @@ Future<ServiceClient> ensureService(
         } finally {
           await closing.client.close();
         }
+      } on _ServiceTransportLost {
+        // An isolated frontend can accept while its worker is already gone.
+        // Retry only this startup status probe, never a business operation.
       } on SocketException {
         // A starting or closing owner may still hold the profile lock.
       }
