@@ -10,9 +10,9 @@ mkdir -p /out
 trap 'chown -R "$OUT_UID:$OUT_GID" /out' EXIT
 # Match the source exclusions of .dockerignore. In particular, local account
 # data and .env files must not enter the container or portable bundle.
+export FORESIGHT_PYTHON=${FORESIGHT_PYTHON:-/opt/dev-python/bin/python}
 bash /workspace/tools/copy_linux_source.sh /workspace /src
 cd /src
-export FORESIGHT_PYTHON=${FORESIGHT_PYTHON:-/opt/dev-python/bin/python}
 export FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=${FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE:-1}
 bash tools/build.sh --build-only "-DFORESIGHT_BUILD_REVISION=$SOURCE_REVISION"
 task_args=()
