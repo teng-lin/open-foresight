@@ -188,11 +188,16 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     }
     final result = await client.call(operation.wire, args);
     if (operation == Operation.workspaceClear) {
-      _apply(
-        Map<String, dynamic>.from(
-          await client.call(Operation.status.wire) as Map,
-        ),
-      );
+      try {
+        _apply(
+          Map<String, dynamic>.from(
+            await client.call(Operation.status.wire) as Map,
+          ),
+        );
+      } catch (_) {
+        // Deletion was acknowledged. A later snapshot/reconnect can refresh
+        // status; failure here must not prevent the caller's local UI reset.
+      }
     }
     return result;
   }

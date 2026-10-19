@@ -32,6 +32,7 @@ class RemoteFixture {
     'web_search_available': false,
   };
   void Function(Socket, Map<String, dynamic>)? handler;
+  bool rejectStatus = false;
 
   Future<void> start() async {
     try {
@@ -63,7 +64,11 @@ class RemoteFixture {
               requests.add(message);
               if (message.containsKey('cancel')) return;
               if (message['method'] == 'status') {
-                reply(socket, message, status);
+                if (rejectStatus) {
+                  socket.destroy();
+                } else {
+                  reply(socket, message, status);
+                }
               } else {
                 handler?.call(socket, message);
               }
