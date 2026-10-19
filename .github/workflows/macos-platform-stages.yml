@@ -84,7 +84,7 @@ jobs:
         build-number: ${{ inputs.build_number }}
         label: ${{ inputs.label }}
     - name: Offline Python tests and coverage
-      run: tools/coverage.sh
+      run: tools/coverage.sh --durations=20
     - name: Verify SDK source guards
       run: .venv/bin/python -m pytest tests/test_macos_tools.py -k SdkSourceTests -v
     - name: Validate or restore the native stage

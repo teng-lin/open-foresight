@@ -20,9 +20,12 @@ stage_environment = importlib.import_module(
     "tools.ci_stage_environment" if __package__ else "ci_stage_environment"
 )
 
+timing = importlib.import_module("tools.ci_timing" if __package__ else "ci_timing")
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@timing.phase("same-run prerequisite verification and restore")
 def restore_input(root, platform, stage, directory, identity, source):
     receipt = json.loads((directory / "identity.json").read_text())
     if (
@@ -43,6 +46,7 @@ def restore_input(root, platform, stage, directory, identity, source):
     payloads.unpack(root, platform, payload_kind, archive, receipt["content"])
 
 
+@timing.phase("stage execution")
 def execute(root, platform, stage, hit, cmake_args):
     if stage == "native" and hit:
         # The cached source and toolchain are identical. CMake still refreshes
@@ -104,6 +108,7 @@ def execute(root, platform, stage, hit, cmake_args):
             )
 
 
+@timing.phase("complete stage")
 def run(
     root,
     platform,
@@ -160,6 +165,13 @@ def run(
             )
         },
     }
+    # An inactive diagnostic option must not change historical environment
+    # identities or discard compatible native compiler work. Only the core
+    # benchmark has additional validation semantics to bind.
+    if stage == "core" and os.environ.get("FORESIGHT_CORE_COVERAGE_BENCHMARK") == "1":
+        environment["validation_flags"]["FORESIGHT_CORE_COVERAGE_BENCHMARK"] = (
+            hashlib.sha256(b"1").hexdigest()
+        )
     identity = cache.fingerprint(
         platform, stage, root, environment=environment, parents=parents
     )

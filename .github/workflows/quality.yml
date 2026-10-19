@@ -32,12 +32,14 @@ jobs:
           test "$("$task_protoc/bin/protoc" --version)" = 'libprotoc 35.1'
           echo "$task_protoc/bin" >> "$GITHUB_PATH"
       - name: Offline Python unit tests
-        run: python -m pytest --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml
+        run: python -m pytest --cov --cov-config=.coveragerc --cov-report=term --cov-report=xml --durations=20 --junitxml=coverage/python/junit.xml
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: python-coverage
-          path: coverage/python/coverage.xml
+          path: |
+            coverage/python/coverage.xml
+            coverage/python/junit.xml
   format:
     runs-on: ubuntu-24.04
     timeout-minutes: 15

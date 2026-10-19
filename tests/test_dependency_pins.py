@@ -115,7 +115,9 @@ def test_macos_offline_contracts_run_after_the_pinned_sdk_protoc_is_available():
         if step.get("uses") == "./.github/actions/setup-macos-stage"
     )
     tests_index = next(
-        i for i, step in enumerate(native) if step.get("run") == "tools/coverage.sh"
+        i
+        for i, step in enumerate(native)
+        if step.get("run", "").split()[:1] == ["tools/coverage.sh"]
     )
     assert setup_index < tests_index
     install = next(step for step in steps if step.get("name") == "Install build tools")

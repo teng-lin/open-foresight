@@ -172,6 +172,22 @@ def test_private_audio_retries_and_cleans_all_daemons(tmp_path, monkeypatch, fai
     assert not Path(processes[0][1].name).read_text()  # Logs remain available.
 
 
+def test_private_audio_rejects_physical_sound_devices_before_launch(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(gates.sys, "platform", "linux")
+    exists = Path.exists
+    monkeypatch.setattr(
+        Path, "exists", lambda path: True if str(path) == "/dev/snd" else exists(path)
+    )
+    launch = Mock()
+    monkeypatch.setattr(gates.subprocess, "Popen", launch)
+    with pytest.raises(RuntimeError, match="without host sound devices"):
+        with gates.private_pipewire({"DBUS_SESSION_BUS_ADDRESS": "private"}, tmp_path):
+            pytest.fail("physical audio must not reach daemon setup")
+    launch.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "system,has_native", [("linux", True), ("darwin", False), ("linux", False)]
 )

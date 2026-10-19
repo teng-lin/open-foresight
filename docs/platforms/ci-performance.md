@@ -65,6 +65,48 @@ retains its separate policy and history bound. Qualification refactors do not
 change SDK build identities: existing approved merged producers and exact
 manifest originals keep their verified reuse paths, original receipts and bytes.
 
+## Measure before changing validation coverage
+
+The current Python, native, core, desktop, service and installed-acceptance gates
+remain enabled. Python jobs print their 20 slowest tests and retain JUnit timings
+alongside coverage. Core and desktop jobs retain Dart JSON events under
+`test-results/<platform>/<stage>/`, including test names, durations and skips.
+Inspect these artifacts before treating overlapping platform suites as duplicates.
+
+Stage logs include `CI phase:` JSON records on stderr with `phase`, monotonic elapsed
+`seconds`, and `status`. These distinguish API requests, producer qualification,
+metadata lookup, artifact transfer with ZIP checksum verification, receipt
+validation, archive verification/extraction and stage execution. Timings are
+inclusive: parent phases contain their children, so do not add every record to
+estimate job duration. Failed phases report `error` and propagate the original
+failure; timing does not change reuse eligibility, retry budgets or integrity
+checks. A slow or failed lookup does not authorize rebuilding dependencies.
+
+To compare core coverage overhead on the same host, reuse the current verified
+native library/helper and configured language tools, then run:
+
+```sh
+FORESIGHT_CORE_COVERAGE_BENCHMARK=1 \
+  FORESIGHT_PYTHON="$PWD/.venv/bin/python" \
+  ./tools/build.sh --platform linux --stage core
+```
+
+Use `--platform macos` on a Mac with its current native prerequisites. This opt-in
+mode runs the complete plain suite, then the complete suite with coverage. It
+enforces the existing core coverage minimum (90% unless explicitly configured),
+requires matching test identities and skip outcomes, and still runs the source
+compiler hook regression and service/MCP compilation. Reports are retained as
+`plain.events.jsonl` and `coverage.events.jsonl`. Any test, coverage or comparison
+failure stops the gate. Ordinary CI does not enable the extra benchmark run.
+
+Repeat comparisons on the same revision and record runner/toolchain versions and
+cache warmth: the fixed plain-then-covered order can affect warm-up costs.
+Cross-platform timings alone cannot isolate instrumentation overhead. Keep the
+existing macOS coverage gate until a replacement has passed its unchanged
+threshold and platform-dependent execution has been accounted for. Report PR
+elapsed time separately from summed runner time; parallel jobs can dominate the
+critical path even after another job becomes faster.
+
 ## Application stages
 
 Linux native regression and macOS validation run four separate jobs: native,
