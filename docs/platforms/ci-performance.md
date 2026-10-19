@@ -1035,8 +1035,12 @@ its independently verified seed at that same `/src/build/_deps` path. Before any
 restore or execution, API provenance checks bind the artifact to its repository,
 workflow, original successful job/attempt and upload window, and verify the actual
 downloaded ZIP digest. The archive checksum and complete restored manifest are
-then checked. Fork-local SDKs are uploaded once for the in-run consumer with their
-original producer receipt; their scoped trust row cannot serve release lookup.
+then checked. Fork consumers first reuse an ordinary verified SDK directly on both runners.
+Only a missing assembled SDK permits the existing component producer to use
+qualified parents and read-only cache layers; missing parents or transport errors
+fail without compiling those libraries. That source-scoped SDK is uploaded once
+for the in-run consumer, retaining any original reused receipt; its scoped trust
+row cannot serve release lookup.
 
 The comparison retains per-test pass/skip sets for CTest, core, desktop, compiled
 service/MCP and host Python. Service/MCP requires zero skips. The `makepkg` notice probe is deselected from

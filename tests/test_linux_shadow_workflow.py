@@ -30,15 +30,17 @@ def test_shadow_jobs_reuse_verified_inputs_and_leave_required_old_tier_intact():
         }
         text = str(jobs[name])
         assert "cache-to" not in text
-        assert "--wait 1800" in text
-        assert "--discard-archive" in text
+        if name == "linux-test":
+            assert "--wait 1800" in text
+            assert "--discard-archive" in text
     assert jobs["linux-test"]["needs"] == "linux-build"
     build = jobs["linux-build"]["steps"]
     test = jobs["linux-test"]["steps"]
     host_pack = next(step for step in build if step.get("id") == "receipt")
     assert "ci_artifacts.py pack --component linux-app" in host_pack["run"]
     assert '--tier "$CI_TIER" --label "$BUILD_LABEL"' in host_pack["run"]
-    assert any("--save-sdk --shadow" in step.get("run", "") for step in build)
+    assert any("ci_linux_shadow_sdk.py" in step.get("run", "") for step in build)
+    assert "build_linux_sdk_local.sh" not in str(build)
     sdk_upload = next(step for step in build if step.get("id") == "fork-sdk")
     assert sdk_upload["with"]["name"].startswith("shadow-sdk-")
     qualify = next(

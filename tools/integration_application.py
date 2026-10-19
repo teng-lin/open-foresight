@@ -106,7 +106,7 @@ def original_producer(
                 time.sleep(min(5, remaining))
 
 
-def save_sdk(source, image, output, *, shadow=False):
+def save_sdk(source, image, output, *, shadow=False, source_prefix=None):
     """Retain a fork's already-built SDK for this workflow, never compile it twice."""
     actual = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=artifacts.ROOT, text=True, timeout=30
@@ -130,12 +130,24 @@ def save_sdk(source, image, output, *, shadow=False):
                     "archive_sha256": artifacts.digest(archive),
                     "source_scope": source,
                     "local_recipe_sha256": artifacts.digest(
-                        artifacts.ROOT / "tools/build_linux_sdk_local.sh"
+                        artifacts.ROOT
+                        / (
+                            "tools/linux_sdk_artifacts.py"
+                            if shadow
+                            else "tools/build_linux_sdk_local.sh"
+                        )
                     ),
                 }
             )
             + "\n"
         )
+        if source_prefix is not None:
+            for name in ("source-qualification.json", "approved-source.json"):
+                previous = source_prefix / name
+                if previous.is_symlink():
+                    raise ValueError("SDK source qualification must be regular")
+                if previous.is_file():
+                    (prefix / name).write_bytes(previous.read_bytes())
         if shadow:
             artifacts.pack(
                 "linux-sdk",
@@ -251,7 +263,14 @@ def retrieve(
         descriptor = sdk.record(destination, component)
         if descriptor.get("source_scope") != source or descriptor.get(
             "local_recipe_sha256"
-        ) != artifacts.digest(artifacts.ROOT / "tools/build_linux_sdk_local.sh"):
+        ) != artifacts.digest(
+            artifacts.ROOT
+            / (
+                "tools/linux_sdk_artifacts.py"
+                if shadow
+                else "tools/build_linux_sdk_local.sh"
+            )
+        ):
             raise ValueError("Fork SDK transport differs from its source-scoped recipe")
     qualification = {
         "schema": 1,

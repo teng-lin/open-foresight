@@ -352,3 +352,129 @@ def test_reusing_a_seed_checks_every_retained_byte_and_timestamp_without_replaci
         with pytest.raises(ValueError, match="differs"):
             seed.verify_existing("verified-sdk", output, tmp_path / "cache", tmp_path)
     assert target.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    "case", ["reuse", "main-missing", "fork", "race", "race-missing", "network"]
+)
+def test_shadow_sdk_reuses_before_component_scoped_fallback(
+    tmp_path, case, monkeypatch
+):
+    from tools import ci_linux_shadow_sdk as shadow
+
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    prefix = tmp_path / "sdk/verified"
+    prior = case == "reuse"
+    pull_result = (
+        [False, True]
+        if case == "race"
+        else [False, False]
+        if case == "race-missing"
+        else [prior]
+    )
+    with (
+        patch.object(
+            shadow.artifacts,
+            "pull",
+            side_effect=RuntimeError("network") if case == "network" else pull_result,
+        ) as pull,
+        patch.object(
+            shadow.sdk,
+            "produce",
+            return_value="approved-original" if case.startswith("race") else None,
+        ) as produce,
+        patch.object(shadow.artifacts, "unpack") as unpack,
+        patch.object(shadow.sdk, "resolve", return_value="verified-image") as resolve,
+        patch.object(shadow.sdk, "write_outputs") as write,
+        patch.object(shadow.application, "save_sdk") as save,
+    ):
+        if case in ("main-missing", "race-missing", "network"):
+            with pytest.raises(RuntimeError):
+                shadow.prepare(
+                    "owner/repo", "a" * 40, 42, case != "main-missing", tmp_path / "sdk"
+                )
+            if case in ("main-missing", "network"):
+                produce.assert_not_called()
+            save.assert_not_called()
+            return
+        assert shadow.prepare("owner/repo", "a" * 40, 42, True, tmp_path / "sdk") == (
+            case == "fork"
+        )
+        assert pull.call_args_list[0].args[4] == 1800
+        resolve.assert_called_once_with(prefix, load_registry=True)
+        write.assert_called_once_with("verified-image")
+        if case == "fork":
+            produce.assert_called_once()
+            unpack.assert_called_once()
+            save.assert_called_once_with(
+                "a" * 40,
+                "verified-image",
+                tmp_path / "sdk/in-run",
+                shadow=True,
+                source_prefix=prefix,
+            )
+            assert output.read_text() == "in_run=true\n"
+        else:
+            save.assert_not_called()
+            unpack.assert_not_called()
+            assert not output.exists()
+
+
+def test_shadow_sdk_transport_preserves_original_reuse_provenance(tmp_path):
+    from tools import integration_application as application
+
+    original = {"source_receipt": {"source_commit": "b" * 40}, "producer_run": 91}
+    prefix = tmp_path / "verified"
+    prefix.mkdir()
+    (prefix / "source-qualification.json").write_text(json.dumps(original))
+
+    def save(args):
+        Path(args[4]).write_bytes(b"saved exact fixture image")
+
+    with (
+        patch.object(
+            application.artifacts.subprocess,
+            "check_output",
+            return_value="a" * 40 + "\n",
+        ),
+        patch.object(application.sdk, "inspect", return_value="sha256:" + "c" * 64),
+        patch.object(application.sdk, "run", side_effect=save),
+    ):
+        application.save_sdk(
+            "a" * 40,
+            "verified-image",
+            tmp_path / "artifact",
+            shadow=True,
+            source_prefix=prefix,
+        )
+    receipt = json.loads((tmp_path / "artifact/identity.json").read_text())
+    assert receipt["reused_from"] == original
+    assert receipt["tier"] == "pr"
+    restored = tmp_path / "restored"
+    application.artifacts.unpack(
+        "linux-sdk",
+        application.artifacts.fingerprint("linux-sdk"),
+        tmp_path / "artifact",
+        restored,
+    )
+    assert json.loads((restored / "source-qualification.json").read_text()) == original
+    (prefix / "source-qualification.json").unlink()
+    (prefix / "source-qualification.json").symlink_to(tmp_path / "missing")
+    with (
+        patch.object(
+            application.artifacts.subprocess,
+            "check_output",
+            return_value="a" * 40 + "\n",
+        ),
+        patch.object(application.sdk, "inspect", return_value="sha256:" + "c" * 64),
+        patch.object(application.sdk, "run", side_effect=save),
+        pytest.raises(ValueError, match="regular"),
+    ):
+        application.save_sdk(
+            "a" * 40,
+            "verified-image",
+            tmp_path / "invalid",
+            shadow=True,
+            source_prefix=prefix,
+        )

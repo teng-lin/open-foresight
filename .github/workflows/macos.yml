@@ -577,7 +577,7 @@ jobs:
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Validate application cache transport
       run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY"
-    - name: Resolve the verified shadow SDK
+    - name: Resolve verified SDKs before a component-scoped fork fallback
       id: sdk
       env:
         GH_TOKEN: ${{ github.token }}
@@ -585,25 +585,16 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
         FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
       run: |
-        if [[ "$FORK_PR" == true ]]; then
-          tools/build_linux_sdk_local.sh
-          echo 'image=foresight-sdk:pr' >> "$GITHUB_OUTPUT"
-        else
-          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/shadow-sdk --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
-          python tools/linux_sdk_artifacts.py resolve --prefix build/shadow-sdk --load --discard-archive
-        fi
-    - name: Preserve the fork-local SDK before discarding its archive
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
-      env:
-        SOURCE: ${{ github.event.pull_request.head.sha }}
-      run: python -m tools.integration_application --save-sdk --shadow --source "$SOURCE" --directory build/shadow-fork-sdk
+        task_args=()
+        if [[ "$FORK_PR" == true ]]; then task_args+=(--fork); fi
+        python tools/ci_linux_shadow_sdk.py --source "$OWN_HEAD" --own-pr "$OWN_PR" --directory build/shadow-sdk ${task_args[@]+"${task_args[@]}"}
     - name: Retain the source-scoped in-run fork SDK
-      if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+      if: steps.sdk.outputs.in_run == 'true'
       id: fork-sdk
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
         name: shadow-sdk-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
-        path: build/shadow-fork-sdk/
+        path: build/shadow-sdk/in-run/
         if-no-files-found: error
         retention-days: 14
         compression-level: 0
@@ -714,13 +705,12 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         OWN_HEAD: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
-        FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
         ARTIFACT_ID: ${{ needs.linux-build.outputs.sdk_id }}
         ARTIFACT_DIGEST: ${{ needs.linux-build.outputs.sdk_digest }}
         PRODUCER_ATTEMPT: ${{ needs.linux-build.outputs.attempt }}
       run: |
-        if [[ "$FORK_PR" == true ]]; then
+        if [[ -n "$ARTIFACT_ID" ]]; then
           python -m tools.integration_application --shadow --component linux-sdk --source "$OWN_HEAD" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --directory build/shadow-sdk
         else
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/shadow-sdk --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
@@ -782,6 +772,7 @@ jobs:
       with:
         name: linux-shadow-comparison
         path: test-results/linux-shadow-comparison.json
+        overwrite: true
         if-no-files-found: warn
         retention-days: 30
   platform-checks:
