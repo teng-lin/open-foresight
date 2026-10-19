@@ -342,7 +342,7 @@ jobs:
         run: python3 tools/ci_nightly.py aggregate
   nightly-issue:
     needs: [plan, nightly-checks]
-    if: always() && (needs.plan.outputs.build == 'true' || needs.plan.result != 'success' || inputs.exercise_failure_path)
+    if: always() && github.ref == 'refs/heads/main' && (needs.plan.outputs.build == 'true' || needs.plan.result != 'success' || inputs.exercise_failure_path)
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
