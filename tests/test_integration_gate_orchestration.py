@@ -93,6 +93,12 @@ def test_private_audio_requires_linux_and_private_bus(
 @pytest.mark.parametrize("failure", [None, "readiness", "default", "body"])
 def test_private_audio_retries_and_cleans_all_daemons(tmp_path, monkeypatch, failure):
     monkeypatch.setattr(gates.sys, "platform", "linux")
+    # This launch double models the sound-device-free acceptance container,
+    # independently of whether the machine running these unit tests has audio.
+    exists = Path.exists
+    monkeypatch.setattr(
+        Path, "exists", lambda path: False if path == Path("/dev/snd") else exists(path)
+    )
     monkeypatch.setattr(gates.time, "sleep", lambda _: None)
     processes, killed, commands = [], [], []
     clock = iter(range(0, 10000, 10))
@@ -290,12 +296,21 @@ def test_audio_gate_uses_private_routes_and_clears_whisper_for_pcm_inspector(
         yield dict(env, FORESIGHT_LIVE_SINK="private-sink")
 
     monkeypatch.setattr(gates, "private_pipewire", private)
+
+    @contextmanager
+    def display(env, output):
+        assert env["FORESIGHT_PRIVATE_PIPEWIRE"] == "1"
+        yield dict(env, DISPLAY=":71", FORESIGHT_PRIVATE_X11=":71")
+
+    monkeypatch.setattr(gates, "private_x11", display)
     seen = []
 
-    def run(package, files, expected, env, output, name, *rest):
+    def run(package, files, expected, env, output, name, *rest, **kwargs):
         seen.append(name)
         assert ("FORESIGHT_WHISPER_RUNTIME" in env) == (name != "audio-core")
         if name == "audio-meeting":
+            assert kwargs == {"device": "linux"}
+            assert env["DISPLAY"] == env["FORESIGHT_PRIVATE_X11"] == ":71"
             assert env["FORESIGHT_PLAYBACK_TARGET"] == "private-sink"
             manifest = json.loads(Path(env["FORESIGHT_MODEL_MANIFEST"]).read_text())
             assert manifest["generation"]["backend"] == "litert_lm"

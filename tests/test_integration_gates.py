@@ -131,8 +131,8 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     )
     observed = []
 
-    def run(package, files, expected, env, *rest):
-        observed.append((package, list(files), dict(env), expected))
+    def run(package, files, expected, env, *rest, **kwargs):
+        observed.append((package, list(files), dict(env), expected, kwargs))
         return {"passed": expected, "skipped": 0}
 
     def pipewire(env, output):
@@ -145,6 +145,13 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     with (
         patch.object(gates, "model_file", return_value="/fixture/model"),
         patch.object(gates, "private_pipewire", side_effect=pipewire),
+        patch.object(
+            gates,
+            "private_x11",
+            side_effect=lambda env, output: nullcontext(
+                dict(env, DISPLAY=":71", GDK_BACKEND="x11", FORESIGHT_PRIVATE_X11=":71")
+            ),
+        ),
         patch.object(gates, "run_tests", side_effect=run),
     ):
         gates.audio_gate(args, {"PATH": "/bin"})
@@ -156,9 +163,11 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     )
     assert observed[2][1] == ["integration_test/meeting_workflow_test.dart"]
     assert observed[2][3] == 1
+    assert observed[2][4] == {"device": "linux"}
     meeting = observed[2][2]
     assert meeting["FORESIGHT_PLAYBACK_TARGET"] == "ci-sink"
     assert meeting["FORESIGHT_PRIVATE_PIPEWIRE"] == "1"
+    assert meeting["FORESIGHT_PRIVATE_X11"] == meeting["DISPLAY"] == ":71"
     assert meeting["FORESIGHT_AUDIO_FIXTURE"].endswith("tests/fixtures/audio/jfk.wav")
     assert meeting["FORESIGHT_DATA"].endswith("/meeting-data")
     assert meeting["FORESIGHT_REFERENCE_SCREENSHOTS"].endswith("/meeting-screenshots")
@@ -280,3 +289,178 @@ def test_skip_inventory_scans_desktop_integration_tests(tmp_path):
     (folder / "new.dart").write_text("test('x', () {}, skip: true,\n);")
     with pytest.raises(ValueError, match="changed skip"):
         inventory.verify(tmp_path)
+
+
+@pytest.mark.parametrize("device", [None, "linux"])
+def test_native_runner_executes_original_integration_source(tmp_path, device):
+    """Exercise the actual argv/report boundary, including archive-only trees."""
+    desktop = tmp_path / "apps/desktop"
+    (desktop / "test").mkdir(parents=True)
+    (desktop / "integration_test").mkdir()
+    (desktop / "integration_test/workflow.dart").write_text("// fixture")
+    runner = tmp_path / "flutter"
+    runner.write_text(
+        "#!" + sys.executable + "\n"
+        "import json, pathlib, sys\n"
+        "args=sys.argv[1:]\n"
+        "pathlib.Path('argv.json').write_text(json.dumps(args))\n"
+        "events=next(a.split('json:',1)[1] for a in args if a.startswith('--file-reporter='))\n"
+        "pathlib.Path(events).write_text("
+        + repr(
+            '{"type":"testDone","hidden":false,"skipped":false,"result":"success"}\n'
+            '{"type":"done","success":true}\n'
+        )
+        + ")\n"
+    )
+    runner.chmod(0o700)
+    with (
+        patch.object(gates, "ROOT", tmp_path),
+        patch.object(gates.subprocess, "run", wraps=gates.subprocess.run) as launch,
+    ):
+        result = gates.run_tests(
+            "desktop",
+            ["integration_test/workflow.dart"],
+            1,
+            dict(os.environ),
+            tmp_path / "reports",
+            "probe",
+            flutter=str(runner),
+            device=device,
+            timeout=17,
+        )
+    assert launch.call_args.kwargs["timeout"] == 17
+    assert result == {"passed": 1, "skipped": 0}
+    arguments = json.loads((desktop / "argv.json").read_text())
+    assert "--no-pub" in arguments
+    if device:
+        assert "integration_test/workflow.dart" in arguments
+        assert arguments[arguments.index("-d") + 1] == device
+    else:
+        assert "test/private_pipewire_workflow.dart" in arguments
+        assert "-d" not in arguments
+    assert list((desktop / "test").iterdir()) == []
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_private_x_server_is_owned_and_stopped_on_failure(tmp_path, broken):
+    binary = tmp_path / "Xvfb"
+    binary.write_text(
+        "#!" + sys.executable + "\n"
+        "import json, os, pathlib, signal, sys\n"
+        "pathlib.Path(os.environ['DISPLAY_TEST_REPORT']).write_text(json.dumps({'pid':os.getpid(),'env':dict(os.environ),'args':sys.argv[1:]}))\n"
+        "os.write(int(sys.argv[sys.argv.index('-displayfd')+1]), b'71\\n')\n"
+        "signal.pause()\n"
+    )
+    binary.chmod(0o700)
+    report = tmp_path / "server.json"
+    env = dict(
+        os.environ,
+        PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
+        DISPLAY_TEST_REPORT=str(report),
+        DISPLAY=":0",
+        WAYLAND_DISPLAY="host",
+        XAUTHORITY="host-cookie",
+        HYPRLAND_INSTANCE_SIGNATURE="personal",
+        XDG_ACTIVATION_TOKEN="host-activation",
+        DESKTOP_STARTUP_ID="host-startup",
+        FORESIGHT_PRIVATE_PIPEWIRE="1",
+    )
+    try:
+        with gates.private_x11(env, tmp_path) as private:
+            assert private["DISPLAY"] == private["FORESIGHT_PRIVATE_X11"] == ":71"
+            assert private["GDK_BACKEND"] == "x11"
+            for key in [
+                "WAYLAND_DISPLAY",
+                "XAUTHORITY",
+                "HYPRLAND_INSTANCE_SIGNATURE",
+                "XDG_ACTIVATION_TOKEN",
+                "DESKTOP_STARTUP_ID",
+            ]:
+                assert key not in private
+            state = json.loads(report.read_text())
+            assert "DISPLAY" not in state["env"]
+            assert "1280x720x24" in state["args"]
+            assert state["args"][state["args"].index("-nolisten") + 1] == "tcp"
+            if broken:
+                raise RuntimeError("test failed during capture")
+    except RuntimeError as error:
+        assert broken and "test failed during capture" in str(error)
+    with pytest.raises(ProcessLookupError):
+        os.kill(json.loads(report.read_text())["pid"], 0)
+
+
+def test_native_ui_requires_private_audio(tmp_path):
+    with pytest.raises(RuntimeError, match="private Linux audio"):
+        with gates.private_x11({}, tmp_path):
+            pytest.fail("must not capture an inherited display")
+
+
+@pytest.mark.parametrize("failure", ["empty", "invalid", "exited", "timeout", "kill"])
+def test_private_x_server_startup_failures_and_forced_shutdown(
+    tmp_path, monkeypatch, failure
+):
+    monkeypatch.setattr(gates.sys, "platform", "linux")
+    binary = tmp_path / "Xvfb"
+    payload = b"wrong\n" if failure == "invalid" else b"71\n"
+    binary.write_text(
+        "#!" + sys.executable + "\n"
+        "import os, signal, sys\n"
+        + (
+            "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+            if failure == "kill"
+            else ""
+        )
+        + ("sys.exit(0)\n" if failure == "empty" else "")
+        + f"os.write(int(sys.argv[sys.argv.index('-displayfd')+1]), {payload!r})\n"
+        + ("sys.exit(0)\n" if failure == "exited" else "signal.pause()\n")
+    )
+    binary.chmod(0o700)
+    processes = []
+    original = gates.subprocess.Popen
+
+    def launch(*args, **kwargs):
+        process = original(*args, **kwargs)
+        processes.append(process)
+        if failure == "exited":
+            process.wait(timeout=5)
+        return process
+
+    monkeypatch.setattr(gates.subprocess, "Popen", launch)
+    if failure == "timeout":
+        monkeypatch.setattr(gates.select, "select", lambda *args: ([], [], []))
+    env = dict(
+        os.environ,
+        PATH=str(tmp_path) + os.pathsep + os.environ["PATH"],
+        FORESIGHT_PRIVATE_PIPEWIRE="1",
+    )
+    if failure == "kill":
+        with gates.private_x11(env, tmp_path) as private:
+            assert private["DISPLAY"] == ":71"
+        assert processes[0].returncode == -gates.signal.SIGKILL
+    else:
+        with pytest.raises(RuntimeError, match="Private X display"):
+            with gates.private_x11(env, tmp_path):
+                pytest.fail("a server without a valid readiness handshake must fail")
+    assert processes and processes[0].poll() is not None
+    assert (tmp_path / "xvfb.log").exists()
+
+
+def test_missing_x_server_closes_readiness_descriptors(tmp_path, monkeypatch):
+    monkeypatch.setattr(gates.sys, "platform", "linux")
+    opened = []
+    original = gates.os.pipe
+
+    def pipe():
+        pair = original()
+        opened.extend(pair)
+        return pair
+
+    monkeypatch.setattr(gates.os, "pipe", pipe)
+    with pytest.raises(FileNotFoundError):
+        with gates.private_x11(
+            {"PATH": str(tmp_path), "FORESIGHT_PRIVATE_PIPEWIRE": "1"}, tmp_path
+        ):
+            pytest.fail("missing Xvfb cannot provide a native display")
+    for descriptor in opened:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)

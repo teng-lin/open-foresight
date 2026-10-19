@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import subprocess
 import sys
@@ -57,7 +58,17 @@ def widget_test_alias(relative):
 
 
 def run_tests(
-    package, files, expected, env, output, name, flutter="flutter", dart="dart"
+    package,
+    files,
+    expected,
+    env,
+    output,
+    name,
+    flutter="flutter",
+    dart="dart",
+    *,
+    device=None,
+    timeout=2400,
 ):
     output.mkdir(parents=True, exist_ok=True)
     events = output / f"{name}.events.jsonl"
@@ -65,7 +76,11 @@ def run_tests(
     aliases = []
     command_files = []
     for relative in files:
-        if package == "desktop" and relative.startswith("integration_test/"):
+        if (
+            package == "desktop"
+            and device is None
+            and relative.startswith("integration_test/")
+        ):
             command_files.append(widget_test_alias(relative))
             aliases.append(ROOT / "apps/desktop" / command_files[-1])
         else:
@@ -80,6 +95,8 @@ def run_tests(
     ]
     if package == "desktop":
         command.append("--no-pub")
+        if device is not None:
+            command.extend(["-d", device])
     cwd = ROOT / ("apps/desktop" if package == "desktop" else "packages/foresight_core")
     try:
         with (output / f"{name}.log").open("w") as log:
@@ -89,7 +106,7 @@ def run_tests(
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
-                timeout=2400,
+                timeout=timeout,
             )
         if result.returncode:
             print((output / f"{name}.log").read_text()[-12000:], flush=True)
@@ -381,6 +398,76 @@ def meeting_environment(args, env, private):
     return meeting
 
 
+@contextmanager
+def private_x11(env, output):
+    """Own an X server; never capture an inherited user's desktop."""
+    if sys.platform != "linux" or env.get("FORESIGHT_PRIVATE_PIPEWIRE") != "1":
+        raise RuntimeError("Native meeting UI requires the private Linux audio session")
+    private = {
+        key: value
+        for key, value in env.items()
+        if key
+        not in (
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "GDK_BACKEND",
+            "HYPRLAND_INSTANCE_SIGNATURE",
+            "XDG_ACTIVATION_TOKEN",
+            "DESKTOP_STARTUP_ID",
+            "FORESIGHT_PRIVATE_X11",
+        )
+    }
+    read_fd, write_fd = os.pipe()
+    process = None
+    try:
+        with (output / "xvfb.log").open("w") as log:
+            process = subprocess.Popen(
+                [
+                    "Xvfb",
+                    "-displayfd",
+                    str(write_fd),
+                    "-screen",
+                    "0",
+                    "1280x720x24",
+                    "-nolisten",
+                    "tcp",
+                ],
+                env=private,
+                pass_fds=(write_fd,),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            os.close(write_fd)
+            write_fd = -1
+            if not select.select([read_fd], [], [], 30)[0]:
+                raise RuntimeError("Private X display did not start; inspect xvfb.log")
+            display = os.read(read_fd, 32).decode().strip()
+            if not display.isdecimal() or process.poll() is not None:
+                raise RuntimeError("Private X display failed; inspect xvfb.log")
+            private.update(
+                DISPLAY=":" + display,
+                GDK_BACKEND="x11",
+                FORESIGHT_PRIVATE_X11=":" + display,
+            )
+            yield private
+    finally:
+        os.close(read_fd)
+        if write_fd != -1:
+            os.close(write_fd)
+        if process is not None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=5)
+
+
 def audio_gate(args, env):
     runner = args.bundle.resolve() / "bin/whisper-cli-vulkan"
     if not runner.is_file():
@@ -422,20 +509,24 @@ def audio_gate(args, env):
             args.flutter,
             args.dart,
         )
-        meeting = run_tests(
-            "desktop",
-            ["integration_test/meeting_workflow_test.dart"],
-            1,
-            meeting_environment(args, env, private),
-            args.output,
-            "audio-meeting",
-            args.flutter,
-            args.dart,
-        )
+        with private_x11(private, args.output) as display:
+            meeting = run_tests(
+                "desktop",
+                ["integration_test/meeting_workflow_test.dart"],
+                1,
+                meeting_environment(args, env, display),
+                args.output,
+                "audio-meeting",
+                args.flutter,
+                args.dart,
+                device="linux",
+            )
     return {
         "desktop": desktop,
         "core": core,
         "meeting": meeting,
+        "meeting_runner": "compiled-linux-desktop",
+        "screenshots": "private-x11",
         "physical_audio": "not_run",
     }
 
