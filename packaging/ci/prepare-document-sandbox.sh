@@ -10,7 +10,7 @@ case "$task_format" in
     apt-get update
     apt-get install -y --no-install-recommends bubblewrap passwd
     ;;
-  rpm) dnf install -y bubblewrap shadow-utils ;;
+  rpm) dnf install -y bubblewrap shadow-utils util-linux ;;
   arch) pacman -Syu --noconfirm --needed bubblewrap shadow ;;
   *) exit 2;;
 esac

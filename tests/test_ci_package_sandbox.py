@@ -122,6 +122,15 @@ def test_minimal_prerequisites_then_exact_ordinary_user_sandbox_preflight(
                 "passwd",
             ],
         ]
+    elif format == "rpm":
+        assert commands[0] == [
+            "dnf",
+            "install",
+            "-y",
+            "bubblewrap",
+            "shadow-utils",
+            "util-linux",
+        ]
     elif format == "arch":
         assert commands[0] == [
             "pacman",
@@ -175,3 +184,38 @@ def test_each_installer_checks_its_smoke_user_before_expensive_dependencies():
         assert f" {user}\n" in source
         assert "useradd" not in source
         assert f"runuser -u {user} -- xvfb-run" in source
+
+
+def test_rpm_recovery_preserves_other_formats_and_uses_current_preflight():
+    source = (ROOT / ".github/workflows/linux-packages.yml").read_text()
+    jobs = yaml.safe_load(source)["jobs"]
+    assert "workflow_dispatch:" in source
+    assert "!inputs.rpm_only" in jobs["publish"]["if"]
+    assert all("github.ref == 'refs/heads/main'" in job["if"] for job in jobs.values())
+    formats = jobs["packages"]["strategy"]["matrix"]["format"]
+    assert "inputs.rpm_only" in formats and "fromJSON('[\"rpm\"]')" in formats
+    steps = jobs["packages"]["steps"]
+    control = next(
+        step for step in steps if step.get("with", {}).get("path") == ".ci-control"
+    )
+    assert control["with"]["ref"] == "${{ github.sha }}"
+    assert (
+        control["with"]["sparse-checkout"] == "packaging/ci/prepare-document-sandbox.sh"
+    )
+    copy = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("name") == "Install current sandbox preflight tooling"
+    )
+    lifecycle = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("name") == "Native package and installation lifecycle"
+    )
+    assert copy < lifecycle
+    # Recovery still retrieves the exact tagged candidate and attests the RPM;
+    # it cannot trigger the application producer or silently publish the draft.
+    assert '--run-id "$CANDIDATE_RUN"' in source
+    assert "gh workflow run" not in source
+    assert "actions/attest-build-provenance@" in source
+    assert "actions/attest-sbom@" in source
