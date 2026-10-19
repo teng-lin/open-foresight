@@ -299,3 +299,98 @@ def test_original_head_approval_remains_strictly_separate():
         assert not artifacts.eligible_run(REPO, candidate, "macos-sdk")
     # The helper only adds qualification; existing final-head proof is unchanged.
     assert "tools/sdk_final_approval.py" in trust.PRODUCER_CONTROLS
+
+
+@pytest.mark.parametrize("caller", ["sdk", "stage", "sanitizer"])
+@pytest.mark.parametrize(
+    "case,expected,pages",
+    [
+        ("ancestor", True, 0),
+        ("exact_final", True, 0),
+        ("history_member", True, 2),
+        ("exhausted", False, 3),
+        ("unrelated", False, 1),
+        ("unmerged", False, 0),
+        ("unapproved", False, 0),
+        ("fork_head", False, 0),
+        ("fork_base", False, 0),
+        ("wrong_repository", False, 0),
+        ("wrong_workflow", False, 0),
+        ("bad_producer", False, 0),
+        ("bad_final", False, 0),
+        ("lookup_references", True, 0),
+    ],
+)
+def test_all_callers_share_final_source_boundary(
+    monkeypatch, tmp_path, caller, case, expected, pages
+):
+    from tools import ci_sanitizer_artifacts as sanitizer
+    from tools import ci_stage_cache as stage
+
+    evidence = Evidence()
+    candidate = run()
+    workflow = {
+        "sdk": approval.WORKFLOW,
+        "stage": stage.WORKFLOW,
+        "sanitizer": sanitizer.WORKFLOW,
+    }[caller]
+    candidate["path"] = workflow
+    if case == "exact_final":
+        evidence.pull["head"]["sha"] = ORIGINAL
+    elif case in ("history_member", "exhausted", "unrelated"):
+        evidence.status = "diverged"
+        if case == "history_member":
+            evidence.members = [{"sha": "c" * 40}] * 100 + [{"sha": ORIGINAL}]
+        elif case == "exhausted":
+            evidence.members = [{"sha": "c" * 40}] * 400
+    elif case == "unmerged":
+        evidence.pull["merged_at"] = None
+    elif case == "unapproved":
+        evidence.approved = False
+    elif case in ("fork_head", "fork_base"):
+        evidence.pull[case.removeprefix("fork_")]["repo"]["full_name"] = "fork/repo"
+    elif case == "wrong_repository":
+        candidate["head_repository"]["full_name"] = "fork/repo"
+    elif case == "wrong_workflow":
+        candidate["path"] = "other.yml"
+    elif case == "bad_producer":
+        candidate["head_sha"] = None
+    elif case == "bad_final":
+        evidence.pull["head"]["sha"] = None
+    elif case == "lookup_references":
+        candidate["pull_requests"] = []
+
+    def merged(repository, approved):
+        assert repository == REPO
+        assert approved["head_sha"] == evidence.pull["head"]["sha"]
+        assert approved["pull_requests"] == [{"number": 119}]
+        return evidence.approved
+
+    monkeypatch.setattr(artifacts, "api", evidence.api)
+    monkeypatch.setattr(artifacts, "merged_source", merged)
+    # Component equivalence has separate real-source tests in each caller's
+    # suite. Here equal closures isolate the shared provenance decision.
+    monkeypatch.setattr(stage, "ensure_commit", lambda *args: None)
+    monkeypatch.setattr(stage, "source_inputs", lambda *args: {"same": "inputs"})
+    monkeypatch.setattr(sanitizer, "ensure_commit", lambda *args: None)
+    monkeypatch.setattr(sanitizer, "recipe", lambda *args: {"same": "recipe"})
+    monkeypatch.setattr(sanitizer, "control_closure", lambda *args: {})
+    original = copy.deepcopy(candidate)
+    if caller == "sdk":
+        result = approval.approved_final_source(
+            REPO,
+            candidate,
+            "macos-sdk",
+            api=evidence.api,
+            merged_source=merged,
+            fingerprint_at=evidence.fingerprint,
+            read_source=evidence.read,
+            controls=("pack.py",),
+        )
+    elif caller == "stage":
+        result = stage.trusted_native_work_run(candidate, REPO, 999, tmp_path)
+    else:
+        result = sanitizer.approved_final(REPO, candidate, tmp_path, "address")
+    assert result is expected
+    assert candidate == original
+    assert sum("/commits?" in call for call in evidence.calls) == pages
