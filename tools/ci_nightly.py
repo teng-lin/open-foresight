@@ -145,9 +145,13 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
                 for job in jobs(repository, run["id"], request=request)
             ):
                 return
-    issues = pages(
-        repository, f"issues?state=open&labels={label}", None, request=request
-    )
+    issues = [
+        item
+        for item in pages(
+            repository, f"issues?state=open&labels={label}", None, request=request
+        )
+        if "pull_request" not in item
+    ]
     url = f"https://github.com/{repository}/actions/runs/{run_id}"
     if success:
         for item in issues:
@@ -182,18 +186,26 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
         if previous:
             base = previous["head_sha"]
             body += f"\nCommit range since last green: `{base}...{source}`.\n"
-            commits = pages(
-                repository, f"compare/{base}...{source}", "commits", request=request
-            )
-            pull_requests = {}
-            for commit in commits:
-                for pr in pages(
-                    repository, f"commits/{commit['sha']}/pulls", None, request=request
-                ):
-                    pull_requests[pr["number"]] = pr
-            body += "\n".join(
-                f"- #{pr['number']}: {pr['title']}" for pr in pull_requests.values()
-            )
+            try:
+                commits = pages(
+                    repository, f"compare/{base}...{source}", "commits", request=request
+                )
+                pull_requests = {}
+                for commit in commits:
+                    for pr in pages(
+                        repository,
+                        f"commits/{commit['sha']}/pulls",
+                        None,
+                        request=request,
+                    ):
+                        pull_requests[pr["number"]] = pr
+                body += "\n".join(
+                    f"- #{pr['number']}: {pr['title']}" for pr in pull_requests.values()
+                )
+            except RuntimeError as error:
+                print(f"Commit-range metadata unavailable: {error}", file=sys.stderr)
+                body += "\nCommit-range metadata unavailable; inspect the compare/PR API and commit reachability. The failing jobs above still require investigation.\n"
+
         else:
             body += "\nNo earlier green nightly-checks exists; this is the initial baseline.\n"
     if issues:

@@ -76,6 +76,34 @@ def test_open_update_and_close_one_drift_issue():
     assert calls[-2][0:2] == ("issues/9/comments", "POST")
 
 
+@pytest.mark.parametrize("success", [True, False])
+@pytest.mark.parametrize("real_issue", [False, True])
+def test_labeled_pr_is_never_mutated_by_drift_tracking(success, real_issue):
+    request, calls = api_fixture(
+        issues=[{"number": 99, "pull_request": {}}]
+        + ([{"number": 7}] if real_issue else []),
+        job_rows={
+            100: [
+                {
+                    "name": "arch",
+                    "status": "completed",
+                    "conclusion": "success" if success else "failure",
+                }
+            ]
+        },
+    )
+    drift.reconcile(REPOSITORY, "arch-drift.yml", 100, SOURCE, request=request)
+    assert not any(
+        route.startswith("issues/99") and method != "GET" for route, method, _ in calls
+    )
+    if real_issue:
+        assert any(
+            route == "issues/7" and method == "PATCH" for route, method, _ in calls
+        )
+    elif not success:
+        assert calls[-1][0:2] == ("issues", "POST")
+
+
 @pytest.mark.parametrize("conclusion", ["success", "failure", "skipped"])
 def test_newer_authoritative_run_suppresses_stale_success_and_failure(conclusion):
     request, calls = api_fixture(

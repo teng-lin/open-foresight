@@ -82,9 +82,13 @@ def reconcile(repository, workflow, run_id, source, *, request=request):
     failures = result(repository, run_id, expected, allow_missing=True, request=request)
     if failures is None:
         raise ValueError("Drift issue ran before its selected suites completed")
-    issues = pages(
-        repository, f"issues?state=open&labels={label}", None, request=request
-    )
+    issues = [
+        item
+        for item in pages(
+            repository, f"issues?state=open&labels={label}", None, request=request
+        )
+        if "pull_request" not in item
+    ]
     url = f"https://github.com/{repository}/actions/runs/{run_id}"
     if not failures:
         for issue in issues:

@@ -232,6 +232,46 @@ def test_red_issue_reports_range_and_merged_prs_since_actual_green(monkeypatch):
     assert "c" * 40 + "..." + SHA in body and "#9: application fix" in body
 
 
+@pytest.mark.parametrize("success", [True, False])
+@pytest.mark.parametrize("real_issue", [False, True])
+def test_labeled_pr_is_never_updated_or_closed(monkeypatch, success, real_issue):
+    issues = [{"number": 99, "pull_request": {}}] + (
+        [{"number": 7}] if real_issue else []
+    )
+    api, calls = transport(monkeypatch, open_issues=issues)
+    nightly.issue("r", 100, SHA, success, request=api)
+    assert not any(
+        route.startswith("issues/99") and method != "GET" for route, method, _ in calls
+    )
+    if real_issue:
+        assert any(
+            route == "issues/7" and method == "PATCH" for route, method, _ in calls
+        )
+    elif not success:
+        assert calls[-1][0:2] == ("issues", "POST")
+
+
+@pytest.mark.parametrize("failing_endpoint", ["compare/", "commits/"])
+def test_metadata_api_failure_still_reports_failed_nightly(
+    monkeypatch, capsys, failing_endpoint
+):
+    api, calls = transport(
+        monkeypatch,
+        [run(head_sha="c" * 40)],
+        [{"name": "nightly-checks", "conclusion": "success"}],
+    )
+
+    def unavailable(repo, route, *args, **kwargs):
+        if route.startswith(failing_endpoint):
+            raise RuntimeError("HTTP 404 metadata temporarily unavailable")
+        return api(repo, route, *args, **kwargs)
+
+    nightly.issue("r", 100, SHA, False, request=unavailable)
+    assert calls[-1][0:2] == ("issues", "POST")
+    assert "Commit-range metadata unavailable" in calls[-1][2]["body"]
+    assert "HTTP 404" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     "old_success,new_conclusion", [(True, "failure"), (False, "success")]
 )
