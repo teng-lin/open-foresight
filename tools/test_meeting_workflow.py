@@ -177,15 +177,6 @@ def main():
         )
         session = desktop("create", "--mode", "headless", "--guard-host")["session"]
         with tempfile.TemporaryDirectory(prefix="foresight-meeting-ui-") as temporary:
-            opener_directory = Path(temporary) / "opener"
-            opener_directory.mkdir(mode=0o700)
-            opener = opener_directory / "xdg-open"
-            opener.write_text(
-                "#!/usr/bin/env python3\n"
-                "import json, os, pathlib, sys\n"
-                'pathlib.Path(os.environ["FORESIGHT_LINK_OPEN_REPORT"]).write_text(json.dumps(sys.argv[1:]))\n'
-            )
-            opener.chmod(0o700)
             env = {
                 "FORESIGHT_DATA": temporary + "/data",
                 "FORESIGHT_RUNTIME": temporary + "/run",
@@ -209,7 +200,6 @@ def main():
                 "FORESIGHT_AGENT_DESKTOP_SESSION": session,
                 "PIPEWIRE_REMOTE": "/run/user/" + str(os.getuid()) + "/pipewire-0",
                 "PULSE_SERVER": "unix:/run/user/" + str(os.getuid()) + "/pulse/native",
-                "PATH": str(opener_directory) + ":" + os.environ["PATH"],
                 "FORESIGHT_LINK_OPEN_REPORT": temporary + "/link-open.json",
             }
             if args.real_inactivity:

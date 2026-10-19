@@ -18,6 +18,7 @@ import 'package:open_foresight/cluster_rendering.dart';
 import 'package:open_foresight/graph_persistence.dart';
 import 'package:foresight_core/src/model_setup.dart';
 import '../test_support/meeting_panel.dart';
+import '../test_support/file_manager_fixture.dart';
 
 Future<void> waitUntil(
   WidgetTester tester,
@@ -1070,7 +1071,7 @@ void main() {
         final rows = afterCancellation.d.store.sources as List;
         selectedUri =
             rows.singleWhere((row) => row['id'] == id)['source_uri'] as String;
-        if (selectedUri.isNotEmpty &&
+        if (Uri.tryParse(selectedUri)?.scheme == 'file' &&
             (afterCancellation.sourceFeature.graphSelectionEdges as List)
                 .isNotEmpty)
           break;
@@ -1080,6 +1081,7 @@ void main() {
         isNotEmpty,
         reason: 'A real imported source must expose its original URI',
       );
+      expect(Uri.parse(selectedUri).scheme, 'file');
       expect(afterCancellation.sourceFeature.graphSelectedDocument, isNotNull);
       expect(find.byKey(const ValueKey('graph-inspector')), findsOneWidget);
       final selectedDocument =
@@ -1096,16 +1098,34 @@ void main() {
       expect(selectedNode.title, isNotEmpty);
       var originalLinkDispatched = false;
       {
-        await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
-        await tester.pump();
-        final dispatch = File(
-          Platform.environment['FORESIGHT_LINK_OPEN_REPORT']!,
+        final dispatch = File(env['FORESIGHT_LINK_OPEN_REPORT']!);
+        if (dispatch.existsSync()) dispatch.deleteSync();
+        final fileManager = FileManagerRevealSpy(dispatch);
+        await fileManager.start(
+          isolated:
+              env['FORESIGHT_PRIVATE_PIPEWIRE'] == '1' ||
+              env['FORESIGHT_AGENT_DESKTOP_SESSION'] != null,
         );
-        await waitUntil(tester, () => dispatch.existsSync());
-        expect(jsonDecode(dispatch.readAsStringSync()), [
-          Uri.parse(selectedUri).toString(),
-        ]);
-        originalLinkDispatched = true;
+        try {
+          await tester.tap(find.byKey(const ValueKey('graph-inspector-link')));
+          await tester.pump();
+          await waitUntil(
+            tester,
+            () => dispatch.existsSync(),
+            reason:
+                'Original source was not revealed through FileManager1.ShowItems',
+          );
+          expect(jsonDecode(dispatch.readAsStringSync()), {
+            'interface': 'org.freedesktop.FileManager1',
+            'path': '/org/freedesktop/FileManager1',
+            'method': 'ShowItems',
+            'uris': [Uri.parse(selectedUri).toString()],
+            'startup_id': '',
+          });
+          originalLinkDispatched = true;
+        } finally {
+          await fileManager.close();
+        }
       }
       final dynamic selectedLinks = tester
           .widget<CustomPaint>(find.byKey(const ValueKey('source-graph-links')))
@@ -1540,10 +1560,10 @@ void main() {
             'force_position_updates_integrated': true,
             'label_add_reorganized_and_local_remove_preserved_positions': true,
             'organization_label_semantic_assignments_and_cluster_persist': true,
-            'graph_original_link_dispatched_to_system_opener_stub':
+            'graph_original_link_revealed_through_file_manager':
                 originalLinkDispatched,
             'graph_link_test_method':
-                'Owned xdg-open stub captures argv; no real browser or file manager is opened',
+                'Real absolute dbus-send dispatch to an owned FileManager1.ShowItems receiver on the private session bus',
             'source_pause_retains_and_resumes_import_queue': true,
             'stop_recording_completes_while_source_indexing_paused': true,
             'source_reimport_preserved_id_and_advanced_revision': true,

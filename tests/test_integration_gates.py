@@ -163,6 +163,9 @@ def test_waveform_inspector_does_not_inherit_whisper_runtime(tmp_path):
     assert meeting["FORESIGHT_DATA"].endswith("/meeting-data")
     assert meeting["FORESIGHT_REFERENCE_SCREENSHOTS"].endswith("/meeting-screenshots")
     assert meeting["FORESIGHT_MEETING_REPORT"].endswith("/meeting-workflow.json")
+    assert meeting["PATH"] == "/bin"
+    assert not (args.output / "meeting-opener").exists()
+    assert meeting["FORESIGHT_LINK_OPEN_REPORT"].endswith("/link-open.json")
     assert "FORESIGHT_PLAYBACK_TARGET" not in observed[0][2]
 
 
