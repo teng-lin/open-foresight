@@ -11,7 +11,13 @@ void main() {
   test(
     'startup handoff reaches the real worker and custom profile controls',
     () async {
-      final directory = shortTestTempRoot.createTempSync('of-handoff-');
+      // Match the service's canonical profile identity (/tmp is a symlink on
+      // macOS) before comparing its endpoint record with the test profile.
+      final directory = Directory(
+        shortTestTempRoot
+            .createTempSync('of-handoff-')
+            .resolveSymbolicLinksSync(),
+      );
       addTearDown(() => directory.deleteSync(recursive: true));
       final profile = ProfilePaths(
         '${directory.path}/data',
