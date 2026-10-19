@@ -24,6 +24,7 @@ void main() {
         final model = store
             .rows("SELECT * FROM models WHERE kind='generation'")
             .single;
+        generator.modelType = model['model_type'] as int? ?? 0;
         await generator.load(
           env['FORESIGHT_LITERT_RUNNER']!,
           model['path'] as String,
@@ -128,7 +129,7 @@ void main() {
             'generation_backend': generator.effectiveState['backend'],
             'elapsed_seconds': timer.elapsedMilliseconds / 1000,
             'source_profile_modified': false,
-            'method': {'source-guide', 'source-examples'}.contains(answer['model']) ? 'Actual helper retrieval and application authored-source rendering; only a private backup database receives the saved answer' : 'Actual helper retrieval and GPU Gemma generation; only a private backup database receives the saved answer',
+            'method': {'source-guide', 'source-examples'}.contains(answer['model']) ? 'Actual helper retrieval and application authored-source rendering; only a private backup database receives the saved answer' : 'Actual helper retrieval and Gemma generation; only a private backup database receives the saved answer',
             'private_source_text_and_answer_retained_in_report': false,
           })}\n',
         );

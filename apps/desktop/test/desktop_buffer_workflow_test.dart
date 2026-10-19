@@ -272,7 +272,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(requests, [('Who owns the review?', 'meeting:$id', id)]);
       expect(f.shell.meetingFeature.meetingPanel, 'Chat');
-      expect(f.shell.chatFeature.questionFor(id).text, 'Who owns the review?');
+      expect(f.shell.chatFeature.questionFor(id).text, isEmpty);
       expect(f.shell.chatFeature.asking, false);
     },
   );

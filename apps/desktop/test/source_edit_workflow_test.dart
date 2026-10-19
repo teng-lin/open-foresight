@@ -1,8 +1,10 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'controller_fixture.dart';
+import 'pump_until.dart';
 
 void main() {
   testWidgets(
@@ -50,7 +52,7 @@ void main() {
     },
   );
   testWidgets(
-    'file and folder pickers dispatch imports while cancellation remains a no-op',
+    'file and reviewed folder pickers import selections while cancellation is a no-op',
     (tester) async {
       final f = await ControllerFixture.mount(tester);
       final dynamic source = f.shell.sourceFeature;
@@ -83,12 +85,32 @@ void main() {
         isEmpty,
       );
       selected = '${f.root.path}/notes.txt';
+      File(selected).writeAsStringSync('Synthetic source import fixture.');
       await source.import();
       expect(f.connection.calls.last.$2, {'path': selected});
       selected = f.root.path;
-      await source.importFolder();
-      expect(f.connection.calls.last.$1, Operation.sourcesImportDirectory);
-      expect(f.connection.calls.last.$2, {'path': f.root.path});
+      final callsBeforeFolder = f.connection.calls.length;
+      final folder = source.importFolder() as Future<void>;
+      await pumpUntil(
+        tester,
+        () => find.text('Import selected (1)').evaluate().isNotEmpty,
+      );
+      expect(find.text('Review folder import'), findsOneWidget);
+      expect(f.connection.calls, hasLength(callsBeforeFolder));
+      await tester.tap(find.text('Import selected (1)'));
+      await tester.pumpAndSettle();
+      await folder;
+      expect(f.connection.calls, hasLength(callsBeforeFolder + 1));
+      expect(f.connection.calls.last.$1, Operation.sourcesImportFile);
+      expect(f.connection.calls.last.$2, {
+        'path': File('${f.root.path}/notes.txt').resolveSymbolicLinksSync(),
+      });
+      expect(
+        f.connection.calls.where(
+          (c) => c.$1 == Operation.sourcesImportDirectory,
+        ),
+        isEmpty,
+      );
       await source.refreshSources();
       expect(f.connection.calls.last.$1, Operation.sourcesRefresh);
       await source.importSourceUrl('https://example.test/document');

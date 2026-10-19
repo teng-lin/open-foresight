@@ -23,7 +23,7 @@ void main() {
   test(
     'output words filter completion, bucket history, and refresh snapshots',
     () {
-      final now = DateTime.utc(2026, 1, 15, 12);
+      final now = DateTime(2026, 1, 15, 12);
       void answer(String body, int days, {String status = 'completed'}) {
         store.answer('Question', body, status, [], 'fixture');
         store.db.execute('UPDATE answers SET created=? WHERE id=?', [
@@ -34,17 +34,20 @@ void main() {
 
       answer('two\twords', 0);
       answer('three small\nwords', 7);
-      answer('oldest included', 34);
+      answer('oldest included', 28);
       answer('too old', 35);
       answer('future response', -1);
       answer('', 0);
       answer('ignore this incomplete output', 0, status: 'cancelled');
       final meeting = store.meeting('Planning');
       store.artifact(meeting, 'summary', 'artifact has three', 'fixture');
+      store.db.execute('UPDATE artifacts SET created=?', [
+        now.millisecondsSinceEpoch,
+      ]);
 
       expect(store.localOutputWords, 14);
       expect(store.localOutputWords, 14);
-      expect(store.weeklyAnswerWords(now), [2, 0, 0, 3, 2]);
+      expect(store.weeklyOutputWords(now), [2, 0, 0, 3, 5]);
       expect(store.completedAnswerCountRows().single['n'], 6);
       expect(store.completedAnswerBodies().length, 6);
 

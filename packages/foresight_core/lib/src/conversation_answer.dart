@@ -203,7 +203,10 @@ class ConversationAnswer {
               [conversation],
             ).firstOrNull?['question']
             as String?;
-    followUp = isContextualFollowUp(question);
+    followUp = isContextualFollowUp(
+      question,
+      sourceTitles: scope.map((s) => s['title'] as String),
+    );
     final retrievalQuestion = followUp && previousQuestion != null
         ? '$previousQuestion\nFollow-up question: $question'
         : question;

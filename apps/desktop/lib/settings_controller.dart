@@ -389,7 +389,8 @@ class _SettingsController extends _FeatureController {
   List<int> localOutputWeekly = List<int>.filled(5, 0);
 
   int localWords() {
-    final revision = d.store.dataRevision;
+    final revision =
+        '${d.store.dataRevision}:${outputWeekStart(DateTime.now()).millisecondsSinceEpoch}';
     if (localOutputRevision != revision) {
       localOutputRevision = revision;
       unawaited(

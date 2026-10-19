@@ -195,12 +195,7 @@ class _UsageChart extends CustomPainter {
       ];
 
   String _weekLabel(int index) {
-    final today = DateTime.now();
-    final week = DateTime(
-      today.year,
-      today.month,
-      today.day,
-    ).subtract(Duration(days: today.weekday - 1 + (4 - index) * 7));
+    final week = outputWeekStart(DateTime.now(), weeksAgo: 4 - index);
     return 'Week of ${week.month}/${week.day}';
   }
 

@@ -468,7 +468,15 @@ class _IntegrationsController extends _FeatureController {
       builder: (_) => GoogleDrivePicker(google, folder: folder),
     );
     if (selection == null) return;
+    await importDriveSelection(selection, folder: folder);
+  }
+
+  Future<void> importDriveSelection(
+    List<String> selection, {
+    bool folder = false,
+  }) async {
     final failures = <String>[];
+    final failedIds = <String>[];
     for (final id in selection) {
       try {
         if (folder) {
@@ -477,6 +485,7 @@ class _IntegrationsController extends _FeatureController {
           await google.importDriveFile(id);
         }
       } catch (error) {
+        failedIds.add(id);
         failures.add(
           error is StateError ? error.message.toString() : error.toString(),
         );
@@ -484,6 +493,23 @@ class _IntegrationsController extends _FeatureController {
     }
     final kind = folder ? 'folders' : 'files';
     if (failures.isNotEmpty) {
+      if (mounted && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Imported ${selection.length - failures.length} of ${selection.length} $kind from Drive.',
+            ),
+            action: SnackBarAction(
+              label: 'Retry failed $kind',
+              onPressed: () => unawaited(
+                shell.run(
+                  () => importDriveSelection(failedIds, folder: folder),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
       throw StateError(
         'Imported ${selection.length - failures.length} of ${selection.length} $kind from Drive.\n'
         'Could not import:\n${failures.join('\n')}',

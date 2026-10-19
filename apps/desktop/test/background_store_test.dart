@@ -20,7 +20,7 @@ void main() {
         store.artifact(meeting, 'actions', ' \n ', 'fixture');
         final stats = await localOutputStats(store.path);
         expect(stats.words, 5);
-        expect(stats.weekly, [0, 0, 0, 0, 2]);
+        expect(stats.weekly, [0, 0, 0, 0, 5]);
       } finally {
         store.close();
         temporary.deleteSync(recursive: true);

@@ -12,6 +12,17 @@ import 'graph_layout.dart';
 import 'package:crypto/crypto.dart';
 import 'package:sqlite3/sqlite3.dart';
 
+/// Calendar weeks start on Monday in the user's local timezone. Constructing
+/// dates avoids treating a daylight-saving week as seven 24-hour durations.
+DateTime outputWeekStart(DateTime now, {int weeksAgo = 0}) {
+  final local = now.toLocal();
+  return DateTime(
+    local.year,
+    local.month,
+    local.day - local.weekday + 1 - weeksAgo * 7,
+  );
+}
+
 void requireEmbeddingBundle(String path) {
   if (!path.endsWith('.litertlm') || Directory(path).existsSync()) {
     throw StateError(
@@ -24,7 +35,7 @@ void requireEmbeddingBundle(String path) {
 class Store {
   final Database db;
   final String path;
-  static const schemaVersion = 11;
+  static const schemaVersion = 12;
   static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
   Timer? _privacyMaintenanceRetry;
   var _privacyRetrySeconds = 1;
@@ -233,6 +244,14 @@ class Store {
             'UPDATE sources SET locally_edited=1,provenance=? WHERE id=?',
             [provenance, row['id']],
           );
+        }
+      case 12:
+        if (!rows(
+          'PRAGMA table_info(artifacts)',
+        ).any((row) => row['name'] == 'created')) {
+          // Older output has no generation date. Keep it in lifetime totals
+          // without inventing a week from the meeting's creation date.
+          db.execute('ALTER TABLE artifacts ADD COLUMN created INTEGER');
         }
       default:
         throw StateError('Missing application database migration $version');
@@ -904,8 +923,16 @@ class Store {
           meeting,
         ]).first['revision'];
     void insert() => db.execute(
-      'INSERT INTO artifacts(meeting_id,kind,generated,input_revision,model,prompt_version) VALUES(?,?,?,?,?,?)',
-      [meeting, kind, generated, revision, model, 'meeting-v1'],
+      'INSERT INTO artifacts(meeting_id,kind,generated,input_revision,model,prompt_version,created) VALUES(?,?,?,?,?,?,?)',
+      [
+        meeting,
+        kind,
+        generated,
+        revision,
+        model,
+        'meeting-v1',
+        DateTime.now().millisecondsSinceEpoch,
+      ],
     );
     if (kind == 'enhanced_notes') {
       _writeEnhancedNote(meeting, insert, body: generated);
@@ -1156,22 +1183,25 @@ class Store {
 
   String? _outputStatsRevision;
   int _localOutputWords = 0;
-  List<({int created, int words})> _answerWordCounts = [];
+  List<({int? created, int words})> _outputWordCounts = [];
 
   void _refreshOutputStats() {
     final revision = dataRevision;
     if (_outputStatsRevision == revision) return;
     int words(String text) => RegExp(r'\S+').allMatches(text).length;
-    _answerWordCounts = [
+    _outputWordCounts = [
       for (final row in completedAnswerHistory())
         (created: row['created'] as int, words: words(row['body'] as String)),
+      for (final row in rows('SELECT generated,created FROM artifacts'))
+        (
+          created: row['created'] as int?,
+          words: words(row['generated'] as String),
+        ),
     ];
-    _localOutputWords =
-        _answerWordCounts.fold<int>(0, (sum, row) => sum + row.words) +
-        artifactBodies().fold<int>(
-          0,
-          (sum, row) => sum + words(row['generated'] as String),
-        );
+    _localOutputWords = _outputWordCounts.fold<int>(
+      0,
+      (sum, row) => sum + row.words,
+    );
     _outputStatsRevision = revision;
   }
 
@@ -1182,17 +1212,27 @@ class Store {
     return _localOutputWords;
   }
 
-  List<int> weeklyAnswerWords(DateTime now) {
+  List<int> weeklyOutputWords(DateTime now) {
     _refreshOutputStats();
     final weekly = List<int>.filled(5, 0);
-    for (final row in _answerWordCounts) {
-      final days = now
-          .difference(DateTime.fromMillisecondsSinceEpoch(row.created))
-          .inDays;
-      if (days >= 0 && days < 35) weekly[4 - days ~/ 7] += row.words;
+    final starts = [
+      for (var i = 0; i < 5; i++)
+        outputWeekStart(now, weeksAgo: 4 - i).millisecondsSinceEpoch,
+    ];
+    for (final row in _outputWordCounts) {
+      final created = row.created;
+      if (created == null || created > now.millisecondsSinceEpoch) continue;
+      for (var i = 4; i >= 0; i--) {
+        if (created >= starts[i]) {
+          weekly[i] += row.words;
+          break;
+        }
+      }
     }
     return weekly;
   }
+
+  List<int> weeklyAnswerWords(DateTime now) => weeklyOutputWords(now);
 
   // Typed desktop queries keep SQL and snapshot policy in core.
   List<Map<String, Object?>> registeredEmbedding() =>

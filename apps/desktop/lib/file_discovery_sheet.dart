@@ -5,11 +5,13 @@ class FileDiscoverySheet extends StatefulWidget {
   final List<String> initialFolders;
   final Set<String> excludedPaths;
   final Future<String?> Function() pickFolder;
+  final bool folderImport;
   const FileDiscoverySheet({
     super.key,
     required this.initialFolders,
     required this.excludedPaths,
     required this.pickFolder,
+    this.folderImport = false,
   });
   @override
   State<FileDiscoverySheet> createState() => _FileDiscoverySheetState();
@@ -64,6 +66,8 @@ class _FileDiscoverySheetState extends State<FileDiscoverySheet> {
       if (mounted && token == generation)
         setState(() {
           result = next;
+          if (widget.folderImport)
+            selected.addAll(next.files.map((file) => file.path));
           scanning = false;
         });
     } catch (e) {
@@ -81,7 +85,11 @@ class _FileDiscoverySheetState extends State<FileDiscoverySheet> {
         .where((f) => f.path.toLowerCase().contains(query.toLowerCase()))
         .toList();
     return AlertDialog(
-      title: const Text('Find files on this computer'),
+      title: Text(
+        widget.folderImport
+            ? 'Review folder import'
+            : 'Find files on this computer',
+      ),
       content: SizedBox(
         width: 700,
         height: 440,
@@ -92,27 +100,30 @@ class _FileDiscoverySheetState extends State<FileDiscoverySheet> {
               spacing: 8,
               runSpacing: 4,
               children: [
-                for (final folder in folders)
-                  InputChip(
-                    label: Text(folder),
-                    onDeleted: () {
-                      setState(() => folders.remove(folder));
-                      // This task catches failures and publishes them in the view state.
-                      // ignore: discarded_futures
-                      scan();
+                if (widget.folderImport) ...folders.map(Text.new),
+                if (!widget.folderImport)
+                  for (final folder in folders)
+                    InputChip(
+                      label: Text(folder),
+                      onDeleted: () {
+                        setState(() => folders.remove(folder));
+                        // This task catches failures and publishes them in the view state.
+                        // ignore: discarded_futures
+                        scan();
+                      },
+                    ),
+                if (!widget.folderImport)
+                  ActionChip(
+                    label: const Text('Add folder'),
+                    avatar: const Icon(Icons.add, size: 18),
+                    onPressed: () async {
+                      final folder = await widget.pickFolder();
+                      if (folder != null && mounted) {
+                        setState(() => folders.add(folder));
+                        await scan();
+                      }
                     },
                   ),
-                ActionChip(
-                  label: const Text('Add folder'),
-                  avatar: const Icon(Icons.add, size: 18),
-                  onPressed: () async {
-                    final folder = await widget.pickFolder();
-                    if (folder != null && mounted) {
-                      setState(() => folders.add(folder));
-                      await scan();
-                    }
-                  },
-                ),
               ],
             ),
             const SizedBox(height: 12),

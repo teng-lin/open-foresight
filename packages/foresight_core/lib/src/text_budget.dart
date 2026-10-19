@@ -4,7 +4,10 @@ String runePrefix(String text, int limit) =>
 
 /// Keep the previous question for short, referential follow-ups in English and
 /// CJK scripts. The size budget is independent of whitespace segmentation.
-bool isContextualFollowUp(String question) =>
+bool isContextualFollowUp(
+  String question, {
+  Iterable<String> sourceTitles = const [],
+}) =>
     question.runes.length <= 120 &&
     (RegExp(
           r'\b(it|its|that|those|this|they|them|more|again)\b',
@@ -12,7 +15,60 @@ bool isContextualFollowUp(String question) =>
         ).hasMatch(question) ||
         RegExp(
           r'这个|那个|这些|那些|它们|他们|她们|之前|更多|再解释|再说|それ|これ|その|では|続|추가|그것|이것|더 자세히|더 설명|더 알려',
-        ).hasMatch(question));
+        ).hasMatch(question)) &&
+    !_namesSourceSubject(question, sourceTitles);
+
+// A pronoun may refer to a subject in the same question, rather than to the
+// previous turn. Verify multiword names against current source titles before
+// importing that previous question into retrieval and grounding. Matching is
+// case-insensitive, so typing "project juniper" has the same scope.
+bool _namesSourceSubject(String question, Iterable<String> titles) {
+  // Comparisons and other references can still name one subject while relying
+  // on the previous turn for another. Only resolve local "it"/"its" here.
+  if (RegExp(
+    r'\b(compare|compares|compared|comparison|before|after|earlier|later|versus|vs|than|previous|last|same|that|those|this|they|them|more|again)\b',
+    caseSensitive: false,
+  ).hasMatch(question)) {
+    return false;
+  }
+  String normalized(String value) =>
+      ' ${value.toLowerCase().replaceAll(RegExp(r'[^\p{L}\p{N}]+', unicode: true), ' ').trim()} ';
+  final query = normalized(question);
+  final reference = RegExp(r'\b(it|its)\b').firstMatch(query);
+  if (reference == null) return false;
+  // Resolve only the subject of a later question clause ("when does it...",
+  // "what is its..."). An object such as "can Juniper replace it?" still
+  // needs the previous turn even though a known name occurs first.
+  final localClause = RegExp(
+    r'\b(?:when|what|where|why|how|who)\s+(?:does|do|is|was|will|can|would|should|did)\s+(it|its)\b',
+  ).firstMatch(query);
+  if (localClause == null ||
+      localClause.end - localClause[1]!.length != reference.start) {
+    return false;
+  }
+  final names = RegExp(
+    r'\p{Lu}[\p{L}\p{N}]*(?:\s+\p{Lu}[\p{L}\p{N}]*)+',
+    unicode: true,
+  );
+  for (final title in titles) {
+    for (final match in names.allMatches(title)) {
+      final words = match[0]!.split(RegExp(r'\s+'));
+      for (var i = 0; i + 1 < words.length; i++) {
+        if (RegExp(
+          r'^(the|a|an|this|that|these|those|my|our|your|their)$',
+          caseSensitive: false,
+        ).hasMatch(words[i])) {
+          continue;
+        }
+        final subject = query.indexOf(
+          normalized('${words[i]} ${words[i + 1]}'),
+        );
+        if (subject >= 0 && subject < reference.start) return true;
+      }
+    }
+  }
+  return false;
+}
 
 String sourceIdentity(Map<String, Object?> source) {
   final uri = source['source_uri'] as String?;
