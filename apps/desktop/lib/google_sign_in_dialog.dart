@@ -110,7 +110,7 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
                 cancelling
                     ? 'Cancelling Google sign-in…'
                     : browserOpened
-                    ? 'Complete Google sign-in in your browser. You’ll return to Foresight automatically.'
+                    ? 'Complete Google sign-in in your browser. If Open Foresight does not reopen, return to the app manually.'
                     : 'Opening Google sign-in in your browser…',
               ),
               const SizedBox(height: 16),

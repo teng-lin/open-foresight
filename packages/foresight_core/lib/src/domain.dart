@@ -4,6 +4,7 @@ import 'model_setup.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'model_gate.dart';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -461,20 +462,43 @@ class Domain {
     _checkOpen();
     await reconcile();
     _checkOpen();
-    await indexPendingSources();
+    schedulePendingSources();
   }
+
+  void schedulePendingSources() {
+    unawaited(
+      indexPendingSources().catchError((Object error) {
+        if (!closed) developer.log('Queued source indexing', error: error);
+      }),
+    );
+  }
+
+  Future<void>? _pendingSourceIndexing;
 
   /// Retry saved imports after model setup, including the specific setup error
   /// persisted by older versions. Document contents/revisions stay unchanged.
-  Future<void> indexPendingSources() async {
+  Future<void> indexPendingSources() => _pendingSourceIndexing ??=
+      _drainPendingSources().whenComplete(() => _pendingSourceIndexing = null);
+
+  Future<void> _drainPendingSources() async {
     _checkOpen();
+    final generation = workspaceGeneration;
     store.db.execute(
       "UPDATE sources SET state='pending',error='' WHERE deleted=0 AND state='failed' AND error LIKE 'gRPC Error%Pipeline not initialized%'",
     );
-    for (final source in store.sources.where(
-      (s) => s['state'] == 'indexing' || s['state'] == 'pending',
+    // Snapshot identifiers only; a large library's document bodies must not be
+    // materialized on the startup/model-registration path.
+    for (final source in store.rows(
+      "SELECT id FROM sources WHERE deleted=0 AND state IN ('indexing','pending') ORDER BY title",
     )) {
-      await index(source['id'] as String);
+      if (closed || generation != workspaceGeneration) break;
+      try {
+        await index(source['id'] as String);
+      } catch (error) {
+        if (closed || generation != workspaceGeneration) break;
+        // index() persists document failures. Keep processing unrelated imports.
+        developer.log('Queued source ${source['id']}', error: error);
+      }
     }
   }
 

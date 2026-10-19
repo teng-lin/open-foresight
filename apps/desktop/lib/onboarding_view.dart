@@ -62,7 +62,13 @@ class _OnboardingViewState extends State<OnboardingView> {
     try {
       await action();
     } catch (failure) {
-      if (mounted) setState(() => error = failure.toString());
+      if (mounted) {
+        setState(
+          () => error = failure is StateError
+              ? failure.message.toString()
+              : failure.toString(),
+        );
+      }
     } finally {
       if (mounted) setState(() => working = false);
     }

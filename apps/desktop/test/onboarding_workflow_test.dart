@@ -276,10 +276,7 @@ void main() {
         domain.failNotifications = true;
         await tester.tap(find.text('Enable notifications'));
         await tester.pumpAndSettle();
-        expect(
-          find.textContaining('Notification service unavailable'),
-          findsOneWidget,
-        );
+        expect(find.text('Notification service unavailable'), findsOneWidget);
         domain.failNotifications = false;
       } else {
         expect(find.text('Microphone access'), findsNothing);

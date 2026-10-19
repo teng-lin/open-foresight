@@ -401,10 +401,18 @@ def test_onboarding_import_waits_for_model_and_indexes_after_configuration(runni
         ).fetchone()
     assert before == (document.read_text(), 1, "pending", "")
     peer.call("models.embedding", {"path": str(running["root"] / "fixtures/model.litertlm")})
+    assert peer.call("status")["models_busy"] is False
+    deadline = time.monotonic() + 5
     with sqlite3.connect(running["root"] / "data/application.db") as db:
-        after = db.execute(
-            "SELECT content,revision,state,error FROM sources WHERE id=?", [imported]
-        ).fetchone()
+        while True:
+            after = db.execute(
+                "SELECT content,revision,state,error FROM sources WHERE id=?", [imported]
+            ).fetchone()
+            if after[2] == "indexed":
+                break
+            assert after[2] in ("pending", "indexing"), after
+            assert time.monotonic() < deadline, after
+            poll_delay(deadline)
     assert after == (before[0], before[1], "indexed", "")
 
 

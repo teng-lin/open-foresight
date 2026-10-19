@@ -271,7 +271,7 @@ void main() {
         expect(invitation!.host, 'accounts.example.test');
         expect(
           find.text(
-            'Complete Google sign-in in your browser. You’ll return to Foresight automatically.',
+            'Complete Google sign-in in your browser. If Open Foresight does not reopen, return to the app manually.',
           ),
           findsOneWidget,
         );

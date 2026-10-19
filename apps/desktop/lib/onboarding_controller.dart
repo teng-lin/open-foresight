@@ -18,7 +18,13 @@ class _OnboardingController extends _FeatureController {
     try {
       await action();
     } catch (error) {
-      if (mounted) setState(() => failure = error.toString());
+      if (mounted) {
+        setState(
+          () => failure = error is StateError
+              ? error.message.toString()
+              : error.toString(),
+        );
+      }
     } finally {
       if (mounted) setState(() => working = false);
     }

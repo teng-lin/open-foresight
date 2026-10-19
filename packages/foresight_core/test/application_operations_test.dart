@@ -58,8 +58,11 @@ class OperationsRag extends RagServiceBase {
 class OperationsDomain extends AdapterDomain {
   final deleted = <String>[];
   bool rejectIndex = false;
+  Completer<void>? indexEntered, indexRelease;
   @override
   Future<void> index(String id) async {
+    if (indexEntered?.isCompleted == false) indexEntered!.complete();
+    await indexRelease?.future;
     if (rejectIndex) throw StateError('index worker disconnected');
     await super.index(id);
   }
@@ -632,7 +635,19 @@ void main() {
         ),
       );
       rag.release!.complete();
-      await pending;
+      domain.indexEntered = Completer<void>();
+      final indexRelease = domain.indexRelease = Completer<void>();
+      addTearDown(() {
+        if (!indexRelease.isCompleted) indexRelease.complete();
+      });
+      await pending.timeout(const Duration(seconds: 2));
+      await domain.indexEntered!.future.timeout(const Duration(seconds: 1));
+      expect(app.modelBusy, isFalse);
+      await app.call('models.register', {'kind': 'speech', 'path': model.path});
+      expect(domain.store.model('speech'), isNotNull);
+      indexRelease.complete();
+      await domain.indexPendingSources();
+      domain.indexEntered = domain.indexRelease = null;
       expect(domain.indexed, contains(queued));
       expect(domain.store.sources.single['state'], 'indexed');
       expect(domain.store.sources.single['revision'], 1);

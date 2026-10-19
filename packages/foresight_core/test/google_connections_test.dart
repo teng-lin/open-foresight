@@ -12,9 +12,19 @@ import 'package:foresight_core/src/store.dart';
 
 import 'package:foresight_test_support/google_connections.dart';
 
+class FailingImportDomain extends AdapterDomain {
+  FailingImportDomain(super.store, super.helper);
+  bool rejectIndex = false;
+  @override
+  Future<void> index(String id) async {
+    if (rejectIndex) throw StateError('Indexing unavailable');
+    await super.index(id);
+  }
+}
+
 void main() {
   test(
-    'Drive checks download availability and names rejected exports',
+    'Drive rejects restricted downloads and names each file once across batch imports',
     () async {
       final directory = createTestTempDirectorySync('drive-restrictions-');
       final fixture = GoogleFixture()
@@ -31,7 +41,7 @@ void main() {
         '${directory.path}/socket',
         '${directory.path}/helper',
       );
-      final domain = AdapterDomain(store, helper);
+      final domain = FailingImportDomain(store, helper);
       final connection = GoogleConnections(domain, auth);
       try {
         await auth.signIn(fixture.consent);
@@ -65,6 +75,56 @@ void main() {
         await connection.importDriveFile('doc');
         expect(store.sources.single['title'], 'Apollo');
         expect(domain.indexed, hasLength(1));
+        await expectLater(
+          connection.importDriveFolder('folder'),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Imported 0 files; Sheet: Google Drive does not allow downloading this file.',
+            ),
+          ),
+        );
+        await expectLater(
+          connection.importLastYear(),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Slides: This file cannot be downloaded by the user.',
+            ),
+          ),
+        );
+        await connection.syncCalendar();
+        fixture.exportDeniedFiles.add('doc');
+        final meeting =
+            store
+                    .rows('SELECT meeting_id FROM calendar_events')
+                    .single['meeting_id']
+                as int;
+        await expectLater(
+          connection.importAttachments(meeting),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Apollo: This file cannot be downloaded by the user.',
+            ),
+          ),
+        );
+        fixture.exportDeniedFiles.clear();
+        fixture.document = 'Changed upstream';
+        domain.rejectIndex = true;
+        await expectLater(
+          connection.importAttachments(meeting),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'summary',
+              'Apollo: Indexing unavailable',
+            ),
+          ),
+        );
       } finally {
         connection.close();
         await auth.close();

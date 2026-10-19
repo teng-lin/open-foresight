@@ -138,10 +138,7 @@ void main() {
       );
       await tester.tap(find.text('Back'));
       await tester.pumpAndSettle();
-      expect(
-        find.textContaining('Could not save setup progress'),
-        findsOneWidget,
-      );
+      expect(find.text('Could not save setup progress'), findsOneWidget);
       expect(find.text('Install Whisper fixture'), findsOneWidget);
       fail = false;
       await tester.tap(find.text('Back'));

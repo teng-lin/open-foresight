@@ -279,6 +279,15 @@ class GoogleConnections implements ConnectedSources {
     );
   }
 
+  String _importFailure(String name, Object error) {
+    final message = error is StateError
+        ? error.message.toString()
+        : error.toString();
+    return message.startsWith('$name:') || message.startsWith('$name ')
+        ? message
+        : '$name: $message';
+  }
+
   @override
   Future<void> importDriveFolder(
     String folderId, {
@@ -333,7 +342,7 @@ class GoogleConnections implements ConnectedSources {
             );
             count++;
           } catch (error) {
-            failures.add('${file['name']}: $error');
+            failures.add(_importFailure('${file['name']}', error));
           }
         }
       }
@@ -358,7 +367,7 @@ class GoogleConnections implements ConnectedSources {
       try {
         await importDriveFile(file['id'] as String, metadata: file);
       } catch (error) {
-        failures.add('${file['name']}: $error');
+        failures.add(_importFailure('${file['name']}', error));
       }
     }
     if (failures.isNotEmpty) throw StateError(failures.join('\n'));
@@ -555,7 +564,7 @@ class GoogleConnections implements ConnectedSources {
       try {
         await importDriveFile(id);
       } catch (error) {
-        failures.add('${attachment['title']}: $error');
+        failures.add(_importFailure('${attachment['title']}', error));
       }
     }
     if (failures.isNotEmpty) throw StateError(failures.join('\n'));

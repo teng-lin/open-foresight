@@ -14,12 +14,21 @@ class RecoveryRag extends RagServiceBase {
   void Function()? duringEmbedding;
   int indexCalls = 0;
   GrpcError? indexFailure;
+  Completer<void>? indexEntered, indexRelease;
+  String? rejectedDocument;
+  final indexedDocuments = <String>[];
   @override
   Future<IndexResponse> indexDocument(
     ServiceCall call,
     IndexRequest request,
   ) async {
     indexCalls++;
+    indexedDocuments.add(request.documentId);
+    if (indexEntered?.isCompleted == false) indexEntered!.complete();
+    await indexRelease?.future;
+    if (request.documentId == rejectedDocument) {
+      throw GrpcError.invalidArgument('Invalid document');
+    }
     if (indexFailure != null) throw indexFailure!;
     return IndexResponse(success: true);
   }
@@ -182,6 +191,33 @@ void main() {
         store.sources.singleWhere((s) => s['id'] == unrelated)['state'],
         'failed',
       );
+    },
+  );
+
+  test(
+    'resume releases startup while one shared queue isolates failed documents',
+    () async {
+      helper.snapshot = control.State(pipeline: 'ready');
+      final bad = store.importText('A invalid', 'bad', 'text/plain', 'fixture');
+      final good = store.importText('B valid', 'good', 'text/plain', 'fixture');
+      rag.rejectedDocument = bad;
+      rag.indexEntered = Completer<void>();
+      final release = rag.indexRelease = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      await domain.resume().timeout(const Duration(seconds: 2));
+      await rag.indexEntered!.future.timeout(const Duration(seconds: 2));
+      expect(domain.restoring, isFalse);
+      final first = domain.indexPendingSources();
+      expect(identical(first, domain.indexPendingSources()), isTrue);
+      expect(rag.indexCalls, 1);
+      release.complete();
+      await first;
+      expect(rag.indexedDocuments, [bad, good]);
+      expect(store.sources.first['state'], 'failed');
+      expect(store.sources.first['error'], contains('Invalid document'));
+      expect(store.sources.last['state'], 'indexed');
     },
   );
 
