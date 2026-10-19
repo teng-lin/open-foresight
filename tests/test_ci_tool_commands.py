@@ -391,8 +391,9 @@ def test_environment_cli_retains_collected_record(tmp_path, monkeypatch):
     )
 
 
+@pytest.mark.parametrize("allow_local_build", [False, True])
 def test_macos_consumer_cli_keeps_running_producer_parameters(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, allow_local_build
 ):
     ensure = Mock(return_value="artifact")
     monkeypatch.setattr(macos, "ensure", ensure)
@@ -413,11 +414,13 @@ def test_macos_consumer_cli_keeps_running_producer_parameters(
             "77",
             "--wait",
             "30",
+            *(["--allow-local-build"] if allow_local_build else []),
         ],
     )
     macos.main()
     assert capsys.readouterr().out.strip() == "artifact"
     assert ensure.call_args.args[-3:] == ("a" * 40, 77, 30)
+    assert ensure.call_args.kwargs == {"allow_local_build": allow_local_build}
 
 
 @pytest.mark.parametrize("platform", ["all", "macos", "linux"])

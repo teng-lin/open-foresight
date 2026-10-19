@@ -82,8 +82,11 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
+        ALLOW_LOCAL_BUILD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name }}
       run: |-
-        python tools/ci_macos_dependencies.py --component macos-runtime --prefix build/macos-runtimes --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        args=()
+        if [[ "$ALLOW_LOCAL_BUILD" == true ]]; then args+=(--allow-local-build); fi
+        python tools/ci_macos_dependencies.py --component macos-runtime --prefix build/macos-runtimes --own-head "$OWN_HEAD" --own-pr "$OWN_PR" "${args[@]}"
         python tools/ci_verify_dependency.py --component macos-runtime --prefix build/macos-runtimes
     - name: Assemble complete ad hoc application
       env:

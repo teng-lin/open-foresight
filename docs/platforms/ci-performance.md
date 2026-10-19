@@ -939,3 +939,13 @@ the unchanged recipe/cache keys and the Arch toolchain/gate inventory. Hosted
 scheduled SDK restoration and the Arch runtime gate still require proof before
 removing any existing PR checks. These jobs add independent drift coverage;
 runner-minute savings remain unclaimed until measured over five hosted runs.
+
+Ordinary macOS consumers now fail with the missing identity and producer when
+no same-head producer remains, instead of silently compiling dependencies.
+Fork PR validation may explicitly pass `--allow-local-build`; both compiler-SDK
+and runtime steps derive that flag from nonempty head/base repository metadata
+on an actual fork `pull_request` event. The explicit permission propagates to
+the vendor dependency needed by a fork runtime. Dependabot never uses that local
+fallback, and an exhausted wait for a still-running producer always fails.
+Existing verified artifacts are attempted first in every mode. This changes no
+SDK recipe, component identity or vendor input.

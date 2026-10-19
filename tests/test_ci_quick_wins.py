@@ -120,7 +120,10 @@ def test_waiting_producer_requires_current_head_repository_identity_and_active_j
         )
 
 
-def test_dependabot_missing_sdk_is_red_and_actionable(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("allow_local_build", [False, True])
+def test_dependabot_missing_sdk_is_red_and_actionable(
+    tmp_path, monkeypatch, capsys, allow_local_build
+):
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_ACTOR", "dependabot[bot]")
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -131,7 +134,14 @@ def test_dependabot_missing_sdk_is_red_and_actionable(tmp_path, monkeypatch, cap
         patch.object(macos.subprocess, "run") as build,
         pytest.raises(RuntimeError, match="ci-dependencies.yml"),
     ):
-        macos.ensure("macos-sdk", tmp_path, "owner/repo", "a" * 40, 23)
+        macos.ensure(
+            "macos-sdk",
+            tmp_path,
+            "owner/repo",
+            "a" * 40,
+            23,
+            allow_local_build=allow_local_build,
+        )
     build.assert_not_called()
     assert "::error::" in capsys.readouterr().out
     assert "identity" in summary.read_text()
@@ -277,3 +287,142 @@ def test_explain_works_locally_without_github_metadata(tmp_path, monkeypatch, ca
     assert all(report["selection"].values())
     assert report["paths"] == [{"path": "README.md", "gates": []}]
     assert "quality only" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("producer_states", [[[]], [[71], []]])
+def test_ordinary_missing_sdk_fails_without_local_compilation(
+    tmp_path, monkeypatch, capsys, producer_states
+):
+    monkeypatch.setenv("GITHUB_ACTOR", "repository-owner")
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    with (
+        patch.object(macos, "pull", return_value=False),
+        patch.object(macos, "fingerprint", return_value="missing-identity"),
+        patch.object(macos, "waiting_producers", side_effect=producer_states),
+        patch.object(macos.time, "sleep"),
+        patch.object(macos.subprocess, "run") as build,
+        pytest.raises(RuntimeError, match="missing-identity.*ci-dependencies.yml"),
+    ):
+        macos.ensure("macos-sdk", tmp_path, "owner/repo", "a" * 40, 23)
+    build.assert_not_called()
+    assert "::error::" in capsys.readouterr().out
+    assert "retry the failed consumer" in summary.read_text()
+
+
+@pytest.mark.parametrize("location", ["sdk", "runtime"])
+@pytest.mark.parametrize("fork", [False, True])
+def test_only_explicit_fork_metadata_enables_local_build_in_real_consumer_steps(
+    tmp_path, location, fork
+):
+    if location == "sdk":
+        steps = yaml.safe_load(
+            (ROOT / ".github/actions/setup-macos-stage/action.yml").read_text()
+        )["runs"]["steps"]
+    else:
+        steps = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())[
+            "jobs"
+        ]["macos"]["steps"]
+    step = next(
+        step for step in steps if "ci_macos_dependencies.py" in step.get("run", "")
+    )
+    # The GitHub expression requires actual fork event metadata, never an input
+    # supplied by a PR, a branch-name convention, or an absent head repository.
+    assert step["env"]["ALLOW_LOCAL_BUILD"] == (
+        "${{ github.event_name == 'pull_request' && "
+        "github.event.pull_request.head.repo.full_name != '' && "
+        "github.event.pull_request.base.repo.full_name == github.repository && "
+        "github.event.pull_request.head.repo.full_name != "
+        "github.event.pull_request.base.repo.full_name }}"
+    )
+    executable = tmp_path / "bin/python"
+    executable.parent.mkdir()
+    log = tmp_path / "calls.jsonl"
+    executable.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "with open(os.environ['CONSUMER_ARGUMENTS'], 'a') as stream:\n"
+        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+    )
+    executable.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": str(executable.parent) + os.pathsep + os.environ["PATH"],
+            "ALLOW_LOCAL_BUILD": str(fork).lower(),
+            "OWN_HEAD": "a" * 40,
+            "OWN_PR": "23",
+            "GITHUB_WORKSPACE": str(tmp_path),
+            "GITHUB_PATH": str(tmp_path / "github-path"),
+            "CONSUMER_ARGUMENTS": str(log),
+        },
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 2
+    assert calls[0][0] == "tools/ci_macos_dependencies.py"
+    assert ("--allow-local-build" in calls[0]) == fork
+    assert calls[1][0] == "tools/ci_verify_dependency.py"
+    assert "--allow-local-build" not in calls[1]
+
+
+def test_missing_consumer_head_never_polls_unrelated_sdk_producers():
+    with patch.object(macos, "api") as request:
+        assert macos.waiting_producers("owner/repo", "macos-sdk", "", 0) == []
+    request.assert_not_called()
+
+
+@pytest.mark.parametrize("malformed_json", [False, True])
+def test_bad_producer_identity_never_authorizes_implicit_compilation(
+    tmp_path, malformed_json
+):
+    head = "a" * 40
+    candidate = {"id": 71, "status": "in_progress", "head_sha": head}
+
+    def request(repository, route):
+        return {"workflow_runs": [candidate] if "status=in_progress" in route else []}
+
+    with (
+        patch.object(macos, "pull", return_value=False),
+        patch.object(macos, "api", side_effect=request),
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "trusted_run", return_value=True),
+        patch.object(macos, "dependency_jobs", return_value=[]),
+        patch.object(
+            macos,
+            "producer_identity",
+            side_effect=(
+                json.JSONDecodeError("invalid producer", "", 0)
+                if malformed_json
+                else ValueError("unsupported recipe")
+            ),
+        ),
+        patch.object(macos.subprocess, "run") as build,
+        pytest.raises(json.JSONDecodeError if malformed_json else RuntimeError),
+    ):
+        macos.ensure(
+            "macos-sdk",
+            tmp_path,
+            "owner/repo",
+            head,
+            23,
+            allow_local_build=malformed_json,
+        )
+    build.assert_not_called()
+
+
+def test_macos_cli_advertises_explicit_fork_build_permission():
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "tools/ci_macos_dependencies.py"), "--help"],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "--allow-local-build" in result.stdout
+    assert "fork validation only" in " ".join(result.stdout.split())

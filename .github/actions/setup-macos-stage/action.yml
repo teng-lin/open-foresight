@@ -130,15 +130,18 @@ runs:
       with:
         path: ~/.pub-cache
         key: pub-macos-${{ steps.language-cache.outputs.kind }}-v2-${{ (inputs.stage == 'desktop' || inputs.stage == 'service') && hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') || hashFiles('packages/foresight_core/pubspec.lock') }}
-    - name: Fetch the qualified compiler SDK or build pinned sources
+    - name: Fetch the qualified compiler SDK with explicit fork validation
       if: inputs.stage == 'native'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
         OWN_HEAD: ${{ inputs.source }}
         OWN_PR: ${{ inputs.own-pr }}
+        ALLOW_LOCAL_BUILD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name }}
       run: |
-        python tools/ci_macos_dependencies.py --component macos-sdk --prefix build/sdk --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        args=()
+        if [[ "$ALLOW_LOCAL_BUILD" == true ]]; then args+=(--allow-local-build); fi
+        python tools/ci_macos_dependencies.py --component macos-sdk --prefix build/sdk --own-head "$OWN_HEAD" --own-pr "$OWN_PR" "${args[@]}"
         python tools/ci_verify_dependency.py --component macos-sdk --prefix build/sdk
         echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"
     - name: Record the compiler, runtime, package and SDK identity

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Use trusted dependency artifacts, or build the pinned sources locally."""
+"""Reuse verified dependencies; fork validation may explicitly build pinned sources."""
 
 import argparse
 import json
@@ -89,7 +89,16 @@ def waiting_producers(repository, component, own_head, own_pr):
     )
 
 
-def ensure(component, prefix, repository, own_head="", own_pr=0, wait=1800):
+def ensure(
+    component,
+    prefix,
+    repository,
+    own_head="",
+    own_pr=0,
+    wait=1800,
+    *,
+    allow_local_build=False,
+):
     deadline = time.monotonic() + max(0, min(wait, 1800))
     while True:
         if pull(
@@ -109,11 +118,21 @@ def ensure(component, prefix, repository, own_head="", own_pr=0, wait=1800):
             raise RuntimeError(report_unavailable(component, fingerprint(component)))
         # Bound GitHub API traffic while a long-running dependency compiles.
         time.sleep(min(60, max(0, deadline - time.monotonic())))
-    if os.environ.get("GITHUB_ACTOR", "").startswith("dependabot"):
+    if not allow_local_build or os.environ.get("GITHUB_ACTOR", "").startswith(
+        "dependabot"
+    ):
         raise RuntimeError(report_unavailable(component, fingerprint(component)))
     if component == "macos-runtime":
         vendor = prefix.parent / "macos-vendor"
-        ensure("macos-vendor", vendor, repository, own_head, own_pr, wait)
+        ensure(
+            "macos-vendor",
+            vendor,
+            repository,
+            own_head,
+            own_pr,
+            wait,
+            allow_local_build=allow_local_build,
+        )
         command = [
             sys.executable,
             str(ROOT / "tools/build_macos_runtimes.py"),
@@ -152,6 +171,11 @@ def main():
     parser.add_argument("--own-head", default="")
     parser.add_argument("--own-pr", type=int, default=0)
     parser.add_argument("--wait", type=int, default=1800)
+    parser.add_argument(
+        "--allow-local-build",
+        action="store_true",
+        help="Allow pinned local source builds for explicit fork validation only",
+    )
     args = parser.parse_args()
     print(
         ensure(
@@ -161,6 +185,7 @@ def main():
             args.own_head,
             args.own_pr,
             args.wait,
+            allow_local_build=args.allow_local_build,
         )
     )
 
