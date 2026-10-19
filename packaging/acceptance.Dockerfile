@@ -9,7 +9,8 @@ ARG UBUNTU_SNAPSHOT=20261001T000000Z
 RUN for task_attempt in 1 2 3; do \
       if apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any --snapshot "$UBUNTU_SNAPSHOT" update && \
          apt-get -o Acquire::Retries=3 --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
-           pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 mesa-vulkan-drivers; then \
+           pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 mesa-vulkan-drivers \
+           xvfb imagemagick; then \
         rm -rf /var/lib/apt/lists/*; exit 0; \
       fi; \
       if [[ "$task_attempt" == 3 ]]; then echo 'Acceptance package setup failed after three attempts' >&2; exit 1; fi; \

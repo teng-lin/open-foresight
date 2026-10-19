@@ -136,8 +136,10 @@ Future<void> captureWindow(
   List<int> expectedGutter = const [234, 238, 247],
   bool expectGraphSelection = false,
 }) async {
-  // The private PipeWire acceptance session has no Agent Desktop display.
-  if (Platform.environment['FORESIGHT_PRIVATE_PIPEWIRE'] == '1') return;
+  final env = Platform.environment;
+  final privateX11 = env['FORESIGHT_PRIVATE_X11'];
+  // Older widget-only invocations still have no native display to capture.
+  if (env['FORESIGHT_PRIVATE_PIPEWIRE'] == '1' && privateX11 == null) return;
   await tester.runAsync(() async {
     final target = File(path);
     final pending = File('$path.capture.png');
@@ -145,9 +147,17 @@ Future<void> captureWindow(
     final session =
         Platform.environment['FORESIGHT_AGENT_DESKTOP_SESSION'] ?? '';
     final display = Platform.environment['WAYLAND_DISPLAY'] ?? '';
-    if (!RegExp(r'^[a-f0-9]{12}$').hasMatch(session) ||
-        !display.contains('/agent-desktop/$session/') ||
-        Platform.environment.containsKey('HYPRLAND_INSTANCE_SIGNATURE')) {
+    final ownedX11 =
+        privateX11 != null &&
+        RegExp(r'^:\d+$').hasMatch(privateX11) &&
+        env['DISPLAY'] == privateX11 &&
+        env['GDK_BACKEND'] == 'x11' &&
+        env['FORESIGHT_PRIVATE_PIPEWIRE'] == '1';
+    final ownedWayland =
+        RegExp(r'^[a-f0-9]{12}$').hasMatch(session) &&
+        display.contains('/agent-desktop/$session/');
+    if ((!ownedX11 && !ownedWayland) ||
+        env.containsKey('HYPRLAND_INSTANCE_SIGNATURE')) {
       throw StateError(
         'Acceptance requires the explicitly owned private display',
       );
@@ -161,7 +171,13 @@ Future<void> captureWindow(
       final observation = await waitForCapture(
         () async {
           attempts++;
-          final screenshot = await runCaptureProcess('grim', [pending.path]);
+          final screenshot = ownedX11
+              ? await runCaptureProcess('import', [
+                  '-window',
+                  'root',
+                  pending.path,
+                ])
+              : await runCaptureProcess('grim', [pending.path]);
           if (screenshot.exitCode != 0) {
             throw StateError(
               'Cannot capture the test window: ${screenshot.stderr}',
@@ -177,6 +193,8 @@ Future<void> captureWindow(
             codec.dispose();
           }
           try {
+            expect(image.width, 1280);
+            expect(image.height, 720);
             final pixels = await image.toByteData(
               format: ui.ImageByteFormat.rawRgba,
             );
@@ -1505,7 +1523,9 @@ void main() {
             'embedding_dimensions': embeddingIdentity.dimensions,
             'embedding_model_digest': embeddingIdentity.modelDigest,
             'embedding_preprocessing': embeddingIdentity.preprocessing,
-            'display': 'dedicated Agent Desktop headless display, 1280x720',
+            'display': env['FORESIGHT_PRIVATE_X11'] != null
+                ? 'owned Xvfb display, 1280x720; compiled Linux desktop'
+                : 'dedicated Agent Desktop headless display, 1280x720',
             'fixture': fixture,
             'sink': sink,
             'live_text_observed_before_stop': true,
@@ -1556,7 +1576,9 @@ void main() {
             'graph_mac_zoom_limits': [.015, 5],
             'graph_mac_depth_node_style_rendered': true,
             'graph_labelled_style_and_selected_caption': true,
-            'graph_selected_native_capture_has_gold_ring': true,
+            'graph_selected_native_capture_has_gold_ring':
+                env['FORESIGHT_PRIVATE_X11'] != null ||
+                env['FORESIGHT_PRIVATE_PIPEWIRE'] != '1',
             'graph_label_color_method':
                 'Persistent document associations; seven-color palette allocator',
             'graph_label_colors_survive_restart_and_clear': true,

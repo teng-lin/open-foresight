@@ -310,11 +310,29 @@ def application_distribution(prefix, component, source):
 def api(repository, route):
     env = dict(os.environ)
     env.pop("GH_DEBUG", None)
-    return json.loads(
-        subprocess.check_output(
-            ["gh", "api", f"repos/{repository}/{route}"], env=env, timeout=300
-        )
-    )
+    for attempt in range(3):
+        try:
+            response = subprocess.check_output(
+                ["gh", "api", f"repos/{repository}/{route}"],
+                env=env,
+                timeout=300,
+                stderr=subprocess.PIPE,
+            )
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            diagnostic = error.stderr or b""
+            if isinstance(diagnostic, bytes):
+                diagnostic = diagnostic.decode(errors="replace")
+            if diagnostic:
+                print(diagnostic, file=sys.stderr, end="")
+            transient = isinstance(error, subprocess.TimeoutExpired) or re.search(
+                r"HTTP 5\d\d\b", diagnostic
+            )
+            if not transient or attempt == 2:
+                raise
+            print("Retrying GitHub artifact metadata request", file=sys.stderr)
+            time.sleep(2**attempt)
+        else:
+            return json.loads(response)
 
 
 def trusted_run(

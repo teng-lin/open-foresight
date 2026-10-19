@@ -22,6 +22,22 @@ Future<void> waitFor(WidgetTester tester, bool Function() ready) async {
   observed.expect('framework-exception', tester.takeException(), isNull);
 }
 
+Future<void> startDesktop(WidgetTester tester) async {
+  await app.main();
+  await waitFor(
+    tester,
+    () =>
+        find.byType(app.Workspace).evaluate().isNotEmpty ||
+        find.text('Open Foresight could not start').evaluate().isNotEmpty,
+  );
+  if (find.byType(app.Workspace).evaluate().isEmpty) {
+    final details = find.byType(SelectableText);
+    fail(
+      'Desktop startup failed: ${details.evaluate().isEmpty ? 'unknown' : tester.widget<SelectableText>(details).data}',
+    );
+  }
+}
+
 class Mcp {
   final Process process;
   final StreamIterator<Map<String, dynamic>> responses;
@@ -86,9 +102,21 @@ class Mcp {
 }
 
 Future<void> closeDesktop(WidgetTester tester, dynamic workspace) async {
-  final client = (workspace.d as RemoteDomain).client;
+  final connection = workspace.d as RemoteDomain;
+  final client = connection.client;
+  final saves = workspace.meetingFeature.meetingNoteSaves;
   final commands = workspace.integrationFeature.commands;
   await tester.pumpWidget(const SizedBox.shrink());
+  await tester.runAsync(() async {
+    try {
+      await saves.close().timeout(const Duration(seconds: 30));
+    } finally {
+      await Future.wait<void>([
+        client.close(),
+        connection.helper.close(),
+      ]).timeout(const Duration(seconds: 30));
+    }
+  });
   await waitFor(
     tester,
     () => client.isClosed && (commands == null || commands.isClosed == true),
@@ -103,11 +131,7 @@ void main() {
   testWidgets(
     'desktop and MCP share content, capture, and service across desktop restart',
     (tester) async {
-      await app.main();
-      await waitFor(
-        tester,
-        () => find.byType(app.Workspace).evaluate().isNotEmpty,
-      );
+      await startDesktop(tester);
       await finishOnboarding(tester);
       dynamic workspace = tester.state(find.byType(app.Workspace));
       await waitFor(
@@ -160,6 +184,34 @@ void main() {
             .isNotEmpty,
         true,
       );
+      // Exercise denial through the visible desktop and the real MCP/service
+      // boundary before allowing a fresh request. A previous denial must not
+      // create capture handles, transcripts, or an implicit future grant.
+      final denied = mcp.call('tools/call', {
+        'name': 'start_recording',
+        'arguments': {'id': id},
+      });
+      await waitFor(tester, () => find.text('Deny').evaluate().isNotEmpty);
+      await tester.tap(find.text('Deny'));
+      await tester.pumpAndSettle();
+      observed.expect(
+        'recording_denial_reported',
+        (await denied)['isError'],
+        true,
+      );
+      observed.expect(
+        'recording_denial_left_capture_inactive',
+        (await workspace.d.command(Operation.status)
+            as Map)['capture']['active'],
+        false,
+      );
+      final afterDenial =
+          await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
+      observed.expect(
+        'recording_denial_left_no_transcript',
+        afterDenial['transcript'] as List,
+        isEmpty,
+      );
       final starting = mcp.tool('start_recording', {'id': id});
       await waitFor(
         tester,
@@ -168,6 +220,11 @@ void main() {
       await tester.tap(find.text('Allow once'));
       await tester.pumpAndSettle();
       await starting;
+      observed.expect(
+        'recording_retry_required_fresh_approval',
+        find.text('Allow once').evaluate(),
+        isEmpty,
+      );
       await waitFor(
         tester,
         () =>
@@ -189,11 +246,7 @@ void main() {
       );
       // Closing the desktop removes its visible indicator and must stop capture.
       await closeDesktop(tester, workspace);
-      await app.main();
-      await waitFor(
-        tester,
-        () => find.byType(app.Workspace).evaluate().isNotEmpty,
-      );
+      await startDesktop(tester);
       workspace = tester.state(find.byType(app.Workspace));
       await waitFor(tester, () => workspace.meetingFeature.recording == null);
       // Final transcription persists independently of desktop startup. Wait for this
@@ -238,6 +291,71 @@ void main() {
         () => workspace.d.store.saveNote(null, 'forbidden', ''),
         throwsA(anything),
       );
+      // The Python driver owns this executable. Simulate an OS capture denial
+      // across the real native/service boundary without touching host devices.
+      final env = Platform.environment;
+      final capture = File(env['FORESIGHT_CAPTURE_RUNTIME']!);
+      expect(
+        capture.parent.path,
+        '${Directory(env['FORESIGHT_DATA']!).parent.path}/fixtures',
+      );
+      final originalCapture = capture.readAsBytesSync();
+      final savedTranscript = List<Map<String, dynamic>>.from(
+        content['transcript'] as List,
+      );
+      final savedIds = savedTranscript.map((row) => row['id']).toSet();
+      try {
+        capture.writeAsStringSync(
+          '#!/bin/sh\nprintf "Permission denied by capture fixture\\n" >&2\nexit 1\n',
+        );
+        await workspace.d.command(Operation.meetingsStart, {'id': id});
+        await waitFor(
+          tester,
+          () => workspace.meetingFeature.recordingState.toString().contains(
+            'retries exhausted',
+          ),
+        );
+        observed.expect(
+          'capture_denial_reached_desktop',
+          workspace.meetingFeature.recordingState,
+          contains('retries exhausted'),
+        );
+        await tester.tap(find.byTooltip('Stop transcribing'));
+        await waitFor(tester, () => workspace.meetingFeature.recording == null);
+        final failed =
+            await workspace.d.command(Operation.meetingsGet, {'id': id}) as Map;
+        observed.expect(
+          'capture_denial_persisted_interruption',
+          failed['meeting']['state'],
+          'interrupted',
+        );
+        observed.expect(
+          'capture_denial_preserved_transcript',
+          (failed['transcript'] as List)
+              .where((dynamic row) => savedIds.contains(row['id']))
+              .toList(),
+          savedTranscript,
+        );
+      } finally {
+        capture.writeAsBytesSync(originalCapture);
+      }
+      await workspace.d.command(Operation.meetingsStart, {'id': id});
+      await waitFor(
+        tester,
+        () =>
+            workspace.meetingFeature.recording != null &&
+            workspace.meetingFeature.recording.sampleCounts.length == 2 &&
+            workspace.meetingFeature.recording.sampleCounts.every(
+              (int n) => n > 0,
+            ),
+      );
+      observed.expect(
+        'capture_recovered_after_permission_fixture_restored',
+        workspace.meetingFeature.recording.sampleCounts.every((int n) => n > 0),
+        true,
+      );
+      await tester.tap(find.byTooltip('Stop transcribing'));
+      await waitFor(tester, () => workspace.meetingFeature.recording == null);
       final report = Platform.environment['FORESIGHT_SERVICE_UI_REPORT'];
       if (report != null)
         File(report).writeAsStringSync(jsonEncode(observed.toJson()));
