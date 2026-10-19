@@ -1,7 +1,8 @@
 # Releasing Open Foresight
 
 Publish Linux and macOS packages through the `Prepare and publish release`
-workflow. First build and automatically test a draft release, then test those
+workflow. First package verified application candidates and automatically test a
+draft release, then test those
 exact installers on real GPU hardware and publish the same bytes. The examples
 below use release `v0.1.2` and release PR `129`; change both for future releases.
 
@@ -74,7 +75,29 @@ The workflow token cannot create a missing protected release tag. A tag push
 alone does not build installers. Keep the product tag fixed throughout release
 preparation and publication.
 
-## Build and test the draft packages
+## Reuse application candidates and test the draft packages
+
+Normal main CI produces source-bound Linux and macOS application candidates.
+Release preparation discovers those existing outputs and waits for active
+producers; it never dispatches another application build. The two platforms may
+come from different successful producer jobs, but their source, version and
+distribution build number must agree. A failed sibling job does not invalidate
+a successful platform's verified candidate.
+
+If preparation reports a missing platform, inspect its artifacts, receipts and
+running producers first. When no compatible output exists, build only that
+platform for the reviewed product commit. For example, for a missing Linux
+candidate:
+
+```sh
+gh workflow run macos.yml --ref main \
+  -f source="$release_commit" -f platforms=linux
+```
+
+Use `platforms=macos` for a missing Mac candidate. The surviving candidate's build
+identity is retained. Replacing an existing candidate also requires a concrete
+output-affecting `rebuild_reason`; dependency SDKs and valid compiler outputs
+remain reusable. Wait for the selected producer before retrying preparation.
 
 Start the coordinator on main with no GPU evidence:
 
@@ -87,10 +110,10 @@ Open the run shown by `gh run list` in GitHub Actions to follow its progress.
 The coordinator:
 
 1. Verifies the administrator-created tag and its application version.
-2. Dispatches a fresh platform candidate build for the tagged product commit.
-   Dependency SDKs, LiteRT, Whisper, downloads, and compiler caches remain
-   reusable when their real build inputs match.
-3. Creates a draft release and packages the tested Linux and macOS candidates.
+2. Verifies and reuses the exact tagged product's Linux and macOS candidates,
+   preserving their successful producer attempts, receipts and checksums.
+3. Creates or resumes the draft generation and packages missing installer formats
+   with current packaging controls and the original tested application bytes.
 4. Uploads Linux DEB, RPM, Arch, and portable packages, plus the Apple Silicon
    macOS DMG, with checksums, provenance, and installer attestations.
 5. Downloads the draft installers and runs installed-package acceptance on
@@ -178,14 +201,20 @@ hashes and requires hardware testing again for the new bytes.
 Run the coordinator again with publication-only mode and the completed evidence:
 
 ```sh
+acceptance_run=REPLACE_WITH_SUCCESSFUL_ACCEPTANCE_RUN
 gh workflow run release.yml --ref main \
   -f tag="$release_tag" \
   -f publish_only=true \
+  -f acceptance_run="$acceptance_run" \
   -f gpu_evidence="$(cat "$release_dir/gpu-evidence.json")"
 ```
 
-This skips candidate building and packaging, reruns installer acceptance, and
-checks that the hardware evidence matches the accepted installer hashes. When
+Set `acceptance_run` to the original run with a successful installed-acceptance
+aggregate. Its source, successful job/attempt, artifact digest and all four
+current installer hashes are reverified before that result is reused with the
+new hardware evidence. Use `0` when no valid matching report exists; this runs
+installed acceptance again against the existing installers. Candidate production
+and packaging remain skipped in publication-only mode. When
 all required gates pass, the coordinator publishes the draft. It marks the
 release Latest only if it has the highest published stable semantic version.
 
@@ -209,13 +238,33 @@ rebuilding SDKs.
 | --- | --- |
 | Builds and automated acceptance passed; GPU evidence is pending | Complete hardware testing, then use `publish_only=true`. |
 | Existing draft bytes are valid; acceptance failed transiently or evidence needs correction | Fix the cause and use `publish_only=true` to preserve the installers. |
-| Candidate build or packaging failed and the draft installers need replacement | Inspect compatible outputs first. When replacement is necessary, rerun all coordinator jobs or dispatch normal preparation again. Preparation reserves a higher Linux package release and replaces only that draft's assets; test the replacement installer hashes again. |
+| One application platform is missing | Preserve its successful sibling and active producers; build only the missing platform after verifying no compatible retained output exists. |
+| One installer format failed | Recover that format from its original application candidate, preserving the draft generation and other verified assets. Installer bytes are retained before lifecycle tests, so inspect them before repackaging. |
+| An existing asset conflicts or an artifact is corrupt/expired | Follow the verifier's recovery diagnostic. Do not overwrite different bytes or discard surviving formats. Review the exact artifact problem before requesting replacement. |
 | The tagged product code needs a fix | Merge the fix through review and prepare a new version and tag. Keep the original tag fixed. |
 | The release is already public | Prepare a new version. Published release assets are immutable. |
 
 The separate `release-acceptance.yml` workflow can audit an existing draft or
 public release without publishing it. Keep publication in `release.yml` so its
 coordinator, installer, and manual-evidence gates remain enforced.
+
+For an RPM-only recovery, use the Linux candidate run and package release number
+reported by the existing draft's preparation job:
+
+```sh
+candidate_run=REPLACE_WITH_LINUX_CANDIDATE_RUN
+package_release=REPLACE_WITH_EXISTING_DRAFT_GENERATION
+gh workflow run linux-packages.yml --ref main \
+  -f tag="$release_tag" -f candidate_run="$candidate_run" \
+  -f package_release="$package_release" -f format=rpm
+```
+
+This reuses the original Linux application and leaves the DEB, Arch and DMG
+assets intact. Use `macos-release.yml` with `tag` and the original Mac
+`candidate_run` for a missing DMG. Identical verified assets are retained;
+conflicting bytes fail instead of being clobbered. After recovery, run the
+coordinator in publication-only mode for the unchanged installer set and its
+matching hardware evidence.
 
 ## Workflow and acceptance references
 

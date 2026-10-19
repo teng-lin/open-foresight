@@ -123,8 +123,17 @@ match, allowing Ninja to retain valid object files. Distribution stamping makes
 the input tree derived, so those results are not reusable as clean PR results.
 
 Ubuntu package lifecycle and model/audio acceptance share the exact application
-bundle. PR acceptance builds it once, exports it, and mounts it read-only into
-an acceptance-tools image. On main, acceptance starts after a successful
+bundle. PR acceptance retains the original application before setting up its
+acceptance tools. The [PR recovery verifier](../../tools/ci_acceptance_application.py)
+can reuse that archive when a later setup or acceptance step fails. It verifies
+the same PR, equivalent application inputs, producer attempt and successful
+build/export/upload steps, complete product bindings, protected-main control
+history, original checksums, ABI report and bundled-file hashes. Recovery keeps
+the original source revision and epoch in `test-results/application-reuse.json`.
+An API outage or corrupt archive stops the job and preserves the original output.
+When no compatible retained application exists, PR acceptance builds once,
+exports it, and mounts it read-only into an acceptance-tools image.
+On main, acceptance starts after a successful
 `linux-bundle` producer job and downloads its verified exact-source candidate;
 manual and scheduled acceptance select the newest retained verified candidate
 on reviewed main without compiling an application. Historical dispatches resolve
@@ -346,10 +355,12 @@ workflow**, select **main**, then choose:
 | --- | --- |
 | `validation: standard` | Full source/build gates, package integrity, install/startup, service/MCP, reinstall/removal and user-data preservation checks |
 | `validation: full` | Standard checks plus installed inference/speech model acceptance and live cloud checks against bundled distribution configuration |
-| `force: false` | Standard mode skips a main commit that already has a successful preview |
-| `force: true` | Reserve a new build number and rebuild the same commit |
+| `candidate_run` | Recover a retained preview's original applications/installers and distribution identity |
+| `force: false` | Reuse successful previews or recover available outputs for this main commit |
+| `force: true` with `rebuild_reason` | Explicitly replace the preview identity after documenting why existing outputs cannot be reused |
 
-Full mode always rebuilds, even if a standard preview already exists. Missing
+Full mode can validate the original standard-preview installers without
+allocating a new build number or compiling the application again. Missing
 cloud configuration fails full validation; it is not treated as a pass. Standard
 Linux smoke checks retain the existing small Whisper fixture, but do not run the
 full inference/embedding/cloud acceptance suite. Physical-device audio, GPU,
@@ -359,16 +370,23 @@ by either automated mode.
 From the CLI:
 
 ```sh
-gh workflow run preview-packages.yml --ref main -f validation=standard -F force=true
+gh workflow run preview-packages.yml --ref main -f validation=standard
 gh workflow run preview-packages.yml --ref main -f validation=full
+# Recover a retained preview, including one from an earlier reviewed main commit:
+preview_run=REPLACE_WITH_PREVIEW_RUN_ID
+gh workflow run preview-packages.yml --ref main \
+  -f candidate_run="$preview_run" -f validation=full
 ```
 
 The nightly schedule checks main at **07:23 UTC**. It builds only if that exact
-commit has no successful preview. Failed attempts do not advance the successful
-commit watermark and are retried on the next scheduled run. A skip links to the
-previous successful workflow run. Artifacts expire after 14 days; use `force` to
-regenerate expired downloads. The schedule is best effort and can be delayed by
-GitHub; manual dispatch remains available.
+commit has no reusable preview. Failed attempts do not advance the successful
+commit watermark; retries recover surviving application and installer outputs
+with their original source and build number. A skip links to the previous
+successful workflow run. Artifacts expire after 14 days. Inspect retained outputs
+before replacement; partial or incompatible recovery inputs fail closed. An
+intentional replacement requires `force` and a concrete `rebuild_reason`, while
+compatible SDKs and compiler work remain reusable. The schedule is best effort
+and can be delayed by GitHub; manual dispatch remains available.
 
 Only reviewed main is supported by the preview coordinator. It freezes one SHA
 before starting either platform and fails if main advanced before planning. Main
@@ -430,12 +448,12 @@ but does **not** relabel an already tested stable application candidate.
 
 Preview and official distribution coordinators share a concurrency group, so a
 nightly cannot reserve/publish between a stable build and its publication.
-Official release preparation requests a fresh, forced main build for the exact
-product commit; both packagers pin to that producer run. This allocates a build
-number after earlier previews and prevents fallback to older application
-candidates. Historical product commits must contain the distribution build
-support to be rebuilt through this path; unsupported historical builds fail
-without substituting newer source or publishing a release.
+Official release preparation discovers existing exact-product candidates and
+does not dispatch a build. Each platform retains its original successful producer
+run; source, version and distribution identity must match across the pair. A
+missing platform uses the surviving build number. Both packagers use current
+controls with those original application bytes. Unsupported or incompatible
+historical inputs fail without substituting newer source or publishing a release.
 
 Packaging code is shared: both channels use the Linux native package/lifecycle
 scripts and `tools/create_dmg.py`. Standard and full previews contain the same

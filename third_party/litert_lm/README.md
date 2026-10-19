@@ -66,10 +66,15 @@ Build from a clean checkout with its platform's Git LFS prebuilts materialized
 (`prebuilt/macos_arm64/*` or `prebuilt/linux_x86_64/*`):
 
 ```sh
-git clone https://github.com/google-ai-edge/LiteRT-LM.git /tmp/litert-lm-source
-git -C /tmp/litert-lm-source checkout b2f686e2ed4718fb84ec398a61dd59ca0f0aff27
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/google-ai-edge/LiteRT-LM.git /tmp/litert-lm-source
+GIT_LFS_SKIP_SMUDGE=1 git -C /tmp/litert-lm-source checkout b2f686e2ed4718fb84ec398a61dd59ca0f0aff27
 git -C /tmp/litert-lm-source lfs install --local
-git -C /tmp/litert-lm-source lfs pull --include='prebuilt/macos_arm64/*' --exclude=''
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) task_litert_prebuilts=macos_arm64 ;;
+  Linux:x86_64) task_litert_prebuilts=linux_x86_64 ;;
+  *) printf 'Unsupported LiteRT build host\n' >&2; exit 1 ;;
+esac
+git -C /tmp/litert-lm-source lfs pull --include="prebuilt/$task_litert_prebuilts/*" --exclude=''
 python3 tools/build_litert_extensions.py /tmp/litert-lm-source --bazel /path/to/bazel-7.6.1
 ```
 
