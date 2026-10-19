@@ -18,6 +18,7 @@ import 'package:open_foresight/store.dart';
 import 'desktop_connection_fixture.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 import 'quick_start_test.dart' show QuickStartDomain;
+import '../test_support/onboarding.dart';
 
 class SetupDomain extends QuickStartDomain {
   bool failNotifications = false;
@@ -408,6 +409,24 @@ void main() {
         findsOneWidget,
       );
       expect(find.textContaining('gRPC Error'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'workspace acceptance completes onboarding through visible actions',
+    (tester) async {
+      final (store, domain, commands) = await mount(tester);
+      expect(find.byType(OnboardingView), findsOneWidget);
+      await finishOnboarding(tester);
+      expect(store.preference('onboarding.complete'), 'true');
+      expect(store.preference('onboarding.step'), '5');
+      expect(find.byType(OnboardingView), findsNothing);
+      expect(find.text('Knowledge Sources'), findsWidgets);
+      expect(domain.operations, isNot(contains('audio.request_microphone')));
+      expect(domain.operations, isNot(contains('audio.request_system')));
+      expect(domain.operations, isNot(contains('google.sign_in')));
+      await tester.pumpWidget(const SizedBox());
+      await tester.runAsync(() => eventually(() => commands.isClosed));
     },
   );
 

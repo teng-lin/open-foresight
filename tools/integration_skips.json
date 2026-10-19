@@ -198,6 +198,23 @@
       ],
       "gate": "platform",
       "reason": "Unix executable fixture compiler protocol uses Python and chmod; unsupported Windows hosts skip it while Linux/macOS platform jobs run it."
+    },
+    {
+      "path": "apps/desktop/test/desktop_menu_test.dart",
+      "conditions": [
+        "!Platform.isMacOS"
+      ],
+      "gate": "platform",
+      "reason": "macOS menu channel routing and recording permission flows run in the regular macOS desktop suite; Linux skips only these Apple-specific contracts."
+    },
+    {
+      "path": "apps/desktop/test/onboarding_workflow_test.dart",
+      "conditions": [
+        "!Platform.isMacOS",
+        "!Platform.isMacOS"
+      ],
+      "gate": "platform",
+      "reason": "macOS menu channel routing and recording permission flows run in the regular macOS desktop suite; Linux skips only these Apple-specific contracts."
     }
   ]
 }

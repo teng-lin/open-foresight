@@ -79,6 +79,14 @@ void main() {
   test('desktop reconnect during grace period keeps service alive', () async {
     await attach();
     await desktop.close();
+    // Client.close destroys the local socket; the service observes EOF later.
+    // Reconnect after that transition, while its one-second grace is active.
+    final disconnect = Stopwatch()..start();
+    while (service.access.hasHost &&
+        disconnect.elapsed < const Duration(milliseconds: 750)) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+    expect(service.access.hasHost, isFalse);
     desktop = await ServiceClient.connect(service.path);
     await attach();
     await Future<void>.delayed(const Duration(milliseconds: 1200));
