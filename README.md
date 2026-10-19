@@ -30,11 +30,11 @@ Open Foresight began as an experiment: **how far can an AI agent equipped with [
 The reference was Google's macOS **AI Edge Foresight** app (`com.google.AIEdgeForesight`), a Flutter app with local Gemma models, source search, a source graph, and meeting transcription. The experiment used two hosts:
 
 - **Linux with REA**: static analysis of a copied `.app` bundle. This covered its plists, resources, protobuf schemas and model configuration, plus the arm64 Mach-O decompiled through REA's IDA provider. In the Flutter AOT code, recovered strings and pseudocode exposed contracts even though the original Dart source could not be recovered.
-- **A Mac through [herdr](docs/research/rea-linux-and-herdr-mac.md#mac-terminal-control-through-herdr)**: the installed app was run and observed directly, to establish what it actually does at runtime. Static analysis alone cannot show that.
+- **A Mac through herdr**: the installed app was run and observed directly, to establish what it actually does at runtime. Static analysis alone cannot show that.
 
 The work went one feature at a time. Each round identified the feature's contract and inspected the relevant code, observed the same workflow on the Mac, built it here, and compared the two with identical inputs. Parity meant matching state changes, persistence, errors and cancellation, not just matching screenshots. Where the original depended on Mac-only pieces, the port used open replacements: PipeWire instead of Core Audio, public LiteRT model artifacts instead of encrypted model packages, and Linux window and shortcut integration in place of the Mac's.
 
-The full method, including its limits and how evidence was kept, is in [Replicating Foresight with REA on Linux and herdr on Mac](docs/research/rea-linux-and-herdr-mac.md).
+The detailed method notes are kept in git history rather than the current documentation.
 
 ## From port to cross-platform app
 
@@ -81,11 +81,7 @@ Open Foresight reproduces the original's main workflows, and adds features the o
 - **Local and open.** Models are public LiteRT and whisper.cpp files, pinned by SHA-256 hash, and ordinary generation stays local; optional web mode uses remote search and website summaries. The source code is MIT-licensed.
 - **Isolated profiles.** You can run separate profiles side by side, and migrate an existing profile with a tool that keeps a verified backup.
 
-### Limits
-
-Optional web-enabled Ask and meeting Chat need distribution credentials supplied
-when the package is built. Without those credentials those paths stay off.
-Ordinary answer generation stays on the machine.
+### Limitations
 
 Transcripts label channels Microphone, Remote, and Unknown. Those names are
 capture routes, not individual speakers. Meeting generation attributes a
@@ -106,7 +102,7 @@ The remaining macOS release gates are listed in [macOS development and release](
 
 ## Install
 
-Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI before a release is published. Nightly and manual [preview installers](docs/platforms/preview-packages.md) run their own installed-package validation. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
+Download a package for your distribution, or the macOS DMG, from the [releases page](https://github.com/teng-lin/open-foresight/releases). Each installer is built and tested in CI before a release is published. Nightly and manual [preview installers](docs/platforms/ci-performance.md#preview-installers) run their own installed-package validation. See [Linux packaging](docs/platforms/linux-packaging.md) and [macOS release CI](docs/platforms/macos-support.md#release-ci-disk-image) for details.
 
 The macOS CI DMG includes its inference and speech runtimes; users install model weights separately through setup. Runtime bundling is complete, and signed distribution is blocked on Developer ID signing and notarization. The artifact remains ad-hoc signed. See [Mac runtime packaging](docs/platforms/macos-support.md#local-assembly-and-signed-distribution) and the per-release [acceptance gates](docs/platforms/macos-support.md#release-gates).
 
@@ -357,7 +353,7 @@ Tests that use real models, real capture, or the desktop integration are opt-in.
 
 ## Versioning and releases
 
-For installable builds before an official release, see [nightly and manual preview packages](docs/platforms/preview-packages.md).
+For installable builds before an official release, see [nightly and manual preview packages](docs/platforms/ci-performance.md#preview-installers).
 
 The version is written in one place, `apps/desktop/pubspec.yaml`, as `version: X.Y.Z+N`. `X.Y.Z` is the release version, following [SemVer](https://semver.org). `N` is the local build number and the lower bound for CI builds. Main distribution candidates and nightly previews reserve higher numbers from the shared `ci/build-sequence` counter before compilation, so official installers remain newer than earlier previews on macOS. CMake, the helper's build ID, the packaging scripts, the MCP server, and the app all read this value. The app shows it under **Settings → Version**.
 
@@ -380,15 +376,14 @@ Browse the [documentation index](docs/README.md).
 
 | Topic | Document |
 | --- | --- |
-| How this project started | [Replicating Foresight with REA on Linux and herdr on Mac](docs/research/rea-linux-and-herdr-mac.md) |
+| How this project started | [How this project started](#how-this-project-started) |
 | Schema migrations | [schema-migrations.md](docs/architecture/schema-migrations.md) |
 | Credentials at rest | [credentials-at-rest.md](docs/architecture/credentials-at-rest.md) |
 | Application service and MCP | [application-service.md](docs/architecture/application-service.md) |
 | Native inference | [services/inference](services/inference/README.md) |
 | Speech models | [speech-models.md](docs/models/speech-models.md) |
-| GPU runtime closure | [reference-gpu-runtime-closure.md](docs/models/reference-gpu-runtime-closure.md) |
-| Native stop tokens | [reference-native-stop-tokens.md](docs/models/reference-native-stop-tokens.md) |
-| Linux packages and CI | [linux-packaging.md](docs/platforms/linux-packaging.md) · [CI promotion](docs/platforms/ci-performance.md) |
+| LiteRT patches, GPU runtime, stop tokens | [third_party/litert_lm](third_party/litert_lm/README.md) |
+| Linux packages and CI | [linux-packaging.md](docs/platforms/linux-packaging.md) · [CI promotion and previews](docs/platforms/ci-performance.md) |
 | macOS | [build, bundle, and release gates](docs/platforms/macos-support.md) |
 | Integration gates | [integration-gates.md](docs/validation/integration-gates.md) |
 | Published installer acceptance | [release-acceptance.md](docs/validation/release-acceptance.md) |

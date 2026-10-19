@@ -97,6 +97,22 @@ a verified wheel/library manifest. The packager extracts only the native C libra
 dylibs from that build; Python code in its build wheel is never shipped. The stock
 0.18.0 runtime lacks the native stop sequences required by note enhancement.
 
+The vendor and runtime scripts perform these steps with pinned sources, a
+checksum-verified Bazel download, and reusable caches under `build/`:
+
+```sh
+.venv/bin/python tools/build_macos_vendor.py
+.venv/bin/python tools/build_macos_runtimes.py
+.venv/bin/python tools/package_macos.py \
+  --sdk "$PWD/build/macos-sdk" \
+  --litert-extensions-manifest "$PWD/build/macos-runtimes/litert-extensions/build-manifest.json" \
+  --whisper-runtime "$PWD/build/macos-runtimes/whisper/whisper-cli" \
+  --whisper-license "$PWD/build/macos-vendor/whisper/LICENSE" \
+  --output "$PWD/dist/Open Foresight.app"
+```
+
+Alternatively, build LiteRT and Whisper manually from existing checkouts:
+
 ```sh
 .venv/bin/python tools/build_litert_extensions.py /path/to/LiteRT-LM \
   --output "$PWD/build/litert-extensions"
