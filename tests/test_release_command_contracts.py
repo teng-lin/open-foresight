@@ -115,8 +115,6 @@ def test_preview_commands_keep_original_distribution_identity(
             "owner/repo",
             "--validation",
             "full",
-            "--candidate-run",
-            "99",
         ]
     elif command == "receipt":
         args += ["--directory", str(tmp_path), "--format", "dmg", "--source", "a" * 40]
@@ -138,7 +136,7 @@ def test_preview_commands_keep_original_distribution_identity(
     assert json.loads(capsys.readouterr().out)["source"] == "a" * 40
     if command == "plan":
         assert output.read_text() == "source=" + "a" * 40 + "\nbuild_number=42\n"
-        assert operation.call_args.args[-1] == 99
+        assert operation.call_args.args == ("owner/repo", False, "full", "")
     elif command == "receipt":
         assert operation.call_args.args == (tmp_path, "dmg", "a" * 40)
     else:
