@@ -79,8 +79,8 @@ were removed. A redundant helper-only full run hit the host's temporary-storage
 quota; its failure log is retained and the passing final Linux gate above reran
 every affected test from a private disk-backed temporary directory.
 
-The foundation deletes 1,435 lines and adds 5,153, including safety/provenance
-fixtures. Its counted CI code is 23,586 lines versus the frozen 20,776 baseline;
+At `66cb3f3`, the foundation deletes 1,438 lines and adds 5,436, including safety/provenance
+fixtures. Its counted CI code is 23,760 lines versus the frozen 20,776 baseline;
 the planned net reduction remains pending deletion of the replaced pipelines.
 
 ## Review disposition
@@ -110,5 +110,13 @@ consumer failed early because a skipped same-name registry alternative appeared
 before the actual PR archive job. The consumer-only wait correction ignores that
 placeholder and retains the source, identity, original-attempt and checksum
 checks. Every SDK producer-control file remains byte-identical to the running
-producer; the fix does not require another SDK assembly. Hosted checks and
+producer; the fix does not require another SDK assembly. Run `39330591028` then
+finished successfully and produced artifact `12225415661`. A live small-receipt
+probe qualified that original image under the corrected consumer without
+transferring its 1.28 GB payload. The complete Linux export at `66cb3f3` passed
+2,924 tests (28 skips, 96.10% coverage). The new waiter/export fixtures passed
+60 tests under each inherited PR/main/unset ref. Mac source `17d22f8` passed 2,931
+tests (20 skips, 96.28% coverage) with only one stale CLI-name assertion; the
+corrected assertion's entire 23-test file passed at `66cb3f3`, with both source
+integrity manifests preserved and the host execution audit passing. Hosted checks and
 reviews remain pending until their actual results are recorded.
