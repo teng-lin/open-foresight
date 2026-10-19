@@ -21,7 +21,9 @@ while [[ $# -gt 0 ]]; do
 done
 mkdir -p "$task_output"
 task_output=$(cd -- "$task_output" && pwd)
-if [[ ! -f "$task_seed/qualification.json" ]]; then
+if [[ -e "$task_seed" || -L "$task_seed" ]]; then
+  "$task_python" tools/ci_app_dependency_seed.py --sdk-image "$task_sdk" --output "$task_seed" --verify-existing
+else
   "$task_python" tools/ci_app_dependency_seed.py --sdk-image "$task_sdk" --output "$task_seed"
 fi
 task_seed=$(cd -- "$task_seed" && pwd)
@@ -66,7 +68,7 @@ if [[ -n "${FORESIGHT_WEB_CONTENT_API_KEY:-}" ]]; then
   task_mounts+=(-v "$task_secrets/web_key:/run/secrets/foresight_web_content_api_key:ro")
 fi
 task_env=(-e SOURCE_REVISION -e SOURCE_DATE_EPOCH -e VERSION -e RELEASE -e OUT_UID -e OUT_GID
-  -e CI_TIER -e BUILD_LABEL -e REQUIRE_GOOGLE_CLIENT -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT -e FORESIGHT_CORE_COVERAGE_BENCHMARK -e FORESIGHT_QUERY_TERMS_URL)
+  -e CI_TIER -e BUILD_LABEL -e REQUIRE_GOOGLE_CLIENT -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT -e GITHUB_RUN_NUMBER -e FORESIGHT_CORE_COVERAGE_BENCHMARK -e FORESIGHT_QUERY_TERMS_URL)
 if [[ "$task_mode" != test-only ]]; then
   docker run --rm "${task_env[@]}" ${task_mounts[@]+"${task_mounts[@]}"} \
     -v "$task_root:/workspace:ro" -v "$task_output:/out" -v "$task_output/ci-inputs.json:/ci-inputs.json:ro" \

@@ -310,3 +310,45 @@ def test_handoff_rejects_actual_zip_corruption_even_if_api_metadata_still_matche
     with pytest.raises(ValueError, match="ZIP digest"):
         qualify_fixture(qualified_handoff)
     assert not qualified_handoff["output"].exists()
+
+
+@pytest.mark.parametrize("change", [None, "object", "header", "timestamp", "receipt"])
+def test_reusing_a_seed_checks_every_retained_byte_and_timestamp_without_replacing_it(
+    tmp_path, monkeypatch, change
+):
+    from tools import ci_app_dependency_seed as seed
+
+    def prepare(image, output, cache, root):
+        assert image == "verified-sdk"
+        directory = output / "src/build/_deps/vendor-build"
+        directory.mkdir(parents=True)
+        for name in ("archive.a", "header.h"):
+            path = directory / name
+            path.write_text("verified " + name)
+            os.utime(path, ns=(123456789000, 123456789000))
+        os.utime(directory, ns=(123456789000, 123456789000))
+        (output / "qualification.json").write_text('{"original_producer":42}')
+
+    import os
+
+    monkeypatch.setattr(seed, "prepare", prepare)
+    output = tmp_path / "retained"
+    prepare("verified-sdk", output, tmp_path / "cache", tmp_path)
+    target = output / "src/build/_deps/vendor-build/archive.a"
+    initial = target.read_bytes()
+    if change in ("object", "header"):
+        (target if change == "object" else target.with_name("header.h")).write_text(
+            "tampered"
+        )
+    elif change == "timestamp":
+        os.utime(target, ns=(999999999999, 999999999999))
+    elif change == "receipt":
+        (output / "qualification.json").write_text('{"original_producer":43}')
+    before = target.read_bytes()
+    if change is None:
+        seed.verify_existing("verified-sdk", output, tmp_path / "cache", tmp_path)
+        assert before == initial
+    else:
+        with pytest.raises(ValueError, match="differs"):
+            seed.verify_existing("verified-sdk", output, tmp_path / "cache", tmp_path)
+    assert target.read_bytes() == before

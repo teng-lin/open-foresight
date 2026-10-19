@@ -570,15 +570,57 @@ def prepare(image, output, cache, root=ROOT):
     )
 
 
+def verify_existing(image, output, cache, root=ROOT):
+    """Revalidate a local seed against verified layers without replacing its work."""
+    from tools.ci_linux_handoff import inventory
+
+    if output.is_symlink() or not output.is_dir():
+        raise ValueError("Existing dependency seed must be a regular directory")
+    receipt = output / "qualification.json"
+    if receipt.is_symlink() or not receipt.is_file():
+        raise ValueError(
+            "Existing dependency seed lacks a regular qualification receipt"
+        )
+
+    def projection(directory):
+        content = inventory(directory)
+        # These container-root ancestors are created during extraction; their
+        # creation times are not compiler inputs. Every selected source/object
+        # byte, mode, symlink and timestamp remains exact.
+        for parent in ("src", "src/build", "src/build/_deps"):
+            if content.get(parent, {}).get("kind") != "directory":
+                raise ValueError("Invalid dependency seed root: " + parent)
+            content[parent] = {"kind": "directory"}
+        content.pop("qualification.json")
+        return content
+
+    with tempfile.TemporaryDirectory(
+        prefix="verify-app-seed-", dir=output.parent
+    ) as temporary:
+        expected = Path(temporary) / "expected"
+        prepare(image, expected, cache, root)
+        if json.loads(receipt.read_text()) != json.loads(
+            (expected / "qualification.json").read_text()
+        ) or projection(output) != projection(expected):
+            raise ValueError(
+                "Existing dependency seed differs from its verified producer layers; preserve it and inspect the incompatible entries"
+            )
+    print("Revalidated complete dependency seed without changing retained files")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sdk-image", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--verify-existing", action="store_true")
     parser.add_argument(
         "--cache-dir", type=Path, default=ROOT / "build/app-dependency-blobs"
     )
     args = parser.parse_args()
-    prepare(args.sdk_image, args.output, args.cache_dir)
+    if args.verify_existing:
+        verify_existing(args.sdk_image, args.output, args.cache_dir)
+    else:
+        prepare(args.sdk_image, args.output, args.cache_dir)
 
 
 if __name__ == "__main__":

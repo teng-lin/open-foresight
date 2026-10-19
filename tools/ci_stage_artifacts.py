@@ -24,8 +24,6 @@ NATIVE_PATHS = (
     "build/Makefile",
     "build/cmake_install.cmake",
     "build/CTestTestfile.cmake",
-    "test-results/linux/native",
-    "test-results/macos/native",
     "build/native",
     "build/services",
     "build/macos",
@@ -56,7 +54,7 @@ def roots(platform, stage):
     if platform not in ("linux", "macos"):
         raise ValueError("Unknown stage platform")
     if stage == "native":
-        return NATIVE_PATHS
+        return (*NATIVE_PATHS, f"test-results/{platform}/native")
     if stage == "native-runtime":
         return NATIVE_RUNTIME_PATHS
     if stage == "core":

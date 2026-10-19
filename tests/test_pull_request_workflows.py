@@ -588,10 +588,13 @@ jobs:
                                 self.assertEqual(
                                     arguments[arguments.index(flag) + 1], variable
                                 )
-                            self.assertEqual(
-                                step["env"]["OWN_HEAD"],
-                                "${{ github.event.pull_request.head.sha || github.sha }}",
+                            expected_head = (
+                                "${{ inputs.source || github.event.pull_request.head.sha || github.sha }}"
+                                if filename == "macos.yml"
+                                and name in ("linux-build", "linux-test")
+                                else "${{ github.event.pull_request.head.sha || github.sha }}"
                             )
+                            self.assertEqual(step["env"]["OWN_HEAD"], expected_head)
                             self.assertEqual(
                                 step["env"]["OWN_PR"],
                                 "${{ github.event.pull_request.number || 0 }}",
@@ -603,6 +606,8 @@ jobs:
                 ("integration-acceptance.yml", "ubuntu-package"),
                 ("integration-acceptance.yml", "ubuntu-application"),
                 ("macos.yml", "linux-bundle"),
+                ("macos.yml", "linux-build"),
+                ("macos.yml", "linux-test"),
             },
         )
 

@@ -1015,7 +1015,10 @@ when its gate/report configuration requests it, and the ordinary all-mode path
 continues to build and test.
 
 `tools/linux_container_build.sh` is the single in-container build/package script.
-The host driver `tools/build_linux_container.sh` calls it locally and in CI through
+A previously materialized dependency seed is revalidated against the complete
+verified producer layers, including headers, object bytes and timestamps; its
+retained files are never replaced while checking reuse. The host driver
+`tools/build_linux_container.sh` calls it locally and in CI through
 `/workspace/tools/linux_container_build.sh`, mounting source read-only and
 configuration secrets read-only outside the image. Distribution stamping happens
 on the verified host checkout. Packaging retains the exact GPU runtime flags,
