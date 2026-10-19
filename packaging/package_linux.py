@@ -252,7 +252,9 @@ def deb_preinst():
 
 
 def rpm_scriptlets():
-    helper = upgrade_helper()
+    # RPM expands macros before storing scriptlets. Preserve literal shell
+    # percent operators and printf/stat formats through that expansion.
+    helper = upgrade_helper().replace("%", "%%")
     return (
         "%pre\n" + helper + "refuse_upgrade_if_recording /opt/open-foresight\n"
         '%preun\nif [ "$1" = 0 ]; then\n'

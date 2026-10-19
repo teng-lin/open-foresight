@@ -1,11 +1,11 @@
-name: Mac support and Linux native regression
+name: Platform candidates and checks
 run-name: ${{ inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name) }}
 permissions:
   contents: read
   actions: read
 concurrency:
   group: platform-checks-${{ inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha)) }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   macos-stages:
     needs:
@@ -137,15 +137,31 @@ jobs:
         if [[ "$PREVIEW" != true ]]; then
           python tools/ci_artifacts.py pack --component macos-app --identity "$SOURCE" --prefix build/candidate --output build/candidate-upload
         fi
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - id: macos-candidate
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: github.ref == 'refs/heads/main' && !inputs.preview
       with:
         name: ci-macos-app-${{ inputs.source || github.sha }}
         overwrite: true
         path: build/candidate-upload/
-        retention-days: 30
+        retention-days: 90
         if-no-files-found: error
         compression-level: 0
+    - name: Publish small macos candidate identity receipt
+      if: github.ref == 'refs/heads/main' && !inputs.preview
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.sha }}
+        ARTIFACT_ID: ${{ steps.macos-candidate.outputs.artifact-id }}
+      run: python tools/ci_artifacts.py publish-receipt --component macos-app --identity "$SOURCE" --prefix build/candidate-upload --artifact-id "$ARTIFACT_ID" --output build/candidate-receipt
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: github.ref == 'refs/heads/main' && !inputs.preview
+      with:
+        name: receipt-ci-macos-app-${{ inputs.source || github.sha }}
+        overwrite: true
+        path: build/candidate-receipt/
+        retention-days: 90
+        if-no-files-found: error
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: inputs.preview
       with:
@@ -217,11 +233,12 @@ jobs:
       linux_native: ${{ steps.changes.outputs.linux_native }}
       linux_document_imports: ${{ steps.changes.outputs.linux_document_imports }}
       linux_bundle: ${{ steps.changes.outputs.linux_bundle }}
+      packaging: ${{ steps.changes.outputs.packaging }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ inputs.source || github.sha }}
+        ref: ${{ github.sha }}
         fetch-depth: 0
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
@@ -232,19 +249,21 @@ jobs:
         SOURCE: ${{ inputs.source }}
       run: |
         test "$GITHUB_REF" = refs/heads/main
-        test "$(git rev-parse HEAD)" = "$SOURCE"
+        test "${#SOURCE}" = 40
+        [[ "$SOURCE" =~ ^[0-9a-f]+$ ]]
         git merge-base --is-ancestor "$SOURCE" origin/main
     - name: Select affected platform checks
       id: changes
       env:
         BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        PLATFORMS: ${{ inputs.platforms || 'all' }}
         FORCE: ${{ (inputs.preview || github.event_name == 'workflow_dispatch') && '--force' || '' }}
       run: |-
         task_args=(--base "$BASE")
         if [[ "$FORCE" == --force ]]; then
           task_args+=(--force)
         fi
-        python tools/ci_changes.py "${task_args[@]}"
+        python tools/ci_changes.py "${task_args[@]}" --platforms "$PLATFORMS"
     - name: Lint every Actions workflow
       run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
     - name: Validate explicit integration paths
@@ -258,6 +277,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+      actions: read
     outputs:
       version: ${{ steps.number.outputs.version }}
       build_number: ${{ steps.number.outputs.build_number }}
@@ -265,7 +285,8 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ inputs.source || github.sha }}
+        ref: ${{ github.sha }}
+        fetch-depth: 0
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
@@ -273,10 +294,11 @@ jobs:
       id: number
       env:
         GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.sha }}
+        PLATFORMS: ${{ inputs.platforms || 'all' }}
+        REBUILD_REASON: ${{ inputs.rebuild_reason }}
       run: |
-        echo "version=$(python tools/app_version.py)" >> "$GITHUB_OUTPUT"
-        task_number=$(python tools/build_sequence.py --repository "$GITHUB_REPOSITORY" --minimum "$(python tools/app_version.py --build-number)")
-        echo "build_number=$task_number" >> "$GITHUB_OUTPUT"
+        python -m tools.candidate_identity --source "$SOURCE" --platforms "$PLATFORMS" --reason "$REBUILD_REASON"
   linux-bundle:
     needs:
     - changes
@@ -424,15 +446,31 @@ jobs:
       env:
         SOURCE: ${{ inputs.source || github.sha }}
       run: python tools/ci_artifacts.py pack --component linux-app --identity "$SOURCE" --prefix dist/packages --output build/candidate-upload
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - id: linux-candidate
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: ${{ !inputs.preview }}
       with:
         name: ci-linux-app-${{ inputs.source || github.sha }}
         overwrite: true
         path: build/candidate-upload/
-        retention-days: 30
+        retention-days: 90
         if-no-files-found: error
         compression-level: 0
+    - name: Publish small linux candidate identity receipt
+      if: github.ref == 'refs/heads/main' && !inputs.preview
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.sha }}
+        ARTIFACT_ID: ${{ steps.linux-candidate.outputs.artifact-id }}
+      run: python tools/ci_artifacts.py publish-receipt --component linux-app --identity "$SOURCE" --prefix build/candidate-upload --artifact-id "$ARTIFACT_ID" --output build/candidate-receipt
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: github.ref == 'refs/heads/main' && !inputs.preview
+      with:
+        name: receipt-ci-linux-app-${{ inputs.source || github.sha }}
+        overwrite: true
+        path: build/candidate-receipt/
+        retention-days: 90
+        if-no-files-found: error
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: inputs.preview
       with:
@@ -443,6 +481,10 @@ jobs:
         if-no-files-found: error
         compression-level: 0
     if: '!cancelled() && needs.changes.outputs.linux_bundle == ''true'' && github.ref == ''refs/heads/main'' && (inputs.preview || needs.distribution-number.result == ''success'')'
+  packaging:
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
+    uses: ./.github/workflows/package-contracts.yml
   platform-checks:
     timeout-minutes: 5
     if: always()
@@ -453,12 +495,13 @@ jobs:
     - linux-native
     - linux-document-imports
     - linux-bundle
+    - packaging
     runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ inputs.source || github.sha }}
+        ref: ${{ github.sha }}
     - name: Require all selected platform gates
       env:
         NEEDS: ${{ toJSON(needs) }}
@@ -472,6 +515,15 @@ jobs:
   pull_request: null
   workflow_dispatch:
     inputs:
+      rebuild_reason:
+        description: Exact output-affecting input change requiring replacement of an existing candidate
+        type: string
+        default: ''
+      platforms:
+        description: Build only the affected or missing platform
+        type: choice
+        options: [all, linux, macos]
+        default: all
       request_id:
         description: Unique release coordinator request; leave empty for manual builds
         type: string

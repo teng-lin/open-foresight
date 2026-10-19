@@ -822,9 +822,9 @@ class ProducerTests(SourceTree):
             "status": "diverged"
         }
         for page in range(1, 4):
-            self.approval_routes[
-                f"pulls/112/commits?per_page=100&page={page}"
-            ] = [{"sha": "f" * 40}] * 100
+            self.approval_routes[f"pulls/112/commits?per_page=100&page={page}"] = [
+                {"sha": "f" * 40}
+            ] * 100
         # There is deliberately no page 4 fixture: a full terminal page must
         # fail closed rather than request unbounded pages or download objects.
         self.assertFalse(self.find_work(own_pr=119)["hit"])
@@ -893,13 +893,24 @@ class ProducerTests(SourceTree):
             self.find_work(event="push", branch="main", own_pr=0, release=True)["hit"]
         )
 
+    def test_dispatch_and_schedule_retain_objects_but_never_passed_validation(self):
+        self.run.update(event="push", head_branch="main")
+        for event in ("workflow_dispatch", "schedule"):
+            self.assertTrue(
+                self.find_work(event=event, branch="main", own_pr=0, release=True)[
+                    "hit"
+                ]
+            )
+            self.assertFalse(
+                self.find(event=event, branch="main", own_pr=0, release=True)["hit"]
+            )
+
     def test_native_work_other_main_and_release_contexts_remain_restricted(self):
         for overrides in (
             {"event": "push"},
             {"release": True},
             {"branch": "main"},
             {"own_pr": 0},
-            {"event": "workflow_dispatch", "branch": "main", "own_pr": 0},
             {"event": "push", "branch": "topic", "own_pr": 0},
             {"event": "push", "branch": "main", "own_pr": 110},
         ):

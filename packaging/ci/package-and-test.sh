@@ -4,6 +4,8 @@ set -euo pipefail
 task_format=${1:?Expected deb, rpm, or arch}
 task_version=${2:?Expected version}
 task_release=${3:?Expected release}
+task_mode=${4:-all}
+case "$task_mode" in all|prepare|build|test) ;; *) exit 2;; esac
 bash /work/packaging/ci/prepare-document-sandbox.sh "$task_format" package-test
 case "$task_format" in
   deb)
@@ -11,14 +13,16 @@ case "$task_format" in
     apt-get install -y --no-install-recommends python3 binutils xz-utils xvfb xauth dbus-x11 libgl1-mesa-dri libegl-mesa0 libglx-mesa0 desktop-file-utils
     ;;
   rpm)
-    dnf install -y python3 python3-rpm rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
+    dnf install -y python3 python3-rpm perl rpm-build binutils xorg-x11-server-Xvfb xorg-x11-xauth dbus-x11 mesa-dri-drivers mesa-libEGL mesa-libGL desktop-file-utils findutils tar gzip shadow-utils
     ;;
   arch)
     pacman -S --noconfirm --needed python binutils xorg-server-xvfb xorg-xauth dbus mesa desktop-file-utils
     ;;
   *) exit 2;;
 esac
+if [[ "$task_mode" == prepare ]]; then exit 0; fi
 cd /work
+if [[ "$task_mode" != test ]]; then
 python3 packaging/check_preview_version.py "$task_format" "$task_version"
 mkdir -p build/package-input dist/packages
 (cd artifacts && sha256sum --check ./*.tar.gz.sha256)
@@ -27,14 +31,21 @@ if [[ "$task_format" == arch ]]; then
   chown -R package-test:package-test build/package-input dist/packages
   runuser -u package-test -- python3 packaging/package_linux.py \
     --bundle build/package-input/open-foresight --format arch --version "$task_version" --release "$task_release"
-  pacman -U --noconfirm dist/packages/*.pkg.tar.zst
 elif [[ "$task_format" == deb ]]; then
   python3 packaging/package_linux.py --bundle build/package-input/open-foresight --format deb --version "$task_version" --release "$task_release"
-  apt-get install -y "$(realpath dist/packages/*.deb)"
 else
   python3 packaging/package_linux.py --bundle build/package-input/open-foresight --format rpm --version "$task_version" --release "$task_release"
-  dnf install -y dist/packages/*.rpm
 fi
+fi
+if [[ "$task_mode" == build ]]; then
+  printf 'Package bytes created; installation validation has not run.\n'
+  exit 0
+fi
+case "$task_format" in
+  deb) (cd dist/packages && sha256sum --check ./*.deb.sha256); apt-get install -y "$(realpath dist/packages/*.deb)";;
+  rpm) (cd dist/packages && sha256sum --check ./*.rpm.sha256); dnf install -y dist/packages/*.rpm;;
+  arch) (cd dist/packages && sha256sum --check ./*.pkg.tar.zst.sha256); pacman -U --noconfirm dist/packages/*.pkg.tar.zst;;
+esac
 desktop-file-validate /usr/share/applications/io.openforesight.App.desktop
 install -d -o package-test -g package-test /home/package-test/.local/share/open-foresight
 # Expand HOME inside the package-test shell rather than the root shell.

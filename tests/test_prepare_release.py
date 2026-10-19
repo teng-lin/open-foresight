@@ -65,7 +65,16 @@ class PrepareReleaseTest(unittest.TestCase):
 
     def test_verified_candidate_resume_never_dispatches_a_new_build(self):
         with (
-            patch.object(release, "candidates_ready", return_value=True) as ready,
+            patch.object(
+                release,
+                "candidate_runs",
+                return_value={"linux-app": 42, "macos-app": 42},
+            ) as ready,
+            patch.object(
+                release,
+                "application_descriptor",
+                return_value={"version": "0.1.2", "build_number": 10},
+            ),
             patch.object(release, "api") as request,
             patch.object(release.subprocess, "run") as command,
         ):
@@ -73,9 +82,9 @@ class PrepareReleaseTest(unittest.TestCase):
                 release.require_candidates(
                     "owner/repo", "a" * 40, 0, fresh=True, candidate_run=42
                 ),
-                42,
+                {"linux-app": 42, "macos-app": 42},
             )
-        ready.assert_called_once_with("owner/repo", "a" * 40, run_id=42)
+        ready.assert_called_once_with("owner/repo", "a" * 40, 42)
         request.assert_not_called()
         command.assert_not_called()
 
@@ -83,7 +92,8 @@ class PrepareReleaseTest(unittest.TestCase):
         for candidate_run in (-1, 42):
             with (
                 self.subTest(candidate_run=candidate_run),
-                patch.object(release, "candidates_ready", return_value=False),
+                patch.object(release, "candidate_runs", return_value={}),
+                patch.object(release, "api", return_value={}),
                 patch.object(release.subprocess, "run") as command,
             ):
                 with self.assertRaises(ValueError):
@@ -98,6 +108,7 @@ class PrepareReleaseTest(unittest.TestCase):
 
     def test_resume_requires_both_artifacts_from_the_requested_trusted_run(self):
         run = {
+            "id": 42,
             "head_sha": "a" * 40,
             "path": ".github/workflows/macos.yml",
             "event": "workflow_dispatch",
@@ -117,15 +128,45 @@ class PrepareReleaseTest(unittest.TestCase):
                         {
                             "name": route.split("name=")[1].split("&")[0],
                             "expired": False,
+                            "created_at": "2026-10-18T01:00:30Z",
                             "workflow_run": {"id": 42},
                             **artifact_overrides,
                         }
                     ]
                 }
+            if "/jobs?" in route:
+                return {
+                    "jobs": [
+                        {
+                            "name": name,
+                            "conclusion": "success",
+                            "started_at": "2026-10-18T01:00:00Z",
+                            "completed_at": "2026-10-18T01:01:00Z",
+                        }
+                        for name in ("linux-bundle", "macos")
+                    ]
+                }
             self.assertEqual(route, "actions/runs/42")
+            if "/jobs?" in route:
+                return {
+                    "jobs": [
+                        {
+                            "name": name,
+                            "conclusion": "success",
+                            "started_at": "2026-10-18T01:00:00Z",
+                            "completed_at": "2026-10-18T01:01:00Z",
+                        }
+                        for name in ("linux-bundle", "macos")
+                    ]
+                }
             return run
 
-        with patch.object(release, "api", side_effect=response):
+        from tools import ci_artifacts
+
+        with (
+            patch.object(release, "api", side_effect=response),
+            patch.object(ci_artifacts, "api", side_effect=response),
+        ):
             self.assertTrue(release.candidates_ready("owner/repo", "a" * 40, 42))
             for component in ("linux-app", "macos-app"):
                 missing.add(component)
@@ -140,7 +181,6 @@ class PrepareReleaseTest(unittest.TestCase):
                 self.assertFalse(release.candidates_ready("owner/repo", "a" * 40, 42))
                 artifact_overrides.clear()
             for change in (
-                {"conclusion": "failure"},
                 {"head_branch": "unreviewed"},
                 {"path": ".github/workflows/other.yml"},
                 {"head_repository": {"full_name": "untrusted/repo"}},
@@ -223,9 +263,10 @@ class PrepareReleaseTest(unittest.TestCase):
     def test_candidate_requires_successful_exact_main_and_both_platforms(self):
         commit = "a" * 40
         run = dict(
+            id=1,
             head_sha=commit,
             path=".github/workflows/macos.yml",
-            event="workflow_dispatch",
+            event="push",
             head_branch="main",
             conclusion="success",
             head_repository={"full_name": "owner/repo"},
@@ -238,16 +279,33 @@ class PrepareReleaseTest(unittest.TestCase):
                         {
                             "name": route.split("name=")[1].split("&")[0],
                             "expired": False,
+                            "created_at": "2026-10-18T01:00:30Z",
                             "workflow_run": {"id": 1},
                         }
                     ]
                 }
+            if "/jobs?" in route:
+                return {
+                    "jobs": [
+                        {
+                            "name": name,
+                            "conclusion": "success",
+                            "started_at": "2026-10-18T01:00:00Z",
+                            "completed_at": "2026-10-18T01:01:00Z",
+                        }
+                        for name in ("linux-bundle", "macos")
+                    ]
+                }
             return run
 
-        with patch.object(release, "api", side_effect=response):
+        from tools import ci_artifacts
+
+        with (
+            patch.object(release, "api", side_effect=response),
+            patch.object(ci_artifacts, "api", side_effect=response),
+        ):
             self.assertTrue(release.candidates_ready("owner/repo", commit))
             for change in (
-                {"conclusion": "failure"},
                 {"head_sha": "b" * 40},
                 {"head_branch": "other"},
                 {"event": "pull_request"},
@@ -260,19 +318,17 @@ class PrepareReleaseTest(unittest.TestCase):
         with patch.object(release, "api", return_value={"artifacts": []}):
             self.assertFalse(release.candidates_ready("owner/repo", commit))
 
-    def test_missing_candidate_forces_build_before_tagging_and_timeout_leaves_no_tag(
+    def test_missing_candidate_fails_without_building_or_tagging(
         self,
     ):
         with (
-            patch.object(release, "candidates_ready", return_value=False),
-            patch.object(release, "api", return_value={"sha": "a" * 40}),
+            patch.object(release, "candidate_runs", return_value={}),
+            patch.object(release, "api", return_value={"workflow_runs": []}),
             patch.object(release.subprocess, "run") as command,
         ):
-            with self.assertRaises(TimeoutError):
+            with self.assertRaisesRegex(ValueError, "unavailable"):
                 release.require_candidates("owner/repo", "a" * 40, wait=0)
-            self.assertEqual(command.call_count, 1)
-            self.assertIn("macos.yml", command.call_args.args[0])
-            self.assertNotIn("refs", command.call_args.args[0])
+            command.assert_not_called()
 
     def test_different_existing_tag_and_public_release_are_never_overwritten(self):
         refs = [{"ref": "refs/tags/v0.1.1"}]
@@ -292,7 +348,7 @@ class PrepareReleaseTest(unittest.TestCase):
                 release.create_draft("owner/repo", "v0.1.1", "a" * 40)
             command.assert_not_called()
 
-    def test_draft_rebuild_removes_only_unpublished_assets(self):
+    def test_draft_resume_preserves_generation_and_existing_assets(self):
         draft = [
             {
                 "tag_name": "v0.1.1",
@@ -317,15 +373,11 @@ class PrepareReleaseTest(unittest.TestCase):
             ) as command,
         ):
             self.assertEqual(
-                release.create_draft("owner/repo", "v0.1.1", "a" * 40), "8"
+                release.create_draft("owner/repo", "v0.1.1", "a" * 40), "7"
             )
-            self.assertEqual(command.call_count, 2)
-            self.assertIn(
-                "foresight-package-release: 8", command.call_args_list[0].args[0][-1]
-            )
-            self.assertEqual(
-                command.call_args.args[0][-1], "repos/owner/repo/releases/assets/123"
-            )
+            self.assertEqual(command.call_count, 1)
+            self.assertIn("foresight-package-release: 7", command.call_args.args[0][-1])
+            self.assertNotIn("DELETE", command.call_args.args[0])
 
     def test_generation_reservation_explicitly_preserves_the_frozen_draft_binding(self):
         commit = "a" * 40
@@ -370,8 +422,14 @@ class PrepareReleaseTest(unittest.TestCase):
             ),
             patch.object(release.subprocess, "run", side_effect=command) as process,
         ):
-            self.assertEqual(release.create_draft("owner/repo", "v0.1.1", commit), "8")
-        self.assertEqual(process.call_count, 2)
+            self.assertEqual(release.create_draft("owner/repo", "v0.1.1", commit), "7")
+        self.assertEqual(process.call_count, 1)
+        self.assertEqual(payload["target_commitish"], commit)
+        self.assertEqual(payload["tag_name"], "v0.1.1")
+        self.assertIs(payload["draft"], True)
+        self.assertEqual(
+            payload["body"], "Release notes\n<!-- foresight-package-release: 7 -->"
+        )
 
     def test_unexpected_patch_response_never_deletes_draft_assets(self):
         commit = "a" * 40

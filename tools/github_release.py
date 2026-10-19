@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from ci_artifacts import api
+from importlib import import_module
+
+api = import_module("tools.ci_artifacts" if __package__ else "ci_artifacts").api
 
 
 def release_for_tag(repository, tag, *, optional=False, request=api):

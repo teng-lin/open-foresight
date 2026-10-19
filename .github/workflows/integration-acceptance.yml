@@ -3,18 +3,21 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '43 5 * * 1'
-  push:
+  workflow_run:
+    workflows: [Platform candidates and checks]
     branches: [main]
+    types: [completed]
   pull_request:
 permissions:
   contents: read
   actions: read
   packages: read
 concurrency:
-  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: true
+  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
 jobs:
   changes:
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     outputs:
@@ -30,9 +33,18 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
           EVENT: ${{ github.event_name }}
+          PRODUCER_RUN: ${{ github.event.workflow_run.id }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           args=()
-          if [[ "$EVENT" == push ]]; then
+          if [[ "$EVENT" == workflow_run ]]; then
+            if gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$PRODUCER_RUN/jobs?per_page=100" --jq '.jobs[] | select(.name == "linux-bundle" and .conclusion == "success") | .id' | grep -q .; then
+              echo 'linux_bundle=true' >> "$GITHUB_OUTPUT"
+            else
+              echo 'linux_bundle=false' >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          elif [[ "$EVENT" == push ]]; then
             # Deleted/recreated branches and unavailable history must fail safe.
             if [[ ! "$BASE" =~ ^[0-9a-f]{40}$ || "$BASE" == 0000000000000000000000000000000000000000 ]] ||
                ! git cat-file -e "$BASE^{commit}" 2>/dev/null ||
@@ -110,11 +122,13 @@ jobs:
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
       - name: Restore qualified application dependency outputs without compilation
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           SDK_IMAGE: ${{ steps.sdk.outputs.image }}
         run: python tools/ci_app_dependency_seed.py --sdk-image "$SDK_IMAGE" --output build/app-dependency-seed
       - name: Build the shared Ubuntu 24.04 application and acceptance image
+        if: github.event_name == 'pull_request'
         id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
@@ -122,9 +136,9 @@ jobs:
           file: packaging/build.Dockerfile
           build-contexts: appdeps_seed=./build/app-dependency-seed
           builder: ${{ steps.app-cache.outputs.builder }}
-          target: integration
+          target: builder
           load: true
-          tags: foresight-integration:local
+          tags: foresight-built-application:local
           build-args: |
             SDK_IMAGE=${{ steps.sdk.outputs.image }}
             REQUIRE_DEPENDENCY_REUSE=1
@@ -132,47 +146,100 @@ jobs:
           cache-from: |
             type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
             type=registry,ref=${{ steps.app-cache.outputs.cache }}
+      - name: Retrieve the verified main application instead of compiling it again
+        if: github.event_name != 'pull_request'
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.workflow_run.head_sha || github.sha }}
+          PRODUCER_RUN: ${{ github.event.workflow_run.id || '0' }}
+        run: |
+          python -m tools.package_contract_candidate --base "$BASE" --run-id "$PRODUCER_RUN" --directory artifacts
+          (cd artifacts && sha256sum --check ./*.tar.gz.sha256)
+          mkdir -p build/portable/dist
+          tar -xzf artifacts/*.tar.gz -C build/portable/dist
+      - name: Check out the original application source for acceptance tools
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ steps.candidate.outputs.source }}
+          path: product
       - name: Package version
         id: version
+        env:
+          PRODUCT: ${{ github.event_name == 'pull_request' && '.' || 'product' }}
+          CANDIDATE_VERSION: ${{ steps.candidate.outputs.version }}
         run: |
           python3 - <<'PY'
           import os, subprocess, sys
           sys.path.insert(0, 'tools')
           from app_version import read_version, stale
-          if paths := stale():
+          product = os.environ['PRODUCT']
+          if paths := stale(product):
               raise SystemExit('Out of date with apps/desktop/pubspec.yaml: ' + ', '.join(paths))
-          version, _ = read_version()
+          version, _ = read_version(product)
+          if os.environ['CANDIDATE_VERSION'] and version != os.environ['CANDIDATE_VERSION']:
+              raise ValueError('Candidate version differs from its original source')
           release = '1'
-          epoch = subprocess.check_output(['git', 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          epoch = subprocess.check_output(['git', '-C', product, 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
           PY
       - name: Export the exact Ubuntu acceptance application for packaging
+        if: github.event_name == 'pull_request'
         run: |
           mkdir -p build/portable/dist
-          task_container=$(docker create foresight-integration:local /bin/true)
+          task_container=$(docker create foresight-built-application:local /bin/true)
           trap 'docker rm "$task_container" >/dev/null' EXIT
           docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/
+      - name: Archive the original application before acceptance setup
+        if: github.event_name == 'pull_request'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+        run: python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
+      - name: Retain the original application independently of acceptance results
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ubuntu-acceptance-application-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: dist/packages/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+      - name: Prepare acceptance tools without application compilation
+        id: acceptance-image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: ${{ github.event_name == 'pull_request' && '.' || 'product' }}
+          file: packaging/acceptance.Dockerfile
+          load: true
+          tags: foresight-integration:local
+          build-args: SDK_IMAGE=${{ steps.sdk.outputs.image }}
       - name: Build and install the Ubuntu 24.04 package
         env:
           VERSION: ${{ steps.version.outputs.version }}
           RELEASE: ${{ steps.version.outputs.release }}
           SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+          BUILT_APPLICATION: ${{ github.event_name == 'pull_request' }}
         run: |
-          python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
-          mkdir -p artifacts
-          cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
+          if [[ "$BUILT_APPLICATION" == true ]]; then
+            mkdir -p artifacts
+            cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
+          fi
           docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
       # Package, CPU, GPU and audio checks share the image but report failures
       # independently, so an installer failure does not hide later diagnostics.
       - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
-        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.acceptance-image.outcome == 'success' }}
         id: models
         with:
           path: build/acceptance-models
           key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare checksum-pinned public model fixtures
-        if: ${{ !cancelled() && steps.image.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.acceptance-image.outcome == 'success' }}
         id: fixtures
         run: |
           python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output test-results/model-download
@@ -182,30 +249,33 @@ jobs:
           path: build/acceptance-models
           key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Real CPU model, helper, citation and cancellation gates
-        if: ${{ !cancelled() && steps.image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.acceptance-image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
         run: |
           mkdir -p test-results/models test-results/virtual-audio
           chmod 0777 test-results/models test-results/virtual-audio
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
             -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/test-results/models:/reports" \
+            -v "$PWD/build/portable/dist/open-foresight:/src/dist/open-foresight:ro" \
             foresight-integration:local python3 tools/integration_gates.py --suite models \
             --bundle dist/open-foresight --models /models --output /reports
       - name: Shipped GPU runtimes on software Vulkan
-        if: ${{ !cancelled() && steps.image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.acceptance-image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
         run: |
           mkdir -p test-results/software-gpu
           chmod 0777 test-results/software-gpu
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
             -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/test-results/software-gpu:/reports" \
+            -v "$PWD/build/portable/dist/open-foresight:/src/dist/open-foresight:ro" \
             foresight-integration:local python3 tools/accept_software_gpu.py --allow-unavailable \
             --bundle dist/open-foresight --models /models --output /reports
       - name: Private virtual-audio and device-recovery gates
-        if: ${{ !cancelled() && steps.image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.acceptance-image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
         run: |
           mkdir -p test-results/virtual-audio
           chmod 0777 test-results/virtual-audio
           docker run --rm --network none --cap-drop ALL --security-opt no-new-privileges \
             -v "$PWD/build/acceptance-models:/models:ro" -v "$PWD/test-results/virtual-audio:/reports" \
+            -v "$PWD/build/portable/dist/open-foresight:/src/dist/open-foresight:ro" \
             foresight-integration:local dbus-run-session -- python3 tools/integration_gates.py --suite virtual-audio \
             --bundle dist/open-foresight --models /models --output /reports
       - name: Retain explicit integration evidence

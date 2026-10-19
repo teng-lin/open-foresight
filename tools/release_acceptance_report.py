@@ -12,6 +12,7 @@ def aggregate(directory, tag, evidence):
     suffixes = set()
     validation_artifacts = []
     identities: dict[str, dict[str, str]] = {}
+    sources = set()
     for receipt in sorted(directory.glob("*/assets/installer.json")):
         identity = json.loads(receipt.read_text())
         artifact = receipt.parents[1]
@@ -20,6 +21,15 @@ def aggregate(directory, tag, evidence):
             raise ValueError(
                 "Acceptance receipt does not identify the requested verified release"
             )
+        source = identity.get("source_commit", "")
+        if (
+            not re.fullmatch(r"[a-f0-9]{40}", source)
+            or identity.get("release_tag_commit") != source
+        ):
+            raise ValueError(
+                "Acceptance requires an immutable source bound to the release tag"
+            )
+        sources.add(source)
         if len(functional) != 1:
             raise ValueError(
                 "Every installer needs exactly one functional acceptance report"
@@ -62,6 +72,22 @@ def aggregate(directory, tag, evidence):
         raise ValueError(
             "Acceptance must include DEB, RPM, Arch and DMG installer evidence"
         )
+    if len(sources) != 1:
+        raise ValueError("Accepted installers have conflicting product sources")
+    gpu = gpu_status(installers, evidence)
+    return {
+        "tag": tag,
+        "source_commit": sources.pop(),
+        "status": "passed"
+        if gpu["status"] == "manual_passed"
+        else "automated_passed_manual_pending",
+        "installers": installers,
+        "validation_artifacts": validation_artifacts,
+        "gpu_inference": gpu,
+    }
+
+
+def gpu_status(installers, evidence):
     gpu = {"status": "manual_pending", "evidence": []}
     if evidence:
         records = json.loads(evidence)
@@ -98,15 +124,7 @@ def aggregate(directory, tag, evidence):
         if platforms != {"linux", "macos"}:
             raise ValueError("Both supported platforms need release-day GPU evidence")
         gpu = {"status": "manual_passed", "evidence": records}
-    return {
-        "tag": tag,
-        "status": "passed"
-        if gpu["status"] == "manual_passed"
-        else "automated_passed_manual_pending",
-        "installers": installers,
-        "validation_artifacts": validation_artifacts,
-        "gpu_inference": gpu,
-    }
+    return gpu
 
 
 def require_publication(report, tag):

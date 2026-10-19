@@ -6,14 +6,39 @@ concurrency:
   group: macos-release-${{ inputs.tag }}
   cancel-in-progress: false
 jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      formats: ${{ steps.plan.outputs.formats }}
+      source: ${{ steps.plan.outputs.source }}
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.sha }}
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version: '3.13'
+    - name: Inspect existing DMG before allocating a Mac runner
+      id: plan
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ inputs.tag }}
+      run: python -m tools.release_inputs --tag "$RELEASE_TAG" --formats dmg
   build:
+    needs: plan
+    if: needs.plan.outputs.formats != '[]'
     runs-on: macos-15
     timeout-minutes: 90
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: refs/tags/${{ inputs.tag }}
+        ref: ${{ github.sha }}
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
@@ -23,9 +48,8 @@ jobs:
         CANDIDATE_RUN: ${{ inputs.candidate_run }}
         RELEASE_TAG: ${{ inputs.tag }}
       run: |-
-        python tools/app_version.py --check
-        test "$RELEASE_TAG" = "v$(python tools/app_version.py)"
-        python tools/ci_artifacts.py pull --component macos-app --identity "$(git rev-parse HEAD)" --prefix artifacts --wait 3600 --run-id "$CANDIDATE_RUN"
+        source=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)
+        python tools/ci_artifacts.py pull --component macos-app --identity "$source" --prefix artifacts --wait 0 --run-id "$CANDIDATE_RUN"
         mkdir -p staging test-results
         ditto -x -k artifacts/Open-Foresight-macos-arm64.zip staging
         codesign --verify --deep --strict 'staging/Open Foresight.app'
@@ -38,9 +62,15 @@ jobs:
     - name: Run real release-model CPU acceptance
       run: python tools/test_macos_release_models.py 'staging/Open Foresight.app' --models build/release-acceptance-models
         --output test-results/release-models
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: ${{ runner.temp }}/flutter
+        key: flutter-macos-arm64-3.35.7-v1
     - name: Install pinned Dart for live release distribution acceptance
       run: |-
-        git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        if [[ ! -x "$RUNNER_TEMP/flutter/bin/dart" ]]; then
+          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        fi
         test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
         echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
         "$RUNNER_TEMP/flutter/bin/dart" --version
@@ -68,7 +98,7 @@ jobs:
         name: macos-release-application
         path: artifacts/
         if-no-files-found: error
-        retention-days: 14
+        retention-days: 90
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
       with:
@@ -89,7 +119,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: refs/tags/${{ inputs.tag }}
+        ref: ${{ github.sha }}
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
       with:
         name: macos-release-application
@@ -129,15 +159,25 @@ jobs:
         name: open-foresight-macos-arm64-dmg
         path: dist/
         if-no-files-found: error
-        retention-days: 14
+        retention-days: 90
     - name: Attach disk image to release
       env:
         GH_TOKEN: ${{ github.token }}
         GH_REPO: ${{ github.repository }}
       run: |
         test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = true
-        gh release upload "$RELEASE_TAG" dist/*
+        python3 -m tools.release_upload --tag "$RELEASE_TAG" dist/*
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing unpublished stable tag
+        required: true
+        type: string
+      candidate_run:
+        description: Existing verified macOS application candidate run
+        required: true
+        type: string
   workflow_call:
     inputs:
       candidate_run:

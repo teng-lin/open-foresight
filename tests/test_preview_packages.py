@@ -13,7 +13,6 @@ import pytest
 
 from tools import app_version, build_sequence, ci_artifacts, preview_packages as preview
 from tools import verify_preview_cloud as cloud
-from tools import prepare_release as release
 from test_pull_request_workflows import parse_workflow
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,7 +41,7 @@ def test_preview_targets_the_next_unreleased_version(source, latest, expected):
 
 @pytest.mark.parametrize(
     "force,validation,build",
-    [(False, "standard", False), (True, "standard", True), (False, "full", True)],
+    [(False, "standard", False), (True, "standard", True), (False, "full", False)],
 )
 def test_success_watermark_and_force_full_semantics(force, validation, build):
     def request(repo, route, **kwargs):
@@ -56,15 +55,23 @@ def test_success_watermark_and_force_full_semantics(force, validation, build):
 
     with (
         patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ID": "2"}),
+        patch.object(preview, "retained", return_value=True),
         patch.object(preview, "request", side_effect=request),
         patch.object(preview.subprocess, "check_output", return_value=SHA),
         patch.object(preview, "stale", return_value=[]),
         patch.object(preview, "read_version", return_value=("0.1.1", 2)),
         patch.object(preview, "allocate", return_value=12) as allocate,
     ):
-        result = preview.plan("owner/repo", force, validation)
+        result = preview.plan(
+            "owner/repo",
+            force,
+            validation,
+            "intentional distribution configuration rotation" if force else "",
+        )
     assert result["build"] == str(build).lower()
     assert allocate.call_count == int(build)
+    if not build:
+        assert result["reuse_run"] == ("1" if validation == "full" else "0")
     if build:
         assert result["source"] == SHA and result["build_number"] == "12"
         assert result["package_version"].startswith("0.1.2~nightly.")
@@ -79,7 +86,7 @@ def test_planner_rejects_branch_or_advancing_main_before_allocation():
             patch.object(preview, "allocate") as allocate,
         ):
             with pytest.raises(ValueError):
-                preview.plan("owner/repo", True, "standard")
+                preview.plan("owner/repo", True, "standard", "fixture replacement")
             allocate.assert_not_called()
 
 
@@ -234,49 +241,6 @@ def test_cloud_acceptance_reads_only_bundled_values(tmp_path):
         cloud.configuration(tmp_path)
 
 
-def test_fresh_release_candidates_ignore_older_successful_runs():
-    history = iter(
-        (
-            {"workflow_runs": [{"id": 1}]},
-            {
-                "workflow_runs": [
-                    {
-                        "id": 3,
-                        "head_sha": SHA,
-                        "conclusion": "failure",
-                        "display_title": "Release candidate unrelated",
-                    },
-                    {
-                        "id": 2,
-                        "head_sha": SHA,
-                        "conclusion": "success",
-                        "display_title": "Release candidate request-123",
-                    },
-                ]
-            },
-        )
-    )
-
-    def api(repo, route):
-        if route == "commits/main":
-            return {"sha": SHA}
-        return next(history)
-
-    with (
-        patch.object(release, "api", side_effect=api),
-        patch.object(release.subprocess, "run") as dispatch,
-        patch.object(
-            release.uuid,
-            "uuid4",
-            return_value=type("Request", (), {"hex": "request-123"})(),
-        ),
-        patch.object(release, "candidates_ready", return_value=True) as ready,
-    ):
-        assert release.require_candidates("owner/repo", SHA, 5, fresh=True) == 2
-    ready.assert_called_once_with("owner/repo", SHA, 2)
-    assert "request_id=request-123" in dispatch.call_args.args[0]
-
-
 def test_preview_workflow_has_no_release_publication_and_gates_downloads():
     workflow = parse_workflow(
         (ROOT / ".github/workflows/preview-packages.yml").read_text()
@@ -354,47 +318,6 @@ def test_producer_pin_never_falls_back_to_another_successful_run(tmp_path):
             "owner/repo", "macos-app", SHA, tmp_path / "destination", source_run=2
         )
     assert api.call_count == 1
-
-
-def test_fresh_release_candidate_failure_is_correlated_to_its_own_dispatch():
-    from types import SimpleNamespace
-
-    history = iter(
-        [
-            {"workflow_runs": []},
-            {
-                "workflow_runs": [
-                    {
-                        "id": 2,
-                        "head_sha": SHA,
-                        "conclusion": "success",
-                        "display_title": "Release candidate unrelated",
-                    },
-                    {
-                        "id": 3,
-                        "head_sha": SHA,
-                        "conclusion": "failure",
-                        "display_title": "Release candidate own-request",
-                    },
-                ]
-            },
-        ]
-    )
-
-    def api(repository, route):
-        return {"sha": SHA} if route == "commits/main" else next(history)
-
-    with (
-        patch.object(release, "api", side_effect=api),
-        patch.object(
-            release.uuid, "uuid4", return_value=SimpleNamespace(hex="own-request")
-        ),
-        patch.object(release.subprocess, "run"),
-        patch.object(release, "candidates_ready") as ready,
-    ):
-        with pytest.raises(RuntimeError, match="Fresh distribution build failed"):
-            release.require_candidates("owner/repo", SHA, 5, fresh=True)
-        ready.assert_not_called()
 
 
 def test_preview_dmg_receipt_rejects_foreign_build_bytes(tmp_path):

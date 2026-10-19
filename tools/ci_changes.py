@@ -8,7 +8,7 @@ from pathlib import PurePosixPath
 import subprocess
 
 
-GATES = ("macos", "linux-native", "linux-document-imports", "linux-bundle")
+GATES = ("macos", "linux-native", "linux-document-imports", "linux-bundle", "packaging")
 
 # Explicit maintenance paths only: shared tools and unknown files select all gates.
 MAINTENANCE = {
@@ -21,10 +21,51 @@ MAINTENANCE = {
     ".github/workflows/linux-registry.yml",
     ".github/workflows/quality.yml",
 }
-MACOS_FILES = {
-    "tools/ci_macos_dependencies.py",
+# These controls and tests cannot change compiled application/SDK bytes. They
+# still require workflow lint, Python quality and real distro package contracts.
+PACKAGING_FILES = {
+    "tools/package_contract_candidate.py",
+    "tests/test_package_contract_candidate.py",
+    "tools/github_release.py",
+    "tools/release_asset_acceptance.py",
+    "tools/release_acceptance_report.py",
+    "tests/test_release_acceptance_report.py",
+    "tools/reuse_release_acceptance.py",
+    "tests/test_reuse_release_acceptance.py",
+    "tests/test_dmg_contract.py",
+    ".github/workflows/release-acceptance.yml",
+    "packaging/package_linux.py",
+    "packaging/upgrade_lock.sh",
     "tools/create_dmg.py",
     "tests/test_create_dmg.py",
+    "tools/prepare_release.py",
+    "tests/test_prepare_release.py",
+    "tools/preview_packages.py",
+    "tests/test_preview_packages.py",
+    "tests/test_ci_dependencies.py",
+    "tests/test_ci_stage_cache.py",
+    "tests/test_pull_request_workflows.py",
+    "tests/test_linux_stage_workflows.py",
+    "tests/test_linux_packages.py",
+    "tests/test_ci_package_sandbox.py",
+    "tests/test_rpm_scriptlets.py",
+    "tools/release_inputs.py",
+    "tools/release_upload.py",
+    "tests/test_release_upload.py",
+    "tools/candidate_identity.py",
+    "tests/test_candidate_identity.py",
+    "tools/preview_reuse.py",
+    "tests/test_preview_reuse.py",
+    "tests/test_ci_promotion.py",
+    ".github/workflows/linux-packages.yml",
+    ".github/workflows/macos-release.yml",
+    ".github/workflows/preview-packages.yml",
+    ".github/workflows/release.yml",
+    ".github/workflows/package-contracts.yml",
+}
+
+MACOS_FILES = {
+    "tools/ci_macos_dependencies.py",
     "tools/build_macos_sdk.py",
     "tools/build_macos_vendor.py",
     "tools/build_macos_runtimes.py",
@@ -42,11 +83,9 @@ LINUX_FILES = {
     "packaging/sdk-litert.Dockerfile",
     "packaging/sdk-whisper.Dockerfile",
     "packaging/minimal-grpc.cmake",
-    "packaging/package_linux.py",
     "tools/build_linux_sdk.sh",
     "tools/build_linux_sdk_local.sh",
     "tools/linux_sdk_artifacts.py",
-    ".github/workflows/linux-packages.yml",
 }
 
 
@@ -55,6 +94,9 @@ def select_gates(paths, force=False):
     for path in paths:
         # These Markdown notices are installed payloads, so editorial suffix
         # rules must not hide changes to the package's legal contents.
+        if path in PACKAGING_FILES or path.startswith("packaging/ci/"):
+            selected["packaging"] = True
+            continue
         if path.startswith("packaging/notices/"):
             for gate in GATES[1:]:
                 selected[gate] = True
@@ -112,6 +154,7 @@ def main():
     parser.add_argument("--base")
     parser.add_argument("--check-gates", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--platforms", choices=("all", "linux", "macos"), default="all")
     args = parser.parse_args()
     if args.check_gates:
         check_gates(
@@ -138,6 +181,11 @@ def main():
     )
     subprocess.run(["git", "diff", "--check", base, "HEAD"], check=True, timeout=300)
     selected = select_gates([path for path in paths if path], force=args.force)
+    if args.platforms == "linux":
+        selected["macos"] = False
+    elif args.platforms == "macos":
+        for gate in ("linux-native", "linux-document-imports", "linux-bundle"):
+            selected[gate] = False
     print("Selected platform checks: " + json.dumps(selected, sort_keys=True))
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         stream.write("selection=" + json.dumps(selected, separators=(",", ":")) + "\n")

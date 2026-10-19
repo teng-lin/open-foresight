@@ -3,6 +3,10 @@ name: Published installer acceptance
 on:
   workflow_dispatch:
     inputs:
+      acceptance_run:
+        description: Existing successful acceptance run to reuse for unchanged installer bytes
+        type: string
+        default: '0'
       tag:
         description: Release tag to audit
         required: true
@@ -13,6 +17,9 @@ on:
         type: string
   workflow_call:
     inputs:
+      acceptance_run:
+        type: string
+        default: '0'
       tag:
         required: true
         type: string
@@ -33,9 +40,11 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: write # Read unpublished draft metadata before publication.
+      actions: read # Verify the original acceptance job, attempt and artifact.
     outputs:
       tag: ${{ steps.release.outputs.tag }}
       ready: ${{ steps.release.outputs.ready }}
+      reused: ${{ steps.restore.outputs.reused }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -63,10 +72,27 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'tag={tag}\nready=true\n')
           PYCODE
+      - name: Reuse successful acceptance for these exact installer bytes
+        if: inputs.acceptance_run != '0'
+        id: restore
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GPU_EVIDENCE: ${{ inputs.gpu_evidence }}
+          TAG: ${{ inputs.tag }}
+          RUN: ${{ inputs.acceptance_run }}
+        run: |
+          python -m tools.reuse_release_acceptance --tag "$TAG" --run "$RUN" --output release-acceptance.json
+          echo 'reused=true' >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: steps.restore.outputs.reused == 'true'
+        with:
+          name: restored-release-acceptance
+          path: release-acceptance.json
+          retention-days: 90
 
   linux:
     needs: release
-    if: needs.release.outputs.ready == 'true'
+    if: needs.release.outputs.ready == 'true' && needs.release.outputs.reused != 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: write # Read draft metadata and download unpublished assets.
@@ -100,10 +126,12 @@ jobs:
         with:
           path: build/acceptance-models
           key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          # Same pinned weights and cache path as the existing verified main cache.
+          restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare authenticated public model fixtures
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
       - name: Cache authenticated model fixtures before application tests
-        if: steps.models-cache.outputs.cache-hit != 'true'
+        if: steps.models-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/acceptance-models
@@ -131,7 +159,7 @@ jobs:
 
   macos:
     needs: release
-    if: needs.release.outputs.ready == 'true'
+    if: needs.release.outputs.ready == 'true' && needs.release.outputs.reused != 'true'
     runs-on: macos-15
     permissions:
       contents: write # Read draft metadata and download unpublished assets.
@@ -154,10 +182,12 @@ jobs:
         with:
           path: build/acceptance-models
           key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          # Same pinned weights and cache path as the existing verified main cache.
+          restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare authenticated public model fixtures
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
       - name: Cache authenticated model fixtures before application tests
-        if: steps.models-cache.outputs.cache-hit != 'true'
+        if: steps.models-cache.outputs.cache-matched-key == ''
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: build/acceptance-models
@@ -189,27 +219,37 @@ jobs:
       - name: Require every installer test to have passed
         env:
           RESULTS: ${{ toJSON(needs) }}
+          REUSED: ${{ needs.release.outputs.reused }}
         run: |
           python3 - <<'PYCODE'
           import json, os
           results = json.loads(os.environ['RESULTS'])
-          if any(results.get(job, {}).get('result') != 'success' for job in ('release', 'linux', 'macos')):
+          expected = {'release':'success','linux':'skipped','macos':'skipped'} if os.environ['REUSED'] == 'true' else dict.fromkeys(('release','linux','macos'), 'success')
+          if any(results.get(job, {}).get('result') != expected[job] for job in expected):
               raise SystemExit('Installer acceptance failed or was skipped: ' + str(results))
           PYCODE
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: needs.release.outputs.reused != 'true'
         with:
           pattern: published-acceptance-*
           path: acceptance-evidence
       - name: Bind automated acceptance and release-day GPU evidence
+        if: needs.release.outputs.reused != 'true'
         env:
           TAG: ${{ inputs.tag }}
           GPU_EVIDENCE: ${{ inputs.gpu_evidence }}
         run: python3 tools/release_acceptance_report.py --tag "$TAG" --directory acceptance-evidence --output release-acceptance.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        if: needs.release.outputs.reused == 'true'
+        with:
+          name: restored-release-acceptance
+          path: .
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: release-acceptance-summary
           path: release-acceptance.json
+          retention-days: 90
           if-no-files-found: error

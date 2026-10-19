@@ -14,7 +14,9 @@ case "$task_format" in
   arch) pacman -Syu --noconfirm --needed bubblewrap shadow ;;
   *) exit 2;;
 esac
-useradd --create-home "$task_user"
+if ! id -u "$task_user" >/dev/null 2>&1; then
+  useradd --create-home "$task_user"
+fi
 printf 'Checking isolated document namespaces as ordinary user %s.\n' "$task_user"
 # Keep the production launcher's namespace, capability, mount and environment
 # restrictions. Only the selected document/extractor is replaced by /usr/bin/true.
