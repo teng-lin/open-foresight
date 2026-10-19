@@ -133,9 +133,21 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
     assert 'test "$LINUX_RESULT" = success' in aggregate["run"]
     assert 'test "$LINUX_RESULT" = skipped' in aggregate["run"]
     job = jobs["ubuntu-package"]
+    producer = jobs["ubuntu-application"]
+    assert job["needs"] == ["changes", "ubuntu-application"]
+    assert "!cancelled()" in job["if"]
+    assert "needs.ubuntu-application.result == 'success'" in job["if"]
+    assert "github.event_name == 'pull_request'" in producer["if"]
+    assert not any(
+        step.get("with", {}).get("file") == "packaging/build.Dockerfile"
+        for step in job["steps"]
+    )
+    assert any(
+        "tools.integration_application" in step.get("run", "") for step in job["steps"]
+    )
     builds = [
         step
-        for step in job["steps"]
+        for step in producer["steps"]
         if step.get("with", {}).get("file") == "packaging/build.Dockerfile"
     ]
     assert len(builds) == 1
@@ -146,7 +158,9 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
         "SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}"
         in builds[0]["with"]["build-args"]
     )
-    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    commands = "\n".join(
+        step.get("run", "") for step in producer["steps"] + job["steps"]
+    )
     assert "docker create foresight-built-application:local /bin/true" in commands
     assert (
         'docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/'
@@ -388,8 +402,10 @@ def test_disposable_installed_document_containers_can_initialize_isolated_loopba
 def test_hosted_relocated_macos_smoke_checks_the_actual_checkout_revision():
     job = workflow("macos.yml")["jobs"]["macos"]
     step = next(
-        step for step in job["steps"]
-        if step.get("name") == "Relocated application MCP smoke with minimal environment"
+        step
+        for step in job["steps"]
+        if step.get("name")
+        == "Relocated application MCP smoke with minimal environment"
     )
     assert "tools/smoke_macos_bundle.py" in step["run"]
     assert '--expected-revision "$(git rev-parse HEAD)"' in step["run"]
@@ -407,7 +423,8 @@ def test_optional_litert_gpu_policy_is_confined_to_ci_emulator_acceptance():
     assert "--allow-unavailable" not in step["run"]
     for name in ("release.yml", "release-acceptance.yml"):
         assert (
-            "--allow-litert-unavailable" not in (ROOT / ".github/workflows" / name).read_text()
+            "--allow-litert-unavailable"
+            not in (ROOT / ".github/workflows" / name).read_text()
         )
 
 
