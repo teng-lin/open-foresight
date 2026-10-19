@@ -146,6 +146,9 @@ class Service : public rpc::RagService::Service,
       if (result == foresight::ReconfigWait::deadline)
         return {StatusCode::DEADLINE_EXCEEDED,
                 "Model reconfiguration wait expired"};
+      if (result == foresight::ReconfigWait::busy_timeout)
+        return {StatusCode::UNAVAILABLE,
+                "Model reconfiguration in progress; retry"};
       s.reconfiguring = true;
       held = true;
       return Status::OK;

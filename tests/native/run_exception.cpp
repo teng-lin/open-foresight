@@ -11,12 +11,22 @@ int main(int argc, char **argv) {
       pause();
   }
   setenv("FORESIGHT_HELPER", argv[0], 1);
+  setenv("PATH", "/untrusted/capture-bin", 1);
+  if (capture_runtime_command("") != argv[0] ||
+      capture_runtime_command("/explicit/capture-runtime") !=
+          "/explicit/capture-runtime")
+    return 3;
+  setenv("FORESIGHT_CAPTURE_RUNTIME", "relative/capture-runtime", 1);
+  if (fs_capture_start("auto", 0, 48000) != nullptr)
+    return 4;
+  unsetenv("FORESIGHT_CAPTURE_RUNTIME");
   Worker worker;
   bool threw = false;
   try {
-    run(worker, {argv[0], "--callback-worker"}, [](const char *, size_t) {
-      throw std::runtime_error("callback failure");
-    });
+    run(worker, {capture_runtime_command(""), "--callback-worker"},
+        [](const char *, size_t) {
+          throw std::runtime_error("callback failure");
+        });
   } catch (const std::runtime_error &) {
     threw = true;
   }

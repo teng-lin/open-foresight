@@ -106,6 +106,63 @@ void main() {
     },
   );
 
+  test(
+    'clear retries WAL erasure after a real reader releases its snapshot',
+    () async {
+      const marker = 'PRIVATE_PINNED_WAL_MARKER_38c1_';
+      store.saveNote(null, 'Private', marker * 200);
+      final reader = sqlite3.open(store.path, mode: OpenMode.readOnly);
+      try {
+        reader.execute('BEGIN');
+        expect(
+          reader.select('SELECT body FROM notes').single['body'],
+          marker * 200,
+        );
+        await app.call('workspace.clear', {});
+        expect(store.notes(), isEmpty);
+        expect(store.privacyMaintenancePending, isTrue);
+        expect(
+          store
+              .rows(
+                "SELECT value FROM preferences WHERE key='internal.privacyMaintenancePending'",
+              )
+              .single['value'],
+          '1',
+        );
+        // The old snapshot is still usable and keeps the private WAL frames live.
+        expect(
+          reader.select('SELECT body FROM notes').single['body'],
+          marker * 200,
+        );
+        expect(
+          latin1.decode(File('${store.path}-wal').readAsBytesSync()),
+          contains(marker),
+        );
+        reader.execute('COMMIT');
+        await eventually(() => !store.privacyMaintenancePending);
+        expect(
+          store.rows(
+            "SELECT 1 FROM preferences WHERE key='internal.privacyMaintenancePending'",
+          ),
+          isEmpty,
+        );
+        for (final path in [store.path, '${store.path}-wal']) {
+          final file = File(path);
+          if (file.existsSync()) {
+            expect(
+              latin1.decode(file.readAsBytesSync()),
+              isNot(contains(marker)),
+              reason: path,
+            );
+          }
+        }
+      } finally {
+        if (!reader.autocommit) reader.execute('ROLLBACK');
+        reader.dispose();
+      }
+    },
+  );
+
   test('every schema table is cleared or explicitly retained', () async {
     final cleared = Application.workspaceContentTables.toSet();
     const exemptions = {

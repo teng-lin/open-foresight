@@ -26,6 +26,11 @@ const _scalarRuntimeKeys = {
   'FORESIGHT_CRASH_AT',
 };
 
+const _bundledAuthoritativeScalarKeys = {
+  'FORESIGHT_RUNTIME_REVISION',
+  'FORESIGHT_QUERY_TERMS_URL',
+};
+
 class RuntimeConfiguration {
   final Map<String, String> environment;
   RuntimeConfiguration(this.environment);
@@ -51,7 +56,7 @@ class RuntimeConfiguration {
             key.startsWith('FORESIGHT_') &&
             !{
               ..._scalarRuntimeKeys.where(
-                (key) => key != 'FORESIGHT_RUNTIME_REVISION',
+                (key) => !_bundledAuthoritativeScalarKeys.contains(key),
               ),
               'FORESIGHT_DATA',
               'FORESIGHT_RUNTIME',
@@ -89,7 +94,7 @@ class RuntimeConfiguration {
               : '$resources/$relative';
           if (bundled &&
               (!_scalarRuntimeKeys.contains(entry.key) ||
-                  entry.key == 'FORESIGHT_RUNTIME_REVISION')) {
+                  _bundledAuthoritativeScalarKeys.contains(entry.key))) {
             values[entry.key] = value;
           } else {
             values.putIfAbsent(entry.key, () => value);

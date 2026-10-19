@@ -310,7 +310,9 @@ Future<String> parseWebPage(
 /// HTML encoding declarations are ASCII-compatible and only trusted in the
 /// initial bounded sniffing window. An HTTP charset always takes precedence.
 String? htmlDeclaredCharset(Uint8List bytes) {
-  final header = latin1.decode(bytes.take(1024).toList());
+  final header = latin1
+      .decode(bytes.take(1024).toList())
+      .replaceAll(RegExp(r'<!--[\s\S]*?(?:-->|$)'), ' ');
   for (final tag in RegExp(
     r'<meta\b[^>]*>',
     caseSensitive: false,

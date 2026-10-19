@@ -25,10 +25,23 @@ class Store {
   final Database db;
   final String path;
   static const schemaVersion = 11;
+  static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
+  Timer? _privacyMaintenanceRetry;
+  var _privacyRetrySeconds = 1;
+  var _privacyMaintenancePending = false;
+  var _closed = false;
+
+  /// Local deletion is committed even while a reader prevents WAL erasure.
+  bool get privacyMaintenancePending => _privacyMaintenancePending;
 
   Store.readOnly(this.path) : db = sqlite3.open(path, mode: OpenMode.readOnly) {
     try {
       _checkVersion();
+      _privacyMaintenancePending =
+          rows(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='preferences'",
+          ).isNotEmpty &&
+          _hasPrivacyMaintenanceMarker();
     } catch (_) {
       db.dispose();
       rethrow;
@@ -62,28 +75,75 @@ class Store {
       db.dispose();
       rethrow;
     }
+    _privacyMaintenancePending = _hasPrivacyMaintenanceMarker();
+    if (_privacyMaintenancePending) _schedulePrivacyMaintenance();
+  }
+
+  bool _hasPrivacyMaintenanceMarker() => rows(
+    'SELECT 1 FROM preferences WHERE key=?',
+    [_privacyMaintenanceKey],
+  ).isNotEmpty;
+
+  /// Persist the cleanup intent in the same transaction as the content deletion.
+  /// Scheduling starts only after that transaction commits, via compactAfterClear.
+  void markPrivacyMaintenancePending() {
+    db.execute('INSERT OR IGNORE INTO preferences(key,value) VALUES(?,?)', [
+      _privacyMaintenanceKey,
+      '1',
+    ]);
   }
 
   /// Erase freed pages after a committed workspace clear. Live readers can keep
   /// a checkpoint busy, so maintenance failure must not undo the local clear.
   void compactAfterClear() {
-    for (final statement in [
-      'PRAGMA wal_checkpoint(TRUNCATE)',
-      'VACUUM',
-      'PRAGMA wal_checkpoint(TRUNCATE)',
-    ]) {
-      try {
+    _privacyMaintenancePending = true;
+    _privacyRetrySeconds = 1;
+    _retryPrivacyMaintenance();
+  }
+
+  void _schedulePrivacyMaintenance() {
+    if (_closed || _privacyMaintenanceRetry != null) return;
+    _privacyMaintenanceRetry = Timer(
+      Duration(seconds: _privacyRetrySeconds),
+      () {
+        _privacyMaintenanceRetry = null;
+        _retryPrivacyMaintenance();
+      },
+    );
+    _privacyRetrySeconds = (_privacyRetrySeconds * 2).clamp(1, 30);
+  }
+
+  void _retryPrivacyMaintenance() {
+    if (_closed || !_privacyMaintenancePending) return;
+    try {
+      // Only a constant marker is retained, never any cleared content. Persist
+      // it before checkpointing so a shutdown/restart cannot lose the retry.
+      markPrivacyMaintenancePending();
+      for (final statement in [
+        'PRAGMA wal_checkpoint(TRUNCATE)',
+        'VACUUM',
+        'PRAGMA wal_checkpoint(TRUNCATE)',
+      ]) {
         final result = db.select(statement);
         if (statement.startsWith('PRAGMA wal_checkpoint') &&
             result.isNotEmpty &&
             result.first.values.first != 0) {
-          stderr.writeln(
-            'Workspace privacy maintenance deferred: checkpoint is busy',
-          );
+          _schedulePrivacyMaintenance();
+          return;
         }
-      } catch (error) {
-        stderr.writeln('Workspace privacy maintenance: $error');
       }
+      db.execute('DELETE FROM preferences WHERE key=?', [
+        _privacyMaintenanceKey,
+      ]);
+      _privacyMaintenancePending = false;
+      _privacyMaintenanceRetry?.cancel();
+      _privacyMaintenanceRetry = null;
+      _privacyRetrySeconds = 1;
+    } catch (error) {
+      // This runs after the clear committed: maintenance must not turn an
+      // erased workspace into a failed transaction or discard its retry.
+      stderr.writeln('Workspace privacy maintenance deferred: $error');
+      _schedulePrivacyMaintenance();
     }
   }
 
@@ -1249,7 +1309,12 @@ class Store {
   );
   List<Map<String, Object?>> registeredSpeech() =>
       rows("SELECT digest FROM models WHERE kind='speech'");
-  void close() => db.dispose();
+  void close() {
+    _closed = true;
+    _privacyMaintenanceRetry?.cancel();
+    _privacyMaintenanceRetry = null;
+    db.dispose();
+  }
 }
 
 class Parser {

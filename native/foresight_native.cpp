@@ -41,6 +41,9 @@
 #include <unordered_map>
 #include <vector>
 extern char **environ;
+#ifndef FORESIGHT_PW_RECORD_EXECUTABLE
+#define FORESIGHT_PW_RECORD_EXECUTABLE "/usr/bin/pw-record"
+#endif
 namespace {
 using foresight::quote;
 char *owned(const std::string &s) {
@@ -505,6 +508,9 @@ struct Capture : Worker {
   int rate = 48000;
   uint64_t dropped = 0, pending_dropped_bytes = 0;
 };
+std::string capture_runtime_command(const std::string &configured) {
+  return configured.empty() ? FORESIGHT_PW_RECORD_EXECUTABLE : configured;
+}
 std::string capture_overflow(Capture &c) {
   const auto bytes = c.pending_dropped_bytes;
   c.pending_dropped_bytes = 0;
@@ -889,7 +895,7 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
     return -1;
   c.join();
   auto &e = *c.engine;
-  if (e.backend != 1 && (tools || (schema && *schema)))
+  if (e.backend != 1 && (tools || (e.backend != 0 && schema && *schema)))
     return -1;
   std::string previous_state;
   {
@@ -974,10 +980,12 @@ static int generate_with_schema(void *h, const char *id, const char *prompt,
           };
           std::vector<std::string> args;
           bool duplex = tools;
+          // Keep request files alive through run(), including cancellation and
+          // exceptions. Destruction follows the child's owned cleanup/reap.
+          auto launch = foresight::one_shot_launch(
+              e.backend, e.runtime, e.model, text, max_output_tokens,
+              e.model_type, json_schema, tools);
           {
-            auto launch = foresight::one_shot_launch(
-                e.backend, e.runtime, e.model, text, max_output_tokens,
-                e.model_type, json_schema, tools);
             args = std::move(launch.arguments);
             if (e.backend == 1 && e.cpu_fallback) {
               args.push_back("--backend");
@@ -1642,16 +1650,15 @@ void *fs_capture_start_with_options(const char *target, int playback, int rate,
               // PipeWire (including Ubuntu 24.04) has no --raw option. The
               // production path writes to an owned .raw FIFO so stdout
               // diagnostics cannot be PCM.
-              std::vector<std::string> args{
-                  c->runtime.empty() ? "/usr/bin/pw-record" : c->runtime,
-                  "--format",
-                  "s16",
-                  "--rate",
-                  std::to_string(c->rate),
-                  "--channels",
-                  "1",
-                  "--target",
-                  c->target};
+              std::vector<std::string> args{capture_runtime_command(c->runtime),
+                                            "--format",
+                                            "s16",
+                                            "--rate",
+                                            std::to_string(c->rate),
+                                            "--channels",
+                                            "1",
+                                            "--target",
+                                            c->target};
               if (c->playback || c->target != "auto") {
                 args.push_back("--properties");
                 std::string properties = "{ ";

@@ -7,6 +7,7 @@ import 'rpc_error.dart';
 import 'audio_devices.dart';
 import 'agent_access.dart';
 import 'web_import.dart';
+import 'source_type.dart';
 import 'platform_services.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -871,6 +872,7 @@ class Application implements ModelGate {
               store.db.execute(
                 "DELETE FROM preferences WHERE key GLOB 'webAnswer.v1.*'",
               );
+              store.markPrivacyMaintenancePending();
               store.db.execute('COMMIT');
               store.compactAfterClear();
             } catch (_) {
@@ -1325,7 +1327,11 @@ class Application implements ModelGate {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     }
     final existing = store.sources
-        .where((s) => s['source_uri'] == uri.toString())
+        .where(
+          (s) =>
+              s['source_uri'] == uri.toString() &&
+              sourceType(s) == SourceType.url,
+        )
         .firstOrNull;
     final id = store.importText(
       uri.host + uri.path,

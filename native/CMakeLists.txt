@@ -10,6 +10,14 @@ if(APPLE)
 endif()
 find_package(Threads REQUIRED)
 add_library(foresight_native SHARED foresight_native.cpp)
+if(DEFINED FORESIGHT_PW_RECORD_EXECUTABLE AND
+   NOT IS_ABSOLUTE "${FORESIGHT_PW_RECORD_EXECUTABLE}")
+  message(FATAL_ERROR "FORESIGHT_PW_RECORD_EXECUTABLE must be an absolute installation path")
+endif()
+set(FORESIGHT_PW_RECORD_EXECUTABLE "/usr/bin/pw-record" CACHE FILEPATH
+    "Trusted absolute installation path to PipeWire pw-record")
+target_compile_definitions(foresight_native PRIVATE
+    FORESIGHT_PW_RECORD_EXECUTABLE="${FORESIGHT_PW_RECORD_EXECUTABLE}")
 target_compile_definitions(foresight_native PRIVATE FORESIGHT_ENABLE_TEST_HOOKS=${FORESIGHT_PRODUCTION_TEST_HOOKS})
 target_compile_features(foresight_native PRIVATE cxx_std_20)
 target_compile_options(foresight_native PRIVATE -Wall -Wextra -Wpedantic)
@@ -45,6 +53,8 @@ if(BUILD_TESTING)
   add_test(NAME native_thread_rollback COMMAND native_thread_rollback_test)
   set_tests_properties(native_thread_rollback PROPERTIES TIMEOUT 10)
   add_executable(native_run_exception_test ../tests/native/run_exception.cpp)
+  target_compile_definitions(native_run_exception_test PRIVATE
+      FORESIGHT_PW_RECORD_EXECUTABLE="$<TARGET_FILE:native_run_exception_test>")
   target_compile_features(native_run_exception_test PRIVATE cxx_std_20)
   target_link_libraries(native_run_exception_test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
   if(APPLE)

@@ -173,8 +173,9 @@ This launches the actual Flutter app alongside MCP and checks visible meeting up
 On macOS the default profile is `~/Library/Application Support/Open Foresight`.
 Existing profile ancestors are canonicalized, so a symlink alias identifies the
 same profile. `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` remain explicit overrides.
-The default runtime is a short private `/tmp/of-<uid>-<profile hash>` directory;
-long explicit paths are rejected before attempting to bind a Unix socket.
+The default runtime is a short private `$TMPDIR/of-<first 12 characters of profile hash>`
+directory under the per-user macOS temporary directory. Long explicit paths are
+rejected before attempting to bind a Unix socket.
 
 The service takes a nonblocking POSIX advisory lock on
 `<canonical profile>/.application.lock`, independent of runtime overrides. Its
@@ -289,6 +290,12 @@ SDK, Python interpreter, or external document-processing tools.
 Committed transcript segments remain indexed when a later speech segment fails or finalization times out. The meeting becomes `interrupted` and retains its transcript instead of becoming a failed, unindexed meeting. Speech segments have a 60-second deadline and Stop allows at most 90 seconds for queued speech work before terminating it; already committed rows remain available. Startup marks meetings left recording, transcribing, or paused as interrupted.
 
 Whisper retries a failed GPU invocation once with `-ng` on CPU, preserving the original audio and discarding the failed attempt's output. A LiteRT GPU failure rebuilds the generation worker on CPU for the next answer. The current answer fails visibly; tool calls are not replayed automatically. Native capture queue overflow emits an interruption with discarded-byte accounting, which is stored alongside the meeting transcript.
+
+Linux installers with PipeWire outside `/usr/bin` configure the native library
+with `-DFORESIGHT_PW_RECORD_EXECUTABLE=/absolute/installation/path/pw-record`.
+This trusted build-time path defaults to `/usr/bin/pw-record`; native capture never
+searches the process `PATH`. An explicit absolute executable supplied through
+`FORESIGHT_CAPTURE_RUNTIME` still takes precedence for controlled deployments.
 
 `application.resume` explicitly resets an exhausted helper restart budget and starts the helper again. It preserves a healthy helper. An incompatible helper transport requires an application-service restart instead of retrying a terminated connection. Shortcut IPC acknowledges that a command was queued; failures appear in the desktop workspace and shortcut status.
 
