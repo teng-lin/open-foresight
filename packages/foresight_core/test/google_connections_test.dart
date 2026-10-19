@@ -670,8 +670,32 @@ void main() {
           2,
           reason: 'Rescheduling rearms the reminder on the existing meeting',
         );
+        store.importText(
+          '[Calendar] Planning',
+          'MY CANCELLED MEETING EDIT',
+          'text/plain',
+          'calendar',
+          id: calendarId,
+          locallyEdited: true,
+        );
         fixture.cancelledEvent = true;
+        await connection.syncCalendar(preserveLocal: true);
+        expect(
+          store.sources.firstWhere((row) => row['id'] == calendarId)['content'],
+          'MY CANCELLED MEETING EDIT',
+        );
+        expect(
+          store.rows('SELECT status FROM calendar_events').single['status'],
+          'cancelled',
+        );
+        // Explicit manual sync retains its destructive cancellation behavior.
         await connection.syncCalendar();
+        expect(store.sources.any((row) => row['id'] == calendarId), isFalse);
+        // An automatic cancellation still removes an unedited source.
+        fixture.cancelledEvent = false;
+        await connection.syncCalendar();
+        fixture.cancelledEvent = true;
+        await connection.syncCalendar(preserveLocal: true);
         expect(
           store.rows('SELECT status FROM calendar_events').single['status'],
           'cancelled',

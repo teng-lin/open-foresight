@@ -427,9 +427,10 @@ class GoogleConnections implements ConnectedSources {
               "UPDATE calendar_events SET status='cancelled',synced=? WHERE event_key=?",
               [DateTime.now().millisecondsSinceEpoch, key],
             );
-            if (store.rows('SELECT id FROM sources WHERE id=? AND deleted=0', [
-              key,
-            ]).isNotEmpty) {
+            if (store.rows(
+              "SELECT id FROM sources WHERE id=? AND deleted=0 AND (?=0 OR (locally_edited=0 AND provenance NOT LIKE 'user edit; %'))",
+              [key, preserveLocal ? 1 : 0],
+            ).isNotEmpty) {
               await domain.delete(key);
             }
           }
