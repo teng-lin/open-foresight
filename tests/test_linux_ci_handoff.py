@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from tests.test_core_coverage_benchmark import gate as gate, run as run_gate
+from tests.test_sdk_approval_bridge import original as original
 
 from tools import ci_linux_handoff as handoff
 from tools import verify_application_no_build as idle
@@ -370,7 +371,6 @@ def test_reusing_a_seed_checks_every_retained_byte_and_timestamp_without_replaci
         "fork",
         "race",
         "ordinary-race",
-        "race-missing",
         "network",
     ],
 )
@@ -399,17 +399,15 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
         calls.append((args, kwargs))
         if case == "network":
             raise RuntimeError("network")
-        found = case == "reuse" or (case == "race" and len(calls) > 1)
+        found = case == "reuse"
         if found:
             materialize(True)
         return found
 
     def produce(*args, **kwargs):
         assert kwargs == {"retain_payload": prefix}
-        if case in ("race", "race-missing"):
-            return "approved-original"
-        materialize(case == "ordinary-race")
-        return "reused" if case == "ordinary-race" else "built"
+        materialize(case in ("race", "ordinary-race"))
+        return "reused" if case in ("race", "ordinary-race") else "built"
 
     with (
         patch.object(shadow.waiter, "fetch", side_effect=fetch),
@@ -418,7 +416,7 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
         patch.object(shadow.sdk, "write_outputs") as write,
         patch.object(shadow.application, "save_sdk") as save,
     ):
-        if case in ("main-missing", "race-missing", "network"):
+        if case in ("main-missing", "network"):
             with pytest.raises(RuntimeError):
                 shadow.prepare(
                     "owner/repo", "a" * 40, 42, case != "main-missing", tmp_path / "sdk"
@@ -430,6 +428,7 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
         assert shadow.prepare("owner/repo", "a" * 40, 42, True, tmp_path / "sdk") == (
             case == "fork"
         )
+        assert len(calls) == 1  # Retained ordinary/approved races never redownload.
         assert calls[0][0][5] == 1800
         assert calls[0][1] == {"optional": True}
         resolve.assert_called_once_with(prefix, load_registry=True)
@@ -740,3 +739,54 @@ def test_retained_sdk_producer_saves_and_compresses_only_once(
                 == 1
             )
             assert len([cmd for cmd in commands if cmd[:2] == ["docker", "build"]]) == 1
+
+
+def test_approval_backed_reuse_retains_original_verified_payload_without_redownload(
+    original, tmp_path, monkeypatch
+):
+    """Run actual approval, ZIP and payload verification, retaining original provenance."""
+    from tools import ci_artifacts as artifacts
+    from tools import ci_linux_shadow_sdk as shadow
+    from tools import linux_sdk_artifacts as sdk
+    from tests.test_sdk_approval_bridge import REPOSITORY, SEMANTIC
+
+    prefix = tmp_path / "retained"
+    output = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setattr(
+        sdk, "run", lambda *args, **kwargs: pytest.fail("SDK Docker command")
+    )
+    monkeypatch.setattr(
+        artifacts, "pack", lambda *args, **kwargs: pytest.fail("Original was repacked")
+    )
+    assert (
+        sdk.produce(
+            "linux-core", tmp_path / "unused", REPOSITORY, retain_payload=prefix
+        )
+        == "reused"
+    )
+    assert (prefix / "image.tar").read_bytes() == b"original Docker image bytes"
+    assert (
+        sdk.record(prefix, "linux-core")["identity"]
+        == original["entry"]["legacy_identity"]
+    )
+    qualification = json.loads((prefix / "approved-source.json").read_text())
+    assert (
+        qualification["original_source_receipt"] == original["entry"]["source_receipt"]
+    )
+    assert qualification["producer_run"] == original["entry"]["producer_run"]
+    assert qualification["artifact_id"] == original["entry"]["artifact_id"]
+    assert qualification["semantic_identity"] == SEMANTIC
+    before = (prefix / "approved-source.json").read_bytes()
+    shadow.reference(prefix, REPOSITORY)
+    assert output.read_text() == (
+        "producer_run=99\nproducer_artifact_id=5\nproducer_artifact_digest="
+        + original["entry"]["artifact_digest"]
+        + "\n"
+    )
+    assert (prefix / "approved-source.json").read_bytes() == before
+    assert original["downloads"] == [
+        6,
+        5,
+    ]  # One small sidecar and one original SDK ZIP.
+    assert not (tmp_path / "unused").exists()

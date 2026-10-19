@@ -338,15 +338,15 @@ def produce(
             # the saved-image checksum before forwarding its qualified output.
             # Consumers still inspect the actual image after loading it.
             record(prefix, component)
+            if retain_payload is not None:
+                prefix.rename(retain_payload)
+                return "reused"
             if (prefix / "approved-source.json").is_file():
                 print(
                     f"Reuse {component}: retaining its approved original receipt and bytes; no new payload or SDK build",
                     flush=True,
                 )
                 return "approved-original"
-            if retain_payload is not None:
-                prefix.rename(retain_payload)
-                return "reused"
             artifacts.pack(component, identity, prefix, output)
             return
         else:

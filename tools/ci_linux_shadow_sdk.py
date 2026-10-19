@@ -83,15 +83,6 @@ def prepare(repository, source, own_pr, fork, directory):
     result = sdk.produce(
         "linux-sdk", produced, repository, source, own_pr, retain_payload=prefix
     )
-    if result == "approved-original":
-        # A compatible producer may become visible between the two lookups.
-        if not waiter.fetch(
-            repository, "linux-sdk", prefix, source, own_pr, 0, optional=True
-        ):
-            raise RuntimeError("Approved SDK became unavailable during verified reuse")
-        reference(prefix, repository)
-        sdk.write_outputs(load(prefix))
-        return False
     if result == "reused":
         reference(prefix, repository)
         sdk.write_outputs(load(prefix))
