@@ -102,7 +102,7 @@ def test_smoke_rejects_incomplete_lifecycle_and_cleans_up(
         monkeypatch.setattr(smoke, "McpPeer", Peer)
     if failure in ("missing-db", "permissions"):
 
-        def graph(endpoint, peer, database):
+        def graph(endpoint, peer, database, **kwargs):
             if failure != "missing-db":
                 database.touch()
                 database.parent.chmod(0o755)

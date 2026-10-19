@@ -140,7 +140,19 @@ def mac_smoke(tmp_path, monkeypatch):
     (resource / "runtime.json").write_text(
         '{"FORESIGHT_RUNTIME_REVISION":"fixture-revision"}'
     )
-    state = {"owner": 100, "peers": 0, "service": None, "failure": None, "stops": []}
+    state = {
+        "owner": 100,
+        "peers": 0,
+        "service": None,
+        "failure": None,
+        "stops": [],
+        "graph_closed": False,
+    }
+    graph_peer = SimpleNamespace(
+        close=Mock(side_effect=lambda: state.update(graph_closed=True))
+    )
+    state["graph_peer"] = graph_peer
+    monkeypatch.setattr(smoke, "ApplicationPeer", lambda endpoint: graph_peer)
     monkeypatch.setattr(
         smoke,
         "copy_application",
@@ -223,6 +235,7 @@ def mac_smoke(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, "installation_lock", lock)
 
     def install(source, destination, **kwargs):
+        assert not state["graph_closed"], "Graph desktop closed before installer checks"
         if not kwargs.get("stop_services"):
             raise smoke.Deferred("live service")
         state["owner"] = None
@@ -239,7 +252,8 @@ def mac_smoke(tmp_path, monkeypatch):
         lambda *args: {"status": "fixture-rollback"},
     )
 
-    def graph(endpoint, peer, database):
+    def graph(endpoint, peer, database, *, application_peer):
+        assert application_peer is graph_peer
         database.touch()
         return {"fixture": True}
 
@@ -284,6 +298,7 @@ def test_mac_smoke_orchestration_checks_ownership_upgrade_and_persistence(
     assert (report["gates"]["desktop"] != "not_run") is desktop
     assert json.loads(output.read_text()) == report
     assert state["stops"] == [200]
+    assert state["graph_closed"] is True
     assert process.terminate.called is desktop
 
 
@@ -357,8 +372,9 @@ def test_linux_mcp_roundtrip_validates_responses_and_closes_pipes(
 @pytest.mark.parametrize(
     "failure", [None, "revision", "content", "stale", "current", "rows", "vectors"]
 )
+@pytest.mark.parametrize("borrowed", [False, True])
 def test_source_graph_probe_checks_real_sqlite_rows_and_restart_content(
-    tmp_path, monkeypatch, failure
+    tmp_path, monkeypatch, failure, borrowed
 ):
     import copy
     import sqlite3
@@ -438,11 +454,14 @@ def test_source_graph_probe_checks_real_sqlite_rows_and_restart_content(
             )
 
     mcp = Mcp()
+    options = {"application_peer": application} if borrowed else {}
     if failure:
         with pytest.raises(RuntimeError):
-            smoke.source_graph_probe(tmp_path / "socket", mcp, database)
+            smoke.source_graph_probe(tmp_path / "socket", mcp, database, **options)
     else:
-        evidence = smoke.source_graph_probe(tmp_path / "socket", mcp, database)
+        evidence = smoke.source_graph_probe(
+            tmp_path / "socket", mcp, database, **options
+        )
         assert len(evidence["graph_rows"]) == 2
         assert evidence["sources"][0]["revision"] == 2
         smoke.verify_source_graph_restart(mcp, database, evidence)
@@ -454,7 +473,7 @@ def test_source_graph_probe_checks_real_sqlite_rows_and_restart_content(
             db.execute("UPDATE graph_documents SET proj_x=123")
         with pytest.raises(RuntimeError, match="coordinates changed"):
             smoke.verify_source_graph_restart(mcp, database, evidence)
-    assert application.closed
+    assert application.closed is not borrowed
 
 
 @pytest.mark.parametrize(
