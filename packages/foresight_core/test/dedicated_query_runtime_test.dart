@@ -214,6 +214,101 @@ with open(sys.argv[-1] + '.exit', 'w') as output: output.write('eof')
     expect((await Process.run('kill', ['-0', '$pid'])).exitCode, isNot(0));
   });
 
+  for (final fault in [
+    'fatal',
+    'exit',
+    'error',
+    'repeated-ready',
+    'unowned',
+    'invalid',
+  ]) {
+    test('$fault detector failure is bounded and a new request can restart', () async {
+      final script = File(worker).readAsStringSync();
+      final reply = switch (fault) {
+        'fatal' =>
+          "print(json.dumps({'type':'fatal','message':'model unavailable'}),flush=True)",
+        'exit' =>
+          "sys.stderr.write('x'*5000+'final diagnostic');sys.stderr.flush();time.sleep(.05);sys.exit(7)",
+        'error' =>
+          "print(json.dumps({'type':'error','id':request['id'],'message':'inference failed'}),flush=True)",
+        'repeated-ready' => "print(json.dumps({'type':'ready'}),flush=True)",
+        'unowned' =>
+          "print(json.dumps({'type':'result','id':'other','text':'wrong owner'}),flush=True)",
+        _ => "print('[]',flush=True)",
+      };
+      File(worker).writeAsStringSync(
+        'import json,sys,time\nprint(\'{"type":"ready"}\',flush=True)\n'
+        'for line in sys.stdin:\n request=json.loads(line)\n $reply\n',
+      );
+      final message = switch (fault) {
+        'fatal' => 'model unavailable',
+        'exit' => 'exited (7)',
+        'error' => 'inference failed',
+        'repeated-ready' => 'Repeated detector ready',
+        'unowned' => 'Unowned detector response',
+        _ => 'Invalid detector frame',
+      };
+      await expectLater(
+        runtime.complete('question', 'owner'),
+        throwsA(
+          ['fatal', 'exit', 'error'].contains(fault)
+              ? isA<StateError>().having(
+                  (e) => e.message,
+                  'message',
+                  contains(message),
+                )
+              : isA<FormatException>().having(
+                  (e) => e.message,
+                  'message',
+                  contains(message),
+                ),
+        ),
+      );
+      File(worker).writeAsStringSync(script);
+      expect(await runtime.complete('retry', 'new-owner'), ' Question?\n');
+      await runtime.close();
+    });
+  }
+
+  test(
+    'cancellation during a successful late spawn reaps the unadopted child',
+    () async {
+      await runtime.close();
+      final started = Completer<void>();
+      final release = Completer<void>();
+      addTearDown(() {
+        if (!release.isCompleted) release.complete();
+      });
+      Process? child;
+      runtime = DedicatedQueryRuntime(
+        python: 'python3',
+        worker: worker,
+        model: '${directory.path}/pid',
+        startProcess: (executable, arguments) async {
+          child = await Process.start(executable, arguments);
+          started.complete();
+          await release.future;
+          return child!;
+        },
+      );
+      final pending = runtime.complete('wait', 'owner');
+      final failure = expectLater(
+        pending,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      await started.future;
+      runtime.cancel('owner');
+      release.complete();
+      await failure;
+      await runtime.close();
+      expect(await child!.exitCode, -ProcessSignal.sigkill.signalNumber);
+      await child!.stdout.drain<void>();
+      await child!.stderr.drain<void>();
+    },
+  );
+
   test('close during generation releases the owned process', () async {
     final pending = runtime.complete('wait', 'owned');
     final failure = expectLater(

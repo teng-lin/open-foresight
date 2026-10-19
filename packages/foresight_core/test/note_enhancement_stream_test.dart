@@ -10,6 +10,9 @@ const priorEnhanced =
     '# Heading  \n- Prior\n\n\nPlain prose with trailing spaces.  \n💡 Retained\n# Potential Important Topics Not In Notes\n- Excluded';
 
 class ControlledNoteGenerator extends NativeRuntime {
+  bool busy = false;
+  @override
+  bool get generating => busy;
   @override
   bool get loaded => true;
   ControlledNoteGenerator()
@@ -161,6 +164,40 @@ void main() {
     generator.events.add({'type': 'delta', 'text': text});
     await changed;
   }
+
+  test(
+    'deferred enhancement coalesces busy retries and preserves notes on recovery failure',
+    () async {
+      generator.events.stream.listen((_) {});
+      generator.busy = true;
+      await expectLater(domain.application.enhanceNotes(id), throwsStateError);
+      await domain.application.enhanceNotes(id, deferWhenBusy: true);
+      await domain.application.enhanceNotes(id, deferWhenBusy: true);
+      time.elapse(const Duration(seconds: 2));
+      expect(generator.entered.isCompleted, isFalse);
+      expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
+      generator.busy = false;
+      // A restore beginning before the retry owns the model configuration gate.
+      domain.initialize(Future<void>.value());
+      time.elapse(const Duration(seconds: 1));
+      time.flushMicrotasks();
+      expect(
+        domain.application.recordingState,
+        contains('Model configuration is busy'),
+      );
+      expect(generator.entered.isCompleted, isFalse);
+      expect(domain.store.meetingEnhancedNotes(id), priorEnhanced);
+      expect(
+        domain.store.rows('SELECT body FROM meeting_notes').single['body'],
+        'Raw notes',
+      );
+      expect(domain.store.rows('SELECT * FROM artifacts'), hasLength(1));
+      await expectLater(
+        domain.application.enhanceNotes(id, current: () => false),
+        throwsStateError,
+      );
+    },
+  );
 
   test(
     'shorthand reordering immediately reorders the draft and debounces persistence',

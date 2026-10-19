@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/application.dart';
+import 'dart:convert';
+import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 class DeferredEmbeddingDomain extends Domain {
   DeferredEmbeddingDomain(super.store, super.helper);
@@ -62,6 +64,66 @@ void main() {
       await domain.helper.close();
     }
   });
+
+  test(
+    'ready helper identity reuses persisted vectors without a live embedding RPC',
+    () async {
+      final helper = Helper(
+        '${root.path}/offline.sock',
+        root.path,
+        manageProcess: false,
+      );
+      addTearDown(helper.close);
+      final domain = Domain(store, helper);
+      addTearDown(domain.close);
+      final app = Application(domain);
+      addTearDown(app.close);
+      helper.snapshot = control.State(
+        pipeline: 'ready',
+        model: control.ModelIdentity(
+          modelDigest: 'digest',
+          tokenizerDigest: 'tokenizer',
+          preprocessing: 'fixture',
+          backend: 'cpu',
+          dimensions: 3,
+        ),
+      );
+      for (final source in store.sources) {
+        store.state(source['id'] as String, 'indexed');
+      }
+      final identity = jsonEncode([
+        graphLayoutAlgorithmVersion,
+        'digest',
+        'tokenizer',
+        'fixture',
+        'cpu',
+        3,
+      ]);
+      expect(
+        store.saveGraphLayout(
+          identity,
+          store.sources,
+          {
+            'a': [1, 0, 0],
+            'b': [1, 0, 0],
+          },
+          {'a': const GraphPoint(-.5, 0, 0), 'b': const GraphPoint(.5, 0, 0)},
+        ),
+        isTrue,
+      );
+      expect(await app.call('labels.auto_assign', {'name': 'Apollo'}), 2);
+      await app.call('labels.cluster', {'name': 'Apollo'});
+      store.saveLabelCluster('Apollo', x: 12, y: 34, radius: 150);
+      final cluster = store.documentClusters().single;
+      expect(cluster['center_proj_x'], 12);
+      expect(cluster['center_proj_y'], 34);
+      expect(cluster['radius'], 150);
+      expect(
+        store.documentLabels.map((label) => label.name),
+        everyElement('Apollo'),
+      );
+    },
+  );
 
   for (final cancel in [false, true]) {
     test(
