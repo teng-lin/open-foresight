@@ -351,7 +351,7 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
         python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
-        python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
+        python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive
     - name: Packaging contracts
       run: python3 -m unittest discover -s tests -p test_linux_packages.py -v
     - name: Package version
@@ -383,6 +383,7 @@ jobs:
         if-no-files-found: error
         retention-days: 30
     - name: Publish only the secret-free application dependency cache
+      if: github.ref == 'refs/heads/main' && inputs.source == ''
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:
         context: .
@@ -397,6 +398,24 @@ jobs:
           type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
           type=registry,ref=${{ steps.app-cache.outputs.cache }}
         cache-to: ${{ format('type=registry,ref={0},mode=max,image-manifest=true', steps.app-cache.outputs.cache) }}
+    - name: Validate acceptance tools cache transport
+      if: github.ref == 'refs/heads/main' && inputs.source == ''
+      id: acceptance-cache
+      run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY" --acceptance
+    - name: Publish reusable acceptance dependencies without application compilation
+      # Historical product overrides retain their original Dockerfile recipe.
+      if: github.ref == 'refs/heads/main' && inputs.source == ''
+      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+      with:
+        context: .
+        file: packaging/acceptance.Dockerfile
+        target: acceptance-dependencies
+        builder: ${{ steps.acceptance-cache.outputs.builder }}
+        build-args: SDK_IMAGE=${{ steps.sdk.outputs.image }}
+        cache-from: |
+          type=registry,ref=${{ steps.acceptance-cache.outputs.legacy_cache }}
+          type=registry,ref=${{ steps.acceptance-cache.outputs.cache }}
+        cache-to: ${{ format('type=registry,ref={0},mode=max,image-manifest=true', steps.acceptance-cache.outputs.cache) }}
     - name: Build and test the current application without exporting its layers
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:

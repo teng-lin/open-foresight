@@ -329,6 +329,9 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
           PY
+      - name: Validate acceptance tools cache transport
+        id: acceptance-cache
+        run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY" --acceptance
       - name: Prepare acceptance tools without application compilation
         id: acceptance-image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
@@ -338,6 +341,10 @@ jobs:
           load: true
           tags: foresight-integration:local
           build-args: SDK_IMAGE=${{ steps.sdk.outputs.image }}
+          builder: ${{ steps.acceptance-cache.outputs.builder }}
+          cache-from: |
+            type=registry,ref=${{ steps.acceptance-cache.outputs.legacy_cache }}
+            type=registry,ref=${{ steps.acceptance-cache.outputs.cache }}
       - name: Build and install the Ubuntu 24.04 package
         env:
           VERSION: ${{ steps.version.outputs.version }}
