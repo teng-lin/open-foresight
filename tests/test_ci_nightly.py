@@ -178,8 +178,9 @@ def test_pre_rollout_red_producer_without_aggregate_is_not_retried(monkeypatch):
 
 
 @pytest.mark.parametrize("recovered", [False, True])
+@pytest.mark.parametrize("build_conclusion", ["failure", "cancelled"])
 def test_exhausted_retry_trigger_reports_original_producer_and_manual_recovery(
-    monkeypatch, recovered
+    monkeypatch, recovered, build_conclusion
 ):
     calls = []
     producer_rows = [

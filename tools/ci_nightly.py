@@ -37,7 +37,7 @@ def green(repository, run, *, request=request):
     )
 
 
-def has_producer(rows, exercise=False):
+def has_producer(rows, exercise=False, *, include_cancelled=False):
     """Skipped reusable callers and failed plans are not tested producers."""
     planned = any(
         job["name"] == "plan" and job.get("conclusion") == "success" for job in rows
@@ -48,7 +48,10 @@ def has_producer(rows, exercise=False):
             if exercise
             else (job["name"] == "build" or job["name"].startswith("build / "))
         )
-        and job.get("conclusion") not in {None, "skipped", "cancelled"}
+        and job.get("conclusion")
+        not in (
+            {None, "skipped"} if include_cancelled else {None, "skipped", "cancelled"}
+        )
         for job in rows
     )
 
@@ -166,7 +169,7 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
             ):
                 continue
             candidate_jobs = jobs(repository, candidate["id"], request=request)
-            if has_producer(candidate_jobs):
+            if has_producer(candidate_jobs, include_cancelled=True):
                 run_id = candidate["id"]
                 current_jobs = candidate_jobs
                 success = any(
