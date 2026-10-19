@@ -44,6 +44,8 @@ def test_artifact_commands_keep_explicit_identity_and_ci_outputs(
         str(tmp_path / "artifact"),
         "--artifact-id",
         "123",
+        "--artifact-digest",
+        "sha256:" + "d" * 64,
         "--own-head",
         "c" * 40,
         "--own-pr",
@@ -61,7 +63,11 @@ def test_artifact_commands_keep_explicit_identity_and_ci_outputs(
             "owner/repo", "linux-core", "b" * 64, "c" * 40, 77
         )
     elif command == "pull":
-        assert calls["pull"].call_args.kwargs == {"source_run": 456}
+        assert calls["pull"].call_args.kwargs == {
+            "source_run": 456,
+            "artifact_id": 123,
+            "artifact_digest": "sha256:" + "d" * 64,
+        }
         assert calls["pull"].call_args.args[2] == "b" * 64
     elif command == "publish-receipt":
         assert calls["publish_receipt"].call_args.args[4] == 123
