@@ -19,6 +19,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from tools import integration_gates as gates
 
 
+@pytest.fixture(autouse=True)
+def isolated_audio_host(monkeypatch):
+    # Model the sound-device-free CI container, regardless of the test host.
+    exists = Path.exists
+    monkeypatch.setattr(
+        Path, "exists", lambda path: False if path == Path("/dev/snd") else exists(path)
+    )
+
+
 @pytest.mark.parametrize("failure", [None, "exit", "events"])
 def test_run_tests_keeps_command_output_and_cleans_integration_alias(
     tmp_path, monkeypatch, failure, capsys

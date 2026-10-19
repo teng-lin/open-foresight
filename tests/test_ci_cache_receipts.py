@@ -92,7 +92,7 @@ class CacheReceiptTests(unittest.TestCase):
             return {"jobs": self.jobs}
         self.fail(route)
 
-    def download(self, command, stdout, check, timeout):
+    def download(self, command, stdout, check, timeout, stderr):
         self.downloaded.append(command[-1])
         self.assertTrue(command[-1].endswith("/401/zip"))
         stdout.write(self.zip_bytes)

@@ -101,7 +101,12 @@ the downloaded payload's receipt and checksums to match. Legacy archives without
 sidecars permit three full candidate transfers; an incomplete search then fails
 with the next artifact identified, instead of authorizing a cold build while
 older compatible work may remain. API/protocol failures also abort the lookup.
-Failed producer jobs are not accepted as validated cache results.
+Failed producer jobs are not accepted as validated cache results. GitHub metadata
+reads and artifact downloads retry transient server, timeout and truncated-response
+failures up to three times, with two- and four-second delays. Each download retry
+discards only its partial transfer, then verifies the original artifact digest.
+Permission/not-found errors, integrity failures and exhausted transport retries
+still propagate; they never authorize a cold dependency build.
 
 The native key describes the implementation and validation inputs, rather than
 including the source commit in every compiled object. On a native hit, CMake

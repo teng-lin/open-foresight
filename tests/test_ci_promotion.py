@@ -69,7 +69,7 @@ def candidate(tmp_path, monkeypatch):
 
     monkeypatch.setattr(artifacts, "api", api)
 
-    def download(command, *, stdout, check, timeout):
+    def download(command, *, stdout, check, timeout, stderr):
         assert command[:2] == ["gh", "api"] and command[-1].endswith("/5/zip")
         stdout.write(archive.read_bytes())
         return subprocess.CompletedProcess(command, 0)

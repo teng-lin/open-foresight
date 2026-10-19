@@ -307,12 +307,56 @@ def application_distribution(prefix, component, source):
     return {"version": version, "build_number": number}
 
 
+def github_read(operation):
+    """Retry transient read failures without turning them into cache misses."""
+    for attempt in range(3):
+        try:
+            return operation()
+        except (
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+            json.JSONDecodeError,
+        ) as error:
+            transient = isinstance(
+                error, (subprocess.TimeoutExpired, json.JSONDecodeError)
+            )
+            if isinstance(error, subprocess.CalledProcessError):
+                diagnostic = error.stderr or b""
+                if isinstance(diagnostic, bytes):
+                    diagnostic = diagnostic.decode("utf-8", errors="replace")
+                if diagnostic:
+                    print(diagnostic, file=sys.stderr, end="")
+                transient = bool(
+                    re.search(
+                        r"HTTP 5\d\d\b|unexpected end of JSON input|"
+                        r"connection reset|TLS handshake timeout|i/o timeout|"
+                        r"unexpected EOF",
+                        diagnostic,
+                        re.IGNORECASE,
+                    )
+                )
+            if not transient or attempt == 2:
+                raise
+            delay = 2 ** (attempt + 1)
+            print(
+                f"Transient GitHub read failure ({type(error).__name__}); "
+                f"retrying in {delay}s ({attempt + 2}/3)",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+
+
 def api(repository, route):
     env = dict(os.environ)
     env.pop("GH_DEBUG", None)
-    return json.loads(
-        subprocess.check_output(
-            ["gh", "api", f"repos/{repository}/{route}"], env=env, timeout=300
+    return github_read(
+        lambda: json.loads(
+            subprocess.check_output(
+                ["gh", "api", f"repos/{repository}/{route}"],
+                env=env,
+                stderr=subprocess.PIPE,
+                timeout=300,
+            )
         )
     )
 
@@ -476,13 +520,18 @@ def eligible_run(repository, run, component, own_head="", own_pr=0):
 
 
 def download_zip(repository, artifact, destination):
-    with destination.open("wb") as stream:
-        subprocess.run(
-            ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact['id']}/zip"],
-            stdout=stream,
-            check=True,
-            timeout=300,
-        )
+    def download():
+        # Each retry truncates partial bytes from the preceding failed transfer.
+        with destination.open("wb") as stream:
+            subprocess.run(
+                ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact['id']}/zip"],
+                stdout=stream,
+                stderr=subprocess.PIPE,
+                check=True,
+                timeout=300,
+            )
+
+    github_read(download)
     expected = artifact.get("digest", "")
     if (
         not isinstance(expected, str)

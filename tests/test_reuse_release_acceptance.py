@@ -85,7 +85,7 @@ def fixture(monkeypatch):
         lambda *args: {"assets": assets, "target_commitish": SHA},
     )
 
-    def download(command, *, stdout, check, timeout):
+    def download(command, *, stdout, check, timeout, stderr):
         stdout.write(raw)
 
     monkeypatch.setattr(subprocess, "run", download)
