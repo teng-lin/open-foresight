@@ -47,7 +47,7 @@ Future<void> main() async {
         else { unawaited(socket.flush().then((_) => stopped.complete())); }
       } else {
         File('$data/requests').writeAsStringSync('${request['method']}\n', mode: FileMode.append);
-        socket.writeln(jsonEncode({'id': request['id'], 'result': {'pid': pid, 'application_api_version': 1, 'runtime_revision': 'fixture-revision', 'installation_root': data}, 'done': true}));
+        socket.writeln(jsonEncode({'id': request['id'], 'result': {'pid': pid, 'application_api_version': 1, 'runtime_revision': 'fixture-revision', 'installation_root': Directory(data).resolveSymbolicLinksSync()}, 'done': true}));
         if (request['method'] == 'fixture.stop') unawaited(socket.flush().then((_) => stopped.complete()));
       }
     }, onError: (Object _) {}, onDone: () {
