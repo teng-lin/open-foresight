@@ -111,6 +111,9 @@ def test_promotion_implementation_and_app_code_are_not_recipe_inputs(source):
     for name in (
         "tools/ci_artifacts.py",
         "tools/linux_sdk_artifacts.py",
+        "tools/sdk_final_approval.py",
+        "tools/ci_stage_cache.py",
+        "tools/ci_sanitizer_artifacts.py",
         "apps/desktop/lib/main.dart",
     ):
         path = source / name

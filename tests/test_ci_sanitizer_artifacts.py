@@ -899,6 +899,8 @@ def test_intermediate_producer_inherits_only_equal_merged_final_recipe_and_contr
 
     final = save("apps/desktop/lib/ui.dart", "Dart-only final change")
     run = {
+        "path": sdk.WORKFLOW,
+        "head_repository": {"full_name": REPOSITORY},
         "head_sha": producer,
         "event": "pull_request",
         "pull_requests": [{"number": 119}],

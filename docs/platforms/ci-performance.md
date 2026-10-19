@@ -47,6 +47,16 @@ it does not relabel the output as a new build. Changed build inputs or controls
 require a compatibility review and preserve the artifact rather than silently
 authorizing a cold compile.
 
+SDK final approval, native compiler-work reuse and sanitizer final approval share
+`tools/sdk_final_approval.py::approved_final_heads`. It checks the expected
+workflow/repository and merged producer relationship before the authoritative
+merged-source proof, and limits PR commit history to three 100-entry pages
+(GitHub exposes at most 250 commits). Each consumer still checks its own build
+and control equivalence. The exact-manifest historical SDK approval bridge
+retains its separate policy and history bound. Qualification refactors do not
+change SDK build identities: existing approved merged producers and exact
+manifest originals keep their verified reuse paths, original receipts and bytes.
+
 ## Application stages
 
 Linux native regression and macOS validation run four separate jobs: native,

@@ -497,47 +497,14 @@ def control_closure(root, source=None):
 
 def approved_final(repository, run, root, kind):
     """An intermediate producer may inherit only unchanged reviewed final controls."""
-    producer = run.get("head_sha", "")
-    if run.get("event") != "pull_request" or not re.fullmatch(
-        r"[a-f0-9]{40}", producer
+    producer = run.get("head_sha")
+    for final in artifacts.final_approval.approved_final_heads(
+        repository,
+        run,
+        workflow=WORKFLOW,
+        api=artifacts.api,
+        merged_source=artifacts.merged_source,
     ):
-        return False
-    references = run.get("pull_requests") or artifacts.api(
-        repository, f"commits/{producer}/pulls"
-    )
-    for reference in references:
-        number = reference.get("number")
-        if type(number) is not int or number <= 0:
-            continue
-        pull = artifacts.api(repository, f"pulls/{number}")
-        final = pull.get("head", {}).get("sha", "")
-        if (
-            not pull.get("merged_at")
-            or not re.fullmatch(r"[a-f0-9]{40}", final)
-            or any(
-                pull.get(side, {}).get("repo", {}).get("full_name") != repository
-                for side in ("head", "base")
-            )
-        ):
-            continue
-        related = producer == final or artifacts.api(
-            repository, f"compare/{producer}...{final}"
-        )["status"] in ("ahead", "identical")
-        if not related:
-            for page in range(1, 4):
-                commits = artifacts.api(
-                    repository, f"pulls/{number}/commits?per_page=100&page={page}"
-                )
-                if any(commit.get("sha") == producer for commit in commits):
-                    related = True
-                    break
-                if len(commits) < 100:
-                    break
-        if not related or not artifacts.merged_source(
-            repository,
-            {**run, "head_sha": final, "pull_requests": [{"number": number}]},
-        ):
-            continue
         ensure_commit(root, producer)
         ensure_commit(root, final)
         if recipe(root, kind, producer) == recipe(

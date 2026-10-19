@@ -12,31 +12,25 @@ WORKFLOW = ".github/workflows/ci-dependencies.yml"
 MAX_COMMIT_PAGES = 3  # GitHub's PR commits endpoint returns at most 250 commits.
 
 
-def approved_final_source(
-    repository,
-    run,
-    component,
-    *,
-    api,
-    merged_source,
-    fingerprint_at,
-    read_source,
-    controls,
-):
+def approved_final_heads(repository, run, *, workflow, api, merged_source):
+    """Yield related merged final heads with authoritative source approval.
+
+    PR history is bounded to three 100-entry pages: GitHub exposes at most 250
+    commits. Consumers keep their own build/control equivalence and error rules.
+    This qualifies source only, never jobs, receipts, attempts or payload bytes.
+    """
     producer = run.get("head_sha")
     if (
-        component.endswith("-app")
-        or run.get("path") != WORKFLOW
+        run.get("path") != workflow
         or run.get("event") != "pull_request"
         or (run.get("head_repository") or {}).get("full_name") != repository
         or not isinstance(producer, str)
         or not SHA.fullmatch(producer)
     ):
-        return False
+        return
     references = run.get("pull_requests") or api(
         repository, f"commits/{producer}/pulls"
     )
-    errors = []
     for reference in references:
         number = reference.get("number")
         if type(number) is not int or number <= 0:
@@ -72,6 +66,27 @@ def approved_final_source(
         approved = {**run, "head_sha": final, "pull_requests": [{"number": number}]}
         if not merged_source(repository, approved):
             continue
+        yield final
+
+
+def approved_final_source(
+    repository,
+    run,
+    component,
+    *,
+    api,
+    merged_source,
+    fingerprint_at,
+    read_source,
+    controls,
+):
+    if component.endswith("-app"):
+        return False
+    producer = run.get("head_sha")
+    errors = []
+    for final in approved_final_heads(
+        repository, run, workflow=WORKFLOW, api=api, merged_source=merged_source
+    ):
         if fingerprint_at(repository, producer, component) != fingerprint_at(
             repository, final, component
         ):
