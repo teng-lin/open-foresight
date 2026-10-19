@@ -3,6 +3,7 @@
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -25,6 +26,7 @@ def test_shared_dmg_sidecar_binds_bytes_source_version_architecture_and_build(tm
     def run(arguments, **kwargs):
         if arguments[:2] == ["hdiutil", "create"]:
             Path(arguments[-1]).write_bytes(b"verified disk image")
+        return subprocess.CompletedProcess(arguments, 0, "verified\n", "")
 
     with patch.object(create_dmg.subprocess, "run", side_effect=run):
         image = create_dmg.create(
@@ -63,3 +65,113 @@ def test_invalid_dmg_application_identity_is_rejected_before_building(tmp_path):
                 tmp_path / "dist",
             )
         run.assert_not_called()
+
+
+BUSY = "hdiutil: verify failed - Resource temporarily unavailable\n"
+
+
+@pytest.mark.parametrize("output", [b"partial output\xff\n", "partial output\n", None])
+def test_verification_timeout_preserves_partial_output_without_retry(
+    tmp_path, capsys, output
+):
+    command = ["hdiutil", "verify", str(tmp_path / "existing.dmg")]
+    timeout = subprocess.TimeoutExpired(command, 300, output=output, stderr=output)
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=timeout) as run,
+        patch.object(create_dmg.time, "sleep") as sleep,
+        pytest.raises(subprocess.TimeoutExpired) as error,
+    ):
+        create_dmg.verify_image(tmp_path / "existing.dmg")
+    assert error.value is timeout
+    run.assert_called_once()
+    sleep.assert_not_called()
+    captured = capsys.readouterr()
+    expected = output.decode(errors="replace") if isinstance(output, bytes) else output
+    assert captured.out == (expected or "")
+    assert captured.err == (expected or "")
+
+
+@pytest.mark.parametrize("failures", [0, 1, 2])
+def test_verification_retries_only_transient_busy_and_preserves_output(
+    tmp_path, capsys, failures
+):
+    image = tmp_path / "existing.dmg"
+    image.write_bytes(b"same image bytes")
+    command = ["hdiutil", "verify", str(image)]
+    results = [
+        subprocess.CompletedProcess(command, 1, "busy attempt\n", BUSY)
+    ] * failures
+    results.append(subprocess.CompletedProcess(command, 0, "verified image\n", ""))
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=results) as run,
+        patch.object(create_dmg.time, "sleep") as sleep,
+    ):
+        create_dmg.verify_image(image)
+    assert run.call_count == failures + 1
+    for call in run.call_args_list:
+        assert call.args == (command,)
+        assert call.kwargs == {"capture_output": True, "text": True, "timeout": 300}
+    assert sleep.call_args_list == [((2,),)] * failures
+    output = capsys.readouterr()
+    assert output.out == "busy attempt\n" * failures + "verified image\n"
+    assert output.err.count(BUSY) == failures
+    assert image.read_bytes() == b"same image bytes"
+
+
+@pytest.mark.parametrize(
+    ("diagnostic", "returncode", "attempts"),
+    [
+        (BUSY, 1, 3),
+        (BUSY, -9, 1),
+        ("hdiutil: verify failed - checksum mismatch\n", 1, 1),
+        ("hdiutil: verify failed - image not recognized\n", 1, 1),
+        ("other tool: Resource temporarily unavailable\n", 1, 1),
+    ],
+)
+def test_failed_verification_never_recreates_image_or_writes_sidecars(
+    tmp_path, capsys, diagnostic, returncode, attempts
+):
+    app = tmp_path / "Open Foresight.app"
+    app.mkdir()
+    manifest = tmp_path / "app.manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "revision": "a" * 40,
+                "architecture": "arm64",
+                "version": "0.1.2",
+                "build_number": 42,
+            }
+        )
+    )
+    commands = []
+
+    def run(arguments, **kwargs):
+        commands.append(arguments)
+        if arguments[:2] == ["hdiutil", "create"]:
+            Path(arguments[-1]).write_bytes(b"original image")
+        if arguments[:2] == ["hdiutil", "verify"]:
+            return subprocess.CompletedProcess(
+                arguments, returncode, "failed output\n", diagnostic
+            )
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    with (
+        patch.object(create_dmg.subprocess, "run", side_effect=run),
+        patch.object(create_dmg.time, "sleep") as sleep,
+        pytest.raises(subprocess.CalledProcessError) as error,
+    ):
+        create_dmg.create(
+            app, manifest, "Open-Foresight-0.1.2-macos-arm64.dmg", tmp_path / "dist"
+        )
+    assert sum(cmd[:2] == ["hdiutil", "create"] for cmd in commands) == 1
+    assert sum(cmd[:2] == ["hdiutil", "verify"] for cmd in commands) == attempts
+    assert sleep.call_args_list == [((2,),)] * (attempts - 1)
+    image = tmp_path / "dist/Open-Foresight-0.1.2-macos-arm64.dmg"
+    assert image.read_bytes() == b"original image"
+    assert sorted(path.name for path in image.parent.iterdir()) == [image.name]
+    assert error.value.stdout == "failed output\n"
+    assert error.value.stderr == diagnostic
+    output = capsys.readouterr()
+    assert output.out == "failed output\n" * attempts
+    assert output.err.count(diagnostic) == attempts

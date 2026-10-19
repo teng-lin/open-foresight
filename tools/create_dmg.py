@@ -8,7 +8,49 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
+import time
+
+
+def print_output(stdout, stderr):
+    for output, stream in ((stdout, sys.stdout), (stderr, sys.stderr)):
+        if output:
+            if isinstance(output, bytes):
+                output = output.decode(errors="replace")
+            print(output, end="", file=stream, flush=True)
+
+
+def verify_image(destination):
+    # DiskImages can report EAGAIN immediately after successfully creating the
+    # image. Retry verification of those same bytes, never image creation.
+    for attempt in range(3):
+        try:
+            result = subprocess.run(
+                ["hdiutil", "verify", str(destination)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except subprocess.TimeoutExpired as error:
+            print_output(error.stdout, error.stderr)
+            raise
+        print_output(result.stdout, result.stderr)
+        if result.returncode == 0:
+            return
+        if (
+            attempt == 2
+            or result.returncode != 1
+            or "hdiutil: verify failed - Resource temporarily unavailable"
+            not in result.stderr.splitlines()
+        ):
+            result.check_returncode()
+        print(
+            "Disk image verification temporarily unavailable; retrying in 2s",
+            file=sys.stderr,
+            flush=True,
+        )
+        time.sleep(2)
 
 
 def create(app, manifest, name, output):
@@ -55,7 +97,7 @@ def create(app, manifest, name, output):
             check=True,
             timeout=300,
         )
-    subprocess.run(["hdiutil", "verify", str(destination)], check=True, timeout=300)
+    verify_image(destination)
     with destination.open("rb") as stream:
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     Path(str(destination) + ".sha256").write_text(f"{digest}  {name}\n")
