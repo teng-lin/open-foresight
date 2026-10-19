@@ -338,7 +338,7 @@ class _IntegrationsController extends _FeatureController {
     }
   }
 
-  Future<void> connectGoogle() async {
+  Future<void> connectGoogle({bool addAccount = false}) async {
     if (googleAuth.client == null) {
       throw StateError(
         'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.',
@@ -351,6 +351,7 @@ class _IntegrationsController extends _FeatureController {
         auth: googleAuth,
         openBrowser: openPlatformUri,
         returnToApp: () => activateWindow(null),
+        addAccount: addAccount,
       ),
     );
     if (!mounted) return;
@@ -364,6 +365,37 @@ class _IntegrationsController extends _FeatureController {
     }
     setState(() => googleState = 'Connected as ${googleAuth.email}');
     await google.syncCalendar();
+  }
+
+  Future<void> disconnectGoogle() async {
+    await googleAuth.disconnect();
+    if (mounted) {
+      setState(
+        () => googleState = googleAuth.connected
+            ? 'Connected as ${googleAuth.email}'
+            : 'Disconnected; imported documents remain on this device.',
+      );
+    }
+  }
+
+  Future<void> addGoogleAccount() => connectGoogle(addAccount: true);
+
+  Future<void> switchGoogleAccount(String id) async {
+    if (id == googleAuth.account) return;
+    await googleAuth.switchAccount(id);
+    if (!mounted) return;
+    setState(() => googleState = 'Connected as ${googleAuth.email}');
+    await google.syncCalendar();
+  }
+
+  Future<void> signOutGoogleAccount(String id) async {
+    await googleAuth.signOutAccount(id);
+    if (!mounted) return;
+    setState(
+      () => googleState = googleAuth.connected
+          ? 'Connected as ${googleAuth.email}'
+          : 'Disconnected; imported documents remain on this device.',
+    );
   }
 
   Future<void> setMeetingReminders(bool value) async {

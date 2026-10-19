@@ -46,6 +46,7 @@ import 'desktop_menu.dart';
 import 'hypr_shortcuts.dart';
 import 'google_picker.dart';
 import 'google_sign_in_dialog.dart';
+import 'account_button.dart';
 import 'audio_devices.dart';
 import 'gemma_setup_view.dart';
 import 'speech_setup_view.dart';
@@ -822,16 +823,23 @@ class _WorkspaceState extends State<Workspace>
                           ),
                           icon: const Icon(Icons.help_outline),
                         ),
-                        const Padding(
-                          padding: EdgeInsets.all(12),
-                          child: CircleAvatar(
-                            radius: 16,
-                            backgroundColor: Color(0xff008577),
-                            child: Icon(
-                              Icons.person_outline,
-                              color: Colors.white,
-                              size: 20,
-                            ),
+                        AccountButton(
+                          connected: integrationFeature.googleAuth.connected,
+                          busy: busy,
+                          displayName:
+                              integrationFeature.googleAuth.displayName,
+                          email: integrationFeature.googleAuth.email,
+                          photoUrl: integrationFeature.googleAuth.photoUrl,
+                          account: integrationFeature.googleAuth.account,
+                          accounts: integrationFeature.googleAuth.accounts,
+                          onSignIn: () => run(integrationFeature.connectGoogle),
+                          onAddAccount: () =>
+                              run(integrationFeature.addGoogleAccount),
+                          onSwitchAccount: (id) => run(
+                            () => integrationFeature.switchGoogleAccount(id),
+                          ),
+                          onSignOutAccount: (id) => run(
+                            () => integrationFeature.signOutGoogleAccount(id),
                           ),
                         ),
                       ],

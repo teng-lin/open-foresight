@@ -100,8 +100,20 @@ verifies its producer and environment before downloading objects, then requires
 the downloaded payload's receipt and checksums to match. Legacy archives without
 sidecars permit three full candidate transfers; an incomplete search then fails
 with the next artifact identified, instead of authorizing a cold build while
-older compatible work may remain. API/protocol failures also abort the lookup.
-Failed producer jobs are not accepted as validated cache results.
+older compatible work may remain. After exhausted HTTP 5xx retries while
+qualifying a producer, lookup may try another retained producer, which must pass
+every original provenance, successful-attempt, environment and payload check.
+Other artifacts from the unavailable run do not repeat the failed lookup. Three
+unavailable producers exhaust the bounded recovery search and propagate the error.
+If no fully verified compatible producer is found, the original server error is
+re-raised; an incomplete search never permits a cold build. Authentication and
+protocol errors still abort immediately.
+Failed producer jobs are not accepted as validated cache results. GitHub metadata
+reads and artifact downloads retry transient server, timeout and truncated-response
+failures up to three times, with two- and four-second delays. Each download retry
+discards only its partial transfer, then verifies the original artifact digest.
+Permission/not-found errors, integrity failures and exhausted transport retries
+still propagate; they never authorize a cold dependency build.
 
 The native key describes the implementation and validation inputs, rather than
 including the source commit in every compiled object. On a native hit, CMake
@@ -119,7 +131,7 @@ original source/recipe, successful job attempt, environment, upload bounds and
 payload digests remain independently verified. This eligibility applies only to
 compiler work on main pushes, manual dispatches and schedules; successful test-result reuse remains PR-scoped, and main/release
 validation always configures, incrementally builds and tests current inputs.
-API or missing-source proof failures stop lookup rather than authorize a cold
+Unresolved API or missing-source proof failures stop lookup rather than authorize a cold
 build. SDK, LiteRT and Whisper artifacts retain their separate approval policy.
 macOS distribution stamping
 changes the native version input; its derived receipts remain ineligible until a
@@ -138,6 +150,12 @@ acceptance-tools image. It verifies the repository, workflow, source, successful
 producer job and original attempt, upload bounds, ZIP and payload checksums, and
 distribution metadata. Rerunning failed acceptance jobs retains the successful
 producer; it neither compiles an application nor relabels the original attempt.
+When the run-wide jobs API reports that exact producer as pending, restore checks
+the individual job endpoint, requiring the same job ID, name, run, source and
+attempt. If that job is also pending, restore polls for up to 60 seconds before
+failing. It still requires completed success and the
+original upload window before downloading any bytes; failed, ambiguous or
+incorrectly scoped producers are never accepted.
 A fork's locally built SDK is also retained for this successful source-scoped
 producer, so its acceptance job does not build the SDK again. Those artifacts
 never enter the trusted main SDK or release-candidate pools.

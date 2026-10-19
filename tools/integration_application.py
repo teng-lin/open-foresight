@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 
 from tools import ci_artifacts as artifacts
 from tools.ci_stage_cache import read_zip
@@ -101,21 +102,56 @@ def retrieve(
         or (artifact.get("workflow_run") or {}).get("head_sha") != source
     ):
         raise ValueError("Application artifact differs from its producer output")
-    jobs = [
-        job
-        for job in artifacts.dependency_jobs(repository, run_id)
-        if job.get("name") == "ubuntu-application"
-        and job.get("run_id") == run_id
-        and job.get("head_sha") == source
-        and job.get("status") == "completed"
-        and job.get("conclusion") == "success"
-        and job.get("run_attempt") == attempt
-        and artifacts.in_producer_attempt(artifact, job)
-    ]
-    if len(jobs) != 1:
-        raise ValueError(
-            "Application requires one successful original producer attempt"
-        )
+    for poll in range(7):
+        candidates = [
+            job
+            for job in artifacts.dependency_jobs(repository, run_id)
+            if job.get("name") == "ubuntu-application"
+            and job.get("run_id") == run_id
+            and job.get("head_sha") == source
+            and job.get("run_attempt") == attempt
+        ]
+        if (
+            len(candidates) == 1
+            and candidates[0].get("status") in ("queued", "in_progress", "waiting")
+            and candidates[0].get("conclusion") is None
+        ):
+            # The run-wide listing can lag after a successful producer has
+            # released its dependent job. Query that exact job independently.
+            listed = candidates[0]
+            job_id = listed.get("id")
+            if type(job_id) is not int or job_id < 1:
+                raise ValueError("Invalid pending application producer job")
+            current = artifacts.api(repository, f"actions/jobs/{job_id}")
+            if any(
+                current.get(field) != listed.get(field)
+                for field in ("id", "name", "run_id", "head_sha", "run_attempt")
+            ):
+                raise ValueError("Application producer job identity mismatch")
+            candidates = [current]
+        jobs = [
+            job
+            for job in candidates
+            if job.get("status") == "completed"
+            and job.get("conclusion") == "success"
+            and artifacts.in_producer_attempt(artifact, job)
+        ]
+        if len(jobs) == 1:
+            break
+        # A dependent job may start before the jobs API reflects its producer's
+        # success. Wait only for an unambiguous, correctly scoped pending job;
+        # never accept it until completion and the upload window are verified.
+        if (
+            len(candidates) != 1
+            or candidates[0].get("status") not in ("queued", "in_progress", "waiting")
+            or candidates[0].get("conclusion") is not None
+            or poll == 6
+        ):
+            raise ValueError(
+                "Application requires one successful original producer attempt"
+            )
+        print("Waiting for completed application producer metadata", flush=True)
+        time.sleep(10)
     with tempfile.TemporaryDirectory(
         prefix="foresight-integration-application-"
     ) as temporary:

@@ -64,6 +64,7 @@ class GoogleAuth implements GoogleAccount {
   static const scopes = [
     'openid',
     'email',
+    'profile',
     'https://www.googleapis.com/auth/drive.readonly',
     'https://www.googleapis.com/auth/calendar.events.readonly',
   ];
@@ -79,9 +80,13 @@ class GoogleAuth implements GoogleAccount {
   @override
   String loadError = '';
   Map<String, dynamic>? _tokens;
+  Map<String, dynamic>? _persistedActive;
+  final Map<String, Map<String, dynamic>> _savedAccounts = {};
   HttpServer? _callback;
   Completer<String>? _authorization;
   Future<String>? _refreshing;
+  Future<void>? _profileRefresh;
+  bool _profileLoaded = false;
   bool _closed = false, _disconnecting = false;
   int _authorizationGeneration = 0;
   Future<void> _credentialBarrier = Future<void>.value();
@@ -140,14 +145,55 @@ class GoogleAuth implements GoogleAccount {
             loaded['expires_at'] is! int) {
           throw StateError('Incomplete saved Google authorization');
         }
+        final inactive = loaded.remove('saved_accounts');
+        if (inactive != null) {
+          if (inactive is! List) throw StateError('Invalid saved accounts');
+          for (final value in inactive) {
+            final saved = Map<String, dynamic>.from(value as Map);
+            if (!_validTokens(saved) ||
+                _savedAccounts.containsKey(saved['account_sub']) ||
+                saved['account_sub'] == loaded['account_sub']) {
+              throw StateError('Invalid saved Google account');
+            }
+            _savedAccounts[saved['account_sub'] as String] = saved;
+          }
+        }
         _tokens = loaded;
+        _persistedActive = Map<String, dynamic>.from(loaded);
       }
     } catch (_) {
       _tokens = null;
+      _savedAccounts.clear();
       loadError =
           'Saved Google setup could not be loaded. Import your Desktop client configuration and sign in again.';
     }
   }
+  static bool _validTokens(Map<String, dynamic> data) =>
+      data['access_token'] is String &&
+      (data['refresh_token'] is String ||
+          data['refresh_token_store'] == 'platform') &&
+      data['account_sub'] is String &&
+      data['expires_at'] is int;
+
+  String _credentialKey(Map<String, dynamic> data) =>
+      data['refresh_token_account'] == true
+      ? '$_secretKey-${sha256.convert(utf8.encode(data['account_sub'] as String))}'
+      : _secretKey;
+
+  @override
+  List<Map<String, Object?>> get accounts => [
+    if (_tokens != null) _summary(_tokens!, true),
+    for (final saved in _savedAccounts.values) _summary(saved, false),
+  ];
+
+  Map<String, Object?> _summary(Map<String, dynamic> data, bool current) => {
+    'id': data['account_sub'],
+    'email': data['email'] as String? ?? '',
+    'displayName': data['name'] as String? ?? '',
+    'photoUrl': data['picture'] as String? ?? '',
+    'current': current,
+  };
+
   @override
   bool get connected =>
       !_disconnecting &&
@@ -158,6 +204,10 @@ class GoogleAuth implements GoogleAccount {
   String get account => _tokens?['account_sub'] as String? ?? '';
   @override
   String get email => _tokens?['email'] as String? ?? '';
+  @override
+  String get displayName => _tokens?['name'] as String? ?? '';
+  @override
+  String get photoUrl => _tokens?['picture'] as String? ?? '';
   @override
   bool get signingIn => _callback != null;
   String _random(int bytes) => base64UrlEncode(
@@ -188,11 +238,12 @@ class GoogleAuth implements GoogleAccount {
     }
   }
 
-  Future<String?> _refreshCredential() async {
-    final token = _tokens?['refresh_token'];
+  Future<String?> _refreshCredential([Map<String, dynamic>? saved]) async {
+    final data = saved ?? _tokens;
+    final token = data?['refresh_token'];
     if (token is String) return token;
-    if (_tokens?['refresh_token_store'] == 'platform') {
-      final token = await secretStore.read(_secretKey);
+    if (data?['refresh_token_store'] == 'platform') {
+      final token = await secretStore.read(_credentialKey(data!));
       if (token == null) {
         throw StateError(
           'Saved Google authorization is unavailable. Sign in again.',
@@ -213,9 +264,19 @@ class GoogleAuth implements GoogleAccount {
     final token =
         data['refresh_token'] as String? ?? await _refreshCredential();
     if (token == null) throw StateError('Missing Google refresh authorization');
-    final secured = await secretStore.write(_secretKey, token);
+    final subject = data['account_sub'] as String;
+    final target = {
+      ...data,
+      'refresh_token_account': true,
+      if (data['refresh_token_store'] == 'platform' &&
+          data['refresh_token_account'] != true)
+        'refresh_token_legacy': true,
+    };
+    final key = _credentialKey(target);
+    final previousSecret = await secretStore.read(key);
+    final secured = await secretStore.write(key, token);
     try {
-      final persisted = Map<String, dynamic>.from(data);
+      final persisted = Map<String, dynamic>.from(target);
       if (secured) {
         persisted.remove('refresh_token');
         persisted['refresh_token_store'] = 'platform';
@@ -223,18 +284,105 @@ class GoogleAuth implements GoogleAccount {
         persisted.remove('refresh_token_store');
         persisted['refresh_token'] = token;
       }
-      await _save(
-        'tokens.json',
-        persisted,
-        authorizationGeneration: generation,
-      );
+      final inactive = Map<String, Map<String, dynamic>>.from(_savedAccounts);
+      inactive.remove(subject);
+      if (_persistedActive != null &&
+          _persistedActive!['account_sub'] != subject) {
+        inactive[_persistedActive!['account_sub'] as String] =
+            _persistedActive!;
+      }
+      await _saveRegistry(persisted, inactive, generation);
+      _savedAccounts
+        ..clear()
+        ..addAll(inactive);
+      _persistedActive = persisted;
+      data['refresh_token_account'] = true;
+      if (target['refresh_token_legacy'] == true) {
+        data['refresh_token_legacy'] = true;
+        if (!inactive.values.any(
+          (saved) =>
+              saved['refresh_token_store'] == 'platform' &&
+              saved['refresh_token_account'] != true,
+        )) {
+          try {
+            // The atomic registry already points at the verified scoped key.
+            // A failed save above always retains the original legacy secret.
+            await secretStore.delete(_secretKey);
+          } catch (_) {
+            // Keep the legacy marker so per-account logout retries cleanup.
+          }
+        }
+      }
     } catch (_) {
-      if (secured && generation != _authorizationGeneration) {
-        await secretStore.delete(_secretKey);
+      if (secured) {
+        if (previousSecret == null) {
+          await secretStore.delete(key);
+        } else {
+          await secretStore.write(key, previousSecret);
+        }
       }
       rethrow;
     }
   }
+
+  Future<void> _saveRegistry(
+    Map<String, dynamic>? active,
+    Map<String, Map<String, dynamic>> inactive,
+    int generation,
+  ) async {
+    if (_closed || generation != _authorizationGeneration) {
+      throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
+    }
+    if (active == null) {
+      final file = File('${directory.path}/tokens.json');
+      if (file.existsSync()) await file.delete();
+      return;
+    }
+    await _save('tokens.json', {
+      ...active,
+      if (inactive.isNotEmpty) 'saved_accounts': inactive.values.toList(),
+    }, authorizationGeneration: generation);
+  }
+
+  void _resetActiveWork() {
+    _profileLoaded = false;
+    _profileRefresh = null;
+    _refreshing = null;
+  }
+
+  @override
+  Future<void> switchAccount(String id) async {
+    if (id == account) return;
+    if (!_savedAccounts.containsKey(id)) {
+      throw StateError('Google account is not saved');
+    }
+    if (_disconnecting) {
+      throw RpcError(RpcErrorCode.busy, 'Google account change in progress');
+    }
+    final generation = ++_authorizationGeneration;
+    cancelSignIn();
+    await _changeCredential(() async {
+      final next = _savedAccounts[id];
+      if (next == null) throw StateError('Google account is not saved');
+      final inactive = Map<String, Map<String, dynamic>>.from(_savedAccounts)
+        ..remove(id);
+      if (_persistedActive != null) {
+        inactive[_persistedActive!['account_sub'] as String] =
+            _persistedActive!;
+      }
+      await _saveRegistry(next, inactive, generation);
+      _tokens = Map<String, dynamic>.from(next);
+      _persistedActive = next;
+      _savedAccounts
+        ..clear()
+        ..addAll(inactive);
+      _resetActiveWork();
+    });
+  }
+
+  @override
+  Future<void> addAccount(Future<void> Function(Uri) openBrowser) =>
+      _authorize(openBrowser, allowConnected: true);
 
   @override
   Future<void> configure(File file) async {
@@ -310,13 +458,19 @@ class GoogleAuth implements GoogleAccount {
   }
 
   @override
-  Future<void> signIn(Future<void> Function(Uri) openBrowser) async {
+  Future<void> signIn(Future<void> Function(Uri) openBrowser) =>
+      _authorize(openBrowser);
+
+  Future<void> _authorize(
+    Future<void> Function(Uri) openBrowser, {
+    bool allowConnected = false,
+  }) async {
     if (_closed) throw StateError('Google connection closed');
     if (_disconnecting || _forgetting != null) {
       throw RpcError(RpcErrorCode.busy, 'Google disconnect is in progress');
     }
-    final generation = _authorizationGeneration;
-    if (connected) {
+    var generation = _authorizationGeneration;
+    if (connected && !allowConnected) {
       throw StateError(
         'Disconnect the current Google account before signing in again.',
       );
@@ -384,7 +538,7 @@ class GoogleAuth implements GoogleAccount {
           ).replaceAll('=', ''),
           'code_challenge_method': 'S256',
           'access_type': 'offline',
-          'prompt': 'consent',
+          'prompt': allowConnected ? 'select_account consent' : 'consent',
         },
       );
       await openBrowser(uri);
@@ -405,7 +559,9 @@ class GoogleAuth implements GoogleAccount {
         ),
       );
       final granted = (token['scope'] as String? ?? '').split(' ').toSet();
-      if (!scopes.skip(2).every(granted.contains)) {
+      if (!scopes
+          .where((scope) => scope.startsWith('https://'))
+          .every(granted.contains)) {
         throw StateError(
           'Drive and Calendar read access are both required. Reconnect and grant these permissions.',
         );
@@ -419,6 +575,8 @@ class GoogleAuth implements GoogleAccount {
             (token['expires_in'] as num).toInt() * 1000,
         'account_sub': identity['sub'],
         'email': identity['email'],
+        if (identity['name'] is String) 'name': identity['name'],
+        if (identity['picture'] is String) 'picture': identity['picture'],
       };
       if (saved['refresh_token'] is! String ||
           saved['account_sub'] is! String) {
@@ -426,11 +584,24 @@ class GoogleAuth implements GoogleAccount {
           'Google did not return a persistent account authorization. Reconnect.',
         );
       }
+      if (generation != _authorizationGeneration) {
+        throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
+      }
+      generation = ++_authorizationGeneration;
       await _saveTokens(saved, generation);
       if (generation != _authorizationGeneration) {
         throw RpcError(RpcErrorCode.cancelled, 'Google connection changed');
       }
       _tokens = saved;
+      _resetActiveWork();
+      _profileLoaded = displayName.isNotEmpty && photoUrl.isNotEmpty;
+      if (!_profileLoaded) {
+        try {
+          await _loadProfile(identity);
+        } catch (_) {
+          // Optional identity enrichment cannot invalidate successful consent.
+        }
+      }
       loadError = '';
     } finally {
       if (!authorization.isCompleted) {
@@ -452,6 +623,75 @@ class GoogleAuth implements GoogleAccount {
         RpcError(RpcErrorCode.cancelled, 'Google sign-in cancelled'),
       );
     }
+  }
+
+  /// Populate identity omitted by older installations without replacing consent.
+  /// Missing profile claims remain optional for existing authorizations.
+  Future<void> refreshProfile() {
+    if (!connected ||
+        _profileLoaded ||
+        (displayName.isNotEmpty && photoUrl.isNotEmpty)) {
+      return Future<void>.value();
+    }
+    return _profileRefresh ??= _loadProfile().whenComplete(
+      () => _profileRefresh = null,
+    );
+  }
+
+  Future<void> _loadProfile([Map<String, dynamic>? currentIdentity]) async {
+    final generation = _authorizationGeneration;
+    final subject = account;
+    final identity = currentIdentity ?? await apiJson(endpoints.userinfo);
+    if (!connected || generation != _authorizationGeneration) return;
+    if (identity['sub'] != subject) {
+      throw StateError('Google profile does not match the connected account');
+    }
+    final profile = <String, dynamic>{
+      if (identity['name'] is String) 'name': identity['name'],
+      if (identity['picture'] is String) 'picture': identity['picture'],
+    };
+    var retryProfile = false;
+    // Older grants include Drive read access but may lack the profile scope.
+    // Drive exposes the same signed-in user's optional name and photo.
+    if ((profile['name'] as String? ?? '').isEmpty ||
+        (profile['picture'] as String? ?? '').isEmpty) {
+      try {
+        final about = await apiJson(
+          endpoints.drive
+              .resolve('about')
+              .replace(
+                queryParameters: {
+                  'fields': 'user(displayName,photoLink,emailAddress)',
+                },
+              ),
+        );
+        if (!connected || generation != _authorizationGeneration) return;
+        final user = about['user'];
+        final address = user is Map ? user['emailAddress'] : null;
+        if (address is String &&
+            email.isNotEmpty &&
+            address.toLowerCase() == email.toLowerCase()) {
+          if ((profile['name'] as String? ?? '').isEmpty &&
+              user['displayName'] is String) {
+            profile['name'] = user['displayName'];
+          }
+          if ((profile['picture'] as String? ?? '').isEmpty &&
+              user['photoLink'] is String) {
+            profile['picture'] = user['photoLink'];
+          }
+        }
+      } catch (_) {
+        // Retry transient failures during maintenance, while successful responses
+        // with legitimately absent claims are complete for this session.
+        retryProfile = true;
+      }
+    }
+    if (!connected || generation != _authorizationGeneration) return;
+    final saved = {..._tokens!, ...profile};
+    await _saveTokens(saved, generation);
+    if (!connected || generation != _authorizationGeneration) return;
+    _tokens = saved;
+    _profileLoaded = !retryProfile;
   }
 
   Future<String> accessToken({bool forceRefresh = false}) async {
@@ -525,28 +765,29 @@ class GoogleAuth implements GoogleAccount {
 
   Future<Map<String, dynamic>> apiJson(Uri uri) async => _json(await api(uri));
 
-  /// Forget credentials immediately; remote revocation cannot gate local erasure.
+  /// Forget every account immediately; remote revocation cannot gate local erasure.
   Future<void> forget() {
     _authorizationGeneration++;
     cancelSignIn();
     final existing = _forgetting;
     if (existing != null) return existing;
-    final token = _tokens?['refresh_token'] as String?;
-    final secured = _tokens?['refresh_token_store'] == 'platform';
+    final saved = [if (_tokens != null) _tokens!, ..._savedAccounts.values];
     final file = File('${directory.path}/tokens.json');
     if (file.existsSync()) file.deleteSync();
     _tokens = null;
+    _persistedActive = null;
+    _savedAccounts.clear();
+    _resetActiveWork();
     return _forgetting = _changeCredential(() async {
-      String? refresh = token;
-      if (refresh == null && secured) {
+      for (final data in saved) {
+        String? refresh;
         try {
-          refresh = await secretStore.read(_secretKey);
-        } catch (_) {
-          /* Still erase. */
-        }
+          refresh = await _refreshCredential(data);
+        } catch (_) {}
+        await secretStore.delete(_credentialKey(data));
+        await _revokeBestEffort(refresh);
       }
       await secretStore.delete(_secretKey);
-      await _revokeBestEffort(refresh);
     }).whenComplete(() => _forgetting = null);
   }
 
@@ -565,33 +806,53 @@ class GoogleAuth implements GoogleAccount {
 
   @override
   Future<void> disconnect() async {
-    _authorizationGeneration++;
+    if (account.isNotEmpty) await signOutAccount(account);
+  }
+
+  @override
+  Future<void> signOutAccount(String id) async {
+    final data = id == account ? _tokens : _savedAccounts[id];
+    if (data == null) throw StateError('Google account is not saved');
+    if (_disconnecting) {
+      throw RpcError(RpcErrorCode.busy, 'Google account change in progress');
+    }
+    final generation = ++_authorizationGeneration;
     cancelSignIn();
     _disconnecting = true;
     try {
-      final refresh = _refreshing;
-      if (refresh != null) {
-        try {
-          await refresh;
-        } catch (_) {}
-      }
-      final token = await _refreshCredential();
-      if (token != null) {
-        final response = await request(
-          endpoints.revoke,
-          method: 'POST',
-          form: {'token': token},
-        );
-        if (response.status != 200 && response.status != 400) {
-          throw StateError(
-            'Google could not revoke the connection. Retry disconnect.',
+      await _changeCredential(() async {
+        final token = await _refreshCredential(data);
+        if (token != null) {
+          final response = await request(
+            endpoints.revoke,
+            method: 'POST',
+            form: {'token': token},
           );
+          if (response.status != 200 && response.status != 400) {
+            throw StateError(
+              'Google could not revoke the connection. Retry disconnect.',
+            );
+          }
         }
-      }
-      await _changeCredential(() => secretStore.delete(_secretKey));
-      _tokens = null;
-      final file = File('${directory.path}/tokens.json');
-      if (file.existsSync()) await file.delete();
+        final inactive = Map<String, Map<String, dynamic>>.from(_savedAccounts)
+          ..remove(id);
+        Map<String, dynamic>? next = _persistedActive;
+        if (id == account) {
+          next = inactive.isEmpty ? null : inactive.values.first;
+          if (next != null) inactive.remove(next['account_sub']);
+        }
+        await _saveRegistry(next, inactive, generation);
+        _tokens = next == null ? null : Map<String, dynamic>.from(next);
+        _persistedActive = next;
+        _savedAccounts
+          ..clear()
+          ..addAll(inactive);
+        _resetActiveWork();
+        await secretStore.delete(_credentialKey(data));
+        if (data['refresh_token_legacy'] == true) {
+          await secretStore.delete(_secretKey);
+        }
+      });
     } finally {
       _disconnecting = false;
     }

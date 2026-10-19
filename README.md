@@ -322,6 +322,8 @@ On macOS, the command is `/Applications/Open Foresight.app/Contents/MacOS/foresi
 
 Release builds bundle their Google application registration: choose a Drive import, Connect Calendar, or Connect Google and authorize in your browser. You do not need to create a Cloud project. Drive and Calendar share the same read-only account connection.
 
+After signing in, the sidebar shows your Google account photo or initial. Click it to switch between saved accounts, add another account, or sign out of an individual account. Every account shares the same local knowledge base; switching or signing out keeps imported sources, notes, meetings, and answers. Drive and Calendar operations use the selected account.
+
 Distributors supply the Desktop OAuth JSON through the `FORESIGHT_GOOGLE_CLIENT_JSON` repository secret or `--google-client /path/to/google-client.json` to either packager. Release workflows require it. Developer builds can omit it and import their own client through Advanced OAuth configuration. Packaging does not inspect other applications or copy account tokens. Keep OAuth configuration and tokens out of Git.
 
 ## Verification

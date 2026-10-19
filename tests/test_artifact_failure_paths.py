@@ -57,13 +57,14 @@ def test_metadata_transport_retries_transient_failures_without_bypassing_validat
     monkeypatch.setattr(artifacts.time, "sleep", delays.append)
     if failure in ("server", "timeout"):
         assert artifacts.api(REPOSITORY, "actions/runs/1/jobs") == {"jobs": []}
-        assert len(calls) == 2 and delays == [1]
-        assert "Retrying" in capsys.readouterr().err
+        assert len(calls) == 2 and delays == [2]
+        assert "retrying" in capsys.readouterr().err.lower()
     else:
         with pytest.raises((subprocess.CalledProcessError, ValueError)):
             artifacts.api(REPOSITORY, "actions/runs/1/jobs")
-        assert len(calls) == (3 if failure == "exhausted" else 1)
-        assert delays == ([1, 2] if failure == "exhausted" else [])
+        retried = failure in ("exhausted", "malformed")
+        assert len(calls) == (3 if retried else 1)
+        assert delays == ([2, 4] if retried else [])
 
 
 @pytest.mark.parametrize(

@@ -108,19 +108,43 @@ def producer(tmp_path, request):
     return payload, saved, checksum, run, artifact, job
 
 
-def restore(tmp_path, producer, *, head_repository=REPOSITORY, component="linux-app"):
+def restore(
+    tmp_path,
+    producer,
+    *,
+    head_repository=REPOSITORY,
+    component="linux-app",
+    job_states=None,
+    direct_job=None,
+):
     payload, saved, checksum, run, artifact, job = producer
+    queried = 0
 
     def api(repository, route):
+        nonlocal queried
         assert repository == REPOSITORY
         if route == f"actions/runs/{RUN}":
             return run
         if route == f"actions/artifacts/{ARTIFACT}":
             return artifact
+        if route == f"actions/jobs/{JOB}":
+            if direct_job is not None:
+                return direct_job
+            return (
+                job
+                if job_states is None
+                else job_states[min(queried - 1, len(job_states) - 1)]
+            )
         if route == f"actions/runs/{RUN}/jobs?filter=all&per_page=100&page=1":
+            current = (
+                job
+                if job_states is None
+                else job_states[min(queried, len(job_states) - 1)]
+            )
+            queried += 1
             return {
                 "jobs": [
-                    job,
+                    current,
                     {**job, "id": JOB + 1, "run_attempt": 2, "conclusion": "failure"},
                 ]
             }
@@ -152,6 +176,89 @@ def restore(tmp_path, producer, *, head_repository=REPOSITORY, component="linux-
             component=component,
         )
     return payload, destination, result
+
+
+def test_pending_original_producer_is_rechecked_before_restoring_bytes(
+    tmp_path, producer, monkeypatch
+):
+    pending = {
+        **producer[5], "status": "in_progress", "conclusion": None, "completed_at": None
+    }
+    pauses = []
+    monkeypatch.setattr(application.time, "sleep", pauses.append)
+    original, restored, qualification = restore(
+        tmp_path, producer, job_states=[pending, producer[5]]
+    )
+    assert pauses == [10]
+    assert qualification["producer_attempt"] == 1
+    assert qualification["producer_job"] == JOB
+    assert (restored / "application.tar.gz").read_bytes() == (
+        original / "application.tar.gz"
+    ).read_bytes()
+
+
+def test_stale_run_listing_can_use_the_completed_exact_job(
+    tmp_path, producer, monkeypatch
+):
+    pending = {
+        **producer[5], "status": "in_progress", "conclusion": None, "completed_at": None
+    }
+    pauses = []
+    monkeypatch.setattr(application.time, "sleep", pauses.append)
+    original, restored, qualification = restore(
+        tmp_path, producer, job_states=[pending], direct_job=producer[5]
+    )
+    assert pauses == []
+    assert qualification["producer_job"] == JOB
+    assert qualification["producer_attempt"] == 1
+    assert (restored / "application.tar.gz").read_bytes() == (
+        original / "application.tar.gz"
+    ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", JOB + 1), ("name", "foreign"), ("run_id", RUN + 1),
+        ("head_sha", "b" * 40), ("run_attempt", 2),
+    ],
+)
+def test_direct_job_cannot_substitute_another_producer(
+    tmp_path, producer, monkeypatch, field, value
+):
+    pending = {
+        **producer[5], "status": "in_progress", "conclusion": None, "completed_at": None
+    }
+    monkeypatch.setattr(
+        application.time, "sleep",
+        lambda _: pytest.fail("Invalid job must fail immediately"),
+    )
+    with pytest.raises(ValueError, match="producer job identity"):
+        restore(
+            tmp_path, producer, job_states=[pending],
+            direct_job={**producer[5], field: value},
+        )
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize("final_state", ["pending", "failed", "invalid-window"])
+def test_pending_producer_never_waives_success_or_upload_window(
+    tmp_path, producer, monkeypatch, final_state
+):
+    pending = {
+        **producer[5], "status": "in_progress", "conclusion": None, "completed_at": None
+    }
+    final = pending
+    if final_state == "failed":
+        final = {**producer[5], "conclusion": "failure"}
+    elif final_state == "invalid-window":
+        final = {**producer[5], "completed_at": "2025-01-01T00:00:30Z"}
+    pauses = []
+    monkeypatch.setattr(application.time, "sleep", pauses.append)
+    with pytest.raises(ValueError, match="successful original producer"):
+        restore(tmp_path, producer, job_states=[pending, final])
+    assert pauses == [10] * (6 if final_state == "pending" else 1)
+    assert not (tmp_path / "restored").exists()
 
 
 @pytest.mark.parametrize("ref", ["refs/pull/98765/merge", "refs/heads/main", None])

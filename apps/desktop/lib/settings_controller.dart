@@ -1176,15 +1176,9 @@ class _SettingsController extends _FeatureController {
                       TextButton(
                         onPressed: shell.busy
                             ? null
-                            : () => shell.run(() async {
-                                await integrationFeature.googleAuth
-                                    .disconnect();
-                                if (mounted)
-                                  shell.update(
-                                    () => integrationFeature.googleState =
-                                        'Disconnected; imported documents remain on this device.',
-                                  );
-                              }),
+                            : () => shell.run(
+                                integrationFeature.disconnectGoogle,
+                              ),
                         child: const Text('Disconnect Google'),
                       ),
                     ],

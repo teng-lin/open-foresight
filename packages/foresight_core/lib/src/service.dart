@@ -735,8 +735,12 @@ class ApplicationService {
             ),
       );
     }
-    if (lease.method == Operation.googleSignIn.wire) {
-      return application.signIn(lease.id);
+    if (lease.method == Operation.googleSignIn.wire ||
+        lease.method == Operation.googleAddAccount.wire) {
+      return application.signIn(
+        lease.id,
+        addAccount: lease.method == Operation.googleAddAccount.wire,
+      );
     }
     return Stream.fromFuture(_execute(lease.method, args, lease));
   }
@@ -836,7 +840,8 @@ class ApplicationService {
     final lease = _leases[client]?.remove(id);
     if (lease != null) {
       lease.cancelled = true;
-      if (lease.method == Operation.googleSignIn.wire) {
+      if (lease.method == Operation.googleSignIn.wire ||
+          lease.method == Operation.googleAddAccount.wire) {
         application.cancelSignIn(lease.id);
       }
       domain.generator?.cancel(requestId: lease.id);

@@ -215,7 +215,7 @@ def published(tmp_path, monkeypatch):
             return {"status": "identical"}
         raise AssertionError(route)
 
-    def command(command, stdout, check, timeout):
+    def command(command, stdout, check, timeout, stderr):
         assert command[:2] == ["gh", "api"]
         number = int(command[-1].split("/")[-2])
         state["downloaded"].append(number)

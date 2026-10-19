@@ -71,7 +71,7 @@ def transport(monkeypatch, members, names, jobs):
 
     monkeypatch.setattr(reuse.ci_artifacts, "api", api)
 
-    def download(command, *, stdout, check, timeout):
+    def download(command, *, stdout, check, timeout, stderr):
         stdout.write(raw)
 
     monkeypatch.setattr(reuse.ci_artifacts.subprocess, "run", download)
