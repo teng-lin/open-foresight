@@ -1,6 +1,7 @@
 """The shadow runners retain exact bytes/timestamps and never rebuild dependencies."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -78,6 +79,13 @@ def test_real_make_handoff_between_runner_filesystems_is_idle(compiled, tmp_path
         timeout=30,
     )
     (root / "main.c").write_text("int main(void) { return 1; }\n")
+    # GNU Make 3.81 on macOS compares whole seconds. Force a real later edit
+    # without sleeping or changing the unchanged-output restoration assertion.
+    changed_stamp = (
+        max(original.stat().st_mtime_ns, (root / "main.c").stat().st_mtime_ns)
+        + 2_000_000_000
+    )
+    os.utime(root / "main.c", ns=(changed_stamp, changed_stamp))
     with pytest.raises(ValueError, match="not idle"):
         idle.verify(root / "build")
     assert "main.c" in (root / "build/application-no-build-plan.log").read_text()
@@ -509,8 +517,6 @@ def test_shadow_sdk_transport_preserves_original_reuse_provenance(tmp_path):
 
 
 def test_hardlinked_pub_packages_survive_exact_runner_handoff(tmp_path):
-    import os
-
     root = tmp_path / "src"
     package = root / ".pub-cache/hosted/pub.dev/fixture-1.0.0/lib"
     package.mkdir(parents=True)
