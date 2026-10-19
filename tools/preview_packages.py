@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tools.app_version import read_version, set_version, stale  # noqa: E402
 from tools.build_sequence import allocate, request  # noqa: E402
+from tools.preview_reuse import retained, recovery_identity, has_applications
 from tools.release_asset_acceptance import verify_checksum  # noqa: E402
 
 IDENTITY = ".distribution-build.json"
@@ -28,7 +29,11 @@ def preview_version(source, latest):
     return source
 
 
-def plan(repository, force, validation):
+def plan(repository, force, validation, reason="", candidate_run=0):
+    if force and not reason.strip():
+        raise ValueError(
+            "A forced new preview identity requires an exact output-affecting rebuild reason"
+        )
     if os.environ.get("GITHUB_REF") != "refs/heads/main":
         raise ValueError("Preview coordination requires reviewed main")
     commit = request(repository, "commits/main")["sha"]
@@ -37,39 +42,103 @@ def plan(repository, force, validation):
     ).strip()
     if head != commit:
         raise ValueError("Main advanced before planning; retry the workflow")
+    if candidate_run:
+        run = request(repository, f"actions/runs/{candidate_run}")
+        source = run["head_sha"]
+        if request(repository, f"compare/{source}...{commit}")["status"] not in (
+            "ahead",
+            "identical",
+        ):
+            raise ValueError("Preview recovery source is not on reviewed main")
+        return {
+            **recovery_identity(repository, candidate_run, source),
+            "validation": validation,
+        }
     runs = request(
         repository,
-        "actions/workflows/preview-packages.yml/runs?branch=main&status=success&per_page=100",
+        "actions/workflows/preview-packages.yml/runs?branch=main&per_page=100",
     )["workflow_runs"]
+    matching = [
+        run
+        for run in runs
+        if run["head_sha"] == commit and run["id"] < int(os.environ["GITHUB_RUN_ID"])
+    ]
     existing = next(
         (
             run
-            for run in runs
-            if run["head_sha"] == commit
-            and run["id"] != int(os.environ["GITHUB_RUN_ID"])
+            for run in matching
+            if not force and retained(repository, run, request=request)
         ),
         None,
     )
-    if existing and not force and validation != "full":
+    if matching and not existing and not force:
+        recoverable = next(
+            (
+                run
+                for run in matching
+                if has_applications(repository, run, request=request)
+            ),
+            None,
+        )
+        if recoverable is not None:
+            return {
+                **recovery_identity(repository, recoverable["id"], commit),
+                "validation": validation,
+            }
+        if any(run.get("status") != "completed" for run in matching):
+            raise ValueError(
+                "Preserve the running preview producer; wait for its outputs instead of starting a replacement"
+            )
+        for run in matching:
+            items = request(
+                repository, f"actions/runs/{run['id']}/artifacts?per_page=100"
+            )["artifacts"]
+            if any(not item.get("expired") for item in items):
+                raise ValueError(
+                    "No complete retained preview application pair is available. "
+                    "Preserve partial outputs and inspect compatible artifacts "
+                    "before requesting an explicit replacement with a rebuild reason."
+                )
+        print(
+            f"Preview producers {[run['id'] for run in matching]} have no retained outputs. "
+            "A replacement preview identity needs application bundles; retain compatible SDKs and compiler work.",
+            flush=True,
+        )
+    if existing and not force:
         url = existing.get(
             "html_url", f"https://github.com/{repository}/actions/runs/{existing['id']}"
         )
         if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
             with open(summary, "a") as stream:
                 stream.write(
-                    f"No changes since a successful preview of `{commit}`. [Open its package downloads]({url}). Use **force** to rebuild, including when artifacts have expired.\n"
+                    f"No changes since a successful preview of `{commit}`. [Open its package downloads]({url}). Retained installers keep their original source, build number and checksums.\n"
                 )
-        return {"build": "false", "source": commit}
+        return {
+            "build": "false",
+            "recovery_run": "0",
+            "source": commit,
+            "reuse_run": str(existing["id"]) if validation == "full" else "0",
+            "validation": validation,
+        }
     if stale():
         raise ValueError("Source version copies are inconsistent")
     version, minimum = read_version()
     release = request(repository, "releases/latest", optional=True)
     version = preview_version(version, release["tag_name"] if release else None)
+    if force:
+        print("Explicit preview replacement reason: " + reason, flush=True)
+    else:
+        print(
+            "No retained preview exists for this source. A new preview label/version changes embedded application metadata; reuse verified SDKs and native compiler outputs while building only this new distribution identity.",
+            flush=True,
+        )
     number = allocate(repository, minimum)
     date = datetime.now(timezone.utc).strftime("%Y%m%d")
     label = f"nightly.{date}.{number}"
     return {
         "build": "true",
+        "recovery_run": "0",
+        "reuse_run": "0",
         "source": commit,
         "version": version,
         "build_number": str(number),
@@ -183,6 +252,8 @@ def main():
     planning = commands.add_parser("plan")
     planning.add_argument("--repository", required=True)
     planning.add_argument("--force", action="store_true")
+    planning.add_argument("--rebuild-reason", default="")
+    planning.add_argument("--candidate-run", type=int, default=0)
     planning.add_argument(
         "--validation", choices=("standard", "full"), default="standard"
     )
@@ -204,7 +275,13 @@ def main():
     final.add_argument("--validation", choices=("standard", "full"), required=True)
     args = parser.parse_args()
     if args.command == "plan":
-        result = plan(args.repository, args.force, args.validation)
+        result = plan(
+            args.repository,
+            args.force,
+            args.validation,
+            args.rebuild_reason,
+            args.candidate_run,
+        )
         with open(os.environ["GITHUB_OUTPUT"], "a") as output:
             for key, value in result.items():
                 output.write(f"{key}={value}\n")

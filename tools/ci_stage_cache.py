@@ -207,7 +207,10 @@ def reusable(event, own_pr, branch="", release=False):
 def reusable_native_work(event, own_pr, branch="", release=False):
     """Fresh main validation may retain objects from existing trusted producers."""
     return reusable(event, own_pr, branch, release) or (
-        event == "push" and branch == "main" and type(own_pr) is int and own_pr == 0
+        event in ("push", "workflow_dispatch", "schedule")
+        and branch == "main"
+        and type(own_pr) is int
+        and own_pr == 0
     )
 
 

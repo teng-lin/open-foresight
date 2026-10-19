@@ -8,7 +8,12 @@ from pathlib import Path
 import re
 import subprocess
 
-from github_release import release_for_tag
+from importlib import import_module
+
+release_for_tag = import_module(
+    "tools.github_release" if __package__ else "github_release"
+).release_for_tag
+
 
 SUFFIXES = {"deb": ".deb", "rpm": ".rpm", "arch": ".pkg.tar.zst", "dmg": ".dmg"}
 

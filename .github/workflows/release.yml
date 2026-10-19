@@ -7,9 +7,13 @@ on:
         type: string
         required: true
       candidate_run:
-        description: Existing successful main candidate run to verify and reuse; 0 creates fresh candidates
+        description: Existing successful main candidate run to verify and reuse; 0 discovers existing platform candidates
         type: string
         required: false
+        default: '0'
+      acceptance_run:
+        description: Existing successful installed-acceptance run; revalidate asset checksums without rerunning tests
+        type: string
         default: '0'
       publish_only:
         description: Publish existing tested draft bytes after release-day GPU checks; do not rebuild installers
@@ -38,6 +42,8 @@ jobs:
       tag: ${{ steps.prepare.outputs.tag }}
       package_release: ${{ steps.prepare.outputs.package_release }}
       candidate_run: ${{ steps.prepare.outputs.candidate_run }}
+      linux_candidate_run: ${{ steps.prepare.outputs.linux_candidate_run }}
+      macos_candidate_run: ${{ steps.prepare.outputs.macos_candidate_run }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -63,7 +69,7 @@ jobs:
     with:
       tag: ${{ needs.prepare.outputs.tag }}
       package_release: ${{ needs.prepare.outputs.package_release }}
-      candidate_run: ${{ needs.prepare.outputs.candidate_run }}
+      candidate_run: ${{ needs.prepare.outputs.linux_candidate_run }}
   macos:
     needs: prepare
     permissions:
@@ -74,17 +80,19 @@ jobs:
     uses: ./.github/workflows/macos-release.yml
     with:
       tag: ${{ needs.prepare.outputs.tag }}
-      candidate_run: ${{ needs.prepare.outputs.candidate_run }}
+      candidate_run: ${{ needs.prepare.outputs.macos_candidate_run }}
   acceptance:
     if: ${{ !cancelled() && (inputs.publish_only || (needs.prepare.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success')) }}
     needs: [prepare, linux, macos]
     permissions:
       # Draft release metadata/assets are visible only with push access.
       contents: write
+      actions: read
     uses: ./.github/workflows/release-acceptance.yml
     with:
       tag: ${{ inputs.tag }}
       gpu_evidence: ${{ inputs.gpu_evidence }}
+      acceptance_run: ${{ inputs.acceptance_run }}
   publish:
     timeout-minutes: 10
     if: always()

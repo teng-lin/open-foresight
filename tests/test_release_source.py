@@ -71,11 +71,11 @@ class ReleaseSourceTest(unittest.TestCase):
 
     def test_expired_tag_candidates_never_dispatch_or_substitute_newer_main(self):
         with (
-            patch.object(release, "candidates_ready", return_value=False),
-            patch.object(release, "api", return_value={"sha": self.control}),
+            patch.object(release, "candidate_runs", return_value={}),
+            patch.object(release, "api", return_value={"workflow_runs": []}),
             patch.object(release.subprocess, "run") as command,
         ):
-            with self.assertRaisesRegex(ValueError, "refusing to substitute"):
+            with self.assertRaisesRegex(ValueError, "Verified candidates unavailable"):
                 release.require_candidates("owner/repo", self.product, 0)
             command.assert_not_called()
 
@@ -101,7 +101,11 @@ class ReleaseSourceTest(unittest.TestCase):
                     release.subprocess, "check_output", return_value=self.control
                 ),
                 patch.object(release, "release_source", return_value=self.product),
-                patch.object(release, "require_candidates") as candidates,
+                patch.object(
+                    release,
+                    "require_candidates",
+                    return_value={"linux-app": 41, "macos-app": 42},
+                ) as candidates,
                 patch.object(release, "create_draft", return_value="2") as draft,
             ):
                 release.main()
@@ -109,7 +113,6 @@ class ReleaseSourceTest(unittest.TestCase):
                 "teng-lin/open-foresight",
                 self.product,
                 10800,
-                fresh=True,
                 candidate_run=0,
             )
             draft.assert_called_once_with(
@@ -153,16 +156,21 @@ class ReleaseSourceTest(unittest.TestCase):
                 ),
                 patch.object(release, "release_source", return_value=self.product),
                 patch.object(
-                    release, "require_candidates", return_value=42
+                    release,
+                    "require_candidates",
+                    return_value={"linux-app": 42, "macos-app": 42},
                 ) as candidates,
                 patch.object(release, "create_draft", return_value="2") as draft,
             ):
                 release.main()
             candidates.assert_called_once_with(
-                "owner/repo", self.product, 10800, fresh=True, candidate_run=42
+                "owner/repo", self.product, 10800, candidate_run=42
             )
             draft.assert_called_once_with("owner/repo", self.tag, self.product)
             self.assertIn("candidate_run=42\n", output.read_text())
+            self.assertIn(
+                "linux_candidate_run=42\nmacos_candidate_run=42\n", output.read_text()
+            )
             self.assertIn(f"commit={self.product}\n", output.read_text())
 
     def test_new_tag_cannot_use_a_different_current_application_version(self):

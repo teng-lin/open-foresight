@@ -33,17 +33,6 @@ name: Reusable CI dependencies
   - cron: 19 3 1 * *
   pull_request:
     paths:
-    - native/**
-    - services/inference/**
-    - services/helper/**
-    - tools/integration_gates.py
-    - tools/test_macos_release_models.py
-    - tools/model_pins.py
-    - apps/desktop/**
-    - packages/foresight_core/**
-    - packaging/**
-    - .github/workflows/linux-packages.yml
-    - .github/workflows/integration-acceptance.yml
     - .github/workflows/ci-dependencies.yml
     - tools/ci_artifacts.py
     - tools/pins.json

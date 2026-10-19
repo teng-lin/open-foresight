@@ -139,14 +139,15 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
         if step.get("with", {}).get("file") == "packaging/build.Dockerfile"
     ]
     assert len(builds) == 1
-    assert builds[0]["with"]["target"] == "integration"
+    assert builds[0]["with"]["target"] == "builder"
+    assert builds[0]["if"] == "github.event_name == 'pull_request'"
     assert builds[0]["with"]["load"] is True
     assert (
         "SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}"
         in builds[0]["with"]["build-args"]
     )
     commands = "\n".join(step.get("run", "") for step in job["steps"])
-    assert "docker create foresight-integration:local /bin/true" in commands
+    assert "docker create foresight-built-application:local /bin/true" in commands
     assert (
         'docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/'
         in commands
