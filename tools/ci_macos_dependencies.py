@@ -45,21 +45,18 @@ def waiting_producers(repository, component, own_head, own_pr):
     if not own_head:
         return []
     runs: dict[int, dict] = {}
-    for status, scope in (
-        (status, scope)
-        for status in ("in_progress", "queued", "waiting", "pending", "requested")
-        for scope in (f"head_sha={own_head}", "branch=main")
-    ):
+    for scope in (f"head_sha={own_head}", "branch=main"):
         page = 1
         while True:
             batch = api(
                 repository,
-                f"actions/workflows/ci-dependencies.yml/runs?{scope}&status={status}&per_page=100&page={page}",
+                f"actions/workflows/ci-dependencies.yml/runs?{scope}&per_page=100&page={page}",
             )["workflow_runs"]
             runs.update(
                 (run["id"], run)
                 for run in batch
-                if run.get("status") == status
+                if run.get("status")
+                in ("in_progress", "queued", "waiting", "pending", "requested")
                 and (
                     run.get("head_sha") == own_head
                     if scope.startswith("head_sha=")
@@ -116,8 +113,9 @@ def ensure(
     allow_local_build=False,
 ):
     deadline = time.monotonic() + max(0, min(wait, 1800))
-    while True:
-        if pull(
+
+    def restore_original():
+        if not pull(
             repository,
             component,
             fingerprint(component),
@@ -125,10 +123,19 @@ def ensure(
             own_head=own_head,
             own_pr=own_pr,
         ):
-            verify(component, prefix)
+            return False
+        verify(component, prefix)
+        return True
+
+    while True:
+        if restore_original():
             return "artifact"
         waiting = waiting_producers(repository, component, own_head, own_pr)
         if not waiting:
+            # Upload and successful-job metadata can become eligible between
+            # the first pull and the producer-status lookup, even on poll one.
+            if restore_original():
+                return "artifact"
             break
         if time.monotonic() >= deadline:
             raise RuntimeError(report_unavailable(component, fingerprint(component)))

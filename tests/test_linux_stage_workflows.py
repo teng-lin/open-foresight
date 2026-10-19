@@ -496,3 +496,22 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     )
     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
     assert values["linux_bundle"] == str(selected).lower()
+
+
+def test_debian_compatibility_remains_independent_of_buildkit_fixture_failure():
+    steps = workflow("integration-acceptance.yml")["jobs"]["ubuntu-package"]["steps"]
+    fixture = next(
+        step
+        for step in steps
+        if "pytest tests/test_acceptance_image_cache.py" in step.get("run", "")
+    )
+    debian = next(
+        step
+        for step in steps
+        if step.get("name") == "Test Debian 13 with the same Ubuntu-built DEB"
+    )
+    assert steps.index(fixture) < steps.index(debian)
+    assert debian["if"] == "${{ !cancelled() }}"
+    assert fixture.get("continue-on-error", False) is False
+    assert "--security-opt apparmor=foresight-ci-document-sandbox" in debian["run"]
+    assert "dist/packages:/packages:ro" in debian["run"]

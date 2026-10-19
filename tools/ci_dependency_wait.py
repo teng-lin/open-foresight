@@ -17,18 +17,20 @@ def fetch(
 ):
     identity = artifacts.fingerprint(component)
     deadline = time.monotonic() + max(0, min(wait, 1800))
+
+    def restore_original():
+        return artifacts.pull(
+            repository, component, identity, prefix, own_head=own_head, own_pr=own_pr
+        )
+
     while True:
-        if artifacts.pull(
-            repository,
-            component,
-            identity,
-            prefix,
-            own_head=own_head,
-            own_pr=own_pr,
-        ):
+        if restore_original():
             return True
         running = waiting_producers(repository, component, own_head, own_pr)
         if not running:
+            # Completion can become visible between the artifact and job reads.
+            if restore_original():
+                return True
             if optional:
                 return False
             raise RuntimeError(artifacts.report_unavailable(component, identity))
@@ -38,7 +40,7 @@ def fetch(
                 + " Compatible producers are still active; preserve them and retry only this consumer. Their timeout never authorizes a duplicate SDK build."
             )
         print(f"Waiting for verified {component} producer", flush=True)
-        time.sleep(min(20, max(0, deadline - time.monotonic())))
+        time.sleep(min(60, max(0, deadline - time.monotonic())))
 
 
 def main():

@@ -120,3 +120,30 @@ tests (20 skips, 96.28% coverage) with only one stale CLI-name assertion; the
 corrected assertion's entire 23-test file passed at `66cb3f3`, with both source
 integrity manifests preserved and the host execution audit passing. Hosted checks and
 reviews remain pending until their actual results are recorded.
+
+The next PR #150 review batch reduces consumer polling from ten status/scope
+requests to two fully paginated scope requests every 60 seconds. Older active
+runs remain visible after completed pages. Linux and Mac consumers perform one
+last qualified pull when a producer finishes between artifact and job reads,
+including the first poll; API/provenance errors remain fatal. Debian 13 testing
+now runs independently of the BuildKit fixture, and the frozen snapshot command
+includes `headRefName`. Focused validation passed 147 tests and 99 subtests,
+including both completion races, the original context/checksum path, pagination,
+and independent Debian execution. Independent team review found no residual
+issue and confirmed all 11 original SDK producer-control bytes and modes again.
+The pre-existing internal `ci_artifacts.pull(wait>0)` completion race is tracked
+for the already planned shadow transport change after this foundation merges:
+changing that producer control before the original producer's final source is
+approved would invalidate reusable SDK evidence. Consumer waits in this PR use
+`pull(wait=0)` plus the corrected qualified polling wrapper.
+
+The corrected WS2a source `3e8a701` also passed its complete Git-free export:
+Linux 3,009 tests / 28 skips at 95.55% coverage; SkyWalker Mac 3,017 tests /
+20 skips at 95.71%. Mac's production host runner passed 364 tests (11 skips,
+one Arch-owned notice test deselected) and its full-suite inventory audit.
+All 1,000 tracked entries remained unchanged on both hosts. This pre-PR Mac run
+caught BSD/GNU tar exclusion differences and Make 3.81's whole-second comparison
+in a changed-source fixture. The corrected source copy preserves the verified
+seed, tracked `.coveragerc`, nested source directories and transferred Dart cache;
+a real Dart import from that restored cache passed without dependency resolution.
+Actual Docker runtime and five hosted shadow measurements remain pending.

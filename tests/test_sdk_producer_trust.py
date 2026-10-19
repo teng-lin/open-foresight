@@ -295,7 +295,8 @@ def test_waiting_producers_ignores_other_heads_without_fetching_their_recipe():
         patch.object(macos, "dependency_jobs", return_value=[]),
     ):
         assert macos.waiting_producers("owner/repo", "macos-sdk", HEAD, 23) == []
-        assert api.call_count == 10
+        assert api.call_count == 2
+        assert all("status=" not in call.args[1] for call in api.call_args_list)
         assert all(
             f"head_sha={HEAD}" in call.args[1] or "branch=main" in call.args[1]
             for call in api.call_args_list

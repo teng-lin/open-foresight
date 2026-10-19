@@ -38,7 +38,8 @@ def test_skipped_alternative_does_not_hide_a_not_yet_created_producer(
     def request(repository, route):
         return {
             "workflow_runs": [candidate]
-            if f"head_sha={head}" in route and "status=in_progress" in route
+            if f"head_sha={head}" in route
+            and ("status=" not in route or "status=in_progress" in route)
             else []
         }
 
@@ -92,7 +93,8 @@ def test_waits_for_verified_main_identity_without_waiting_for_another_pr(consume
         assert repository == "owner/repo"
         return {
             "workflow_runs": candidates
-            if "branch=main" in route and "status=in_progress" in route
+            if "branch=main" in route
+            and ("status=" not in route or "status=in_progress" in route)
             else []
         }
 
@@ -163,7 +165,8 @@ def test_compatible_main_producer_lookup_paginates(consumer):
             "workflow_runs": (
                 [base] * 100 if route.endswith("&page=1") else [base | {"id": 11}]
             )
-            if "branch=main" in route and "status=queued" in route
+            if "branch=main" in route
+            and ("status=" not in route or "status=queued" in route)
             else []
         }
 

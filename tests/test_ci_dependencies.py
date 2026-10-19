@@ -904,9 +904,7 @@ def test_macos_inflight_selection_rejects_fork_and_failed_producers(failed):
         patch.object(
             macos,
             "api",
-            side_effect=lambda repo, route: {
-                "workflow_runs": [base, fork] if "status=in_progress" in route else []
-            },
+            side_effect=lambda repo, route: {"workflow_runs": [base, fork]},
         ),
         patch.object(
             macos, "source_fingerprint", return_value=macos.fingerprint("macos-sdk")
