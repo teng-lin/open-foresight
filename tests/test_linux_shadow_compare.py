@@ -98,7 +98,7 @@ def test_incomplete_or_different_shadow_reports_fail_closed(reports, failure):
         )
     else:
         write_events(
-            ubuntu / "other/core/core.events.jsonl", "/ubuntu/test/sample_test.dart"
+            ubuntu / "other/core/core.events.jsonl", "/ubuntu/test/changed_test.dart"
         )
     with pytest.raises(ValueError):
         comparison.compare(arch, ubuntu, output)
@@ -114,3 +114,15 @@ def test_benchmark_uses_covered_full_suite_and_rejects_empty_junit(reports):
     path.write_text("<testsuite/>")
     with pytest.raises(ValueError, match="Empty"):
         comparison.junit_result(path)
+
+
+def test_identical_reports_forwarded_with_stage_prerequisites_are_counted_once(reports):
+    arch, ubuntu, output = reports
+    original = arch / "test-results/linux/core/core.events.jsonl"
+    forwarded = arch / "linux-service-evidence/core/core.events.jsonl"
+    forwarded.parent.mkdir(parents=True)
+    forwarded.write_bytes(original.read_bytes())
+    assert comparison.compare(arch, ubuntu, output)["core"] == {
+        "passed": 1,
+        "skipped": 0,
+    }

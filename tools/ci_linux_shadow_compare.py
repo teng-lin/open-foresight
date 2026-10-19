@@ -3,6 +3,7 @@
 
 import argparse
 from collections import Counter
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -28,9 +29,15 @@ def unique(root, suffixes):
         if path.is_file()
         and any(path.as_posix().endswith(suffix) for suffix in suffixes)
     ]
-    if len(paths) != 1:
+    # Service prerequisites carry the exact core report again. Deduplicate
+    # only byte-identical copies; conflicting or absent reports remain fatal.
+    digests = set()
+    for path in paths:
+        with path.open("rb") as stream:
+            digests.add(hashlib.file_digest(stream, "sha256").hexdigest())
+    if len(digests) != 1:
         raise ValueError(
-            f"Expected one complete report for {suffixes}, found {len(paths)}"
+            f"Expected one complete report for {suffixes}, found {len(digests)} distinct reports"
         )
     return paths[0]
 

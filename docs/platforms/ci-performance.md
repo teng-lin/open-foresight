@@ -1043,7 +1043,8 @@ for the in-run consumer, retaining any original reused receipt; its scoped trust
 row cannot serve release lookup.
 
 The comparison retains per-test pass/skip sets for CTest, core, desktop, compiled
-service/MCP and host Python. Service/MCP requires zero skips. The `makepkg` notice probe is deselected from
+service/MCP and host Python. Byte-identical reports forwarded with legacy stage
+prerequisites are counted once; conflicting copies fail. Service/MCP requires zero skips. The `makepkg` notice probe is deselected from
 host inventories and runs explicitly in the Arch installer contract. The Ubuntu
 `dpkg-deb` notice probe is the one directional distro difference; other missing,
 failing or changed test identities fail comparison. Native JUnit
