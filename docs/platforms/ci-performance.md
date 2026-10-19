@@ -1003,3 +1003,12 @@ empty, pending and cancelled suite jobs provide no result. A cancelled/replaced
 issue job does not discard its run's otherwise completed test evidence, and a
 stale queued writer reports the newer tests instead of assuming a replacement
 writer will run.
+
+SDK consumer waits ignore skipped alternatives with duplicate display names.
+GitHub may expose the skipped main-registry job before its PR-archive counterpart
+is created after parent jobs finish. That placeholder is not proof that the
+component finished. Linux application consumers use `ci_dependency_wait.py` to
+share the qualified source/identity wait with macOS, capped at 1,800 seconds.
+Network and provenance failures remain fatal. This consumer-only correction
+preserves every SDK producer-control byte, allowing the already running producer
+and its eventual original artifact to remain qualified without recompilation.

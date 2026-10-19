@@ -100,3 +100,15 @@ Actual original-artifact probes caught a historical compatibility regression:
 producers predating the new trust table were incorrectly required to contain it.
 The fix allows absence only when the immutable old controls do not reference that
 table; all required recipe inputs and present-file bytes/modes remain verified.
+
+## Hosted foundation rollout
+
+[PR #150](https://github.com/teng-lin/open-foresight/pull/150) opened at head
+`846073c`. Six unchanged component jobs reused their verified originals. The new
+Linux image assembler in run `39330591028` was preserved. Its first acceptance
+consumer failed early because a skipped same-name registry alternative appeared
+before the actual PR archive job. The consumer-only wait correction ignores that
+placeholder and retains the source, identity, original-attempt and checksum
+checks. Every SDK producer-control file remains byte-identical to the running
+producer; the fix does not require another SDK assembly. Hosted checks and
+reviews remain pending until their actual results are recorded.

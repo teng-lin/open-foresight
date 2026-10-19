@@ -376,7 +376,7 @@ jobs:
         OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
       run: |-
-        python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+        python tools/ci_dependency_wait.py --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive
     - name: Packaging contracts
       run: python3 -m unittest discover -s tests -p test_linux_packages.py -v

@@ -9,6 +9,54 @@ from tools import ci_macos_dependencies as macos
 
 
 @pytest.mark.parametrize("consumer", ["linux", "macos"])
+@pytest.mark.parametrize("actual_conclusion", [None, "success", "failure"])
+def test_skipped_alternative_does_not_hide_a_not_yet_created_producer(
+    consumer, actual_conclusion
+):
+    head = "a" * 40
+    component = "linux-sdk" if consumer == "linux" else "macos-sdk"
+    module = macos
+    candidate = {
+        "id": 10,
+        "head_sha": head,
+        "head_branch": "feature",
+        "event": "pull_request",
+        "pull_requests": [{"number": 23}],
+        "path": artifacts.WORKFLOW,
+        "head_repository": {"full_name": "owner/repo"},
+        "status": "in_progress",
+        "run_attempt": 1,
+    }
+    # GitHub lists the skipped registry alternative immediately, before the
+    # PR archive job materializes after its prerequisite component jobs finish.
+    jobs = [{"name": artifacts.JOBS[component], "conclusion": "skipped"}]
+    if actual_conclusion is not None:
+        jobs.append(
+            {"name": artifacts.JOBS[component], "conclusion": actual_conclusion}
+        )
+
+    def request(repository, route):
+        return {
+            "workflow_runs": [candidate]
+            if f"head_sha={head}" in route and "status=in_progress" in route
+            else []
+        }
+
+    with (
+        patch.object(module, "api", side_effect=request),
+        patch.object(module, "dependency_jobs", return_value=jobs),
+        patch.object(
+            module,
+            "producer_identity",
+            return_value="identity",
+        ),
+        patch.object(macos, "fingerprint", return_value="identity"),
+    ):
+        waiting = macos.waiting_producers("owner/repo", component, head, 23)
+    assert waiting == ([10] if actual_conclusion is None else [])
+
+
+@pytest.mark.parametrize("consumer", ["linux", "macos"])
 def test_waits_for_verified_main_identity_without_waiting_for_another_pr(consumer):
     head, previous, incompatible = "a" * 40, "b" * 40, "c" * 40
     component = "linux-sdk" if consumer == "linux" else "macos-sdk"
