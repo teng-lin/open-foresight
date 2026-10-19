@@ -99,7 +99,7 @@ main. Thus a Dart-only final fix can preserve an earlier native compilation
 archive without relabeling it as a final-head build. Repository, workflow,
 original source/recipe, successful job attempt, environment, upload bounds and
 payload digests remain independently verified. This eligibility applies only to
-compiler work; successful test-result reuse remains PR-scoped, and main/release
+compiler work on main pushes, manual dispatches and schedules; successful test-result reuse remains PR-scoped, and main/release
 validation always configures, incrementally builds and tests current inputs.
 API or missing-source proof failures stop lookup rather than authorize a cold
 build. SDK, LiteRT and Whisper artifacts retain their separate approval policy.
@@ -112,11 +112,15 @@ unpacking. Unchanged source timestamps are restored only after their file hashes
 match, allowing Ninja to retain valid object files. Distribution stamping makes
 the input tree derived, so those results are not reusable as clean PR results.
 
-Ubuntu package lifecycle and model/audio acceptance share one application image
-and build. The package job extracts that exact bundle, creates the DEB and
-installs it in Ubuntu 24.04 to test dependencies, file layout, service lifecycle
-and installed document parsing. Documentation-only main pushes skip this work;
-manual and scheduled acceptance still run. Those installation checks remain necessary for
+Ubuntu package lifecycle and model/audio acceptance share the exact application
+bundle. PR acceptance builds it once, exports it, and mounts it read-only into
+an acceptance-tools image. On main, acceptance starts after a successful
+`linux-bundle` producer job and downloads its verified exact-source candidate;
+manual and scheduled acceptance also consume candidates without compiling an
+application. The tools image installs test prerequisites but has no application
+or SDK build step. The package job creates the DEB and installs it in Ubuntu
+24.04 to test dependencies, layout, service lifecycle and document parsing.
+Documentation-only main pushes skip this work. Those installation checks remain necessary for
 application or packaging changes, but no longer compile a duplicate application.
 The disposable installer-test container explicitly selects the CI AppArmor
 profile that permits user namespaces; generic `apparmor=unconfined` still receives
@@ -259,11 +263,52 @@ document the exact incompatible input and the affected component before running
 its necessary replacement build. A missing tag or transport failure does not
 authorize that build.
 
-Main builds allocate a monotonic distribution number and stamp that version
-before building the Linux and macOS candidates. Nightly/manual previews use the
-same bundle and installer paths and run installed-package validation. A release
-coordinator identifies its own freshly dispatched build using a unique request
-ID and pins downstream downloads to that producer run.
+Main builds allocate a monotonic distribution number and stamp it before
+building Linux and macOS candidates. A missing platform uses the surviving
+platform's verified version and build number. An existing requested candidate
+stops compilation unless an operator supplies a concrete output-affecting
+`rebuild_reason`; select `platforms=linux` or `platforms=macos` for a missing
+platform. Compiler recipes remain bound to the selected product source.
+
+Release preparation only discovers and verifies candidates; it never dispatches
+a build. Linux and macOS can have separate producer runs. A successful platform
+job remains eligible when a sibling job fails, with its original successful
+attempt, receipt, upload bounds and checksums intact. Candidates and small
+identity receipts are retained for 90 days. Missing or incompatible candidates
+stop with an actionable error, preserving completed outputs and active producers.
+
+The main-only `linux-packages.yml` workflow can be dispatched with `tag=v0.1.2`,
+`candidate_run=39189741345` and `format=rpm` to recover only the missing RPM.
+`format=all` considers DEB, RPM and Arch independently; `macos-release.yml`
+handles the DMG. These workflows use current packaging controls and original
+verified application bytes from the immutable product tag. They preserve the
+draft generation, retain identical verified assets, and reject conflicting
+bytes instead of deleting or overwriting them. Neither workflow builds an
+application, SDK, LiteRT or Whisper library.
+
+Installer creation and validation are separate steps. Installer bytes upload
+before installation tests; validation evidence uploads separately. A lifecycle
+failure therefore preserves the installer and the original application candidate.
+RPM contracts exercise real macro expansion and upgrade locks. Package-only PRs
+run the DEB/RPM/Arch lifecycle against a verified reviewed-main application fixture,
+and a tiny signed macOS fixture exercises DMG creation, mounting and execution.
+These recipe contracts do not require an application or SDK build.
+
+Nightly/manual previews use the same installer paths and validate installed
+packages. A new preview label is a new embedded distribution identity, which
+requires application assembly while retaining compatible dependencies. A retry
+retains the original identity and restores surviving application/installer
+artifacts. Standard-to-full validation consumes the original installers and
+records their original producer; it does not allocate a new build number or
+compile the application again. Expired or incompatible outputs stop recovery
+rather than silently start a new full build. An intentional replacement requires
+`force` and a concrete `rebuild_reason`.
+
+Release acceptance can restore a prior successful aggregate with `acceptance_run`
+only when its source, successful job/attempt, artifact digest and all four current
+installer hashes match. New GPU evidence can be attached to those exact bytes;
+missing evidence remains `manual_pending`. Changing installer bytes requires
+fresh acceptance, without rebuilding the SDK or application.
 
 Release publication requires administrator-created protected tags, complete
 installer provenance and installed acceptance. See

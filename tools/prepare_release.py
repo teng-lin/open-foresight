@@ -6,116 +6,109 @@ import base64
 import json
 import os
 import re
+from pathlib import Path
+import sys
 import subprocess
 import time
-import uuid
 
-from app_version import PUBSPEC, SOURCE, read_version, stale
-from ci_artifacts import api, name, trusted_run
-from github_release import release_for_tag
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from tools.app_version import PUBSPEC, SOURCE, read_version, stale
+from tools.ci_artifacts import (
+    api,
+    name,
+    trusted_run,
+    application_jobs,
+    application_descriptor,
+)
+from tools.github_release import release_for_tag
 
 
-def candidates_ready(repository, commit, run_id=None):
+def candidate_runs(repository, commit, run_id=None):
+    result = {}
     for component in ("linux-app", "macos-app"):
         artifact_name = name(component, commit)
         artifacts = api(
             repository, f"actions/artifacts?name={artifact_name}&per_page=100"
         )["artifacts"]
-        qualified = False
         for artifact in artifacts:
             if artifact["expired"] or artifact["name"] != artifact_name:
                 continue
-            if run_id is not None and artifact["workflow_run"]["id"] != run_id:
+            producer = artifact["workflow_run"]["id"]
+            if run_id is not None and producer != run_id:
                 continue
-            run = api(repository, f"actions/runs/{artifact['workflow_run']['id']}")
+            run = api(repository, f"actions/runs/{producer}")
             if (
-                run["head_sha"] == commit
-                or (run_id is not None and run.get("event") == "workflow_dispatch")
-            ) and trusted_run(run, component, repository=repository):
-                qualified = True
+                (
+                    run["head_sha"] == commit
+                    or run.get("event") == "workflow_dispatch"
+                )
+                and trusted_run(run, component, repository=repository)
+                and application_jobs(repository, run, component, artifact)
+            ):
+                result[component] = producer
                 break
-        if not qualified:
-            return False
-    return True
+    return result
+
+
+def candidates_ready(repository, commit, run_id=None):
+    return len(candidate_runs(repository, commit, run_id)) == 2
 
 
 def require_candidates(repository, commit, wait, fresh=False, candidate_run=0):
+    # This consumer never starts a producer. A missing output is an actionable
+    # artifact problem, not authorization to rebuild both platforms.
     if candidate_run < 0:
         raise ValueError("Candidate run must be a positive run ID")
-    if candidate_run:
-        if not candidates_ready(repository, commit, run_id=candidate_run):
+    deadline = time.monotonic() + wait
+    while True:
+        runs = candidate_runs(repository, commit, candidate_run or None)
+        if len(runs) == 2:
+            identities = [
+                application_descriptor(repository, component, commit, run)
+                for component, run in runs.items()
+            ]
+            if identities[0] != identities[1]:
+                raise ValueError(
+                    "Platform candidates have different distribution identities; recover only the missing matching output"
+                )
+            print(
+                f"Reuse verified exact-source platform candidates: {runs}", flush=True
+            )
+            return runs
+        active = (
+            [api(repository, f"actions/runs/{candidate_run}")]
+            if candidate_run
+            else api(
+                repository, "actions/workflows/macos.yml/runs?branch=main&per_page=100"
+            )["workflow_runs"]
+        )
+        pending = any(
+            run.get("status")
+            in ("queued", "in_progress", "waiting", "requested", "pending")
+            and (
+                candidate_run
+                or run.get("head_sha") == commit
+                or run.get("id") in runs.values()
+            )
+            and run.get("head_branch") == "main"
+            and run.get("path") == ".github/workflows/macos.yml"
+            and run.get("head_repository", {}).get("full_name") == repository
+            for run in active
+        )
+        if not pending or time.monotonic() >= deadline:
+            missing = sorted({"linux-app", "macos-app"} - runs.keys())
             raise ValueError(
-                "Requested candidate run has no successful trusted Linux and macOS "
-                "candidates for the tagged product commit"
+                f"Verified candidates unavailable for {commit}: {missing}. "
+                "Preserve completed outputs; inspect existing producers, then "
+                "dispatch macos.yml with source and platforms only for missing outputs. "
+                "Packaging never recompiles applications or SDKs."
             )
         print(
-            f"Reuse verified exact-source candidates from run {candidate_run}",
+            f"Waiting for existing exact-source producers; available: {runs}",
             flush=True,
         )
-        return candidate_run
-    if not fresh and candidates_ready(repository, commit):
-        return None
-    current_main = api(repository, "commits/main")["sha"]
-    if fresh and current_main != commit:
-        comparison = api(repository, f"compare/{commit}...{current_main}")
-        if comparison["status"] not in ("ahead", "identical"):
-            raise ValueError("Distribution source must be reachable from reviewed main")
-    if not fresh and current_main != commit:
-        raise ValueError(
-            "Exact-commit candidates are unavailable; refusing to substitute a newer main build"
-        )
-    route = "actions/workflows/macos.yml/runs?branch=main&event=workflow_dispatch&per_page=100"
-    previous = (
-        {run["id"] for run in api(repository, route)["workflow_runs"]}
-        if fresh
-        else set()
-    )
-    command = [
-        "gh",
-        "workflow",
-        "run",
-        "macos.yml",
-        "--repo",
-        repository,
-        "--ref",
-        "main",
-    ]
-    request_id = uuid.uuid4().hex if fresh else ""
-    if fresh:
-        command += ["-f", f"source={commit}", "-f", f"request_id={request_id}"]
-    subprocess.run(
-        command,
-        check=True,
-        timeout=300,
-    )
-    deadline = time.monotonic() + wait
-    while time.monotonic() < deadline:
-        if fresh:
-            for run in api(repository, route)["workflow_runs"]:
-                if (
-                    run["id"] in previous
-                    or run.get("display_title") != f"Release candidate {request_id}"
-                ):
-                    continue
-                if run.get("conclusion") in ("failure", "cancelled", "timed_out"):
-                    raise RuntimeError(
-                        "Fresh distribution build failed; release remains unpublished"
-                    )
-                if run.get("conclusion") == "success" and candidates_ready(
-                    repository, commit, run["id"]
-                ):
-                    return run["id"]
-        elif candidates_ready(repository, commit):
-            return None
-        if not fresh and api(repository, "commits/main")["sha"] != commit:
-            raise ValueError(
-                "Main advanced before the requested candidate was available; retry release preparation"
-            )
-        print(f"Waiting for exact-commit main candidates: {commit}", flush=True)
         time.sleep(min(20, max(0, deadline - time.monotonic())))
-    raise TimeoutError(
-        "Candidates unavailable; release remains unpublished. Inspect macos.yml and retry."
-    )
 
 
 def package_release(body):
@@ -198,11 +191,10 @@ def create_draft(repository, tag, commit):
     if not release["draft"]:
         raise ValueError("Public releases are immutable; cut a new version")
     body = release.get("body") or ""
-    generation = package_release(body)
+    generation = str(max(1, int(package_release(body)) - 1))
     body = re.sub(r"\n?<!-- foresight-package-release: [0-9]+ -->", "", body)
     body += f"\n<!-- foresight-package-release: {generation} -->"
-    # Persist the reservation before deleting anything. Retrying an old workflow
-    # still advances the draft generation, even after a partially failed rebuild.
+    # Resume the same draft generation and retain successful installer bytes.
     updated = subprocess.run(
         [
             "gh",
@@ -233,18 +225,6 @@ def create_draft(repository, tag, commit):
     ):
         raise ValueError(
             "Draft metadata update changed the immutable release binding; assets were not deleted"
-        )
-    for asset in release["assets"]:
-        subprocess.run(
-            [
-                "gh",
-                "api",
-                "--method",
-                "DELETE",
-                f"repos/{repository}/releases/assets/{asset['id']}",
-            ],
-            check=True,
-            timeout=300,
         )
     return generation
 
@@ -278,12 +258,12 @@ def main():
             "A new release tag must match the synchronized application version"
         )
     candidate_run = require_candidates(
-        args.repo, commit, args.wait, fresh=True, candidate_run=args.candidate_run
+        args.repo, commit, args.wait, candidate_run=args.candidate_run
     )
     release = create_draft(args.repo, args.tag, commit)
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         stream.write(
-            f"tag={args.tag}\npackage_release={release}\ncommit={commit}\ncontrol_commit={control_commit}\ncandidate_run={candidate_run or 0}\n"
+            f"tag={args.tag}\npackage_release={release}\ncommit={commit}\ncontrol_commit={control_commit}\ncandidate_run={args.candidate_run}\nlinux_candidate_run={candidate_run['linux-app']}\nmacos_candidate_run={candidate_run['macos-app']}\n"
         )
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a") as stream:

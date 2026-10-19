@@ -242,6 +242,15 @@ def pack(component, identity, prefix, output):
                 "sha256": digest(archive),
                 "source_commit": source_commit,
                 "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+                **(
+                    {
+                        "distribution": application_distribution(
+                            prefix, component, identity
+                        )
+                    }
+                    if component.endswith("-app")
+                    else {}
+                ),
                 **({"reused_from": reused} if reused is not None else {}),
             },
             indent=2,
@@ -278,6 +287,26 @@ def unpack(component, identity, source, destination):
         (Path(temporary) / "payload").rename(destination)
 
 
+def application_distribution(prefix, component, source):
+    pattern = "*.build.json" if component == "linux-app" else "*.manifest.json"
+    records = list(prefix.glob(pattern))
+    if len(records) != 1:
+        raise ValueError(
+            "Application candidate requires unambiguous distribution metadata"
+        )
+    metadata = json.loads(records[0].read_text())
+    version, number = metadata.get("version"), metadata.get("build_number")
+    if (
+        metadata.get("revision") != source
+        or not isinstance(version, str)
+        or not re.fullmatch(r"\d+\.\d+\.\d+", version)
+        or type(number) is not int
+        or number < 1
+    ):
+        raise ValueError("Invalid application distribution identity")
+    return {"version": version, "build_number": number}
+
+
 def api(repository, route):
     env = dict(os.environ)
     env.pop("GH_DEBUG", None)
@@ -305,10 +334,9 @@ def trusted_run(
     ):
         return False
     if component.endswith("-app"):
-        return (
-            run.get("head_branch") == "main"
-            and run.get("event") in ("push", "workflow_dispatch")
-            and run.get("conclusion") == "success"
+        return run.get("head_branch") == "main" and run.get("event") in (
+            "push",
+            "workflow_dispatch",
         )
     if run.get("head_branch") == "main" and run.get("event") != "pull_request":
         return True
@@ -501,6 +529,20 @@ def in_producer_attempt(artifact, job):
         return started <= created <= completed
     except (KeyError, TypeError, ValueError):
         return False
+
+
+def application_jobs(repository, run, component, artifact):
+    """Qualify a completed platform producer independently of sibling jobs."""
+    if not trusted_run(run, component, repository=repository):
+        return []
+    expected = {"linux-app": "linux-bundle", "macos-app": "macos"}[component]
+    return [
+        job
+        for job in dependency_jobs(repository, run["id"])
+        if job.get("name") == expected
+        and job.get("conclusion") == "success"
+        and in_producer_attempt(artifact, job)
+    ]
 
 
 def publish_receipt(repository, component, identity, source, artifact_id, output):
@@ -789,8 +831,11 @@ def pull(
                 continue
             if component.endswith("-app"):
                 if run["head_sha"] != identity and not (
-                    source_run and run.get("event") == "workflow_dispatch"
+                    run.get("event") == "workflow_dispatch"
                 ):
+                    continue
+                jobs = application_jobs(repository, run, component, artifact)
+                if not jobs:
                     continue
             else:
                 jobs = dependency_jobs(repository, run["id"])
@@ -811,8 +856,16 @@ def pull(
                     }:
                         raise ValueError("Unexpected artifact download members")
                     stream.extractall(source)  # noqa: S202 - Archive members are validated immediately above; links are retained.
-                if not component.endswith("-app"):
-                    receipt = json.loads((source / "identity.json").read_text())
+                receipt = json.loads((source / "identity.json").read_text())
+                if component.endswith("-app"):
+                    if not valid_receipt(receipt, component, identity) or not any(
+                        job.get("run_attempt", 1) == receipt["source_run_attempt"]
+                        for job in jobs
+                    ):
+                        raise ValueError(
+                            "Application receipt differs from successful producer attempt"
+                        )
+                else:
                     attempt = receipt.get(
                         "source_run_attempt", run.get("run_attempt", 1)
                     )
@@ -842,21 +895,20 @@ def pull(
                     raise ValueError(
                         "Ordinary SDK artifact contains imported approval; use the verified original bridge"
                     )
-                if not component.endswith("-app"):
-                    if (prefix / "source-qualification.json").is_symlink():
-                        raise ValueError("SDK qualification metadata must be regular")
-                    (prefix / "source-qualification.json").write_text(
-                        json.dumps(
-                            {
-                                "source_receipt": receipt,
-                                "producer_run": run["id"],
-                                "artifact_id": artifact["id"],
-                                "artifact_digest": artifact["digest"],
-                            },
-                            indent=2,
-                        )
-                        + "\n"
+                if (prefix / "source-qualification.json").is_symlink():
+                    raise ValueError("SDK qualification metadata must be regular")
+                (prefix / "source-qualification.json").write_text(
+                    json.dumps(
+                        {
+                            "source_receipt": receipt,
+                            "producer_run": run["id"],
+                            "artifact_id": artifact["id"],
+                            "artifact_digest": artifact["digest"],
+                        },
+                        indent=2,
                     )
+                    + "\n"
+                )
             print(
                 f"Using {artifact_name} from verified workflow run {run['id']}",
                 flush=True,
@@ -868,6 +920,66 @@ def pull(
             return False
         print(f"Waiting for verified dependency/candidate {artifact_name}", flush=True)
         time.sleep(min(20, max(0, deadline - time.monotonic())))
+
+
+def application_descriptor(repository, component, source, run_id):
+    """Prefer a small verified receipt; legacy candidates retain full verification."""
+    run = api(repository, f"actions/runs/{run_id}")
+    metadata_name = receipt_name(component, source)
+    items = api(repository, f"actions/artifacts?name={metadata_name}&per_page=100")[
+        "artifacts"
+    ]
+    for item in items:
+        if (
+            item["expired"]
+            or item["name"] != metadata_name
+            or item["workflow_run"]["id"] != run_id
+        ):
+            continue
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "receipt.zip"
+            download_zip(repository, item, archive)
+            with zipfile.ZipFile(archive) as bundle:
+                if (
+                    bundle.namelist() != ["receipt.json"]
+                    or bundle.getinfo("receipt.json").file_size > 65536
+                ):
+                    raise ValueError("Invalid application metadata archive")
+                record = json.loads(bundle.read("receipt.json"))
+        payload = api(repository, f"actions/artifacts/{record['artifact_id']}")
+        receipt = record.get("source_receipt")
+        if (
+            not valid_receipt(receipt, component, source)
+            or receipt["source_commit"] != source
+            or record.get("component") != component
+            or record.get("identity") != source
+            or record.get("artifact_digest") != payload.get("digest")
+            or payload.get("expired")
+            or payload.get("name") != name(component, source)
+            or payload.get("workflow_run", {}).get("id") != run_id
+        ):
+            raise ValueError("Application metadata does not bind the original payload")
+        jobs = application_jobs(repository, run, component, payload)
+        if not any(
+            job.get("run_attempt", 1) == receipt["source_run_attempt"]
+            and in_producer_attempt(item, job)
+            for job in jobs
+        ):
+            raise ValueError("Application metadata producer job/attempt mismatch")
+        distribution = receipt.get("distribution", {})
+        if (
+            not isinstance(distribution.get("version"), str)
+            or not re.fullmatch(r"\d+\.\d+\.\d+", distribution["version"])
+            or type(distribution.get("build_number")) is not int
+            or distribution["build_number"] < 1
+        ):
+            raise ValueError("Application metadata lacks a valid distribution identity")
+        return distribution
+    with tempfile.TemporaryDirectory() as temporary:
+        prefix = Path(temporary) / "candidate"
+        if not pull(repository, component, source, prefix, source_run=run_id):
+            raise ValueError("Verified surviving candidate became unavailable")
+        return application_distribution(prefix, component, source)
 
 
 def main():

@@ -22,6 +22,8 @@ def receipts(root):
                 {
                     "tag": "v1.2.3",
                     "status": "verified_download",
+                    "source_commit": "a" * 40,
+                    "release_tag_commit": "a" * 40,
                     "asset": "app" + suffix,
                     "sha256": str(index) * 64,
                 }

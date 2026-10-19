@@ -292,12 +292,10 @@ class ProvenanceTests(unittest.TestCase):
         self.assertTrue(artifacts.trusted_run(manual, "macos-sdk", own_head="a" * 40))
         self.assertFalse(artifacts.trusted_run(manual, "macos-sdk", own_head="b" * 40))
 
-    def test_candidates_require_successful_main_workflow(self):
+    def test_candidate_context_is_independent_of_sibling_workflow_failures(self):
         run = self.run_record(path=".github/workflows/macos.yml", conclusion="success")
         self.assertTrue(artifacts.trusted_run(run, "macos-app"))
         for change in (
-            {"conclusion": None},
-            {"conclusion": "failure"},
             {"head_branch": "feature"},
             {"event": "pull_request"},
         ):
@@ -554,11 +552,15 @@ class SelectionTests(unittest.TestCase):
                 self.assert_selection([path], ["macos"])
         for path in (
             "apps/desktop/linux/runner/my_application.cc",
-            "packaging/ci/test-debian.sh",
             *changes.LINUX_FILES,
         ):
             with self.subTest(path=path):
                 self.assert_selection([path], changes.GATES[1:])
+
+    def test_packaging_controls_require_contracts_without_application_builds(self):
+        for path in (*changes.PACKAGING_FILES, "packaging/ci/test-debian.sh"):
+            with self.subTest(path=path):
+                self.assert_selection([path], ["packaging"])
 
     def test_shared_unknown_and_selector_changes_keep_full_validation(self):
         for path in (
@@ -568,7 +570,6 @@ class SelectionTests(unittest.TestCase):
             "services/helper/main.cpp",
             "tools/build.sh",
             "tools/build_litert_extensions.py",
-            "tools/ci_changes.py",
             ".github/workflows/macos.yml",
             ".github/workflows/ci-dependencies.yml",
             "requirements-dev.lock",
@@ -756,9 +757,10 @@ def test_zip_download_checks_github_digest_before_unpacking(tmp_path):
             )
 
 
-def test_shared_dmg_packaging_selects_macos_checks():
+def test_shared_dmg_packaging_selects_package_contracts_without_compilation():
     selected = changes.select_gates(["tools/create_dmg.py"])
-    assert selected["macos"]
+    assert selected["packaging"]
+    assert not selected["macos"]
     assert not selected["linux-native"]
 
 

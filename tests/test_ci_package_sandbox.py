@@ -192,29 +192,23 @@ def test_rpm_recovery_preserves_other_formats_and_uses_current_preflight():
     assert "workflow_dispatch:" in source
     assert "!inputs.rpm_only" in jobs["publish"]["if"]
     assert all("github.ref == 'refs/heads/main'" in job["if"] for job in jobs.values())
-    formats = jobs["packages"]["strategy"]["matrix"]["format"]
-    assert "inputs.rpm_only" in formats and "fromJSON('[\"rpm\"]')" in formats
-    steps = jobs["packages"]["steps"]
-    control = next(
-        step for step in steps if step.get("with", {}).get("path") == ".ci-control"
-    )
-    assert control["with"]["ref"] == "${{ github.sha }}"
     assert (
-        control["with"]["sparse-checkout"] == "packaging/ci/prepare-document-sandbox.sh"
+        jobs["packages"]["strategy"]["matrix"]["format"]
+        == "${{ fromJSON(needs.bundle.outputs.formats) }}"
     )
-    copy = next(
+    steps = jobs["packages"]["steps"]
+    assert steps[0]["with"]["ref"] == "${{ github.sha }}"
+    retained = next(
         i
         for i, step in enumerate(steps)
-        if step.get("name") == "Install current sandbox preflight tooling"
+        if step.get("name") == "Retain built installers before lifecycle validation"
     )
-    lifecycle = next(
+    tested = next(
         i
         for i, step in enumerate(steps)
         if step.get("name") == "Native package and installation lifecycle"
     )
-    assert copy < lifecycle
-    # Recovery still retrieves the exact tagged candidate and attests the RPM;
-    # it cannot trigger the application producer or silently publish the draft.
+    assert retained < tested
     assert '--run-id "$CANDIDATE_RUN"' in source
     assert "gh workflow run" not in source
     assert "actions/attest-build-provenance@" in source

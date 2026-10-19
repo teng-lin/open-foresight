@@ -351,6 +351,12 @@ jobs:
         self.assertEqual(step["with"]["file"], "packaging/build.Dockerfile")
         self.assertEqual(sample["jobs"]["linux"]["runs-on"], "ubuntu-24.04")
 
+    def test_acceptance_recovery_can_read_original_producer(self):
+        caller = self.workflow("release.yml")["jobs"]["acceptance"]
+        recovery = self.workflow("release-acceptance.yml")["jobs"]["release"]
+        self.assertEqual(caller["permissions"]["actions"], "read")
+        self.assertEqual(recovery["permissions"]["actions"], "read")
+
     def test_ubuntu_package_job_shares_the_acceptance_build(self):
         workflow = self.workflow("integration-acceptance.yml")
         self.assertIn("pull_request", workflow["on"])
@@ -364,7 +370,8 @@ jobs:
             if "packaging/build.Dockerfile" in json.dumps(step)
         ]
         self.assertEqual(len(builds), 1)
-        self.assertEqual(builds[0]["with"]["target"], "integration")
+        self.assertEqual(builds[0]["with"]["target"], "builder")
+        self.assertEqual(builds[0]["if"], "github.event_name == 'pull_request'")
         blob = json.dumps(job)
         self.assertIn("docker cp", blob)
         self.assertIn("/src/dist/open-foresight", blob)
@@ -557,12 +564,13 @@ def test_release_latest_and_push_concurrency_are_explicit():
     assert not re.search(r"--latest(?:\s|$)", release)
     for name in ("quality.yml", "integration-acceptance.yml"):
         assert (
-            "github.event_name == 'pull_request' && github.ref || github.sha"
+            "github.event_name == 'pull_request' && github.ref ||"
             in (WORKFLOWS / name).read_text()
         )
     package = (WORKFLOWS / "linux-packages.yml").read_text()
     assert "workflow_call:" in package
-    assert "refs/tags/${{ inputs.tag }}" in package
+    assert "python -m tools.release_inputs" in package
+    assert "ref: ${{ github.sha }}" in package
     assert '--run-id "$CANDIDATE_RUN"' in package
 
 
