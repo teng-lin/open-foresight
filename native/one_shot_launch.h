@@ -1,6 +1,13 @@
 #pragma once
+#include <cerrno>
+#include <cstdlib>
+#include <fcntl.h>
+#include <filesystem>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 namespace foresight {
@@ -59,9 +66,58 @@ inline bool single_line_json(const std::string &value) {
   return value.find_first_of("\r\n") == std::string::npos;
 }
 
+// Schema contents are request data. Only an owner-readable random filename is
+// exposed to the child argv, and the launch owns it until the child is reaped.
+class OneShotSchemaFile {
+  std::vector<char> filename;
+
+public:
+  explicit OneShotSchemaFile(const std::string &schema) {
+    const auto pattern =
+        (std::filesystem::temp_directory_path() / "foresight-schema-XXXXXX")
+            .string();
+    filename.assign(pattern.begin(), pattern.end());
+    filename.push_back('\0');
+    const int fd = mkstemp(filename.data());
+    if (fd < 0)
+      throw std::runtime_error("Cannot create private schema file");
+    try {
+      if (fchmod(fd, 0600) || fcntl(fd, F_SETFD, FD_CLOEXEC))
+        throw std::runtime_error("Cannot protect private schema file");
+      size_t offset = 0;
+      while (offset < schema.size()) {
+        const auto count =
+            write(fd, schema.data() + offset, schema.size() - offset);
+        if (count < 0 && errno == EINTR)
+          continue;
+        if (count <= 0)
+          throw std::runtime_error("Cannot write private schema file");
+        offset += static_cast<size_t>(count);
+      }
+    } catch (...) {
+      close(fd);
+      unlink(filename.data());
+      throw;
+    }
+    if (close(fd)) {
+      unlink(filename.data());
+      throw std::runtime_error("Cannot finish private schema file");
+    }
+  }
+  OneShotSchemaFile(const OneShotSchemaFile &) = delete;
+  OneShotSchemaFile &operator=(const OneShotSchemaFile &) = delete;
+  ~OneShotSchemaFile() {
+    unlink(filename.data());
+  }
+  const char *path() const {
+    return filename.data();
+  }
+};
+
 struct OneShotLaunch {
   std::vector<std::string> arguments;
   std::string standard_input;
+  std::unique_ptr<OneShotSchemaFile> schema_file;
 };
 
 // One-shot generation feeds the prompt on stdin. The prompt text is not an
@@ -72,7 +128,7 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
                                      int max_output_tokens, int model_type,
                                      const std::string &json_schema,
                                      bool tools = false) {
-  if (backend != 1 && (!json_schema.empty() || tools))
+  if (backend != 1 && (tools || (backend != 0 && !json_schema.empty())))
     throw std::invalid_argument(
         "Runtime does not support structured stdin requests");
   OneShotLaunch launch;
@@ -99,6 +155,11 @@ inline OneShotLaunch one_shot_launch(int backend, const std::string &runtime,
     launch.standard_input = prompt;
     if (launch.standard_input.empty() || launch.standard_input.back() != '\n')
       launch.standard_input.push_back('\n');
+    if (!json_schema.empty()) {
+      launch.schema_file = std::make_unique<OneShotSchemaFile>(json_schema);
+      launch.arguments.push_back("--json-schema-file");
+      launch.arguments.push_back(launch.schema_file->path());
+    }
   }
   return launch;
 }

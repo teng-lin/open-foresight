@@ -28,4 +28,20 @@ int main() {
                           : foresight::ReconfigWait::cancelled))
       return 1;
   }
+  for (const auto expected :
+       {foresight::ReconfigWait::busy_timeout,
+        foresight::ReconfigWait::deadline, foresight::ReconfigWait::cancelled,
+        foresight::ReconfigWait::ready}) {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::unique_lock lock(mutex);
+    const bool busy = expected != foresight::ReconfigWait::ready;
+    const auto actual = foresight::wait_for_reconfiguration(
+        changed, lock, busy,
+        [&] { return expected == foresight::ReconfigWait::cancelled; },
+        [&] { return expected == foresight::ReconfigWait::deadline; },
+        std::chrono::milliseconds(0));
+    if (actual != expected)
+      throw std::runtime_error("Server busy cap confused with client deadline");
+  }
 }

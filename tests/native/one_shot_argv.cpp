@@ -1,5 +1,7 @@
 #include "json_string.h"
 #include "one_shot_launch.h"
+#include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 
@@ -67,9 +69,35 @@ int main() {
       REQUIRE(argument.find(schema) == std::string::npos);
       REQUIRE(argument.find(prompt) == std::string::npos);
     }
+    std::string schema_path;
+    {
+      auto constrained = foresight::one_shot_launch(0, "llama", "model", prompt,
+                                                    32, 0, schema);
+      require_prompt_absent(constrained, prompt);
+      const auto option =
+          std::find(constrained.arguments.begin(), constrained.arguments.end(),
+                    "--json-schema-file");
+      REQUIRE(option != constrained.arguments.end());
+      REQUIRE(option + 1 != constrained.arguments.end());
+      schema_path = *(option + 1);
+      for (const auto &argument : constrained.arguments)
+        REQUIRE(argument.find(schema) == std::string::npos);
+      struct stat metadata{};
+      REQUIRE(stat(schema_path.c_str(), &metadata) == 0);
+      REQUIRE(S_ISREG(metadata.st_mode));
+      REQUIRE((metadata.st_mode & 0777) == 0600);
+      REQUIRE(metadata.st_uid == getuid());
+      std::ifstream input(schema_path);
+      const std::string contents{std::istreambuf_iterator<char>(input), {}};
+      REQUIRE(contents == schema);
+      auto moved = std::move(constrained);
+      REQUIRE(access(schema_path.c_str(), R_OK) == 0);
+    }
+    REQUIRE(access(schema_path.c_str(), F_OK) == -1 && errno == ENOENT);
     bool refused = false;
     try {
-      foresight::one_shot_launch(0, "llama", "model", prompt, 32, 0, schema);
+      foresight::one_shot_launch(0, "llama", "model", prompt, 32, 0, schema,
+                                 true);
     } catch (const std::invalid_argument &) {
       refused = true;
     }

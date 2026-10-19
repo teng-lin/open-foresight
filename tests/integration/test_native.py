@@ -170,6 +170,58 @@ class NativeTest(unittest.TestCase):
     def engine(self, body):
         return self.lib.fs_engine_create(self.runner(body), str(self.model).encode())
 
+    def test_llama_schema_file_is_private_and_owned_until_child_completion(self):
+        generate = self.lib.fs_generate_json
+        generate.argtypes = [C.c_void_p, C.c_char_p, C.c_char_p, C.c_char_p]
+        generate.restype = C.c_int
+        schema = '{"type":"object","description":"private schema λ"}'
+        prompt = "private schema prompt"
+        for mode in ("completed", "failed", "cancelled"):
+            with self.subTest(mode=mode):
+                observed = self.path / (mode + ".json")
+                runner = self.runner(
+                    "import json,pathlib,stat,sys,time\n"
+                    "p=pathlib.Path(sys.argv[sys.argv.index('--json-schema-file')+1])\n"
+                    "data={'path':str(p),'schema':p.read_text(),'mode':stat.S_IMODE(p.stat().st_mode),'argv':sys.argv,'prompt':sys.stdin.read()}\n"
+                    f"pathlib.Path({str(observed)!r}).write_text(json.dumps(data))\n"
+                    + ("time.sleep(60)\n" if mode == "cancelled" else "")
+                    + ("sys.exit(7)\n" if mode == "failed" else "print('{}')\n")
+                )
+                engine = self.lib.fs_engine_create(runner, str(self.model).encode())
+                conversation = self.lib.fs_conversation_create(engine)
+                try:
+                    self.assertEqual(
+                        generate(
+                            conversation,
+                            mode.encode(),
+                            prompt.encode(),
+                            schema.encode(),
+                        ),
+                        0,
+                    )
+                    deadline = time.monotonic() + 3
+                    while not observed.exists() and time.monotonic() < deadline:
+                        threading.Event().wait(0.005)
+                    self.assertTrue(observed.exists())
+                    data = json.loads(observed.read_text())
+                    self.assertEqual(data["schema"], schema)
+                    self.assertEqual(data["mode"], 0o600)
+                    self.assertEqual(data["prompt"], prompt + "\n")
+                    self.assertTrue(
+                        all(
+                            schema not in arg and prompt not in arg
+                            for arg in data["argv"]
+                        )
+                    )
+                    if mode == "cancelled":
+                        self.assertTrue(Path(data["path"]).is_file())
+                        self.assertEqual(self.lib.fs_generation_cancel(conversation), 0)
+                    self.assertEqual(drain(self.lib, conversation)[-1]["status"], mode)
+                finally:
+                    self.lib.fs_conversation_destroy(conversation, 1)
+                    self.lib.fs_engine_destroy(engine)
+                self.assertFalse(Path(data["path"]).exists())
+
     def test_runtime_environment_is_sealed_by_the_first_handle(self):
         engine = self.engine("pass\n")
         try:

@@ -520,6 +520,36 @@ void main() {
     },
   );
 
+  test(
+    'commented HTML charset declarations cannot corrupt imported text',
+    () async {
+      for (final comment in [
+        '<!-- <meta charset="gbk"> -->',
+        '<!-- first line\n<meta http-equiv="content-type" content="text/html; charset=gbk">\n-->',
+      ]) {
+        final bytes = Uint8List.fromList(
+          utf8.encode('$comment<meta charset="utf-8"><p>中文 café</p>'),
+        );
+        expect(htmlDeclaredCharset(bytes), 'utf-8');
+        expect(await parseWebPage(bytes, mimeType: 'text/html'), '中文 café');
+      }
+      expect(
+        htmlDeclaredCharset(
+          Uint8List.fromList(ascii.encode('<!-- <meta charset=gbk>')),
+        ),
+        isNull,
+      );
+      expect(
+        htmlDeclaredCharset(
+          Uint8List.fromList(
+            ascii.encode('${' ' * 1000}<!-- <meta charset=gbk> -->'),
+          ),
+        ),
+        isNull,
+      );
+    },
+  );
+
   test('HTML meta charset is sniffed only without an HTTP encoding', () async {
     for (final declaration in [
       '<meta charset="gbk">',

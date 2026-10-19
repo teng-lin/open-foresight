@@ -28,13 +28,39 @@ void main() {
         'Edited',
         'Local text',
         'text/plain',
-        'edited legacy description',
+        'user edit; url:$uri',
         sourceUri: uri,
         locallyEdited: true,
       );
+      final drive = store.importText(
+        'Drive document',
+        'Original Drive text',
+        'text/plain',
+        'google-drive:fixture-account:document',
+        sourceUri: uri,
+      );
+      store.db.execute('INSERT INTO google_sources VALUES(?,?,?,?,?)', [
+        drive,
+        'fixture-account',
+        'document',
+        'original-modified',
+        'application/vnd.google-apps.document',
+      ]);
+      final driveBefore = Map<String, Object?>.from(
+        store.sources.singleWhere((source) => source['id'] == drive),
+      );
+      final association = store.rows('SELECT * FROM google_sources').single;
       expect(await app.importUrl(uri, allowPrivateNetwork: true), id);
-      expect(store.sources, hasLength(1));
-      expect(store.sources.single['content'], 'Refreshed text');
+      expect(store.sources, hasLength(2));
+      expect(
+        store.sources.singleWhere((source) => source['id'] == id)['content'],
+        'Refreshed text',
+      );
+      expect(
+        store.sources.singleWhere((source) => source['id'] == drive),
+        driveBefore,
+      );
+      expect(store.rows('SELECT * FROM google_sources').single, association);
     } finally {
       await app.close();
       domain.close();

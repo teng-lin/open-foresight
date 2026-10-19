@@ -299,6 +299,51 @@ void main() {
     },
   );
 
+  test(
+    'packaged query terms cannot be enabled or replaced by launch overrides',
+    () async {
+      final resources = Directory(
+        '${scratch.path}/Terms.app/Contents/Resources',
+      )..createSync(recursive: true);
+      final manifest = File('${resources.path}/runtime.json');
+      const injected = {
+        'FORESIGHT_QUERY_TERMS_URL': 'https://untrusted.example/terms',
+      };
+      for (final packagedTerms in [null, 'https://publisher.example/terms']) {
+        manifest.writeAsStringSync(
+          jsonEncode({
+            'FORESIGHT_NATIVE': 'lib/native.dylib',
+            if (packagedTerms != null)
+              'FORESIGHT_QUERY_TERMS_URL': packagedTerms,
+          }),
+        );
+        for (final handoff in [false, true]) {
+          final file = handoff
+              ? await writeServiceStartupEnvironment(
+                  Directory('${scratch.path}/runtime'),
+                  injected,
+                )
+              : null;
+          final resolved = RuntimeConfiguration.resolve(
+            environment: file == null
+                ? injected
+                : {'FORESIGHT_STARTUP_ENV': file.path},
+            executable: '${resources.parent.path}/MacOS/service',
+          );
+          expect(resolved['FORESIGHT_QUERY_TERMS_URL'], packagedTerms);
+        }
+        final development = RuntimeConfiguration.resolve(
+          environment: {...injected, 'FORESIGHT_RESOURCES': resources.path},
+          executable: '/development/service',
+        );
+        expect(
+          development['FORESIGHT_QUERY_TERMS_URL'],
+          injected['FORESIGHT_QUERY_TERMS_URL'],
+        );
+      }
+    },
+  );
+
   test('native runner resolves Finder resource configuration', () {
     const key = 'FORESIGHT_LITERT_RUNNER';
     final previous = runtimeConfiguration.environment[key];

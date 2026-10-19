@@ -1,5 +1,6 @@
 """Installed sanitizer migration must never silently invoke a library build."""
 
+from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
 import io
@@ -709,7 +710,7 @@ def test_changed_repository_provisioning_needs_its_own_profile_review(source):
         inspect.assert_not_called()
 
 
-def cache_origin_fixture(source, abi):
+def cache_origin_fixture(source, abi, reference="refs/pull/119/merge"):
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=source, text=True, timeout=30
     ).strip()
@@ -722,7 +723,7 @@ def cache_origin_fixture(source, abi):
     cache = {
         "id": 99,
         "key": key,
-        "ref": "refs/pull/119/merge",
+        "ref": reference,
         "created_at": "2026-10-18T20:01:00.500679Z",
     }
     run = {
@@ -733,6 +734,10 @@ def cache_origin_fixture(source, abi):
         "pull_requests": [{"number": 119}],
         "head_sha": commit,
     }
+    if reference == "refs/heads/main":
+        run.update(event="push", head_branch="main", pull_requests=[])
+    else:
+        run["pull_requests"] = [{"number": int(reference.split("/")[2])}]
     job = {
         "id": 2001,
         "name": sdk.JOBS["address"],
@@ -756,13 +761,18 @@ def cache_origin_fixture(source, abi):
     return key, cache, run, job, commit
 
 
-def check_cache_origin(source, abi, fixture):
+def check_cache_origin(source, abi, fixture, *, inherit_ref=False, cache_refs=None):
     key, cache, run, job, commit = fixture
 
     def api(repository, route):
         assert repository == REPOSITORY
         if route.startswith("actions/caches?"):
-            return {"actions_caches": [cache]}
+            from urllib.parse import parse_qs, urlsplit
+
+            reference = parse_qs(urlsplit(route).query)["ref"][0]
+            if cache_refs is not None:
+                cache_refs.append(reference)
+            return {"actions_caches": [cache] if reference == cache["ref"] else []}
         return {"workflow_runs": [run]}
 
     original = sdk.subprocess.check_output
@@ -779,8 +789,10 @@ def check_cache_origin(source, abi, fixture):
         return original(command, **kwargs)
 
     with (
-        # This fixture belongs to PR119, independently of the host CI run.
-        patch.dict(sdk.os.environ, {"GITHUB_REF": "refs/pull/119/merge"}),
+        # Ordinary fixtures are isolated; scope regressions inherit the real ref.
+        nullcontext()
+        if inherit_ref
+        else patch.dict(sdk.os.environ, {"GITHUB_REF": "refs/pull/119/merge"}),
         patch.object(sdk.artifacts, "api", side_effect=api),
         patch.object(sdk.artifacts, "dependency_jobs", return_value=[job]),
         patch.object(sdk.subprocess, "check_output", side_effect=request),
@@ -788,13 +800,23 @@ def check_cache_origin(source, abi, fixture):
         return sdk.cache_origin(source, "address", REPOSITORY, 119, key, abi)
 
 
-@pytest.mark.parametrize("ambient_ref", ["refs/pull/110/merge", "refs/heads/main", ""])
+@pytest.mark.parametrize(
+    "ambient_ref", ["refs/pull/110/merge", "refs/heads/main", None]
+)
 def test_scoped_cache_keeps_original_source_even_if_later_application_failed(
     source, abi, monkeypatch, ambient_ref
 ):
-    monkeypatch.setenv("GITHUB_REF", ambient_ref)
-    fixture = cache_origin_fixture(source, abi)
-    origin = check_cache_origin(source, abi, fixture)
+    if ambient_ref is None:
+        monkeypatch.delenv("GITHUB_REF", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_REF", ambient_ref)
+    reference = ambient_ref or "refs/pull/119/merge"
+    fixture = cache_origin_fixture(source, abi, reference)
+    cache_refs = []
+    origin = check_cache_origin(
+        source, abi, fixture, inherit_ref=True, cache_refs=cache_refs
+    )
+    assert cache_refs == [reference]
     assert origin["source_commit"] == fixture[-1]
     assert (
         origin["run_id"] == 1001
@@ -807,6 +829,18 @@ def test_scoped_cache_keeps_original_source_even_if_later_application_failed(
         == origin["cache_save_step"]["conclusion"]
         == "success"
     )
+
+
+def test_scoped_cache_falls_back_to_verified_main_upload(source, abi, monkeypatch):
+    monkeypatch.setenv("GITHUB_REF", "refs/pull/110/merge")
+    fixture = cache_origin_fixture(source, abi, "refs/heads/main")
+    cache_refs = []
+    origin = check_cache_origin(
+        source, abi, fixture, inherit_ref=True, cache_refs=cache_refs
+    )
+    assert cache_refs == ["refs/pull/110/merge", "refs/heads/main"]
+    assert origin["source_commit"] == fixture[-1]
+    assert origin["run_id"] == 1001
 
 
 @pytest.mark.parametrize(
