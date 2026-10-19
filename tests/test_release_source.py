@@ -106,7 +106,11 @@ class ReleaseSourceTest(unittest.TestCase):
             ):
                 release.main()
             candidates.assert_called_once_with(
-                "teng-lin/open-foresight", self.product, 10800, fresh=True
+                "teng-lin/open-foresight",
+                self.product,
+                10800,
+                fresh=True,
+                candidate_run=0,
             )
             draft.assert_called_once_with(
                 "teng-lin/open-foresight", self.tag, self.product
@@ -117,6 +121,49 @@ class ReleaseSourceTest(unittest.TestCase):
             )
             self.assertIn(f"Product commit: `{self.product}`", summary.read_text())
             self.assertIn(f"Control commit: `{self.control}`", summary.read_text())
+
+    def test_resume_cli_preserves_product_and_candidate_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "prepare",
+                        "--tag",
+                        self.tag,
+                        "--repo",
+                        "owner/repo",
+                        "--candidate-run",
+                        "42",
+                    ],
+                ),
+                patch.dict(
+                    os.environ,
+                    {
+                        "GITHUB_REF": "refs/heads/main",
+                        "GITHUB_OUTPUT": str(output),
+                        "GITHUB_STEP_SUMMARY": "",
+                    },
+                ),
+                patch.object(release, "stale", return_value=[]),
+                patch.object(
+                    release.subprocess, "check_output", return_value=self.control
+                ),
+                patch.object(release, "release_source", return_value=self.product),
+                patch.object(
+                    release, "require_candidates", return_value=42
+                ) as candidates,
+                patch.object(release, "create_draft", return_value="2") as draft,
+            ):
+                release.main()
+            candidates.assert_called_once_with(
+                "owner/repo", self.product, 10800, fresh=True, candidate_run=42
+            )
+            draft.assert_called_once_with("owner/repo", self.tag, self.product)
+            self.assertIn("candidate_run=42\n", output.read_text())
+            self.assertIn(f"commit={self.product}\n", output.read_text())
 
     def test_new_tag_cannot_use_a_different_current_application_version(self):
         with (
