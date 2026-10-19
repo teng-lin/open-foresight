@@ -72,6 +72,29 @@ retains its separate policy and history bound. Qualification refactors do not
 change SDK build identities: existing approved merged producers and exact
 manifest originals keep their verified reuse paths, original receipts and bytes.
 
+## Consumer-scoped producer trust (WS2-0)
+
+`tools/ci_producer_trust.py` is the shared workflow/event/job allowlist for PR
+application handoff, fork SDK handoff, release candidates, dependency SDKs,
+sanitizer SDKs, the frozen dependency seed and installer-acceptance reuse. Caller
+prefixes such as `acceptance / acceptance` are explicit. Each row records its
+receipt tier; `None` means today's legacy receipts have no tier requirement.
+The rows retain today's names and events. In particular, neither PR artifacts
+nor preview producers qualify as release candidates, and scheduled sanitizer
+runs do not qualify as SDK producers. Future producer names and tier requirements
+must be introduced with their consumer's proof and negative fixtures.
+
+The table only identifies producers. Consumers retain their repository and source
+policy, successful original-attempt proof, upload-window binding, receipt checks
+and byte checksums. Producer controls include the table, independently of SDK
+build-input fingerprints, so extracting this policy does not invalidate compiled
+SDKs or authorize a rebuild. The seed row remains restricted to its original
+main-push `linux-bundle` producer until a later workstream requalifies it.
+
+This refactor changes no workflow execution or runner-minute baseline. Its direct
+deletion is the duplicated SDK job allowlists; hosted savings come from subsequent
+producer/consumer restructuring.
+
 ## Python validation ownership and parallel workflow lint
 
 The unconditional Ubuntu quality job runs the complete ordinary Python suite

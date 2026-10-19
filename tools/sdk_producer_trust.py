@@ -12,22 +12,19 @@ from pathlib import Path, PurePosixPath
 import re
 import tempfile
 
+from tools.ci_producer_trust import PRODUCERS
+
 COMMIT = re.compile(r"[a-f0-9]{40}")
-WORKFLOW = ".github/workflows/ci-dependencies.yml"
+WORKFLOW = PRODUCERS["dependency-sdk"].workflows[0]
 JOBS = {
-    "macos-sdk": "Build macOS sdk",
-    "macos-vendor": "Build macOS vendor",
-    "macos-runtime": "Build macOS runtime",
-    "linux-core": "Build Linux core",
-    "linux-litert": "Build Linux litert",
-    "linux-whisper": "Build Linux whisper",
-    "linux-sdk": "Assemble Linux SDK",
+    component: jobs[0] for component, jobs in PRODUCERS["dependency-sdk"].jobs.items()
 }
 PRODUCER_CONTROLS = (
     "tools/ci_artifacts.py",
     "tools/linux_sdk_artifacts.py",
     "tools/ci_verify_dependency.py",
     "tools/sdk_producer_trust.py",
+    "tools/ci_producer_trust.py",
     "tools/sdk_approval_bridge.py",
     "tools/sdk_final_approval.py",
     "tools/sdk_approved_legacy.json",

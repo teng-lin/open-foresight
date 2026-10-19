@@ -18,15 +18,18 @@ import time
 from tools import ci_artifacts as artifacts
 from tools.ci_stage_cache import read_zip
 from tools import linux_sdk_artifacts as sdk
+from tools.ci_producer_trust import PRODUCERS
 
 
-def original_producer(repository, source, run_id, attempt, artifact, *, wait=60):
+def original_producer(
+    repository, source, run_id, attempt, artifact, *, wait=60, consumer="pr-application"
+):
     """Refresh a uniquely identified pending producer without relaxing its proof."""
     deadline = time.monotonic() + wait
 
     def matches(job):
         return (
-            job.get("name") == "ubuntu-application"
+            PRODUCERS[consumer].matches_job(job)
             and job.get("run_id") == run_id
             and job.get("head_sha") == source
             and job.get("run_attempt") == attempt
@@ -43,7 +46,7 @@ def original_producer(repository, source, run_id, attempt, artifact, *, wait=60)
         if len(jobs) == 1:
             break
         if len(jobs) > 1 or any(
-            job.get("name") == "ubuntu-application" for job in listed
+            PRODUCERS[consumer].matches_job(job) for job in listed
         ):
             reject(
                 f"found {len(jobs)} matching producer jobs; identity is ambiguous or mismatched"
@@ -170,10 +173,10 @@ def retrieve(
         else f"integration-sdk-{source}-{attempt}"
     )
     run = artifacts.api(repository, f"actions/runs/{run_id}")
+    consumer = "pr-application" if component == "linux-app" else "fork-sdk"
     if (
         run.get("id") != run_id
-        or run.get("path") != ".github/workflows/integration-acceptance.yml"
-        or run.get("event") != "pull_request"
+        or not PRODUCERS[consumer].matches_run(run)
         or run.get("head_sha") != source
         or (run.get("repository") or {}).get("full_name") != repository
         or (run.get("head_repository") or {}).get("full_name") != head_repository
@@ -190,7 +193,13 @@ def retrieve(
     ):
         raise ValueError("Application artifact differs from its producer output")
     job = original_producer(
-        repository, source, run_id, attempt, artifact, wait=producer_wait
+        repository,
+        source,
+        run_id,
+        attempt,
+        artifact,
+        wait=producer_wait,
+        consumer=consumer,
     )
     with tempfile.TemporaryDirectory(
         prefix="foresight-integration-application-"

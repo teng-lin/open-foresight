@@ -25,9 +25,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
 from tools.ci_stage_cache import ensure_commit  # noqa: E402
 from tools.sanitizer_runtime import address_runtime  # noqa: E402
+from tools.ci_producer_trust import PRODUCERS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ".github/workflows/native-sanitizers.yml"
+WORKFLOW = PRODUCERS["sanitizer-sdk"].workflows[0]
 FILES = (
     "tools/build_sanitizer_sdk.py",
     "tools/sanitizer_runtime.py",
@@ -42,7 +43,7 @@ IMPORTED = (
     "require_clean_sources",
     "run",
 )
-JOBS = {"address": "native-sanitizers", "thread": "native-thread-sanitizer"}
+JOBS = {kind: jobs[0] for kind, jobs in PRODUCERS["sanitizer-sdk"].jobs.items()}
 INSTALL = {
     "address": "Install the native compiler and test dependencies",
     "thread": "Install the separate TSan toolchain",
@@ -441,7 +442,7 @@ def verify_installed(root, kind, prefix, abi):
 
 def trusted(repository, run, own_pr, root=ROOT, kind="address"):
     if (
-        run.get("path") != WORKFLOW
+        not PRODUCERS["sanitizer-sdk"].matches_run(run)
         or (run.get("head_repository") or {}).get("full_name") != repository
     ):
         return False
@@ -558,7 +559,7 @@ def cache_origin(root, kind, repository, own_pr, cache_key, abi):
         )["workflow_runs"]
         for run in batch:
             if (
-                run.get("path") != WORKFLOW
+                not PRODUCERS["sanitizer-sdk"].matches_run(run)
                 or (run.get("head_repository") or {}).get("full_name") != repository
             ):
                 continue

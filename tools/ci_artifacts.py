@@ -21,6 +21,7 @@ from tools.sdk_workflow_recipe import validate as validate_recipe_workflow  # no
 from tools import sdk_producer_trust as producer_trust  # noqa: E402
 from tools import sdk_approval_bridge as approval_bridge  # noqa: E402
 from tools import sdk_final_approval as final_approval  # noqa: E402
+from tools.ci_producer_trust import PRODUCERS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = {
@@ -71,7 +72,7 @@ FILES = {
 # Build recipes and provenance are separate: promotion/receipt implementation and
 # unrelated pin metadata cannot change compiler outputs. The workflow regions
 # contain only the component's runner, build environment and build/setup steps.
-WORKFLOW = ".github/workflows/ci-dependencies.yml"
+WORKFLOW = PRODUCERS["dependency-sdk"].workflows[0]
 PIN_KEYS = {"linux-litert": ("litert_lm",), "macos-vendor": ("litert_lm",)}
 for _component, _inputs in FILES.items():
     _inputs.append(WORKFLOW)
@@ -136,13 +137,7 @@ PARENTS = {
     "linux-sdk": ["linux-core", "linux-litert", "linux-whisper"],
 }
 JOBS = {
-    "macos-sdk": "Build macOS sdk",
-    "macos-runtime": "Build macOS runtime",
-    "macos-vendor": "Build macOS vendor",
-    "linux-sdk": "Assemble Linux SDK",
-    "linux-core": "Build Linux core",
-    "linux-litert": "Build Linux litert",
-    "linux-whisper": "Build Linux whisper",
+    component: jobs[0] for component, jobs in PRODUCERS["dependency-sdk"].jobs.items()
 }
 
 
@@ -365,23 +360,18 @@ def trusted_run(
     run, component, own_head="", repository="teng-lin/open-foresight", own_pr=0
 ):
     """Dependencies come from main, merged sources, or this repository's own PR."""
-    workflow = (
-        ".github/workflows/macos.yml"
+    producer = PRODUCERS[
+        "release-candidate"
         if component.endswith("-app")
-        else ".github/workflows/ci-dependencies.yml"
-    )
+        else "dependency-sdk"
+    ]
     if (
-        run.get("path") != workflow
-        or run.get("event")
-        not in ("push", "workflow_dispatch", "schedule", "pull_request")
+        not producer.matches_run(run)
         or (run.get("head_repository") or {}).get("full_name") != repository
     ):
         return False
     if component.endswith("-app"):
-        return run.get("head_branch") == "main" and run.get("event") in (
-            "push",
-            "workflow_dispatch",
-        )
+        return run.get("head_branch") == "main"
     if run.get("head_branch") == "main" and run.get("event") != "pull_request":
         return True
     if (
@@ -584,11 +574,10 @@ def application_jobs(repository, run, component, artifact):
     """Qualify a completed platform producer independently of sibling jobs."""
     if not trusted_run(run, component, repository=repository):
         return []
-    expected = {"linux-app": "linux-bundle", "macos-app": "macos"}[component]
     return [
         job
         for job in dependency_jobs(repository, run["id"])
-        if job.get("name") == expected
+        if PRODUCERS["release-candidate"].matches_job(job, component)
         and job.get("conclusion") == "success"
         and in_producer_attempt(artifact, job)
     ]
