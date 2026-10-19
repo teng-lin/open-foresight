@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:foresight_core/src/platform_services.dart';
+import 'package:foresight_core/src/profile_paths.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
@@ -77,6 +78,61 @@ void main() {
       await expectLater(connection.connect(), throwsStateError);
     },
   );
+
+  test('launcher waits for model verification beyond ten seconds', () async {
+    runtimeConfiguration.environment.removeWhere(
+      (key, _) => key.startsWith('FORESIGHT_'),
+    );
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = '/usr/bin/true';
+    final profile = ProfilePaths(
+      '${f.root.path}/slow-data',
+      '${f.root.path}/slow-run',
+    );
+    ServerSocket? server;
+    final peers = <Socket>[];
+    final listening = Future<void>.delayed(
+      const Duration(seconds: 11),
+      () async {
+        server = await ServerSocket.bind(
+          InternetAddress(
+            '${profile.runtime}/application.sock',
+            type: InternetAddressType.unix,
+          ),
+          0,
+        );
+        server!.listen((socket) {
+          peers.add(socket);
+          unawaited(socket.done.catchError((Object _) {}));
+          socket
+              .cast<List<int>>()
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .listen((line) {
+                final request = jsonDecode(line) as Map;
+                socket.writeln(
+                  jsonEncode({
+                    'id': request['id'],
+                    'result': {'pid': pid},
+                    'done': true,
+                  }),
+                );
+              });
+        });
+      },
+    );
+    ServiceClient? client;
+    try {
+      client = await ensureService(profile);
+      expect((await client.call('status') as Map)['pid'], pid);
+    } finally {
+      await listening;
+      await client?.close();
+      for (final socket in peers) {
+        socket.destroy();
+      }
+      await server?.close();
+    }
+  });
 
   test(
     'closing during connect rejects the late connection and leaves no usable client',

@@ -743,8 +743,8 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
         first.service_pid = second.service_pid = owner
         first.tool("save_note", {"title": "Restart-safe", "body": "persisted"})
         os.kill(owner, signal.SIGTERM)
-        # Shutdown may wait up to five seconds for the helper, and a new
-        # launcher allows ten seconds for the replacement service to bind.
+        # Shutdown may wait up to five seconds for the helper. These tiny
+        # fixture models do not need the production-model startup allowance.
         deadline = time.monotonic() + 30
         while True:
             status = first.tool("get_status")

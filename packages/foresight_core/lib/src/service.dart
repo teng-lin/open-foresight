@@ -1408,7 +1408,10 @@ Future<ServiceClient> ensureService(ProfilePaths profile) async {
         environment: environment,
       );
     }
-    for (var attempt = 0; attempt < 100; attempt++) {
+    // Every registered model is rehashed before the service binds its socket.
+    // Production models can take longer than ten seconds even on a warm disk.
+    final startup = Stopwatch()..start();
+    while (startup.elapsed < const Duration(minutes: 3)) {
       try {
         path = serviceEndpoint(profile);
         return await _connectCompatibleService(path);

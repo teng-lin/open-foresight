@@ -133,23 +133,34 @@ def test_ubuntu_package_and_acceptance_use_one_exact_application_build():
     assert 'test "$LINUX_RESULT" = success' in aggregate["run"]
     assert 'test "$LINUX_RESULT" = skipped' in aggregate["run"]
     job = jobs["ubuntu-package"]
+    producer = jobs["ubuntu-application"]
+    assert job["needs"] == ["changes", "ubuntu-application"]
+    assert "!cancelled()" in job["if"]
+    assert "needs.ubuntu-application.result == 'success'" in job["if"]
+    assert "github.event_name == 'pull_request'" in producer["if"]
+    assert not any(
+        step.get("with", {}).get("file") == "packaging/build.Dockerfile"
+        for step in job["steps"]
+    )
+    assert any(
+        "tools.integration_application" in step.get("run", "") for step in job["steps"]
+    )
     builds = [
         step
-        for step in job["steps"]
+        for step in producer["steps"]
         if step.get("with", {}).get("file") == "packaging/build.Dockerfile"
     ]
     assert len(builds) == 1
     assert builds[0]["with"]["target"] == "builder"
-    assert (
-        builds[0]["if"]
-        == "github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'"
-    )
+    assert builds[0]["if"] == "github.event_name == 'pull_request'"
     assert builds[0]["with"]["load"] is True
     assert (
         "SOURCE_REVISION=${{ github.event.pull_request.head.sha || github.sha }}"
         in builds[0]["with"]["build-args"]
     )
-    commands = "\n".join(step.get("run", "") for step in job["steps"])
+    commands = "\n".join(
+        step.get("run", "") for step in producer["steps"] + job["steps"]
+    )
     assert "docker create foresight-built-application:local /bin/true" in commands
     assert (
         'docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/'

@@ -75,11 +75,17 @@ jobs:
             test "$SELECTED" = false
             test "$LINUX_RESULT" = skipped
           fi
-  ubuntu-package:
+  ubuntu-application:
     needs: changes
-    if: needs.changes.outputs.linux_bundle == 'true'
+    if: needs.changes.outputs.linux_bundle == 'true' && github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 300
+    outputs:
+      artifact_id: ${{ steps.application.outputs.artifact-id }}
+      artifact_digest: ${{ steps.application.outputs.artifact-digest }}
+      attempt: ${{ steps.receipt.outputs.attempt }}
+      sdk_id: ${{ steps.fork-sdk.outputs.artifact-id }}
+      sdk_digest: ${{ steps.fork-sdk.outputs.artifact-digest }}
     steps:
       - name: Free hosted-runner space for SDK and model fixtures
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -121,24 +127,14 @@ jobs:
           fi
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
-      - name: Recover the original PR application before compiling
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        id: retained
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OWN_HEAD: ${{ github.event.pull_request.head.sha }}
-          OWN_PR: ${{ github.event.pull_request.number }}
-          OWN_BRANCH: ${{ github.head_ref }}
-          WORKFLOW_SOURCE: ${{ github.workflow_sha }}
-        run: python tools/ci_acceptance_application.py --head "$OWN_HEAD" --pr "$OWN_PR" --branch "$OWN_BRANCH" --workflow-source "$WORKFLOW_SOURCE"
       - name: Restore qualified application dependency outputs without compilation
-        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           SDK_IMAGE: ${{ steps.sdk.outputs.image }}
         run: python tools/ci_app_dependency_seed.py --sdk-image "$SDK_IMAGE" --output build/app-dependency-seed
-      - name: Build the shared Ubuntu 24.04 application and acceptance image
-        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
+      - name: Build the shared Ubuntu 24.04 application
+        if: github.event_name == 'pull_request'
         id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
@@ -156,6 +152,143 @@ jobs:
           cache-from: |
             type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
             type=registry,ref=${{ steps.app-cache.outputs.cache }}
+      - name: Package version
+        id: version
+        env:
+          PRODUCT: .
+          CANDIDATE_VERSION: ''
+        run: |
+          python3 - <<'PY'
+          import os, subprocess, sys
+          sys.path.insert(0, 'tools')
+          from app_version import read_version, stale
+          product = os.environ['PRODUCT']
+          if paths := stale(product):
+              raise SystemExit('Out of date with apps/desktop/pubspec.yaml: ' + ', '.join(paths))
+          version, _ = read_version(product)
+          if os.environ['CANDIDATE_VERSION'] and version != os.environ['CANDIDATE_VERSION']:
+              raise ValueError('Candidate version differs from its original source')
+          release = '1'
+          epoch = subprocess.check_output(['git', '-C', product, 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
+          PY
+      - name: Export the exact Ubuntu acceptance application for packaging
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p build/portable/dist
+          task_container=$(docker create foresight-built-application:local /bin/true)
+          trap 'docker rm "$task_container" >/dev/null' EXIT
+          docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/
+      - name: Archive the original application before acceptance setup
+        if: github.event_name == 'pull_request'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          RELEASE: ${{ steps.version.outputs.release }}
+          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
+        run: python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
+      - name: Bind application bytes to the actual source and original attempt
+        id: receipt
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python tools/ci_artifacts.py pack --component linux-app --identity "$SOURCE" --prefix dist/packages --output build/acceptance-application
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Retain the successful application independently of acceptance
+        id: application
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-linux-app-${{ github.event.pull_request.head.sha }}
+          path: build/acceptance-application/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: true
+      - name: Save the fork SDK already built by this producer
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          SOURCE: ${{ github.event.pull_request.head.sha }}
+        run: python -m tools.integration_application --save-sdk --source "$SOURCE" --directory build/fork-sdk-artifact
+      - name: Retain the source-scoped fork SDK without publishing it
+        if: github.event.pull_request.head.repo.full_name != github.repository
+        id: fork-sdk
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-sdk-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: build/fork-sdk-artifact/
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+          overwrite: true
+      - name: Retain application dependency qualification
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: acceptance-application-evidence
+          path: build/app-dependency-seed/qualification.json
+          if-no-files-found: ignore
+          overwrite: true
+  ubuntu-package:
+    needs: [changes, ubuntu-application]
+    if: ${{ !cancelled() && needs.changes.outputs.linux_bundle == 'true' && (github.event_name != 'pull_request' || needs.ubuntu-application.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Free hosted-runner space for SDK and model fixtures
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Allow isolated document namespaces in package-test containers
+        run: bash tools/ci_package_sandbox.sh
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Restore the verified application from its successful producer
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          ARTIFACT_ID: ${{ needs.ubuntu-application.outputs.artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.ubuntu-application.outputs.artifact_digest }}
+          PRODUCER_ATTEMPT: ${{ needs.ubuntu-application.outputs.attempt }}
+        run: |
+          python -m tools.integration_application --source "$SOURCE" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --directory dist/packages
+          (cd dist/packages && sha256sum --check ./*.tar.gz.sha256)
+          mkdir -p build/portable/dist
+          tar -xzf dist/packages/*.tar.gz -C build/portable/dist
+      - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        with:
+          driver: docker
+      - name: Authenticate SDK registry
+        env:
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Fetch verified Linux SDK descriptor
+        id: sdk
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          OWN_PR: ${{ github.event.pull_request.number || 0 }}
+          FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          FORK_SDK_ID: ${{ needs.ubuntu-application.outputs.sdk_id }}
+          FORK_SDK_DIGEST: ${{ needs.ubuntu-application.outputs.sdk_digest }}
+          PRODUCER_ATTEMPT: ${{ needs.ubuntu-application.outputs.attempt }}
+        run: |-
+          # Fork SDKs remain scoped to this successful producer and exact source.
+          if [[ "$FORK_PR" == true ]]; then
+            python -m tools.integration_application --component linux-sdk --source "$OWN_HEAD" --head-repository "$HEAD_REPOSITORY" --artifact-id "$FORK_SDK_ID" --artifact-digest "$FORK_SDK_DIGEST" --attempt "$PRODUCER_ATTEMPT" --directory build/sdk-descriptor
+            python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
+            exit 0
+          fi
+          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+          python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
       - name: Retrieve the verified main application instead of compiling it again
         if: github.event_name != 'pull_request'
         id: candidate
@@ -180,7 +313,6 @@ jobs:
         env:
           PRODUCT: ${{ github.event_name == 'pull_request' && '.' || 'product' }}
           CANDIDATE_VERSION: ${{ steps.candidate.outputs.version }}
-          RETAINED_EPOCH: ${{ steps.retained.outputs.epoch }}
         run: |
           python3 - <<'PY'
           import os, subprocess, sys
@@ -193,33 +325,10 @@ jobs:
           if os.environ['CANDIDATE_VERSION'] and version != os.environ['CANDIDATE_VERSION']:
               raise ValueError('Candidate version differs from its original source')
           release = '1'
-          epoch = os.environ['RETAINED_EPOCH'] or subprocess.check_output(['git', '-C', product, 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          epoch = subprocess.check_output(['git', '-C', product, 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
           PY
-      - name: Export the exact Ubuntu acceptance application for packaging
-        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
-        run: |
-          mkdir -p build/portable/dist
-          task_container=$(docker create foresight-built-application:local /bin/true)
-          trap 'docker rm "$task_container" >/dev/null' EXIT
-          docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/
-      - name: Archive the original application before acceptance setup
-        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-          RELEASE: ${{ steps.version.outputs.release }}
-          SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
-        run: python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
-      - name: Retain the original application independently of acceptance results
-        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: ubuntu-acceptance-application-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
-          path: dist/packages/
-          if-no-files-found: error
-          retention-days: 90
-          compression-level: 0
       - name: Prepare acceptance tools without application compilation
         id: acceptance-image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc

@@ -77,7 +77,10 @@ def test_registry_failure_is_not_permission_to_compile_uncached():
 
 @pytest.mark.parametrize(
     "name,job",
-    [("integration-acceptance.yml", "ubuntu-package"), ("macos.yml", "linux-bundle")],
+    [
+        ("integration-acceptance.yml", "ubuntu-application"),
+        ("macos.yml", "linux-bundle"),
+    ],
 )
 def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consumed(
     name, job
@@ -117,7 +120,7 @@ def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consume
         assert "steps.sdk.outputs.cache" not in build["cache-from"]
         assert "REQUIRE_DEPENDENCY_REUSE=1" in build["build-args"]
     exporters = [build for build in builds if "cache-to" in build]
-    if job == "ubuntu-package":
+    if job == "ubuntu-application":
         assert not exporters
         assert (
             selected.get("permissions", workflow["permissions"])["packages"] == "read"

@@ -820,6 +820,31 @@ class ContainerdArchiveTests(unittest.TestCase):
                     ["docker", "image", "tag", target, "verified:pr"],
                 )
 
+    def test_receipt_manifest_or_index_resolves_classic_store_config_id(self):
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                config, _, original = oci_archive(self.prefix, nested=nested)
+                descriptor = json.loads((self.prefix / "image.json").read_text())
+                descriptor["image_id"] = original
+                (self.prefix / "image.json").write_text(json.dumps(descriptor))
+
+                def inspect(image, config=config):
+                    if image != config:
+                        raise missing_docker_image(image)
+                    return config
+
+                with (
+                    patch.object(sdk, "inspect", side_effect=inspect),
+                    patch.object(sdk, "run") as run,
+                ):
+                    self.assertEqual(
+                        sdk.load(self.prefix, "linux-sdk", "verified:pr"), "verified:pr"
+                    )
+                self.assertEqual(
+                    run.call_args.args[0],
+                    ["docker", "image", "tag", config, "verified:pr"],
+                )
+
     def test_archive_manifest_cannot_substitute_different_receipt_config(self):
         original, _, _ = oci_archive(self.prefix, wrong_config=True)
         with (

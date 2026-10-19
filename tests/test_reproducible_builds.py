@@ -329,7 +329,10 @@ class BuildPolicyTests(unittest.TestCase):
             self.assertIn("refresh-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT", tag)
 
     def test_pr_consumers_can_use_unpublished_dependency_changes(self):
-        for name, job in (("integration-acceptance.yml", "ubuntu-package"),):
+        for name, job in (
+            ("integration-acceptance.yml", "ubuntu-package"),
+            ("integration-acceptance.yml", "ubuntu-application"),
+        ):
             with self.subTest(workflow=name):
                 workflow = yaml.safe_load(
                     (ROOT / ".github/workflows" / name).read_text()
@@ -337,7 +340,13 @@ class BuildPolicyTests(unittest.TestCase):
                 steps = workflow["jobs"][job]["steps"]
                 resolve = next(step for step in steps if step.get("id") == "sdk")["run"]
                 self.assertIn('if [[ "$FORK_PR" == true ]]; then', resolve)
-                self.assertIn("tools/build_linux_sdk_local.sh", resolve)
+                if job == "ubuntu-application":
+                    self.assertIn("tools/build_linux_sdk_local.sh", resolve)
+                else:
+                    self.assertNotIn("tools/build_linux_sdk_local.sh", resolve)
+                    self.assertIn(
+                        "tools.integration_application --component linux-sdk", resolve
+                    )
                 self.assertNotIn("--optional", resolve)
                 self.assertIn("--wait 12600", resolve)
                 self.assertIn("tools/linux_sdk_artifacts.py resolve", resolve)
@@ -377,13 +386,22 @@ class BuildPolicyTests(unittest.TestCase):
                     for step in steps
                     if "docker/build-push-action@" in step.get("uses", "")
                 )
-                self.assertIn(
-                    "steps.app-cache.outputs.cache", build["with"]["cache-from"]
-                )
-                self.assertIn(
-                    "steps.app-cache.outputs.legacy_cache", build["with"]["cache-from"]
-                )
-                self.assertNotIn("steps.sdk.outputs.cache", build["with"]["cache-from"])
+                if job == "ubuntu-application":
+                    self.assertIn(
+                        "steps.app-cache.outputs.cache", build["with"]["cache-from"]
+                    )
+                    self.assertIn(
+                        "steps.app-cache.outputs.legacy_cache",
+                        build["with"]["cache-from"],
+                    )
+                    self.assertNotIn(
+                        "steps.sdk.outputs.cache", build["with"]["cache-from"]
+                    )
+                else:
+                    self.assertEqual(
+                        build["with"]["file"], "packaging/acceptance.Dockerfile"
+                    )
+                    self.assertNotIn("packaging/build.Dockerfile", json.dumps(steps))
 
     def test_dart_auth_and_model_revisions_are_pinned(self):
         auth = [

@@ -4,9 +4,17 @@
 ARG SDK_IMAGE
 FROM ${SDK_IMAGE}
 ARG UBUNTU_SNAPSHOT=20261001T000000Z
-RUN apt-get --snapshot "$UBUNTU_SNAPSHOT" update && apt-get --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
-    pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 mesa-vulkan-drivers && \
-    rm -rf /var/lib/apt/lists/*
+# Snapshot outages must not turn an incomplete update into misleading missing
+# packages. Retain downloaded indexes/packages between bounded retries.
+RUN for task_attempt in 1 2 3; do \
+      if apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any --snapshot "$UBUNTU_SNAPSHOT" update && \
+         apt-get -o Acquire::Retries=3 --snapshot "$UBUNTU_SNAPSHOT" install -y --no-install-recommends \
+           pipewire pipewire-pulse wireplumber pulseaudio-utils dbus-x11 mesa-vulkan-drivers; then \
+        rm -rf /var/lib/apt/lists/*; exit 0; \
+      fi; \
+      if [[ "$task_attempt" == 3 ]]; then echo 'Acceptance package setup failed after three attempts' >&2; exit 1; fi; \
+      sleep 10; \
+    done
 # The cached SDK uses a shallow, commit-pinned Flutter checkout. Restore its
 # matching release tag before pub resolves packages, verifying the tag cannot
 # change the pinned framework revision. Discard the previously cached unknown

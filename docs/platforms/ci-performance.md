@@ -123,17 +123,19 @@ match, allowing Ninja to retain valid object files. Distribution stamping makes
 the input tree derived, so those results are not reusable as clean PR results.
 
 Ubuntu package lifecycle and model/audio acceptance share the exact application
-bundle. PR acceptance retains the original application before setting up its
-acceptance tools. The [PR recovery verifier](../../tools/ci_acceptance_application.py)
-can reuse that archive when a later setup or acceptance step fails. It verifies
-the same PR, equivalent application inputs, producer attempt and successful
-build/export/upload steps, complete product bindings, protected-main control
-history, original checksums, ABI report and bundled-file hashes. Recovery keeps
-the original source revision and epoch in `test-results/application-reuse.json`.
-An API outage or corrupt archive stops the job and preserves the original output.
-When no compatible retained application exists, PR acceptance builds once,
-exports it, and mounts it read-only into an acceptance-tools image.
-On main, acceptance starts after a successful
+bundle. The PR `ubuntu-application` producer builds it once and completes after
+uploading its checksummed source/attempt receipt. The separate `ubuntu-package`
+job restores that exact artifact and mounts the application read-only into an
+acceptance-tools image. It verifies the repository, workflow, source, successful
+producer job and original attempt, upload bounds, ZIP and payload checksums, and
+distribution metadata. Rerunning failed acceptance jobs retains the successful
+producer; it neither compiles an application nor relabels the original attempt.
+A fork's locally built SDK is also retained for this successful source-scoped
+producer, so its acceptance job does not build the SDK again. Those artifacts
+never enter the trusted main SDK or release-candidate pools.
+Pinned snapshot package setup retries transient failures, requires a complete
+index update, and preserves downloaded work between attempts. On main,
+acceptance starts after a successful
 `linux-bundle` producer job and downloads its verified exact-source candidate;
 manual and scheduled acceptance select the newest retained verified candidate
 on reviewed main without compiling an application. Historical dispatches resolve
