@@ -260,7 +260,7 @@ Replace the AGENTS.md section "Reuse SDKs, libraries, and build caches before re
    - A dispatch input `exercise_failure_path` runs plan → a synthetic failing check → the issue job, with no build or publish. Those runs are named distinctly and excluded from the skip logic, the rerun logic and build-number allocation.
 4. **Concurrency.**
    - Preview gets its own group, `preview-packages`.
-   - `release.yml`'s workflow-level `distribution-packages` group (`release.yml:30-32`) moves to its draft and publish jobs.
+   - `release.yml` retains workflow-level `distribution-packages` serialization, independent of the preview group. Serializing only its draft/publish jobs lets a newer queued draft cancel an older pending publication, so the whole official release remains serialized.
    - Build numbers already use compare-and-swap (`tools/build_sequence.py:77`).
 
 **WS-Nb: drift.**

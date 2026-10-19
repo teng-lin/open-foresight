@@ -37,6 +37,22 @@ def green(repository, run, *, request=request):
     )
 
 
+def has_producer(rows, exercise=False):
+    """Skipped reusable callers and failed plans are not tested producers."""
+    planned = any(
+        job["name"] == "plan" and job.get("conclusion") == "success" for job in rows
+    )
+    return planned and any(
+        (
+            job["name"] == "exercise"
+            if exercise
+            else (job["name"] == "build" or job["name"].startswith("build / "))
+        )
+        and job.get("conclusion") not in {None, "skipped", "cancelled"}
+        for job in rows
+    )
+
+
 def previous_nightly(repository, commit, force, *, request=request):
     """A retry retains original bytes and returns immediately, without polling."""
     if force:
@@ -77,10 +93,7 @@ def previous_nightly(repository, commit, force, *, request=request):
                 "summary": f"No changes since green nightly-checks for `{commit}` in run {run['id']}."
             }
         if run["conclusion"] in {"failure", "timed_out", "cancelled"}:
-            if not any(
-                job["name"] == "build" or job["name"].startswith("build / ")
-                for job in run_jobs
-            ):
+            if not has_producer(run_jobs):
                 planning_failure = run["id"]
                 continue
             if run["run_attempt"] != 1:
@@ -131,6 +144,27 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
         "workflow_runs",
         request=request,
     )
+    current_jobs = jobs(repository, run_id, request=request)
+    if not exercise and not success and not has_producer(current_jobs):
+        # A trigger reporting an exhausted retry must keep the original failures.
+        for candidate in sorted(runs, key=lambda item: item["id"], reverse=True):
+            if (
+                candidate["id"] >= run_id
+                or candidate["head_sha"] != source
+                or candidate["status"] != "completed"
+                or candidate.get("display_title", "").startswith("Nightly exercise")
+            ):
+                continue
+            candidate_jobs = jobs(repository, candidate["id"], request=request)
+            if has_producer(candidate_jobs):
+                run_id = candidate["id"]
+                current_jobs = candidate_jobs
+                success = any(
+                    job["name"] == "nightly-checks"
+                    and job.get("conclusion") == "success"
+                    for job in current_jobs
+                )
+                break
     for run in runs:
         is_exercise = run.get("display_title", "").startswith("Nightly exercise")
         if (
@@ -138,11 +172,11 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
             and is_exercise == exercise
             and run["status"] == "completed"
         ):
-            if any(
+            newer_jobs = jobs(repository, run["id"], request=request)
+            if has_producer(newer_jobs, exercise) and any(
                 job["name"] == "nightly-checks"
-                and job.get("conclusion")
-                in {"success", "failure", "cancelled", "timed_out"}
-                for job in jobs(repository, run["id"], request=request)
+                and job.get("conclusion") in {"success", "failure", "timed_out"}
+                for job in newer_jobs
             ):
                 return
     issues = [
@@ -167,10 +201,31 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
         return
     failures = [
         job["name"]
-        for job in jobs(repository, run_id, request=request)
+        for job in current_jobs
         if job.get("conclusion") in {"failure", "cancelled", "timed_out"}
     ]
     body = f"[Nightly run]({url}) for `{source}` failed.\n\nFailing jobs: {', '.join(failures) or 'missing aggregate evidence'}.\n"
+    if issues:
+        issue_number = issues[0]["number"]
+        request(repository, f"issues/{issue_number}", "PATCH", {"body": body})
+    else:
+        if not request(repository, f"labels/{label}", optional=True):
+            request(repository, "labels", "POST", {"name": label, "color": "d73a4a"})
+        created = request(
+            repository,
+            "issues",
+            "POST",
+            {
+                "title": f"{label}: failing nightly checks",
+                "labels": [label],
+                "body": body,
+            },
+        )
+    if not issues:
+        issue_number = created["number"]
+    if exercise:
+        return
+    # Persist the critical failure first; optional history enrichment may time out.
     if not exercise:
         previous = next(
             (
@@ -208,21 +263,7 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
 
         else:
             body += "\nNo earlier green nightly-checks exists; this is the initial baseline.\n"
-    if issues:
-        request(repository, f"issues/{issues[0]['number']}", "PATCH", {"body": body})
-    else:
-        if not request(repository, f"labels/{label}", optional=True):
-            request(repository, "labels", "POST", {"name": label, "color": "d73a4a"})
-        request(
-            repository,
-            "issues",
-            "POST",
-            {
-                "title": f"{label}: failing nightly checks",
-                "labels": [label],
-                "body": body,
-            },
-        )
+    request(repository, f"issues/{issue_number}", "PATCH", {"body": body})
 
 
 def main():

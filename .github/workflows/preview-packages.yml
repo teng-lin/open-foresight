@@ -30,7 +30,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: preview-packages
+  group: ${{ inputs.exercise_failure_path && 'preview-packages-exercise' || 'preview-packages' }}
   cancel-in-progress: false
 jobs:
   plan:

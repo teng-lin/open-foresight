@@ -718,7 +718,7 @@ but does **not** relabel an already tested stable application candidate.
 ### Relationship to official releases
 
 Preview uses its own `preview-packages` concurrency group. Official release
-draft and publish jobs serialize through `distribution-packages`, while the
+workflows serialize through `distribution-packages`, while the
 compare-and-swap allocator protects build numbers. A release can start while a
 nightly runs.
 Official release preparation discovers existing exact-product candidates and
@@ -889,7 +889,7 @@ latency or runner-minute savings; no after-value is claimed from local tests.
 
 `nightly-checks` requires the current run's selected platform suites, installer lifecycle jobs and final download artifact to succeed. It explicitly excludes the separate main model/audio acceptance until WS2b moves those gates in-run. Unchanged main skips only after a successful `nightly-checks`; a failed producer retries only its failed jobs once, preserving the original run and successful outputs, then returns without waiting. Planning-only triggers cannot recursively retry an exhausted producer.
 
-`ci-nightly` issues track failing jobs, the range since the last green aggregate and PRs in that range. Older reruns cannot overwrite or close newer results. Dispatch `exercise_failure_path: true` to fail without reserving a build number, building or publishing; `exercise_recovery: true` closes the separate `ci-nightly-exercise` issue. Exercise runs are excluded from real-night selection and retry. The preview group is `preview-packages`; release serialization moves to its draft and publish jobs, allowing release preparation to start while a nightly is active.
+`ci-nightly` issues track failing jobs, the range since the last green aggregate and PRs in that range. Older reruns cannot overwrite or close newer results. Dispatch `exercise_failure_path: true` to fail without reserving a build number, building or publishing; `exercise_recovery: true` closes the separate `ci-nightly-exercise` issue. Exercise runs are excluded from real-night selection and retry. The preview group is `preview-packages`; official releases retain workflow-level serialization in a separate group, allowing release preparation to start while a nightly is active without letting a queued draft displace an older publication.
 
 Deleted: cross-run preview recovery/revalidation jobs, `preview_reuse.py` and obsolete recovery-only tests. Retry uploads replace only their original run's own artifacts. No SDK recipe or compiled dependency input changes. Offline contract tests cover green/skip/failure evidence, original-run retry, pagination, stale results and isolated issue open/update/close. Hosted exercises, a real failed-job retry, two consecutive green nights and release/nightly concurrency still need proof; no latency savings are claimed before the five-run measurement gate.
 

@@ -21,7 +21,7 @@ def transport(
     def api(repository, route, method="GET", payload=None, **kwargs):
         calls.append((route, method, payload))
         if method != "GET":
-            return {}
+            return {"number": 7} if route == "issues" and method == "POST" else {}
         if route.startswith("actions/workflows/"):
             return {"workflow_runs": list(runs)}
         if route.startswith("actions/runs/"):
@@ -55,6 +55,7 @@ def test_original_red_night_retries_only_failed_jobs_once_and_never_waits(monkey
         monkeypatch,
         [run(conclusion="failure")],
         [
+            {"name": "plan", "conclusion": "success"},
             {"name": "build / macos", "conclusion": "failure"},
             {"name": "nightly-checks", "conclusion": "failure"},
         ],
@@ -68,6 +69,7 @@ def test_original_red_night_retries_only_failed_jobs_once_and_never_waits(monkey
         monkeypatch,
         [run(conclusion="failure", run_attempt=2)],
         [
+            {"name": "plan", "conclusion": "success"},
             {"name": "build / macos", "conclusion": "failure"},
             {"name": "nightly-checks", "conclusion": "failure"},
         ],
@@ -112,6 +114,7 @@ def test_skipped_trigger_cannot_hide_original_red_run_and_exercises_are_excluded
             run(id=40, head_sha="b" * 40),
         ],
         [
+            {"name": "plan", "conclusion": "success"},
             {"name": "build / macos", "conclusion": "failure"},
             {"name": "nightly-checks", "conclusion": "failure"},
         ],
@@ -139,6 +142,11 @@ def test_failed_planning_trigger_cannot_recursively_retry_an_exhausted_producer(
             }
         return {
             "jobs": [
+                {
+                    "name": "plan",
+                    "conclusion": "failure" if "runs/200/" in route else "success",
+                },
+                {"name": "build", "conclusion": "skipped"},
                 {"name": "nightly-checks", "conclusion": "failure"},
                 {
                     "name": "plan" if "runs/200/" in route else "build / macos",
@@ -167,6 +175,80 @@ def test_pre_rollout_red_producer_without_aggregate_is_not_retried(monkeypatch):
     )
     assert nightly.previous_nightly("r", SHA, False, request=api) is None
     assert not any(method != "GET" for _, method, _ in calls)
+
+
+@pytest.mark.parametrize("recovered", [False, True])
+def test_exhausted_retry_trigger_reports_original_producer_and_manual_recovery(
+    monkeypatch, recovered
+):
+    calls = []
+    producer_rows = [
+        {"name": "plan", "conclusion": "success"},
+        {"name": "build / macos", "conclusion": "success" if recovered else "failure"},
+        {"name": "nightly-checks", "conclusion": "success" if recovered else "failure"},
+    ]
+    planning_rows = [
+        {"name": "plan", "conclusion": "failure"},
+        {"name": "build", "conclusion": "skipped"},
+        {"name": "nightly-checks", "conclusion": "failure"},
+    ]
+
+    def api(repo, route, method="GET", payload=None, **kwargs):
+        calls.append((route, method, payload))
+        if method != "GET":
+            return {}
+        if route.startswith("actions/workflows/"):
+            return {
+                "workflow_runs": [
+                    run(id=300, conclusion="failure"),
+                    run(id=200, conclusion="failure"),
+                    run(
+                        id=100,
+                        conclusion="success" if recovered else "failure",
+                        run_attempt=2,
+                    ),
+                ]
+            }
+        if route.startswith("actions/runs/"):
+            return {"jobs": producer_rows if "/100/" in route else planning_rows}
+        if route.startswith("issues?"):
+            return [{"number": 7}]
+        raise AssertionError(route)
+
+    nightly.issue("r", 300, SHA, False, request=api)
+    if recovered:
+        assert calls[-1] == ("issues/7", "PATCH", {"state": "closed"})
+        assert "runs/100" in calls[-2][2]["body"]
+    else:
+        assert "runs/100" in calls[-1][2]["body"]
+        assert "build / macos" in calls[-1][2]["body"]
+        assert "runs/300" not in calls[-1][2]["body"]
+
+
+def test_newer_failed_plan_does_not_block_original_run_recovery(monkeypatch):
+    rows = {
+        100: [
+            {"name": "plan", "conclusion": "success"},
+            {"name": "build / macos", "conclusion": "success"},
+            {"name": "nightly-checks", "conclusion": "success"},
+        ],
+        200: [
+            {"name": "plan", "conclusion": "failure"},
+            {"name": "build", "conclusion": "skipped"},
+            {"name": "nightly-checks", "conclusion": "failure"},
+        ],
+    }
+    api, calls = transport(
+        monkeypatch, [run(id=200, conclusion="failure")], open_issues=[{"number": 7}]
+    )
+
+    def request(repo, route, *args, **kwargs):
+        if route.startswith("actions/runs/"):
+            return {"jobs": rows[int(route.split("/")[2])]}
+        return api(repo, route, *args, **kwargs)
+
+    nightly.issue("r", 100, SHA, True, request=request)
+    assert calls[-1] == ("issues/7", "PATCH", {"state": "closed"})
 
 
 def test_pagination_preserves_all_evidence():
@@ -248,7 +330,7 @@ def test_labeled_pr_is_never_updated_or_closed(monkeypatch, success, real_issue)
             route == "issues/7" and method == "PATCH" for route, method, _ in calls
         )
     elif not success:
-        assert calls[-1][0:2] == ("issues", "POST")
+        assert any(route == "issues" and method == "POST" for route, method, _ in calls)
 
 
 @pytest.mark.parametrize("failing_endpoint", ["compare/", "commits/"])
@@ -263,11 +345,14 @@ def test_metadata_api_failure_still_reports_failed_nightly(
 
     def unavailable(repo, route, *args, **kwargs):
         if route.startswith(failing_endpoint):
+            assert any(
+                route == "issues" and method == "POST" for route, method, _ in calls
+            )
             raise RuntimeError("HTTP 404 metadata temporarily unavailable")
         return api(repo, route, *args, **kwargs)
 
     nightly.issue("r", 100, SHA, False, request=unavailable)
-    assert calls[-1][0:2] == ("issues", "POST")
+    assert calls[-1][0:2] == ("issues/7", "PATCH")
     assert "Commit-range metadata unavailable" in calls[-1][2]["body"]
     assert "HTTP 404" in capsys.readouterr().err
 
@@ -286,7 +371,14 @@ def test_stale_results_cannot_close_or_overwrite_newer_nightly_issue(
     api, calls = transport(
         monkeypatch,
         [newer],
-        [{"name": "nightly-checks", "conclusion": new_conclusion}],
+        [
+            {"name": "plan", "conclusion": "success"},
+            {
+                "name": "exercise" if exercise else "build / macos",
+                "conclusion": new_conclusion,
+            },
+            {"name": "nightly-checks", "conclusion": new_conclusion},
+        ],
         open_issues=[{"number": 7}],
     )
     nightly.issue("r", 100, SHA, old_success, exercise, request=api)

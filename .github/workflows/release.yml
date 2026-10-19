@@ -27,11 +27,11 @@ on:
 permissions:
   contents: read
   actions: read
+concurrency:
+  group: distribution-packages
+  cancel-in-progress: false
 jobs:
   prepare:
-    concurrency:
-      group: distribution-packages
-      cancel-in-progress: false
     if: ${{ !inputs.publish_only }}
     runs-on: ubuntu-24.04
     timeout-minutes: 190
@@ -94,9 +94,6 @@ jobs:
       gpu_evidence: ${{ inputs.gpu_evidence }}
       acceptance_run: ${{ inputs.acceptance_run }}
   publish:
-    concurrency:
-      group: distribution-packages
-      cancel-in-progress: false
     timeout-minutes: 10
     if: always()
     needs: [prepare, linux, macos, acceptance]
