@@ -2,6 +2,9 @@ name: Independent Linux application stages
 on:
   workflow_call:
     inputs:
+      core_coverage_benchmark:
+        type: boolean
+        default: false
       source:
         type: string
         required: true
@@ -44,8 +47,8 @@ jobs:
       - uses: ./.github/actions/setup-linux-stage
         with:
           stage: native
-      - name: Offline Python tests
-        run: .venv/bin/python -m pytest
+      - name: Linux Python host contracts
+        run: .venv/bin/python tools/platform_python_tests.py --platform linux
       - name: Validate or restore the native stage
         id: stage
         env:
@@ -132,6 +135,8 @@ jobs:
       - name: Validate or restore the core stage
         id: stage
         env:
+          FORESIGHT_COVERAGE: ${{ inputs.core_coverage_benchmark && '1' || '0' }}
+          FORESIGHT_CORE_COVERAGE_MIN: '90'
           GH_TOKEN: ${{ github.token }}
           STAGE_EVENT: ${{ inputs.event }}
           OWN_PR: ${{ inputs.own_pr }}

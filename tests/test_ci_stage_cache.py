@@ -76,6 +76,20 @@ class SourceTree(unittest.TestCase):
 
 
 class FingerprintTests(SourceTree):
+    def test_real_report_ignore_rules_keep_generated_events_out_of_source_identities(
+        self,
+    ):
+        ignore = Path(__file__).resolve().parents[1] / ".gitignore"
+        self.write(".gitignore", ignore.read_text())
+        self.save()
+        baseline = {stage: self.key(stage) for stage in cache.STAGES}
+        for platform in cache.PLATFORMS:
+            for stage in ("core", "desktop"):
+                name = f"test-results/{platform}/{stage}/events.jsonl"
+                self.write(name, '{"type":"done","success":true,"time":1234}\n')
+                self.assertEqual(self.git("check-ignore", name), name)
+        self.assertEqual(baseline, {stage: self.key(stage) for stage in cache.STAGES})
+
     def test_worktree_and_git_objects_agree_without_commit_identity_in_key(self):
         key = self.key()
         self.assertEqual(key, self.key(ref=self.commit))

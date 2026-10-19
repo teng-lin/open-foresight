@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Run host contracts while the quality job owns full Python coverage."""
+
+import argparse
+import ast
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+
+# Keep real compiler, filesystem and shell behavior on both hosted platforms.
+SHARED = (
+    "tests/test_app_dependency_cmake.py",
+    "tests/test_build_stages.py",
+    "tests/test_capture_runtime_configuration.py",
+    "tests/test_ci_stage_artifacts.py",
+    "tests/test_ci_stage_environment.py",
+    "tests/test_ci_stage_setup.py",
+    "tests/test_ci_timing.py",
+    "tests/test_core_coverage_benchmark.py",
+    "tests/test_helper_build_identity.py",
+    "tests/test_installed_documents.py",
+    "tests/test_linux_packages.py",
+    "tests/test_litert_build_snapshot.py",
+    "tests/test_native_incremental_work.py",
+    "tests/test_parallel_build_gates.py",
+    "tests/test_profile_migration.py",
+    "tests/test_release_hook_configurations.py",
+    "tests/test_test_hygiene.py",
+    "tests/contracts/test_descriptor.py",
+    "tests/contracts/test_owned_descriptors.py",
+    "tests/inference/test_legacy_query_executor.py",
+    "tests/inference/test_litert_identity.py",
+)
+PLATFORM = {
+    # Keep Linux extractors, native packagers and opt-in BuildKit fixtures.
+    "linux": (
+        "tests/test_acceptance_image_cache.py",
+        "tests/test_rpm_scriptlets.py",
+    ),
+    # These execute Apple tools/metadata APIs rather than portable mocks.
+    "macos": (
+        "tests/test_dmg_contract.py",
+        "tests/test_macos_bundle.py",
+        "tests/test_macos_deployment_target.py",
+        "tests/test_macos_tools.py",
+    ),
+}
+# These platform probes are fully replaced by fixtures; quality executes every
+# case independently of its operating system. Keep explicit reasons for audit.
+QUALITY_ONLY = {
+    "tests/test_build_recipes.py": "All platform/tool probes are monkeypatched.",
+    "tests/test_litert_build_orchestration.py": "Host platform/machine are fixture inputs.",
+}
+
+
+def host_sensitive(path):
+    """Recognize existing host/tool conditions; newly found files need ownership."""
+    tree = ast.parse(path.read_text())
+    os_names = {"os"} | {
+        alias.asname or alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "os"
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (
+            node.module in {"platform", "sys", "os", "shutil"}
+            and any(
+                alias.name
+                in {"platform", "name", "which", "system", "machine", "uname"}
+                for alias in node.names
+            )
+        ):
+            return True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id
+            in {
+                "skip",
+                "skipif",
+                "skipIf",
+                "skipUnless",
+                "skipTest",
+                "SkipTest",
+                "importorskip",
+                "which",
+            }
+        ):
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in {
+            "platform",
+            "system",
+            "machine",
+            "uname",
+            "name",
+            "which",
+            "skip",
+            "skipif",
+            "skipIf",
+            "skipUnless",
+            "skipTest",
+            "SkipTest",
+            "importorskip",
+        }:
+            # Avoid treating unrelated object.name attributes as host checks.
+            if node.attr != "name" or (
+                isinstance(node.value, ast.Name) and node.value.id in os_names
+            ):
+                return True
+    return False
+
+
+def inventory(root=ROOT):
+    assigned = set(SHARED).union(*PLATFORM.values(), QUALITY_ONLY)
+    missing = sorted(name for name in assigned if not (root / name).is_file())
+    if missing:
+        raise ValueError("Missing platform Python contracts: " + ", ".join(missing))
+    excluded = json.loads((root / "pytest-exclusions.json").read_text())
+    unassigned = sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / "tests").rglob("test_*.py")
+        if path.relative_to(root).as_posix() not in excluded
+        and path.relative_to(root).as_posix() not in assigned
+        and host_sensitive(path)
+    )
+    if unassigned:
+        raise ValueError(
+            "Assign host-sensitive Python contracts: " + ", ".join(unassigned)
+        )
+
+
+def command(platform, root=ROOT):
+    inventory(root)
+    return [
+        sys.executable,
+        "-m",
+        "pytest",
+        "--durations=20",
+        "-ra",
+        f"--junitxml=coverage/python/{platform}-contracts.xml",
+        *SHARED,
+        *PLATFORM[platform],
+    ]
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--platform", required=True, choices=tuple(PLATFORM))
+    args = parser.parse_args()
+    raise SystemExit(
+        subprocess.run(command(args.platform), cwd=ROOT, timeout=1800).returncode
+    )
+
+
+if __name__ == "__main__":
+    main()

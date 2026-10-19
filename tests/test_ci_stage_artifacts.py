@@ -57,6 +57,103 @@ def test_native_round_trip_keeps_modes_and_unchanged_source_times(tmp_path):
     assert restored.stat().st_mtime_ns == exact_output_time
 
 
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_restore_discards_only_unlisted_stage_event_reports(
+    tmp_path, platform, stage, legacy
+):
+    root = tmp_path / "original"
+    repository(root)
+    product = root / module.roots(platform, stage)[0] / "fixture-product"
+    product.parent.mkdir(parents=True)
+    product.write_bytes(b"compiled product")
+    relative = f"test-results/{platform}/{stage}"
+    if not legacy:
+        report = root / relative / "current.events.jsonl"
+        report.parent.mkdir(parents=True)
+        report.write_bytes(b"verified events")
+    output = tmp_path / "artifact"
+    manifest = module.pack(root, platform, stage, output)
+    target = tmp_path / "target"
+    reports = target / relative
+    reports.mkdir(parents=True)
+    (reports / "old.events.jsonl").write_bytes(b"stale events")
+    (reports / "diagnostic.log").write_bytes(b"keep diagnostics")
+    outside = tmp_path / "outside.events.jsonl"
+    outside.write_bytes(b"outside evidence")
+    linked = reports / "linked.events.jsonl"
+    linked.symlink_to(outside)
+    other_stage = "desktop" if stage == "core" else "core"
+    sibling = target / f"test-results/{platform}/{other_stage}/old.events.jsonl"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_bytes(b"other stage")
+
+    module.unpack(target, platform, stage, output / "payload.tar.gz", manifest)
+
+    assert not (reports / "old.events.jsonl").exists()
+    assert not linked.is_symlink()
+    assert outside.read_bytes() == b"outside evidence"
+    assert (reports / "diagnostic.log").read_bytes() == b"keep diagnostics"
+    assert sibling.read_bytes() == b"other stage"
+    copied = module.pack(target, platform, stage, tmp_path / "copied")
+    original_events = {
+        name: item
+        for name, item in manifest["files"].items()
+        if name.endswith(".events.jsonl")
+    }
+    copied_events = {
+        name: item
+        for name, item in copied["files"].items()
+        if name.endswith(".events.jsonl")
+    }
+    assert copied_events == original_events
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+def test_corrupt_restore_keeps_existing_event_evidence(tmp_path, platform, stage):
+    root = tmp_path / "original"
+    repository(root)
+    product = root / module.roots(platform, stage)[0] / "fixture-product"
+    product.parent.mkdir(parents=True)
+    product.write_bytes(b"compiled product")
+    output = tmp_path / "artifact"
+    manifest = module.pack(root, platform, stage, output)
+    manifest["files"][product.relative_to(root).as_posix()]["sha256"] = "0" * 64
+    target = tmp_path / "target"
+    old = target / f"test-results/{platform}/{stage}/old.events.jsonl"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(b"previous evidence")
+    with pytest.raises(ValueError, match="content mismatch"):
+        module.unpack(target, platform, stage, output / "payload.tar.gz", manifest)
+    assert old.read_bytes() == b"previous evidence"
+
+
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+@pytest.mark.parametrize("link_path", ["test-results", "test-results/linux"])
+def test_legacy_restore_refuses_report_directory_symlinks(tmp_path, stage, link_path):
+    root = tmp_path / "original"
+    repository(root)
+    product = root / module.roots("linux", stage)[0] / "fixture-product"
+    product.parent.mkdir(parents=True)
+    product.write_bytes(b"compiled product")
+    output = tmp_path / "artifact"
+    manifest = module.pack(root, "linux", stage, output)
+    target = tmp_path / "target"
+    outside = tmp_path / "outside"
+    sentinel = outside / "linux" / stage / "old.events.jsonl"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_bytes(b"outside evidence")
+    link = target / link_path
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="report directory traverses a symlink"):
+        module.unpack(target, "linux", stage, output / "payload.tar.gz", manifest)
+    assert sentinel.read_bytes() == b"outside evidence"
+    assert not (target / product.relative_to(root)).exists()
+
+
 def test_changed_source_times_are_never_overwritten(tmp_path):
     root = tmp_path / "original"
     repository(root)
@@ -159,6 +256,72 @@ def test_desktop_artifact_preserves_flutter_coverage_at_actual_output_path(
     repository(target)
     module.unpack(target, platform, "desktop", output / "payload.tar.gz", manifest)
     assert (target / coverage.relative_to(root)).read_bytes() == coverage.read_bytes()
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+def test_event_streams_survive_original_and_saved_copy_round_trips(
+    tmp_path, platform, stage
+):
+    root = tmp_path / "original"
+    repository(root)
+    product = root / module.roots(platform, stage)[0] / "fixture-product"
+    product.parent.mkdir(parents=True)
+    product.write_bytes(b"compiled product")
+    names = (
+        ["core.events.jsonl", "plain.events.jsonl", "coverage.events.jsonl"]
+        if stage == "core"
+        else ["desktop.events.jsonl"]
+    )
+    reports = {}
+    for name in names:
+        relative = f"test-results/{platform}/{stage}/{name}"
+        report = root / relative
+        report.parent.mkdir(parents=True, exist_ok=True)
+        reports[relative] = b'{"success":true,"type":"done","time":1234}\n'
+        report.write_bytes(reports[relative])
+    original_output = tmp_path / "original-payload"
+    original_manifest = module.pack(root, platform, stage, original_output)
+    restored = tmp_path / "restored"
+    module.unpack(
+        restored, platform, stage, original_output / "payload.tar.gz", original_manifest
+    )
+    assert (restored / product.relative_to(root)).read_bytes() == b"compiled product"
+    copied_output = tmp_path / "copied-payload"
+    copied_manifest = module.pack(restored, platform, stage, copied_output)
+    assert copied_manifest == original_manifest
+    copied_target = tmp_path / "copied-target"
+    module.unpack(
+        copied_target,
+        platform,
+        stage,
+        copied_output / "payload.tar.gz",
+        copied_manifest,
+    )
+    for relative, original in reports.items():
+        assert (restored / relative).read_bytes() == original
+        assert (copied_target / relative).read_bytes() == original
+
+
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+def test_new_report_paths_cannot_restore_another_platform_or_stage(
+    tmp_path, platform, stage
+):
+    other_platform = "macos" if platform == "linux" else "linux"
+    other_stage = "desktop" if stage == "core" else "core"
+    for relative in (
+        f"test-results/{other_platform}/{stage}/events.jsonl",
+        f"test-results/{platform}/{other_stage}/events.jsonl",
+    ):
+        with pytest.raises(ValueError, match="manifest paths"):
+            module.unpack(
+                tmp_path,
+                platform,
+                stage,
+                tmp_path / "unused",
+                {"files": {relative: {}}},
+            )
 
 
 @pytest.mark.parametrize("platform", ["linux", "macos"])

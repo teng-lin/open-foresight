@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from tools import ci_stage_environment as environment
-from tools.ci_stage_cache import fingerprint
+from tools.ci_stage_cache import compilation_environment, fingerprint
 
 NOW = datetime(2026, 10, 18, 12, tzinfo=timezone.utc)
 
@@ -77,6 +77,28 @@ def test_source_commit_and_volatile_github_job_variables_are_excluded():
     assert context({"GITHUB_SHA": "first", "GITHUB_JOB": "one"}) == context(
         {"GITHUB_SHA": "second", "GITHUB_JOB": "two"}
     )
+
+
+@pytest.mark.parametrize("value", ["0", "1"])
+def test_core_benchmark_option_does_not_discard_native_validation_or_compiler_work(
+    repository, value
+):
+    baseline = context({})
+    measured = context({"FORESIGHT_CORE_COVERAGE_BENCHMARK": value})
+    assert baseline == measured
+    assert stage_identity(repository, baseline) == stage_identity(repository, measured)
+    assert compilation_environment(baseline) == compilation_environment(measured)
+    # Normalize compatible historical receipts without rewriting their bytes.
+    historical = {
+        **measured,
+        "validation_environment_sha256": {
+            "FORESIGHT_CORE_COVERAGE_BENCHMARK": "a" * 64
+        },
+    }
+    assert compilation_environment(historical) == compilation_environment(baseline)
+    assert historical["validation_environment_sha256"] == {
+        "FORESIGHT_CORE_COVERAGE_BENCHMARK": "a" * 64
+    }
 
 
 @pytest.mark.parametrize("key", ["CC", "CXX"])

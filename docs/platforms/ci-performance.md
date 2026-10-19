@@ -37,6 +37,14 @@ qualification is checked separately from build compatibility. Consumers verify
 repository, workflow, event, actual producer source, successful job and attempt,
 upload times, ZIP digest, component identity and archive contents.
 
+PR acceptance restores its successful application's original artifact and attempt.
+If GitHub's job list still shows that exact producer as pending, the consumer
+refreshes the same job ID within a bounded visibility window before deciding
+whether it qualifies. Repository, source, attempt, completion, upload interval and
+checksum checks remain mandatory. An acceptance failure should retry the consumer
+against those saved bytes rather than rerunning the successful application or SDK
+producer.
+
 The reviewed SDK approval manifest preserves compatible existing artifacts
 across the identity migration and stacked/rebased PRs. Each entry pins the
 original run, source, artifact, receipt and checksums, and proves that its full
@@ -64,6 +72,172 @@ and control equivalence. The exact-manifest historical SDK approval bridge
 retains its separate policy and history bound. Qualification refactors do not
 change SDK build identities: existing approved merged producers and exact
 manifest originals keep their verified reuse paths, original receipts and bytes.
+
+## Python validation ownership and parallel workflow lint
+
+The unconditional Ubuntu quality job runs the complete ordinary Python suite
+and remains the authoritative 95% branch-coverage gate. Native Linux and macOS
+jobs run `tools/platform_python_tests.py --platform <platform>` instead of
+repeating the complete suite. Its explicit inventory retains shared real
+compiler/Make/Ninja, filesystem, shell, protobuf and incremental-reuse fixtures;
+Linux export/packaging/extractor contracts; and macOS Mach-O, deployment target,
+DMG, metadata and SDK-source guards. The macOS packaging job still runs installed
+component probes with current native/service/MCP binaries available.
+
+The inventory fails on missing assigned files and unassigned ordinary test files
+with platform/tool probes or skip conditions. Files whose host probes are fully
+mocked have explicit quality-only ownership and reasons. This guard is an audit
+backstop for common conditions, not a proof that arbitrary Python cannot inspect
+the host; review new process/tool contracts for platform ownership. Existing
+CTest, Dart, desktop, service and real installed-application gates remain enabled.
+
+Actionlint runs in an independent `workflow-lint` job, with ShellCheck required
+on PATH, alongside platform setup. The existing `platform-checks` aggregate
+requires that job to succeed even on editorial-only changes. Classification no
+longer waits for Go/actionlint startup before releasing the platform jobs.
+
+Previously observed duplicate Python steps consumed 90 seconds on Arch and 181
+seconds on macOS. Those 271 seconds are an upper bound on removable runner time:
+focused host contracts still run. Measure the new hosted jobs before claiming
+an elapsed-time improvement; the workflow's parallel critical path can differ.
+
+Linux portal protocol tests run only on Linux; portable shortcut parsing and the
+macOS channel test remain outside that group.
+
+## Measured main baseline
+
+The earlier failed main samples are no longer the only baseline. Main
+[run 39264664955](https://github.com/teng-lin/open-foresight/actions/runs/39264664955),
+revision `fdac2293`, completed all 18 jobs successfully, including both current
+application bundles and receipts. Its Linux job reused verified SDK producer
+`39250487487` and dependency seed producer `39146018643`, reporting no dependency
+compilation. The missing local SDK image was already fixed with verified
+`resolve --load --discard-archive`; it does not require recompilation.
+
+| Baseline measurement | Duration |
+| --- | ---: |
+| Run creation to completion | 26m 30s |
+| Sum of job durations | 70.1 runner-minutes |
+| Active jobs on the critical path | 24m 12s |
+| macOS native, including Python | 6m 21s |
+| Python tests/coverage within macOS native | 3m 42s |
+| macOS core | 10m 59s |
+| Core tests/coverage within that job | 9m 07s |
+| macOS desktop, overlapping core | 9m 19s |
+| macOS service | 4m 09s |
+| macOS packaging | 2m 14s |
+| Linux bundle | 12m 23s |
+
+Initial scheduling accounted for 21 seconds; the remaining critical-path gaps
+totaled 1m 57s. Job timestamps cannot separate queue time from orchestration.
+Core ran 982 tests with eight skips and 91.00% coverage, above its 90% minimum.
+The historical four 30-second portal failures also are not a current savings
+estimate; the fixture now supplies an explicit authentication identity.
+
+## Measure before changing validation coverage
+
+Python jobs print their 20 slowest tests and retain JUnit timings; the full quality
+job also retains coverage. Core and desktop jobs retain Dart JSON events under
+`test-results/<platform>/<stage>/`, including test names, durations and skips.
+Inspect these artifacts before treating overlapping platform suites as duplicates.
+New core and desktop stage payloads retain these event streams byte-for-byte,
+including when a verified artifact copy is saved again. On a cache hit the
+reports are retained verified evidence, not fresh timing measurements. The reuse
+log identifies the supplying artifact's producer; for saved copies, follow that
+producer's reuse history to find the original execution. Historical verified payloads
+without event streams remain usable. Missing timing data does not justify
+rebuilding a compatible stage or SDK.
+
+Fresh core and desktop executions clear their own previous event streams before
+analysis. Verified restores discard only unlisted event streams from that same
+platform and stage, after validating the archive, so saved copies cannot inherit
+stale local timing evidence. Other diagnostics and stages remain intact.
+
+Stage logs include `CI phase:` JSON records on stderr with `phase`, monotonic elapsed
+`seconds`, and `status`. These distinguish API requests, producer qualification,
+metadata lookup, artifact transfer with ZIP checksum verification, receipt
+validation, archive verification/extraction and stage execution. Timings are
+inclusive: parent phases contain their children, so do not add every record to
+estimate job duration. Failed phases report `error` and propagate the original
+failure; timing does not change reuse eligibility, retry budgets or integrity
+checks. A slow or failed lookup does not authorize rebuilding dependencies.
+
+To compare core coverage overhead on the same host, reuse the current verified
+native library/helper and configured language tools, then run:
+
+```sh
+FORESIGHT_CORE_COVERAGE_BENCHMARK=1 \
+  FORESIGHT_PYTHON="$PWD/.venv/bin/python" \
+  ./tools/build.sh --platform linux --stage core
+```
+
+Use `--platform macos` on a Mac with its current native prerequisites. This opt-in
+mode runs the complete plain suite and the complete suite with coverage. It
+enforces the existing core coverage minimum (90% unless explicitly configured),
+requires matching test identities and skip outcomes, and still runs the source
+compiler hook regression and service/MCP compilation. Reports are retained as
+`plain.events.jsonl` and `coverage.events.jsonl`. Any test, coverage or comparison
+failure stops the gate. Ordinary CI does not enable the extra benchmark run.
+
+The benchmark logs its execution order and alternates which suite runs first
+using the parity of `GITHUB_RUN_NUMBER` and `GITHUB_RUN_ATTEMPT`. Consecutive runs
+at the same attempt number reverse the order, as do retries of one run. Intervening
+non-benchmark runs and reset attempt numbers can change which samples alternate.
+These counters must contain decimal
+digits, and the attempt must be positive. Local runs default to plain then
+covered; set `GITHUB_RUN_NUMBER=1` to exercise covered then plain. Report names
+always identify the suite, regardless of execution order. Repeat both orders on
+the same revision and record runner/toolchain versions and cache warmth: order
+alternation reduces systematic warm-up bias but does not remove it.
+Cross-platform timings alone cannot isolate instrumentation overhead. Keep the
+existing macOS coverage gate until a replacement has passed its unchanged
+threshold and platform-dependent execution has been accounted for. Report PR
+elapsed time separately from summed runner time; parallel jobs can dominate the
+critical path even after another job becomes faster.
+
+For a hosted comparison, the existing Platform candidates and checks manual
+dispatch accepts `core_coverage_benchmark=true`, with `platforms=all`. It runs full
+macOS core tests plain and covered on the same host, plus full Linux core tests
+with coverage on the same source revision. The macOS coverage gate stays at 90%;
+the Linux trial also checks 90%. This input defaults to false and only affects
+core jobs. Normal Linux core execution stays plain, and normal macOS core stays
+fully covered. Compare the retained core events and phase logs with their stage
+environment records; the observed 447-second macOS versus 97-second Linux sample
+mixes platform and instrumentation and cannot estimate coverage-placement savings.
+The manual experiment has not been executed by this change.
+
+## Observe model and audio selection before skipping
+
+`tools/ci_acceptance_plan.py` records proposals in the changes job's
+`acceptance-selection-observation` artifact. The report contains changed paths,
+per-phase reasons, and `permits_skipping: false`. It has no job-selection outputs;
+CPU model, software Vulkan and private virtual-audio steps keep their existing
+conditions and all assertions. Package production and installed Ubuntu/Debian
+smoke/lifecycle checks are unchanged.
+
+The initial audited map is deliberately narrow:
+
+| Changed input | Proposed acceptance |
+| --- | --- |
+| Exact CPU-model suite entry points listed in `SUITE_INPUTS` | CPU model group |
+| `tools/accept_software_gpu.py` | Software Vulkan |
+| Exact recording, PipeWire and meeting suite entry points in `SUITE_INPUTS` | Virtual audio group |
+| Explicit editorial/standalone quality inputs | No expensive phase proposed |
+| Inference, retrieval, audio, meeting, service, native, shared test support, packaging, dependencies, unknown/new inputs | All three phases |
+| Missing/unreadable PR history, main completion, manual dispatch or schedule | All three phases |
+
+Suite membership is not a claim that production dependencies are disjoint. In
+particular, meeting summary depends on generation/retrieval and the shared service,
+so their changes select every phase. Retain observations across representative
+PRs and compare actual outcomes before broadening this map or allowing skips.
+The fallback is now genuinely nightly at 05:43 UTC (`43 5 * * *`), replacing the
+previous Monday-only schedule. Main completion and manual validation remain full.
+The first scheduled execution is still pending; no skip policy relies on it yet.
+
+The older CPU-model and audio phases totaled about nine runner-minutes, with
+software Vulkan roughly another minute. Those are possible future phase savings,
+not end-to-end PR savings: application production, setup and package smoke still
+run. The 149-second meeting and 126-second Gemma tests retain their assertions.
 
 ## Application stages
 

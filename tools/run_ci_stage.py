@@ -20,9 +20,12 @@ stage_environment = importlib.import_module(
     "tools.ci_stage_environment" if __package__ else "ci_stage_environment"
 )
 
+timing = importlib.import_module("tools.ci_timing" if __package__ else "ci_timing")
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@timing.phase("same-run prerequisite verification and restore")
 def restore_input(root, platform, stage, directory, identity, source):
     receipt = json.loads((directory / "identity.json").read_text())
     if (
@@ -40,9 +43,11 @@ def restore_input(root, platform, stage, directory, identity, source):
     payload_kind = "native-runtime" if stage == "native" else stage
     if receipt.get("payload_kind", stage) != payload_kind:
         raise ValueError("Prerequisite has an unexpected payload kind")
-    payloads.unpack(root, platform, payload_kind, archive, receipt["content"])
+    with timing.phase("prerequisite TAR verification and extraction"):
+        payloads.unpack(root, platform, payload_kind, archive, receipt["content"])
 
 
+@timing.phase("stage execution")
 def execute(root, platform, stage, hit, cmake_args):
     if stage == "native" and hit:
         # The cached source and toolchain are identical. CMake still refreshes
@@ -104,6 +109,7 @@ def execute(root, platform, stage, hit, cmake_args):
             )
 
 
+@timing.phase("complete stage")
 def run(
     root,
     platform,
@@ -160,6 +166,13 @@ def run(
             )
         },
     }
+    # An inactive diagnostic option must not change historical environment
+    # identities or discard compatible native compiler work. Only the core
+    # benchmark has additional validation semantics to bind.
+    if stage == "core" and os.environ.get("FORESIGHT_CORE_COVERAGE_BENCHMARK") == "1":
+        environment["validation_flags"]["FORESIGHT_CORE_COVERAGE_BENCHMARK"] = (
+            hashlib.sha256(b"1").hexdigest()
+        )
     identity = cache.fingerprint(
         platform, stage, root, environment=environment, parents=parents
     )
@@ -180,13 +193,14 @@ def run(
             Path(temporary) / "restored",
         )
         if found["hit"]:
-            payloads.unpack(
-                root,
-                platform,
-                stage,
-                Path(found["download_dir"]) / "payload.tar.gz",
-                found["receipt"]["content"],
-            )
+            with timing.phase("cached stage TAR verification and extraction"):
+                payloads.unpack(
+                    root,
+                    platform,
+                    stage,
+                    Path(found["download_dir"]) / "payload.tar.gz",
+                    found["receipt"]["content"],
+                )
             print(
                 f"Reuse verified {stage}-{platform} from run {found['run_id']} ({identity})",
                 flush=True,
@@ -210,14 +224,17 @@ def run(
                     Path(temporary) / "compilation",
                 )
                 if compilation["hit"]:
-                    payloads.unpack(
-                        root,
-                        platform,
-                        "native",
-                        Path(compilation["download_dir"]) / "payload.tar.gz",
-                        compilation["receipt"]["content"],
-                        force_changed=True,
-                    )
+                    with timing.phase(
+                        "native compiler work TAR verification and extraction"
+                    ):
+                        payloads.unpack(
+                            root,
+                            platform,
+                            "native",
+                            Path(compilation["download_dir"]) / "payload.tar.gz",
+                            compilation["receipt"]["content"],
+                            force_changed=True,
+                        )
                     if compilation.get("configuration_changed"):
                         # Recompute changed CMake defaults instead of inheriting
                         # old cached values. Keep all objects, fetched dependency

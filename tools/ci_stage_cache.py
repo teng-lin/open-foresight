@@ -32,6 +32,8 @@ artifacts = importlib.import_module(
     "tools.ci_artifacts" if __package__ else "ci_artifacts"
 )
 
+timing = importlib.import_module("tools.ci_timing" if __package__ else "ci_timing")
+
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ("linux", "macos")
 STAGES = ("native", "core", "desktop", "service")
@@ -45,6 +47,21 @@ IDENTITY_RECIPE = 2
 MAX_NATIVE_WORK_DOWNLOADS = 3
 MAX_NATIVE_WORK_PRODUCER_ERRORS = 3
 MAX_STAGE_RECEIPT_BYTES = 16 * 1024 * 1024
+
+
+def lookup_api(repository, route):
+    with timing.phase("stage API request"):
+        return artifacts.api(repository, route)
+
+
+def lookup_download(repository, artifact, destination):
+    with timing.phase("stage artifact transfer and ZIP checksum"):
+        return artifacts.download_zip(repository, artifact, destination)
+
+
+def lookup_jobs(repository, run_id):
+    with timing.phase("stage producer jobs request"):
+        return artifacts.dependency_jobs(repository, run_id)
 
 
 def git(root, *args):
@@ -229,6 +246,7 @@ def trusted_run(run, repository, own_pr):
     )
 
 
+@timing.phase("native producer qualification")
 def trusted_native_work_run(run, repository, own_pr, root=ROOT):
     """Qualify compiler objects from a source-equivalent approved merged PR.
 
@@ -271,6 +289,7 @@ def ensure_commit(root, commit):
         git(root, "cat-file", "-e", commit + "^{commit}")
 
 
+@timing.phase("stage receipt validation")
 def validate_receipt(
     receipt, platform, stage, identity, run, environment, parents, root
 ):
@@ -317,6 +336,7 @@ def validate_receipt(
         raise ValueError("Producer source fingerprint differs from current recipe")
 
 
+@timing.phase("stage archive verification and extraction")
 def read_zip(path, destination=None):
     """Read exactly the expected two flat regular files, with bounded receipt."""
     with zipfile.ZipFile(path) as stream:
@@ -334,24 +354,29 @@ def read_zip(path, destination=None):
         except json.JSONDecodeError as error:
             raise ValueError("Invalid cached stage receipt JSON") from error
         # Do not trust a receipt's checksum without reading the actual payload.
-        with stream.open("payload.tar.gz") as payload:
+        with (
+            timing.phase("stage payload checksum verification"),
+            stream.open("payload.tar.gz") as payload,
+        ):
             digest = hashlib.sha256()
             while block := payload.read(1024 * 1024):
                 digest.update(block)
             checksum = digest.hexdigest()
-        if not isinstance(receipt, dict) or receipt.get("sha256") != checksum:
-            raise ValueError("Stage payload checksum mismatch")
+            if not isinstance(receipt, dict) or receipt.get("sha256") != checksum:
+                raise ValueError("Stage payload checksum mismatch")
         if destination:
-            destination.mkdir(parents=True, exist_ok=False)
-            for member in ("identity.json", "payload.tar.gz"):
-                with (
-                    stream.open(member) as source,
-                    (destination / member).open("wb") as target,
-                ):
-                    shutil.copyfileobj(source, target)
+            with timing.phase("stage ZIP payload extraction"):
+                destination.mkdir(parents=True, exist_ok=False)
+                for member in ("identity.json", "payload.tar.gz"):
+                    with (
+                        stream.open(member) as source,
+                        (destination / member).open("wb") as target,
+                    ):
+                        shutil.copyfileobj(source, target)
         return receipt
 
 
+@timing.phase("stage result lookup")
 def find(
     repository,
     platform,
@@ -374,18 +399,16 @@ def find(
     }
     if not reusable(event, own_pr, branch, release):
         return result
-    candidates = artifacts.api(
+    candidates = lookup_api(
         repository, f"actions/artifacts?name={result['artifact_name']}&per_page=100"
     )["artifacts"]
     for artifact in candidates:
         if artifact.get("expired") or artifact.get("name") != result["artifact_name"]:
             continue
-        run = artifacts.api(
-            repository, f"actions/runs/{artifact['workflow_run']['id']}"
-        )
+        run = lookup_api(repository, f"actions/runs/{artifact['workflow_run']['id']}")
         if not trusted_run(run, repository, own_pr):
             continue
-        jobs = artifacts.dependency_jobs(repository, run["id"])
+        jobs = lookup_jobs(repository, run["id"])
         # Reject bad job provenance before transferring a potentially large ZIP.
         candidates_jobs = [
             job
@@ -399,7 +422,7 @@ def find(
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "stage.zip"
             try:
-                artifacts.download_zip(repository, artifact, archive)
+                lookup_download(repository, artifact, archive)
                 receipt = read_zip(archive)
                 validate_receipt(
                     receipt, platform, stage, identity, run, environment, parents, root
@@ -468,7 +491,11 @@ def compilation_environment(environment):
         result["validation_environment_sha256"] = {
             key: value
             for key, value in flags.items()
-            if key != "FORESIGHT_FLUTTER_EXECUTABLE"
+            if key
+            not in (
+                "FORESIGHT_FLUTTER_EXECUTABLE",
+                "FORESIGHT_CORE_COVERAGE_BENCHMARK",
+            )
         }
     return result
 
@@ -500,9 +527,9 @@ def native_work_candidates(repository, platform):
     pattern = rf"ci-stage-{platform}-native-({HEX})"
     page = 1
     while True:
-        batch = artifacts.api(
-            repository, f"actions/artifacts?per_page=100&page={page}"
-        )["artifacts"]
+        batch = lookup_api(repository, f"actions/artifacts?per_page=100&page={page}")[
+            "artifacts"
+        ]
         for artifact in batch:
             match = re.fullmatch(pattern, artifact.get("name", ""))
             if match and not artifact.get("expired"):
@@ -512,6 +539,7 @@ def native_work_candidates(repository, platform):
         page += 1
 
 
+@timing.phase("native metadata lookup")
 def native_work_metadata(repository, artifact, identity, run, platform, jobs, root):
     """Read a small successful producer receipt before transferring its objects.
 
@@ -524,7 +552,7 @@ def native_work_metadata(repository, artifact, identity, run, platform, jobs, ro
     page = 1
     found = False
     while True:
-        batch = artifacts.api(
+        batch = lookup_api(
             repository,
             f"actions/artifacts?name={metadata_name}&per_page=100&page={page}",
         )["artifacts"]
@@ -544,7 +572,7 @@ def native_work_metadata(repository, artifact, identity, run, platform, jobs, ro
                 continue
             with tempfile.TemporaryDirectory() as temporary:
                 archive = Path(temporary) / "receipt.zip"
-                artifacts.download_zip(repository, metadata, archive)
+                lookup_download(repository, metadata, archive)
                 with zipfile.ZipFile(archive) as stream:
                     if stream.namelist() != ["identity.json"]:
                         raise ValueError("Unexpected native metadata members")
@@ -598,7 +626,7 @@ def native_work_producers(repository, platform, own_pr, root):
             continue
         try:
             if run_id not in runs:
-                runs[run_id] = artifacts.api(repository, f"actions/runs/{run_id}")
+                runs[run_id] = lookup_api(repository, f"actions/runs/{run_id}")
             run = runs[run_id]
             if run_id not in qualified_runs:
                 qualified_runs[run_id] = trusted_native_work_run(
@@ -607,7 +635,7 @@ def native_work_producers(repository, platform, own_pr, root):
             if not qualified_runs[run_id]:
                 continue
             if run_id not in jobs_by_run:
-                jobs_by_run[run_id] = artifacts.dependency_jobs(repository, run_id)
+                jobs_by_run[run_id] = lookup_jobs(repository, run_id)
         except subprocess.CalledProcessError as error:
             diagnostic = error.stderr or b""
             if isinstance(diagnostic, bytes):
@@ -636,6 +664,7 @@ def native_work_producers(repository, platform, own_pr, root):
         raise next(iter(failed_runs.values()))
 
 
+@timing.phase("native compilation lookup")
 def find_native_work(
     repository,
     platform,
@@ -689,7 +718,7 @@ def find_native_work(
                             "Do not start a cold build solely because this transfer budget was reached."
                         )
                     legacy_downloads += 1
-                    artifacts.download_zip(repository, artifact, archive)
+                    lookup_download(repository, artifact, archive)
                     receipt = read_zip(archive)
                 else:
                     receipt = metadata
@@ -740,7 +769,7 @@ def find_native_work(
                     rejected += 1
                     continue
                 if metadata is not None:
-                    artifacts.download_zip(repository, artifact, archive)
+                    lookup_download(repository, artifact, archive)
                     if read_zip(archive) != metadata:
                         raise ValueError(
                             "Native payload receipt differs from verified metadata"

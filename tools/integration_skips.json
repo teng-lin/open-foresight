@@ -26,6 +26,14 @@
       "reason": "Checksum-pinned public model fixtures and the current packaged CPU runtimes."
     },
     {
+      "path": "apps/desktop/test/global_shortcuts_test.dart",
+      "conditions": [
+        "!Platform.isLinux ? 'Linux D-Bus portal protocol requires a private session bus' : false"
+      ],
+      "gate": "platform",
+      "reason": "Four Linux D-Bus portal protocol cases run in the regular Linux desktop suite. Portable shortcut parsing and the macOS platform-channel contract remain enabled on both platforms."
+    },
+    {
       "path": "apps/desktop/test/google_real_helper_test.dart",
       "conditions": [
         "Platform.environment['FORESIGHT_GOOGLE_REAL_HELPER'] != '1'"

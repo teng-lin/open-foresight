@@ -546,7 +546,7 @@ jobs:
         dependency = self.workflow("ci-dependencies.yml")
         self.assertNotIn("Publish readable current alias", json.dumps(dependency))
 
-    def test_linux_pull_request_runs_offline_pytest(self):
+    def test_linux_pull_request_runs_offline_host_contracts(self):
         workflow = self.workflow("macos.yml")
         self.assertIn("pull_request", workflow["on"])
         caller = workflow["jobs"]["linux-native"]
@@ -558,7 +558,8 @@ jobs:
         self.assertTrue(_linux_job(native))
         self.assertTrue(
             any(
-                re.search(r"(^|\s)pytest(\s|$)", step.get("run") or "")
+                "tools/platform_python_tests.py --platform linux"
+                in (step.get("run") or "")
                 for step in native["steps"]
             )
         )
