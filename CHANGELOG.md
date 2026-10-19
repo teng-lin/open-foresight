@@ -6,8 +6,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-18
+
 ### Changed
 
+- README source-build instructions cover macOS and Linux prerequisites, dependency reuse, runtime bundling, packaging, and launch commands.
 - Desktop Start/Resume transcribing controls act directly without a second confirmation or duplicate red capture banner; waveform, pause and Stop controls remain visible, and external recording requests still require approval.
 - Linux RTF imports remove the converter's leading separator when quiet output omits its translation banner, preserving separators within the document body.
 - CI pins Python 3.13, Dart protobuf tooling, shared dependency versions and dated Ubuntu archives; monthly snapshot updates arrive as draft review PRs, with weekly dependency and vulnerability reports.
@@ -19,24 +22,16 @@ Notable changes to Open Foresight are recorded here. Versions follow
 - Installer workflows publish signed build provenance and SBOM attestations. Dependency artifact downloads verify GitHub ZIP digests.
 - Offline Python tests use directory discovery with an explicit inventory for build and device harnesses. Integration acceptance reports an always-running required check.
 
-### Security
-
-- Dependency artifact promotion binds output to the producing workflow and tools and accepts only the final reviewed PR head.
-
 ### Fixed
 
 - Documentation-only main pushes skip application packaging and model acceptance; shipped license notices still select package validation.
-
 - CI software Vulkan explicitly selects lavapipe and records unavailable GPU support as skipped. Disposable installer-test containers permit the real document sandbox to initialize isolated networking.
-
 - macOS CI consumes the same PR source as dependency producers and waits only for matching trusted producers, with pinned source fallback when no eligible producer exists.
 - Stale CMake Python paths fail before native work. Workspace cleanup waits for observed completion under parallel load; speech GPU-to-CPU retry and cancellation cover both worker protocols.
 - Long meeting generation includes balanced beginning, middle and ending evidence within the model context. HTML imports honor bounded meta encodings, and Unicode truncation preserves supplementary characters.
 - Local edits use a structured schema flag and URL imports deduplicate by source URI. Helper crash recovery resets after a quiet window, and answer validation failures are visible by reason.
 - Native worker failures clean up owned processes and roll back busy handles; model framing and one-shot requests keep prompts out of argv. Reconfiguration respects cancellation, audio writes detect failures, and Linux LiteRT loading binds hashes to the loaded descriptor.
 - Workspace clear securely deletes application rows and attempts checkpoint/VACUUM; helper deletions erase freed database content.
-
-
 - Package upgrades ignore installation locks with invalid ownership, permissions or symlinks, preventing other local users from blocking updates.
 - Clearing a workspace works offline, discards pending meeting drafts and retries helper deletion after reconnect. Stale speech audio is removed on startup.
 - Calendar refresh preserves local edits and deletions and bounds untrusted invitation HTML parsing.
@@ -46,11 +41,11 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ### Security
 
+- Dependency artifact promotion binds output to the producing workflow and tools and accepts only the final reviewed PR head.
 - macOS parser confinement, sealed runtime code paths, private startup configuration and private temporary socket roots reduce exposure. Service-specific Keychain access controls remain deferred pending signing and runtime-integrity work.
 - Local source links reveal files instead of launching their default handlers. Approval dialogs highlight risky options and limit repeated identical prompts; verified peer identity and trusted gesture redesign remain deferred.
 - Automatic question-model downloads require configured genuine publisher terms and revision-specific acknowledgment. Missing terms configuration disables automatic acquisition.
 - Release builds disable crash and delay test hooks, and system integration commands use absolute paths.
-
 
 ## [0.1.1] - 2026-10-17
 
@@ -112,6 +107,7 @@ The macOS disk image in this release is ad-hoc signed and is not notarized.
 Physical-device recovery and echo-cancellation quality were not validated across
 hardware. Model weights are downloaded after install and are not inside the packages.
 
-[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/teng-lin/open-foresight/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.2
 [0.1.1]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.1
 [0.1.0]: https://github.com/teng-lin/open-foresight/releases/tag/v0.1.0
