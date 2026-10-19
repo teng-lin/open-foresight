@@ -111,6 +111,24 @@ def retrieve(
             and job.get("head_sha") == source
             and job.get("run_attempt") == attempt
         ]
+        if (
+            len(candidates) == 1
+            and candidates[0].get("status") in ("queued", "in_progress", "waiting")
+            and candidates[0].get("conclusion") is None
+        ):
+            # The run-wide listing can lag after a successful producer has
+            # released its dependent job. Query that exact job independently.
+            listed = candidates[0]
+            job_id = listed.get("id")
+            if type(job_id) is not int or job_id < 1:
+                raise ValueError("Invalid pending application producer job")
+            current = artifacts.api(repository, f"actions/jobs/{job_id}")
+            if any(
+                current.get(field) != listed.get(field)
+                for field in ("id", "name", "run_id", "head_sha", "run_attempt")
+            ):
+                raise ValueError("Application producer job identity mismatch")
+            candidates = [current]
         jobs = [
             job
             for job in candidates

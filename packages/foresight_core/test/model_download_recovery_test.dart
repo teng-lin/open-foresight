@@ -311,4 +311,194 @@ void main() {
       expect(await file.readAsBytes(), bytes);
     },
   );
+
+  for (final fault in [
+    'range',
+    'status',
+    'length',
+    'redirect-loop',
+    'redirect-missing',
+    'redirect-http',
+  ]) {
+    test(
+      '$fault response preserves registration bytes and permits a verified retry',
+      () async {
+        final destination =
+            File('${root.path}/${model.directory}/${model.filename}')
+              ..createSync(recursive: true)
+              ..writeAsStringSync('previous model');
+        var broken = true;
+        server.listen((request) async {
+          if (!broken) {
+            final range = request.headers.value('range');
+            final start = range == null
+                ? 0
+                : int.parse(range.substring(6).split('-').first);
+            final end = range == null
+                ? bytes.length - 1
+                : int.parse(range.split('-').last);
+            if (range != null) {
+              request.response.statusCode = 206;
+              request.response.headers.set(
+                'content-range',
+                'bytes $start-$end/${bytes.length}',
+              );
+            }
+            request.response.add(bytes.sublist(start, end + 1));
+          } else if (fault.startsWith('redirect')) {
+            request.response.statusCode = 302;
+            if (fault != 'redirect-missing') {
+              request.response.headers.set(
+                'location',
+                fault == 'redirect-http' ? 'http://127.0.0.1/model' : '/model',
+              );
+            }
+          } else if (fault == 'range') {
+            request.response.statusCode = 206;
+            request.response.headers.set('content-range', 'bytes 1-1024/4096');
+            request.response.add(bytes.sublist(0, 1024));
+          } else if (fault == 'length') {
+            request.response.contentLength = 1;
+            request.response.add([0]);
+          } else {
+            request.response.statusCode = 403;
+          }
+          await request.response.close();
+        });
+        final downloader = GemmaDownload(
+          createClient: client,
+          rangeThreshold: fault == 'range' ? 0 : 65536,
+        );
+        await expectLater(
+          downloader.download(model, root, sourceForTesting: uri),
+          throwsStateError,
+        );
+        expect(destination.readAsStringSync(), 'previous model');
+        broken = false;
+        final verified = await downloader.download(
+          model,
+          root,
+          sourceForTesting: uri,
+        );
+        expect(await verified.readAsBytes(), bytes);
+        expect(
+          await verifyModelFile(verified, model.digest, model.bytes),
+          isTrue,
+        );
+      },
+    );
+  }
+
+  test('parallel transfer falls back when the server ignores ranges', () async {
+    final requests = <String?>[];
+    final phases = <ModelDownloadPhase>[];
+    final progress = <int>[];
+    server.listen((request) async {
+      requests.add(request.headers.value('range'));
+      request.response.add(bytes);
+      await request.response.close();
+    });
+    final file =
+        await GemmaDownload(
+          createClient: client,
+          rangeThreshold: 0,
+          parallelism: 3,
+        ).download(
+          model,
+          root,
+          sourceForTesting: uri,
+          phase: phases.add,
+          progress: (received, _) => progress.add(received),
+        );
+    expect(requests, ['bytes=0-1365']);
+    expect(await file.readAsBytes(), bytes);
+    expect(progress.last, bytes.length);
+    expect(phases.last, ModelDownloadPhase.verifyingDownload);
+    expect(Directory('${file.parent.path}/.download').existsSync(), isFalse);
+  });
+
+  test(
+    'incompatible staging identity and oversized parts cannot poison retries',
+    () async {
+      final stage = Directory('${root.path}/${model.directory}/.download')
+        ..createSync(recursive: true);
+      File('${stage.path}/identity.json').writeAsStringSync('{"digest":"old"}');
+      File('${stage.path}/model.part').writeAsStringSync('old partial');
+      File('${stage.path}/assembled.part').writeAsStringSync('old assembly');
+      server.listen((request) async {
+        request.response.add(bytes);
+        await request.response.close();
+      });
+      final first = await GemmaDownload(
+        createClient: client,
+      ).download(model, root, sourceForTesting: uri);
+      expect(await first.readAsBytes(), bytes);
+      first.deleteSync();
+      stage.createSync();
+      final part = File('${stage.path}/model.part')
+        ..writeAsBytesSync(List.filled(bytes.length + 1, 0));
+      final next = await GemmaDownload(
+        createClient: client,
+      ).download(model, root, sourceForTesting: uri);
+      expect(await next.readAsBytes(), bytes);
+      expect(part.existsSync(), isFalse);
+    },
+  );
+
+  test(
+    'untrusted staging and destination entries fail before network access',
+    () async {
+      final destination = Directory(
+        '${root.path}/${model.directory}/${model.filename}',
+      )..createSync(recursive: true);
+      await expectLater(
+        GemmaDownload(
+          createClient: () => throw StateError('network opened'),
+        ).download(model, root),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'The model cache destination must be a regular file.',
+          ),
+        ),
+      );
+      destination.deleteSync();
+      final stage = Directory(
+        '${root.path}/${model.directory}/.download/model.part',
+      )..createSync(recursive: true);
+      await expectLater(
+        GemmaDownload(
+          createClient: () => throw StateError('network opened'),
+        ).download(model, root),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.message,
+            'message',
+            'Invalid download staging file.',
+          ),
+        ),
+      );
+      expect(stage.existsSync(), isTrue);
+      for (final parallelism in [0, 9]) {
+        await expectLater(
+          GemmaDownload(parallelism: parallelism).download(model, root),
+          throwsArgumentError,
+        );
+      }
+      final invalid = GemmaModel(
+        'Invalid',
+        '',
+        '',
+        '../model.bin',
+        model.digest,
+        model.bytes,
+        0,
+      );
+      await expectLater(
+        GemmaDownload().download(invalid, root),
+        throwsArgumentError,
+      );
+    },
+  );
 }

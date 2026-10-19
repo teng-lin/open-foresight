@@ -150,8 +150,10 @@ acceptance-tools image. It verifies the repository, workflow, source, successful
 producer job and original attempt, upload bounds, ZIP and payload checksums, and
 distribution metadata. Rerunning failed acceptance jobs retains the successful
 producer; it neither compiles an application nor relabels the original attempt.
-When the jobs API still reports that exact producer as pending, restore polls
-for up to 60 seconds before failing. It still requires completed success and the
+When the run-wide jobs API reports that exact producer as pending, restore checks
+the individual job endpoint, requiring the same job ID, name, run, source and
+attempt. If that job is also pending, restore polls for up to 60 seconds before
+failing. It still requires completed success and the
 original upload window before downloading any bytes; failed, ambiguous or
 incorrectly scoped producers are never accepted.
 A fork's locally built SDK is also retained for this successful source-scoped
