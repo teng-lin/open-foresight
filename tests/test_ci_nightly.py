@@ -185,7 +185,10 @@ def test_exhausted_retry_trigger_reports_original_producer_and_manual_recovery(
     calls = []
     producer_rows = [
         {"name": "plan", "conclusion": "success"},
-        {"name": "build / macos", "conclusion": "success" if recovered else "failure"},
+        {
+            "name": "build / macos",
+            "conclusion": "success" if recovered else build_conclusion,
+        },
         {"name": "nightly-checks", "conclusion": "success" if recovered else "failure"},
     ]
     planning_rows = [
@@ -205,7 +208,7 @@ def test_exhausted_retry_trigger_reports_original_producer_and_manual_recovery(
                     run(id=200, conclusion="failure"),
                     run(
                         id=100,
-                        conclusion="success" if recovered else "failure",
+                        conclusion="success" if recovered else build_conclusion,
                         run_attempt=2,
                     ),
                 ]

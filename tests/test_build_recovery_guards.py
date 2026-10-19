@@ -55,11 +55,8 @@ def test_candidate_recovery_never_relabels_surviving_platforms(monkeypatch, fail
             else "version: 1.2.3-dev+4\n"
         ),
     )
-    monkeypatch.setattr(
-        candidates,
-        "candidate_runs",
-        lambda *a: {"macos-app": 41},
-    )
+    candidate_runs = Mock(return_value={"macos-app": 41})
+    monkeypatch.setattr(candidates, "candidate_runs", candidate_runs)
     allocate = Mock(side_effect=AssertionError("must retain allocated identity"))
     monkeypatch.setattr(candidates, "allocate", allocate)
     monkeypatch.setattr(
@@ -83,13 +80,18 @@ def test_candidate_recovery_never_relabels_surviving_platforms(monkeypatch, fail
     with pytest.raises(ValueError, match=message):
         candidates.number("owner/repo", SOURCE, "linux")
     allocate.assert_not_called()
+    if failure != "unstable-source":
+        candidate_runs.assert_called_once_with(
+            "owner/repo", SOURCE, consumer="artifact-pull"
+        )
 
 
 def test_explicit_candidate_replacement_records_reason_before_allocating(
     monkeypatch, capsys
 ):
     monkeypatch.setattr(candidates, "source_version", lambda *a: ("1.2.3", 4))
-    monkeypatch.setattr(candidates, "candidate_runs", lambda *a: {"macos-app": 41})
+    candidate_runs = Mock(return_value={"macos-app": 41})
+    monkeypatch.setattr(candidates, "candidate_runs", candidate_runs)
     allocate = Mock(return_value=7)
     monkeypatch.setattr(candidates, "allocate", allocate)
     assert (
@@ -100,6 +102,9 @@ def test_explicit_candidate_replacement_records_reason_before_allocating(
     )
     assert "Changed embedded OAuth registration" in capsys.readouterr().out
     allocate.assert_called_once_with("owner/repo", 4)
+    candidate_runs.assert_called_once_with(
+        "owner/repo", SOURCE, consumer="artifact-pull"
+    )
 
 
 @pytest.mark.parametrize("failure", ["negative", "conflicts", "permission"])
