@@ -185,7 +185,7 @@ def test_observer_is_uploaded_and_never_controls_phase_execution():
     workflow = parse_workflow(
         (ROOT / ".github/workflows/integration-acceptance.yml").read_text()
     )
-    assert workflow["on"]["schedule"] == [{"cron": "43 5 * * *"}]
+    assert workflow["on"]["schedule"] == [{"cron": "43 5 * * 1"}]
     steps = workflow["jobs"]["changes"]["steps"]
     observer = next(
         step for step in steps if "ci_acceptance_plan.py" in step.get("run", "")
