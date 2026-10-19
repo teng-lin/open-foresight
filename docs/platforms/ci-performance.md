@@ -1007,7 +1007,9 @@ writer will run.
 ## WS2a Ubuntu shadow build and test
 
 The additional `linux-build`, `linux-test` and `linux-shadow-comparison` jobs in
-`macos.yml` observe the Ubuntu design while the existing required platform and
+`macos.yml` observe the Ubuntu design on pull requests only. All three jobs are
+nonblocking during this shadow phase; main and called nightly previews skip them,
+so preview packaging neither waits for them nor inherits their failures. The required platform and
 acceptance aggregates keep their current dependencies. These jobs never publish
 registry images or caches. They restore the existing verified SDK and qualified
 Make dependency seed before building the secret-free Docker `ci` target. A cache
@@ -1045,10 +1047,15 @@ its independently verified seed at that same `/src/build/_deps` path. Before any
 restore or execution, API provenance checks bind the artifact to its repository,
 workflow, original successful job/attempt and upload window, and verify the actual
 downloaded ZIP digest. The archive checksum and complete restored manifest are
-then checked. Fork consumers first reuse an ordinary verified SDK directly on both runners.
+then checked. The Dart package cache lives at `/src/.pub-cache` and travels in
+this manifest with the lockfiles and package configuration. Consumers pin the exact
+original SDK run, artifact ID and ZIP digest selected by the build runner,
+including approved original artifacts. Fork consumers first reuse that verified SDK.
 Only a missing assembled SDK permits the existing component producer to use
 qualified parents and read-only cache layers; missing parents or transport errors
-fail without compiling those libraries. That source-scoped SDK is uploaded once
+fail without compiling those libraries. A new SDK is saved once and its verified
+archive is retained for the in-run envelope; a producer reuse race preserves the
+original qualification instead of relabeling bytes. That source-scoped SDK is uploaded once
 for the in-run consumer, retaining any original reused receipt; its scoped trust
 row cannot serve release lookup.
 

@@ -22,6 +22,7 @@ def test_shadow_jobs_reuse_verified_inputs_and_leave_required_old_tier_intact():
     }
     for name in ("linux-build", "linux-test", "linux-shadow-comparison"):
         assert name not in required
+        assert jobs[name]["continue-on-error"] is True
     for name in ("linux-build", "linux-test"):
         assert jobs[name]["permissions"] == {
             "contents": "read",
@@ -31,7 +32,9 @@ def test_shadow_jobs_reuse_verified_inputs_and_leave_required_old_tier_intact():
         text = str(jobs[name])
         assert "cache-to" not in text
         if name == "linux-test":
-            assert "--wait 1800" in text
+            assert "--run-id" in text
+            assert "--artifact-id" in text
+            assert "--artifact-digest" in text
             assert "--discard-archive" in text
     assert jobs["linux-test"]["needs"] == "linux-build"
     build = jobs["linux-build"]["steps"]
@@ -93,5 +96,20 @@ def test_local_and_ci_container_paths_keep_secrets_out_of_layers_and_exact_packa
     assert "ci_linux_handoff.py restore" in test
     assert "tools/build.sh --test-only" in test
     assert "tar -C /workspace" not in test
+    assert "PUB_CACHE=/src/.pub-cache" in wrapper
+    assert "copy_linux_source.sh /workspace /src" in shared
     assert "FORESIGHT_CORE_COVERAGE_MIN=90" in test
     assert "Compiled service suite must have zero skips" in test
+
+
+def test_shadow_rollout_does_not_delay_or_fail_nightly_preview():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())["jobs"]
+    selected = jobs["linux-build"]["if"]
+    assert "github.event_name == 'pull_request'" in selected
+    assert "!inputs.preview" in selected
+    # The called preview has event=schedule or workflow_dispatch and preview=true.
+    # Skipping the producer skips both downstream shadow jobs; legacy build stays unchanged.
+    assert jobs["linux-test"]["needs"] == "linux-build"
+    assert jobs["linux-shadow-comparison"]["needs"] == ["linux-native", "linux-test"]
+    for name in ("linux-build", "linux-test", "linux-shadow-comparison"):
+        assert jobs[name]["continue-on-error"] is True

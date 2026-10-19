@@ -538,8 +538,9 @@ jobs:
     uses: ./.github/workflows/package-contracts.yml
   linux-build:
     name: linux-build
+    continue-on-error: true
     needs: [changes, distribution-number]
-    if: "!cancelled() && needs.changes.outputs.linux_native == 'true' && (inputs.preview || github.ref != 'refs/heads/main' || needs.distribution-number.result == 'success')"
+    if: "!cancelled() && github.event_name == 'pull_request' && !inputs.preview && needs.changes.outputs.linux_native == 'true'"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -658,6 +659,7 @@ jobs:
         docker system df
   linux-test:
     name: linux-test
+    continue-on-error: true
     needs: linux-build
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -750,6 +752,7 @@ jobs:
         df -h / /mnt
         docker system df
   linux-shadow-comparison:
+    continue-on-error: true
     needs: [linux-native, linux-test]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
