@@ -15,7 +15,7 @@ def test_coverage_instruments_children_and_counts_unexecuted_production_files(tm
     config = configparser.ConfigParser()
     config.read_string(policy)
     assert config.getboolean("run", "branch")
-    assert config.getfloat("report", "fail_under") >= 90
+    assert config.getfloat("report", "fail_under") >= 95
     (tmp_path / ".coveragerc").write_text(policy)
     (tmp_path / "tools").mkdir()
     (tmp_path / "packaging").mkdir()
@@ -54,7 +54,7 @@ def test_coverage_instruments_children_and_counts_unexecuted_production_files(tm
     run("combine")
     failed = run("report", success=False)
     assert failed.returncode == 2
-    assert "fail-under=90" in failed.stdout
+    assert "fail-under=95" in failed.stdout
     run("json", "--fail-under=0", "-o", "first.json")
     files = json.loads((tmp_path / "first.json").read_text())["files"]
     assert files["tools/child.py"]["summary"]["covered_lines"] > 0
