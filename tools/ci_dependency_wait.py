@@ -15,22 +15,26 @@ from tools.ci_macos_dependencies import waiting_producers  # noqa: E402
 def fetch(repository, component, prefix, own_head="", own_pr=0, wait=1800):
     identity = artifacts.fingerprint(component)
     deadline = time.monotonic() + max(0, min(wait, 1800))
+
+    def restore_original():
+        return artifacts.pull(
+            repository, component, identity, prefix, own_head=own_head, own_pr=own_pr
+        )
+
     while True:
-        if artifacts.pull(
-            repository,
-            component,
-            identity,
-            prefix,
-            own_head=own_head,
-            own_pr=own_pr,
-        ):
+        if restore_original():
             return
-        if time.monotonic() >= deadline or not waiting_producers(
-            repository, component, own_head, own_pr
-        ):
+        running = waiting_producers(repository, component, own_head, own_pr)
+        if not running:
+            # A successful producer can become visible after the first pull.
+            # Keep all original qualification checks on this final read.
+            if restore_original():
+                return
+            raise RuntimeError(artifacts.report_unavailable(component, identity))
+        if time.monotonic() >= deadline:
             raise RuntimeError(artifacts.report_unavailable(component, identity))
         print(f"Waiting for verified {component} producer", flush=True)
-        time.sleep(min(20, max(0, deadline - time.monotonic())))
+        time.sleep(min(60, max(0, deadline - time.monotonic())))
 
 
 def main():

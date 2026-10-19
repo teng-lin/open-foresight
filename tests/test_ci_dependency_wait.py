@@ -42,7 +42,7 @@ def test_requeries_original_verified_artifact_after_wait(monkeypatch, tmp_path):
     waiter.fetch("owner/repo", "linux-sdk", tmp_path, "a" * 40, 23)
     assert pull.call_count == 2
     waiting.assert_called_once_with("owner/repo", "linux-sdk", "a" * 40, 23)
-    sleep.assert_called_once_with(20)
+    sleep.assert_called_once_with(60)
 
 
 @pytest.mark.parametrize("failure", ["transport", "provenance", "no-producer"])
@@ -89,3 +89,35 @@ def test_cli_forwards_explicit_consumer_context(monkeypatch, tmp_path):
     monkeypatch.setattr(waiter, "fetch", fetch)
     waiter.main()
     fetch.assert_called_once_with("owner/repo", "linux-sdk", tmp_path, "a" * 40, 23, 60)
+
+
+@pytest.mark.parametrize("prior_wait", [False, True])
+def test_successful_producer_completion_race_gets_final_qualified_pull(
+    monkeypatch, tmp_path, prior_wait
+):
+    pull = Mock(side_effect=[False] * (2 if prior_wait else 1) + [True])
+    monkeypatch.setattr(waiter.artifacts, "fingerprint", lambda component: "identity")
+    monkeypatch.setattr(waiter.artifacts, "pull", pull)
+    monkeypatch.setattr(
+        waiter,
+        "waiting_producers",
+        Mock(side_effect=[[71], []] if prior_wait else [[]]),
+    )
+    monkeypatch.setattr(waiter.time, "sleep", Mock())
+    waiter.fetch("owner/repo", "linux-sdk", tmp_path, "a" * 40, 23)
+    assert pull.call_count == (3 if prior_wait else 2)
+    assert all(
+        call.kwargs == {"own_head": "a" * 40, "own_pr": 23}
+        for call in pull.call_args_list
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("network"), ValueError("untrusted receipt")]
+)
+def test_final_pull_errors_remain_fatal(monkeypatch, tmp_path, failure):
+    monkeypatch.setattr(waiter.artifacts, "fingerprint", lambda component: "identity")
+    monkeypatch.setattr(waiter.artifacts, "pull", Mock(side_effect=[False, failure]))
+    monkeypatch.setattr(waiter, "waiting_producers", Mock(return_value=[]))
+    with pytest.raises(type(failure), match=str(failure)):
+        waiter.fetch("owner/repo", "linux-sdk", tmp_path, "a" * 40, 23)

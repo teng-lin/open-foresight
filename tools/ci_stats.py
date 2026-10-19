@@ -2,7 +2,7 @@
 """Report CI latency/cost from frozen GitHub REST snapshots; never dispatch CI.
 
 Input directory: runs.jsonl, jobs/<run-id>.jsonl (all attempts), prs.json
-(gh pr list --state all --json number,state,headRefOid,mergeCommit,mergedAt),
+(gh pr list --state all --json number,state,headRefName,headRefOid,mergeCommit,mergedAt),
 trees.txt (SHA TREE [PARENTS]), and logs/<run-id>.txt for workflow_run jobs.
 Use --current-since to separate removed job shapes from current configuration.
 """

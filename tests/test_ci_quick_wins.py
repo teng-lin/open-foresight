@@ -384,7 +384,7 @@ def test_bad_producer_identity_never_authorizes_implicit_compilation(
     candidate = {"id": 71, "status": "in_progress", "head_sha": head}
 
     def request(repository, route):
-        return {"workflow_runs": [candidate] if "status=in_progress" in route else []}
+        return {"workflow_runs": [candidate]}
 
     with (
         patch.object(macos, "pull", return_value=False),
@@ -426,3 +426,73 @@ def test_macos_cli_advertises_explicit_fork_build_permission():
     assert result.returncode == 0, result.stdout + result.stderr
     assert "--allow-local-build" in result.stdout
     assert "fork validation only" in " ".join(result.stdout.split())
+
+
+@pytest.mark.parametrize("prior_wait", [False, True])
+def test_macos_completion_race_reuses_and_verifies_original_before_fork_fallback(
+    tmp_path, prior_wait
+):
+    with (
+        patch.object(
+            macos, "pull", side_effect=[False] * (2 if prior_wait else 1) + [True]
+        ) as pull,
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(
+            macos, "waiting_producers", side_effect=[[71], []] if prior_wait else [[]]
+        ),
+        patch.object(macos.time, "sleep"),
+        patch.object(macos, "verify") as verify,
+        patch.object(macos.subprocess, "run") as build,
+    ):
+        assert (
+            macos.ensure(
+                "macos-sdk",
+                tmp_path,
+                "owner/repo",
+                "a" * 40,
+                23,
+                allow_local_build=True,
+            )
+            == "artifact"
+        )
+        assert pull.call_count == (3 if prior_wait else 2)
+        verify.assert_called_once_with("macos-sdk", tmp_path)
+        build.assert_not_called()
+
+
+def test_consumer_poll_queries_each_scope_once_and_keeps_older_active_pages():
+    head = "a" * 40
+    active = {
+        "id": 71,
+        "head_sha": head,
+        "head_branch": "feature",
+        "path": ".github/workflows/ci-dependencies.yml",
+        "head_repository": {"full_name": "owner/repo"},
+        "event": "pull_request",
+        "pull_requests": [{"number": 23}],
+        "status": "queued",
+        "run_attempt": 1,
+    }
+    calls = []
+
+    def request(repository, route):
+        calls.append(route)
+        assert "status=" not in route
+        if "branch=main" in route:
+            return {"workflow_runs": []}
+        return {
+            "workflow_runs": [
+                {**active, "id": 1000 + i, "status": "completed"} for i in range(100)
+            ]
+            if route.endswith("&page=1")
+            else [active]
+        }
+
+    with (
+        patch.object(macos, "api", side_effect=request),
+        patch.object(macos, "fingerprint", return_value="identity"),
+        patch.object(macos, "producer_identity", return_value="identity"),
+        patch.object(macos, "dependency_jobs", return_value=[]),
+    ):
+        assert macos.waiting_producers("owner/repo", "macos-sdk", head, 23) == [71]
+    assert len(calls) == 3  # Two scopes, with a genuine second page retained.

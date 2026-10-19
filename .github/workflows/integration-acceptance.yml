@@ -394,6 +394,7 @@ jobs:
           python -m pip install --require-hashes -r requirements-dev.lock
           python -m pytest tests/test_acceptance_image_cache.py -ra
       - name: Test Debian 13 with the same Ubuntu-built DEB
+        if: ${{ !cancelled() }}
         run: |
           docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work:ro" -v "$PWD/dist/packages:/packages:ro" debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 bash /work/packaging/ci/test-debian.sh
       # Package, CPU, GPU and audio checks share the image but report failures
