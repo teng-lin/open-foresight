@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
+from tools import ci_dependency_wait as waiter  # noqa: E402
 from tools import integration_application as application  # noqa: E402
 from tools import linux_sdk_artifacts as sdk  # noqa: E402
 
@@ -23,7 +24,9 @@ def load(prefix):
 def prepare(repository, source, own_pr, fork, directory):
     identity = artifacts.fingerprint("linux-sdk")
     prefix = directory / "verified"
-    if artifacts.pull(repository, "linux-sdk", identity, prefix, 1800, source, own_pr):
+    if waiter.fetch(
+        repository, "linux-sdk", prefix, source, own_pr, 1800, optional=fork
+    ):
         sdk.write_outputs(load(prefix))
         return False
     if not fork:
@@ -39,8 +42,8 @@ def prepare(repository, source, own_pr, fork, directory):
     result = sdk.produce("linux-sdk", produced, repository, source, own_pr)
     if result == "approved-original":
         # A compatible producer may become visible between the two lookups.
-        if not artifacts.pull(
-            repository, "linux-sdk", identity, prefix, 0, source, own_pr
+        if not waiter.fetch(
+            repository, "linux-sdk", prefix, source, own_pr, 0, optional=True
         ):
             raise RuntimeError("Approved SDK became unavailable during verified reuse")
         sdk.write_outputs(load(prefix))

@@ -375,8 +375,8 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
     )
     with (
         patch.object(
-            shadow.artifacts,
-            "pull",
+            shadow.waiter,
+            "fetch",
             side_effect=RuntimeError("network") if case == "network" else pull_result,
         ) as pull,
         patch.object(
@@ -401,7 +401,8 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
         assert shadow.prepare("owner/repo", "a" * 40, 42, True, tmp_path / "sdk") == (
             case == "fork"
         )
-        assert pull.call_args_list[0].args[4] == 1800
+        assert pull.call_args_list[0].args[5] == 1800
+        assert pull.call_args_list[0].kwargs == {"optional": True}
         resolve.assert_called_once_with(prefix, load_registry=True)
         write.assert_called_once_with("verified-image")
         if case == "fork":
