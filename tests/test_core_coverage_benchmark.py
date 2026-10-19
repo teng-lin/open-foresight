@@ -17,6 +17,7 @@ def gate(tmp_path):
     root = tmp_path / "repo"
     (root / "tools").mkdir(parents=True)
     (root / "packages/foresight_core").mkdir(parents=True)
+    (root / "apps/desktop").mkdir(parents=True)
     for name in (
         "build_dart_gates.sh",
         "ci_timing.sh",
@@ -33,8 +34,10 @@ def gate(tmp_path):
         + """import json, os, pathlib, sys
 args = sys.argv[1:]
 with open(os.environ['COMMANDS'], 'a') as stream:
-    stream.write(json.dumps({'args': args, 'native': os.getenv('FORESIGHT_NATIVE_LIBRARY'),
+    stream.write(json.dumps({'args': args, 'tool': sys.argv[0], 'native': os.getenv('FORESIGHT_NATIVE_LIBRARY'),
                              'helper': os.getenv('FORESIGHT_HELPER')}) + '\\n')
+if args[0] == 'analyze':
+    sys.exit(int(os.getenv('ANALYSIS_EXIT', '0')))
 if args[0] == 'test':
     coverage = any(arg.startswith('--coverage=') for arg in args)
     code = int(os.getenv('COVERED_EXIT' if coverage else 'PLAIN_EXIT', '0'))
@@ -60,6 +63,7 @@ elif args[:2] == ['run', 'coverage:format_coverage']:
 """
     )
     dart.chmod(0o700)
+    shutil.copy2(dart, binary / "flutter")
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -71,13 +75,13 @@ elif args[:2] == ['run', 'coverage:format_coverage']:
     return root, environment
 
 
-def run(gate, platform="linux", **settings):
+def run(gate, platform="linux", stage="core", **settings):
     root, environment = gate
     result = subprocess.run(
         [
             "bash",
             str(root / "tools/build_dart_gates.sh"),
-            "core",
+            stage,
             platform,
             str(root / "build"),
             sys.executable,
@@ -127,6 +131,62 @@ def test_benchmark_runs_both_full_suites_and_preserves_coverage_threshold(
     assert any(arg.startswith("--coverage=") for arg in tests[1]["args"])
     assert "minimum 90%" in result.stdout
     assert "Core benchmark matched: 1 passed, 0 skipped" in result.stdout
+
+
+def test_benchmark_uses_the_same_overridden_dart_and_supplied_python(gate):
+    _, environment = gate
+    binary = Path(environment["PATH"].split(":")[0])
+    override = binary / "alternate dart"
+    shutil.copy2(binary / "dart", override)
+    result, commands = run(
+        gate,
+        FORESIGHT_CORE_COVERAGE_BENCHMARK="1",
+        FORESIGHT_DART=str(override),
+        FORESIGHT_PYTHON="/missing/inherited-python",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    tests = [command for command in commands if command["args"][0] == "test"]
+    assert len(tests) == 2
+    assert all(command["tool"] == str(override) for command in tests)
+    formatter = next(
+        command
+        for command in commands
+        if command["args"][:2] == ["run", "coverage:format_coverage"]
+    )
+    assert formatter["tool"] == str(override)
+
+
+def test_repeated_plain_and_benchmark_runs_keep_only_current_event_streams(gate):
+    root, _ = gate
+    reports = root / "test-results/linux/core"
+    for settings, expected in [
+        ({}, {"core.events.jsonl"}),
+        (
+            {"FORESIGHT_CORE_COVERAGE_BENCHMARK": "1"},
+            {"plain.events.jsonl", "coverage.events.jsonl"},
+        ),
+        ({}, {"core.events.jsonl"}),
+    ]:
+        result, _ = run(gate, **settings)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert {path.name for path in reports.glob("*.events.jsonl")} == expected
+
+
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+def test_failed_analysis_removes_only_current_stage_old_events(gate, stage):
+    root, _ = gate
+    reports = root / f"test-results/linux/{stage}"
+    reports.mkdir(parents=True)
+    (reports / "old.events.jsonl").write_text("old execution")
+    (reports / "diagnostic.log").write_text("preserved diagnostic")
+    sibling = root / "test-results/macos" / stage / "old.events.jsonl"
+    sibling.parent.mkdir(parents=True)
+    sibling.write_text("other platform")
+    result, _ = run(gate, stage=stage, ANALYSIS_EXIT="7")
+    assert result.returncode == 7
+    assert not list(reports.glob("*.events.jsonl"))
+    assert (reports / "diagnostic.log").read_text() == "preserved diagnostic"
+    assert sibling.read_text() == "other platform"
 
 
 @pytest.mark.parametrize(

@@ -66,9 +66,14 @@ def validation_context(environment=None, now=None):
         "validation_environment_sha256": {
             key: hashlib.sha256(value.encode()).hexdigest()
             for key, value in environment.items()
-            if key.startswith("FORESIGHT_")
-            or key == "CI"
-            or key.lower() in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
+            # run_ci_stage binds the enabled benchmark to core validation only.
+            # It does not select native compiler inputs or other stage gates.
+            if key != "FORESIGHT_CORE_COVERAGE_BENCHMARK"
+            and (
+                key.startswith("FORESIGHT_")
+                or key == "CI"
+                or key.lower() in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")
+            )
         },
     }
 

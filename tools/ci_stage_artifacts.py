@@ -62,6 +62,7 @@ def roots(platform, stage):
             "build/application",
             "coverage/core",
             "test-results/build-gates/core.log",
+            f"test-results/{platform}/core",
         )
     if stage == "desktop":
         product = (
@@ -73,6 +74,7 @@ def roots(platform, stage):
             product,
             "apps/desktop/coverage",
             "test-results/build-gates/desktop.log",
+            f"test-results/{platform}/desktop",
         )
     if stage == "service":
         return ("test-results/service", "test-results/desktop-service-integration.json")
@@ -263,6 +265,28 @@ def restore_legacy_ninja_times(root, files):
             os.utime(path, ns=(path.stat().st_atime_ns, expected))
 
 
+def discard_unlisted_event_reports(root, platform, stage, files):
+    """Prevent stale local reports from becoming evidence in a saved copy."""
+    if stage not in ("core", "desktop"):
+        return
+    directory = root / f"test-results/{platform}/{stage}"
+    for parent in (directory, *directory.parents):
+        if parent == root:
+            break
+        if parent.is_symlink():
+            raise ValueError("Stage event report directory traverses a symlink")
+    stale = [
+        path
+        for path in directory.glob("*.events.jsonl")
+        if path.relative_to(root).as_posix() not in files
+    ]
+    for path in stale:
+        if path.is_dir() and not path.is_symlink():
+            raise ValueError("Stage event report collides with a directory")
+    for path in stale:
+        path.unlink()
+
+
 def unpack(root, platform, stage, archive, manifest, force_changed=False):
     files = manifest.get("files")
     if (
@@ -321,6 +345,7 @@ def unpack(root, platform, stage, archive, manifest, force_changed=False):
                     raise ValueError(f"Stage destination traverses a symlink: {name}")
             if expected["kind"] == "directory" and destination.is_symlink():
                 raise ValueError(f"Stage destination is a symlink: {name}")
+        discard_unlisted_event_reports(root, platform, stage, files)
         # Do not replace an unrelated directory (for example build/sdk).
         for name, expected in files.items():
             destination = root / name

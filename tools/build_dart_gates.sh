@@ -18,16 +18,17 @@ case "$task_gate" in
     export FORESIGHT_NATIVE_LIBRARY="$task_build/native/${task_native##*/}"
     export FORESIGHT_HELPER="$task_build/services/helper/ForesightHelper"
     cd "$task_root/packages/foresight_core"
-    ci_timed "core dependency resolution" dart pub get --enforce-lockfile
-    ci_timed "core analysis" dart analyze
     task_reports="$task_root/test-results/$task_platform/core"
     mkdir -p "$task_reports"
+    rm -f -- "$task_reports"/*.events.jsonl
+    ci_timed "core dependency resolution" dart pub get --enforce-lockfile
+    ci_timed "core analysis" dart analyze
     if [[ "${FORESIGHT_CORE_COVERAGE_BENCHMARK:-0}" == 1 ]]; then
       # Compare the full suite on the same host/native binaries. Keep coverage
       # enforcement and reject changed test/skip outcomes between the two runs.
       export FORESIGHT_CORE_COVERAGE_MIN=${FORESIGHT_CORE_COVERAGE_MIN:-90}
-      ci_timed "core benchmark without coverage" dart test --file-reporter="json:$task_reports/plain.events.jsonl"
-      ci_timed "core benchmark with coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/coverage.events.jsonl"
+      ci_timed "core benchmark without coverage" "${FORESIGHT_DART:-dart}" test --file-reporter="json:$task_reports/plain.events.jsonl"
+      FORESIGHT_PYTHON="$task_python" ci_timed "core benchmark with coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/coverage.events.jsonl"
       ci_timed "core benchmark outcome comparison" "$task_python" "$task_root/tools/compare_test_runs.py" "$task_reports/plain.events.jsonl" "$task_reports/coverage.events.jsonl"
     elif [[ "${FORESIGHT_COVERAGE:-0}" == 1 ]]; then
       ci_timed "core tests and coverage" "$task_root/tools/coverage_core.sh" --file-reporter="json:$task_reports/core.events.jsonl"
@@ -43,10 +44,11 @@ case "$task_gate" in
   desktop)
     (
       cd "$task_root/apps/desktop"
-      ci_timed "desktop dependency resolution" flutter pub get --enforce-lockfile
-      ci_timed "desktop analysis" flutter analyze
       task_reports="$task_root/test-results/$task_platform/desktop"
       mkdir -p "$task_reports"
+      rm -f -- "$task_reports"/*.events.jsonl
+      ci_timed "desktop dependency resolution" flutter pub get --enforce-lockfile
+      ci_timed "desktop analysis" flutter analyze
       ci_timed "desktop tests and coverage" flutter test --dart-define=FORESIGHT_ENABLE_TEST_HOOKS=true --coverage --file-reporter="json:$task_reports/desktop.events.jsonl"
       if [[ "$task_platform" == linux ]]; then
         python3 "$task_root/tools/check_coverage.py" coverage/lcov.info --label Desktop --minimum 90

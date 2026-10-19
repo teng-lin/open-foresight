@@ -72,6 +72,18 @@ remain enabled. Python jobs print their 20 slowest tests and retain JUnit timing
 alongside coverage. Core and desktop jobs retain Dart JSON events under
 `test-results/<platform>/<stage>/`, including test names, durations and skips.
 Inspect these artifacts before treating overlapping platform suites as duplicates.
+New core and desktop stage payloads retain these event streams byte-for-byte,
+including when a verified artifact copy is saved again. On a cache hit the
+reports are retained verified evidence, not fresh timing measurements. The reuse
+log identifies the supplying artifact's producer; for saved copies, follow that
+producer's reuse history to find the original execution. Historical verified payloads
+without event streams remain usable. Missing timing data does not justify
+rebuilding a compatible stage or SDK.
+
+Fresh core and desktop executions clear their own previous event streams before
+analysis. Verified restores discard only unlisted event streams from that same
+platform and stage, after validating the archive, so saved copies cannot inherit
+stale local timing evidence. Other diagnostics and stages remain intact.
 
 Stage logs include `CI phase:` JSON records on stderr with `phase`, monotonic elapsed
 `seconds`, and `status`. These distinguish API requests, producer qualification,

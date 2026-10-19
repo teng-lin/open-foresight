@@ -485,7 +485,11 @@ def compilation_environment(environment):
         result["validation_environment_sha256"] = {
             key: value
             for key, value in flags.items()
-            if key != "FORESIGHT_FLUTTER_EXECUTABLE"
+            if key
+            not in (
+                "FORESIGHT_FLUTTER_EXECUTABLE",
+                "FORESIGHT_CORE_COVERAGE_BENCHMARK",
+            )
         }
     return result
 

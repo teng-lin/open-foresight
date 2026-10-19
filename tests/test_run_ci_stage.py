@@ -170,12 +170,14 @@ def test_runner_does_not_expose_validation_environment_in_receipt(
 
 
 @pytest.mark.parametrize(
-    "stage,enabled", [("native", False), ("core", False), ("core", True)]
+    "stage,enabled",
+    [("native", False), ("native", True), ("core", False), ("core", True)],
 )
 def test_benchmark_flag_binds_only_enabled_core_validation(
     tmp_path, monkeypatch, stage, enabled
 ):
     monkeypatch.setenv("FORESIGHT_CORE_COVERAGE_BENCHMARK", "1" if enabled else "0")
+    collected = runner.stage_environment.validation_context()
     with (
         patch.object(runner, "restore_input"),
         patch.object(runner.cache, "git", return_value=b"a" * 40),
@@ -188,7 +190,7 @@ def test_benchmark_flag_binds_only_enabled_core_validation(
                 tmp_path,
                 "linux",
                 stage,
-                {},
+                collected,
                 {"native": "b" * 64} if stage == "core" else {},
                 {"native": tmp_path} if stage == "core" else {},
                 "repo",
@@ -198,7 +200,9 @@ def test_benchmark_flag_binds_only_enabled_core_validation(
                 [],
             )
     flags = fingerprint.call_args.kwargs["environment"]["validation_flags"]
-    assert ("FORESIGHT_CORE_COVERAGE_BENCHMARK" in flags) == enabled
+    assert ("FORESIGHT_CORE_COVERAGE_BENCHMARK" in flags) == (
+        stage == "core" and enabled
+    )
 
 
 @pytest.mark.parametrize(
