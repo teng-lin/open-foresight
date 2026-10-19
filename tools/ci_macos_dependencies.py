@@ -94,7 +94,13 @@ def waiting_producers(repository, component, own_head, own_pr):
         component,
         fingerprint(component),
         eligible=lambda run: trusted_run(run, component, own_head, repository, own_pr),
-        jobs=dependency_jobs,
+        # Mutually exclusive registry/archive jobs share producer names. GitHub
+        # can list the skipped alternative before the real job is materialized.
+        jobs=lambda repo, run_id: [
+            job
+            for job in dependency_jobs(repo, run_id)
+            if job.get("conclusion") != "skipped"
+        ],
         fingerprint_at=fingerprint_at,
     )
 

@@ -34,6 +34,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
+          fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Trust only the checked-out workspace
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -78,6 +79,13 @@ jobs:
             pub-linux-
       - name: Run every Linux host Python contract
         run: .venv/bin/python tools/platform_python_tests.py --platform linux
+      - name: Restore verified compatible native compiler work
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWN_PR: ${{ github.event.pull_request.number || 0 }}
+        run: |
+          .venv/bin/python tools/ci_native_work.py --own-pr "$OWN_PR" \
+            --output test-results/arch/native-work.json -- -G Ninja
       - name: Build and test with the current Arch toolchain
         run: xvfb-run -a dbus-run-session -- bash tools/build.sh --platform linux -G Ninja
       - name: Retain drift diagnostics and suite evidence

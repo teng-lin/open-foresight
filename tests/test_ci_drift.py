@@ -268,6 +268,20 @@ def test_arch_daily_probe_inlines_toolchain_and_runs_existing_full_gates():
     assert (
         "build_sanitizer_sdk.py" not in commands and "build_linux_sdk" not in commands
     )
+    restore = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Restore verified compatible native compiler work"
+    )
+    assert "tools/ci_native_work.py" in restore["run"]
+    assert "--output test-results/arch/native-work.json -- -G Ninja" in restore["run"]
+    build = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Build and test with the current Arch toolchain"
+    )
+    assert "if" not in build
+    assert job["steps"].index(restore) < job["steps"].index(build)
     assert not any("cache/save@" in step.get("uses", "") for step in job["steps"])
     assert not any(
         "uses" in step and step["uses"].startswith("./.github/actions/")

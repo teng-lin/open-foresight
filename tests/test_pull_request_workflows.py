@@ -575,9 +575,12 @@ jobs:
                 for step in job.get("steps") or []:
                     for line in step.get("run", "").splitlines():
                         shadow_resolver = "ci_linux_shadow_sdk.py" in line
-                        if (
-                            not shadow_resolver
-                            and "ci_artifacts.py pull --component linux-sdk" not in line
+                        if not shadow_resolver and not any(
+                            command in line
+                            for command in (
+                                "ci_artifacts.py pull --component linux-sdk",
+                                "ci_dependency_wait.py --component linux-sdk",
+                            )
                         ):
                             continue
                         with self.subTest(workflow=filename, job=name):

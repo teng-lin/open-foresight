@@ -146,7 +146,7 @@ jobs:
             echo 'image=foresight-sdk:pr' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+          python tools/ci_dependency_wait.py --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive
       - name: Restore qualified application dependency outputs without compilation
         if: github.event_name == 'pull_request'
@@ -317,7 +317,7 @@ jobs:
             python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
             exit 0
           fi
-          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+          python tools/ci_dependency_wait.py --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
       - name: Retrieve the verified main application instead of compiling it again
         if: github.event_name != 'pull_request'

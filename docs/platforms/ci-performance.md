@@ -918,9 +918,19 @@ contracts daily in the pinned Arch container, with its rolling pacman toolchain
 list inlined. It records the compiler and complete package inventory before the
 build, restores existing compatible Flutter/pub caches and verifies Flutter's
 exact commit. It uses Arch's installed gRPC/protobuf and never builds an SDK.
-The fresh Arch application build can compile its FlatBuffers/SentencePiece
-closure; compatible Ubuntu SDK objects have a different compiler/environment
-and cannot supply that work. Before a manual hosted probe, inspect existing
+Before the Arch application build, `ci_native_work.py` searches retained verified
+native-stage compiler payloads, including FlatBuffers/SentencePiece outputs.
+It qualifies the exact compiler, complete package inventory, absolute workspace,
+CMake arguments and native flags; Mac callers additionally bind SDK bytes/prefix,
+Xcode and Apple SDK. Ubuntu objects cannot substitute for different Arch inputs.
+The original successful producer receipt and checksums stay authoritative.
+Only proven Dart coverage/scheduling controls and report/SDK locators are excluded
+from compiler compatibility; successful stage identities still bind those
+validation settings. Unknown flags and native hooks remain strict. Search/API
+failures stop the job, while a completed miss records actual incompatible fields.
+Changed CMake inputs remove only the old CMake cache, retaining objects and
+fetched dependencies. Every hit still runs current configure/build/CTest and all
+application gates; neither old test success nor a new cache publication is used. Before a manual hosted probe, inspect existing
 verified artifacts and identify any actual toolchain/input drift or missing
 compatible work. This workflow neither deletes dependency caches nor publishes
 compiler outputs. Its temporary PR trigger selects only its own workflow path;
@@ -1062,3 +1072,12 @@ measurements or Docker runtime pass are inferred from local fixtures. The SDK re
 projection is unchanged by this workstream; the foundation's SentencePiece Python
 wheel change affects only the assembled Linux SDK Python layer, retaining all
 core, LiteRT, Whisper and macOS component identities.
+
+SDK consumer waits ignore skipped alternatives with duplicate display names.
+GitHub may expose the skipped main-registry job before its PR-archive counterpart
+is created after parent jobs finish. That placeholder is not proof that the
+component finished. Linux application consumers use `ci_dependency_wait.py` to
+share the qualified source/identity wait with macOS, capped at 1,800 seconds.
+Network and provenance failures remain fatal. This consumer-only correction
+preserves every SDK producer-control byte, allowing the already running producer
+and its eventual original artifact to remain qualified without recompilation.
