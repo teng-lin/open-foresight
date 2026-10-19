@@ -6,6 +6,10 @@ Notable changes to Open Foresight are recorded here. Versions follow
 
 ## [Unreleased]
 
+### Added
+
+- Experimental Google Calendar connection through Granola’s hosted WorkOS flow and calendar API, with a Foresight-owned return URL, separate app-session handling, and no Drive access. A manual return-link field accepts Granola’s HTTPS app-redirect and native completion links, including sign-ins that open Granola.
+
 ## [0.1.2] - 2026-10-18
 
 ### Changed

@@ -70,6 +70,14 @@ class GoogleConnections implements ConnectedSources {
     }
   }
 
+  void _requireDrive() {
+    if (auth.viaGranola) {
+      throw StateError(
+        'Drive is unavailable through the Granola calendar connection.',
+      );
+    }
+  }
+
   Future<void> _checkpoint(String account) async {
     _check(account);
     await domain.waitForSourceWork();
@@ -92,6 +100,7 @@ class GoogleConnections implements ConnectedSources {
   }) async {
     final account = auth.account;
     _check(account);
+    _requireDrive();
     final filters = [
       'trashed = false',
       if (parent != null) "'${_literal(parent)}' in parents",
@@ -380,6 +389,58 @@ class GoogleConnections implements ConnectedSources {
     );
   }
 
+  void _storeCalendarEvent(
+    String account,
+    String calendarId,
+    Map<String, dynamic> event,
+  ) {
+    final key = _id('google-calendar', '$calendarId:${event['id']}');
+    final old = store.rows('SELECT * FROM calendar_events WHERE event_key=?', [
+      key,
+    ]).firstOrNull;
+    final cancelled = event['status'] == 'cancelled';
+    if (cancelled) {
+      if (old != null) {
+        store.db.execute(
+          "UPDATE calendar_events SET status='cancelled',synced=? WHERE event_key=?",
+          [DateTime.now().millisecondsSinceEpoch, key],
+        );
+      }
+      return;
+    }
+    final start = eventTime(event['start']), end = eventTime(event['end']);
+    if (start == null || end == null) return;
+    final title = event['summary'] as String? ?? '[Untitled meeting]';
+    final meeting = old?['meeting_id'] as int? ?? store.meeting(title);
+    if (old != null && old['starts'] != start.millisecondsSinceEpoch) {
+      store.db.execute(
+        'UPDATE meeting_details SET reminder=0 WHERE meeting_id=?',
+        [meeting],
+      );
+    }
+    store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
+      title,
+      meeting,
+    ]);
+    store.db.execute(
+      'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET starts=excluded.starts,ends=excluded.ends,status=excluded.status,metadata=excluded.metadata,synced=excluded.synced',
+      [
+        key,
+        account,
+        calendarId,
+        event['id'],
+        meeting,
+        '', // Calendar events are meeting metadata, not knowledge sources.
+        start.millisecondsSinceEpoch,
+        end.millisecondsSinceEpoch,
+        event['status'] as String? ?? 'confirmed',
+        jsonEncode(event),
+        DateTime.now().millisecondsSinceEpoch,
+      ],
+    );
+    _check(account);
+  }
+
   @override
   Future<void> syncCalendar({
     String calendarId = 'primary',
@@ -388,6 +449,10 @@ class GoogleConnections implements ConnectedSources {
   }) async {
     final account = auth.account;
     _check(account);
+    if (auth.viaGranola) {
+      await _syncGranolaCalendar(account);
+      return;
+    }
     now ??= DateTime.now();
     var page = '';
     do {
@@ -411,52 +476,7 @@ class GoogleConnections implements ConnectedSources {
       _check(account);
       for (final event
           in (response['items'] as List? ?? []).cast<Map<String, dynamic>>()) {
-        final key = _id('google-calendar', '$calendarId:${event['id']}');
-        final old = store.rows(
-          'SELECT * FROM calendar_events WHERE event_key=?',
-          [key],
-        ).firstOrNull;
-        final cancelled = event['status'] == 'cancelled';
-        if (cancelled) {
-          if (old != null) {
-            store.db.execute(
-              "UPDATE calendar_events SET status='cancelled',synced=? WHERE event_key=?",
-              [DateTime.now().millisecondsSinceEpoch, key],
-            );
-          }
-          continue;
-        }
-        final start = eventTime(event['start']), end = eventTime(event['end']);
-        if (start == null || end == null) continue;
-        final title = event['summary'] as String? ?? '[Untitled meeting]';
-        final meeting = old?['meeting_id'] as int? ?? store.meeting(title);
-        if (old != null && old['starts'] != start.millisecondsSinceEpoch) {
-          store.db.execute(
-            'UPDATE meeting_details SET reminder=0 WHERE meeting_id=?',
-            [meeting],
-          );
-        }
-        store.db.execute('UPDATE meetings SET title=? WHERE id=?', [
-          title,
-          meeting,
-        ]);
-        store.db.execute(
-          'INSERT INTO calendar_events VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(event_key) DO UPDATE SET starts=excluded.starts,ends=excluded.ends,status=excluded.status,metadata=excluded.metadata,synced=excluded.synced',
-          [
-            key,
-            account,
-            calendarId,
-            event['id'],
-            meeting,
-            '', // Calendar events are meeting metadata, not knowledge sources.
-            start.millisecondsSinceEpoch,
-            end.millisecondsSinceEpoch,
-            event['status'] as String? ?? 'confirmed',
-            jsonEncode(event),
-            DateTime.now().millisecondsSinceEpoch,
-          ],
-        );
-        _check(account);
+        _storeCalendarEvent(account, calendarId, event);
       }
       page = response['nextPageToken'] as String? ?? '';
     } while (page.isNotEmpty);
@@ -466,6 +486,72 @@ class GoogleConnections implements ConnectedSources {
     );
   }
 
+  Future<void> _syncGranolaCalendar(String account) async {
+    final response = await auth.granolaCalendarEvents();
+    _check(account);
+    final results = response['results'];
+    if (results is! Map || results['events'] is! List) {
+      throw StateError('Granola did not return a calendar snapshot.');
+    }
+    if (results['error'] != null && results['error'] != false) {
+      throw StateError(
+        'Granola could not refresh Calendar. Check Google Calendar access in Granola and retry.',
+      );
+    }
+    final events = <(String, Map<String, dynamic>)>[];
+    final keys = <String>{};
+    // Validate the entire snapshot before marking any missing events cancelled.
+    for (final raw in results['events'] as List) {
+      if (raw is! Map || raw['id'] is! String || raw['calendarId'] is! String) {
+        throw StateError('Granola returned an invalid calendar event.');
+      }
+      final event = Map<String, dynamic>.from(raw);
+      final calendar = event['calendarId'] as String;
+      if (event['status'] == 'cancelled' ||
+          (event['attendees'] as List? ?? []).any(
+            (a) =>
+                a is Map &&
+                a['self'] == true &&
+                a['responseStatus'] == 'declined',
+          )) {
+        continue;
+      }
+      if (eventTime(event['start']) == null ||
+          eventTime(event['end']) == null ||
+          event['summary'] is! String) {
+        continue;
+      }
+      keys.add(_id('google-calendar', '$calendar:${event['id']}'));
+      events.add((calendar, event));
+    }
+    store.db.execute('BEGIN');
+    try {
+      for (final (calendar, event) in events) {
+        _storeCalendarEvent(account, calendar, event);
+      }
+      for (final row in store.rows(
+        "SELECT event_key FROM calendar_events WHERE account=? AND event_key LIKE 'google-calendar-%'",
+        [account],
+      )) {
+        if (!keys.contains(row['event_key'])) {
+          store.db.execute(
+            "UPDATE calendar_events SET status='cancelled',synced=? WHERE event_key=?",
+            [DateTime.now().millisecondsSinceEpoch, row['event_key']],
+          );
+        }
+      }
+      _check(account);
+      store.setPreference(
+        'googleCalendarLastSync',
+        DateTime.now().millisecondsSinceEpoch.toString(),
+      );
+      store.db.execute('COMMIT');
+    } catch (_) {
+      store.db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
   @override
   Future<void> refresh() =>
       _refreshing ??= _refresh().whenComplete(() => _refreshing = null);
@@ -473,6 +559,15 @@ class GoogleConnections implements ConnectedSources {
     final account = auth.account;
     _check(account);
     final failures = <String>[];
+    if (auth.viaGranola) {
+      await syncCalendar(preserveLocal: true);
+      store.setPreference(
+        'googleLastSync',
+        DateTime.now().millisecondsSinceEpoch.toString(),
+      );
+      store.setPreference('googleLastSyncAccount', account);
+      return;
+    }
     for (final source in store.rows(
       'SELECT google_sources.*,sources.revision AS source_revision FROM google_sources JOIN sources ON sources.id=google_sources.source_id WHERE account=? AND deleted=0',
       [account],

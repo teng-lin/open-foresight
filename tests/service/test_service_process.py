@@ -606,6 +606,43 @@ def test_restart_preserves_data_and_does_not_reuse_stale_socket(running):
         log.close()
 
 
+@pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
+def test_granola_manual_return_requires_active_matching_attempt_without_network(running):
+    from urllib.parse import parse_qs, urlparse
+
+    peer = running["peer"]
+    peer.call("google.configure", {"provider": "granola"})
+    identifier = peer.send("google.sign_in")
+    while True:
+        response = json.loads(peer.reader.readline())
+        if response.get("event"):
+            continue
+        assert response["id"] == identifier and "error" not in response, response
+        if response.get("result", {}).get("authorization_url"):
+            invitation = response["result"]["authorization_url"]
+            break
+    query = parse_qs(urlparse(invitation).query)
+    assert query["code_challenge"] and query["sign_in_click_id"]
+    other = Peer(running["path"])
+    try:
+        callback = "granola://login-complete?code=private-return-fixture&signInClickId=wrong-attempt"
+        bridge = "https://www.granola.ai/app-redirect?code=private-return-fixture&signInClickId=wrong-attempt"
+        for return_url in [callback, bridge]:
+            for manual in [False, True]:
+                with pytest.raises(RuntimeError) as error:
+                    other.call("google.complete_sign_in", {"url": return_url, "manual": manual})
+                assert "private-return-fixture" not in str(error.value)
+        assert other.call("google.status")["signingIn"]
+        other.call("google.cancel_sign_in")
+        with pytest.raises(RuntimeError):
+            peer.result(identifier)
+        with pytest.raises(RuntimeError):
+            other.call("google.complete_sign_in", {"url": callback, "manual": True})
+        assert not other.call("google.status")["connected"]
+    finally:
+        other.close()
+
+
 def test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations(
     running,
 ):

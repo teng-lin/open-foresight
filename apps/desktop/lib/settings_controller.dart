@@ -1117,6 +1117,8 @@ class _SettingsController extends _FeatureController {
                 Text(
                   integrationFeature.googleAuth.connected
                       ? 'Connected as ${integrationFeature.googleAuth.email}'
+                      : integrationFeature.granolaCalendar
+                      ? 'Google Calendar through Granola'
                       : 'Google Drive and Calendar',
                   style: const TextStyle(
                     fontSize: 20,
@@ -1124,8 +1126,10 @@ class _SettingsController extends _FeatureController {
                   ),
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Connect to import files and upcoming meetings. Foresight requests read-only access; imported text is indexed on this computer.',
+                Text(
+                  integrationFeature.granolaCalendar
+                      ? 'Calendar only. Sign-in and calendar sync use Granola’s hosted service. Drive is unavailable. This experimental connection depends on Granola accepting the return to Foresight.'
+                      : 'Connect to import files and upcoming meetings. Foresight requests read-only access; imported text is indexed on this computer.',
                 ),
                 if (!integrationFeature.googleAuth.connected &&
                     integrationFeature.googleAuth.client == null)
@@ -1151,13 +1155,23 @@ class _SettingsController extends _FeatureController {
                             : () => shell.run(integrationFeature.connectGoogle),
                         child: const Text('Connect Google'),
                       ),
+                      OutlinedButton(
+                        onPressed: shell.busy
+                            ? null
+                            : () => shell.run(
+                                integrationFeature.connectGranolaCalendar,
+                              ),
+                        child: const Text('Connect calendar through Granola'),
+                      ),
                       TextButton(
                         onPressed: () => showDialog<void>(
                           context: context,
                           builder: (_) => AlertDialog(
                             title: Text('Google connection setup'),
                             content: SelectableText(
-                              integrationFeature.googleAuth.client != null
+                              integrationFeature.granolaCalendar
+                                  ? 'This connects to Google through Granola’s existing WorkOS project and hosted calendar API. Granola processes authorization and calendar data. Drive is unavailable. Google consent may include calendar write access, matching Granola’s initial sign-in. Disconnect removes the saved session from Foresight; manage service access in Google or Granola. If your browser opens Granola, paste the return link into the waiting Foresight sign-in dialog.'
+                                  : integrationFeature.googleAuth.client != null
                                   ? 'Choose Connect Google, select your account in the browser, and grant Drive and Calendar read access. This app already has its application sign-in configuration.\n\nYour Google password is never entered into Foresight. After signing in, you return to the app automatically.'
                                   : 'Google sign-in is unavailable in this build. Install a distribution with Google sign-in included.\n\nSign-in opens your default browser and asks for read access. Your Google password is never entered into Foresight.',
                             ),
@@ -1192,20 +1206,40 @@ class _SettingsController extends _FeatureController {
                 ),
                 const Divider(),
                 settingRow(
-                  'Refresh interval for Calendar events and Drive files',
-                  'Refreshes imported Drive folders, files and upcoming Calendar events.',
+                  integrationFeature.granolaCalendar
+                      ? 'Calendar refresh interval'
+                      : 'Refresh interval for Calendar events and Drive files',
+                  integrationFeature.granolaCalendar
+                      ? 'Refreshes upcoming meetings through Granola.'
+                      : 'Refreshes imported Drive folders, files and upcoming Calendar events.',
                   DesktopSettingSelect<String>(
-                    value: d.store.preference('googleRefreshHours', '4'),
-                    items: ['1', '2', '4', '8', '24']
-                        .map(
-                          (value) => DropdownMenuItem(
-                            value: value,
-                            child: Text('$value hours'),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: (value) =>
-                        preference('googleRefreshHours', value!),
+                    value: integrationFeature.granolaCalendar
+                        ? d.store.preference(
+                            'granolaCalendarRefreshMinutes',
+                            '10',
+                          )
+                        : d.store.preference('googleRefreshHours', '4'),
+                    items:
+                        (integrationFeature.granolaCalendar
+                                ? ['5', '10', '30', '60']
+                                : ['1', '2', '4', '8', '24'])
+                            .map(
+                              (value) => DropdownMenuItem(
+                                value: value,
+                                child: Text(
+                                  integrationFeature.granolaCalendar
+                                      ? '$value minutes'
+                                      : '$value hours',
+                                ),
+                              ),
+                            )
+                            .toList(),
+                    onChanged: (value) => preference(
+                      integrationFeature.granolaCalendar
+                          ? 'granolaCalendarRefreshMinutes'
+                          : 'googleRefreshHours',
+                      value!,
+                    ),
                   ),
                 ),
               ],

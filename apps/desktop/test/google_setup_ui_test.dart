@@ -1,5 +1,6 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'desktop_connection_fixture.dart';
+import 'pump_until.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -31,6 +32,55 @@ class BundledGoogleDomain extends Domain {
 }
 
 void main() {
+  testWidgets(
+    'Granola calendar option configures Calendar only and disables every Drive import',
+    (tester) async {
+      final root = createTestTempDirectorySync('granola-calendar-ui-');
+      final auth = BundledGoogleAuth(Directory('${root.path}/google'));
+      final store = Store('${root.path}/application.db');
+      final helper = OfflineHelper(
+        '${root.path}/socket',
+        '${root.path}/helper',
+      );
+      final domain = BundledGoogleDomain(store, helper, auth);
+      await tester.pumpWidget(
+        Foresight(TestDesktopConnection(domain), deviceLoader: () async => []),
+      );
+      await tester.tap(find.text('Settings'));
+      await tester.pumpAndSettle();
+      final connect = find.widgetWithText(
+        OutlinedButton,
+        'Connect calendar through Granola',
+      );
+      await tester.ensureVisible(connect);
+      await tester.runAsync(() => tester.tap(connect));
+      await pumpUntil(tester, () => auth.invitations == 1);
+      await tester.pumpAndSettle();
+      expect(auth.viaGranola, true);
+      expect(auth.invitations, 1);
+      expect(find.textContaining('Drive is unavailable.'), findsWidgets);
+      await tester.tap(find.text('Sources').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(PopupMenuButton<String>).first);
+      await tester.pumpAndSettle();
+      for (final label in [
+        'Add files from Drive',
+        'Add an entire Drive folder',
+        'Import last 1 year from Drive',
+      ]) {
+        expect(
+          tester
+              .widget<PopupMenuItem<String>>(
+                find.widgetWithText(PopupMenuItem<String>, label),
+              )
+              .enabled,
+          false,
+        );
+      }
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets(
     'bundled Google setup goes directly to sign-in from Settings, Calendar and every Drive import',
     (tester) async {
