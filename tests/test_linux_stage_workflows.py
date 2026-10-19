@@ -385,17 +385,18 @@ def test_disposable_installed_document_containers_can_initialize_isolated_loopba
     assert "'--cap-drop',\n        'ALL'" in parser
 
 
-def test_optional_gpu_policy_is_confined_to_ci_emulator_acceptance():
+def test_optional_litert_gpu_policy_is_confined_to_ci_emulator_acceptance():
     jobs = workflow("integration-acceptance.yml")["jobs"]
     step = next(
         step
         for step in jobs["ubuntu-package"]["steps"]
         if step.get("name") == "Shipped GPU runtimes on software Vulkan"
     )
-    assert "--allow-unavailable" in step["run"]
+    assert "--allow-litert-unavailable" in step["run"]
+    assert "--allow-unavailable" not in step["run"]
     for name in ("release.yml", "release-acceptance.yml"):
         assert (
-            "--allow-unavailable" not in (ROOT / ".github/workflows" / name).read_text()
+            "--allow-litert-unavailable" not in (ROOT / ".github/workflows" / name).read_text()
         )
 
 

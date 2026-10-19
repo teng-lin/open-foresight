@@ -202,20 +202,34 @@ def test_decode_executes_on_gpu_with_sixteen_token_bound(tmp_path, content, deco
 
 
 @pytest.mark.parametrize("allow_litert_unavailable", [False, True])
-def test_absent_whisper_device_fails_even_with_litert_skips(tmp_path, allow_litert_unavailable):
+def test_absent_whisper_device_fails_even_with_litert_skips(
+    tmp_path, allow_litert_unavailable
+):
     unavailable = SimpleNamespace(
-        returncode=0, stdout="CPU fallback transcript",
+        returncode=0,
+        stdout="CPU fallback transcript",
         stderr="ggml_vulkan: No devices found.\nwhisper_backend_init_gpu: no GPU found\n",
     )
     output = tmp_path / "reports"
     with (
-        patch.object(sys, "argv", [
-            "probe", "--bundle", str(tmp_path), "--models", str(tmp_path),
-            "--output", str(output),
-            *(["--allow-litert-unavailable"] if allow_litert_unavailable else []),
-        ]),
+        patch.object(
+            sys,
+            "argv",
+            [
+                "probe",
+                "--bundle",
+                str(tmp_path),
+                "--models",
+                str(tmp_path),
+                "--output",
+                str(output),
+                *(["--allow-litert-unavailable"] if allow_litert_unavailable else []),
+            ],
+        ),
         patch.object(gpu.Path, "glob", return_value=[tmp_path / "lvp_icd.json"]),
-        patch.object(gpu, "packaged_paths", return_value=(Path("runner"), Path("worker"), {})),
+        patch.object(
+            gpu, "packaged_paths", return_value=(Path("runner"), Path("worker"), {})
+        ),
         patch.object(gpu, "model_file", return_value="model"),
         patch.object(gpu.subprocess, "run", return_value=unavailable),
         patch.object(gpu, "litert_probe") as litert,
@@ -291,11 +305,18 @@ def test_real_whisper_command_explicitly_selects_the_software_vulkan_device(
 @pytest.mark.parametrize("allow_litert_unavailable", [False, True])
 @pytest.mark.parametrize("icds", [[], [Path("lvp1.json"), Path("lvp2.json")]])
 def test_required_driver_absence_or_ambiguity_fails_before_models(
-    tmp_path, allow_litert_unavailable, icds,
+    tmp_path,
+    allow_litert_unavailable,
+    icds,
 ):
     arguments = [
-        "probe", "--bundle", str(tmp_path), "--models", str(tmp_path),
-        "--output", str(tmp_path),
+        "probe",
+        "--bundle",
+        str(tmp_path),
+        "--models",
+        str(tmp_path),
+        "--output",
+        str(tmp_path),
         *(["--allow-litert-unavailable"] if allow_litert_unavailable else []),
     ]
     with (

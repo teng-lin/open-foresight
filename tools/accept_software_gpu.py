@@ -179,9 +179,14 @@ def main():
             f"found {len(icds)} in /usr/share/vulkan/icd.d. "
             "Install mesa-vulkan-drivers in the integration image."
         )
-        write_report(args.output, {
-            "status": "failed", "error": message, "physical_gpu_verified": False,
-        })
+        write_report(
+            args.output,
+            {
+                "status": "failed",
+                "error": message,
+                "physical_gpu_verified": False,
+            },
+        )
         raise RuntimeError(message)
     runner, _, environment = packaged_paths(args.bundle)
     with tempfile.TemporaryDirectory(prefix="software-gpu-") as temporary:

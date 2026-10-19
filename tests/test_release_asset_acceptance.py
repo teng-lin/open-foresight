@@ -486,9 +486,15 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
             digest = hashlib.sha256(b"fixture").hexdigest()
             Path(str(dmg) + ".sha256").write_text(digest + "  fixture.dmg\n")
             revision = "c" * 40
-            (root / "installer.json").write_text(json.dumps({
-                "asset": dmg.name, "sha256": digest, "source_commit": revision,
-            }))
+            (root / "installer.json").write_text(
+                json.dumps(
+                    {
+                        "asset": dmg.name,
+                        "sha256": digest,
+                        "source_commit": revision,
+                    }
+                )
+            )
             commands = []
 
             def command(arguments, **kwargs):
@@ -497,28 +503,43 @@ class ReleaseAssetAcceptanceTest(unittest.TestCase):
                     mount = Path(arguments[arguments.index("-mountpoint") + 1])
                     contents = mount / "Open Foresight.app/Contents"
                     contents.mkdir(parents=True)
-                    (contents / "Info.plist").write_bytes(plistlib.dumps({
-                        "CFBundleIdentifier": "io.openforesight.App",
-                    }))
+                    (contents / "Info.plist").write_bytes(
+                        plistlib.dumps(
+                            {
+                                "CFBundleIdentifier": "io.openforesight.App",
+                            }
+                        )
+                    )
                 return subprocess.CompletedProcess(arguments, 0, "", "")
 
             with (
                 patch("test_release_dmg.platform.system", return_value="Darwin"),
                 patch("test_release_dmg.subprocess.run", side_effect=command),
-                patch("test_release_dmg.verify_signature", return_value={"adhoc": True}),
+                patch(
+                    "test_release_dmg.verify_signature", return_value={"adhoc": True}
+                ),
                 patch("test_release_dmg.probe_installed_documents", return_value={}),
                 patch("test_release_dmg.persistence_probe"),
                 patch("test_release_dmg.install"),
             ):
-                run_dmg(Namespace(
-                    dmg=dmg, destination=root / "Installed.app", models=None,
-                    validation="standard", output=root / "reports",
-                ))
-            smoke = next(args for args in commands if any(
-                str(arg).endswith("/smoke_macos_bundle.py") for arg in args
-            ))
+                run_dmg(
+                    Namespace(
+                        dmg=dmg,
+                        destination=root / "Installed.app",
+                        models=None,
+                        validation="standard",
+                        output=root / "reports",
+                    )
+                )
+            smoke = next(
+                args
+                for args in commands
+                if any(str(arg).endswith("/smoke_macos_bundle.py") for arg in args)
+            )
             self.assertEqual(smoke[smoke.index("--expected-revision") + 1], revision)
-            self.assertFalse(any("test_installed_release.py" in str(args) for args in commands))
+            self.assertFalse(
+                any("test_installed_release.py" in str(args) for args in commands)
+            )
 
     def test_dmg_requires_installer_identity_report_and_handles_detach_failures(self):
         """DMG acceptance must require installer.json and preserve primary errors on detach failure."""

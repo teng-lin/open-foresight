@@ -18,6 +18,7 @@ import install_macos as installer
 import test_gemma_models as gemma_probe
 from smoke_macos_bundle import (
     McpPeer,
+    main as smoke_main,
     verify_runtime_revision,
     stop_desktop,
     parser_probe,
@@ -40,18 +41,45 @@ class RuntimeRevisionTests(unittest.TestCase):
             revision = "a" * 40
             for actual in (revision, None, "b" * 40):
                 with self.subTest(actual=actual):
-                    runtime.write_text(json.dumps({"FORESIGHT_RUNTIME_REVISION": actual}))
+                    runtime.write_text(
+                        json.dumps({"FORESIGHT_RUNTIME_REVISION": actual})
+                    )
                     report = {}
                     if actual == revision:
                         verify_runtime_revision(app, revision, report, output)
                         self.assertEqual(report["runtime_revision"], revision)
                     else:
-                        with self.assertRaisesRegex(RuntimeError, "installer source commit"):
+                        with self.assertRaisesRegex(
+                            RuntimeError, "installer source commit"
+                        ):
                             verify_runtime_revision(app, revision, report, output)
                         evidence = json.loads(output.read_text())
                         self.assertEqual(evidence["status"], "failed")
                         self.assertEqual(evidence["runtime_revision"], actual)
                         self.assertEqual(evidence["expected_revision"], revision)
+
+    def test_cli_failure_overwrites_invalid_or_stale_prior_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "smoke.json"
+            for previous in ("truncated {", '{"runtime_revision": "stale"}'):
+                with self.subTest(previous=previous):
+                    output.write_text(previous)
+                    with (
+                        patch("smoke_macos_bundle.sys.platform", "darwin"),
+                        patch(
+                            "smoke_macos_bundle.smoke",
+                            side_effect=RuntimeError("primary smoke failure"),
+                        ),
+                        self.assertRaisesRegex(RuntimeError, "primary smoke failure"),
+                    ):
+                        smoke_main([temporary, "--output", str(output)])
+                    self.assertEqual(
+                        json.loads(output.read_text()),
+                        {
+                            "status": "failed",
+                            "error": "primary smoke failure",
+                        },
+                    )
 
 
 class MacModelProbeTests(unittest.TestCase):

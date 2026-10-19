@@ -480,6 +480,12 @@ def verify_transaction_rollback(source, destination):
     }
 
 
+class RuntimeRevisionMismatch(RuntimeError):
+    def __init__(self, report):
+        super().__init__(report["error"])
+        self.report = report
+
+
 def verify_runtime_revision(app, expected_revision, report, output):
     report["runtime_revision"] = json.loads(
         (app / "Contents/Resources/runtime.json").read_text()
@@ -494,7 +500,7 @@ def verify_runtime_revision(app, expected_revision, report, output):
             )
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(json.dumps(report, indent=2) + "\n")
-            raise RuntimeError(report["error"])
+            raise RuntimeRevisionMismatch(report)
 
 
 def smoke(bundle, output, desktop=False, expected_revision=None):
@@ -778,12 +784,16 @@ def main(argv=None):
         parser.error("Installed Mac bundle smoke requires macOS")
     try:
         report = smoke(
-            args.bundle.resolve(), args.output, desktop=args.desktop,
+            args.bundle.resolve(),
+            args.output,
+            desktop=args.desktop,
             expected_revision=args.expected_revision,
         )
     except Exception as error:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        evidence = json.loads(args.output.read_text()) if args.output.is_file() else {}
+        evidence = (
+            error.report.copy() if isinstance(error, RuntimeRevisionMismatch) else {}
+        )
         evidence.update(status="failed", error=str(error))
         args.output.write_text(json.dumps(evidence, indent=2) + "\n")
         raise
