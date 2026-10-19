@@ -89,6 +89,10 @@ def processes_in_bundle(app):
 
 def minimal_environment(home, profile=None):
     env = {"HOME": str(home), "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+    if sys.platform == "darwin":
+        # ProfilePaths validates the private user temp directory before profile
+        # endpoint discovery, even when the live service uses a runtime override.
+        env["TMPDIR"] = os.environ.get("TMPDIR", tempfile.gettempdir())
     if profile is not None:
         env["FORESIGHT_DATA"] = str(Path(profile).resolve())
     return env
