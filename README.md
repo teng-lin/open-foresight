@@ -154,28 +154,124 @@ python3.13 -m venv .venv
 
 ## Build from source
 
-These commands target Linux. For macOS, see [Mac build, bundle, and MCP instructions](docs/platforms/macos-support.md); it uses a source-built dependency SDK and `tools/package_macos.py`.
-
-**Requirements:**
-
-- a C++20 compiler and CMake
-- protobuf and gRPC development packages
-- SQLite3, nlohmann-json, OpenSSL, and ICU
-- Python 3.13, for build and test tooling
-- Flutter, with the GTK3 Linux development dependencies
-
-Flutter package dependencies are pinned in the source. The reference toolchain is Flutter 3.35.7, protobuf 35.1, gRPC 1.83.1, and nlohmann-json 3.11.3.
+Clone the repository and run the commands for your platform from its root:
 
 ```sh
-uv venv .venv
-uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.lock
-python3 tools/prepare_litert.py build/lib/liblitert-lm.so
-./tools/build.sh
-python3 tools/package.py
+git clone https://github.com/teng-lin/open-foresight.git
+cd open-foresight
+```
+
+Keep existing SDKs, dependency downloads, and build caches when rebuilding. The
+commands below reuse compatible outputs; a fresh checkout builds the dependencies
+it does not already have. Model weights are downloaded separately through setup
+on first launch.
+
+### macOS (Apple Silicon)
+
+**Requirements:** macOS 15 or later on Apple Silicon, Xcode with its command-line
+tools, Flutter **3.35.7** (Dart **3.9.2**), Python **3.13**, CMake, Ninja, Git,
+Git LFS, and CocoaPods. Put Flutter and Dart on `PATH` before building.
+
+Create the Python environment and enable Flutter's Swift Package Manager support:
+
+```sh
+flutter config --enable-swift-package-manager
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+```
+
+Build the pinned static dependency SDK, then build and test the application.
+Use this SDK's gRPC/protobuf libraries to preserve the macOS 15 deployment target:
+
+```sh
+.venv/bin/python tools/build_macos_sdk.py --prefix "$PWD/build/macos-sdk"
+export PATH="$PWD/build/macos-sdk/bin:$PATH"
+
+FORESIGHT_REQUIRE_DART_GATES=1 tools/build.sh --platform macos \
+  -DCMAKE_PREFIX_PATH="$PWD/build/macos-sdk" \
+  '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
+```
+
+This runs native tests, core and desktop analysis/tests, and compiled service/MCP
+subprocess tests. It builds the native components under `build/`, the service and
+MCP executables under `build/application/`, and the release Flutter app under
+`apps/desktop/build/macos/Build/Products/Release/`.
+
+To assemble a runnable development bundle with the pinned LiteRT and Whisper
+runtimes, build or reuse the vendor libraries and package the app:
+
+```sh
+.venv/bin/python tools/build_macos_vendor.py
+.venv/bin/python tools/build_macos_runtimes.py
+.venv/bin/python tools/package_macos.py \
+  --sdk "$PWD/build/macos-sdk" \
+  --litert-extensions-manifest "$PWD/build/macos-runtimes/litert-extensions/build-manifest.json" \
+  --whisper-runtime "$PWD/build/macos-runtimes/whisper/whisper-cli" \
+  --whisper-license "$PWD/build/macos-vendor/whisper/LICENSE" \
+  --output "$PWD/dist/Open Foresight.app"
+open "dist/Open Foresight.app"
+```
+
+The bundle is ad-hoc signed for development. See [macOS development and
+release](docs/platforms/macos-support.md) for Developer ID signing, notarization,
+installation, permissions, and release validation.
+
+### Linux (x86-64)
+
+For a complete bundle with the pinned compiler dependencies, Flutter, LiteRT,
+and Whisper runtimes, use Docker with BuildKit and Buildx on an x86-64 Linux host:
+
+```sh
+tools/build_linux_sdk.sh
+docker build --file packaging/build.Dockerfile --target artifact \
+  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
+  --output type=local,dest=build/portable .
+./build/portable/dist/open-foresight/open-foresight
+```
+
+The SDK script retains Docker's cached dependency layers. If you already have a
+compatible `open-foresight-sdk:local` image, start with the application
+`docker build` command. The container builds and tests the application, then
+exports the bundle to `build/portable/dist/open-foresight/`. Host Flutter and
+Python installations are not needed for this container build.
+
+Run the exported app in your Linux desktop session. The supported distributions
+are Ubuntu 24.04, Debian 13, Fedora 44, and Arch/Omarchy. Recording requires
+PipeWire and `pw-record`; PDF/RTF import requires bubblewrap, `pdftotext`, and
+`unrtf`. The container bundle runs Gemma generation and Whisper on the GPU through
+Vulkan, using device 0 by default, with no automatic CPU fallback. Set
+`FORESIGHT_WHISPER_DEVICE` to select another GPU, or use the host development
+build below for CPU generation. See [Linux packaging](docs/platforms/linux-packaging.md)
+for host runtime dependencies, sandbox setup, and `.deb`, `.rpm`, and Arch package
+commands.
+
+#### Linux host development build
+
+To build directly on the host instead, install:
+
+- a C++20 compiler and CMake
+- protobuf and gRPC development packages, including a `protoc` supporting Edition 2024
+- SQLite3, nlohmann-json, OpenSSL, and ICU
+- Python 3.13, for build and test tooling
+- Flutter 3.35.7 (Dart 3.9.2), with Clang, Ninja, pkg-config, and the GTK3 Linux development dependencies
+
+Flutter package dependencies are pinned in the source. The reference native toolchain is protobuf 35.1, gRPC 1.83.1, and nlohmann-json 3.11.3. Older distro protobuf packages may not support the descriptor; use the container build above if the required toolchain is unavailable.
+
+```sh
+python3.13 -m venv .venv
+.venv/bin/python -m pip install --require-hashes -r requirements-dev.lock
+.venv/bin/python tools/prepare_litert.py build/lib/liblitert-lm.so
+FORESIGHT_REQUIRE_DART_GATES=1 tools/build.sh --platform linux
+.venv/bin/python tools/package.py
 ./tools/run_desktop.sh
 ```
 
-The bundle is written to `dist/open-foresight/` and contains three programs:
+This host development path uses the stock pinned LiteRT runtime, which lacks the
+native stop-sequence extension required by note enhancement. Use the container
+build for the source-built runtime and bundled Whisper. See
+[native inference](services/inference/README.md) for runtime details.
+
+The host-built bundle is written to `dist/open-foresight/` and contains three programs:
 
 - `open-foresight`: the desktop app
 - `open-foresight-mcp`: the MCP stdio server
@@ -183,14 +279,14 @@ The bundle is written to `dist/open-foresight/` and contains three programs:
 
 Linux and macOS use the same native C++ LiteRT-LM worker for generation and embedding, one citation checker, and Whisper for speech. macOS also uses a native legacy query worker and ships no Python runtime. The optional Linux legacy query diagnostic can use a separately bundled Python runtime. See [runtime packaging](services/inference/README.md).
 
-### Packaging options
+#### Linux host packaging options
 
 ```sh
 # Package Gemma GPU generation into a separate, unused output directory
-python3 tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
+.venv/bin/python tools/package.py --output dist/open-foresight-gemma --generation-backend gpu
 # Optional EmbeddingGemma fixture and CPU generation/speech runtimes
-python3 tools/download_embedding_fixture.py models/local
-python3 native/setup_models.py --directory models/local/native
+.venv/bin/python tools/download_embedding_fixture.py models/local
+.venv/bin/python native/setup_models.py --directory models/local/native
 ```
 
 For Whisper GPU packaging, use `--whisper-gpu-runtime` and `--whisper-gpu-device`, and check device indices on the target machine. PDF and RTF import uses `pdftotext` and `unrtf`. Recording needs PipeWire and `pw-record`.
