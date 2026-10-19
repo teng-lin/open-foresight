@@ -24,6 +24,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import zipfile
 
@@ -42,6 +43,7 @@ COMMIT = r"[a-f0-9]{40}"
 EDITORIAL = {"README.md", "CHANGELOG.md", "LICENSE", "AGENTS.md"}
 IDENTITY_RECIPE = 2
 MAX_NATIVE_WORK_DOWNLOADS = 3
+MAX_NATIVE_WORK_PRODUCER_ERRORS = 3
 MAX_STAGE_RECEIPT_BYTES = 16 * 1024 * 1024
 
 
@@ -579,6 +581,61 @@ def native_work_metadata(repository, artifact, identity, run, platform, jobs, ro
         page += 1
 
 
+def native_work_producers(repository, platform, own_pr, root):
+    """Try independent producers after exhausted server errors, never cold build.
+
+    A failed producer lookup is unresolved, not incompatible. Another producer
+    may still be completely verified; if none supplies compatible work, rethrow
+    the original failure when this iterator is exhausted.
+    """
+    runs = {}
+    qualified_runs = {}
+    jobs_by_run = {}
+    failed_runs = {}
+    for artifact, identity in native_work_candidates(repository, platform):
+        run_id = artifact["workflow_run"]["id"]
+        if run_id in failed_runs:
+            continue
+        try:
+            if run_id not in runs:
+                runs[run_id] = artifacts.api(repository, f"actions/runs/{run_id}")
+            run = runs[run_id]
+            if run_id not in qualified_runs:
+                qualified_runs[run_id] = trusted_native_work_run(
+                    run, repository, own_pr, root
+                )
+            if not qualified_runs[run_id]:
+                continue
+            if run_id not in jobs_by_run:
+                jobs_by_run[run_id] = artifacts.dependency_jobs(repository, run_id)
+        except subprocess.CalledProcessError as error:
+            diagnostic = error.stderr or b""
+            if isinstance(diagnostic, bytes):
+                diagnostic = diagnostic.decode("utf-8", errors="replace")
+            if not re.search(r"\bHTTP 5\d\d\b", diagnostic):
+                raise
+            failed_runs[run_id] = error
+            print(
+                f"GitHub producer lookup failed for run {run_id}: {diagnostic.strip()}; "
+                "checking other retained producers. An unresolved lookup cannot authorize a cold build.",
+                file=sys.stderr,
+            )
+            if len(failed_runs) >= MAX_NATIVE_WORK_PRODUCER_ERRORS:
+                raise
+            continue
+        jobs = [
+            job
+            for job in jobs_by_run[run_id]
+            if job.get("name", "").split(" / ")[-1] == f"native-{platform}"
+            and job.get("conclusion") == "success"
+            and artifacts.in_producer_attempt(artifact, job)
+        ]
+        if jobs:
+            yield artifact, identity, run, jobs
+    if failed_runs:
+        raise next(iter(failed_runs.values()))
+
+
 def find_native_work(
     repository,
     platform,
@@ -604,34 +661,13 @@ def find_native_work(
         for key, value in source_inputs(root, "native").items()
         if value[0] == "120000"
     }
-    runs = {}
-    qualified_runs = {}
-    jobs_by_run = {}
     mismatches: set[str] = set()
     rejected = 0
     legacy_downloads = 0
-    for artifact, identity in native_work_candidates(repository, platform):
-        run_id = artifact["workflow_run"]["id"]
-        if run_id not in runs:
-            runs[run_id] = artifacts.api(repository, f"actions/runs/{run_id}")
-        run = runs[run_id]
-        if run_id not in qualified_runs:
-            qualified_runs[run_id] = trusted_native_work_run(
-                run, repository, own_pr, root
-            )
-        if not qualified_runs[run_id]:
-            continue
-        if run_id not in jobs_by_run:
-            jobs_by_run[run_id] = artifacts.dependency_jobs(repository, run_id)
-        jobs = [
-            job
-            for job in jobs_by_run[run_id]
-            if job.get("name", "").split(" / ")[-1] == f"native-{platform}"
-            and job.get("conclusion") == "success"
-            and artifacts.in_producer_attempt(artifact, job)
-        ]
-        if not jobs:
-            continue
+    for artifact, identity, run, jobs in native_work_producers(
+        repository, platform, own_pr, root
+    ):
+        run_id = run["id"]
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "native.zip"
             try:
