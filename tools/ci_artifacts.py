@@ -206,7 +206,7 @@ def name(component, identity):
     return f"ci-{component}-{identity}"
 
 
-def pack(component, identity, prefix, output):
+def pack(component, identity, prefix, output, *, tier=None, label=""):
     """Archive verified outputs with executable modes, symlinks and a digest."""
     source_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True, timeout=30
@@ -216,6 +216,11 @@ def pack(component, identity, prefix, output):
             raise ValueError(
                 "Application identity must match the actual built checkout"
             )
+    if tier is not None and (
+        tier not in ("pr", "sweep", "preview", "release", "local")
+        or (tier == "release" and label)
+    ):
+        raise ValueError("Invalid application artifact tier/label")
     output.mkdir(parents=True, exist_ok=True)
     archive = output / "payload.tar.gz"
     with tarfile.open(archive, "w:gz", compresslevel=1) as stream:
@@ -237,6 +242,7 @@ def pack(component, identity, prefix, output):
                 "sha256": digest(archive),
                 "source_commit": source_commit,
                 "source_run_attempt": int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+                **({"tier": tier, "label": label} if tier is not None else {}),
                 **(
                     {
                         "distribution": application_distribution(
@@ -1134,6 +1140,10 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--artifact-id", type=int)
     parser.add_argument(
+        "--tier", choices=("pr", "sweep", "preview", "release", "local")
+    )
+    parser.add_argument("--label", default="")
+    parser.add_argument(
         "--repository",
         default=os.environ.get("GITHUB_REPOSITORY", "teng-lin/open-foresight"),
     )
@@ -1196,7 +1206,17 @@ def main():
     if args.command == "pack":
         if not args.output:
             parser.error("--output is required")
-        pack(args.component, identity, args.prefix, args.output)
+        if args.tier is None:
+            pack(args.component, identity, args.prefix, args.output)
+        else:
+            pack(
+                args.component,
+                identity,
+                args.prefix,
+                args.output,
+                tier=args.tier,
+                label=args.label,
+            )
     elif not pull(
         args.repository,
         args.component,
