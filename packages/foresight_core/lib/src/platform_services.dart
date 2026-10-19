@@ -327,7 +327,9 @@ bool allowedSourceUri(Uri uri) {
         '--type=method_call',
         '/org/freedesktop/FileManager1',
         'org.freedesktop.FileManager1.ShowItems',
-        'array:string:${Uri.file(path)}',
+        // dbus-send splits array elements on literal commas. Keep a comma
+        // in the file name inside its URI rather than creating another item.
+        'array:string:${Uri.file(path).toString().replaceAll(',', '%2C')}',
         'string:',
       ],
     );

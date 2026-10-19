@@ -1115,11 +1115,17 @@ void main() {
             reason:
                 'Original source was not revealed through FileManager1.ShowItems',
           );
-          expect(jsonDecode(dispatch.readAsStringSync()), {
+          final observed = jsonDecode(dispatch.readAsStringSync()) as Map;
+          final revealed = List<String>.from(observed.remove('uris') as List);
+          expect(revealed, hasLength(1));
+          expect(
+            Uri.parse(revealed.single).toFilePath(),
+            Uri.parse(selectedUri).toFilePath(),
+          );
+          expect(observed, {
             'interface': 'org.freedesktop.FileManager1',
             'path': '/org/freedesktop/FileManager1',
             'method': 'ShowItems',
-            'uris': [Uri.parse(selectedUri).toString()],
             'startup_id': '',
           });
           originalLinkDispatched = true;

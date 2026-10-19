@@ -121,14 +121,24 @@ jobs:
           fi
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
+      - name: Recover the original PR application before compiling
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        id: retained
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWN_HEAD: ${{ github.event.pull_request.head.sha }}
+          OWN_PR: ${{ github.event.pull_request.number }}
+          OWN_BRANCH: ${{ github.head_ref }}
+          WORKFLOW_SOURCE: ${{ github.workflow_sha }}
+        run: python tools/ci_acceptance_application.py --head "$OWN_HEAD" --pr "$OWN_PR" --branch "$OWN_BRANCH" --workflow-source "$WORKFLOW_SOURCE"
       - name: Restore qualified application dependency outputs without compilation
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           SDK_IMAGE: ${{ steps.sdk.outputs.image }}
         run: python tools/ci_app_dependency_seed.py --sdk-image "$SDK_IMAGE" --output build/app-dependency-seed
       - name: Build the shared Ubuntu 24.04 application and acceptance image
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
         id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
@@ -170,6 +180,7 @@ jobs:
         env:
           PRODUCT: ${{ github.event_name == 'pull_request' && '.' || 'product' }}
           CANDIDATE_VERSION: ${{ steps.candidate.outputs.version }}
+          RETAINED_EPOCH: ${{ steps.retained.outputs.epoch }}
         run: |
           python3 - <<'PY'
           import os, subprocess, sys
@@ -182,26 +193,26 @@ jobs:
           if os.environ['CANDIDATE_VERSION'] and version != os.environ['CANDIDATE_VERSION']:
               raise ValueError('Candidate version differs from its original source')
           release = '1'
-          epoch = subprocess.check_output(['git', '-C', product, 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
+          epoch = os.environ['RETAINED_EPOCH'] or subprocess.check_output(['git', '-C', product, 'show', '-s', '--format=%ct', 'HEAD'], text=True).strip()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write(f'version={version}\nrelease={release}\nepoch={epoch}\n')
           PY
       - name: Export the exact Ubuntu acceptance application for packaging
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
         run: |
           mkdir -p build/portable/dist
           task_container=$(docker create foresight-built-application:local /bin/true)
           trap 'docker rm "$task_container" >/dev/null' EXIT
           docker cp "$task_container:/src/dist/open-foresight" build/portable/dist/
       - name: Archive the original application before acceptance setup
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           RELEASE: ${{ steps.version.outputs.release }}
           SOURCE_DATE_EPOCH: ${{ steps.version.outputs.epoch }}
         run: python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
       - name: Retain the original application independently of acceptance results
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.retained.outputs.hit != 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ubuntu-acceptance-application-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}

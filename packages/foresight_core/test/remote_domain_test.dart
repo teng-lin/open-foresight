@@ -18,6 +18,24 @@ void main() {
   });
   tearDown(() => f.close());
 
+  test('acknowledged clear survives a failed status refresh', () async {
+    f.handler = (socket, request) {
+      expect(request['method'], Operation.workspaceClear.wire);
+      f.reply(socket, request, {'cleared': true});
+      f.rejectStatus = true;
+    };
+    expect(await f.remote.command(Operation.workspaceClear), {'cleared': true});
+    expect(f.remote.client.isClosed, isTrue);
+  });
+
+  test('a failed clear still reports its error', () async {
+    f.handler = (socket, request) => socket.destroy();
+    await expectLater(
+      f.remote.command(Operation.workspaceClear),
+      throwsA(isA<RpcError>()),
+    );
+  });
+
   test(
     'capture telemetry updates only level listeners and preserves workspace state',
     () async {
