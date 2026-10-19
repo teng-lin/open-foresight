@@ -2,6 +2,60 @@ import 'package:foresight_core/src/text_budget.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'a named current source subject does not inherit an unrelated prior topic',
+    () {
+      const titles = [
+        'Open Foresight Parity Audit - Project Juniper.txt',
+        'Cedar Brief.txt',
+      ];
+      for (final question in [
+        'Who owns Project Juniper, and when does it launch?',
+        'Who owns project juniper, and when does it launch?',
+      ]) {
+        expect(
+          isContextualFollowUp(question, sourceTitles: titles),
+          isFalse,
+          reason: question,
+        );
+      }
+      expect(
+        isContextualFollowUp('When does it launch?', sourceTitles: titles),
+        isTrue,
+      );
+      expect(
+        isContextualFollowUp('What about those dates?', sourceTitles: titles),
+        isTrue,
+      );
+      expect(
+        isContextualFollowUp(
+          'Tell me more about Juniperous projects.',
+          sourceTitles: titles,
+        ),
+        isTrue,
+      );
+    },
+  );
+  test('named sources preserve unresolved prior-turn references', () {
+    const titles = ['Project Juniper.txt', 'The Project Plan.txt'];
+    for (final question in [
+      'How does Project Juniper compare with it?',
+      'Does it launch before Project Juniper?',
+      'Compare Project Juniper with Cedar Brief; when do they launch?',
+      'Tell me more about the project.',
+      'Who owns that Project Juniper?',
+      'Does it own Project Juniper?',
+      'Is Project Juniper similar to it?',
+      'How does Project Juniper relate to it?',
+      'Can Project Juniper replace it?',
+    ]) {
+      expect(
+        isContextualFollowUp(question, sourceTitles: titles),
+        isTrue,
+        reason: question,
+      );
+    }
+  });
   test('short CJK follow-up preserves context without spaces', () {
     expect(isContextualFollowUp('那它与之前的方法有什么区别？'), isTrue);
     expect(isContextualFollowUp('What about that?'), isTrue);

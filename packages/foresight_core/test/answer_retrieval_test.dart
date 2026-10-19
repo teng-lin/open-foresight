@@ -9,6 +9,96 @@ Map<String, Object?> source(String id, String body, {String? title}) => {
 };
 
 void main() {
+  test('lexical windows still expand the complete matched paragraph', () {
+    final paragraph =
+        'Juniper milestones. ${'Context sentence. ' * 41}'
+        'The launch date is 7 November 2026.';
+    final document =
+        '${'Earlier unrelated prose. ' * 30}\n\n$paragraph\n\n'
+        '${'Trailing unrelated prose. ' * 160}';
+    final passages = rankAnswerPassages('Juniper milestones', [
+      source('long', document),
+    ], []);
+    expect(passages.first['excerpt'], paragraph);
+  });
+  const juniper =
+      'Open Foresight Functional Parity Audit — Project Juniper\n\n'
+      'This is a synthetic test document, not a real project.\n'
+      'Audit marker: OF-PARITY-20261019.\n'
+      'Project Juniper launches on 7 November 2026.\n'
+      'The project owner is Mira Chen.\n'
+      'The project budget is 8,400 test credits.\n'
+      'The launch checklist is: review the checklist, run a rehearsal, and publish the release notes.\n'
+      'The rehearsal happens on 3 November 2026.\n'
+      'The project status is green.\n';
+  for (final question in [
+    'In the synthetic Project Juniper parity audit document, what is the launch date and who is the project owner? Use only that document and cite it.',
+    'Who owns Project Juniper, and when does it launch?',
+  ]) {
+    for (final semantic in [false, true]) {
+      test(
+        'Juniper keeps complementary facts with semantic=$semantic: $question',
+        () {
+          final passages = rankAnswerPassages(
+            question,
+            [
+              for (var i = 0; i < 30; i++)
+                source(
+                  'noise$i',
+                  'Synthetic project parity audit document launch date owner. Unrelated project $i.',
+                ),
+              source(
+                'juniper',
+                juniper,
+                title: 'Open Foresight Parity Audit - Project Juniper.txt',
+              ),
+            ],
+            [
+              if (semantic)
+                {'document_id': 'juniper', 'text': juniper, 'score': .88},
+            ],
+          );
+          final evidence = passages
+              .where((p) => p['document_id'] == 'juniper')
+              .single;
+          expect(evidence['excerpt'], contains('Mira Chen'));
+          expect(evidence['excerpt'], contains('7 November 2026'));
+          expect(evidence['excerpt'], contains('not a real project'));
+          expect(evidence['revision'], 1);
+        },
+      );
+    }
+  }
+  test('Cedar preserves edited source revision and cited facts', () {
+    final passages = rankAnswerPassages(
+      "In the Cedar Brief fixture, who is Project Cedar's owner and what is its review date? Cite the source.",
+      [
+        {
+          ...source(
+            'cedar',
+            'OF Parity Cedar Brief\n\nProject Cedar is owned by Rowan Vale.\nThe review date is 12 November 2026.\n\nAudit revision 2: verified through the UI.',
+          ),
+          'revision': 2,
+        },
+      ],
+      [],
+    );
+    expect(passages.single['revision'], 2);
+    expect(passages.single['excerpt'], contains('Rowan Vale'));
+    expect(passages.single['excerpt'], contains('12 November 2026'));
+  });
+  test('semantic expansion keeps a bounded hit spanning plain paragraphs', () {
+    const hit =
+        'Juniper context.\n\nOwner Mira Chen.\n\nLaunch 7 November 2026.';
+    final passages = rankAnswerPassages(
+      'Juniper owner launch',
+      [source('long', '$hit\n\n${'Unrelated trailing paragraph. ' * 200}')],
+      [
+        {'document_id': 'long', 'text': hit, 'score': .9},
+      ],
+    );
+    expect(passages.first['excerpt'], contains(hit));
+  });
   test(
     'bounded lexical discovery retains rare subjects among common distractors',
     () {

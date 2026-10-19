@@ -18,6 +18,46 @@ void main() {
     addTearDown(() => directory.deleteSync(recursive: true));
   });
 
+  test('v12 dates new output without inventing dates for legacy artifacts', () {
+    var store = Store(path);
+    final meeting = store.meeting('An older meeting');
+    store.artifact(meeting, 'summary', 'legacy output', 'fixture');
+    store.db.execute('ALTER TABLE artifacts DROP COLUMN created');
+    store.db.execute('PRAGMA user_version=11');
+    store.close();
+    store = Store(path);
+    try {
+      expect(
+        store.rows('SELECT created FROM artifacts').single['created'],
+        isNull,
+      );
+      final before = DateTime.now().millisecondsSinceEpoch;
+      store.artifact(meeting, 'enhanced_notes', 'new local output', 'fixture');
+      final now = DateTime.now();
+      final created =
+          store
+                  .rows('SELECT created FROM artifacts ORDER BY id DESC')
+                  .first['created']
+              as int;
+      expect(created, inInclusiveRange(before, now.millisecondsSinceEpoch));
+      expect(store.localOutputWords, 5);
+      expect(store.weeklyOutputWords(now), [0, 0, 0, 0, 3]);
+      store.editArtifact(
+        2,
+        'Manual edits must not increase generation accounting',
+      );
+      expect(store.localOutputWords, 5);
+    } finally {
+      store.close();
+    }
+    final reader = Store.readOnly(path);
+    try {
+      expect(reader.localOutputWords, 5);
+    } finally {
+      reader.close();
+    }
+  });
+
   test('v11 backfills local edits and repeated edits never nest provenance', () {
     var store = Store(path);
     final id = store.importText(

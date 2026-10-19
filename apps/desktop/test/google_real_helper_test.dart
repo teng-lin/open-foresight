@@ -52,6 +52,56 @@ void main() {
         await helper.start();
         await auth.configure(config);
         await auth.signIn(fixture.consent);
+        // Exercise explicit multi-selection, including a failed second download
+        // and retry, through HTTP export and the actual embedding helper.
+        await connection.importDriveFile('doc');
+        fixture.exportDeniedFiles.add('sheet');
+        await expectLater(
+          connection.importDriveFile('sheet'),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'file error',
+              contains('Sheet: This file cannot be downloaded'),
+            ),
+          ),
+        );
+        expect(store.sources.single['state'], 'indexed');
+        fixture.exportDeniedFiles.clear();
+        await connection.importDriveFile('sheet');
+        expect(store.sources, hasLength(2));
+        expect(store.sources.every((row) => row['state'] == 'indexed'), isTrue);
+        fixture.restrictedFiles.add('sheet');
+        await expectLater(
+          connection.importDriveFile('sheet'),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'restriction',
+              contains('Google Drive does not allow downloading'),
+            ),
+          ),
+        );
+        fixture.restrictedFiles.clear();
+        for (final row in store.sources) {
+          final retrieved = await helper.client.retrieveContext(
+            RetrieveRequest(
+              query: Query(
+                textQuery: row['title'] == 'Sheet'
+                    ? 'Who owns Review?'
+                    : 'When does Apollo launch?',
+              ),
+              userId: 'local_user',
+              allowedDocumentIds: [row['id'] as String],
+              maxResults: 3,
+            ),
+          );
+          expect(retrieved.chunks, isNotEmpty);
+          expect(
+            retrieved.chunks.first.text,
+            contains(row['title'] == 'Sheet' ? 'Ravi' : 'Friday'),
+          );
+        }
         await connection.importDriveFolder('folder');
         await connection.syncCalendar();
         expect(store.sources.every((row) => row['state'] == 'indexed'), true);
@@ -133,6 +183,7 @@ void main() {
               'workflow':
                   'Loopback OAuth/Drive/Calendar protocol fixtures -> actual EmbeddingGemma helper -> filtered retrieval',
               'drive_sources_indexed_calendar_metadata_excluded': true,
+              'two_selected_exports_indexed_partial_failure_and_retry': true,
               'remote_edit_replaced_old_retrieval': true,
               'folder_refresh_discovered_new_file_and_indexed_it': true,
               'folder_refresh_preserved_user_deletion_and_excluded_retrieval':

@@ -15,7 +15,7 @@ import 'pump_until.dart';
 class BatchDrive extends PendingDrive {
   @override
   final Store store;
-  final bool rejectSecond;
+  bool rejectSecond;
   final imported = <String>[];
   BatchDrive(this.store, {required this.rejectSecond});
 
@@ -127,6 +127,13 @@ void main() {
               'Imported 2 of 3 files from Drive.\n'
               'Could not import:\nSecond: This file cannot be downloaded by the user.',
             );
+            drive.rejectSecond = false;
+            await tester.tap(find.text('Retry failed files'));
+            await pumpUntil(tester, () => !state.busy);
+            await tester.pumpAndSettle();
+            expect(drive.imported, ['First', 'Second', 'Third', 'Second']);
+            expect(store.sources, hasLength(3));
+            expect(state.error, isEmpty);
           } else {
             expect(state.error, isEmpty);
             expect(find.text('Imported 3 files from Drive.'), findsOneWidget);
