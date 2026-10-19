@@ -962,7 +962,6 @@ class IsolatedApplicationService {
           profile.data,
           profile.runtime,
           Map<String, String>.from(runtimeConfiguration.environment),
-          host._errors.sendPort,
         ],
         onError: host._errors.sendPort,
         onExit: host._exits.sendPort,
@@ -1191,14 +1190,24 @@ class IsolatedApplicationService {
 }
 
 void _applicationServiceWorker(List<Object?> configuration) {
-  // The guarded zone reports all asynchronous failures through the error port.
+  runApplicationWorkerZone(() async {
+    try {
+      await _runApplicationServiceWorker(configuration);
+    } catch (error, stack) {
+      // Include failures before the main worker lifecycle installs its own
+      // handler (for example while installing the inherited environment).
+      (configuration[0] as SendPort).send(['failure', '$error\n$stack']);
+    }
+  });
+}
+
+/// Keep recoverable asynchronous errors local to the worker. Startup and main
+/// lifecycle failures are reported by the worker's failure message; uncaught
+/// fatal isolate errors still reach Isolate.spawn's separate onError port.
+void runApplicationWorkerZone(Future<void> Function() worker) {
   // ignore: discarded_futures
-  runZonedGuarded(() => _runApplicationServiceWorker(configuration), (
-    error,
-    stack,
-  ) {
+  runZonedGuarded(worker, (error, stack) {
     stderr.writeln('Application worker asynchronous error: $error\n$stack');
-    (configuration[4] as SendPort).send(['$error', '$stack']);
   });
 }
 
