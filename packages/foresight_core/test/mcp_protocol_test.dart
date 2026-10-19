@@ -35,12 +35,26 @@ class McpFixture {
     incoming = StreamIterator(requests.stream);
     listener.listen((socket) {
       sockets.add(socket);
+      var startupProbe = true;
       socket
           .cast<List<int>>()
           .transform(utf8.decoder)
           .transform(const LineSplitter())
           .listen((line) {
-            requests.add(jsonDecode(line) as Map<String, dynamic>);
+            final request = jsonDecode(line) as Map<String, dynamic>;
+            if (startupProbe) {
+              startupProbe = false;
+              expect(request['method'], 'status');
+              socket.writeln(
+                jsonEncode({
+                  'id': request['id'],
+                  'result': {'ready': true},
+                  'done': true,
+                }),
+              );
+              return;
+            }
+            requests.add(request);
           });
     });
     process = await Process.start(

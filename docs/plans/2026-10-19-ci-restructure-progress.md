@@ -147,3 +147,90 @@ in a changed-source fixture. The corrected source copy preserves the verified
 seed, tracked `.coveragerc`, nested source directories and transferred Dart cache;
 a real Dart import from that restored cache passed without dependency resolution.
 Actual Docker runtime and five hosted shadow measurements remain pending.
+
+At hosted head `f936af9`, dependency run `39332714668` reused every SDK component
+in 14–29 seconds. Quality, sanitizers, Arch drift and platform run `39332714692`
+passed, including the compiled macOS application/service checks. Acceptance run
+`39332714680` passed its model gates and failed on the third desktop launch,
+while transcription remained pending: the preceding service was still closing
+and answered the new launch's status probe with its explicit shutdown error.
+The original failure log and small diagnostic artifact are retained. A separate
+process holding the actual profile lock reproduces that response locally; the
+meeting test's pending-transcription and restart assertions remain unchanged.
+
+Native verification first qualified original main artifact `12214226069` from
+run `39305527517`, rather than downloading the larger SDK or recompiling its
+libraries. Its native/helper/protocol/inference source inputs match the current
+source, and its receipt inventories the complete 29-test root CMake suite.
+The original successful attempt, upload window, payload digest and 3,115 extracted
+entries were verified. Its Arch gRPC 1.84 runtime was restored from a signed
+matching package; these producer runtime versions are distinct from Ubuntu SDK
+pins. One self-referential test harness requires recompilation because its
+`FORESIGHT_PW_RECORD_EXECUTABLE` embeds the original runner's absolute path.
+Only that test's path input changes; all native/helper/inference/vendor libraries
+remain the verified original outputs. Initial relocated execution failures and
+the final verification results are retained separately.
+The corrected complete root CTest inventory passed all 29 tests with no CTest
+skips, including all five inference tests and `native_probe_failure`. Its
+internal lifecycle suite ran 30 cases with one expected Darwin-only permission
+skip and no failures. The release-hook-disabled check and enabled helper contracts
+also passed. The optional detector-model parity experiment was not run.
+
+The service handoff is implemented at `68890b2` and integrated at `2250d0ba`.
+Startup probes only read status; the exact closing-owner response transfers its
+socket into a bounded wait. EOF, profile-lock availability and clean endpoint
+removal precede any replacement launch. Revision, installation-root and API
+compatibility checks remain intact. Local direct and isolated hosts are tracked
+until teardown completes, and lock probing is synchronous to preserve POSIX
+process ownership. No business operation is replayed. The meeting test and its
+pending-ASR/restart assertions are unchanged. Independent team review and Agy
+review found no remaining issue after deadline and lock-lifetime corrections.
+
+Final fixture source `a7ece8cc` passed all 58 handoff, connection and MCP cases
+on SkyWalker with Dart 3.9.2 and the locked offline package cache. Mac caught a
+`/tmp` versus `/private/tmp` identity in the controlled owner fixture, which now
+returns its canonical installation root. MCP fixtures explicitly consume and
+assert the read-only startup probe before their original business assertions.
+These are the only two file differences from the complete Python export; every
+production/Python/dependency/SDK input is identical. All 990 tracked entries
+remained unchanged before and after each frozen export run.
+
+That Linux export passed 2,932 Python tests with 28 expected skips and 96.11%
+coverage; SkyWalker passed 2,940 with 20 expected skips and 96.28% coverage.
+The production Mac host inventory passed 311 tests (12 expected skips) and its
+execution audit. The 25-file artifact/cache/provenance matrix passed 1,053 tests
+and 225 subtests in each of the inherited unrelated-PR, main and unset-ref
+contexts. All 11 original SDK control files still match bytes and Git modes,
+and all seven SDK fingerprints remain unchanged.
+
+Current product inputs are byte-identical between the combined foundation and
+final product export `ea8ce88`: core 1,075 passed / 10 gated skips at 93.02%
+coverage; desktop 253 passed / 17 gated skips at 92.20%; both 90% thresholds
+enforced. The enabled development-hook case also passed through the source
+compiler; the default-disabled case passed in the full suite. Current service
+and MCP AOT compilation, analysis, and all 21 compiled subprocess tests passed
+with zero skips, including the real desktop restart on a private X display.
+A failed first desktop run inherited the user's Hyprland activation environment;
+its complete rerun passed with display/session variables isolated. A first
+process harness used an overlong Unix socket path; its corrected short private
+path passed the complete suite. Both failure logs remain available.
+
+The exact audio replay uses the verified original `f936af9` application runtime
+artifact `12226420958`, with only current Dart service/MCP binaries overlaid in
+a separate copy. All three existing model files match their pinned SHA256s.
+Two real Whisper capture probes and the private PCM route-loss probe passed.
+The initial meeting setup hit an Xvfb SIGSEGV before application startup: the
+coredump implicates the host NVIDIA EGL/GBM stack under the private device
+namespace. A display-only probe passed with the installed Mesa software vendor
+selected for this task; the unchanged meeting replay then resumed without
+repeating the three successful audio probes. Original artifact provenance,
+overlay hashes, signed Xvfb package proof and all failed setup logs are retained.
+
+The resumed exact meeting replay passed with one executed test and no skips
+in 1m47s. It reached the previously failing third launch during pending ASR,
+then verified the unchanged final transcript, summary and restart assertions.
+The original meeting test hash and all 990 frozen source entries remain intact.
+Together with the three prior audio probes, every requested real virtual-audio
+case passed using current Dart binaries and the qualified original runtimes.
+This is actual isolated Linux host execution; the hosted Ubuntu container path
+remains a required gate rather than a locally claimed Docker result.
