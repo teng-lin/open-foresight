@@ -35,22 +35,13 @@ Future<LocalOutputStats> localOutputStats(String path, {int? nowMs}) =>
     Isolate.run(() {
       final reader = Store.readOnly(path);
       try {
-        final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
-        final weekly = List<int>.filled(5, 0);
-        var words = 0;
-        for (final row in reader.rows(
-          "SELECT body,created FROM answers WHERE status='completed'",
-        )) {
-          final count = RegExp(r'\S+').allMatches(row['body'] as String).length;
-          words += count;
-          final week =
-              Duration(milliseconds: now - (row['created'] as int)).inDays ~/ 7;
-          if (week >= 0 && week < 5) weekly[4 - week] += count;
-        }
-        for (final row in reader.rows('SELECT generated FROM artifacts')) {
-          words += RegExp(r'\S+').allMatches(row['generated'] as String).length;
-        }
-        return LocalOutputStats(words, weekly);
+        final now = nowMs == null
+            ? DateTime.now()
+            : DateTime.fromMillisecondsSinceEpoch(nowMs);
+        return LocalOutputStats(
+          reader.localOutputWords,
+          reader.weeklyOutputWords(now),
+        );
       } finally {
         reader.close();
       }

@@ -371,7 +371,7 @@ class ProvenanceTests(unittest.TestCase):
                         }
                     return run  # noqa: B023 - Fixture callbacks are consumed within this iteration.
 
-                def download(args, stdout, check, timeout):
+                def download(args, stdout, check, timeout, stderr):
                     with zipfile.ZipFile(stdout, "w") as archive:
                         for name in ("identity.json", "payload.tar.gz"):
                             archive.write(root / "upload" / name, name)  # noqa: B023 - Fixture callbacks are consumed within this iteration.
@@ -472,7 +472,7 @@ class ProvenanceTests(unittest.TestCase):
                         return {"jobs": job_records}
                     return run_record
 
-                def download(args, stdout, check, timeout, fixture_root=root):
+                def download(args, stdout, check, timeout, stderr, fixture_root=root):
                     with zipfile.ZipFile(stdout, "w") as archive:
                         for name in ("identity.json", "payload.tar.gz"):
                             archive.write(fixture_root / "upload" / name, name)

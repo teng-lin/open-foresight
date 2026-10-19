@@ -260,7 +260,12 @@ void main() {
         store.rows('SELECT * FROM answers').single['status'],
         'insufficient_context',
       );
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller!.text,
+        isEmpty,
+      );
       await tester.enterText(find.byType(TextField), 'Summarize my meeting');
+      await tester.pumpAndSettle();
       await tester.tap(send);
       await tester.pumpAndSettle();
       expect(store.rows('SELECT * FROM answers').length, 2);

@@ -21,10 +21,12 @@ class GoogleSignInDialog extends StatefulWidget {
     required this.auth,
     required this.openBrowser,
     this.returnToApp,
+    this.addAccount = false,
   });
   final GoogleAccount auth;
   final Future<void> Function(Uri) openBrowser;
   final Future<void> Function()? returnToApp;
+  final bool addAccount;
 
   @override
   State<GoogleSignInDialog> createState() => _GoogleSignInDialogState();
@@ -46,7 +48,10 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
     if (!mounted) return;
     GoogleSignInOutcome outcome;
     try {
-      await widget.auth.signIn((uri) async {
+      final authenticate = widget.addAccount
+          ? widget.auth.addAccount
+          : widget.auth.signIn;
+      await authenticate((uri) async {
         if (cancelling || !mounted) {
           widget.auth.cancelSignIn();
           return;
@@ -99,7 +104,9 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
         if (!didPop) cancel();
       },
       child: AlertDialog(
-        title: const Text('Connect Google'),
+        title: Text(
+          widget.addAccount ? 'Add another account' : 'Connect Google',
+        ),
         content: SizedBox(
           width: 400,
           child: Column(

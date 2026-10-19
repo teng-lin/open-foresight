@@ -136,6 +136,9 @@ void main() {
       for (final method in [
         'workspace.clear',
         'google.sign_in',
+        'google.add_account',
+        'google.switch_account',
+        'google.sign_out_account',
         'meetings.start',
         'sources.import_file',
       ]) {

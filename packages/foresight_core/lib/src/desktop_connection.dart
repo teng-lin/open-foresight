@@ -27,6 +27,12 @@ abstract interface class RecordingStatus {
 abstract interface class GoogleAccount {
   bool get connected;
   String get email;
+  String get displayName;
+  String get photoUrl;
+  List<Map<String, Object?>> get accounts;
+  Future<void> addAccount(Future<void> Function(Uri) openBrowser);
+  Future<void> switchAccount(String id);
+  Future<void> signOutAccount(String id);
   String get account;
   String get loadError;
   bool get signingIn;

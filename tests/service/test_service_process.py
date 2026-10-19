@@ -21,6 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 from service_ui_report import verify_service_ui_report  # noqa: E402
+from integration_gates import run_tests  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 SERVICE = Path(
@@ -682,24 +683,17 @@ def test_native_desktop_and_mcp_share_service(running):
                 "Linux native UI gate requires an isolated X display"
             )
             env["GDK_BACKEND"] = "x11"
-        completed = subprocess.run(
-            [
-                flutter,
-                "test",
-                "--no-pub",
-                "-d",
-                "macos" if mac_ui else "linux",
-                "integration_test/service_mcp_test.dart",
-                "--reporter",
-                "expanded",
-            ],
-            cwd=ROOT / "apps/desktop",
-            env=env,
-            capture_output=True,
-            text=True,
+        run_tests(
+            "desktop",
+            ["integration_test/service_mcp_test.dart"],
+            1,
+            env,
+            ROOT / "test-results/service/desktop-ui",
+            "desktop-service",
+            flutter=flutter,
+            device="macos" if mac_ui else "linux",
             timeout=300,
         )
-        assert completed.returncode == 0, completed.stdout + "\n" + completed.stderr
         evidence = json.loads(report.read_text())
         verify_service_ui_report(evidence)
         return

@@ -79,7 +79,10 @@ def original_producer(repository, source, run_id, attempt, artifact, *, wait=60)
             if not artifacts.in_producer_attempt(artifact, job):
                 reject(f"artifact was not created during producer job {job_id}")
             return job
-        if job.get("status") not in ("queued", "in_progress"):
+        if (
+            job.get("status") not in ("queued", "in_progress", "waiting")
+            or job.get("conclusion") is not None
+        ):
             reject(f"producer job {job_id} has invalid status {job.get('status')!r}")
         if time.monotonic() >= deadline:
             reject(f"producer job {job_id} is still {job['status']} after {wait}s")
@@ -94,7 +97,8 @@ def original_producer(repository, source, run_id, attempt, artifact, *, wait=60)
         if (
             matches(job)
             and job.get("id") == job_id
-            and job.get("status") in ("queued", "in_progress")
+            and job.get("status") in ("queued", "in_progress", "waiting")
+            and job.get("conclusion") is None
         ):
             remaining = deadline - time.monotonic()
             if remaining > 0:

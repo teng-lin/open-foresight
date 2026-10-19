@@ -102,8 +102,16 @@ void main() {
         await tester.pump();
         domain.response.add('Alpha streaming response');
         await tester.pump();
+        expect(tester.widget<TextField>(composer()).controller!.text, isEmpty);
+        await tester.enterText(composer(), 'Next Alpha question');
+        domain.response.add('Alpha updated response');
+        await tester.pump();
         expect(
-          find.text('Alpha streaming response', findRichText: true),
+          tester.widget<TextField>(composer()).controller!.text,
+          'Next Alpha question',
+        );
+        expect(
+          find.text('Alpha updated response', findRichText: true),
           findsOneWidget,
         );
         navigate(beta);
@@ -113,7 +121,7 @@ void main() {
           'Beta draft',
         );
         expect(
-          find.text('Alpha streaming response', findRichText: true),
+          find.text('Alpha updated response', findRichText: true),
           findsNothing,
         );
         expect(find.byTooltip('Cancel answer'), findsNothing);
@@ -134,13 +142,13 @@ void main() {
           'General draft',
         );
         expect(
-          find.text('Alpha streaming response', findRichText: true),
+          find.text('Alpha updated response', findRichText: true),
           findsNothing,
         );
         navigate(alpha);
         await tester.pump();
         expect(
-          find.text('Alpha streaming response', findRichText: true),
+          find.text('Alpha updated response', findRichText: true),
           findsOneWidget,
         );
         expect(find.byTooltip('Cancel answer'), findsOneWidget);

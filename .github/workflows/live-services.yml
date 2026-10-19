@@ -1,0 +1,73 @@
+name: Live service smoke checks
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 2'
+permissions:
+  contents: read
+concurrency:
+  group: live-services
+  cancel-in-progress: false
+jobs:
+  live-services:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.FORESIGHT_LIVE_SERVICES == '1')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ runner.temp }}/flutter
+          key: quality-flutter-linux-3.35.7
+      - name: Reuse pinned Dart toolchain
+        run: |
+          if [[ ! -x "$RUNNER_TEMP/flutter/bin/dart" ]]; then
+            git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+          fi
+          test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
+          echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+      - name: Resolve locked application dependencies
+        working-directory: packages/foresight_core
+        run: dart pub get --enforce-lockfile
+      - name: Google refresh, identity, document export and credential reopen
+        env:
+          FORESIGHT_CI_GOOGLE_CLIENT_JSON: ${{ secrets.FORESIGHT_CI_GOOGLE_CLIENT_JSON }}
+          FORESIGHT_CI_GOOGLE_REFRESH_TOKEN: ${{ secrets.FORESIGHT_CI_GOOGLE_REFRESH_TOKEN }}
+          FORESIGHT_CI_GOOGLE_SUB: ${{ secrets.FORESIGHT_CI_GOOGLE_SUB }}
+          FORESIGHT_CI_GOOGLE_FILE_ID: ${{ secrets.FORESIGHT_CI_GOOGLE_FILE_ID }}
+          FORESIGHT_CI_GOOGLE_EXPECTED_TEXT: ${{ secrets.FORESIGHT_CI_GOOGLE_EXPECTED_TEXT }}
+        run: |
+          mkdir -p test-results/live-services
+          (cd packages/foresight_core && dart run tool/verify_google_live.dart) > test-results/live-services/google.json
+      - name: Live search, website summary and model metadata
+        if: ${{ !cancelled() }}
+        env:
+          FORESIGHT_SEARCH_API_KEY: ${{ secrets.FORESIGHT_SEARCH_API_KEY }}
+          FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
+        run: |
+          mkdir -p test-results/live-services
+          (cd packages/foresight_core && dart run tool/verify_cloud_services.dart) > test-results/live-services/web.json
+      - name: Bind evidence to tested source
+        if: always()
+        env:
+          SOURCE: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          mkdir -p test-results/live-services
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          Path('test-results/live-services/source.json').write_text(json.dumps({
+              'source': os.environ['SOURCE'], 'run': os.environ['RUN_ID'],
+              'attempt': os.environ['ATTEMPT'], 'suite': 'live-services',
+          }) + '\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: live-service-evidence
+          path: test-results/live-services/
+          if-no-files-found: error

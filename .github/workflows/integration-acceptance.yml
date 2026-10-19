@@ -415,7 +415,7 @@ jobs:
             -v "$PWD/build/portable/dist/open-foresight:/src/dist/open-foresight:ro" \
             foresight-integration:local python3 tools/accept_software_gpu.py --allow-litert-unavailable \
             --bundle dist/open-foresight --models /models --output /reports
-      - name: Private virtual-audio and device-recovery gates
+      - name: Private virtual-audio, compiled meeting UI and device-recovery gates
         if: ${{ !cancelled() && steps.acceptance-image.outcome == 'success' && steps.fixtures.outcome == 'success' }}
         run: |
           mkdir -p test-results/virtual-audio

@@ -73,7 +73,8 @@ class _ChatController extends _FeatureController {
   Future<void> askQuestion({int? meetingScope}) => shell.run(() async {
     if (meetingFeature.meetingEnhancing)
       throw StateError('Wait for note enhancement to finish.');
-    final prompt = questionFor(meetingScope).text;
+    final draft = questionFor(meetingScope);
+    final prompt = draft.text;
     if (prompt.trim().isEmpty) throw StateError('Enter a question.');
     final scope = meetingScope == null ? 'desktop' : 'meeting:$meetingScope';
     shell.update(() {
@@ -82,12 +83,26 @@ class _ChatController extends _FeatureController {
       askingScope = scope;
     });
     try {
+      var acknowledged = false;
+      void acknowledge() {
+        if (acknowledged) return;
+        acknowledged = true;
+        if (draft.text == prompt) draft.clear();
+      }
+
       final ask = webSearchScopes.contains(scope)
           ? d.askWithWebInConversation
           : d.askInConversation;
       await for (final text in ask(prompt, scope, meetingId: meetingScope)) {
-        if (mounted) shell.update(() => answer = text);
+        if (mounted)
+          shell.update(() {
+            // The first accepted response acknowledges submission. Preserve a
+            // replacement draft typed while the request was being accepted.
+            acknowledge();
+            answer = text;
+          });
       }
+      if (mounted) shell.update(acknowledge);
     } finally {
       if (mounted)
         shell.update(() {

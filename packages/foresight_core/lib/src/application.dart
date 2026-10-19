@@ -467,6 +467,9 @@ class Application implements ModelGate {
     'connected': googleAuth.connected,
     'syncing': _googleBusy || google.syncing,
     'email': googleAuth.email,
+    'displayName': googleAuth.displayName,
+    'photoUrl': googleAuth.photoUrl,
+    'accounts': googleAuth.accounts,
     'account': googleAuth.account,
     'configured': googleAuth.client != null,
     'signingIn': googleAuth.signingIn,
@@ -476,16 +479,33 @@ class Application implements ModelGate {
   void startBackground() {
     google;
     proactive.restore();
+    unawaited(_restoreGoogleProfile());
     _googleTimer = Timer.periodic(
       const Duration(minutes: 1),
       (_) => unawaited(maintainGoogle()),
     );
   }
 
+  Future<void> _restoreGoogleProfile() async {
+    try {
+      final previousName = googleAuth.displayName;
+      final previousPhoto = googleAuth.photoUrl;
+      await googleAuth.refreshProfile();
+      if (!_closed &&
+          (previousName != googleAuth.displayName ||
+              previousPhoto != googleAuth.photoUrl)) {
+        changed();
+      }
+    } catch (_) {
+      stderr.writeln('Google profile could not be refreshed; will retry.');
+    }
+  }
+
   Future<void> maintainGoogle() async {
     if (_googleBusy || !googleAuth.connected) return;
     _googleBusy = true;
     try {
+      await _restoreGoogleProfile();
       await google.reminders(domain.clock.now(), (message) async {
         await platformNotification('Open Foresight', message);
       });
@@ -724,6 +744,13 @@ class Application implements ModelGate {
           return googleState;
         case Operation.googleCancelSignIn:
           googleAuth.cancelSignIn();
+          return googleState;
+        case Operation.googleSwitchAccount:
+          await googleAuth.switchAccount(a['id'] as String);
+          unawaited(_restoreGoogleProfile());
+          return googleState;
+        case Operation.googleSignOutAccount:
+          await googleAuth.signOutAccount(a['id'] as String);
           return googleState;
         case Operation.googleDisconnect:
           await googleAuth.disconnect();
@@ -1204,6 +1231,7 @@ class Application implements ModelGate {
           );
         case Operation.answerStream:
         case Operation.googleSignIn:
+        case Operation.googleAddAccount:
         case Operation.securityAttachDesktop:
         case Operation.securityDetachDesktop:
         case Operation.securityDecide:
@@ -1220,13 +1248,15 @@ class Application implements ModelGate {
     }
   }
 
-  Stream<Object?> signIn(String owner) async* {
+  Stream<Object?> signIn(String owner, {bool addAccount = false}) async* {
     if (_signInOwner != null) {
       throw RpcError(RpcErrorCode.busy, 'Google sign-in is already open');
     }
     _signInOwner = owner;
     final invitation = Completer<Uri>();
-    final signedIn = googleAuth.signIn((uri) async {
+    final signedIn = (addAccount ? googleAuth.addAccount : googleAuth.signIn)((
+      uri,
+    ) async {
       invitation.complete(uri);
       changed();
     });

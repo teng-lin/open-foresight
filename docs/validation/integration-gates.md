@@ -11,7 +11,15 @@ job now installs pinned Flutter 3.35.7 and runs core, desktop and native tests,
 including a real desktop/service/MCP session under Xvfb/D-Bus with controlled
 capture and inference fixtures. The Mac job also explicitly enables that native
 UI fixture. A requested UI gate without a platform runner fails rather than
-skipping. Physical audio is not exercised by those fixtures.
+skipping. The compiled UI denies an MCP recording request, verifies that capture
+stays inactive and no transcript is created, then requires a fresh approval for
+a retry. This covers the application's recording approval boundary; actual OS
+permission dialogs and physical audio are not exercised by those fixtures.
+The same test then substitutes an owned capture executable that exits with a
+permission-denied diagnostic. It verifies the native failure reaches desktop
+state, Stop persists an interrupted meeting without losing the saved transcript,
+and restoring the executable permits a fresh capture. Both captures are stopped
+through the visible desktop control.
 
 The separate `linux-document-imports` job requires one Python contract that
 imports both PDF and RTF fixtures through the production Dart parser on an
@@ -54,12 +62,22 @@ separate from the read-only model fixture mount.
 | Virtual audio | 3 desktop + 1 core | Whisper partial/final text while capturing, virtual microphone disappearance/return, overlap/pause exclusion and pinned-route recovery, and the meeting workflow (record, transcribe, summarize, cite, restart). |
 
 That meeting workflow is `apps/desktop/integration_test/meeting_workflow_test.dart`,
-run by the virtual-audio gate inside the private PipeWire session. `captureWindow`
-returns immediately when `FORESIGHT_PRIVATE_PIPEWIRE=1`, so those assertions do not
-use grim or an Agent Desktop display. `tools/test_meeting_workflow.py` remains the
-local driver for an owned private display. Path filters that skip the job also skip
-this meeting workflow; changes under the desktop app, the application service, or
-packaging do not.
+run by the virtual-audio gate using `flutter test -d linux` inside the private
+PipeWire session and an owned Xvfb server. It compiles the desktop test harness
+from current Dart/runner sources, reusing the SDK and the verified bundle's
+service, helper, inference libraries and model fixtures. No SDK or model rebuild
+is needed for these test changes. The acceptance-tools image adds only Xvfb and
+ImageMagick to its existing test prerequisites.
+
+Native screenshots use ImageMagick's `import` on that server's root window.
+They must be 1280×720 and pass the existing background and graph-selection pixel
+assertions. The server chooses a free display, removes inherited display/session
+settings, disables TCP listening and is stopped even if the test fails. The
+summary identifies the compiled runner and screenshot backend. Older explicit
+widget-only invocations still skip screenshots and must not be reported as native
+UI acceptance. `tools/test_meeting_workflow.py` remains the local driver for an
+owned Wayland display. Path filters that skip the job also skip this meeting
+workflow; desktop app, application service and packaging changes select it.
 
 The three older generation tests explicitly select LiteRT by default; an
 explicit `FORESIGHT_GENERATION_BACKEND` can select a legacy runtime. The load
@@ -85,6 +103,67 @@ dbus-run-session -- python tools/integration_gates.py --suite virtual-audio \
 
 These jobs supplement installed-package acceptance; they do not prove physical
 microphone/system audio quality, permissions, suspend/resume, or GPU fidelity.
+
+## Live services
+
+`live-services.yml` is separate from PR checks and runs only on `main`. Manual
+dispatch executes the checks immediately; set repository variable
+`FORESIGHT_LIVE_SERVICES=1` to enable the weekly schedule. Missing required
+credentials fail a requested run with a `blocked` report rather than passing.
+The workflow reuses the pinned Dart toolchain; it builds no native SDK, downloads
+no model weights, and receives no personal application profile.
+
+Provision a dedicated Google test account with a Google Doc containing a fixed,
+non-sensitive marker. Complete consent once outside CI with this application's
+Desktop OAuth client and its read-only Drive and identity scopes. Configure these
+repository secrets:
+
+| Secret | Value |
+| --- | --- |
+| `FORESIGHT_CI_GOOGLE_CLIENT_JSON` | That Desktop client's installed-client JSON. |
+| `FORESIGHT_CI_GOOGLE_REFRESH_TOKEN` | The dedicated account's offline refresh grant. |
+| `FORESIGHT_CI_GOOGLE_SUB` | Expected OpenID subject for that account. |
+| `FORESIGHT_CI_GOOGLE_FILE_ID` | ID of the dedicated Google Doc. |
+| `FORESIGHT_CI_GOOGLE_EXPECTED_TEXT` | Marker the exported document must contain. |
+| `FORESIGHT_SEARCH_API_KEY` | Existing application search credential. |
+| `FORESIGHT_WEB_CONTENT_API_KEY` | Existing application web-content credential. |
+
+`packages/foresight_core/tool/verify_google_live.dart` uses production GoogleAuth
+transport to refresh an expired credential, check the account identity, export
+the expected document, and reopen its persisted authorization. All credentials
+are kept in an owned temporary directory and removed after the run. It never
+revokes the reusable CI grant. Reports contain statuses and error types, never
+tokens, document text or account identifiers. The web step uses the existing
+`verify_cloud_services.dart` search, website-summary and model-metadata checks;
+it still runs if Google acceptance fails. Evidence includes the source SHA, run
+and attempt and is retained on failure.
+
+This smoke lane does not automate interactive Google consent, revocation, or
+Google-to-semantic-index retrieval. The existing controlled Google/model group
+covers the latter application's data flow. Interactive consent and revocation
+need a separately provisioned account with a disposable grant; revoking a shared
+scheduled credential would invalidate future runs.
+
+## Physical-device release acceptance
+
+Hosted virtual audio and software Vulkan remain separate from physical-device
+evidence. This change does not provision a hardware runner or claim those paths
+passed. Before adding a hardware job, provide a dedicated Linux/macOS runner with
+an owned desktop session, a known speaker-to-microphone fixture, and the required
+GPU. Reuse the installer and model artifacts already verified for that release.
+
+| Scenario | Required observation on the dedicated runner |
+| --- | --- |
+| Physical microphone and system playback | Known speech appears on the intended channels; unrelated devices are not selected. |
+| OS permission denial and revocation | Denial is visible, capture stops, existing text survives, and a subsequent grant permits a fresh recording. |
+| Suspend/resume during capture | After actual suspend, recording recovers or reports interruption, without duplicated transcript segments or orphaned capture processes. |
+| Physical GPU | Actual adapter identity, model startup/decode and known-audio transcription, bound to the tested installer digest. |
+
+Use the existing manual probes below where applicable; keep per-scenario results
+and logs tied to the installer checksum and source revision. Actual suspend and
+OS consent must run on the dedicated machine, not be inferred from injected
+lifecycle events. Until that runner is provisioned, record these cases as manual
+or not run in release evidence.
 
 ## Restricted/reference and diagnostic paths
 

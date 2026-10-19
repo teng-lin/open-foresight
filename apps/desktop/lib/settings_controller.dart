@@ -389,7 +389,8 @@ class _SettingsController extends _FeatureController {
   List<int> localOutputWeekly = List<int>.filled(5, 0);
 
   int localWords() {
-    final revision = d.store.dataRevision;
+    final revision =
+        '${d.store.dataRevision}:${outputWeekStart(DateTime.now()).millisecondsSinceEpoch}';
     if (localOutputRevision != revision) {
       localOutputRevision = revision;
       unawaited(
@@ -1176,15 +1177,9 @@ class _SettingsController extends _FeatureController {
                       TextButton(
                         onPressed: shell.busy
                             ? null
-                            : () => shell.run(() async {
-                                await integrationFeature.googleAuth
-                                    .disconnect();
-                                if (mounted)
-                                  shell.update(
-                                    () => integrationFeature.googleState =
-                                        'Disconnected; imported documents remain on this device.',
-                                  );
-                              }),
+                            : () => shell.run(
+                                integrationFeature.disconnectGoogle,
+                              ),
                         child: const Text('Disconnect Google'),
                       ),
                     ],

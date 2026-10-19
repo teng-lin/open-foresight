@@ -116,21 +116,42 @@ def restore(
     component="linux-app",
     producer_wait=0,
     refresh=None,
+    job_states=None,
+    direct_job=None,
 ):
     payload, saved, checksum, run, artifact, job = producer
+    queried = 0
+    direct_queried = 0
 
     def api(repository, route):
+        nonlocal queried, direct_queried
         assert repository == REPOSITORY
         if route == f"actions/runs/{RUN}":
             return run
         if route == f"actions/artifacts/{ARTIFACT}":
             return artifact
-        if route == f"actions/jobs/{JOB}" and refresh is not None:
-            return refresh()
+        if route == f"actions/jobs/{JOB}":
+            if refresh is not None:
+                return refresh()
+            if direct_job is not None:
+                return direct_job
+            current = (
+                job
+                if job_states is None
+                else job_states[min(queried + direct_queried - 1, len(job_states) - 1)]
+            )
+            direct_queried += 1
+            return current
         if route == f"actions/runs/{RUN}/jobs?filter=all&per_page=100&page=1":
+            current = (
+                job
+                if job_states is None
+                else job_states[min(queried, len(job_states) - 1)]
+            )
+            queried += 1
             return {
                 "jobs": [
-                    job,
+                    current,
                     {**job, "id": JOB + 1, "run_attempt": 2, "conclusion": "failure"},
                 ]
             }
@@ -163,6 +184,109 @@ def restore(
             producer_wait=producer_wait,
         )
     return payload, destination, result
+
+
+def test_pending_original_producer_is_rechecked_before_restoring_bytes(
+    tmp_path, producer, visibility_clock
+):
+    pending = {
+        **producer[5],
+        "status": "in_progress",
+        "conclusion": None,
+        "completed_at": None,
+    }
+    pauses = visibility_clock[1]
+    original, restored, qualification = restore(
+        tmp_path, producer, job_states=[pending, producer[5]], producer_wait=60
+    )
+    assert pauses == [5]
+    assert qualification["producer_attempt"] == 1
+    assert qualification["producer_job"] == JOB
+    assert (restored / "application.tar.gz").read_bytes() == (
+        original / "application.tar.gz"
+    ).read_bytes()
+
+
+def test_stale_run_listing_can_use_the_completed_exact_job(
+    tmp_path, producer, visibility_clock
+):
+    pending = {
+        **producer[5],
+        "status": "in_progress",
+        "conclusion": None,
+        "completed_at": None,
+    }
+    pauses = visibility_clock[1]
+    original, restored, qualification = restore(
+        tmp_path,
+        producer,
+        job_states=[pending],
+        direct_job=producer[5],
+        producer_wait=60,
+    )
+    assert pauses == []
+    assert qualification["producer_job"] == JOB
+    assert qualification["producer_attempt"] == 1
+    assert (restored / "application.tar.gz").read_bytes() == (
+        original / "application.tar.gz"
+    ).read_bytes()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("id", JOB + 1),
+        ("name", "foreign"),
+        ("run_id", RUN + 1),
+        ("head_sha", "b" * 40),
+        ("run_attempt", 2),
+    ],
+)
+def test_direct_job_cannot_substitute_another_producer(
+    tmp_path, producer, monkeypatch, field, value
+):
+    pending = {
+        **producer[5],
+        "status": "in_progress",
+        "conclusion": None,
+        "completed_at": None,
+    }
+    monkeypatch.setattr(
+        application.time,
+        "sleep",
+        lambda _: pytest.fail("Invalid job must fail immediately"),
+    )
+    with pytest.raises(ValueError, match="changed producer identity"):
+        restore(
+            tmp_path,
+            producer,
+            job_states=[pending],
+            direct_job={**producer[5], field: value},
+            producer_wait=60,
+        )
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize("final_state", ["pending", "failed", "invalid-window"])
+def test_pending_producer_never_waives_success_or_upload_window(
+    tmp_path, producer, visibility_clock, final_state
+):
+    pending = {
+        **producer[5],
+        "status": "in_progress",
+        "conclusion": None,
+        "completed_at": None,
+    }
+    final = pending
+    if final_state == "failed":
+        final = {**producer[5], "conclusion": "failure"}
+    elif final_state == "invalid-window":
+        final = {**producer[5], "completed_at": "2025-01-01T00:00:30Z"}
+    pauses = visibility_clock[1]
+    with pytest.raises(ValueError, match="successful original producer"):
+        restore(tmp_path, producer, job_states=[pending, final], producer_wait=60)
+    assert pauses == [5] * (12 if final_state == "pending" else 1)
+    assert not (tmp_path / "restored").exists()
 
 
 @pytest.mark.parametrize("ref", ["refs/pull/98765/merge", "refs/heads/main", None])
@@ -350,7 +474,7 @@ def visibility_clock(monkeypatch):
 
 
 @pytest.mark.parametrize("ref", ["refs/pull/98765/merge", "refs/heads/main", None])
-@pytest.mark.parametrize("status", ["queued", "in_progress"])
+@pytest.mark.parametrize("status", ["queued", "in_progress", "waiting"])
 def test_pending_list_refreshes_exact_original_job_before_verified_restore(
     tmp_path, producer, monkeypatch, visibility_clock, capsys, ref, status
 ):
@@ -389,6 +513,31 @@ def test_pending_direct_endpoint_waits_only_until_exact_producer_is_visible(
     refreshes = iter([dict(producer[5]), complete])
     restore(tmp_path, producer, refresh=lambda: next(refreshes), producer_wait=60)
     assert visibility_clock[1] == [5]
+
+
+@pytest.mark.parametrize("location", ["list", "direct"])
+@pytest.mark.parametrize("conclusion", ["success", "failure", "cancelled"])
+def test_pending_metadata_with_terminal_conclusion_is_rejected_immediately(
+    tmp_path, producer, visibility_clock, location, conclusion
+):
+    invalid = {
+        **producer[5],
+        "status": "waiting",
+        "conclusion": conclusion,
+        "completed_at": None,
+    }
+    producer[5].update(status="waiting", conclusion=None, completed_at=None)
+    if location == "list":
+        producer[5].update(invalid)
+    with pytest.raises(ValueError, match="invalid status"):
+        restore(
+            tmp_path,
+            producer,
+            refresh=lambda: invalid,
+            producer_wait=60,
+        )
+    assert not visibility_clock[1]
+    assert not (tmp_path / "restored").exists()
 
 
 def test_missing_producer_list_row_is_refetched_within_visibility_window(

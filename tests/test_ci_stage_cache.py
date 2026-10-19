@@ -325,6 +325,7 @@ class ProducerTests(SourceTree):
             return cache.find(**args)
 
     def find_work(self, candidates=None, **overrides):
+        jobs_api = overrides.pop("jobs_api", lambda *args: [self.job])
         args = {
             "repository": REPOSITORY,
             "platform": "linux",
@@ -336,7 +337,7 @@ class ProducerTests(SourceTree):
         args.update(overrides)
         with (
             patch.object(cache.artifacts, "api", side_effect=self.api),
-            patch.object(cache.artifacts, "dependency_jobs", return_value=[self.job]),
+            patch.object(cache.artifacts, "dependency_jobs", side_effect=jobs_api),
             patch.object(cache.artifacts, "download_zip", side_effect=self.download),
             patch.object(
                 cache,
@@ -347,6 +348,125 @@ class ProducerTests(SourceTree):
             ),
         ):
             return cache.find_native_work(**args)
+
+    def unavailable_producer(self):
+        self.additional_runs[99] = {**self.run, "id": 99}
+        return [
+            ({**self.artifact, "id": number, "workflow_run": {"id": 99}}, self.identity)
+            for number in (201, 202)
+        ] + [(self.artifact, self.identity)]
+
+    def test_native_work_server_error_uses_an_independently_verified_producer(self):
+        candidates = self.unavailable_producer()
+        queried = []
+        failure = subprocess.CalledProcessError(1, "gh", stderr=b"gh: HTTP 502\n")
+
+        def jobs(repository, run_id):
+            queried.append(run_id)
+            if run_id == 99:
+                raise failure
+            return [self.job]
+
+        result = self.find_work(candidates=candidates, jobs_api=jobs)
+        self.assertTrue(result["hit"])
+        self.assertEqual(result["run_id"], 100)
+        self.assertEqual(result["artifact_id"], self.artifact["id"])
+        self.assertEqual(result["receipt"], self.receipt)
+        # A second artifact from the unavailable producer must not repeat all
+        # exhausted HTTP retries. Its bytes have never been trusted/downloaded.
+        self.assertEqual(queried, [99, 100])
+        self.assertEqual(self.downloaded_ids, [self.artifact["id"]])
+
+    def test_native_work_run_metadata_server_error_can_use_another_producer(self):
+        candidates = self.unavailable_producer()
+        original_api = self.api
+
+        def query(repository, route):
+            if route == "actions/runs/99":
+                raise subprocess.CalledProcessError(1, "gh", stderr="gh: HTTP 503")
+            return original_api(repository, route)
+
+        self.api = query
+        result = self.find_work(candidates=candidates)
+        self.assertTrue(result["hit"])
+        self.assertEqual(result["run_id"], 100)
+        self.assertEqual(self.downloaded_ids, [self.artifact["id"]])
+
+    def test_native_work_auth_and_protocol_failures_still_stop_lookup(self):
+        candidates = self.unavailable_producer()
+        for failure in (
+            subprocess.CalledProcessError(1, "gh", stderr=b"gh: HTTP 401"),
+            subprocess.CalledProcessError(1, "gh", stderr=b"gh: HTTP 403"),
+            subprocess.CalledProcessError(1, "gh", stderr=b"gh: HTTP 404"),
+            subprocess.CalledProcessError(1, "gh"),
+            json.JSONDecodeError("Malformed GitHub response", "{", 1),
+        ):
+            queried = []
+
+            def jobs(repository, run_id, queried=queried, failure=failure):
+                queried.append(run_id)
+                raise failure
+
+            with self.subTest(failure=failure), self.assertRaises(type(failure)) as caught:
+                self.find_work(candidates=candidates, jobs_api=jobs)
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(queried, [99])
+        self.assertEqual(self.downloaded_ids, [])
+
+    def test_native_work_server_error_search_is_bounded_and_fails_closed(self):
+        candidates = []
+        queried = []
+        failure = subprocess.CalledProcessError(1, "gh", stderr=b"gh: HTTP 502")
+        for run_id in (97, 98, 99):
+            self.additional_runs[run_id] = {**self.run, "id": run_id}
+            candidates.append(
+                ({**self.artifact, "workflow_run": {"id": run_id}}, self.identity)
+            )
+        candidates.append((self.artifact, self.identity))
+
+        def jobs(repository, run_id):
+            queried.append(run_id)
+            if run_id != 100:
+                raise failure
+            return [self.job]
+
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            self.find_work(candidates=candidates, jobs_api=jobs)
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(queried, [97, 98, 99])
+        self.assertEqual(self.downloaded_ids, [])
+
+    def test_native_work_unresolved_server_error_never_becomes_a_cold_build(self):
+        candidates = self.unavailable_producer()
+        failure = subprocess.CalledProcessError(1, "gh", stderr=b"gh: HTTP 502\n")
+
+        def jobs(repository, run_id):
+            if run_id == 99:
+                raise failure
+            return [self.job]
+
+        original_receipt = deepcopy(self.receipt)
+        original_run = deepcopy(self.run)
+        for rejection in ("environment", "receipt", "checksum", "failed-job", "untrusted"):
+            self.receipt = deepcopy(original_receipt)
+            self.run = deepcopy(original_run)
+            self.job["conclusion"] = "success"
+            self.payload = b"payload"
+            if rejection == "environment":
+                self.receipt["environment"] = {**ENVIRONMENT, "compiler": "incompatible"}
+            elif rejection == "receipt":
+                self.receipt["source_run_attempt"] = 2
+            elif rejection == "checksum":
+                self.payload = b"tampered bytes"
+            elif rejection == "failed-job":
+                self.job["conclusion"] = "failure"
+            else:
+                self.run["pull_requests"] = [{"number": 999}]
+            with self.subTest(rejection=rejection), self.assertRaises(
+                subprocess.CalledProcessError
+            ) as caught:
+                self.find_work(candidates=candidates, jobs_api=jobs)
+            self.assertIs(caught.exception, failure)
 
     def add_metadata(self, artifact, receipt):
         metadata = {

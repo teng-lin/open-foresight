@@ -322,6 +322,10 @@ class _SourcesController extends _FeatureController {
       ),
     );
     if (!mounted || selected == null) return;
+    await importSelectedPaths(selected);
+  }
+
+  Future<void> importSelectedPaths(List<String> selected) async {
     final failures = <String>[];
     for (final path in selected) {
       try {
@@ -338,8 +342,21 @@ class _SourcesController extends _FeatureController {
 
   Future<void> importFolder() async {
     final path = await getDirectoryPath();
-    if (path == null) return;
-    await importDirectory(path);
+    if (!mounted || path == null) return;
+    await reviewFolderImport(path);
+  }
+
+  Future<void> reviewFolderImport(String path) async {
+    final selected = await shell.showInputDialog<List<String>>(
+      builder: (_) => FileDiscoverySheet(
+        initialFolders: [path],
+        excludedPaths: const {},
+        pickFolder: () async => null,
+        folderImport: true,
+      ),
+    );
+    if (!mounted || selected == null) return;
+    await importSelectedPaths(selected);
   }
 
   Future<void> importDirectory(String path) async {
