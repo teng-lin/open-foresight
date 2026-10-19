@@ -93,7 +93,10 @@ def previous_nightly(repository, commit, force, *, request=request):
                 "summary": f"No changes since green nightly-checks for `{commit}` in run {run['id']}."
             }
         if run["conclusion"] in {"failure", "timed_out", "cancelled"}:
-            if not has_producer(run_jobs):
+            if not any(
+                job["name"] == "plan" and job.get("conclusion") == "success"
+                for job in run_jobs
+            ):
                 planning_failure = run["id"]
                 continue
             if run["run_attempt"] != 1:
@@ -145,7 +148,14 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
         request=request,
     )
     current_jobs = jobs(repository, run_id, request=request)
-    if not exercise and not success and not has_producer(current_jobs):
+    if (
+        not exercise
+        and not success
+        and not any(
+            job["name"] == "plan" and job.get("conclusion") == "success"
+            for job in current_jobs
+        )
+    ):
         # A trigger reporting an exhausted retry must keep the original failures.
         for candidate in sorted(runs, key=lambda item: item["id"], reverse=True):
             if (
@@ -173,7 +183,9 @@ def issue(repository, run_id, source, success, exercise=False, *, request=reques
             and run["status"] == "completed"
         ):
             newer_jobs = jobs(repository, run["id"], request=request)
-            if has_producer(newer_jobs, exercise) and any(
+            if (
+                has_producer(newer_jobs, exercise) or run["head_sha"] != source
+            ) and any(
                 job["name"] == "nightly-checks"
                 and job.get("conclusion") in {"success", "failure", "timed_out"}
                 for job in newer_jobs

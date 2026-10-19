@@ -251,6 +251,45 @@ def test_newer_failed_plan_does_not_block_original_run_recovery(monkeypatch):
     assert calls[-1] == ("issues/7", "PATCH", {"state": "closed"})
 
 
+@pytest.mark.parametrize("success", [False, True])
+def test_newer_source_planning_failure_cannot_be_hidden_by_an_old_rerun(
+    monkeypatch, success
+):
+    api, calls = transport(
+        monkeypatch,
+        [run(id=200, head_sha="b" * 40, conclusion="failure")],
+        [
+            {"name": "plan", "conclusion": "failure"},
+            {"name": "build", "conclusion": "skipped"},
+            {"name": "nightly-checks", "conclusion": "failure"},
+        ],
+        open_issues=[{"number": 7}],
+    )
+    nightly.issue("r", 100, SHA, success, request=api)
+    assert all(method == "GET" for _, method, _ in calls)
+
+
+@pytest.mark.parametrize("build_name", ["build", "build / macos"])
+def test_cancelled_build_after_successful_plan_retries_once(monkeypatch, build_name):
+    rows = [
+        {"name": "plan", "conclusion": "success"},
+        {"name": build_name, "conclusion": "cancelled"},
+        {"name": "nightly-checks", "conclusion": "failure"},
+    ]
+    api, calls = transport(monkeypatch, [run(conclusion="cancelled")], rows)
+    assert (
+        "Retry requested"
+        in nightly.previous_nightly("r", SHA, False, request=api)["summary"]
+    )
+    assert calls[-1][0:2] == ("actions/runs/50/rerun-failed-jobs", "POST")
+    api, calls = transport(
+        monkeypatch, [run(conclusion="cancelled", run_attempt=2)], rows
+    )
+    with pytest.raises(ValueError, match="failed after its retry"):
+        nightly.previous_nightly("r", SHA, False, request=api)
+    assert all(method == "GET" for _, method, _ in calls)
+
+
 def test_pagination_preserves_all_evidence():
     def api(repo, route):
         return {"items": list(range(100)) if "&page=1" in route else [100]}
