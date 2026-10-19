@@ -274,9 +274,9 @@ Suite membership is not a claim that production dependencies are disjoint. In
 particular, meeting summary depends on generation/retrieval and the shared service,
 so their changes select every phase. Retain observations across representative
 PRs and compare actual outcomes before broadening this map or allowing skips.
-The fallback is now genuinely nightly at 05:43 UTC (`43 5 * * *`), replacing the
-previous Monday-only schedule. Main completion and manual validation remain full.
-The first scheduled execution is still pending; no skip policy relies on it yet.
+The acceptance fallback runs weekly on Monday at 05:43 UTC (`43 5 * * 1`).
+Main completion and manual validation remain full. The separate preview nightly
+adds an in-run aggregate; no per-phase skip policy relies on this observer.
 
 The older CPU-model and audio phases totaled about nine runner-minutes, with
 software Vulkan roughly another minute. Those are possible future phase savings,
@@ -623,12 +623,14 @@ workflow**, select **main**, then choose:
 | --- | --- |
 | `validation: standard` | Full source/build gates, package integrity, install/startup, service/MCP, reinstall/removal and user-data preservation checks |
 | `validation: full` | Standard checks plus installed inference/speech model acceptance and live cloud checks against bundled distribution configuration |
-| `candidate_run` | Recover a retained preview's original applications/installers and distribution identity |
-| `force: false` | Reuse successful previews or recover available outputs for this main commit |
-| `force: true` with `rebuild_reason` | Explicitly replace the preview identity after documenting why existing outputs cannot be reused |
+| `force: false` | Skip after green `nightly-checks`, or retry failed jobs once in the original producer run |
+| `force: true` with `rebuild_reason` | Explicitly replace the preview identity for a concrete output-affecting change |
+| `exercise_failure_path` / `exercise_recovery` | Open/close the isolated exercise issue without building or publishing |
 
-Full mode can validate the original standard-preview installers without
-allocating a new build number or compiling the application again. Missing
+Validation is selected when a new preview is created; original-run retries keep
+that validation mode and distribution identity. Cross-run recovery/revalidation
+is removed. An unchanged green nightly is skipped even if a later dispatch
+requests a different mode; the summary names the earlier run. Missing
 cloud configuration fails full validation; it is not treated as a pass. Standard
 Linux smoke checks retain the existing small Whisper fixture, but do not run the
 full inference/embedding/cloud acceptance suite. Physical-device audio, GPU,
@@ -640,21 +642,22 @@ From the CLI:
 ```sh
 gh workflow run preview-packages.yml --ref main -f validation=standard
 gh workflow run preview-packages.yml --ref main -f validation=full
-# Recover a retained preview, including one from an earlier reviewed main commit:
-preview_run=REPLACE_WITH_PREVIEW_RUN_ID
-gh workflow run preview-packages.yml --ref main \
-  -f candidate_run="$preview_run" -f validation=full
+# Retry only failed jobs in their original run; keep successful builds:
+gh run rerun REPLACE_WITH_PREVIEW_RUN_ID --failed
+# Exercise tracking without building or publishing:
+gh workflow run preview-packages.yml --ref main -f exercise_failure_path=true
 ```
 
 The nightly schedule checks main at **07:23 UTC**. It builds only if that exact
-commit has no reusable preview. Failed attempts do not advance the successful
-commit watermark; retries recover surviving application and installer outputs
-with their original source and build number. A skip links to the previous
-successful workflow run. Artifacts expire after 14 days. Inspect retained outputs
-before replacement; partial or incompatible recovery inputs fail closed. An
-intentional replacement requires `force` and a concrete `rebuild_reason`, while
-compatible SDKs and compiler work remain reusable. The schedule is best effort
-and can be delayed by GitHub; manual dispatch remains available.
+commit has no green `nightly-checks`. A failed aggregate triggers one retry of the
+original producer's failed jobs and exits without waiting; that original run's
+aggregate and issue job report the result. Pre-rollout runs without the aggregate
+cannot authorize a skip or automatic retry. Exhausted retries fail with an
+actionable diagnostic, preserving compatible SDKs and successful jobs.
+Application intermediates expire after 14 days; final installer downloads are
+retained for 90 days. An intentional new identity requires `force` and a concrete
+output-affecting `rebuild_reason`. The schedule is best effort and can be delayed
+by GitHub; manual dispatch remains available.
 
 Only reviewed main is supported by the preview coordinator. It freezes one SHA
 before starting either platform and fails if main advanced before planning. Main
@@ -714,8 +717,10 @@ but does **not** relabel an already tested stable application candidate.
 
 ### Relationship to official releases
 
-Preview and official distribution coordinators share a concurrency group, so a
-nightly cannot reserve/publish between a stable build and its publication.
+Preview uses its own `preview-packages` concurrency group. Official release
+draft and publish jobs serialize through `distribution-packages`, while the
+compare-and-swap allocator protects build numbers. A release can start while a
+nightly runs.
 Official release preparation discovers existing exact-product candidates and
 does not dispatch a build. Each platform retains its original successful producer
 run; source, version and distribution identity must match across the pair. A
