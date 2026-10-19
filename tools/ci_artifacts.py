@@ -482,7 +482,7 @@ def approved_final_sdk_source(repository, run, component):
         api=api,
         merged_source=merged_source,
         fingerprint_at=source_fingerprint_at,
-        read_source=lambda repo, commit, **kwargs: producer_trust.read_source(
+        read_source=lambda repo, commit, **kwargs: producer_trust.read_producer_controls(
             repo, commit, api=partial(immutable_source_api, api), **kwargs
         ),
         controls=(*producer_trust.PRODUCER_CONTROLS, WORKFLOW),

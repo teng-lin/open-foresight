@@ -98,6 +98,25 @@ This refactor changes no workflow execution or runner-minute baseline. Its direc
 deletion is the duplicated SDK job allowlists; hosted savings come from subsequent
 producer/consumer restructuring.
 
+Historical final-head approval reads the producer's actual control closure.
+Before this extraction, `ci_producer_trust.py` did not exist; it is conditional
+only when the immutable producer controls do not reference it. A present table
+is still verified and compared by bytes and Git mode. A referenced missing
+table, another missing control, changed producer/final control, corrupt blob or
+incomplete Git tree fails closed. SDK recipe reads remain strict. This preserves
+the merged-final proof for older outputs without omitting a newer producer's
+consumed table or changing any build fingerprint.
+
+The real 2026-10-19 receipt probes qualify macOS runtime artifact `12154159175`
+from run `39177548843`, successful job `117823344728`, original attempt 1. Its
+producer `d5a33af49f1692665591dbf1d60e629fbc3e56ce` belongs to merged PR #110;
+its build/control closure matches reviewed final head
+`c8e031f02d154a676961f2d3a3712f5316940c29`. The payload's recorded digest is
+`sha256:485980a96a60de46c7c496a1c9f8ef601b67f13590278d8b099fa4fd5a9b552f`.
+The macOS SDK probe retains approved original `12144094861` from run
+`39148967092`. These metadata/receipt probes transfer no large SDK payload and
+compile nothing; subsequent downloads retain full checksum/receipt validation.
+
 ## Python validation ownership and parallel workflow lint
 
 The unconditional Ubuntu quality job runs the complete ordinary Python suite

@@ -117,7 +117,7 @@ def test_exact_successful_component_attempt_required(field, value):
     assert not verified(*values)
 
 
-def git_api(contents, *, corrupt=False, truncated=False, mode="100644"):
+def git_api(contents, *, corrupt=False, truncated=False, mode="100644", commit=HEAD):
     tree_sha = "f" * 40
     objects = {}
     entries = []
@@ -135,8 +135,8 @@ def git_api(contents, *, corrupt=False, truncated=False, mode="100644"):
 
     def api(repository, route):
         assert repository == "owner/repo"
-        if route == f"git/commits/{HEAD}":
-            return {"sha": HEAD, "tree": {"sha": tree_sha}}
+        if route == f"git/commits/{commit}":
+            return {"sha": commit, "tree": {"sha": tree_sha}}
         if route == f"git/trees/{tree_sha}?recursive=1":
             return {"sha": tree_sha, "truncated": truncated, "tree": entries}
         return objects[route.removeprefix("git/blobs/")]
@@ -187,6 +187,54 @@ def test_source_loader_rejects_unverifiable_git_inputs(options):
 def test_missing_required_input_is_not_a_valid_old_recipe():
     with pytest.raises(ValueError, match="missing required"):
         trust.read_source("owner/repo", HEAD, api=git_api({}), paths={"recipe.py"})
+
+
+def test_legacy_controls_do_not_require_an_unconsumed_new_table():
+    paths = ("packer.py", trust.TRUST_TABLE)
+    assert trust.read_producer_controls(
+        "owner/repo",
+        HEAD,
+        api=git_api({"packer.py": b"reviewed"}),
+        paths=paths,
+    ) == {"packer.py": ("100644", b"reviewed")}
+    with pytest.raises(ValueError, match="missing required"):
+        trust.read_producer_controls("owner/repo", HEAD, api=git_api({}), paths=paths)
+    with pytest.raises(ValueError, match="missing required"):
+        trust.read_source(
+            "owner/repo", HEAD, api=git_api({"packer.py": b"reviewed"}), paths=paths
+        )
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        b"from tools.ci_producer_trust import PRODUCERS",
+        b"from tools import ci_producer_trust",
+        b'importlib.import_module("tools.ci_producer_trust")',
+        b'Path("tools/ci_producer_trust.py").read_bytes()',
+    ],
+)
+def test_consumed_table_cannot_be_omitted(reference):
+    with pytest.raises(ValueError, match="references a missing producer trust table"):
+        trust.read_producer_controls(
+            "owner/repo",
+            HEAD,
+            api=git_api({"packer.py": reference}),
+            paths=("packer.py", trust.TRUST_TABLE),
+        )
+
+
+@pytest.mark.parametrize(
+    "options", [{"corrupt": True}, {"truncated": True}, {"mode": "120000"}]
+)
+def test_conditional_table_keeps_git_integrity_checks(options):
+    with pytest.raises(ValueError):
+        trust.read_producer_controls(
+            "owner/repo",
+            HEAD,
+            api=git_api({trust.TRUST_TABLE: b"reviewed"}, **options),
+            paths=(trust.TRUST_TABLE,),
+        )
 
 
 def test_compatible_running_earlier_head_is_preserved_and_current_rerun_selected():
