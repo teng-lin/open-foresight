@@ -10,8 +10,13 @@ import subprocess
 
 GATES = ("macos", "linux-native", "linux-document-imports", "linux-bundle", "packaging")
 
-# Explicit maintenance paths only: shared tools and unknown files select all gates.
+# Standalone quality/maintenance controls do not change installed application bytes.
 MAINTENANCE = {
+    ".coveragerc",
+    "pytest.ini",
+    "pytest-exclusions.json",
+    "pyproject.toml",
+    "tools/evaluate_pipeline.py",
     "tools/release_latest.py",
     "tests/test_release_latest.py",
     "tools/cleanup_linux_packages.py",
@@ -65,6 +70,9 @@ PACKAGING_FILES = {
 }
 
 MACOS_FILES = {
+    "tests/test_macos_bundle.py",
+    "tests/test_macos_tools.py",
+    "tests/test_macos_deployment_target.py",
     "tools/ci_macos_dependencies.py",
     "tools/build_macos_sdk.py",
     "tools/build_macos_vendor.py",
@@ -100,6 +108,16 @@ def select_gates(paths, force=False):
         if path.startswith("packaging/notices/"):
             for gate in GATES[1:]:
                 selected[gate] = True
+            continue
+        # Root Python tests run in the unconditional quality job. Keep explicit
+        # packaging and real Apple-runtime tests above/in MACOS_FILES; nested
+        # native, inference and subprocess suites still select their platforms.
+        if (
+            PurePosixPath(path).parent == PurePosixPath("tests")
+            and PurePosixPath(path).name.startswith("test_")
+            and PurePosixPath(path).suffix == ".py"
+            and path not in MACOS_FILES
+        ):
             continue
         if (
             path.startswith("docs/")

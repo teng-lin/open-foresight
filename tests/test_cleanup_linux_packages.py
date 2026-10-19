@@ -1,6 +1,7 @@
 """Protect live images and descriptors when retiring obsolete GHCR versions."""
 
 import copy
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -30,10 +31,34 @@ class CleanupTests(unittest.TestCase):
             version(7, "child"),
             version(8, "old-alias", "current"),
             version(9, "app-deps-buildcache-v1"),
+            version(10, "acceptance-tools-buildcache-v1"),
         ]
         self.assertEqual(
             cleanup.candidates(versions, "new", {versions[6]["name"]}), [versions[5]]
         )
+
+    def test_acceptance_cache_and_child_manifests_are_protected(self):
+        versions = [
+            version(1, "new"),
+            version(2, "acceptance-tools-buildcache-v1"),
+            version(3, "old-child"),
+            version(4, "retired"),
+        ]
+
+        def response(request, **kwargs):
+            url = request if isinstance(request, str) else request.full_url
+            if "/token?" in url:
+                value = {"token": "fixture-token"}
+            elif url.endswith(versions[1]["name"]):
+                value = {"manifests": [{"digest": versions[2]["name"]}]}
+            else:
+                value = {}
+            return io.BytesIO(json.dumps(value).encode())
+
+        with patch.object(cleanup.urllib.request, "urlopen", side_effect=response):
+            protected = cleanup.protected_manifests("linux-sdk", versions, "new")
+        self.assertEqual(protected, {item["name"] for item in versions[:3]})
+        self.assertEqual(cleanup.candidates(versions, "new", protected), versions[3:])
 
     def test_missing_current_image_stops_cleanup(self):
         with self.assertRaisesRegex(RuntimeError, "not published"):

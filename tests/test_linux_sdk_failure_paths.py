@@ -111,7 +111,10 @@ def test_oci_fallback_only_accepts_exact_missing_image_diagnostic(
             "verified:local",
         ]
     else:
-        with pytest.raises((ValueError, subprocess.CalledProcessError)):
+        expected = (
+            ValueError if failure == "all-missing" else subprocess.CalledProcessError
+        )
+        with pytest.raises(expected):
             sdk.load(prefix, "linux-sdk", "verified:local")
         assert run.call_count == 1  # Load only; never publish or build.
     assert (prefix / "image.tar").read_bytes() == before

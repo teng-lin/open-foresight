@@ -11,6 +11,14 @@ and explicitly listed maintenance changes avoid native builds; unknown paths
 select every platform. `platform-checks` and `acceptance-checks` always report the
 aggregate result, including when selected expensive jobs are skipped.
 
+Root `tests/test_*.py` changes and Python coverage/quality configuration run in
+the unconditional Python quality job without rebuilding Ubuntu applications.
+Explicit package-contract tests retain the packaging gate, and real Apple
+runtime tests retain the macOS gate. Nested native, inference and service tests,
+test support such as `conftest.py`, application tests, and unknown paths keep
+platform validation. Mixed changes take the union; forced validation still
+selects every platform.
+
 Dependency producers and macOS consumers check out the PR head. Advancing main
 therefore cannot make consumers request a merge-tree identity that no producer
 built. A trusted completed artifact is used when available. Consumers wait for a
@@ -144,6 +152,28 @@ commit. Acceptance checks out that original product for its Dart/Flutter test
 packages while retaining the current acceptance-image recipe. The tools image installs test prerequisites but has no application
 or SDK build step. The package job creates the DEB and installs it in Ubuntu
 24.04 to test dependencies, layout, service lifecycle and document parsing.
+
+The main `linux-bundle` job loads the verified SDK into its shared Docker daemon
+before inspecting it to qualify existing dependency objects. Resolving a registry
+descriptor alone does not load an image; failed inspection must never authorize
+recompiling the SDK or dependencies.
+
+Acceptance tooling has its own `acceptance-tools-buildcache-v1` registry cache.
+Only the existing reviewed-main `linux-bundle` job can publish it; PR and
+acceptance consumers have read-only registry access. Its dependency stage binds
+the immutable SDK, snapshot package recipe, Flutter verification and all local
+package manifests/lockfiles. Sources are copied afterward, so ordinary source or
+test edits reuse package setup and dependency downloads. Registry authentication,
+transport and malformed-manifest failures stop lookup rather than silently
+discarding reusable layers. The legacy application cache remains imported and
+unchanged. Before the first main publication, a confirmed missing tools cache
+requires only acceptance package/tool setup using the existing verified SDK.
+There is no SDK or application build in that stage. Exercise the layer boundary
+locally with `FORESIGHT_DOCKER_CACHE_TEST=1 python -m pytest
+tests/test_acceptance_image_cache.py`; it uses a cached Ubuntu base, fake external
+tools, and a disabled build network, and never compiles real dependencies.
+Cleanup retains the tools cache and its child manifests. Historical product
+overrides keep their original recipes and cannot replace current shared caches.
 Documentation-only main pushes skip this work. Those installation checks remain necessary for
 application or packaging changes, but no longer compile a duplicate application.
 The disposable installer-test container explicitly selects the CI AppArmor
