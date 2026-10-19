@@ -93,6 +93,7 @@ class ServiceClient {
   final events = StreamController<Map<String, dynamic>>.broadcast();
   int _next = 0;
   bool _closed = false;
+  RpcError? _failure;
   bool get isClosed => _closed;
   ServiceClient._(this.socket, this._maxMessageBytes) {
     unawaited(socket.done.catchError((Object _) {}));
@@ -157,6 +158,9 @@ class ServiceClient {
   void _fail(Object error, StackTrace st) {
     if (_closed) return;
     _closed = true;
+    _failure = error is SocketException
+        ? _ServiceTransportLost()
+        : RpcError.from(error);
     for (final c in _pending.values) {
       c.addError(error, st);
       unawaited(c.close());
@@ -184,7 +188,7 @@ class ServiceClient {
       },
     );
     if (_closed) {
-      controller.addError(_ServiceTransportLost());
+      controller.addError(_failure ?? _ServiceTransportLost());
       unawaited(controller.close());
     } else {
       _pending[id] = controller;
@@ -1504,19 +1508,18 @@ Future<ServiceClient> ensureService(
   String? executable;
   String? startupLog;
   File? handoff;
+  TimeoutException deadlineFailure() => TimeoutException(
+    launched
+        ? startupLog != null
+              ? 'Application service did not start. Inspect $startupLog.'
+              : 'Application service did not start. Run $executable directly to inspect the startup error.'
+        : closingOwner
+        ? 'Application service owner handoff did not finish'
+        : 'Application service profile lock is still held; its owner is not serving the endpoint.',
+  );
   Duration remaining() {
     final left = startupTimeout - startup.elapsed;
-    if (left <= Duration.zero) {
-      throw TimeoutException(
-        launched
-            ? startupLog != null
-                  ? 'Application service did not start. Inspect $startupLog.'
-                  : 'Application service did not start. Run $executable directly to inspect the startup error.'
-            : closingOwner
-            ? 'Application service owner handoff did not finish'
-            : 'Application service profile lock is still held; its owner is not serving the endpoint.',
-      );
-    }
+    if (left <= Duration.zero) throw deadlineFailure();
     return left;
   }
 
@@ -1590,9 +1593,7 @@ Future<ServiceClient> ensureService(
           // EOF alone precedes the worker's final profile-lock release.
           await closing.client.socket.done.timeout(
             remaining(),
-            onTimeout: () => throw TimeoutException(
-              'Previous application service did not close its socket',
-            ),
+            onTimeout: () => throw deadlineFailure(),
           );
         } finally {
           await closing.client.close();
