@@ -1,3 +1,4 @@
+import 'model_setup_surface.dart';
 import 'dart:io';
 import 'dart:async';
 import 'model_terms_dialog.dart';
@@ -7,7 +8,10 @@ import 'speech_models.dart';
 import 'store.dart';
 
 class SpeechSetupDialog extends StatefulWidget {
+  final VoidCallback? onDone;
+  bool get embedded => onDone != null;
   final Store store;
+  final ModelPreferenceWriter? savePreference;
   final LocalModelFinder findLocalModel;
   final Future<void> Function(File, String, String, bool Function())?
   installSpeech;
@@ -16,7 +20,9 @@ class SpeechSetupDialog extends StatefulWidget {
   final VoidCallback installed;
   const SpeechSetupDialog({
     super.key,
+    this.onDone,
     required this.store,
+    this.savePreference,
     this.findLocalModel = localModelFile,
     this.installSpeech,
     required this.directory,
@@ -49,7 +55,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
     selected =
         speechModels.where((m) => m.digest == currentDigest).firstOrNull ??
         speechModels.where(cached).firstOrNull ??
-        speechModels[2];
+        speechModels[3];
     unawaited(checkLocalModels());
   }
 
@@ -78,6 +84,14 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
 
   bool cached(GemmaModel model) => localFile(model) != null;
 
+  void finish() {
+    if (widget.onDone != null) {
+      widget.onDone!();
+    } else {
+      Navigator.pop(context);
+    }
+  }
+
   void cancel() {
     cancelled = true;
     download?.cancel();
@@ -93,7 +107,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   Future<void> install() async {
     if (working || checkingCache) return;
     if (isCurrent(selected)) {
-      Navigator.pop(context);
+      finish();
       return;
     }
     setState(() {
@@ -106,7 +120,12 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
     try {
       final model = selected;
       if (!cached(model) &&
-          !await confirmModelTerms(context, widget.store, model))
+          !await confirmModelTerms(
+            context,
+            widget.store,
+            model,
+            savePreference: widget.savePreference,
+          ))
         return;
       if (!mounted || cancelled) return;
       final asset = await download!.download(
@@ -159,7 +178,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
         if (!mounted || cancelled) return;
       }
       widget.installed();
-      if (mounted) Navigator.pop(context);
+      if (mounted) finish();
     } on ModelDownloadCancelled {
       // Closing this dialog leaves the previous registration intact.
     } catch (failure) {
@@ -170,7 +189,8 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
   }
 
   @override
-  Widget build(BuildContext context) => AlertDialog(
+  Widget build(BuildContext context) => ModelSetupSurface(
+    embedded: widget.embedded,
     title: const Text('Transcription Model'),
     content: SizedBox(
       width: 540,
@@ -228,22 +248,24 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
             if (error.isNotEmpty)
               Text(error, style: const TextStyle(color: Colors.red)),
             const SizedBox(height: 12),
-            SelectableText(
-              'Models: ${widget.directory.path}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            if (!widget.embedded)
+              SelectableText(
+                'Models: ${widget.directory.path}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
           ],
         ),
       ),
     ),
     actions: [
-      TextButton(
-        onPressed: () {
-          cancel();
-          Navigator.pop(context);
-        },
-        child: const Text('Cancel'),
-      ),
+      if (!widget.embedded)
+        TextButton(
+          onPressed: () {
+            cancel();
+            finish();
+          },
+          child: const Text('Cancel'),
+        ),
       FilledButton(
         onPressed: working || checkingCache || widget.runner.isEmpty
             ? null

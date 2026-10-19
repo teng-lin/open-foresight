@@ -607,6 +607,12 @@ void main() {
     () async {
       final model = File('${root.path}/embedding.litertlm')
         ..writeAsStringSync('fixture');
+      final queued = domain.store.importText(
+        'Saved during setup',
+        'Keep this document',
+        'text/plain',
+        'fixture',
+      );
       rag.entered = Completer<void>();
       rag.release = Completer<void>();
       final pending = app.call('models.embedding', {
@@ -627,6 +633,9 @@ void main() {
       );
       rag.release!.complete();
       await pending;
+      expect(domain.indexed, contains(queued));
+      expect(domain.store.sources.single['state'], 'indexed');
+      expect(domain.store.sources.single['revision'], 1);
       expect(
         domain.store.model('embedding')!['backend'],
         'litert_lm_embedding_gpu',
@@ -640,6 +649,17 @@ void main() {
       );
       expect(app.modelBusy, isFalse);
       expect(domain.store.model('embedding')!['path'], model.absolute.path);
+      rag.reject = false;
+      domain.rejectIndex = true;
+      domain.store.importText(
+        'Needs an indexing retry',
+        'Retained',
+        'text/plain',
+        'fixture',
+      );
+      await app.call('models.embedding', {'path': model.path});
+      expect(domain.store.model('embedding')!['path'], model.absolute.path);
+      expect(app.modelBusy, isFalse);
       await app.call('models.register', {'kind': 'speech', 'path': model.path});
       expect(domain.store.model('speech'), isNotNull);
       await app.call('models.cancel_query_acquisition', {});

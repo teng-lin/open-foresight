@@ -122,12 +122,17 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
                   final supported = GoogleConnections.supported(
                     file['mimeType'] as String,
                   );
+                  final downloadable = GoogleConnections.canDownload(file);
                   return ListTile(
                     leading: folder
                         ? const Icon(Icons.folder_outlined)
                         : Checkbox(
                             value: selected.contains(file['id']),
-                            onChanged: loading || widget.folder || !supported
+                            onChanged:
+                                loading ||
+                                    widget.folder ||
+                                    !supported ||
+                                    !downloadable
                                 ? null
                                 : (checked) => setState(() {
                                     if (checked == true) {
@@ -141,9 +146,11 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
                     subtitle: Text(
                       folder
                           ? 'Folder'
-                          : supported
-                          ? file['mimeType'] as String
-                          : 'Unsupported file type',
+                          : !supported
+                          ? 'Unsupported file type'
+                          : !downloadable
+                          ? 'Download restricted by Google Drive'
+                          : file['mimeType'] as String,
                     ),
                     trailing: folder ? const Icon(Icons.chevron_right) : null,
                     onTap: loading
@@ -156,7 +163,7 @@ class _GoogleDrivePickerState extends State<GoogleDrivePicker> {
                             // ignore: discarded_futures
                             load();
                           }
-                        : widget.folder || !supported
+                        : widget.folder || !supported || !downloadable
                         ? null
                         : () => setState(() {
                             if (!selected.add(file['id'] as String))

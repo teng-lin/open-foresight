@@ -4,12 +4,13 @@ import FlutterMacOS
 @main
 class AppDelegate: FlutterAppDelegate {
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-    // Keep the shortcut and reopen behavior available when a window is closed.
-    // The detached application service has a separate lifetime in either case.
-    return false
+    // Closing the last window ends the desktop connection. The service then
+    // finalizes capture and releases its helper and model workers.
+    return true
   }
 
   override func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    mainFlutterWindow?.deminiaturize(nil)
     mainFlutterWindow?.makeKeyAndOrderFront(nil)
     sender.activate(ignoringOtherApps: true)
     return true

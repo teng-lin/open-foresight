@@ -2,10 +2,19 @@ import Cocoa
 import FlutterMacOS
 import Carbon
 import ServiceManagement
+import CoreServices
 
 class MainFlutterWindow: NSWindow {
   private var integration: DesktopIntegration?
   override func awakeFromNib() {
+    // TCC stores audio-only requests against the main bundle identifier. It
+    // needs Launch Services to resolve that identifier to display our row in
+    // System Settings, including when launched from a development directory.
+    // Register before Flutter can start the service and request audio access.
+    let registration = LSRegisterURL(Bundle.main.bundleURL as CFURL, true)
+    if registration != noErr {
+      NSLog("Open Foresight application registration failed: %d", registration)
+    }
     let flutterViewController = FlutterViewController()
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
@@ -14,6 +23,11 @@ class MainFlutterWindow: NSWindow {
     titleVisibility = .hidden
     titlebarAppearsTransparent = true
     backgroundColor = NSColor(calibratedRed: 0.914, green: 0.933, blue: 0.965, alpha: 1)
+    // Show both onboarding panels in a normal window, with room around it.
+    let visible = (screen ?? NSScreen.main)?.visibleFrame
+    setContentSize(NSSize(width: min(1200, (visible?.width ?? 1280) - 80),
+                          height: min(860, (visible?.height ?? 940) - 80)))
+    center()
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
@@ -24,10 +38,12 @@ class MainFlutterWindow: NSWindow {
   }
 }
 
-private class DesktopIntegration {
+private class DesktopIntegration: NSObject {
   private weak var window: NSWindow?
   private let channel: FlutterMethodChannel
   private let activation: FlutterMethodChannel
+  private let menuChannel: FlutterMethodChannel
+  private var statusItem: NSStatusItem?
   private var hotKey: EventHotKeyRef?
   private var handler: EventHandlerRef?
   private var registeredTrigger: String?
@@ -37,6 +53,9 @@ private class DesktopIntegration {
     self.window = window
     channel = FlutterMethodChannel(name: "foresight/desktop", binaryMessenger: messenger)
     activation = FlutterMethodChannel(name: "foresight/window", binaryMessenger: messenger)
+    menuChannel = FlutterMethodChannel(name: "foresight/menu", binaryMessenger: messenger)
+    super.init()
+    installMenuBar()
     activation.setMethodCallHandler { [weak self] call, result in
       switch call.method {
       case "activate": self?.activate(); result(nil)
@@ -80,7 +99,60 @@ private class DesktopIntegration {
     }
   }
 
+  private func installMenuBar() {
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    // Transparent silhouette of our mark; AppKit supplies the menu bar's
+    // monochrome appearance in light/dark mode and when the menu is selected.
+    let image = NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in
+      NSColor.black.setFill()
+      let scale: CGFloat = 18 / 75.4
+      for points: [(CGFloat, CGFloat)] in [
+        [(37.7, 0), (0, 37.7), (11.6, 49.3), (60.9, 0)],
+        [(37.8, 34.8), (17.5, 55.1), (37.8, 75.4), (61, 75.4), (40.7, 55.1), (61, 34.8)]
+      ] {
+        let path = NSBezierPath()
+        for (index, point) in points.enumerated() {
+          let location = NSPoint(x: 1.7 + point.0 * scale, y: point.1 * scale)
+          if index == 0 { path.move(to: location) } else { path.line(to: location) }
+        }
+        path.close()
+        path.fill()
+      }
+      return true
+    }
+    image.isTemplate = true
+    item.button?.image = image
+    item.button?.toolTip = "Open Foresight"
+    item.button?.setAccessibilityLabel("Open Foresight")
+    let menu = NSMenu()
+    func add(_ title: String, _ command: String) {
+      let entry = NSMenuItem(title: title, action: #selector(menuCommand(_:)), keyEquivalent: "")
+      entry.target = self
+      entry.representedObject = command
+      menu.addItem(entry)
+    }
+    add("Start Open Foresight transcript", "quick-meeting")
+    menu.addItem(.separator())
+    add("Meetings", "meetings")
+    add("Ask", "ask")
+    add("Knowledge Sources", "sources")
+    add("Settings", "settings")
+    menu.addItem(.separator())
+    let quit = NSMenuItem(title: "Quit Open Foresight", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    quit.target = NSApp
+    menu.addItem(quit)
+    item.menu = menu
+    statusItem = item
+  }
+
+  @objc private func menuCommand(_ sender: NSMenuItem) {
+    guard let command = sender.representedObject as? String else { return }
+    activate()
+    menuChannel.invokeMethod(command, arguments: nil)
+  }
+
   private func activate() {
+    window?.deminiaturize(nil)
     window?.makeKeyAndOrderFront(nil)
     NSApp.activate(ignoringOtherApps: true)
   }
@@ -152,5 +224,8 @@ private class DesktopIntegration {
     }
   }
 
-  deinit { unregisterShortcut() }
+  deinit {
+    unregisterShortcut()
+    if let item = statusItem { NSStatusBar.system.removeStatusItem(item) }
+  }
 }

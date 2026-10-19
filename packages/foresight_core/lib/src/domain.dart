@@ -206,6 +206,14 @@ class Domain {
     );
     if (current.isEmpty) return;
     final source = current.first;
+    // Imports can arrive during first-run setup.
+    // Keep their content durable until a model is configured instead of sending
+    // an IndexDocument request to an explicitly unconfigured helper.
+    if (store.model('embedding') == null &&
+        helper.snapshot?.pipeline == 'unconfigured') {
+      store.state(id, 'pending');
+      return;
+    }
     // A deterministic Calendar/meeting ID can be reused after clear. Delete the
     // old helper copy before indexing its replacement, within the mutation queue.
     if (store.rows(
@@ -244,6 +252,18 @@ class Domain {
       );
     } catch (e) {
       checkWorkspace(generation);
+      // Cover the race before the first helper state event arrives. Other
+      // preconditions and configured-model failures retain their normal errors.
+      if (store.model('embedding') == null &&
+          e is GrpcError &&
+          e.code == StatusCode.failedPrecondition &&
+          e.message == 'Pipeline not initialized') {
+        store.db.execute(
+          "UPDATE sources SET state='pending',error='' WHERE id=? AND revision=? AND deleted=0",
+          [id, source['revision']],
+        );
+        return;
+      }
       store.db.execute(
         "UPDATE sources SET state='failed',error=? WHERE id=? AND revision=? AND deleted=0",
         [e.toString(), id, source['revision']],
@@ -431,6 +451,16 @@ class Domain {
     _checkOpen();
     await reconcile();
     _checkOpen();
+    await indexPendingSources();
+  }
+
+  /// Retry saved imports after model setup, including the specific setup error
+  /// persisted by older versions. Document contents/revisions stay unchanged.
+  Future<void> indexPendingSources() async {
+    _checkOpen();
+    store.db.execute(
+      "UPDATE sources SET state='pending',error='' WHERE deleted=0 AND state='failed' AND error LIKE 'gRPC Error%Pipeline not initialized%'",
+    );
     for (final source in store.sources.where(
       (s) => s['state'] == 'indexing' || s['state'] == 'pending',
     )) {

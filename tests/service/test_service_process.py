@@ -351,13 +351,14 @@ def running(tmp_path, request):
         desktop = ApprovalDesktop(
             tmp_path / "run/application.sock", tmp_path / "data", tmp_path
         )
-        deadline = time.monotonic() + 5
-        while True:
-            try:
-                peer.call("models.embedding", {"path": str(model)})
-                break
-            except RuntimeError:
-                poll_delay(deadline)
+        if getattr(request, "param", None) != "without_embedding":
+            deadline = time.monotonic() + 5
+            while True:
+                try:
+                    peer.call("models.embedding", {"path": str(model)})
+                    break
+                except RuntimeError:
+                    poll_delay(deadline)
         yield {
             "peer": peer,
             "peers": peers,
@@ -384,6 +385,27 @@ def running(tmp_path, request):
         log.seek(0)
         print(log.read())
         log.close()
+
+
+@pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
+def test_onboarding_import_waits_for_model_and_indexes_after_configuration(running):
+    import sqlite3
+
+    document = running["root"] / "onboarding.txt"
+    document.write_text("Saved before model setup. Keep this evidence.")
+    peer = running["peer"]
+    imported = peer.call("sources.import_file", {"path": str(document)})["id"]
+    with sqlite3.connect(running["root"] / "data/application.db") as db:
+        before = db.execute(
+            "SELECT content,revision,state,error FROM sources WHERE id=?", [imported]
+        ).fetchone()
+    assert before == (document.read_text(), 1, "pending", "")
+    peer.call("models.embedding", {"path": str(running["root"] / "fixtures/model.litertlm")})
+    with sqlite3.connect(running["root"] / "data/application.db") as db:
+        after = db.execute(
+            "SELECT content,revision,state,error FROM sources WHERE id=?", [imported]
+        ).fetchone()
+    assert after == (before[0], before[1], "indexed", "")
 
 
 def test_shared_owner_concurrent_writes_search_and_mcp(running):
@@ -851,7 +873,8 @@ def test_url_and_directory_imports_run_in_the_service(running):
         thread.join(timeout=5)
 
 
-def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running):
+@pytest.mark.parametrize("shutdown", ["explicit-stop", "desktop-close"])
+def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running, shutdown):
     import sqlite3
 
     peer = running["peer"]
@@ -871,15 +894,23 @@ def test_service_stop_waits_for_active_capture_and_finalizes_transcript(running)
             "fixture did not deliver audio before shutdown"
         )
         poll_delay(deadline)
-    stopped = subprocess.run(
-        [str(SERVICE), "--stop"],
-        env=running["env"],
-        capture_output=True,
-        text=True,
-        timeout=15,
-    )
-    assert stopped.returncode == 0, stopped.stderr
-    assert running["process"].wait(timeout=5) == 0
+    helper_pid = int(peer.call("status")["helper"]["instanceId"].split("-", 1)[0])
+    if shutdown == "desktop-close":
+        # Leave the agent connected: it must not retain the UI's daemon.
+        running["desktop"].close()
+    else:
+        stopped = subprocess.run(
+            [str(SERVICE), "--stop"],
+            env=running["env"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert stopped.returncode == 0, stopped.stderr
+    assert running["process"].wait(timeout=15) == 0
+    assert not running["path"].exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(helper_pid, 0)
     with sqlite3.connect(
         "file:" + str(running["root"] / "data/application.db") + "?mode=ro", uri=True
     ) as db:

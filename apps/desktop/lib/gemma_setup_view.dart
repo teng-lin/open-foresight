@@ -1,3 +1,4 @@
+import 'model_setup_surface.dart';
 import 'package:foresight_core/remote.dart' show GenerationStatus;
 import 'dart:io';
 import 'dart:async';
@@ -9,7 +10,10 @@ import 'native.dart';
 import 'store.dart';
 
 class GemmaSetupDialog extends StatefulWidget {
+  final VoidCallback? onDone;
+  bool get embedded => onDone != null;
   final Store store;
+  final ModelPreferenceWriter? savePreference;
   final GemmaDownload Function()? createDownload;
   final LocalModelFinder findLocalModel;
   final bool firstRun, needsEmbedding, needsGeneration;
@@ -23,7 +27,9 @@ class GemmaSetupDialog extends StatefulWidget {
   installGeneration;
   const GemmaSetupDialog({
     super.key,
+    this.onDone,
     required this.store,
+    this.savePreference,
     this.createDownload,
     this.findLocalModel = localModelFile,
     this.installGeneration,
@@ -142,6 +148,14 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
                   gemmaModels.last);
   }
 
+  void finish() {
+    if (widget.onDone != null) {
+      widget.onDone!();
+    } else {
+      Navigator.pop(context);
+    }
+  }
+
   void cancel() {
     cancelled = true;
     download?.cancel();
@@ -158,7 +172,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   Future<void> install() async {
     if (working || checkingCache) return;
     if (done) {
-      Navigator.pop(context);
+      finish();
       return;
     }
     final installGeneration = widget.needsGeneration && !isCurrent(selected);
@@ -181,7 +195,13 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         if (!embeddingReady && !embeddingCached) embeddingGemmaModel,
         if (installGeneration && localGeneration(model) == null) model,
       ]) {
-        if (!await confirmModelTerms(context, widget.store, termsModel)) return;
+        if (!await confirmModelTerms(
+          context,
+          widget.store,
+          termsModel,
+          savePreference: widget.savePreference,
+        ))
+          return;
         if (!mounted || cancelled) return;
       }
       download = widget.createDownload?.call() ?? GemmaDownload();
@@ -226,7 +246,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         embeddingReady = true;
       }
       if (!installGeneration) {
-        if (mounted) Navigator.pop(context);
+        if (mounted) finish();
         return;
       }
       setState(() {
@@ -274,7 +294,7 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         return;
       }
       widget.installed(ready, model);
-      if (mounted) Navigator.pop(context);
+      if (mounted) finish();
     } on ModelDownloadCancelled {
       if (mounted) setState(() => status = 'Download cancelled.');
     } catch (failure) {
@@ -318,7 +338,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
   @override
   Widget build(BuildContext context) => PopScope(
     onPopInvokedWithResult: (_, _) => cancel(),
-    child: AlertDialog(
+    child: ModelSetupSurface(
+      embedded: widget.embedded,
       title: Text(
         !widget.needsGeneration
             ? embeddingCached
@@ -431,6 +452,8 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
               Text(
                 !embeddingReady
                     ? 'You can cancel setup without changing existing model registrations.'
+                    : widget.embedded
+                    ? 'Choose your transcription model in the next step.'
                     : 'Speech models are configured separately in Settings.',
               ),
               if (widget.runner.isEmpty)
@@ -463,23 +486,25 @@ class _GemmaSetupDialogState extends State<GemmaSetupDialog> {
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: working
-              ? null
-              : () {
-                  cancel();
-                  Navigator.pop(context);
-                  widget.localSetup();
-                },
-          child: const Text('Use local models'),
-        ),
-        TextButton(
-          onPressed: () {
-            cancel();
-            Navigator.pop(context);
-          },
-          child: const Text('Cancel'),
-        ),
+        if (!widget.embedded)
+          TextButton(
+            onPressed: working
+                ? null
+                : () {
+                    cancel();
+                    finish();
+                    widget.localSetup();
+                  },
+            child: const Text('Use local models'),
+          ),
+        if (!widget.embedded)
+          TextButton(
+            onPressed: () {
+              cancel();
+              finish();
+            },
+            child: const Text('Cancel'),
+          ),
         FilledButton(
           onPressed:
               working ||

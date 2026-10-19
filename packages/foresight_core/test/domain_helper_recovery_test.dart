@@ -12,6 +12,18 @@ import 'package:test/test.dart';
 
 class RecoveryRag extends RagServiceBase {
   void Function()? duringEmbedding;
+  int indexCalls = 0;
+  GrpcError? indexFailure;
+  @override
+  Future<IndexResponse> indexDocument(
+    ServiceCall call,
+    IndexRequest request,
+  ) async {
+    indexCalls++;
+    if (indexFailure != null) throw indexFailure!;
+    return IndexResponse(success: true);
+  }
+
   @override
   Future<ComputeEmbeddingResponse> computeEmbedding(
     ServiceCall call,
@@ -115,6 +127,94 @@ void main() {
         domain.graphEmbeddings(store.sources),
         throwsStateError,
       );
+    },
+  );
+
+  test(
+    'unconfigured model keeps imports durable and retries legacy setup failures',
+    () async {
+      helper.snapshot = control.State(pipeline: 'unconfigured');
+      final pending = store.importText(
+        'Saved document',
+        'Keep all content',
+        'text/plain',
+        'fixture',
+      );
+      final legacy = store.importText(
+        'Calendar event',
+        'Event details',
+        'text/plain',
+        'google-calendar:fixture',
+      );
+      store.state(
+        legacy,
+        'failed',
+        'gRPC Error (code: 9, codeName: FAILED_PRECONDITION, message: Pipeline not initialized, details: [])',
+      );
+      final unrelated = store.importText(
+        'Damaged document',
+        'Keep this too',
+        'text/plain',
+        'fixture',
+      );
+      store.state(unrelated, 'failed', 'A different indexing failure');
+      await domain.index(pending);
+      await domain.indexPendingSources();
+      expect(rag.indexCalls, 0);
+      for (final id in [pending, legacy]) {
+        final source = store.sources.singleWhere((s) => s['id'] == id);
+        expect(source['state'], 'pending');
+        expect(source['error'], isEmpty);
+        expect(source['revision'], 1);
+      }
+      helper.snapshot = control.State(pipeline: 'ready');
+      await domain.indexPendingSources();
+      expect(rag.indexCalls, 2);
+      expect(
+        store.sources.singleWhere((s) => s['id'] == pending)['content'],
+        'Keep all content',
+      );
+      expect(
+        store.sources.singleWhere((s) => s['id'] == legacy)['state'],
+        'indexed',
+      );
+      expect(
+        store.sources.singleWhere((s) => s['id'] == unrelated)['state'],
+        'failed',
+      );
+    },
+  );
+
+  test(
+    'missing-model race is queued but configured and unrelated failures remain failures',
+    () async {
+      final id = store.importText(
+        'Saved before state event',
+        'Evidence',
+        'text/plain',
+        'fixture',
+      );
+      rag.indexFailure = GrpcError.failedPrecondition(
+        'Pipeline not initialized',
+      );
+      await domain.index(id);
+      expect(store.sources.single['state'], 'pending');
+      expect(store.sources.single['error'], isEmpty);
+      final model = File('${root.path}/model.litertlm')
+        ..writeAsStringSync('model fixture');
+      await store.register(
+        'embedding',
+        model.path,
+        '',
+        backend: 'litert_lm_embedding_cpu',
+      );
+      await expectLater(domain.index(id), throwsA(isA<GrpcError>()));
+      expect(store.sources.single['state'], 'failed');
+      store.db.execute("DELETE FROM models WHERE kind='embedding'");
+      rag.indexFailure = GrpcError.invalidArgument('Invalid document');
+      await expectLater(domain.index(id), throwsA(isA<GrpcError>()));
+      expect(store.sources.single['state'], 'failed');
+      expect(store.sources.single['error'], contains('Invalid document'));
     },
   );
 
