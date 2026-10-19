@@ -236,53 +236,13 @@ def trusted_native_work_run(run, repository, own_pr, root=ROOT):
     if trusted_run(run, repository, own_pr):
         return True
     producer = run.get("head_sha")
-    if (
-        run.get("path") != WORKFLOW
-        or run.get("event") != "pull_request"
-        or (run.get("head_repository") or {}).get("full_name") != repository
-        or not isinstance(producer, str)
-        or not re.fullmatch(COMMIT, producer)
+    for final in artifacts.final_approval.approved_final_heads(
+        repository,
+        run,
+        workflow=WORKFLOW,
+        api=artifacts.api,
+        merged_source=artifacts.merged_source,
     ):
-        return False
-    references = run.get("pull_requests") or artifacts.api(
-        repository, f"commits/{producer}/pulls"
-    )
-    for reference in references:
-        number = reference.get("number")
-        if type(number) is not int or number <= 0:
-            continue
-        pull = artifacts.api(repository, f"pulls/{number}")
-        final = pull.get("head", {}).get("sha")
-        if (
-            not pull.get("merged_at")
-            or pull.get("base", {}).get("repo", {}).get("full_name") != repository
-            or pull.get("head", {}).get("repo", {}).get("full_name") != repository
-            or not isinstance(final, str)
-            or not re.fullmatch(COMMIT, final)
-        ):
-            continue
-        ancestor = producer == final
-        if not ancestor:
-            ancestor = artifacts.api(repository, f"compare/{producer}...{final}")[
-                "status"
-            ] in ("ahead", "identical")
-        if not ancestor:
-            # GitHub exposes at most 250 PR commits. Bound API work even if a
-            # malformed/paginated response keeps returning a full page.
-            for page in range(1, 4):
-                commits = artifacts.api(
-                    repository, f"pulls/{number}/commits?per_page=100&page={page}"
-                )
-                if any(commit.get("sha") == producer for commit in commits):
-                    ancestor = True
-                    break
-                if len(commits) < 100:
-                    break
-        if not ancestor:
-            continue
-        approved = {**run, "head_sha": final, "pull_requests": [{"number": number}]}
-        if not artifacts.merged_source(repository, approved):
-            continue
         ensure_commit(root, producer)
         ensure_commit(root, final)
         # Use the current approved conservative selector. Receipt verification
