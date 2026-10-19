@@ -832,16 +832,12 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
     if component not in FILES or not own_head:
         return []
     result = []
-    for status, scope in (
-        (status, scope)
-        for status in ("queued", "in_progress", "waiting", "pending", "requested")
-        for scope in (f"head_sha={own_head}", "branch=main")
-    ):
+    for scope in (f"head_sha={own_head}", "branch=main"):
         page = 1
         while True:
             runs = api(
                 repository,
-                f"actions/workflows/ci-dependencies.yml/runs?{scope}&status={status}&per_page=100&page={page}",
+                f"actions/workflows/ci-dependencies.yml/runs?{scope}&per_page=100&page={page}",
             )["workflow_runs"]
             for run in runs:
                 if (
@@ -851,7 +847,8 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
                         else run.get("head_branch") == "main"
                         and run.get("event") != "pull_request"
                     )
-                    or run.get("status") != status
+                    or run.get("status")
+                    not in ("queued", "in_progress", "waiting", "pending", "requested")
                     or not trusted_run(run, component, own_head, repository, own_pr)
                 ):
                     continue
@@ -859,6 +856,7 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
                     job
                     for job in dependency_jobs(repository, run["id"])
                     if job.get("name") == JOBS[component]
+                    and job.get("conclusion") != "skipped"
                     and job.get("run_attempt", 1) == run.get("run_attempt", 1)
                 ]
                 if jobs and all(job.get("conclusion") is not None for job in jobs):
@@ -961,6 +959,7 @@ def pull(
     artifact_name = name(component, identity)
     deadline = time.monotonic() + max(0, min(wait, 1800))
     qualification_errors: list[ValueError] = []
+    terminal_read = False
     while True:
         artifacts = (
             [api(repository, f"actions/artifacts/{artifact_id}")]
@@ -1082,14 +1081,24 @@ def pull(
                 flush=True,
             )
             return True
+        if terminal_read:
+            if qualification_errors:
+                raise qualification_errors[-1]
+            return False
         if time.monotonic() >= deadline or not waiting_for_dependency(
             repository, component, identity, own_head, own_pr
         ):
+            if wait > 0:
+                # The successful upload/job may become eligible between reads.
+                # Re-read the exact same qualified artifact once, without sleep
+                # or reopening the deadline. Nonwaiting callers stay single-read.
+                terminal_read = True
+                continue
             if qualification_errors:
                 raise qualification_errors[-1]
             return False
         print(f"Waiting for verified dependency/candidate {artifact_name}", flush=True)
-        time.sleep(min(20, max(0, deadline - time.monotonic())))
+        time.sleep(min(60, max(0, deadline - time.monotonic())))
 
 
 def application_descriptor(

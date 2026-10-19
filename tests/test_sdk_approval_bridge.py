@@ -586,3 +586,81 @@ def test_ordinary_pin_keeps_original_sdk_even_with_newer_producer(
         assert original["downloads"] == [5]
     else:
         assert not destination.exists()
+
+
+@pytest.mark.parametrize("prior_wait", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "failure", "expired", "corrupt-zip"])
+def test_internal_wait_completion_race_requalifies_original_zip(
+    original, monkeypatch, prior_wait, outcome
+):
+    entry = original["entry"]
+    original["records"]["actions/runs/99"].update(
+        head_sha="f" * 40, head_branch="main", event="push"
+    )
+    original["job"]["conclusion"] = None
+    monkeypatch.setattr(artifacts, "approved_original", lambda *args: None)
+    monkeypatch.setattr(
+        artifacts, "source_fingerprint_at", lambda *args: entry["legacy_identity"]
+    )
+    monkeypatch.setattr(artifacts, "qualified_producer_control", lambda *args: True)
+    lookups, statuses, delays = [], [], []
+    request = artifacts.api
+
+    def api(repo, route):
+        if route == "actions/artifacts/5":
+            lookups.append(route)
+        return request(repo, route)
+
+    monkeypatch.setattr(artifacts, "api", api)
+
+    def waiting(*args):
+        statuses.append(args)
+        if prior_wait and len(statuses) == 1:
+            return [99]
+        original["job"]["conclusion"] = "failure" if outcome == "failure" else "success"
+        if outcome == "expired":
+            original["records"]["actions/artifacts/5"]["expired"] = True
+        elif outcome == "corrupt-zip":
+            original["payloads"][5] += b"corrupt"
+        return []
+
+    monkeypatch.setattr(artifacts, "waiting_for_dependency", waiting)
+    monkeypatch.setattr(artifacts.time, "monotonic", lambda: 0)
+    monkeypatch.setattr(artifacts.time, "sleep", delays.append)
+    destination = original["root"] / "completion-pinned"
+    options = dict(
+        wait=1800,
+        own_head="f" * 40,
+        own_pr=0,
+        source_run=99,
+        artifact_id=5,
+        artifact_digest=entry["artifact_digest"],
+    )
+    if outcome == "corrupt-zip":
+        with pytest.raises(ValueError, match="ZIP digest"):
+            artifacts.pull(
+                REPOSITORY,
+                "linux-core",
+                entry["legacy_identity"],
+                destination,
+                **options,
+            )
+    else:
+        assert artifacts.pull(
+            REPOSITORY, "linux-core", entry["legacy_identity"], destination, **options
+        ) == (outcome == "success")
+    assert len(lookups) == (3 if prior_wait else 2)
+    assert len(statuses) == (2 if prior_wait else 1)
+    assert delays == ([60] if prior_wait else [])
+    if outcome == "success":
+        assert original["downloads"] == [5]
+        assert (
+            destination / "image.tar"
+        ).read_bytes() == b"original Docker image bytes"
+        proof = json.loads((destination / "source-qualification.json").read_text())
+        assert (
+            proof["artifact_id"] == 5
+            and proof["source_receipt"] == entry["source_receipt"]
+        )
+    else:
+        assert not destination.exists()
