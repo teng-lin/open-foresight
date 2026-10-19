@@ -12,6 +12,7 @@ class SpeechSetupDialog extends StatefulWidget {
   bool get embedded => onDone != null;
   final Store store;
   final ModelPreferenceWriter? savePreference;
+  final GemmaDownload Function()? createDownload;
   final LocalModelFinder findLocalModel;
   final Future<void> Function(File, String, String, bool Function())?
   installSpeech;
@@ -23,6 +24,7 @@ class SpeechSetupDialog extends StatefulWidget {
     this.onDone,
     required this.store,
     this.savePreference,
+    this.createDownload,
     this.findLocalModel = localModelFile,
     this.installSpeech,
     required this.directory,
@@ -116,7 +118,7 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
       error = '';
       progress = null;
     });
-    download = GemmaDownload();
+    download = widget.createDownload?.call() ?? GemmaDownload();
     try {
       final model = selected;
       if (!cached(model) &&
@@ -175,8 +177,8 @@ class _SpeechSetupDialogState extends State<SpeechSetupDialog> {
             if (cancelled) process.kill();
           },
         );
-        if (!mounted || cancelled) return;
       }
+      if (!mounted || cancelled) return;
       widget.installed();
       if (mounted) finish();
     } on ModelDownloadCancelled {

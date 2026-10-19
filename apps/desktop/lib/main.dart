@@ -91,6 +91,7 @@ class DesktopStartup extends StatefulWidget {
   final Future<DesktopConnection> Function(ProfilePaths) connect;
   final VoidCallback quit;
   final void Function(String) configureRuntime;
+  final Future<List<AudioDevice>> Function() deviceLoader;
   const DesktopStartup({
     super.key,
     this.arguments = const [],
@@ -98,6 +99,7 @@ class DesktopStartup extends StatefulWidget {
     this.connect = connectDesktopDomain,
     this.quit = quitDesktop,
     this.configureRuntime = configureProfileRuntime,
+    this.deviceLoader = audioDevices,
   });
   @override
   State<DesktopStartup> createState() => _DesktopStartupState();
@@ -166,6 +168,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
         () => application = Foresight(
           domain,
           commands: ownedCommands,
+          deviceLoader: widget.deviceLoader,
           quickOnLaunch: widget.arguments.contains('--quick-meeting'),
         ),
       );

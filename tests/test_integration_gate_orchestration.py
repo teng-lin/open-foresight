@@ -102,6 +102,12 @@ def test_private_audio_requires_linux_and_private_bus(
 @pytest.mark.parametrize("failure", [None, "readiness", "default", "body"])
 def test_private_audio_retries_and_cleans_all_daemons(tmp_path, monkeypatch, failure):
     monkeypatch.setattr(gates.sys, "platform", "linux")
+    # All daemons are fakes; model the required isolated host independently of
+    # whether the developer's real machine exposes sound devices.
+    real_exists = Path.exists
+    monkeypatch.setattr(
+        Path, "exists", lambda path: False if path == Path("/dev/snd") else real_exists(path)
+    )
     monkeypatch.setattr(gates.time, "sleep", lambda _: None)
     processes, killed, commands = [], [], []
     clock = iter(range(0, 10000, 10))

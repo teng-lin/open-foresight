@@ -5,9 +5,10 @@ import 'dart:io';
 class HyprShortcuts {
   final Directory config;
   final String launcher;
+  final Future<ProcessResult> Function(String, List<String>) run;
   static const begin = '-- BEGIN FORESIGHT GLOBAL SHORTCUT';
   static const end = '-- END FORESIGHT GLOBAL SHORTCUT';
-  HyprShortcuts(this.config, this.launcher);
+  HyprShortcuts(this.config, this.launcher, {this.run = Process.run});
   File get bindings => File('${config.path}/hypr/bindings.lua');
   bool get installed =>
       bindings.existsSync() && bindings.readAsStringSync().contains(begin);
@@ -32,7 +33,7 @@ class HyprShortcuts {
       throw StateError('Install shortcuts from the packaged app.');
     if (!bindings.existsSync())
       throw StateError('Omarchy user bindings.lua is unavailable.');
-    final live = await Process.run('/usr/bin/hyprctl', ['binds', '-j']);
+    final live = await run('/usr/bin/hyprctl', ['binds', '-j']);
     if (live.exitCode != 0)
       throw StateError('Cannot inspect existing desktop shortcuts.');
     final parts = normalized.split(' + ');
@@ -72,13 +73,13 @@ class HyprShortcuts {
     );
     await backup.writeAsString(original);
     await bindings.writeAsString(updated);
-    final reload = await Process.run('/usr/bin/hyprctl', ['reload']);
-    final errors = await Process.run('/usr/bin/hyprctl', ['configerrors']);
+    final reload = await run('/usr/bin/hyprctl', ['reload']);
+    final errors = await run('/usr/bin/hyprctl', ['configerrors']);
     if (reload.exitCode != 0 ||
         errors.exitCode != 0 ||
         errors.stdout.toString().trim().isNotEmpty) {
       await bindings.writeAsString(original);
-      await Process.run('/usr/bin/hyprctl', ['reload']);
+      await run('/usr/bin/hyprctl', ['reload']);
       throw StateError(
         'Desktop rejected the shortcut configuration; previous bindings restored.',
       );
