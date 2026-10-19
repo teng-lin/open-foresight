@@ -574,14 +574,21 @@ jobs:
             for name, job in self.workflow(filename)["jobs"].items():
                 for step in job.get("steps") or []:
                     for line in step.get("run", "").splitlines():
-                        if "ci_artifacts.py pull --component linux-sdk" not in line:
+                        shadow_resolver = "ci_linux_shadow_sdk.py" in line
+                        if (
+                            not shadow_resolver
+                            and "ci_artifacts.py pull --component linux-sdk" not in line
+                        ):
                             continue
                         with self.subTest(workflow=filename, job=name):
                             lexer = shlex.shlex(line, posix=True, punctuation_chars=";")
                             lexer.whitespace_split = True
                             arguments = list(lexer)
                             for flag, variable in (
-                                ("--own-head", "$OWN_HEAD"),
+                                (
+                                    "--source" if shadow_resolver else "--own-head",
+                                    "$OWN_HEAD",
+                                ),
                                 ("--own-pr", "$OWN_PR"),
                             ):
                                 self.assertIn(flag, arguments)
