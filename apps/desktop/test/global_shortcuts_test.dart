@@ -93,7 +93,9 @@ void main() {
       final address = await server.listenAddress(
         DBusAddress.unix(dir: Directory.systemTemp),
       );
-      host = DBusClient(address);
+      // The private Dart server accepts a fixture identity. Supplying it avoids
+      // the library's Linux/Windows-only automatic user-ID lookup on macOS.
+      host = DBusClient(address, authClient: DBusAuthClient(uid: '1000'));
       await host.requestName(GlobalShortcuts.service);
       portal = Portal();
       session = Session();
@@ -104,7 +106,7 @@ void main() {
       shortcuts = GlobalShortcuts(
         (id, token) => activations.add('$id:$token'),
         macOS: false,
-        client: DBusClient(address),
+        client: DBusClient(address, authClient: DBusAuthClient(uid: '1000')),
         changed: () => changes++,
       );
     });

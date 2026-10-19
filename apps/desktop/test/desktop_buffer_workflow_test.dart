@@ -447,8 +447,12 @@ void main() {
           for (final name in ['alpha.txt', 'beta.md', 'gamma.txt'])
             (File(
               '${folder.path}/$name',
-            )..writeAsStringSync('Fixture $name')).path,
+            )..writeAsStringSync('Fixture $name')).resolveSymbolicLinksSync(),
         ];
+        // Discovery canonicalizes selected folders (including macOS /tmp).
+        // Exercise an alias on every host so path expectations stay portable.
+        final selected = Link('${f.root.path}/selected-documents')
+          ..createSync(folder.path);
         f.connection.replies[Operation.sourcesImportFile] = {};
         if (partial)
           f.connection.fileFailures[paths[1]] = StateError(
@@ -458,7 +462,7 @@ void main() {
             f.shell.run(
                   () =>
                       f.shell.sourceFeature.findLocalFiles(
-                            roots: <String>[folder.path],
+                            roots: <String>[selected.path],
                           )
                           as Future<void>,
                 )

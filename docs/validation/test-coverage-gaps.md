@@ -262,6 +262,20 @@ native, service, or desktop source relative to their previously recorded runs,
 apart from this worktree's existing desktop changes; those build outputs were
 reused.
 
+The initial hosted macOS desktop run exposed two portability assumptions in the
+new fixtures: D-Bus's automatic authentication identity lookup supports Linux
+and Windows only, and discovery returns canonical `/private/tmp` paths for
+macOS `/tmp` inputs. Private D-Bus clients now supply an explicit fixture identity;
+file discovery tests use canonical expected paths and select symlinked folders
+on every host. No tests are skipped and production authentication/discovery
+behavior is unchanged. Native/core artifacts and SDK inputs are unchanged, so
+the follow-up can reuse their completed verified artifacts. Actual macOS runtime
+validation still requires the hosted desktop job.
+Both corrected full desktop suites passed locally (240 passed, 17 skipped,
+92.10%), including the Git-free export with development hooks disabled. Analysis
+and formatting passed. Logs are `coverage/desktop/ci-portability-fix.log` and
+`coverage/desktop/ci-portability-export.log`.
+
 ## Reproducing the baseline
 
 From the worktree root, with the pinned Python dependencies already installed:

@@ -63,7 +63,10 @@ void main() {
   testWidgets(
     'file discovery adds folders, filters names, selects visible files and rescans on removal',
     (tester) async {
-      final root = createTestTempDirectorySync('discovery-dialog-');
+      final fixture = createTestTempDirectorySync('discovery-dialog-');
+      final root = Directory('${fixture.path}/documents')..createSync();
+      final selected = Link('${fixture.path}/selected-documents')
+        ..createSync(root.path);
       final first = File('${root.path}/first.txt')..writeAsStringSync('one');
       File('${root.path}/second.md').writeAsStringSync('two');
       List<String>? imported;
@@ -80,7 +83,7 @@ void main() {
                       builder: (_) => FileDiscoverySheet(
                         initialFolders: const [],
                         excludedPaths: const {},
-                        pickFolder: () async => root.path,
+                        pickFolder: () async => selected.path,
                       ),
                     ),
                 child: const Text('Open discovery'),
@@ -103,7 +106,7 @@ void main() {
       await tester.pump();
       await tester.tap(find.text('Import selected (1)'));
       await tester.pumpAndSettle();
-      expect(imported, [first.path]);
+      expect(imported, [first.resolveSymbolicLinksSync()]);
       await tester.tap(find.text('Open discovery'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Add folder'));
