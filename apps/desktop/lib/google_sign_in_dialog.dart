@@ -1,5 +1,6 @@
 import 'package:foresight_core/remote.dart' show GoogleAccount;
 import 'package:flutter/material.dart';
+import 'google_auth.dart' show GranolaReturnFailure;
 import 'package:flutter/services.dart';
 
 class GoogleSignInOutcome {
@@ -22,11 +23,15 @@ class GoogleSignInDialog extends StatefulWidget {
     required this.openBrowser,
     this.returnToApp,
     this.addAccount = false,
+    this.calendarThroughGranola = false,
+    this.completeSignIn,
   });
   final GoogleAccount auth;
   final Future<void> Function(Uri) openBrowser;
   final Future<void> Function()? returnToApp;
   final bool addAccount;
+  final bool calendarThroughGranola;
+  final Future<void> Function(String)? completeSignIn;
 
   @override
   State<GoogleSignInDialog> createState() => _GoogleSignInDialogState();
@@ -36,6 +41,9 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
   bool cancelling = false;
   bool browserOpened = false;
   bool finished = false;
+  bool submittingReturn = false;
+  String returnError = '';
+  final returnUrl = TextEditingController();
 
   @override
   void initState() {
@@ -83,6 +91,38 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
     if (mounted) Navigator.of(context).pop(outcome);
   }
 
+  Future<void> submitReturn() async {
+    if (submittingReturn ||
+        cancelling ||
+        finished ||
+        widget.completeSignIn == null)
+      return;
+    final url = returnUrl.text.trim();
+    if (url.isEmpty) return;
+    setState(() {
+      submittingReturn = true;
+      returnError = '';
+    });
+    try {
+      await widget.completeSignIn!(url);
+      if (mounted) returnUrl.clear();
+    } catch (error) {
+      // Callback URLs contain codes. Never echo them or transport error bodies.
+      if (mounted)
+        setState(
+          () => returnError =
+              error is StateError &&
+                  GranolaReturnFailure.values.any(
+                    (failure) => failure.message == error.message,
+                  )
+              ? error.message.toString()
+              : 'The return link was not accepted. Use the link from this sign-in attempt, or cancel and sign in again.',
+        );
+    } finally {
+      if (mounted) setState(() => submittingReturn = false);
+    }
+  }
+
   void cancel() {
     if (cancelling || finished) return;
     setState(() => cancelling = true);
@@ -92,6 +132,7 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
   @override
   void dispose() {
     if (!finished) widget.auth.cancelSignIn();
+    returnUrl.dispose();
     super.dispose();
   }
 
@@ -105,7 +146,11 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
       },
       child: AlertDialog(
         title: Text(
-          widget.addAccount ? 'Add another account' : 'Connect Google',
+          widget.addAccount
+              ? 'Add another account'
+              : widget.calendarThroughGranola
+              ? 'Connect Calendar through Granola'
+              : 'Connect Google',
         ),
         content: SizedBox(
           width: 400,
@@ -120,6 +165,50 @@ class _GoogleSignInDialogState extends State<GoogleSignInDialog> {
                     ? 'Complete Google sign-in in your browser. If Open Foresight does not reopen, return to the app manually.'
                     : 'Opening Google sign-in in your browser…',
               ),
+              if (widget.calendarThroughGranola) ...[
+                const SizedBox(height: 12),
+                const Text(
+                  'Granola handles sign-in and calendar data. Drive is unavailable with this connection.',
+                ),
+              ],
+              if (widget.calendarThroughGranola &&
+                  widget.completeSignIn != null) ...[
+                const SizedBox(height: 16),
+                const Text(
+                  'If the browser opens Granola, paste the full https://www.granola.ai/app-redirect or granola://login-complete return link from this sign-in here.',
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: returnUrl,
+                  obscureText: true,
+                  autocorrect: false,
+                  enableSuggestions: false,
+                  autofillHints: const [],
+                  maxLength: 16384,
+                  enabled: !cancelling && !submittingReturn,
+                  decoration: const InputDecoration(
+                    labelText: 'Return URL from browser',
+                    counterText: '',
+                  ),
+                  onSubmitted: (_) => submitReturn(),
+                ),
+                const SizedBox(height: 8),
+                FilledButton(
+                  onPressed: cancelling || submittingReturn
+                      ? null
+                      : submitReturn,
+                  child: Text(
+                    submittingReturn
+                        ? 'Submitting return link…'
+                        : 'Complete sign-in with return URL',
+                  ),
+                ),
+                if (returnError.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Text(returnError),
+                  ),
+              ],
               const SizedBox(height: 16),
               const LinearProgressIndicator(),
             ],

@@ -36,6 +36,7 @@ class AppCommands {
     String? activationToken,
     bool quick = true,
     String? command,
+    String? authUrl,
   }) async {
     Socket? socket;
     try {
@@ -45,7 +46,7 @@ class AppCommands {
         timeout: const Duration(seconds: 1),
       );
       socket.write(
-        '${jsonEncode({'version': 1, 'command': command ?? (quick ? 'quick-meeting' : 'activate'), if (activationToken != null) 'activation_token': activationToken})}\n',
+        '${jsonEncode({'version': 1, 'command': command ?? (quick ? 'quick-meeting' : 'activate'), if (activationToken != null) 'activation_token': activationToken, if (authUrl != null) 'auth_url': authUrl})}\n',
       );
       await socket.flush();
       final response = await utf8.decoder
@@ -100,7 +101,7 @@ class AppCommands {
       final line = await socket
           .map((chunk) {
             bytes += chunk.length;
-            if (bytes > 4096) throw StateError('Activation command too large');
+            if (bytes > 20000) throw StateError('Activation command too large');
             return chunk;
           })
           .cast<List<int>>()
@@ -115,7 +116,13 @@ class AppCommands {
             'quick-meeting',
             'stop-meeting',
             'activate',
-          ].contains(message['command'])) {
+            'calendar-auth',
+          ].contains(message['command']) ||
+          (message['command'] == 'calendar-auth' &&
+              (message['auth_url'] is! String ||
+                  !(message['auth_url'] as String).startsWith(
+                    'open-foresight://login-in-progress?',
+                  )))) {
         socket.writeln('rejected');
       } else {
         socket.writeln('queued');
@@ -125,7 +132,10 @@ class AppCommands {
               .then(
                 (action) => action(
                   message['command'] as String,
-                  message['activation_token'] as String?,
+                  message[message['command'] == 'calendar-auth'
+                          ? 'auth_url'
+                          : 'activation_token']
+                      as String?,
                 ),
               )
               .catchError((Object error) {

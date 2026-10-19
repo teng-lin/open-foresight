@@ -9,6 +9,8 @@ import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart';
 
+part 'granola_calendar_auth.dart';
+
 class GoogleEndpoints {
   final Uri authorize, token, revoke, userinfo, drive, calendar;
   GoogleEndpoints({
@@ -58,8 +60,8 @@ class GoogleClient {
   };
 }
 
-/// OAuth access never uses another application's tokens. Loopback listener,
-/// PKCE and state validation bind consent to this app's sign-in attempt.
+/// Direct Google OAuth and an explicitly selected Granola calendar connection.
+/// Each connection obtains its own authorization through the system browser.
 class GoogleAuth implements GoogleAccount {
   static const scopes = [
     'openid',
@@ -70,6 +72,11 @@ class GoogleAuth implements GoogleAccount {
   ];
   final Directory directory;
   final GoogleEndpoints endpoints;
+  final GranolaEndpoints granolaEndpoints;
+  bool _viaGranola = false;
+  String? _granolaNonce;
+  String? _granolaSignInClickId;
+  bool get viaGranola => _viaGranola;
   final HttpClient http;
   final SecretStore secretStore;
   late final String _secretKey = sha256
@@ -104,19 +111,24 @@ class GoogleAuth implements GoogleAccount {
   GoogleAuth(
     this.directory, {
     GoogleEndpoints? endpoints,
+    GranolaEndpoints? granolaEndpoints,
     HttpClient? http,
     File? defaultClient,
     SecretStore? secretStore,
   }) : endpoints = endpoints ?? GoogleEndpoints(),
+       granolaEndpoints = granolaEndpoints ?? GranolaEndpoints(),
        http = http ?? HttpClient(),
        secretStore = secretStore ?? PlatformSecretStore() {
     final config = File('${directory.path}/client.json'),
         tokens = File('${directory.path}/tokens.json');
     try {
       if (config.existsSync()) {
-        client = GoogleClient.parse(
-          jsonDecode(config.readAsStringSync()) as Map<String, dynamic>,
-        );
+        final configuration =
+            jsonDecode(config.readAsStringSync()) as Map<String, dynamic>;
+        _viaGranola = configuration['provider'] == 'granola';
+        client = _viaGranola
+            ? GoogleClient('granola', '')
+            : GoogleClient.parse(configuration);
       } else {
         final bundled =
             defaultClient ??
@@ -145,12 +157,18 @@ class GoogleAuth implements GoogleAccount {
             loaded['expires_at'] is! int) {
           throw StateError('Incomplete saved Google authorization');
         }
+        if ((loaded['provider'] == 'granola') != _viaGranola) {
+          throw StateError(
+            'Saved authorization belongs to a different provider',
+          );
+        }
         final inactive = loaded.remove('saved_accounts');
         if (inactive != null) {
           if (inactive is! List) throw StateError('Invalid saved accounts');
           for (final value in inactive) {
             final saved = Map<String, dynamic>.from(value as Map);
-            if (!_validTokens(saved) ||
+            if ((saved['provider'] == 'granola') != _viaGranola ||
+                !_validTokens(saved) ||
                 _savedAccounts.containsKey(saved['account_sub']) ||
                 saved['account_sub'] == loaded['account_sub']) {
               throw StateError('Invalid saved Google account');
@@ -164,8 +182,9 @@ class GoogleAuth implements GoogleAccount {
     } catch (_) {
       _tokens = null;
       _savedAccounts.clear();
-      loadError =
-          'Saved Google setup could not be loaded. Import your Desktop client configuration and sign in again.';
+      loadError = _viaGranola
+          ? 'Saved Granola calendar authorization could not be loaded. Sign in again.'
+          : 'Saved Google setup could not be loaded. Import your Desktop client configuration and sign in again.';
     }
   }
   static bool _validTokens(Map<String, dynamic> data) =>
@@ -209,7 +228,17 @@ class GoogleAuth implements GoogleAccount {
   @override
   String get photoUrl => _tokens?['picture'] as String? ?? '';
   @override
-  bool get signingIn => _callback != null;
+  bool get signingIn =>
+      _callback != null || (_viaGranola && _authorization != null);
+
+  Future<void> configureGranola() => _configureGranola();
+  void completeGranolaSignIn(Uri uri, {bool manual = false}) =>
+      _completeGranolaSignIn(uri, manual: manual);
+  Future<Map<String, dynamic>> granolaCalendarEvents() {
+    if (!_viaGranola) throw StateError('Granola calendar is not configured.');
+    return _granolaApi('refresh-calendar-events');
+  }
+
   String _random(int bytes) => base64UrlEncode(
     List.generate(bytes, (_) => Random.secure().nextInt(256)),
   ).replaceAll('=', '');
@@ -359,8 +388,8 @@ class GoogleAuth implements GoogleAccount {
     if (_disconnecting) {
       throw RpcError(RpcErrorCode.busy, 'Google account change in progress');
     }
-    final generation = ++_authorizationGeneration;
     cancelSignIn();
+    final generation = ++_authorizationGeneration;
     await _changeCredential(() async {
       final next = _savedAccounts[id];
       if (next == null) throw StateError('Google account is not saved');
@@ -389,7 +418,7 @@ class GoogleAuth implements GoogleAccount {
     if (_disconnecting || _forgetting != null) {
       throw RpcError(RpcErrorCode.busy, 'Google disconnect is in progress');
     }
-    if (connected) {
+    if (connected || (_viaGranola && accounts.isNotEmpty) || signingIn) {
       throw StateError(
         'Disconnect the current Google account before changing its OAuth client.',
       );
@@ -399,6 +428,7 @@ class GoogleAuth implements GoogleAccount {
     );
     await _save('client.json', candidate.toJson());
     client = candidate;
+    _viaGranola = false;
     loadError = '';
   }
 
@@ -407,12 +437,26 @@ class GoogleAuth implements GoogleAccount {
     String method = 'GET',
     String? bearer,
     Map<String, String>? form,
+    Map<String, dynamic>? jsonBody,
     int maximumBytes = 32 * 1024 * 1024,
   }) async {
     if (_closed) throw StateError('Google connection closed');
     final request = await http
         .openUrl(method, uri)
         .timeout(const Duration(seconds: 30));
+    if (jsonBody != null) {
+      request.followRedirects = false;
+      request.headers.contentType = ContentType.json;
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'OpenForesight/GranolaCalendar',
+      );
+      request.headers.set('X-Client-Version', '7.663.2');
+      request.headers.set(
+        'X-Granola-Platform',
+        Platform.isMacOS ? 'macOS' : 'linux',
+      );
+    }
     if (bearer != null) {
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearer');
     }
@@ -430,6 +474,7 @@ class GoogleAuth implements GoogleAccount {
             .join('&'),
       );
     }
+    if (jsonBody != null) request.write(jsonEncode(jsonBody));
     final response = await request.close().timeout(const Duration(seconds: 45));
     final bytes = <int>[];
     await for (final chunk in response.timeout(const Duration(seconds: 30))) {
@@ -465,6 +510,9 @@ class GoogleAuth implements GoogleAccount {
     Future<void> Function(Uri) openBrowser, {
     bool allowConnected = false,
   }) async {
+    if (_viaGranola) {
+      return _authorizeGranola(openBrowser, allowConnected: allowConnected);
+    }
     if (_closed) throw StateError('Google connection closed');
     if (_disconnecting || _forgetting != null) {
       throw RpcError(RpcErrorCode.busy, 'Google disconnect is in progress');
@@ -618,6 +666,7 @@ class GoogleAuth implements GoogleAccount {
 
   @override
   void cancelSignIn() {
+    if (_viaGranola && _authorization != null) _authorizationGeneration++;
     if (_authorization?.isCompleted == false) {
       _authorization!.completeError(
         RpcError(RpcErrorCode.cancelled, 'Google sign-in cancelled'),
@@ -639,6 +688,7 @@ class GoogleAuth implements GoogleAccount {
   }
 
   Future<void> _loadProfile([Map<String, dynamic>? currentIdentity]) async {
+    if (_viaGranola) return _loadGranolaProfile();
     final generation = _authorizationGeneration;
     final subject = account;
     final identity = currentIdentity ?? await apiJson(endpoints.userinfo);
@@ -707,6 +757,7 @@ class GoogleAuth implements GoogleAccount {
   }
 
   Future<String> _refresh() async {
+    if (_viaGranola) return _refreshGranola();
     final generation = _authorizationGeneration;
     final token = _json(
       await request(
@@ -745,6 +796,11 @@ class GoogleAuth implements GoogleAccount {
     Uri uri, {
     int maximumBytes = 32 * 1024 * 1024,
   }) async {
+    if (_viaGranola) {
+      throw StateError(
+        'This connection supports Calendar through Granola. Drive is unavailable.',
+      );
+    }
     var response = await request(
       uri,
       bearer: await accessToken(),
@@ -792,7 +848,7 @@ class GoogleAuth implements GoogleAccount {
   }
 
   Future<void> _revokeBestEffort(String? token) async {
-    if (token == null) return;
+    if (token == null || _viaGranola) return;
     try {
       await request(
         endpoints.revoke,
@@ -816,13 +872,13 @@ class GoogleAuth implements GoogleAccount {
     if (_disconnecting) {
       throw RpcError(RpcErrorCode.busy, 'Google account change in progress');
     }
-    final generation = ++_authorizationGeneration;
     cancelSignIn();
+    final generation = ++_authorizationGeneration;
     _disconnecting = true;
     try {
       await _changeCredential(() async {
         final token = await _refreshCredential(data);
-        if (token != null) {
+        if (token != null && !_viaGranola) {
           final response = await request(
             endpoints.revoke,
             method: 'POST',
