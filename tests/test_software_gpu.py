@@ -28,7 +28,7 @@ def test_cpu_preflight_uses_metadata_retained_from_actual_ci_whisper_log():
     result = SimpleNamespace(
         returncode=0, stdout="my fellow Americans", stderr=diagnostic
     )
-    whisper = gpu.whisper_result(result, allow_unavailable=True)
+    whisper = gpu.whisper_result(result)
     skipped = gpu.litert_ci_preflight(whisper, diagnostic, allow_unavailable=True)
     assert skipped["status"] == "skipped"
     assert skipped["adapter"]["type"] == "cpu"
@@ -75,7 +75,7 @@ def test_only_explicit_ci_cpu_adapter_skips_before_litert_startup(
                 str(tmp_path),
                 "--output",
                 str(output),
-                *(["--allow-unavailable"] if allow_unavailable else []),
+                *(["--allow-litert-unavailable"] if allow_unavailable else []),
             ],
         ),
         patch.object(gpu.Path, "glob", return_value=[tmp_path / "lvp_icd.x86_64.json"]),
@@ -201,29 +201,29 @@ def test_decode_executes_on_gpu_with_sixteen_token_bound(tmp_path, content, deco
     assert '"max_output_tokens": 16' in commands[1]
 
 
-def test_absent_vulkan_device_is_skipped_only_by_explicit_ci_policy():
+@pytest.mark.parametrize("allow_litert_unavailable", [False, True])
+def test_absent_whisper_device_fails_even_with_litert_skips(tmp_path, allow_litert_unavailable):
     unavailable = SimpleNamespace(
-        returncode=0,
-        stdout="CPU fallback transcript",
-        stderr=(
-            "ggml_vulkan: No devices found.\nwhisper_backend_init_gpu: no GPU found\n"
-        ),
+        returncode=0, stdout="CPU fallback transcript",
+        stderr="ggml_vulkan: No devices found.\nwhisper_backend_init_gpu: no GPU found\n",
     )
-    with pytest.raises(RuntimeError, match="failed to execute"):
-        gpu.whisper_result(unavailable)
-    skipped = gpu.whisper_result(unavailable, allow_unavailable=True)
-    assert skipped["status"] == "skipped"
-    assert "no supported GPU" in skipped["reason"]
-    assert skipped["diagnostic"] == unavailable.stderr
-    # Absence never excuses a failing process or an available backend regression.
-    unavailable.returncode = 1
-    with pytest.raises(RuntimeError):
-        gpu.whisper_result(unavailable, allow_unavailable=True)
-    unavailable.returncode = 0
-    unavailable.stderr += "using Vulkan0 backend\n0 = llvmpipe"
-    unavailable.stdout = ""
-    with pytest.raises(RuntimeError, match="no known speech"):
-        gpu.whisper_result(unavailable, allow_unavailable=True)
+    output = tmp_path / "reports"
+    with (
+        patch.object(sys, "argv", [
+            "probe", "--bundle", str(tmp_path), "--models", str(tmp_path),
+            "--output", str(output),
+            *(["--allow-litert-unavailable"] if allow_litert_unavailable else []),
+        ]),
+        patch.object(gpu.Path, "glob", return_value=[tmp_path / "lvp_icd.json"]),
+        patch.object(gpu, "packaged_paths", return_value=(Path("runner"), Path("worker"), {})),
+        patch.object(gpu, "model_file", return_value="model"),
+        patch.object(gpu.subprocess, "run", return_value=unavailable),
+        patch.object(gpu, "litert_probe") as litert,
+        pytest.raises(RuntimeError, match="failed to execute on software Vulkan"),
+    ):
+        gpu.main()
+    litert.assert_not_called()
+    assert unavailable.stderr in (output / "whisper-vulkan.log").read_text()
 
 
 @pytest.mark.parametrize("allow_unavailable", [False, True])
@@ -258,7 +258,7 @@ def test_real_whisper_command_explicitly_selects_the_software_vulkan_device(
                 str(tmp_path),
                 "--output",
                 str(report),
-                *(["--allow-unavailable"] if allow_unavailable else []),
+                *(["--allow-litert-unavailable"] if allow_unavailable else []),
             ],
         ),
         patch.object(gpu.Path, "glob", return_value=[icd]),
@@ -288,34 +288,25 @@ def test_real_whisper_command_explicitly_selects_the_software_vulkan_device(
     assert evidence["physical_gpu_verified"] is False
 
 
-def test_missing_driver_records_skip_without_starting_models_only_when_requested(
-    tmp_path,
+@pytest.mark.parametrize("allow_litert_unavailable", [False, True])
+@pytest.mark.parametrize("icds", [[], [Path("lvp1.json"), Path("lvp2.json")]])
+def test_required_driver_absence_or_ambiguity_fails_before_models(
+    tmp_path, allow_litert_unavailable, icds,
 ):
     arguments = [
-        "probe",
-        "--bundle",
-        str(tmp_path),
-        "--models",
-        str(tmp_path),
-        "--output",
-        str(tmp_path),
+        "probe", "--bundle", str(tmp_path), "--models", str(tmp_path),
+        "--output", str(tmp_path),
+        *(["--allow-litert-unavailable"] if allow_litert_unavailable else []),
     ]
     with (
         patch.object(sys, "argv", arguments),
-        patch.object(gpu.Path, "glob", return_value=[]),
+        patch.object(gpu.Path, "glob", return_value=icds),
         patch.object(gpu, "packaged_paths") as packaged,
         pytest.raises(RuntimeError, match="Exactly one"),
     ):
         gpu.main()
     packaged.assert_not_called()
-    with (
-        patch.object(sys, "argv", [*arguments, "--allow-unavailable"]),
-        patch.object(gpu.Path, "glob", return_value=[]),
-        patch.object(gpu, "packaged_paths") as packaged,
-    ):
-        gpu.main()
-    packaged.assert_not_called()
     evidence = json.loads((tmp_path / "software-gpu.json").read_text())
-    assert evidence["status"] == "skipped"
-    assert "No Mesa lavapipe" in evidence["reason"]
+    assert evidence["status"] == "failed"
+    assert "Install mesa-vulkan-drivers" in evidence["error"]
     assert evidence["physical_gpu_verified"] is False
