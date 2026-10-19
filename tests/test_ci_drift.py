@@ -353,7 +353,7 @@ def test_partial_completed_evidence_still_reports_missing_suites():
     assert "thread-policy" in calls[-1][2]["body"]
 
 
-def test_every_always_upload_in_the_nightly_called_workflow_closure_is_retry_safe():
+def test_every_upload_in_the_nightly_called_workflow_closure_is_retry_safe():
     visited = set()
     evidence = set()
 
@@ -367,7 +367,7 @@ def test_every_always_upload_in_the_nightly_called_workflow_closure_is_retry_saf
             for step in job.get("steps", []):
                 if step.get("uses", "").startswith(
                     "actions/upload-artifact@"
-                ) and "always()" in str(step.get("if", "")):
+                ):
                     assert step["with"].get("overwrite") is True, (filename, name, step)
                     evidence.add(filename)
 
