@@ -1,10 +1,13 @@
 # Test coverage gaps and integration priorities
 
-Assessment date: 2026-10-19. Baseline source: `da39f98d`.
+Assessment date: 2026-10-19. Initial baseline source: `da39f98d`;
+synchronized base: `a739c640` (#140).
 
 The repository has substantial service, native, model, and meeting integration
-tests, but its gates do not establish 90% repository coverage or 95% Python
-coverage. Prioritize first-run setup through the real service, ordinary packaged
+tests. The initial baseline predated #140, which raised the Python gate to 95%,
+enabled subprocess measurement, and expanded its scope to native Python tools.
+The separate percentages do not establish 90% repository-wide coverage.
+Prioritize first-run setup through the real service, ordinary packaged
 startup, and platform acceptance. Raising unit coverage alone cannot establish
 those user journeys.
 
@@ -12,14 +15,15 @@ those user journeys.
 
 | Surface | Configured gate | Evidence and scope |
 | --- | --- | --- |
-| Python | 49.17% combined statements and branches | Fresh offline baseline: **60.98%**; 5,931/9,552 statements (**62.09%**) and 2,342/4,014 branches (**58.35%**). 1,288 passed, 32 skipped. |
+| Python | 95% combined statements and branches after #140 | Synchronized full-suite measurement: **95.94%**, 2,426 passed, 32 skipped, in both the worktree and Git-free export. Historical pre-#140 baseline: **60.98%** on its narrower scope. |
 | Dart core | 90% lines when the coverage gate is enabled | Fresh full-suite measurement: **90.56%**, 8,959/9,893 lines; 980 passed, 10 skipped. `tools/coverage_core.sh` filters generated files and measures `lib`. |
 | Flutter desktop | 90% lines on Linux | Fresh full-suite measurement after the improvements below: **92.10%**, 5,546/6,022 lines; 240 passed, 17 skipped. The previous Linux minimum was 76.35%. The macOS path collects coverage without that desktop minimum check. |
 | Native and helper | No numerical coverage gate found in the reviewed build/workflow paths | CTest and sanitizer suites exercise these components; their passing results do not supply a line or branch percentage. |
 
 Python's [configuration](../../.coveragerc) measures `tools` and `packaging`,
-enables branches, and omits `tools/test_*.py` and oracle test files. It does not
-measure the Dart application, native C++, or `native/setup_models.py`. The default
+enables branches, and omits `tools/test_*.py` and oracle test files. After #140 it
+also measures native Python tools and child processes. It does not
+measure the Dart application or native C++. The default
 [pytest configuration](../../pytest.ini) excludes `tests/integration` and
 `tests/service`, plus four inference CLI harnesses. Their reasons are recorded
 in [pytest-exclusions.json](../../pytest-exclusions.json). Ordinary Python passes
@@ -30,9 +34,9 @@ restricted detector cases, six CTest-only native loader cases, sixteen macOS
 toolchain cases, and three Linux package-tool cases. Preserve those distinctions
 when comparing this result with hosted CI.
 
-The offline report also does not automatically include execution inside child
-Python processes. A script at 0% may have subprocess tests or a separate
-acceptance job; verify that wiring before treating 0% as an absent test.
+The historical offline report below did not include execution inside child
+Python processes. #140 now instruments subprocesses. Compare measurements only
+when their source scope and instrumentation match.
 
 ## Existing integration coverage to retain
 
@@ -140,16 +144,17 @@ cost permits; retain one full meeting journey. Update expected executed counts
 and preserve all current assertions.
 
 Publish separate Python, core, desktop, native, and integration evidence with
-source revision and executed/skip counts. Consider native instrumentation in a
-separate reusable build configuration. Ratchet Python's threshold only after
-measuring stable CI results; enabling subprocess collection changes measurement
-scope and needs an explicit baseline. Do not combine these percentages into a
-repository-wide number.
+source revision and executed/skip counts. Consider native C++ instrumentation
+in a separate reusable build configuration. Preserve the Python 95% gate and
+subprocess collection introduced by #140. Do not combine these percentages into
+a repository-wide number.
 
 ## Python hotspots
 
-The baseline's largest missed statement counts include the following production
-scripts. Percentages here include branches, as configured for Python.
+The initial baseline's largest missed statement counts included the following
+production scripts. These historical percentages predate #140's additional tests
+and measurement scope; they are not current gaps. Reassess remaining missed lines
+from the synchronized report. Percentages include branches.
 
 | File | Coverage | Missed statements | Next useful check |
 | --- | --- | --- | --- |
@@ -174,7 +179,7 @@ The initial audit reused the existing Python environment and left coverage
 configuration unchanged. The desktop improvements below subsequently raise its
 Linux gate; Python coverage configuration remains unchanged.
 
-Validation after adding the tests: **1,303 passed, 32 skipped** in both the
+Historical validation before synchronization: **1,303 passed, 32 skipped** in the
 worktree and a complete source export outside any Git repository. Python's
 combined coverage increased from **60.98% to 61.03%**; the integration runner
 increased from **41.07% to 43.15%**. Ruff, mypy (118 production source files),
@@ -239,6 +244,24 @@ run used the short private disk-backed directory `/home/blackmyth/fc-tmp`, four
 workers, and a two-minute default test timeout. Failed-run output was retained;
 no assertions or coverage filters were removed.
 
+Synchronization with #140 exposed a host-dependent assumption in its private
+audio daemon fixture: the fixture mocked daemon processes but still inspected
+the real `/dev/snd`. The fixture now models the required device-free host for
+that one path; all other filesystem checks remain real. The separate regression
+that rejects host sound devices is retained. The 65 integration-runner and
+orchestration tests pass together with this correction.
+
+After synchronization, both full Python coverage runs passed: **2,426 passed,
+32 skipped**, with **95.94% combined statement/branch coverage** and the inherited
+95% minimum enforced. The post-rebase desktop run again passed **240 tests,
+17 skips**, at **92.10%**, and Flutter analysis and Python lint checks passed.
+Logs are `coverage/python/rebased-verified.log`,
+`coverage/python/rebased-export-verified.log`, and
+`coverage/desktop/rebased-full.log`. The synchronized changes do not alter core,
+native, service, or desktop source relative to their previously recorded runs,
+apart from this worktree's existing desktop changes; those build outputs were
+reused.
+
 ## Reproducing the baseline
 
 From the worktree root, with the pinned Python dependencies already installed:
@@ -250,7 +273,7 @@ python tools/check_integration_inventory.py
 
 Local raw results are retained under `coverage/python/`: `baseline.log` and
 `baseline.json`, followed by `final.log`, `final.json`, and `source-export.log`.
-Generated coverage files are ignored by Git. The source-export run uses a full
+Generated coverage files are ignored by Git. The source-export run used a full
 `git archive` plus the new test file, without `.git`. Keep both the export and
 disk-backed `TMPDIR` outside any Git worktree: an initial rerun with a nested
 temporary directory failed the existing exported-build identity test because Git
