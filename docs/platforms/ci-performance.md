@@ -801,7 +801,8 @@ and resolved Git trees into `trees.txt` (`SHA TREE [PARENTS]`). PR metadata need
 `number`, `state`, `headRefName`, `headRefOid`, `mergedAt`, and `mergeCommit.oid`.
 For merged PRs whose REST run association is empty, only an unambiguous branch
 name in that snapshot may restore attribution. Reused ambiguous branch names are
-left unassigned. Closed unmerged PRs are excluded from push-to-green samples.
+left unassigned. Closed unmerged PRs are excluded from push-to-green samples, while their
+runner-minute costs remain in the per-push accounting.
 Every required check must succeed; missing or skipped required checks never count
 as green. First workflow creation approximates push time, including queue delay.
 

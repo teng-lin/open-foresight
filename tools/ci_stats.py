@@ -148,9 +148,6 @@ def report(runs, prs, trees, current_since):
     per_push = []
     for (number, sha), group in sorted(pushes.items()):
         pull = pulls.get(number, {})
-        # Closed, unmerged PRs are abandoned, not successful delivery samples.
-        if pull.get("state") not in {"OPEN", "MERGED"}:
-            continue
         checks = {}
         for run in sorted(group, key=lambda item: (item["created_at"], item["id"])):
             for job in sorted(
@@ -158,9 +155,14 @@ def report(runs, prs, trees, current_since):
             ):
                 if job["name"] in REQUIRED:
                     checks[job["name"]] = job
-        green = len(checks) == len(REQUIRED) and all(
-            job.get("conclusion") == "success" and job.get("completed_at")
-            for job in checks.values()
+        # Abandoned PRs still consume runner time, but are not delivery samples.
+        green = (
+            pull.get("state") in {"OPEN", "MERGED"}
+            and len(checks) == len(REQUIRED)
+            and all(
+                job.get("conclusion") == "success" and job.get("completed_at")
+                for job in checks.values()
+            )
         )
         end = max(
             (
@@ -174,6 +176,7 @@ def report(runs, prs, trees, current_since):
         per_push.append(
             {
                 "pr": number,
+                "state": pull.get("state"),
                 "sha": sha,
                 "final": sha == pull.get("headRefOid"),
                 "green_minutes": (end - start).total_seconds() / 60 if green else None,

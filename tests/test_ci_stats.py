@@ -74,7 +74,10 @@ def test_full_required_set_and_final_sha_are_necessary_for_green():
     for name in stats.REQUIRED:
         missing = [case for case in jobs if case["name"] != name]
         assert report([run(jobs=missing)])["push_to_green"]["n"] == 0
-    assert report([good], [pull(state="CLOSED")])["pushes"] == []
+    abandoned = report([good], [pull(state="CLOSED")])
+    assert abandoned["push_to_green"]["n"] == 0
+    assert abandoned["pushes"][0]["runner_minutes"] == 2
+    assert abandoned["pushes"][0]["state"] == "CLOSED"
     assert report([good], [pull(head=C)])["final_push_to_green"]["n"] == 0
     jobs[-1]["conclusion"] = "skipped"
     assert report([good])["push_to_green"]["n"] == 0
