@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.fixture
 def repository(tmp_path):
     for name in set(contracts.SHARED).union(
-        *contracts.PLATFORM.values(), contracts.QUALITY_ONLY
+        *contracts.PLATFORM.values(), contracts.QUALITY_ONLY, contracts.EXTERNAL
     ):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +122,7 @@ def test_runner_preserves_pytest_exit_status_and_subprocess_output(monkeypatch, 
         return SimpleNamespace(returncode=status)
 
     monkeypatch.setattr(contracts.subprocess, "run", run)
+    monkeypatch.setattr(contracts, "verify_execution", lambda *args: None)
     with pytest.raises(SystemExit) as result:
         contracts.main()
     assert result.value.code == status
@@ -227,3 +228,89 @@ def test_required_aggregate_rejects_unsuccessful_lint_even_for_editorial_prs(sta
     assert (result.returncode == 0) == (status == "success"), (
         result.stdout + result.stderr
     )
+
+
+@pytest.mark.parametrize("mode", ["all", "skipped", "missing", "partial", "empty"])
+def test_junit_execution_requires_each_assigned_file(tmp_path, monkeypatch, mode):
+    monkeypatch.setattr(contracts, "SHARED", ("tests/test_one.py", "tests/test_two.py"))
+    monkeypatch.setattr(contracts, "PLATFORM", {"linux": ()})
+    path = tmp_path / "results.xml"
+    cases = '<testcase classname="tests.test_one.Example"/>'
+    if mode == "all":
+        cases += '<testcase classname="tests.test_two"/>'
+    elif mode == "skipped":
+        cases += '<testcase classname="tests.test_two"><skipped/></testcase>'
+    elif mode == "partial":
+        cases += '<testcase classname="tests.test_two_extra"/>'
+    elif mode == "empty":
+        cases = ""
+    path.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>")
+    if mode == "all":
+        contracts.verify_execution("linux", path)
+    else:
+        with pytest.raises(ValueError, match="absent or wholly skipped.*test_two.py"):
+            contracts.verify_execution("linux", path)
+
+
+def test_platform_lists_execute_once_under_required_aggregate():
+    import yaml
+
+    workflows = ROOT / ".github/workflows"
+    main = yaml.safe_load((workflows / "macos.yml").read_text())
+
+    def commands(workflow, name):
+        job = workflow["jobs"][name]
+        if "uses" in job and job["uses"].startswith("./.github/workflows/"):
+            called = yaml.safe_load((ROOT / job["uses"]).read_text())
+            return [
+                step.get("run", "")
+                for child in called["jobs"].values()
+                for step in child.get("steps", [])
+            ]
+        return [step.get("run", "") for step in job.get("steps", [])]
+
+    required = main["jobs"]["platform-checks"]["needs"]
+    runs = [command for name in required for command in commands(main, name)]
+    for platform in contracts.PLATFORM:
+        assert (
+            sum(
+                f"tools/platform_python_tests.py --platform {platform}" in run
+                for run in runs
+            )
+            == 1
+        )
+    assert "tests/test_rpm_scriptlets.py" not in contracts.command("linux")
+    assert "tests/test_acceptance_image_cache.py" not in contracts.command("linux")
+    fedora = (workflows / "package-contracts.yml").read_text()
+    assert 'if [[ "$FORMAT" == rpm ]]' in fedora
+    assert "-p test_rpm_scriptlets.py" in fedora
+    acceptance = yaml.safe_load((workflows / "integration-acceptance.yml").read_text())
+    steps = acceptance["jobs"]["ubuntu-package"]["steps"]
+    fixture = next(
+        i
+        for i, step in enumerate(steps)
+        if "pytest tests/test_acceptance_image_cache.py" in step.get("run", "")
+    )
+    assert steps[fixture]["env"]["FORESIGHT_DOCKER_CACHE_TEST"] == "1"
+    assert any(
+        "ubuntu:24.04@sha256:" in step.get("run", "") for step in steps[:fixture]
+    )
+
+
+def test_acceptance_weekly_and_pr_selection_uses_merge_base():
+    text = (ROOT / ".github/workflows/integration-acceptance.yml").read_text()
+    assert "cron: '43 5 * * 1'" in text
+    assert (
+        'elif [[ "$EVENT" == pull_request ]]; then\n            BASE=$(git merge-base "$BASE" HEAD)'
+        in text
+    )
+
+
+def test_loader_identity_retains_real_ctest_ownership():
+    path = "tests/inference/test_litert_identity.py"
+    assert path in contracts.EXTERNAL
+    assert path not in contracts.SHARED
+    source = (ROOT / "native/CMakeLists.txt").read_text()
+    assert "add_test(NAME native_litert_identity" in source
+    assert "../" + path in source
+    assert "sentencepiece==0.2.1" in (ROOT / "requirements-dev.txt").read_text()

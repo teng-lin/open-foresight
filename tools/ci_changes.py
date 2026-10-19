@@ -12,6 +12,8 @@ GATES = ("macos", "linux-native", "linux-document-imports", "linux-bundle", "pac
 
 # Standalone quality/maintenance controls do not change installed application bytes.
 MAINTENANCE = {
+    "tools/ci_stats.py",
+    "tests/test_ci_stats.py",
     ".coveragerc",
     "pytest.ini",
     "pytest-exclusions.json",

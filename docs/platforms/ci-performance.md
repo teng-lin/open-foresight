@@ -753,3 +753,72 @@ The minimal Ubuntu base bootstraps HTTPS with a dated Mozilla CA bundle fetched 
 ### WS-P policy adoption (2026-10-19)
 
 The [restructuring plan](../plans/2026-10-19-ci-restructure-plan.md) keeps repository, source, input identity, original producer attempt, upload-window and checksum checks mandatory. Cost rules are defaults; dedicated producers stay non-cancelling and normal producer waits are bounded at 30 minutes. Main-only publication and removal of stage-result reuse roll out with WS2b/WS2c; the current guarded workflows remain during that transition. This documentation change modifies no SDK input and compiles nothing. Runtime measurements remain at the plan baseline until implementation lands.
+## WS0: measured baseline and inventory follow-ups
+
+The restructuring baseline is the configuration after #148, main `b62e5e02`,
+measured from runs since 2026-10-19 13:57 UTC. These are historical observations,
+not forecasts or results of the follow-ups:
+
+| Measure | Baseline |
+| --- | ---: |
+| App PR final push to green, p50 (6 pushes) | 36.9 min |
+| All green PR commits, p50 / p90 (11 pushes) | 37.2 / 56.6 min |
+| Runner-minutes per app PR push, p50 (20 pushes) | 85 |
+| macOS minutes per app PR push, p50 (range) | 31.6 (27–44) |
+| macOS jobs per app PR push | 6 |
+| Time at the five-macOS-job cap | 59 / 264 min (22%) |
+| Main minutes per identical-tree merge | 84–91 |
+| Acceptance chain floor | 29.5 min |
+| Main acceptance history | 6/6 accepted; `88cf883e` red and untracked |
+
+`tools/ci_stats.py SNAPSHOT_DIRECTORY` reports JSON for each PR push and merged
+PR, plus percentile and mean summaries. Capture REST runs into `runs.jsonl`,
+all-attempt job records into `jobs/<run-id>.jsonl`, PR metadata into `prs.json`,
+and resolved Git trees into `trees.txt` (`SHA TREE [PARENTS]`). PR metadata needs
+`number`, `state`, `headRefName`, `headRefOid`, `mergedAt`, and `mergeCommit.oid`.
+For merged PRs whose REST run association is empty, only an unambiguous branch
+name in that snapshot may restore attribution. Reused ambiguous branch names are
+left unassigned. Closed unmerged PRs are excluded from push-to-green samples.
+Every required check must succeed; missing or skipped required checks never count
+as green. First workflow creation approximates push time, including queue delay.
+
+For `workflow_run` acceptance, save its actual candidate-selection log as
+`logs/<run-id>.txt`. The parser reads the logged source JSON or `source=SHA`;
+it does not equate the workflow's own `head_sha` with the candidate it tested.
+Missing or conflicting candidate evidence is reported as unattributed. Missing
+merge runs and missing tree identities remain explicit unknowns, never zero-cost
+merges. Historical repeated successful jobs are counted once across attempts.
+Use a snapshot bounded to the measurement window and `--current-since TIMESTAMP`
+to distinguish shapes observed in the current configuration from older shapes
+not observed since that cutoff. A shape's absence is an observation, not proof
+that its workflow was deleted. The mixed Oct 16–19 snapshot cannot reproduce the
+current-configuration baseline without filtering and candidate log evidence.
+
+`tools/ci_stats.py --lines` counts physical code lines, excluding blanks,
+comments, and Python docstrings, without Git metadata. It inventories workflows,
+`tools/ci_*`, `tests/test_ci_*`, and its explicit set of historically named CI
+helpers and their tests. The same inventory must be used for the final deletion
+comparison; the frozen pre-WS0 file counts are in
+[ci-restructure-baseline.json](ci-restructure-baseline.json).
+
+The host runner now reads its fresh JUnit report and fails if any assigned file
+is absent or wholly skipped. `test_rpm_scriptlets.py` runs with `rpmspec` in the
+Fedora contract. The opt-in BuildKit fixture runs enabled in Ubuntu acceptance,
+after the pinned Ubuntu base is already present; it compiles no SDK or vendor
+code. `test_litert_identity.py` belongs to the existing `native_litert_identity`
+CTest target rather than an ordinary pytest invocation that always skips it.
+The pinned sentencepiece wheel activates the legacy executor's ordinary math
+contracts on both hosts; authenticated original-model cases retain their
+existing opt-in requirement. These changes preserve the PR suites.
+
+The sentencepiece lock addition changes the assembled Linux SDK image because
+that image installs the development lock. Its core, LiteRT and Whisper build
+inputs are unchanged: reuse those verified component images, and only assemble
+the new SDK layer that installs the additional wheel. No vendor library needs
+recompilation for this Python contract dependency.
+
+Acceptance runs weekly on Mondays at 05:43 UTC. PR selection resolves the merge
+base before calling the common classifier, which is equivalent to diffing
+`base...HEAD` and avoids selecting changes introduced only by advancing main.
+At least five hosted follow-up runs are still needed before claiming measured
+latency or runner-minute savings; no after-value is claimed from local tests.

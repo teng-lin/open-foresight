@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,14 +33,9 @@ SHARED = (
     "tests/contracts/test_descriptor.py",
     "tests/contracts/test_owned_descriptors.py",
     "tests/inference/test_legacy_query_executor.py",
-    "tests/inference/test_litert_identity.py",
 )
 PLATFORM = {
-    # Keep Linux extractors, native packagers and opt-in BuildKit fixtures.
-    "linux": (
-        "tests/test_acceptance_image_cache.py",
-        "tests/test_rpm_scriptlets.py",
-    ),
+    "linux": (),
     # These execute Apple tools/metadata APIs rather than portable mocks.
     "macos": (
         "tests/test_dmg_contract.py",
@@ -53,6 +49,13 @@ PLATFORM = {
 QUALITY_ONLY = {
     "tests/test_build_recipes.py": "All platform/tool probes are monkeypatched.",
     "tests/test_litert_build_orchestration.py": "Host platform/machine are fixture inputs.",
+}
+
+
+EXTERNAL = {
+    "tests/inference/test_litert_identity.py": "native_litert_identity runs real loader fixtures in CTest on both platforms.",
+    "tests/test_rpm_scriptlets.py": "Fedora package contract executes real rpmspec.",
+    "tests/test_acceptance_image_cache.py": "Ubuntu acceptance executes opt-in Docker fixture.",
 }
 
 
@@ -116,7 +119,7 @@ def host_sensitive(path):
 
 
 def inventory(root=ROOT):
-    assigned = set(SHARED).union(*PLATFORM.values(), QUALITY_ONLY)
+    assigned = set(SHARED).union(*PLATFORM.values(), QUALITY_ONLY, EXTERNAL)
     missing = sorted(name for name in assigned if not (root / name).is_file())
     if missing:
         raise ValueError("Missing platform Python contracts: " + ", ".join(missing))
@@ -148,13 +151,34 @@ def command(platform, root=ROOT):
     ]
 
 
+def verify_execution(platform, report):
+    """Reject absent or wholly skipped files, using the real pytest report."""
+    cases = ET.parse(report).getroot().iter("testcase")  # noqa: S314 - local pytest output
+    executed = set()
+    for case in cases:
+        if case.find("skipped") is None:
+            name = case.get("classname", "")
+            for path in SHARED + PLATFORM[platform]:
+                module = path.removesuffix(".py").replace("/", ".")
+                if name == module or name.startswith(module + "."):
+                    executed.add(path)
+    missing = sorted(set(SHARED + PLATFORM[platform]) - executed)
+    if missing:
+        raise ValueError(
+            "Platform contracts absent or wholly skipped: " + ", ".join(missing)
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", required=True, choices=tuple(PLATFORM))
     args = parser.parse_args()
-    raise SystemExit(
-        subprocess.run(command(args.platform), cwd=ROOT, timeout=1800).returncode
-    )
+    report = ROOT / f"coverage/python/{args.platform}-contracts.xml"
+    report.unlink(missing_ok=True)
+    status = subprocess.run(command(args.platform), cwd=ROOT, timeout=1800).returncode
+    if status == 0:
+        verify_execution(args.platform, report)
+    raise SystemExit(status)
 
 
 if __name__ == "__main__":
