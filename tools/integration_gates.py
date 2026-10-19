@@ -335,18 +335,9 @@ def private_pipewire(env, output):
 def meeting_environment(args, env, private):
     data = args.output / "meeting-data"
     screenshots = args.output / "meeting-screenshots"
-    opener = args.output / "meeting-opener"
-    # The service creates FORESIGHT_DATA itself and rejects a directory other
-    # users can read. Screenshot and opener directories are not profile paths.
-    for directory in (screenshots, opener):
-        directory.mkdir(parents=True, exist_ok=True)
-    script = opener / "xdg-open"
-    script.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, pathlib, sys\n"
-        'pathlib.Path(os.environ["FORESIGHT_LINK_OPEN_REPORT"]).write_text(json.dumps(sys.argv[1:]))\n'
-    )
-    script.chmod(0o700)
+    # File reveal is observed by a test-only FileManager1 receiver on the
+    # runner's private session bus; production executable paths stay trusted.
+    screenshots.mkdir(parents=True, exist_ok=True)
     speech = env["FORESIGHT_SPEECH_MODEL"]
     generation = model_file(args.models, "generation")
     embedding = model_file(args.models, "embedding")
@@ -386,7 +377,6 @@ def meeting_environment(args, env, private):
         FORESIGHT_LINK_OPEN_REPORT=str(args.output / "link-open.json"),
         FORESIGHT_MODEL_MANIFEST=str(manifest),
         FORESIGHT_SERVICE=str(args.bundle.resolve() / "bin/foresight-service"),
-        PATH=str(opener) + os.pathsep + meeting.get("PATH", ""),
     )
     return meeting
 
