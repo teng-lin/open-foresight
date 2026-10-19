@@ -9,7 +9,66 @@ import sys
 
 import pytest
 
+from tests.test_pull_request_workflows import parse_workflow
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_hosted_benchmark_is_manual_macos_only_and_preserves_both_coverage_gates():
+    def workflow(name):
+        return parse_workflow((ROOT / ".github/workflows" / name).read_text())
+
+    parent = workflow("macos.yml")
+    dispatch = parent["on"]["workflow_dispatch"]["inputs"]["core_coverage_benchmark"]
+    assert dispatch["type"] == "boolean"
+    assert dispatch["default"] is False
+    caller = parent["jobs"]["macos-stages"]
+    assert (
+        caller["with"]["core_coverage_benchmark"]
+        == "${{ inputs.core_coverage_benchmark || false }}"
+    )
+    macos = workflow("macos-platform-stages.yml")
+    linux = workflow("linux-platform-stages.yml")
+    assert (
+        macos["on"]["workflow_call"]["inputs"]["core_coverage_benchmark"]["default"]
+        is False
+    )
+    assert macos["env"]["FORESIGHT_COVERAGE"] == "1"
+    assert macos["env"]["FORESIGHT_CORE_COVERAGE_MIN"] == "90"
+    assert "FORESIGHT_COVERAGE" not in linux["env"]
+    assert (
+        linux["on"]["workflow_call"]["inputs"]["core_coverage_benchmark"]["default"]
+        is False
+    )
+    assert (
+        parent["jobs"]["linux-native"]["with"]["core_coverage_benchmark"]
+        == "${{ inputs.core_coverage_benchmark || false }}"
+    )
+    for config in (macos, linux):
+        assert "FORESIGHT_CORE_COVERAGE_BENCHMARK" not in config["env"]
+        for name, job in config["jobs"].items():
+            for step in job.get("steps", []):
+                setting = step.get("env", {}).get("FORESIGHT_CORE_COVERAGE_BENCHMARK")
+                if (
+                    config == macos
+                    and name == "core-macos"
+                    and step.get("id") == "stage"
+                ):
+                    assert (
+                        setting == "${{ inputs.core_coverage_benchmark && '1' || '0' }}"
+                    )
+                else:
+                    assert setting is None
+                if (
+                    config == linux
+                    and name == "core-linux"
+                    and step.get("id") == "stage"
+                ):
+                    assert (
+                        step["env"]["FORESIGHT_COVERAGE"]
+                        == "${{ inputs.core_coverage_benchmark && '1' || '0' }}"
+                    )
+                    assert step["env"]["FORESIGHT_CORE_COVERAGE_MIN"] == "90"
 
 
 @pytest.fixture

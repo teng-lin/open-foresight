@@ -2,7 +2,7 @@ name: Model and virtual audio acceptance
 on:
   workflow_dispatch:
   schedule:
-    - cron: '43 5 * * 1'
+    - cron: '43 5 * * *'
   workflow_run:
     workflows: [Platform candidates and checks]
     branches: [main]
@@ -28,6 +28,23 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Observe acceptance dependencies without skipping phases
+        continue-on-error: true
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          python3 tools/ci_acceptance_plan.py --base "$BASE" --event "$EVENT" \
+            --output test-results/acceptance-selection.json
+      - name: Retain acceptance selection observations
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: acceptance-selection-observation
+          path: test-results/acceptance-selection.json
+          if-no-files-found: error
+          retention-days: 30
       - name: Select integration acceptance
         id: select
         env:

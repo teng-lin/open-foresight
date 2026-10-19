@@ -80,133 +80,140 @@ void main() {
       expect(() => HyprShortcuts.normalize(value), throwsStateError);
     }
   });
-  group('private shortcut portal', () {
-    late DBusServer server;
-    late DBusClient host;
-    late Portal portal;
-    late Session session;
-    late GlobalShortcuts shortcuts;
-    late List<String> activations;
-    late int changes;
-    setUp(() async {
-      server = DBusServer();
-      final address = await server.listenAddress(
-        DBusAddress.unix(dir: Directory.systemTemp),
-      );
-      // The private Dart server accepts a fixture identity. Supplying it avoids
-      // the library's Linux/Windows-only automatic user-ID lookup on macOS.
-      host = DBusClient(address, authClient: DBusAuthClient(uid: '1000'));
-      await host.requestName(GlobalShortcuts.service);
-      portal = Portal();
-      session = Session();
-      await host.registerObject(portal);
-      await host.registerObject(session);
-      activations = [];
-      changes = 0;
-      shortcuts = GlobalShortcuts(
-        (id, token) => activations.add('$id:$token'),
-        macOS: false,
-        client: DBusClient(address, authClient: DBusAuthClient(uid: '1000')),
-        changed: () => changes++,
-      );
-    });
-    tearDown(() async {
-      await shortcuts.close();
-      await host.close();
-      await server.close();
-    });
-    test(
-      'registers, binds, receives owned signals, configures and releases session',
-      () async {
-        await shortcuts.enable(preferredTrigger: 'ALT+SHIFT+f');
-        expect(shortcuts.state, 'Registered with desktop');
-        expect(shortcuts.trigger, 'Ctrl+Shift+F');
-        expect(portal.calls.map((c) => c.name), [
-          'Register',
-          'CreateSession',
-          'BindShortcuts',
-        ]);
-        final binding = portal.calls.last.values[1]
-            .asArray()
-            .single
-            .asStruct()[1]
-            .asStringVariantDict();
-        expect(binding['preferred_trigger']!.asString(), 'ALT+SHIFT+f');
-        await shortcuts.enable();
-        expect(portal.calls, hasLength(3));
-        final changed = Completer<void>();
-        final signal = DBusRemoteObjectSignalStream(
-          object: DBusRemoteObject(
-            host,
-            name: host.uniqueName,
-            path: portal.path,
-          ),
-          interface: GlobalShortcuts.interface,
-          name: 'ShortcutsChanged',
-        ).listen((_) => changed.complete());
-        await portal.emitSignal(GlobalShortcuts.interface, 'Activated', [
-          Portal.owned,
-          DBusString('quick-meeting'),
-          DBusUint64(0),
-          DBusDict.stringVariant({
-            'activation_token': DBusString('owned-token'),
-          }),
-        ]);
-        await portal.emitSignal(GlobalShortcuts.interface, 'ShortcutsChanged', [
-          Portal.owned,
-          portal.shortcuts('Alt+Shift+F'),
-        ]);
-        await changed.future.timeout(const Duration(seconds: 5));
-        // A round trip on the consumer connection drains prior ordered signals.
-        await shortcuts.client.getId();
-        expect(activations, ['quick-meeting:owned-token']);
-        expect(shortcuts.trigger, 'Alt+Shift+F');
-        await signal.cancel();
-        await shortcuts.configure();
-        expect(portal.calls.last.name, 'ConfigureShortcuts');
-        session.fail = true;
-        await shortcuts.disable();
-        expect(session.closed, 1);
-        expect(shortcuts.session, isNull);
-        expect(shortcuts.state, 'disabled');
-        expect(changes, greaterThan(2));
-        await shortcuts.enable();
-        expect(portal.calls.where((c) => c.name == 'Register'), hasLength(1));
-      },
-    );
-    for (final method in ['CreateSession', 'BindShortcuts']) {
+  group(
+    'private shortcut portal',
+    () {
+      late DBusServer server;
+      late DBusClient host;
+      late Portal portal;
+      late Session session;
+      late GlobalShortcuts shortcuts;
+      late List<String> activations;
+      late int changes;
+      setUp(() async {
+        server = DBusServer();
+        final address = await server.listenAddress(
+          DBusAddress.unix(dir: Directory.systemTemp),
+        );
+        // The private Dart server accepts a fixture identity. Authentication
+        // must not depend on the runner's actual user ID.
+        host = DBusClient(address, authClient: DBusAuthClient(uid: '1000'));
+        await host.requestName(GlobalShortcuts.service);
+        portal = Portal();
+        session = Session();
+        await host.registerObject(portal);
+        await host.registerObject(session);
+        activations = [];
+        changes = 0;
+        shortcuts = GlobalShortcuts(
+          (id, token) => activations.add('$id:$token'),
+          macOS: false,
+          client: DBusClient(address, authClient: DBusAuthClient(uid: '1000')),
+          changed: () => changes++,
+        );
+      });
+      tearDown(() async {
+        await shortcuts.close();
+        await host.close();
+        await server.close();
+      });
       test(
-        'denied $method leaves no owned session and preserves error state',
+        'registers, binds, receives owned signals, configures and releases session',
         () async {
-          portal.denied = method;
-          await expectLater(shortcuts.enable(), throwsStateError);
+          await shortcuts.enable(preferredTrigger: 'ALT+SHIFT+f');
+          expect(shortcuts.state, 'Registered with desktop');
+          expect(shortcuts.trigger, 'Ctrl+Shift+F');
+          expect(portal.calls.map((c) => c.name), [
+            'Register',
+            'CreateSession',
+            'BindShortcuts',
+          ]);
+          final binding = portal.calls.last.values[1]
+              .asArray()
+              .single
+              .asStruct()[1]
+              .asStringVariantDict();
+          expect(binding['preferred_trigger']!.asString(), 'ALT+SHIFT+f');
+          await shortcuts.enable();
+          expect(portal.calls, hasLength(3));
+          final changed = Completer<void>();
+          final signal = DBusRemoteObjectSignalStream(
+            object: DBusRemoteObject(
+              host,
+              name: host.uniqueName,
+              path: portal.path,
+            ),
+            interface: GlobalShortcuts.interface,
+            name: 'ShortcutsChanged',
+          ).listen((_) => changed.complete());
+          await portal.emitSignal(GlobalShortcuts.interface, 'Activated', [
+            Portal.owned,
+            DBusString('quick-meeting'),
+            DBusUint64(0),
+            DBusDict.stringVariant({
+              'activation_token': DBusString('owned-token'),
+            }),
+          ]);
+          await portal.emitSignal(
+            GlobalShortcuts.interface,
+            'ShortcutsChanged',
+            [Portal.owned, portal.shortcuts('Alt+Shift+F')],
+          );
+          await changed.future.timeout(const Duration(seconds: 5));
+          // A round trip on the consumer connection drains prior ordered signals.
+          await shortcuts.client.getId();
+          expect(activations, ['quick-meeting:owned-token']);
+          expect(shortcuts.trigger, 'Alt+Shift+F');
+          await signal.cancel();
+          await shortcuts.configure();
+          expect(portal.calls.last.name, 'ConfigureShortcuts');
+          session.fail = true;
+          await shortcuts.disable();
+          expect(session.closed, 1);
           expect(shortcuts.session, isNull);
-          expect(shortcuts.state, contains('cancelled or denied'));
-          expect(session.closed, method == 'BindShortcuts' ? 1 : 0);
+          expect(shortcuts.state, 'disabled');
+          expect(changes, greaterThan(2));
+          await shortcuts.enable();
+          expect(portal.calls.where((c) => c.name == 'Register'), hasLength(1));
         },
       );
-    }
-    test(
-      'configuration requires enabled session and portal version two',
-      () async {
-        await expectLater(shortcuts.configure(), throwsStateError);
-        await shortcuts.enable();
-        portal.version = 1;
-        await expectLater(
-          shortcuts.configure(),
-          throwsA(
-            isA<StateError>().having(
-              (e) => e.message,
-              'message',
-              contains('keyboard settings'),
-            ),
-          ),
+      for (final method in ['CreateSession', 'BindShortcuts']) {
+        test(
+          'denied $method leaves no owned session and preserves error state',
+          () async {
+            portal.denied = method;
+            await expectLater(shortcuts.enable(), throwsStateError);
+            expect(shortcuts.session, isNull);
+            expect(shortcuts.state, contains('cancelled or denied'));
+            expect(session.closed, method == 'BindShortcuts' ? 1 : 0);
+          },
         );
-        await shortcuts.close();
-        await expectLater(shortcuts.enable(), throwsStateError);
-      },
-    );
-  });
+      }
+      test(
+        'configuration requires enabled session and portal version two',
+        () async {
+          await expectLater(shortcuts.configure(), throwsStateError);
+          await shortcuts.enable();
+          portal.version = 1;
+          await expectLater(
+            shortcuts.configure(),
+            throwsA(
+              isA<StateError>().having(
+                (e) => e.message,
+                'message',
+                contains('keyboard settings'),
+              ),
+            ),
+          );
+          await shortcuts.close();
+          await expectLater(shortcuts.enable(), throwsStateError);
+        },
+      );
+    },
+    skip: !Platform.isLinux
+        ? 'Linux D-Bus portal protocol requires a private session bus'
+        : false,
+  );
   test(
     'macOS shortcut registration, failure, activation and cleanup use platform channel',
     () async {

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import zipfile
 from unittest.mock import patch
 
 import pytest
@@ -48,6 +49,25 @@ def test_timed_transfer_preserves_checksum_failure(tmp_path, capsys):
         with pytest.raises(ValueError, match="ZIP digest mismatch"):
             cache.lookup_download("owner/repo", {"id": 1}, tmp_path / "artifact.zip")
     assert '"status": "error"' in capsys.readouterr().err
+
+
+def test_corrupt_payload_marks_checksum_verification_phase_failed(tmp_path, capsys):
+    archive = tmp_path / "corrupt.zip"
+    with zipfile.ZipFile(archive, "w") as stream:
+        stream.writestr("identity.json", json.dumps({"sha256": "0" * 64}))
+        stream.writestr("payload.tar.gz", b"corrupt payload")
+    with pytest.raises(ValueError, match="Stage payload checksum mismatch"):
+        cache.read_zip(archive)
+    records = [
+        json.loads(line.removeprefix("CI phase: "))
+        for line in capsys.readouterr().err.splitlines()
+    ]
+    checksum = next(
+        record
+        for record in records
+        if record["phase"] == "stage payload checksum verification"
+    )
+    assert checksum["status"] == "error"
 
 
 def test_probe_stdout_remains_one_json_document_with_timing_on_stderr(tmp_path):

@@ -43,7 +43,8 @@ def restore_input(root, platform, stage, directory, identity, source):
     payload_kind = "native-runtime" if stage == "native" else stage
     if receipt.get("payload_kind", stage) != payload_kind:
         raise ValueError("Prerequisite has an unexpected payload kind")
-    payloads.unpack(root, platform, payload_kind, archive, receipt["content"])
+    with timing.phase("prerequisite TAR verification and extraction"):
+        payloads.unpack(root, platform, payload_kind, archive, receipt["content"])
 
 
 @timing.phase("stage execution")
@@ -192,13 +193,14 @@ def run(
             Path(temporary) / "restored",
         )
         if found["hit"]:
-            payloads.unpack(
-                root,
-                platform,
-                stage,
-                Path(found["download_dir"]) / "payload.tar.gz",
-                found["receipt"]["content"],
-            )
+            with timing.phase("cached stage TAR verification and extraction"):
+                payloads.unpack(
+                    root,
+                    platform,
+                    stage,
+                    Path(found["download_dir"]) / "payload.tar.gz",
+                    found["receipt"]["content"],
+                )
             print(
                 f"Reuse verified {stage}-{platform} from run {found['run_id']} ({identity})",
                 flush=True,
@@ -222,14 +224,17 @@ def run(
                     Path(temporary) / "compilation",
                 )
                 if compilation["hit"]:
-                    payloads.unpack(
-                        root,
-                        platform,
-                        "native",
-                        Path(compilation["download_dir"]) / "payload.tar.gz",
-                        compilation["receipt"]["content"],
-                        force_changed=True,
-                    )
+                    with timing.phase(
+                        "native compiler work TAR verification and extraction"
+                    ):
+                        payloads.unpack(
+                            root,
+                            platform,
+                            "native",
+                            Path(compilation["download_dir"]) / "payload.tar.gz",
+                            compilation["receipt"]["content"],
+                            force_changed=True,
+                        )
                     if compilation.get("configuration_changed"):
                         # Recompute changed CMake defaults instead of inheriting
                         # old cached values. Keep all objects, fetched dependency

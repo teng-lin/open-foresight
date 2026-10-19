@@ -352,21 +352,25 @@ def read_zip(path, destination=None):
         except json.JSONDecodeError as error:
             raise ValueError("Invalid cached stage receipt JSON") from error
         # Do not trust a receipt's checksum without reading the actual payload.
-        with stream.open("payload.tar.gz") as payload:
+        with (
+            timing.phase("stage payload checksum verification"),
+            stream.open("payload.tar.gz") as payload,
+        ):
             digest = hashlib.sha256()
             while block := payload.read(1024 * 1024):
                 digest.update(block)
             checksum = digest.hexdigest()
-        if not isinstance(receipt, dict) or receipt.get("sha256") != checksum:
-            raise ValueError("Stage payload checksum mismatch")
+            if not isinstance(receipt, dict) or receipt.get("sha256") != checksum:
+                raise ValueError("Stage payload checksum mismatch")
         if destination:
-            destination.mkdir(parents=True, exist_ok=False)
-            for member in ("identity.json", "payload.tar.gz"):
-                with (
-                    stream.open(member) as source,
-                    (destination / member).open("wb") as target,
-                ):
-                    shutil.copyfileobj(source, target)
+            with timing.phase("stage ZIP payload extraction"):
+                destination.mkdir(parents=True, exist_ok=False)
+                for member in ("identity.json", "payload.tar.gz"):
+                    with (
+                        stream.open(member) as source,
+                        (destination / member).open("wb") as target,
+                    ):
+                        shutil.copyfileobj(source, target)
         return receipt
 
 
