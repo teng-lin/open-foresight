@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/profile_paths.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
 
@@ -171,6 +172,96 @@ void main() {
     },
   );
 
+  test(
+    'local close preserves pending errors and the public disconnect contract',
+    () async {
+      final client = await ServiceClient.connect(
+        '${f.profile.runtime}/application.sock',
+      );
+      final pending = client.call('fixture.pending');
+      final failure = expectLater(
+        pending,
+        throwsA(
+          allOf(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              'Client closed',
+            ),
+            isNot(isA<RpcError>()),
+          ),
+        ),
+      );
+      await eventually(
+        () => f.requests.any((r) => r['method'] == 'fixture.pending'),
+      );
+      await client.close();
+      await failure;
+      await client.close();
+      for (final request in [
+        () => client.call('after.close'),
+        () => client.stream('after.close').toList(),
+      ]) {
+        await expectLater(
+          request(),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.unavailable)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Application service disconnected',
+                )
+                .having(
+                  (error) => error.runtimeType,
+                  'plain public type',
+                  RpcError,
+                ),
+          ),
+        );
+      }
+      expect(f.requests.where((r) => r['method'] == 'after.close'), isEmpty);
+    },
+  );
+
+  test('local close cannot replace an earlier EOF failure', () async {
+    final client = await ServiceClient.connect(
+      '${f.profile.runtime}/application.sock',
+    );
+    final pending = client.call('fixture.pending');
+    final failure = expectLater(
+      pending,
+      throwsA(
+        isA<RpcError>().having(
+          (error) => error.code,
+          'code',
+          RpcErrorCode.unavailable,
+        ),
+      ),
+    );
+    await eventually(
+      () => f.requests.any((r) => r['method'] == 'fixture.pending'),
+    );
+    f.sockets.last.destroy();
+    await failure;
+    final cause = await client
+        .call('after.eof')
+        .then<Object?>(
+          (_) => fail('Expected EOF'),
+          onError: (Object error) => error,
+        );
+    expect(
+      cause,
+      isA<RpcError>().having(
+        (error) => error.message,
+        'message',
+        'Application service disconnected',
+      ),
+    );
+    await client.close();
+    await expectLater(client.call('after.close'), throwsA(same(cause)));
+  });
+
   for (final malformed in ['json', 'utf8', 'oversized']) {
     test(
       '$malformed service frames fail pending operations and close the client',
@@ -204,7 +295,18 @@ void main() {
           client.stream('after.close').toList(),
           throwsStateError,
         );
+        final cause = await client
+            .call('before.local.close')
+            .then<Object?>(
+              (_) => fail('Expected the original frame failure'),
+              onError: (Object error) => error,
+            );
+        expect(cause, isA<RpcError>());
         await client.close();
+        await expectLater(
+          client.call('after.local.close'),
+          throwsA(same(cause)),
+        );
       },
     );
   }

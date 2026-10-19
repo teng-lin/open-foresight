@@ -158,7 +158,7 @@ class ServiceClient {
   void _fail(Object error, StackTrace st) {
     if (_closed) return;
     _closed = true;
-    _failure = error is SocketException
+    _failure ??= error is SocketException
         ? _ServiceTransportLost()
         : RpcError.from(error);
     for (final c in _pending.values) {
@@ -243,6 +243,12 @@ class ServiceClient {
   }
 
   Future<void> close() async {
+    if (!_closed) {
+      _failure = RpcError(
+        RpcErrorCode.unavailable,
+        'Application service disconnected',
+      );
+    }
     _fail(StateError('Client closed'), StackTrace.current);
   }
 }
