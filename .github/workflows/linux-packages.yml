@@ -7,7 +7,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   bundle:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: write # gh release view must see the unpublished draft.
@@ -53,7 +53,7 @@ jobs:
         if-no-files-found: error
         retention-days: 14
   publish:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && !inputs.rpm_only
     needs:
     - bundle
     - packages
@@ -79,7 +79,7 @@ jobs:
           artifacts/open-foresight-arch-x86-64/*.pkg.tar.zst*
 
   packages:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: bundle
     permissions:
       contents: read
@@ -90,18 +90,23 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-        - format: deb
-          image: ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
-        - format: rpm
-          image: fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80
-        - format: arch
-          image: archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1
+        format: ${{ inputs.rpm_only && fromJSON('["rpm"]') || fromJSON('["deb", "rpm", "arch"]') }}
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
         ref: refs/tags/${{ inputs.tag }}
+    # Use the reviewed controller's sandbox prerequisites with the immutable
+    # tagged packaging recipe and the original, verified application payload.
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.sha }}
+        path: .ci-control
+        sparse-checkout: packaging/ci/prepare-document-sandbox.sh
+        sparse-checkout-cone-mode: false
+    - name: Install current sandbox preflight tooling
+      run: cp .ci-control/packaging/ci/prepare-document-sandbox.sh packaging/ci/prepare-document-sandbox.sh
     - name: Allow isolated document namespaces in package-test containers
       run: bash tools/ci_package_sandbox.sh
     - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
@@ -111,7 +116,7 @@ jobs:
     - name: Native package and installation lifecycle
       env:
         FORMAT: ${{ matrix.format }}
-        IMAGE: ${{ matrix.image }}
+        IMAGE: ${{ matrix.format == 'deb' && 'ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac' || matrix.format == 'rpm' && 'fedora:44@sha256:43b29f65a41eb9c35e1cd5323e3bdf3b655c2357a9f4f1ff2f9c2798e5045d80' || 'archlinux:base-devel@sha256:061679925e5d5028f2df9395d441ce6c4b9accf0157ff3486c06b6962e014ef1' }}
         VERSION: ${{ needs.bundle.outputs.version }}
         RELEASE: ${{ needs.bundle.outputs.release }}
         SOURCE_DATE_EPOCH: ${{ needs.bundle.outputs.epoch }}
@@ -159,8 +164,29 @@ jobs:
         retention-days: 14
 
 on:
+  workflow_dispatch:
+    inputs:
+      candidate_run:
+        description: Successful original candidate run (no recompilation)
+        required: true
+        type: string
+      tag:
+        description: Existing unpublished release tag
+        required: true
+        type: string
+      package_release:
+        description: Existing draft package release number
+        required: true
+        type: string
+      rpm_only:
+        description: Recover only RPM; retain artifacts without uploading to the draft
+        type: boolean
+        default: true
   workflow_call:
     inputs:
+      rpm_only:
+        type: boolean
+        default: false
       candidate_run:
         type: string
         default: "0"
