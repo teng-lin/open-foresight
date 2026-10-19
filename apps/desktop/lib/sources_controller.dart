@@ -342,7 +342,7 @@ class _SourcesController extends _FeatureController {
 
   Future<void> importFolder() async {
     final path = await getDirectoryPath();
-    if (path == null) return;
+    if (!mounted || path == null) return;
     await reviewFolderImport(path);
   }
 

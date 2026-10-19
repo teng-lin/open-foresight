@@ -9,6 +9,33 @@ Map<String, Object?> source(String id, String body, {String? title}) => {
 };
 
 void main() {
+  for (final precedingParagraphs in [0, 1, 30]) {
+    test(
+      'short lexical paragraph stays complete at prefix=$precedingParagraphs',
+      () {
+        const paragraph =
+            'Juniper milestones. The launch date is 7 November 2026.';
+        final document =
+            '${'Earlier unrelated prose. ' * precedingParagraphs}\n\n'
+            '$paragraph\n\n${'Trailing unrelated prose. ' * 200}';
+        final passages = rankAnswerPassages('Juniper milestones', [
+          source('long', document),
+        ], []);
+        expect(passages.first['excerpt'], paragraph);
+      },
+    );
+  }
+  test('lexical title-only fallback expands just its opening paragraph', () {
+    const paragraph = 'Opening unrelated context paragraph.';
+    final passages = rankAnswerPassages('Juniper', [
+      source(
+        'long',
+        '$paragraph\n\n${'Trailing unrelated prose. ' * 200}',
+        title: 'Juniper',
+      ),
+    ], []);
+    expect(passages.single['excerpt'], paragraph);
+  });
   test('lexical windows still expand the complete matched paragraph', () {
     final paragraph =
         'Juniper milestones. ${'Context sentence. ' * 41}'

@@ -468,7 +468,7 @@ class _IntegrationsController extends _FeatureController {
               'Imported ${selection.length - failures.length} of ${selection.length} $kind from Drive.',
             ),
             action: SnackBarAction(
-              label: 'Retry failed files',
+              label: 'Retry failed $kind',
               onPressed: () => unawaited(
                 shell.run(
                   () => importDriveSelection(failedIds, folder: folder),

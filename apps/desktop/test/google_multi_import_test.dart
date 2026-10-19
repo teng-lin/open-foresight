@@ -17,6 +17,7 @@ class BatchDrive extends PendingDrive {
   final Store store;
   bool rejectSecond;
   final imported = <String>[];
+  final importedFolders = <String>[];
   BatchDrive(this.store, {required this.rejectSecond});
 
   @override
@@ -55,6 +56,15 @@ class BatchDrive extends PendingDrive {
     );
     store.state(id, 'indexed');
   }
+
+  @override
+  Future<void> importDriveFolder(
+    String folderId, {
+    bool refreshing = false,
+  }) async {
+    importedFolders.add(folderId);
+    await importDriveFile(folderId);
+  }
 }
 
 class BatchConnection extends TestDesktopConnection {
@@ -65,9 +75,15 @@ class BatchConnection extends TestDesktopConnection {
 }
 
 void main() {
-  for (final partial in [false, true]) {
+  for (final (partial, folder) in [
+    (false, false),
+    (true, false),
+    (true, true),
+  ]) {
     testWidgets(
-      partial
+      folder
+          ? 'Drive folder retry names folders and retries only the failed ID'
+          : partial
           ? 'multi-file Drive import keeps successes and names the rejected file'
           : 'multi-file Drive import imports every selected file',
       (tester) async {
@@ -95,27 +111,40 @@ void main() {
           await tester.pumpAndSettle();
           final dynamic state = tester.state(find.byType(Workspace));
           final importing =
-              state.run(state.integrationFeature.chooseDrive) as Future<void>;
-          await pumpUntil(
-            tester,
-            () => find.text('Third').evaluate().isNotEmpty,
-          );
-          await tester.pump(const Duration(milliseconds: 300));
-          expect(
-            find.text('Download restricted by Google Drive'),
-            findsOneWidget,
-          );
-          final restricted = find.ancestor(
-            of: find.text('Restricted'),
-            matching: find.byType(ListTile),
-          );
-          expect(tester.widget<ListTile>(restricted).onTap, isNull);
-          await tester.tap(find.text('Restricted'));
-          for (final name in ['First', 'Second', 'Third']) {
-            await tester.tap(find.text(name));
+              state.run(() async {
+                    if (folder) {
+                      await state.integrationFeature.importDriveSelection([
+                        'First',
+                        'Second',
+                        'Third',
+                      ], folder: true);
+                    } else {
+                      await state.integrationFeature.chooseDrive();
+                    }
+                  })
+                  as Future<void>;
+          if (!folder) {
+            await pumpUntil(
+              tester,
+              () => find.text('Third').evaluate().isNotEmpty,
+            );
+            await tester.pump(const Duration(milliseconds: 300));
+            expect(
+              find.text('Download restricted by Google Drive'),
+              findsOneWidget,
+            );
+            final restricted = find.ancestor(
+              of: find.text('Restricted'),
+              matching: find.byType(ListTile),
+            );
+            expect(tester.widget<ListTile>(restricted).onTap, isNull);
+            await tester.tap(find.text('Restricted'));
+            for (final name in ['First', 'Second', 'Third']) {
+              await tester.tap(find.text(name));
+            }
+            await tester.pump();
+            await tester.tap(find.text('Import 3 files'));
           }
-          await tester.pump();
-          await tester.tap(find.text('Import 3 files'));
           await pumpUntil(tester, () => !state.busy);
           await tester.pumpAndSettle();
           await importing;
@@ -124,14 +153,20 @@ void main() {
           if (partial) {
             expect(
               state.error,
-              'Imported 2 of 3 files from Drive.\n'
+              'Imported 2 of 3 ${folder ? 'folders' : 'files'} from Drive.\n'
               'Could not import:\nSecond: This file cannot be downloaded by the user.',
             );
             drive.rejectSecond = false;
-            await tester.tap(find.text('Retry failed files'));
+            await tester.tap(
+              find.text('Retry failed ${folder ? 'folders' : 'files'}'),
+            );
             await pumpUntil(tester, () => !state.busy);
             await tester.pumpAndSettle();
             expect(drive.imported, ['First', 'Second', 'Third', 'Second']);
+            expect(
+              drive.importedFolders,
+              folder ? ['First', 'Second', 'Third', 'Second'] : isEmpty,
+            );
             expect(store.sources, hasLength(3));
             expect(state.error, isEmpty);
           } else {

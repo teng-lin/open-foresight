@@ -168,11 +168,16 @@ String _evidenceSection(
   String text,
   int offset,
   String fallback,
-  List<RegExpMatch> headings,
-) {
+  List<RegExpMatch> headings, {
+  bool allowSemanticExpansion = false,
+}) {
   // Short documents are already bounded evidence. Starting at a title or the
   // first paragraph must not discard complementary facts later in the document.
-  if (headings.isEmpty && utf8.encode(text).length <= 4000) return text;
+  if (headings.isEmpty &&
+      text.length <= 4000 &&
+      utf8.encode(text).length <= 4000) {
+    return text;
+  }
   RegExpMatch? start;
   final ancestors = <RegExpMatch>[];
   for (final heading in headings) {
@@ -211,7 +216,10 @@ String _evidenceSection(
   final paragraph = text.substring(paragraphStart, paragraphEnd).trim();
   // A semantic hit can span several paragraphs. Expansion may add context,
   // but must not reduce that hit to only its opening paragraph.
-  if (fallback.length > paragraph.length &&
+  if (allowSemanticExpansion &&
+      text.startsWith(fallback, offset) &&
+      fallback.length > paragraph.length &&
+      fallback.length <= 4000 &&
       fallback.contains(paragraph) &&
       utf8.encode(fallback).length <= 4000) {
     return fallback;
@@ -335,8 +343,9 @@ List<Map<String, Object?>> rankAnswerPassages(
     Map<String, Object?> source,
     String text,
     int offset,
-    String fallback,
-  ) => _evidenceSection(
+    String fallback, {
+    bool allowSemanticExpansion = false,
+  }) => _evidenceSection(
     text,
     offset,
     fallback,
@@ -347,6 +356,7 @@ List<Map<String, Object?>> rankAnswerPassages(
         multiLine: true,
       ).allMatches(text).toList(),
     ),
+    allowSemanticExpansion: allowSemanticExpansion,
   );
   void add(
     Map<String, Object?> source,
@@ -354,12 +364,21 @@ List<Map<String, Object?>> rankAnswerPassages(
     double semanticBonus, {
     double? similarity,
     bool expand = true,
+    bool allowSemanticExpansion = false,
   }) {
     if (expand) {
       text = cleanAnswerText(text);
       final document = cleaned(source);
       final offset = document.indexOf(text);
-      if (offset >= 0) text = section(source, document, offset, text);
+      if (offset >= 0) {
+        text = section(
+          source,
+          document,
+          offset,
+          text,
+          allowSemanticExpansion: allowSemanticExpansion,
+        );
+      }
     }
     if (!_useful(text)) return;
     final canonical = _words(text);
@@ -385,6 +404,7 @@ List<Map<String, Object?>> rankAnswerPassages(
         candidate['text'] as String,
         .25 / (1 + i),
         similarity: (candidate['score'] as num?)?.toDouble(),
+        allowSemanticExpansion: true,
       );
     }
   }

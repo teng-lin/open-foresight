@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:open_foresight/main.dart';
@@ -10,6 +12,44 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 import 'pump_until.dart';
 
 void main() {
+  testWidgets('folder picker completion after disposal opens no review', (
+    tester,
+  ) async {
+    const channel = MethodChannel('plugins.flutter.io/file_selector');
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    final picked = Completer<String?>();
+    var requested = false;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      expect(call.method, 'getDirectoryPath');
+      requested = true;
+      return picked.future;
+    });
+    final root = createTestTempDirectorySync('folder-disposed-');
+    final helper = OfflineHelper('${root.path}/socket', '${root.path}/helper');
+    try {
+      await tester.pumpWidget(
+        Foresight(
+          TestDesktopConnection(Domain(Store('${root.path}/app.db'), helper)),
+          deviceLoader: () async => [],
+        ),
+      );
+      final dynamic state = tester.state(find.byType(Workspace));
+      final work = state.sourceFeature.importFolder() as Future<void>;
+      await tester.pump();
+      expect(requested, isTrue);
+      await tester.pumpWidget(const SizedBox.shrink());
+      picked.complete(root.path);
+      await tester.pump();
+      await work;
+      expect(find.text('Review folder import'), findsNothing);
+      expect(tester.takeException(), isNull);
+    } finally {
+      messenger.setMockMethodCallHandler(channel, null);
+      await helper.close();
+      root.deleteSync(recursive: true);
+    }
+  });
   for (final cancel in [true, false]) {
     testWidgets('folder review imports only checked files, cancel=$cancel', (
       tester,
