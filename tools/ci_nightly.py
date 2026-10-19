@@ -66,6 +66,9 @@ def previous_nightly(repository, commit, force, *, request=request):
                 "summary": f"Original nightly {run['id']} is still active; preserving it."
             }
         run_jobs = jobs(repository, run["id"], request=request)
+        if not any(job["name"] == "nightly-checks" for job in run_jobs):
+            # Pre-rollout producers have no aggregate/issue job to report a retry.
+            continue
         if any(
             job["name"] == "nightly-checks" and job["conclusion"] == "success"
             for job in run_jobs

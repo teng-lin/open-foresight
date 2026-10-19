@@ -54,7 +54,10 @@ def test_original_red_night_retries_only_failed_jobs_once_and_never_waits(monkey
     api, calls = transport(
         monkeypatch,
         [run(conclusion="failure")],
-        [{"name": "build / macos", "conclusion": "failure"}],
+        [
+            {"name": "build / macos", "conclusion": "failure"},
+            {"name": "nightly-checks", "conclusion": "failure"},
+        ],
     )
     result = nightly.previous_nightly("owner/repo", SHA, False, request=api)
     assert "Retry requested" in result["summary"]
@@ -64,7 +67,10 @@ def test_original_red_night_retries_only_failed_jobs_once_and_never_waits(monkey
     api, calls = transport(
         monkeypatch,
         [run(conclusion="failure", run_attempt=2)],
-        [{"name": "build / macos", "conclusion": "failure"}],
+        [
+            {"name": "build / macos", "conclusion": "failure"},
+            {"name": "nightly-checks", "conclusion": "failure"},
+        ],
     )
     with pytest.raises(ValueError, match="failed after its retry"):
         nightly.previous_nightly("owner/repo", SHA, False, request=api)
@@ -105,7 +111,10 @@ def test_skipped_trigger_cannot_hide_original_red_run_and_exercises_are_excluded
             run(id=100, conclusion="failure"),
             run(id=40, head_sha="b" * 40),
         ],
-        [{"name": "build / macos", "conclusion": "failure"}],
+        [
+            {"name": "build / macos", "conclusion": "failure"},
+            {"name": "nightly-checks", "conclusion": "failure"},
+        ],
     )
     nightly.previous_nightly("r", SHA, False, request=api)
     assert any(route == "actions/runs/50/rerun-failed-jobs" for route, _, _ in calls)
@@ -130,19 +139,34 @@ def test_failed_planning_trigger_cannot_recursively_retry_an_exhausted_producer(
             }
         return {
             "jobs": [
+                {"name": "nightly-checks", "conclusion": "failure"},
                 {
                     "name": "plan" if "runs/200/" in route else "build / macos",
                     "conclusion": "failure",
-                }
+                },
             ]
         }
 
     with pytest.raises(ValueError, match="failed after its retry"):
         nightly.previous_nightly("r", SHA, False, request=api)
     assert not any(method != "GET" for _, method in calls)
-    api, _ = transport(monkeypatch, [run(conclusion="failure")])
+    api, _ = transport(
+        monkeypatch,
+        [run(conclusion="failure")],
+        [{"name": "nightly-checks", "conclusion": "failure"}],
+    )
     with pytest.raises(ValueError, match="planning failed"):
         nightly.previous_nightly("r", SHA, False, request=api)
+
+
+def test_pre_rollout_red_producer_without_aggregate_is_not_retried(monkeypatch):
+    api, calls = transport(
+        monkeypatch,
+        [run(conclusion="failure")],
+        [{"name": "build / macos", "conclusion": "failure"}],
+    )
+    assert nightly.previous_nightly("r", SHA, False, request=api) is None
+    assert not any(method != "GET" for _, method, _ in calls)
 
 
 def test_pagination_preserves_all_evidence():
