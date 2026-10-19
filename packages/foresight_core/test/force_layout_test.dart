@@ -4,6 +4,93 @@ import 'package:foresight_core/src/graph_layout.dart';
 
 void main() {
   test(
+    'overlapping groups and stale duplicate edges preserve deterministic geometry',
+    () {
+      final points = {
+        'a': const GraphPoint(-10, 0, 2),
+        'b': const GraphPoint(10, 0, 2),
+        'shared': const GraphPoint(0, 10, 2),
+        'unlabelled': const GraphPoint(0, 5, 2),
+      };
+      final labels = {
+        'a': ['Left'],
+        'b': ['Right'],
+        'shared': ['Left', 'Right'],
+      };
+      final edges = [const GraphEdge('a', 'b', .8)];
+      final clean = forceLabelLayout(points, edges, labels, ['Left', 'Right']);
+      final duplicated = forceLabelLayout(
+        points,
+        [
+          ...edges,
+          const GraphEdge('b', 'a', .8),
+          const GraphEdge('missing', 'a', .5),
+        ],
+        labels,
+        ['Left', 'Right'],
+      );
+      for (final id in points.keys) {
+        final point = clean.points[id]!;
+        expect(
+          [point.x, point.y, point.z].every((value) => value.isFinite),
+          isTrue,
+        );
+        expect(duplicated.points[id]!.x, point.x);
+        expect(duplicated.points[id]!.y, point.y);
+        expect(duplicated.points[id]!.z, point.z);
+      }
+      for (final cluster in clean.clusters) {
+        final members = points.keys
+            .where((id) => labels[id]?.contains(cluster.label) == true)
+            .toList();
+        expect(
+          cluster.center.x,
+          closeTo(
+            members.map((id) => clean.points[id]!.x).reduce((a, b) => a + b) /
+                members.length,
+            1e-9,
+          ),
+        );
+        expect(cluster.radius, greaterThanOrEqualTo(50));
+      }
+      expect(
+        points['a']!.x,
+        -10,
+        reason: 'Organization must not mutate persisted input points',
+      );
+    },
+  );
+
+  test(
+    'disjoint label groups separate even when seeded into the same region',
+    () {
+      final initial = {
+        'a': const GraphPoint(-5, 0, 1),
+        'b': const GraphPoint(5, 0, 1),
+        'c': const GraphPoint(0, 5, 1),
+        'd': const GraphPoint(0, -5, 1),
+      };
+      final result = forceLabelLayout(
+        initial,
+        [],
+        {
+          'a': ['Alpha'],
+          'b': ['Alpha'],
+          'c': ['Beta'],
+          'd': ['Beta'],
+        },
+        ['Alpha', 'Beta'],
+      );
+      final first = result.clusters.first.center,
+          second = result.clusters.last.center;
+      final distanceSquared =
+          (first.x - second.x) * (first.x - second.x) +
+          (first.y - second.y) * (first.y - second.y) +
+          (first.z - second.z) * (first.z - second.z);
+      expect(distanceSquared, greaterThan(10000));
+    },
+  );
+  test(
     'force organization handles singleton and zero-variance PCA seeds',
     () async {
       for (final vectors in <Map<String, List<double>>>[

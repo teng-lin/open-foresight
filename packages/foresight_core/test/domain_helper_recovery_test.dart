@@ -11,6 +11,18 @@ import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
 class RecoveryRag extends RagServiceBase {
+  bool failDelete = false, acknowledgeDelete = true;
+  final deletedDocuments = <String>[];
+  @override
+  Future<DeleteResponse> deleteDocument(
+    ServiceCall call,
+    DeleteRequest request,
+  ) async {
+    deletedDocuments.add(request.documentId);
+    if (failDelete) throw GrpcError.unavailable('delete transport lost');
+    return DeleteResponse(success: acknowledgeDelete);
+  }
+
   void Function()? duringEmbedding;
   int indexCalls = 0;
   GrpcError? indexFailure;
@@ -81,6 +93,7 @@ class RecoveryControl extends control.HelperControlServiceBase {
 }
 
 void main() {
+  final native = Platform.environment['FORESIGHT_NATIVE_LIBRARY'];
   late Directory root;
   late Store store;
   late Helper helper;
@@ -137,6 +150,89 @@ void main() {
         throwsStateError,
       );
     },
+  );
+
+  test(
+    'delete failures retain tombstones and reconciliation retries acknowledged work',
+    () async {
+      final id = store.importText(
+        'Private',
+        'Saved bytes',
+        'text/plain',
+        'fixture',
+      );
+      rag.failDelete = true;
+      await expectLater(domain.delete(id), throwsA(isA<GrpcError>()));
+      expect(store.sources, isEmpty);
+      expect(
+        store.sourceById(id, includeDeleted: true).single['state'],
+        'delete_failed',
+      );
+      rag.failDelete = false;
+      await domain.reconcile();
+      expect(rag.deletedDocuments, [id, id]);
+      expect(
+        store.sourceById(id, includeDeleted: true).single['state'],
+        'deleted',
+      );
+      final replacement = store.importText(
+        'Replacement',
+        'Current bytes',
+        'text/plain',
+        'fixture',
+      );
+      store.db.execute('INSERT INTO pending_helper_deletes VALUES(?,?)', [
+        replacement,
+        1,
+      ]);
+      rag.acknowledgeDelete = false;
+      await expectLater(domain.index(replacement), throwsStateError);
+      expect(rag.indexCalls, 0);
+      expect(store.rows('SELECT * FROM pending_helper_deletes'), hasLength(1));
+      rag.acknowledgeDelete = true;
+      await domain.index(replacement);
+      expect(store.rows('SELECT * FROM pending_helper_deletes'), isEmpty);
+      expect(store.sourceById(replacement).single['state'], 'indexed');
+      helper.snapshot = controlService.value;
+      expect(
+        (await domain.graphEmbeddings(store.sourceSummaries))[replacement],
+        hasLength(3),
+      );
+    },
+  );
+
+  test(
+    'native generation is reacquired from its durable registration on resume',
+    () async {
+      final environment = Map.of(runtimeConfiguration.environment);
+      addTearDown(
+        () => runtimeConfiguration.environment
+          ..clear()
+          ..addAll(environment),
+      );
+      runtimeConfiguration.environment['FORESIGHT_NATIVE'] = native!;
+      final model = File('${root.path}/model.bin')
+        ..writeAsStringSync('fixture');
+      final runner = File('${root.path}/runner')
+        ..writeAsStringSync('#!/bin/sh\nexit 0\n');
+      expect(
+        (await Process.run('/bin/chmod', ['700', runner.path])).exitCode,
+        0,
+      );
+      await store.register('generation', model.path, runner.path);
+      final acquired = await domain.noteEnhancementService();
+      expect(acquired!.loaded, isTrue);
+      expect(await domain.noteEnhancementService(), same(acquired));
+      await domain.resetNoteEnhancementService();
+      expect(acquired.loaded, isFalse);
+      await domain.resume();
+      expect(domain.generator, isNot(same(acquired)));
+      expect(domain.generator!.loaded, isTrue);
+      domain.generator!.close();
+    },
+    skip: native == null
+        ? 'Requires the native runtime supplied by the core CI gate'
+        : false,
   );
 
   test(

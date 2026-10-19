@@ -35,6 +35,32 @@ def test_explicit_resume_restarts_helper_after_automatic_budget_is_exhausted(run
     assert _ready(peer, identity) != identity
 
 
+def test_helper_crash_preserves_committed_data_and_restores_indexing(running):  # noqa: F811 - pytest injects the imported fixture by parameter name.
+    peer = running["peer"]
+    note = peer.call("notes.save", {"title": "Before crash", "body": "Durable note"})
+    source = peer.call(
+        "sources.import",
+        {"title": "Planning", "text": "Mira sends the draft Tuesday."},
+    )["id"]
+    identity = _ready(peer)
+    owner = peer.call("status")["pid"]
+    os.kill(int(identity.split("-")[0]), signal.SIGKILL)
+    # Application SQLite and the public service stay usable during helper loss.
+    after = peer.call("notes.save", {"title": "During recovery", "body": "Also durable"})
+    assert peer.call("status")["pid"] == owner
+    assert {row["id"] for row in peer.call("notes.list")} == {note["id"], after["id"]}
+    assert _ready(peer, identity) != identity
+    assert peer.call("sources.get", {"id": source})["state"] == "indexed"
+    imported = peer.call(
+        "sources.import",
+        {"title": "After recovery", "text": "Atlas review happens Friday."},
+    )["id"]
+    assert peer.call("sources.get", {"id": imported})["state"] == "indexed"
+    results = peer.call("sources.search", {"query": "Atlas review"})
+    assert imported in {row["id"] for row in results}
+    assert peer.call("status")["pid"] == owner
+
+
 @pytest.mark.parametrize("running", ["capture_poll_gate"], indirect=True)
 def test_native_queue_overflow_is_saved_as_meeting_interruption(running):  # noqa: F811 - pytest injects the imported fixture by parameter name.
     capture = running["root"] / "fixtures" / "pw-record"
