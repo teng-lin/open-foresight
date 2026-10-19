@@ -86,6 +86,7 @@ def candidates(versions, identity, protected, retained=()):
         "buildcache",
         "app-buildcache-x86-64",
         "app-deps-buildcache-v1",
+        "acceptance-tools-buildcache-v1",
         *retained,
     }
     return [
@@ -112,6 +113,7 @@ def protected_manifests(component, versions, identity, retained=()):
             "buildcache",
             "app-buildcache-x86-64",
             "app-deps-buildcache-v1",
+            "acceptance-tools-buildcache-v1",
             *retained,
         }
     }

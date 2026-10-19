@@ -74,8 +74,6 @@ void main() {
       port: 0,
     );
     helper = Helper(socket, root.path);
-  });
-  setUp(() {
     addTearDown(() async {
       await helper.close();
       await server.shutdown();
@@ -84,6 +82,13 @@ void main() {
         ..clear()
         ..addAll(environment);
     });
+    // serve() binds the socket without establishing an RPC-ready channel.
+    // Establish fixture readiness outside the production 400 ms adoption probe
+    // so a busy test host cannot turn first-call setup into a second spawn.
+    await helper.client.ping(
+      PingRequest(),
+      options: CallOptions(timeout: const Duration(seconds: 5)),
+    );
   });
   test('a matching helper is adopted before application readiness', () async {
     var ready = 0;

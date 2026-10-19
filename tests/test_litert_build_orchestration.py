@@ -164,8 +164,8 @@ def test_litert_build_binds_wheel_library_vendor_abi_and_test_log(
 @pytest.mark.parametrize(
     "failure,message",
     [
-        ("version", ""),
-        ("machine", ""),
+        ("version", "The pinned source requires Bazel 7.6.1"),
+        ("machine", "Supported build hosts are macOS arm64 and Linux x86_64"),
         ("test-log", "regression"),
         ("metadata", "metadata"),
         ("package", "litert-lm-api"),
@@ -174,7 +174,7 @@ def test_litert_build_binds_wheel_library_vendor_abi_and_test_log(
     ],
 )
 def test_litert_build_never_publishes_receipt_for_unverified_outputs(
-    build_fixture, failure, message
+    build_fixture, failure, message, capsys
 ):
     source, output, state, _ = build_fixture
     if failure == "test-log":
@@ -187,8 +187,14 @@ def test_litert_build_never_publishes_receipt_for_unverified_outputs(
         state["package"] = "different-distribution"
     else:
         state[failure] = False
-    with pytest.raises((SystemExit, RuntimeError), match=message):
-        builder.main()
+    if failure in ("version", "machine"):
+        with pytest.raises(SystemExit) as error:
+            builder.main()
+        assert error.value.code == 2
+        assert message in capsys.readouterr().err
+    else:
+        with pytest.raises(RuntimeError, match=message):
+            builder.main()
     assert not (output / "build-manifest.json").exists()
 
 
