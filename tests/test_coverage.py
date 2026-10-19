@@ -69,7 +69,7 @@ def test_invalid_thresholds_are_rejected(tmp_path, minimum):
     assert "--minimum must be between 0 and 100" in result.stderr
 
 
-@pytest.mark.parametrize("minimum,covered,expected", [(76.35, 77, 0), (76.35, 76, 1)])
+@pytest.mark.parametrize("minimum,covered,expected", [(90, 90, 0), (90, 89, 1)])
 def test_desktop_baseline_accepts_and_rejects_regressions(
     tmp_path, minimum, covered, expected
 ):
