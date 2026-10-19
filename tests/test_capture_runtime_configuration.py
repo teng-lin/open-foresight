@@ -4,6 +4,8 @@ from pathlib import Path
 import json
 import subprocess
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -12,6 +14,8 @@ def test_capture_installation_path_must_be_absolute(tmp_path):
     configured = subprocess.run(
         [
             "cmake",
+            "-G",
+            "Unix Makefiles",
             "-S",
             str(ROOT / "native"),
             "-B",
@@ -27,12 +31,20 @@ def test_capture_installation_path_must_be_absolute(tmp_path):
     assert "must be an absolute installation path" in configured.stderr
 
 
-def test_capture_installation_path_enters_native_compile_definition(tmp_path):
+@pytest.mark.parametrize("inherited_generator", ["Xcode", "Visual Studio 17 2022"])
+def test_capture_installation_path_enters_native_compile_definition(
+    tmp_path, monkeypatch, inherited_generator
+):
+    # Compile-command export is supported only by Makefile/Ninja generators;
+    # a developer's inherited IDE generator must not change this fixture.
+    monkeypatch.setenv("CMAKE_GENERATOR", inherited_generator)
     installed = tmp_path / "trusted installation" / "bin" / "pw-record"
     build = tmp_path / "build"
     subprocess.run(
         [
             "cmake",
+            "-G",
+            "Unix Makefiles",
             "-S",
             str(ROOT / "native"),
             "-B",

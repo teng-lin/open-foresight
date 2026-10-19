@@ -60,5 +60,6 @@ case "$task_format" in
 esac
 test ! -e /usr/bin/open-foresight
 test ! -e /opt/open-foresight
+test ! -e /usr/share/applications/io.openforesight.App.desktop
 test "$(cat /home/package-test/.local/share/open-foresight/install-test-sentinel)" = preserve
 printf 'Native %s installation, startup, reinstall, removal and data preservation passed.\n' "$task_format"

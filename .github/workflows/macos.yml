@@ -113,6 +113,7 @@ jobs:
     - name: Relocated application MCP smoke with minimal environment
       run: |
         .venv/bin/python tools/smoke_macos_bundle.py 'dist/Open Foresight.app' \
+          --expected-revision "$(git rev-parse HEAD)" \
           --output test-results/macos-bundle.json
     - name: Retain development package evidence
       if: always()

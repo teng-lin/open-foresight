@@ -22,19 +22,7 @@ UNSUPPORTED = re.compile(
 )
 
 
-def whisper_result(result, allow_unavailable=False):
-    if (
-        allow_unavailable
-        and result.returncode == 0
-        and "using Vulkan0 backend" not in result.stderr
-        and "ggml_vulkan: No devices found." in result.stderr
-        and "whisper_backend_init_gpu: no GPU found" in result.stderr
-    ):
-        return {
-            "status": "skipped",
-            "reason": "The selected software Vulkan driver exposes no supported GPU device.",
-            "diagnostic": result.stderr,
-        }
+def whisper_result(result):
     if result.returncode or "using Vulkan0 backend" not in result.stderr:
         raise RuntimeError(
             "Whisper failed to execute on software Vulkan: " + result.stderr
@@ -178,25 +166,28 @@ def main():
     parser.add_argument("--models", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--allow-unavailable",
+        "--allow-litert-unavailable",
         action="store_true",
-        help="CI only: record absent GPU/driver support as skipped; runtime failures remain fatal.",
+        help="CI only: allow qualified LiteRT CPU-adapter/unsupported-driver skips; lavapipe and Whisper Vulkan are required.",
     )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     icds = sorted(Path("/usr/share/vulkan/icd.d").glob("lvp_icd*.json"))
-    if not icds and args.allow_unavailable:
+    if len(icds) != 1:
+        message = (
+            "Exactly one installed Mesa lavapipe ICD is required; "
+            f"found {len(icds)} in /usr/share/vulkan/icd.d. "
+            "Install mesa-vulkan-drivers in the integration image."
+        )
         write_report(
             args.output,
             {
-                "status": "skipped",
-                "reason": "No Mesa lavapipe Vulkan ICD is installed on this CI instance.",
+                "status": "failed",
+                "error": message,
                 "physical_gpu_verified": False,
             },
         )
-        return
-    if len(icds) != 1:
-        raise RuntimeError("Exactly one installed Mesa lavapipe ICD is required")
+        raise RuntimeError(message)
     runner, _, environment = packaged_paths(args.bundle)
     with tempfile.TemporaryDirectory(prefix="software-gpu-") as temporary:
         env = software_environment(icds[0], temporary, environment)
@@ -232,17 +223,17 @@ def main():
         report = {
             "driver": "Mesa lavapipe",
             "physical_gpu_verified": False,
-            "whisper": whisper_result(result, args.allow_unavailable),
+            "whisper": whisper_result(result),
         }
         report["litert"] = litert_ci_preflight(
-            report["whisper"], result.stderr, args.allow_unavailable
+            report["whisper"], result.stderr, args.allow_litert_unavailable
         )
         if report["litert"] is None:
             report["litert"] = litert_probe(
                 runner, model_file(args.models, "generation"), env, args.output
             )
         if (
-            args.allow_unavailable
+            args.allow_litert_unavailable
             and report["litert"]["status"] == "unsupported_software_driver"
         ):
             report["litert"]["status"] = "skipped"
