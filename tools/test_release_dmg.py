@@ -131,6 +131,8 @@ def run(args):
                             str(Path(__file__).with_name("smoke_macos_bundle.py")),
                             str(destination),
                             "--desktop",
+                            "--expected-revision",
+                            identity["source_commit"],
                             "--output",
                             str(args.output / "smoke.json"),
                         ],

@@ -485,7 +485,30 @@ def verify_transaction_rollback(source, destination):
     }
 
 
-def smoke(bundle, output, desktop=False):
+class RuntimeRevisionMismatch(RuntimeError):
+    def __init__(self, report):
+        super().__init__(report["error"])
+        self.report = report
+
+
+def verify_runtime_revision(app, expected_revision, report, output):
+    report["runtime_revision"] = json.loads(
+        (app / "Contents/Resources/runtime.json").read_text()
+    ).get("FORESIGHT_RUNTIME_REVISION")
+    if expected_revision is not None:
+        report["expected_revision"] = expected_revision
+        if not expected_revision or report["runtime_revision"] != expected_revision:
+            report["status"] = "failed"
+            report["error"] = (
+                f"Installed runtime revision {report['runtime_revision']!r} "
+                f"does not match installer source commit {expected_revision!r}"
+            )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(report, indent=2) + "\n")
+            raise RuntimeRevisionMismatch(report)
+
+
+def smoke(bundle, output, desktop=False, expected_revision=None):
     if not __debug__:
         raise RuntimeError(
             "Smoke verification requires assertions; run Python without -O or PYTHONOPTIMIZE"
@@ -514,9 +537,7 @@ def smoke(bundle, output, desktop=False):
         app.parent.mkdir()
         copy_application(bundle, app)
         info = metadata(app)
-        report["runtime_revision"] = json.loads(
-            (app / "Contents/Resources/runtime.json").read_text()
-        ).get("FORESIGHT_RUNTIME_REVISION")
+        verify_runtime_revision(app, expected_revision, report, output)
         upgrade_source = root / "Upgrade Source.app"
         copy_application(app, upgrade_source)
         subprocess.run(
@@ -757,6 +778,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("bundle", type=Path)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--expected-revision")
     parser.add_argument(
         "--desktop",
         action="store_true",
@@ -766,12 +788,19 @@ def main(argv=None):
     if sys.platform != "darwin":
         parser.error("Installed Mac bundle smoke requires macOS")
     try:
-        report = smoke(args.bundle.resolve(), args.output, desktop=args.desktop)
+        report = smoke(
+            args.bundle.resolve(),
+            args.output,
+            desktop=args.desktop,
+            expected_revision=args.expected_revision,
+        )
     except Exception as error:
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(
-            json.dumps({"status": "failed", "error": str(error)}) + "\n"
+        evidence = (
+            error.report.copy() if isinstance(error, RuntimeRevisionMismatch) else {}
         )
+        evidence.update(status="failed", error=str(error))
+        args.output.write_text(json.dumps(evidence, indent=2) + "\n")
         raise
     print(json.dumps({key: value for key, value in report.items() if key != "linkage"}))
 
