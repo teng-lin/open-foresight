@@ -100,18 +100,24 @@ Run from a clean checkout with Docker/BuildKit available:
 
 ```sh
 tools/build_linux_sdk.sh
-docker build --file packaging/build.Dockerfile --target artifact \
-  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
-  --output type=local,dest=build/portable .
+tools/build_linux_container.sh
 export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight \
   --format tar --version 0.1.0 --release 1
 ```
 
-The Docker build runs descriptor verification, native CTest, Flutter analysis and
-regular Flutter tests before packaging. Large model downloads and GPU inference
-are not part of this build. The exported bundle includes the GPU-capable Whisper
-runner and LiteRT runtime, with model setup available on first launch.
+The shared wrapper uses the `ci` Docker target, retaining verified SDK and
+application dependency outputs. Python 3.13 and the GitHub CLI are needed on the
+host for qualification; the SDK supplies Dart and Flutter. `--seed` accepts an
+existing qualified dependency directory, and `--sdk-image` selects an already
+available compatible SDK. The build container runs `tools/linux_container_build.sh`
+without tests, packages the bytes, and exports its exact source/build tree with
+checksums and nanosecond timestamps. A second container verifies those inputs and
+runs CTest, core and desktop coverage, service/MCP with a native UI, fast integration
+and Linux host contracts without rebuilding application outputs. The wrapper
+then extracts the verified package to `build/portable/dist/open-foresight/`.
+Large model downloads and GPU inference are separate acceptance gates. The bundle
+includes GPU-capable Whisper and LiteRT, with model setup available on first launch.
 
 Build each installer inside its native distro container, using the same commands
 as CI. These commands install/remove packages only inside disposable containers:
@@ -228,10 +234,7 @@ configuration explicitly through a BuildKit secret:
 
 ```sh
 tools/build_linux_sdk.sh
-docker build --file packaging/build.Dockerfile --target artifact \
-  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
-  --secret id=google_client,src=/path/to/google-client.json \
-  --output type=local,dest=build/portable .
+tools/build_linux_container.sh --google-client /path/to/google-client.json
 ```
 
 This configuration is intentionally copied into the distributed app so every

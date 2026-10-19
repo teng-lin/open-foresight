@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.test_core_coverage_benchmark import gate as gate, run as run_gate
+
 from tools import ci_linux_handoff as handoff
 from tools import verify_application_no_build as idle
 
@@ -153,3 +155,158 @@ def test_ci_identity_is_input_based_and_does_not_hash_a_rebuilt_ci_image(tmp_pat
 )
 def test_idle_guard_rejects_all_planned_generation_compilation_and_failure(output):
     assert idle.planned_work(output) == output
+
+
+@pytest.mark.parametrize("mode", ["build-only", "test-only"])
+@pytest.mark.parametrize("stage", ["core", "desktop"])
+@pytest.mark.parametrize("platform", ["linux", "macos"])
+def test_language_build_and_test_modes_do_not_repeat_compilation_or_suites(
+    gate, mode, stage, platform
+):
+    root, _ = gate
+    coverage = root / "apps/desktop/coverage"
+    coverage.mkdir()
+    (coverage / "lcov.info").write_text("SF:lib/app.dart\nDA:1,1\nend_of_record\n")
+    result, commands = run_gate(
+        gate, stage=stage, platform=platform, FORESIGHT_BUILD_MODE=mode
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = [command["args"] for command in commands]
+    compiled = [item for item in args if item[0] in ("compile", "build")]
+    tests = [item for item in args if item[0] == "test"]
+    assert bool(compiled) == (mode == "build-only")
+    assert bool(tests) == (mode == "test-only")
+    assert any(item[0] == "analyze" for item in args) == (mode == "test-only")
+    assert any(item[0] == "pub" for item in args) == (mode == "build-only")
+    if stage == "desktop" and tests:
+        assert ("--coverage" in tests[0]) == (platform == "linux")
+
+
+@pytest.fixture
+def qualified_handoff(tmp_path, monkeypatch):
+    import zipfile
+    from tools import ci_artifacts as artifacts
+
+    for key, value in {
+        "GITHUB_REPOSITORY": "owner/repo",
+        "GITHUB_RUN_ID": "41",
+        "GITHUB_RUN_ATTEMPT": "2",
+    }.items():
+        monkeypatch.setenv(key, value)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compiled").write_bytes(b"compiled bytes")
+    inputs = tmp_path / "inputs"
+    inputs.write_text("{}")
+    upload = tmp_path / "upload"
+    handoff.pack(source, upload, "a" * 40, inputs)
+    archive = tmp_path / "artifact.zip"
+    with zipfile.ZipFile(archive, "w") as stream:
+        for name in ("source-build.json", "source-build.tar.gz"):
+            stream.write(upload / name, name)
+    checksum = handoff.digest(archive)
+    run = {
+        "id": 41,
+        "event": "pull_request",
+        "head_sha": "a" * 40,
+        "path": ".github/workflows/macos.yml",
+        "repository": {"full_name": "owner/repo"},
+    }
+    artifact = {
+        "id": 51,
+        "name": "linux-src-build-41-2",
+        "expired": False,
+        "workflow_run": {"id": 41},
+        "digest": "sha256:" + checksum,
+        "created_at": "2026-10-19T10:00:30Z",
+    }
+    job = {
+        "id": 61,
+        "run_id": 41,
+        "run_attempt": 2,
+        "head_sha": "a" * 40,
+        "name": "linux-build",
+        "conclusion": "success",
+        "status": "completed",
+        "started_at": "2026-10-19T10:00:00Z",
+        "completed_at": "2026-10-19T10:01:00Z",
+    }
+
+    def api(repository, route):
+        assert repository == "owner/repo"
+        assert route in ("actions/runs/41", "actions/artifacts/51")
+        return run if route.endswith("41") else artifact
+
+    def download(command, **kwargs):
+        assert command == ["gh", "api", "repos/owner/repo/actions/artifacts/51/zip"]
+        kwargs["stdout"].write(archive.read_bytes())
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(artifacts, "api", api)
+    monkeypatch.setattr(artifacts, "dependency_jobs", lambda *args: [job])
+    monkeypatch.setattr(artifacts.subprocess, "run", download)
+    return {
+        "output": tmp_path / "download",
+        "source": "a" * 40,
+        "run": run,
+        "artifact": artifact,
+        "job": job,
+        "checksum": checksum,
+    }
+
+
+def qualify_fixture(value):
+    from tools import integration_application
+
+    # Missing producer fixtures fail at the visibility deadline; do not wait a
+    # wall-clock minute for jobs that this fixture deliberately omitted.
+    with patch.object(integration_application.time, "monotonic", side_effect=[0, 1000]):
+        return handoff.qualify(
+            value["output"], value["source"], 41, 2, 51, value["checksum"], "owner/repo"
+        )
+
+
+def test_handoff_verifies_original_successful_job_attempt_and_downloaded_zip(
+    qualified_handoff,
+):
+    qualify_fixture(qualified_handoff)
+    assert (qualified_handoff["output"] / "source-build.tar.gz").is_file()
+
+
+@pytest.mark.parametrize(
+    "section,field,value",
+    [
+        ("run", "path", ".github/workflows/quality.yml"),
+        ("run", "head_sha", "b" * 40),
+        ("run", "repository", {"full_name": "other/repo"}),
+        ("artifact", "expired", True),
+        ("artifact", "name", "linux-src-build-41-1"),
+        ("artifact", "workflow_run", {"id": 42}),
+        ("artifact", "digest", "sha256:" + "b" * 64),
+        ("artifact", "created_at", "2026-10-19T09:59:00Z"),
+        ("job", "conclusion", "failure"),
+        ("job", "run_attempt", 1),
+        ("job", "name", "linux-bundle"),
+    ],
+)
+def test_handoff_rejects_wrong_provenance_before_execution(
+    qualified_handoff, section, field, value
+):
+    qualified_handoff[section][field] = value
+    with pytest.raises(ValueError):
+        qualify_fixture(qualified_handoff)
+    assert not qualified_handoff["output"].exists()
+
+
+def test_handoff_rejects_actual_zip_corruption_even_if_api_metadata_still_matches(
+    qualified_handoff, monkeypatch
+):
+    from tools import ci_artifacts as artifacts
+
+    def corrupt(command, **kwargs):
+        kwargs["stdout"].write(b"different downloaded bytes")
+
+    monkeypatch.setattr(artifacts.subprocess, "run", corrupt)
+    with pytest.raises(ValueError, match="ZIP digest"):
+        qualify_fixture(qualified_handoff)
+    assert not qualified_handoff["output"].exists()

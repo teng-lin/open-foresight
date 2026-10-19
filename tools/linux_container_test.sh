@@ -16,7 +16,16 @@ export FORESIGHT_LINUX_UI_TEST=1 FORESIGHT_REQUIRE_NATIVE_UI_TEST=1
 export FORESIGHT_FLUTTER_EXECUTABLE=/opt/flutter/bin/flutter LIBGL_ALWAYS_SOFTWARE=1
 export FORESIGHT_PARALLEL_GATES=1 FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=1
 # Preserve diagnostics even when a required test fails.
-trap 'cp -a /src/test-results /out/ 2>/dev/null || true; cp -a /src/coverage /out/ 2>/dev/null || true; chown -R "$OUT_UID:$OUT_GID" /out' EXIT
+task_finish() {
+  mkdir -p /out/test-results /out/apps/desktop
+  cp -a /src/test-results/. /out/test-results/ 2>/dev/null || true
+  cp -a /src/coverage /out/ 2>/dev/null || true
+  cp -a /src/apps/desktop/coverage /out/apps/desktop/ 2>/dev/null || true
+  cp -a /src/build/application-no-build-plan.log /out/test-results/ 2>/dev/null || true
+  cp -a /src/build/Testing/Temporary/LastTest.log /out/test-results/ 2>/dev/null || true
+  chown -R "$OUT_UID:$OUT_GID" /out
+}
+trap task_finish EXIT
 xvfb-run -a dbus-run-session -- bash tools/build.sh --test-only
 xvfb-run -a dbus-run-session -- "$task_python" tools/integration_gates.py \
   --suite fast --native build/native/libforesight_native.so --output test-results/fast-integration

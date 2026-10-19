@@ -231,6 +231,7 @@ def retrieve(
             or not PRODUCERS[consumer].matches_receipt(receipt)
             or receipt["source_commit"] != source
             or receipt["source_run_attempt"] != attempt
+            or (shadow and receipt.get("label") != "")
             or (
                 PRODUCERS[consumer].receipt_tier is not None
                 and receipt.get("tier") != PRODUCERS[consumer].receipt_tier

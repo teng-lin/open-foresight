@@ -24,6 +24,8 @@ NATIVE_PATHS = (
     "build/Makefile",
     "build/cmake_install.cmake",
     "build/CTestTestfile.cmake",
+    "test-results/linux/native",
+    "test-results/macos/native",
     "build/native",
     "build/services",
     "build/macos",

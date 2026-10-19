@@ -19,6 +19,8 @@ import stat
 import subprocess
 import sys
 import tarfile
+import tempfile
+import zipfile
 
 EXCLUDED = {".git", ".venv", "build/_deps"}
 EXTERNAL_LINK_ROOTS = ("/opt/", "/root/.pub-cache/", "/usr/")
@@ -263,6 +265,7 @@ def qualify(directory, revision, run_id, attempt, artifact_id, checksum, reposit
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from tools import ci_artifacts as artifacts
     from tools.ci_producer_trust import PRODUCERS
+    from tools.integration_application import original_producer
 
     if (
         not re.fullmatch(r"[a-f0-9]{40}", revision)
@@ -284,26 +287,48 @@ def qualify(directory, revision, run_id, attempt, artifact_id, checksum, reposit
         raise ValueError("Handoff producer repository/workflow/source mismatch")
     artifact = artifacts.api(repository, f"actions/artifacts/{artifact_id}")
     if (
-        artifact.get("name") != f"linux-src-build-{run_id}-{attempt}"
+        artifact.get("id") != artifact_id
+        or artifact.get("name") != f"linux-src-build-{run_id}-{attempt}"
         or artifact.get("expired") is not False
         or artifact.get("digest") != "sha256:" + checksum
         or artifact.get("workflow_run", {}).get("id") != run_id
     ):
         raise ValueError("Handoff differs from the original artifact upload")
-    jobs = [
-        job
-        for job in artifacts.dependency_jobs(repository, run_id)
-        if producer.matches_job(job)
-        and job.get("conclusion") == "success"
-        and job.get("run_attempt", 1) == attempt
-        and job.get("head_sha") == run.get("head_sha")
-        and artifacts.in_producer_attempt(artifact, job)
-    ]
-    if len(jobs) != 1:
-        raise ValueError(
-            "Handoff requires its unique successful original producer attempt"
-        )
+    original_producer(
+        repository,
+        run["head_sha"],
+        run_id,
+        attempt,
+        artifact,
+        consumer="shadow-handoff",
+    )
+    if directory.exists() or directory.is_symlink():
+        raise ValueError("Choose an absent handoff output directory")
+    with tempfile.TemporaryDirectory(prefix="linux-handoff-") as temporary:
+        archive = Path(temporary) / "handoff.zip"
+        artifacts.download_zip(repository, artifact, archive)
+        with zipfile.ZipFile(archive) as stream:
+            if len(stream.namelist()) != 2 or set(stream.namelist()) != {
+                "source-build.json",
+                "source-build.tar.gz",
+            }:
+                raise ValueError("Unexpected handoff artifact members")
+            directory.mkdir(parents=True)
+            stream.extractall(directory)  # noqa: S202 - Exact flat members and ZIP digest verified.
     manifest = json.loads((directory / "source-build.json").read_text())
+    expected_tier = (
+        "pr"
+        if run["event"] == "pull_request"
+        else "preview"
+        if run["path"] == ".github/workflows/preview-packages.yml"
+        else "sweep"
+    )
+    if manifest.get("tier") != expected_tier or (
+        expected_tier != "preview" and manifest.get("label") != ""
+    ):
+        raise ValueError(
+            "Handoff receipt tier or label differs from its producer scope"
+        )
     recorded = manifest.get("producer", {})
     if (
         manifest.get("source") != revision

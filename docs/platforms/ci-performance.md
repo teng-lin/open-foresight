@@ -993,3 +993,64 @@ empty, pending and cancelled suite jobs provide no result. A cancelled/replaced
 issue job does not discard its run's otherwise completed test evidence, and a
 stale queued writer reports the newer tests instead of assuming a replacement
 writer will run.
+
+## WS2a Ubuntu shadow build and test
+
+The additional `linux-build`, `linux-test` and `linux-shadow-comparison` jobs in
+`macos.yml` observe the Ubuntu design while the existing required platform and
+acceptance aggregates keep their current dependencies. These jobs never publish
+registry images or caches. They restore the existing verified SDK and qualified
+Make dependency seed before building the secret-free Docker `ci` target. A cache
+miss may rebuild that application test image, while unchanged SDKs and dependency
+objects remain verified and reused.
+
+`tools/build.sh --build-only` compiles native products, service/MCP AOT and Flutter
+release without running suites. `--test-only` first rejects any nonempty full
+application build plan, then runs CTest and the existing Dart/service gates against
+the restored outputs. Compiler, generated-file and link commands fail that guard;
+Make's recursive no-work bookkeeping is retained in a diagnostic log. Dart tests
+and analysis run only in the test phase; AOT/release compilation runs only in the
+build phase. Linux retains both 90% coverage gates. macOS collects desktop coverage
+when its gate/report configuration requests it, and the ordinary all-mode path
+continues to build and test.
+
+`tools/linux_container_build.sh` is the single in-container build/package script.
+The host driver `tools/build_linux_container.sh` calls it locally and in CI through
+`/workspace/tools/linux_container_build.sh`, mounting source read-only and
+configuration secrets read-only outside the image. Distribution stamping happens
+on the verified host checkout. Packaging retains the exact GPU runtime flags,
+Google-client requirement, ABI report and tar package used by the existing builder.
+Only the host's Git checkout writes the application receipt, including tier/label.
+The shadow bundle uses `linux-bundle-<run>-<attempt>`, never candidate lookup names.
+
+The input identity covers the SDK image ID, dependency-seed qualification digest,
+CI/dependency Docker recipe and pinned Ubuntu snapshot. A rebuilt CI image may
+have another image ID; its recorded inputs must still match exactly. The handoff
+archive preserves source and build bytes, modes, symlinks and nanosecond timestamps,
+excluding `.git`, virtual environments and `build/_deps`. The second runner keeps
+its independently verified seed at that same `/src/build/_deps` path. Before any
+restore or execution, API provenance checks bind the artifact to its repository,
+workflow, original successful job/attempt and upload window, and verify the actual
+downloaded ZIP digest. The archive checksum and complete restored manifest are
+then checked. Fork-local SDKs are uploaded once for the in-run consumer with their
+original producer receipt; their scoped trust row cannot serve release lookup.
+
+The comparison retains per-test pass/skip sets for CTest, core, desktop, compiled
+service/MCP and host Python. Service/MCP requires zero skips. The `makepkg` notice probe is deselected from
+host inventories and runs explicitly in the Arch installer contract. The Ubuntu
+`dpkg-deb` notice probe is the one directional distro difference; other missing,
+failing or changed test identities fail comparison. Native JUnit
+reports travel with the legacy stage artifact so comparisons remain possible when
+that existing tier restores a compatible result. Source/build archive byte counts
+are printed in producer logs and retained with the manifest.
+
+Local verification uses real Unix Makefiles and a tiny static dependency archive
+across replaced runner filesystems: source timestamps keep the restored graph idle,
+changed source is rejected, and dependency bytes remain unchanged. Hosted acceptance
+still needs archive-SDK, fork-style and recipe-changing shadow runs, per-test outcome
+comparison, and at least five runs for build/test latency and tar-size measurements.
+The target is build p50 at most 7 minutes and test at most 11 minutes. No hosted
+measurements or Docker runtime pass are inferred from local fixtures. The SDK recipe
+projection is unchanged by this workstream; the foundation's SentencePiece Python
+wheel change affects only the assembled Linux SDK Python layer, retaining all
+core, LiteRT, Whisper and macOS component identities.

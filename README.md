@@ -219,17 +219,18 @@ and Whisper runtimes, use Docker with BuildKit and Buildx on an x86-64 Linux hos
 
 ```sh
 tools/build_linux_sdk.sh
-docker build --file packaging/build.Dockerfile --target artifact \
-  --build-arg SOURCE_REVISION="$(git rev-parse HEAD)" \
-  --output type=local,dest=build/portable .
+tools/build_linux_container.sh
 ./build/portable/dist/open-foresight/open-foresight
 ```
 
 The SDK script retains Docker's cached dependency layers. If you already have a
-compatible `open-foresight-sdk:local` image, start with the application
-`docker build` command. The container builds and tests the application, then
-exports the bundle to `build/portable/dist/open-foresight/`. Host Flutter and
-Python installations are not needed for this container build.
+compatible `open-foresight-sdk:local` image, start with
+`tools/build_linux_container.sh`. The shared wrapper restores verified dependency
+objects, builds once, and tests the exact source/build archive in a second
+container before exporting `build/portable/dist/open-foresight/`. It requires
+Python 3.13 and the GitHub CLI on the host; Dart and Flutter stay in the SDK.
+Use `--sdk-image IMAGE`, `--seed QUALIFIED_DIRECTORY`, or `--output DIRECTORY`
+to reuse existing inputs and choose the export location.
 
 Run the exported app in your Linux desktop session. The supported distributions
 are Ubuntu 24.04, Debian 13, Fedora 44, and Arch/Omarchy. Recording requires

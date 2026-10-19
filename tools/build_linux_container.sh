@@ -44,6 +44,7 @@ if [[ "$task_mode" == prepare-only ]]; then exit 0; fi
 export SOURCE_REVISION=${SOURCE_REVISION:-$(git rev-parse HEAD)}
 export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(git show -s --format=%ct HEAD)}
 export VERSION=${VERSION:-$("$task_python" tools/app_version.py)}
+export CI_TIER=${CI_TIER:-local}
 export RELEASE=${RELEASE:-1} OUT_UID=${OUT_UID:-$(id -u)} OUT_GID=${OUT_GID:-$(id -g)}
 task_secrets=$(mktemp -d "${TMPDIR:-/tmp}/foresight-distribution.XXXXXX")
 trap 'rm -rf -- "$task_secrets"' EXIT
@@ -65,7 +66,7 @@ if [[ -n "${FORESIGHT_WEB_CONTENT_API_KEY:-}" ]]; then
   task_mounts+=(-v "$task_secrets/web_key:/run/secrets/foresight_web_content_api_key:ro")
 fi
 task_env=(-e SOURCE_REVISION -e SOURCE_DATE_EPOCH -e VERSION -e RELEASE -e OUT_UID -e OUT_GID
-  -e CI_TIER -e BUILD_LABEL -e REQUIRE_GOOGLE_CLIENT -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT)
+  -e CI_TIER -e BUILD_LABEL -e REQUIRE_GOOGLE_CLIENT -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT -e FORESIGHT_CORE_COVERAGE_BENCHMARK -e FORESIGHT_QUERY_TERMS_URL)
 if [[ "$task_mode" != test-only ]]; then
   docker run --rm "${task_env[@]}" ${task_mounts[@]+"${task_mounts[@]}"} \
     -v "$task_root:/workspace:ro" -v "$task_output:/out" -v "$task_output/ci-inputs.json:/ci-inputs.json:ro" \
@@ -81,4 +82,10 @@ if [[ "$task_mode" != build-only ]]; then
     "${task_env[@]}" -v "$task_root:/workspace:ro" -v "$task_output/evidence:/out" \
     -v "$task_output/ci-inputs.json:/ci-inputs.json:ro" -v "$task_output/handoff:/handoff:ro" \
     "$task_image" bash /workspace/tools/linux_container_test.sh
+fi
+if [[ "$task_mode" == all ]]; then
+  task_package="open-foresight-$VERSION-$RELEASE-linux-x86_64.tar.gz"
+  (cd "$task_output/packages" && sha256sum --check "$task_package.sha256")
+  mkdir -p "$task_output/dist"
+  "$task_python" -m tarfile --extract "$task_output/packages/$task_package" "$task_output/dist" --filter data
 fi

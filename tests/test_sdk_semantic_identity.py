@@ -328,3 +328,20 @@ def test_auxiliary_display_and_matrix_aliases_cannot_spoof_component_jobs(
     path.write_text(path.read_text().replace(old, new, 1))
     with pytest.raises(ValueError):
         identities(source)
+
+
+def test_shadow_ci_image_and_runner_scripts_do_not_change_sdk_build_inputs(source):
+    before = identities(source)
+    dockerfile = source / "packaging/build.Dockerfile"
+    dockerfile.write_text(
+        "FROM application-dependencies AS ci\nRUN changed test tooling\n"
+    )
+    for name in (
+        "build.sh",
+        "build_dart_gates.sh",
+        "linux_container_build.sh",
+        "build_linux_container.sh",
+        "ci_linux_handoff.py",
+    ):
+        (source / "tools" / name).write_text("changed application-only runner\n")
+    assert identities(source) == before
