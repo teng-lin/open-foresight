@@ -106,18 +106,38 @@ def original_producer(
                 time.sleep(min(5, remaining))
 
 
-def save_sdk(source, image, output, *, shadow=False, source_prefix=None):
+def save_sdk(
+    source, image, output, *, shadow=False, source_prefix=None, reuse_archive=False
+):
     """Retain a fork's already-built SDK for this workflow, never compile it twice."""
     actual = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=artifacts.ROOT, text=True, timeout=30
     ).strip()
     if actual != source or not re.fullmatch(r"[a-f0-9]{40}", source):
         raise ValueError("SDK source must match the actual built checkout")
-    with tempfile.TemporaryDirectory(prefix="foresight-integration-sdk-") as directory:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix="foresight-integration-sdk-", dir=output.parent
+    ) as directory:
         prefix = Path(directory)
         image_id = sdk.inspect(image)
         archive = prefix / "image.tar"
-        sdk.run(["docker", "image", "save", "--output", str(archive), image_id])
+        if reuse_archive:
+            if not shadow or source_prefix is None:
+                raise ValueError("Archive reuse requires a verified shadow SDK prefix")
+            metadata = sdk.record(source_prefix, "linux-sdk")
+            if (
+                metadata.get("transport") != "docker-archive"
+                or metadata.get("image_id") != image_id
+            ):
+                raise ValueError(
+                    "Retained archive differs from the inspected SDK image"
+                )
+            # The validated payload and output share a task filesystem. A hardlink
+            # preserves its exact bytes without a second multi-GB docker save/copy.
+            os.link(source_prefix / "image.tar", archive)
+        else:
+            sdk.run(["docker", "image", "save", "--output", str(archive), image_id])
         (prefix / "image.json").write_text(
             json.dumps(
                 {

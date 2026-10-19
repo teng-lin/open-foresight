@@ -903,9 +903,29 @@ def pull(
     source_run=0,
     *,
     consumer="artifact-pull",
+    artifact_id=0,
+    artifact_digest="",
 ):
+    if bool(artifact_id) != bool(artifact_digest) or (
+        artifact_id
+        and (
+            type(artifact_id) is not int
+            or artifact_id < 1
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", artifact_digest)
+        )
+    ):
+        raise ValueError("Exact artifact pin requires a positive ID and SHA-256 digest")
     original = approved_original(repository, component, identity)
-    if original:
+    if original and (
+        (
+            not artifact_id
+            or (
+                original[1]["id"] == artifact_id
+                and original[1]["digest"] == artifact_digest
+            )
+        )
+        and (not source_run or original[1]["workflow_run"]["id"] == source_run)
+    ):
         entry, artifact = original
         with tempfile.TemporaryDirectory() as temporary:
             archive = Path(temporary) / "original.zip"
@@ -942,10 +962,19 @@ def pull(
     deadline = time.monotonic() + max(0, min(wait, 1800))
     qualification_errors: list[ValueError] = []
     while True:
-        artifacts = api(
-            repository, f"actions/artifacts?name={artifact_name}&per_page=100"
-        )["artifacts"]
+        artifacts = (
+            [api(repository, f"actions/artifacts/{artifact_id}")]
+            if artifact_id
+            else api(
+                repository, f"actions/artifacts?name={artifact_name}&per_page=100"
+            )["artifacts"]
+        )
         for artifact in artifacts:
+            if artifact_id and (
+                artifact.get("id") != artifact_id
+                or artifact.get("digest") != artifact_digest
+            ):
+                raise ValueError("Pinned SDK artifact ID/digest changed")
             if artifact["expired"] or artifact["name"] != artifact_name:
                 continue
             if source_run and artifact["workflow_run"]["id"] != source_run:
@@ -1139,6 +1168,7 @@ def main():
     parser.add_argument("--prefix", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--artifact-id", type=int)
+    parser.add_argument("--artifact-digest", default="")
     parser.add_argument(
         "--tier", choices=("pr", "sweep", "preview", "release", "local")
     )
@@ -1226,6 +1256,8 @@ def main():
         args.own_head,
         args.own_pr,
         source_run=args.run_id,
+        artifact_id=args.artifact_id or 0,
+        artifact_digest=args.artifact_digest,
     ):
         if args.optional:
             raise SystemExit(4)

@@ -552,6 +552,9 @@ jobs:
       attempt: ${{ steps.receipt.outputs.attempt }}
       sdk_id: ${{ steps.fork-sdk.outputs.artifact-id }}
       sdk_digest: ${{ steps.fork-sdk.outputs.artifact-digest }}
+      producer_sdk_run: ${{ steps.sdk.outputs.producer_run }}
+      producer_sdk_id: ${{ steps.sdk.outputs.producer_artifact_id }}
+      producer_sdk_digest: ${{ steps.sdk.outputs.producer_artifact_digest }}
     steps:
     - name: Record initial shadow build storage
       run: |
@@ -709,11 +712,15 @@ jobs:
         ARTIFACT_ID: ${{ needs.linux-build.outputs.sdk_id }}
         ARTIFACT_DIGEST: ${{ needs.linux-build.outputs.sdk_digest }}
         PRODUCER_ATTEMPT: ${{ needs.linux-build.outputs.attempt }}
+        SDK_RUN: ${{ needs.linux-build.outputs.producer_sdk_run }}
+        SDK_ID: ${{ needs.linux-build.outputs.producer_sdk_id }}
+        SDK_DIGEST: ${{ needs.linux-build.outputs.producer_sdk_digest }}
       run: |
         if [[ -n "$ARTIFACT_ID" ]]; then
           python -m tools.integration_application --shadow --component linux-sdk --source "$OWN_HEAD" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --directory build/shadow-sdk
         else
-          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/shadow-sdk --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+          [[ -n "$SDK_RUN" && -n "$SDK_ID" && -n "$SDK_DIGEST" ]] || { echo "Build SDK reference is missing" >&2; exit 1; }
+          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/shadow-sdk --run-id "$SDK_RUN" --artifact-id "$SDK_ID" --artifact-digest "$SDK_DIGEST" --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         fi
         python tools/linux_sdk_artifacts.py resolve --prefix build/shadow-sdk --load --discard-archive
     - name: Test the restored bytes without rebuilding the application

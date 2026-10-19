@@ -319,7 +319,9 @@ def qualify(component, image):
         run(["docker", "run", "--rm", image, "test", "-s", path], timeout=300)
 
 
-def produce(component, output, repository, own_head="", own_pr=0):
+def produce(
+    component, output, repository, own_head="", own_pr=0, *, retain_payload=None
+):
     """Reuse one qualified component, or build it from qualified parent images."""
     image = local_tag(component)
     identity = artifacts.fingerprint(component)
@@ -342,6 +344,9 @@ def produce(component, output, repository, own_head="", own_pr=0):
                     flush=True,
                 )
                 return "approved-original"
+            if retain_payload is not None:
+                prefix.rename(retain_payload)
+                return "reused"
             artifacts.pack(component, identity, prefix, output)
             return
         else:
@@ -399,6 +404,9 @@ def produce(component, output, repository, own_head="", own_pr=0):
                 )
                 + "\n"
             )
+        if retain_payload is not None:
+            prefix.rename(retain_payload)
+            return "built"
         artifacts.pack(component, identity, prefix, output)
 
 

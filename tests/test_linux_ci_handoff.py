@@ -355,7 +355,16 @@ def test_reusing_a_seed_checks_every_retained_byte_and_timestamp_without_replaci
 
 
 @pytest.mark.parametrize(
-    "case", ["reuse", "main-missing", "fork", "race", "race-missing", "network"]
+    "case",
+    [
+        "reuse",
+        "main-missing",
+        "fork",
+        "race",
+        "ordinary-race",
+        "race-missing",
+        "network",
+    ],
 )
 def test_shadow_sdk_reuses_before_component_scoped_fallback(
     tmp_path, case, monkeypatch
@@ -365,26 +374,38 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
     output = tmp_path / "outputs"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
     prefix = tmp_path / "sdk/verified"
-    prior = case == "reuse"
-    pull_result = (
-        [False, True]
-        if case == "race"
-        else [False, False]
-        if case == "race-missing"
-        else [prior]
-    )
+    reference = {
+        "producer_run": 91,
+        "artifact_id": 92,
+        "artifact_digest": "sha256:" + "d" * 64,
+    }
+    calls = []
+
+    def materialize(reused):
+        prefix.mkdir(parents=True)
+        (prefix / "image.tar").write_bytes(b"verified image")
+        if reused:
+            (prefix / "source-qualification.json").write_text(json.dumps(reference))
+
+    def fetch(*args, **kwargs):
+        calls.append((args, kwargs))
+        if case == "network":
+            raise RuntimeError("network")
+        found = case == "reuse" or (case == "race" and len(calls) > 1)
+        if found:
+            materialize(True)
+        return found
+
+    def produce(*args, **kwargs):
+        assert kwargs == {"retain_payload": prefix}
+        if case in ("race", "race-missing"):
+            return "approved-original"
+        materialize(case == "ordinary-race")
+        return "reused" if case == "ordinary-race" else "built"
+
     with (
-        patch.object(
-            shadow.waiter,
-            "fetch",
-            side_effect=RuntimeError("network") if case == "network" else pull_result,
-        ) as pull,
-        patch.object(
-            shadow.sdk,
-            "produce",
-            return_value="approved-original" if case.startswith("race") else None,
-        ) as produce,
-        patch.object(shadow.artifacts, "unpack") as unpack,
+        patch.object(shadow.waiter, "fetch", side_effect=fetch),
+        patch.object(shadow.sdk, "produce", side_effect=produce) as producer,
         patch.object(shadow.sdk, "resolve", return_value="verified-image") as resolve,
         patch.object(shadow.sdk, "write_outputs") as write,
         patch.object(shadow.application, "save_sdk") as save,
@@ -395,31 +416,37 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
                     "owner/repo", "a" * 40, 42, case != "main-missing", tmp_path / "sdk"
                 )
             if case in ("main-missing", "network"):
-                produce.assert_not_called()
+                producer.assert_not_called()
             save.assert_not_called()
             return
         assert shadow.prepare("owner/repo", "a" * 40, 42, True, tmp_path / "sdk") == (
             case == "fork"
         )
-        assert pull.call_args_list[0].args[5] == 1800
-        assert pull.call_args_list[0].kwargs == {"optional": True}
+        assert calls[0][0][5] == 1800
+        assert calls[0][1] == {"optional": True}
         resolve.assert_called_once_with(prefix, load_registry=True)
         write.assert_called_once_with("verified-image")
         if case == "fork":
-            produce.assert_called_once()
-            unpack.assert_called_once()
+            producer.assert_called_once()
             save.assert_called_once_with(
                 "a" * 40,
                 "verified-image",
                 tmp_path / "sdk/in-run",
                 shadow=True,
                 source_prefix=prefix,
+                reuse_archive=True,
             )
+            assert not prefix.exists()
             assert output.read_text() == "in_run=true\n"
         else:
             save.assert_not_called()
-            unpack.assert_not_called()
-            assert not output.exists()
+            assert (
+                output.read_text()
+                == "producer_run=91\nproducer_artifact_id=92\nproducer_artifact_digest=sha256:"
+                + "d" * 64
+                + "\n"
+            )
+            assert not (prefix / "image.tar").exists()
 
 
 def test_shadow_sdk_transport_preserves_original_reuse_provenance(tmp_path):
@@ -574,3 +601,136 @@ def test_source_copy_preserves_root_configuration_and_nested_source_names(tmp_pa
         for p in destination.rglob("*")
         if p.is_file()
     } == set(retained)
+
+
+@pytest.mark.parametrize("change", ["valid", "corrupt", "different-image"])
+def test_saved_shadow_sdk_reuses_verified_archive_without_docker_save(tmp_path, change):
+    from tools import integration_application as application
+    from tests.test_linux_sdk_artifacts import write_archive, IMAGE_ID
+
+    prefix = tmp_path / "verified"
+    write_archive(prefix)
+    original = (prefix / "image.tar").read_bytes()
+    if change == "corrupt":
+        (prefix / "image.tar").write_bytes(b"changed")
+    image = "sha256:" + "e" * 64 if change == "different-image" else IMAGE_ID
+    output = tmp_path / "in-run"
+    with (
+        patch.object(application.subprocess, "check_output", return_value="a" * 40),
+        patch.object(application.sdk, "inspect", return_value=image),
+        patch.object(application.sdk, "run") as docker,
+    ):
+        if change != "valid":
+            with pytest.raises(ValueError):
+                application.save_sdk(
+                    "a" * 40,
+                    "verified-image",
+                    output,
+                    shadow=True,
+                    source_prefix=prefix,
+                    reuse_archive=True,
+                )
+            assert not output.exists()
+        else:
+            application.save_sdk(
+                "a" * 40,
+                "verified-image",
+                output,
+                shadow=True,
+                source_prefix=prefix,
+                reuse_archive=True,
+            )
+            restored = tmp_path / "restored"
+            application.artifacts.unpack(
+                "linux-sdk",
+                application.artifacts.fingerprint("linux-sdk"),
+                output,
+                restored,
+            )
+            assert (restored / "image.tar").read_bytes() == original
+        docker.assert_not_called()
+
+
+@pytest.mark.parametrize("reused", [False, True])
+def test_retained_sdk_producer_saves_and_compresses_only_once(
+    tmp_path, monkeypatch, reused
+):
+    from tools import integration_application as application
+    from tools import linux_sdk_artifacts as sdk
+    from tests.test_linux_sdk_artifacts import (
+        write_archive,
+        docker_output,
+        REPOSITORY,
+        REGISTRY_IMAGE,
+    )
+
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+    monkeypatch.setenv("GITHUB_RUN_ID", "41")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    qualification = {
+        "source_receipt": {"component": "linux-sdk", "source_commit": "b" * 40},
+        "producer_run": 91,
+        "artifact_id": 92,
+        "artifact_digest": "sha256:" + "d" * 64,
+    }
+    commands = []
+
+    def pull(repository, component, identity, prefix, **kwargs):
+        if component == "linux-sdk":
+            if not reused:
+                return False
+            prefix.mkdir()
+            (prefix / "image.json").write_text(json.dumps({"image": REGISTRY_IMAGE}))
+            (prefix / "source-qualification.json").write_text(json.dumps(qualification))
+        else:
+            write_archive(prefix, component)
+        return True
+
+    def docker(command, **kwargs):
+        commands.append(command)
+        if command[:3] == ["docker", "image", "save"]:
+            Path(command[command.index("--output") + 1]).write_bytes(b"saved once")
+
+    prefix = tmp_path / "verified"
+    with (
+        patch.object(sdk.artifacts, "pull", side_effect=pull),
+        patch.object(
+            sdk.sdk_build_transport, "prepare", return_value=["docker", "build"]
+        ),
+        patch.object(sdk, "run", side_effect=docker),
+        patch.object(sdk.subprocess, "check_output", side_effect=docker_output),
+    ):
+        result = sdk.produce(
+            "linux-sdk", tmp_path / "unused-packed", REPOSITORY, retain_payload=prefix
+        )
+        assert result == ("reused" if reused else "built")
+        assert not (tmp_path / "unused-packed").exists()
+        if reused:
+            assert (
+                json.loads((prefix / "source-qualification.json").read_text())
+                == qualification
+            )
+            assert commands == []
+        else:
+            application.save_sdk(
+                "a" * 40,
+                "verified-image",
+                tmp_path / "in-run",
+                shadow=True,
+                source_prefix=prefix,
+                reuse_archive=True,
+            )
+            restored = tmp_path / "restored"
+            application.artifacts.unpack(
+                "linux-sdk",
+                sdk.artifacts.fingerprint("linux-sdk"),
+                tmp_path / "in-run",
+                restored,
+            )
+            assert (restored / "image.tar").read_bytes() == b"saved once"
+            assert (
+                len([cmd for cmd in commands if cmd[:3] == ["docker", "image", "save"]])
+                == 1
+            )
+            assert len([cmd for cmd in commands if cmd[:2] == ["docker", "build"]]) == 1
