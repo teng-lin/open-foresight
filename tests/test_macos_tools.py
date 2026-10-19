@@ -1,6 +1,7 @@
 """Installer transaction and MCP transport tests; no release/signing claims."""
 
 import json
+from contextlib import closing, ExitStack
 import os
 import shutil
 import subprocess
@@ -8,6 +9,7 @@ from pathlib import Path
 import plistlib
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
@@ -17,6 +19,7 @@ import build_macos_sdk as sdk
 import install_macos as installer
 import test_gemma_models as gemma_probe
 from smoke_macos_bundle import (
+    ApplicationPeer,
     McpPeer,
     main as smoke_main,
     verify_runtime_revision,
@@ -800,9 +803,12 @@ class CompiledMacComponentTests(unittest.TestCase):
             self.skipTest(
                 "Build AOT service/MCP or supply FORESIGHT_SERVICE_EXECUTABLE and FORESIGHT_MCP_EXECUTABLE"
             )
-        with tempfile.TemporaryDirectory(
-            prefix="of-source-test-", dir="/tmp"
-        ) as temporary:
+        with (
+            tempfile.TemporaryDirectory(
+                prefix="of-source-test-", dir="/tmp"
+            ) as temporary,
+            ExitStack() as connections,
+        ):
             work = Path(temporary)
             env = installer.minimal_environment(work, work / "data")
             env.update(
@@ -815,11 +821,23 @@ class CompiledMacComponentTests(unittest.TestCase):
             try:
                 peer = McpPeer(mcp, env)
                 owner = peer.tool("get_status")["pid"]
+                graph_peer = connections.enter_context(
+                    closing(ApplicationPeer(work / "run/application.sock"))
+                )
                 evidence = source_graph_probe(
-                    work / "run/application.sock", peer, work / "data/application.db"
+                    work / "run/application.sock",
+                    peer,
+                    work / "data/application.db",
+                    application_peer=graph_peer,
                 )
                 peer.close()
                 peer = None
+                # A graph probe is an authenticated desktop client. Retain it
+                # past the real one-second desktop-close shutdown grace period.
+                time.sleep(1.25)
+                self.assertEqual(
+                    service_command(service, env, "--status")["pid"], owner
+                )
                 service_command(service, env, "--stop")
                 wait_stopped(owner, service)
                 owner = None

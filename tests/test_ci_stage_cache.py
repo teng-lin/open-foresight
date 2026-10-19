@@ -1087,3 +1087,46 @@ class ProducerTests(SourceTree):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubmoduleInputsTests(SourceTree):
+    def test_gitlink_tracks_checked_out_commit_without_reading_nested_worktree(self):
+        nested = self.root / "native/vendor"
+        nested.mkdir(parents=True)
+
+        def module_git(*args):
+            return (
+                subprocess.check_output(
+                    ["git", *args], cwd=nested, stderr=subprocess.DEVNULL, timeout=30
+                )
+                .decode()
+                .strip()
+            )
+
+        module_git("init", "-q")
+        module_git("config", "user.name", "Fixture")
+        module_git("config", "user.email", "fixture@example.invalid")
+        (nested / "source.cpp").write_text("verified vendor source")
+        module_git("add", ".")
+        module_git("commit", "-qm", "vendor fixture")
+        first = module_git("rev-parse", "HEAD")
+        self.git(
+            "update-index", "--add", "--cacheinfo", f"160000,{first},native/vendor"
+        )
+        self.git("commit", "-qm", "bind vendor commit")
+        before = cache.source_inputs(self.root, "native")
+        self.assertEqual(before["native/vendor"], ["160000", "commit", first])
+        self.assertEqual(
+            before,
+            cache.source_inputs(self.root, "native", self.git("rev-parse", "HEAD")),
+        )
+        (nested / "untracked.o").write_bytes(b"preserve compiler output")
+        self.assertEqual(before, cache.source_inputs(self.root, "native"))
+        module_git("commit", "--allow-empty", "-qm", "changed vendor checkout")
+        second = module_git("rev-parse", "HEAD")
+        after = cache.source_inputs(self.root, "native")
+        self.assertEqual(after["native/vendor"], ["160000", "commit", second])
+        self.assertNotEqual(before, after)
+        self.assertEqual(
+            (nested / "untracked.o").read_bytes(), b"preserve compiler output"
+        )
