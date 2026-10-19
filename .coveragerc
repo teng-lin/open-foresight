@@ -1,18 +1,23 @@
 [run]
 branch = True
+patch = subprocess
 relative_files = True
 source =
     tools
     packaging
+    native
 omit =
-    tools/test_*.py
-    tools/original_query_oracle/test_*.py
+    */tools/test_*.py
+    */tools/original_query_oracle/test_*.py
 
 [report]
 precision = 2
-fail_under = 49.17
+fail_under = 90
 show_missing = True
 skip_empty = True
+omit =
+    */tools/test_*.py
+    */tools/original_query_oracle/test_*.py
 
 [html]
 directory = coverage/python/html

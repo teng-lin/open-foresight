@@ -35,23 +35,24 @@ def main():
             stderr=subprocess.DEVNULL,
         )
         channel = grpc.insecure_channel("unix:" + socket)
-        library = ctypes.CDLL(str(args.native.resolve()))
-        library.fs_engine_create.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
-        library.fs_engine_create.restype = ctypes.c_void_p
-        library.fs_conversation_create.argtypes = [ctypes.c_void_p]
-        library.fs_conversation_create.restype = ctypes.c_void_p
-        library.fs_generate.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_char_p,
-            ctypes.c_char_p,
-        ]
-        library.fs_event_poll.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        library.fs_event_poll.restype = ctypes.c_void_p
-        library.fs_string_free.argtypes = [ctypes.c_void_p]
-        library.fs_conversation_destroy.argtypes = [ctypes.c_void_p, ctypes.c_int]
-        library.fs_engine_destroy.argtypes = [ctypes.c_void_p]
         engine = conversation = None
+        library = None
         try:
+            library = ctypes.CDLL(str(args.native.resolve()))
+            library.fs_engine_create.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+            library.fs_engine_create.restype = ctypes.c_void_p
+            library.fs_conversation_create.argtypes = [ctypes.c_void_p]
+            library.fs_conversation_create.restype = ctypes.c_void_p
+            library.fs_generate.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_char_p,
+                ctypes.c_char_p,
+            ]
+            library.fs_event_poll.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            library.fs_event_poll.restype = ctypes.c_void_p
+            library.fs_string_free.argtypes = [ctypes.c_void_p]
+            library.fs_conversation_destroy.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            library.fs_engine_destroy.argtypes = [ctypes.c_void_p]
             grpc.channel_ready_future(channel).result(timeout=15)
 
             def call(method, request, response, **fields):
@@ -196,9 +197,9 @@ def main():
                 )
             )
         finally:
-            if conversation:
+            if conversation and library is not None:
                 library.fs_conversation_destroy(conversation, 1)
-            if engine:
+            if engine and library is not None:
                 library.fs_engine_destroy(engine)
             channel.close()
             process.terminate()
