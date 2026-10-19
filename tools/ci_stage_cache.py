@@ -495,6 +495,27 @@ def compilation_environment(environment):
             not in (
                 "FORESIGHT_FLUTTER_EXECUTABLE",
                 "FORESIGHT_CORE_COVERAGE_BENCHMARK",
+                # These control subsequent Dart gates or scheduling/reporting,
+                # never native configure flags. Results still bind all of them.
+                "FORESIGHT_COVERAGE",
+                "FORESIGHT_CORE_COVERAGE_MIN",
+                "FORESIGHT_DESKTOP_COVERAGE_MIN",
+                "FORESIGHT_PARALLEL_GATES",
+                "FORESIGHT_REQUIRE_DART_GATES",
+                "FORESIGHT_BUILD_JOBS",
+                "FORESIGHT_STAGE_ENVIRONMENT",
+            )
+        }
+    validation_flags = result.get("validation_flags")
+    if isinstance(validation_flags, dict):
+        result["validation_flags"] = {
+            key: value
+            for key, value in validation_flags.items()
+            if key
+            not in (
+                "FORESIGHT_COVERAGE",
+                "FORESIGHT_CORE_COVERAGE_MIN",
+                "FORESIGHT_DESKTOP_COVERAGE_MIN",
             )
         }
     return result

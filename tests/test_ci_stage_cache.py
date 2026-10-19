@@ -407,7 +407,10 @@ class ProducerTests(SourceTree):
                 queried.append(run_id)
                 raise failure
 
-            with self.subTest(failure=failure), self.assertRaises(type(failure)) as caught:
+            with (
+                self.subTest(failure=failure),
+                self.assertRaises(type(failure)) as caught,
+            ):
                 self.find_work(candidates=candidates, jobs_api=jobs)
             self.assertIs(caught.exception, failure)
             self.assertEqual(queried, [99])
@@ -447,13 +450,22 @@ class ProducerTests(SourceTree):
 
         original_receipt = deepcopy(self.receipt)
         original_run = deepcopy(self.run)
-        for rejection in ("environment", "receipt", "checksum", "failed-job", "untrusted"):
+        for rejection in (
+            "environment",
+            "receipt",
+            "checksum",
+            "failed-job",
+            "untrusted",
+        ):
             self.receipt = deepcopy(original_receipt)
             self.run = deepcopy(original_run)
             self.job["conclusion"] = "success"
             self.payload = b"payload"
             if rejection == "environment":
-                self.receipt["environment"] = {**ENVIRONMENT, "compiler": "incompatible"}
+                self.receipt["environment"] = {
+                    **ENVIRONMENT,
+                    "compiler": "incompatible",
+                }
             elif rejection == "receipt":
                 self.receipt["source_run_attempt"] = 2
             elif rejection == "checksum":
@@ -462,9 +474,10 @@ class ProducerTests(SourceTree):
                 self.job["conclusion"] = "failure"
             else:
                 self.run["pull_requests"] = [{"number": 999}]
-            with self.subTest(rejection=rejection), self.assertRaises(
-                subprocess.CalledProcessError
-            ) as caught:
+            with (
+                self.subTest(rejection=rejection),
+                self.assertRaises(subprocess.CalledProcessError) as caught,
+            ):
                 self.find_work(candidates=candidates, jobs_api=jobs)
             self.assertIs(caught.exception, failure)
 
@@ -799,6 +812,62 @@ class ProducerTests(SourceTree):
         )
         self.assertIn("FORESIGHT_FLUTTER_EXECUTABLE", old_flags)
         self.assertEqual(self.receipt["environment"]["dart"], "old Dart")
+
+    def test_native_work_ignores_only_proven_execution_flags_not_native_inputs(self):
+        old = {
+            **ENVIRONMENT,
+            "validation_environment_sha256": {"CI": "a" * 64},
+            "validation_flags": {"CFLAGS": None, "FORESIGHT_COVERAGE": None},
+        }
+        self.receipt["environment"] = old
+        self.identity = self.key(environment=old)
+        self.artifact["name"] = cache.name("linux", "native", self.identity)
+        self.receipt["identity"] = self.identity
+        current = {
+            **old,
+            "validation_environment_sha256": {
+                **old["validation_environment_sha256"],
+                **{
+                    key: "b" * 64
+                    for key in (
+                        "FORESIGHT_COVERAGE",
+                        "FORESIGHT_CORE_COVERAGE_MIN",
+                        "FORESIGHT_DESKTOP_COVERAGE_MIN",
+                        "FORESIGHT_BUILD_JOBS",
+                        "FORESIGHT_PARALLEL_GATES",
+                        "FORESIGHT_REQUIRE_DART_GATES",
+                        "FORESIGHT_STAGE_ENVIRONMENT",
+                    )
+                },
+            },
+            "validation_flags": {"CFLAGS": None, "FORESIGHT_COVERAGE": "b" * 64},
+        }
+        # Compiler work can survive these changes; successful validation cannot.
+        self.assertNotEqual(self.identity, self.key(environment=current))
+        self.assertTrue(self.find_work(environment=current)["hit"])
+        self.assertEqual(self.receipt["environment"], old)
+        for key in ("FORESIGHT_ENABLE_TEST_HOOKS", "FORESIGHT_NEW_UNKNOWN_FLAG"):
+            with self.subTest(key=key):
+                changed = {
+                    **current,
+                    "validation_environment_sha256": {
+                        **current["validation_environment_sha256"],
+                        key: "c" * 64,
+                    },
+                }
+                self.assertFalse(self.find_work(environment=changed)["hit"])
+        for key in ("CFLAGS", "CXXFLAGS", "LDFLAGS", "FORESIGHT_ENABLE_TEST_HOOKS"):
+            with self.subTest(key=key):
+                changed = {
+                    **current,
+                    "validation_flags": {**current["validation_flags"], key: "c" * 64},
+                }
+                self.assertFalse(self.find_work(environment=changed)["hit"])
+        self.assertFalse(
+            self.find_work(
+                environment={**current, "cmake_arguments": ["-DFEATURE=changed"]}
+            )["hit"]
+        )
 
     def test_native_work_verifies_frozen_legacy_recipe_independently(self):
         self.write("apps/desktop/pubspec.yaml", "version: 1.2.3+4\ndependencies: old\n")

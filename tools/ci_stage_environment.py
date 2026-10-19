@@ -172,6 +172,31 @@ def collect(platform_name, root=ROOT, sdk_prefix=None, stage=None):
     return record
 
 
+def with_build_settings(environment, cmake_args):
+    """Bind the exact configure arguments and flags used by native producers."""
+    return {
+        **environment,
+        "cmake_arguments": cmake_args,
+        "validation_flags": {
+            key: hashlib.sha256(os.environ[key].encode()).hexdigest()
+            if key in os.environ
+            else None
+            for key in (
+                "FORESIGHT_COVERAGE",
+                "FORESIGHT_CORE_COVERAGE_MIN",
+                "FORESIGHT_DESKTOP_COVERAGE_MIN",
+                "FORESIGHT_ENABLE_TEST_HOOKS",
+                "FORESIGHT_LINUX_UI_TEST",
+                "FORESIGHT_MACOS_UI_TEST",
+                "FORESIGHT_REQUIRE_NATIVE_UI_TEST",
+                "CFLAGS",
+                "CXXFLAGS",
+                "LDFLAGS",
+            )
+        },
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", choices=("linux", "macos"), required=True)

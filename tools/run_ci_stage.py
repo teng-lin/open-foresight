@@ -145,27 +145,7 @@ def run(
     # successful desktop prerequisite is bound by identity, not a Release bundle.
     if set(inputs) != required:
         raise ValueError(f"Stage {stage} requires input artifacts {sorted(required)}")
-    environment = {
-        **environment,
-        "cmake_arguments": cmake_args,
-        "validation_flags": {
-            key: hashlib.sha256(os.environ[key].encode()).hexdigest()
-            if key in os.environ
-            else None
-            for key in (
-                "FORESIGHT_COVERAGE",
-                "FORESIGHT_CORE_COVERAGE_MIN",
-                "FORESIGHT_DESKTOP_COVERAGE_MIN",
-                "FORESIGHT_ENABLE_TEST_HOOKS",
-                "FORESIGHT_LINUX_UI_TEST",
-                "FORESIGHT_MACOS_UI_TEST",
-                "FORESIGHT_REQUIRE_NATIVE_UI_TEST",
-                "CFLAGS",
-                "CXXFLAGS",
-                "LDFLAGS",
-            )
-        },
-    }
+    environment = stage_environment.with_build_settings(environment, cmake_args)
     # An inactive diagnostic option must not change historical environment
     # identities or discard compatible native compiler work. Only the core
     # benchmark has additional validation semantics to bind.
