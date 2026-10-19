@@ -570,8 +570,9 @@ def test_source_copy_preserves_root_configuration_and_nested_source_names(tmp_pa
         "source/dist/data",
         "source/coverage/data",
         "source/test-results/data",
-        "source/.venv/data",
-        "source/.env.example",
+        "source/.gitignore",
+        "source/.gitattributes",
+        "source/.github/control.yml",
     ]
     excluded = [
         ".git/config",
@@ -585,11 +586,30 @@ def test_source_copy_preserves_root_configuration_and_nested_source_names(tmp_pa
         "source/build/old",
         "source/.dart_tool/old",
         "source/__pycache__/old",
+        "source/.git",
+        "vendor/.git/config",
+        "source/.venv/cache",
+        "source/.venv-local/bin/python",
+        "source/.env",
+        "source/.env.local",
+        "source/.env.example",
     ]
     for name in retained + excluded:
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(name)
+    # Neither secret symlinks nor host-interpreter virtualenv links may escape
+    # into the retained handoff. Ordinary source symlinks remain intact.
+    private = tmp_path / "private-config"
+    private.write_text("local secret")
+    (source / "source/.env.local").unlink()
+    (source / "source/.env.local").symlink_to(private)
+    (source / "source/.venv-local/bin/python").unlink()
+    (source / "source/.venv-local/bin/python").symlink_to("/usr/bin/python3")
+    (source / "source-link").symlink_to("source/dist/data")
+    seed = destination / "build/_deps/qualified-object"
+    seed.parent.mkdir(parents=True)
+    seed.write_bytes(b"verified dependency object")
     subprocess.run(
         [
             "bash",
@@ -605,7 +625,13 @@ def test_source_copy_preserves_root_configuration_and_nested_source_names(tmp_pa
         p.relative_to(destination).as_posix()
         for p in destination.rglob("*")
         if p.is_file()
-    } == set(retained)
+    } == set(retained) | {"source-link", "build/_deps/qualified-object"}
+    assert (destination / "source-link").readlink() == Path("source/dist/data")
+    assert seed.read_bytes() == b"verified dependency object"
+    assert private.read_text() == "local secret"
+    for name in excluded:
+        assert not (destination / name).exists()
+        assert not (destination / name).is_symlink()
 
 
 @pytest.mark.parametrize("change", ["valid", "corrupt", "different-image"])

@@ -10,9 +10,12 @@ import sys
 source, destination = (Path(value).resolve() for value in sys.argv[1:])
 if destination == source or destination.is_relative_to(source):
     raise ValueError("Source copy destination must be outside the checkout")
-root_patterns = (".git", "build", "dist", ".venv*", ".pub-cache", ".dart_tool",
-                 "test-results", "coverage", ".env*", ".coverage", ".coverage.*")
-all_patterns = ("build", ".dart_tool", "__pycache__", "*.pyc", "*.db*", "*.log", "google-client*.json")
+root_patterns = ("build", "dist", ".pub-cache", ".dart_tool",
+                 "test-results", "coverage", ".coverage", ".coverage.*")
+# Local secrets and checkout/virtualenv metadata are unsafe at every depth.
+# Match exact .git, retaining ordinary .gitignore/.gitattributes/.github sources.
+all_patterns = (".git", ".venv*", ".env*", "build", ".dart_tool", "__pycache__",
+                "*.pyc", "*.db*", "*.log", "google-client*.json")
 
 def ignored(directory, names):
     relative = Path(directory).relative_to(source)
