@@ -1145,3 +1145,16 @@ assumption in historical sanitizer and candidate-selection fixtures; their real
 packing now supplies the original attempt too. No production provenance rule
 changed. The failed attempt is excluded
 and the five-execution measurement must restart on the corrected source.
+
+
+The subsequent `575ef4e3` measurements qualified attempts 1 and 4. Attempt 2
+failed on Ubuntu snapshot HTTP 500/502 before application tests; attempt 3
+recovered only that test job and retains the original build, so it is excluded
+from fresh build timings. Attempt 5 built successfully but exhausted three GitHub
+HTTP 502 responses while qualifying its producer, again before application tests.
+The same 100-job API page still failed on inspection; 10-, 30- and 50-job pages
+and the attempt-specific endpoint succeeded. Producer enumeration now uses
+30-job pages with `filter=all`, retaining every original attempt and propagating
+later-page errors. Receipts, successful upload attempts, upload windows and
+checksums remain mandatory. The two qualified measurements remain recorded;
+the five-execution gate must restart for the pagination correction's new source.

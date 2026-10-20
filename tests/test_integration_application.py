@@ -142,7 +142,7 @@ def restore(
             )
             direct_queried += 1
             return current
-        if route == f"actions/runs/{RUN}/jobs?filter=all&per_page=100&page=1":
+        if route == f"actions/runs/{RUN}/jobs?filter=all&per_page=30&page=1":
             current = (
                 job
                 if job_states is None

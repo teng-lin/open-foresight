@@ -211,7 +211,7 @@ def historical_original(tmp_path, monkeypatch):
         "actions/runs/99": run,
         "actions/artifacts/5": payload,
         "actions/artifacts/6": sidecar,
-        "actions/runs/99/jobs?filter=all&per_page=100&page=1": {"jobs": [job]},
+        "actions/runs/99/jobs?filter=all&per_page=30&page=1": {"jobs": [job]},
     }
     manifest = tmp_path / "bridge.json"
     monkeypatch.setattr(bridge, "MANIFEST", manifest)
