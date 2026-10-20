@@ -3,8 +3,9 @@
 
 The Docker driver and containerd image store support both registry cache import
 and SDK archives loaded into the same daemon. PR consumers never export caches;
-only the main-only linux-bundle job publishes dependency and acceptance-tool
-layers. Application sources and test results never enter these new cache tags.
+the dedicated main-only publisher and retained guarded legacy job publish
+dependency and acceptance-tool layers. Application sources and test results
+never enter these new cache tags.
 """
 
 import argparse
@@ -21,25 +22,29 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.sdk_build_transport import inspect_builder_driver, inspect_registry_cache  # noqa: E402
 
 
-def reference(repository, *, legacy=False, acceptance=False):
+def reference(repository, *, legacy=False, acceptance=False, ci=False):
     repository = repository.lower()
     if not re.fullmatch(r"[a-z0-9_.-]+/[a-z0-9_.-]+", repository):
         raise ValueError(
             "Application cache repository must be an explicit GitHub repository"
         )
+    if acceptance and ci:
+        raise ValueError("Choose one application cache stage")
     tag = (
         "app-buildcache-x86-64"
         if legacy
         else "acceptance-tools-buildcache-v1"
         if acceptance
+        else "ci-tools-buildcache-v1"
+        if ci
         else "app-deps-buildcache-v1"
     )
     return f"ghcr.io/{repository}/linux-sdk:{tag}"
 
 
-def prepare(repository, *, request=subprocess.check_output, acceptance=False):
+def prepare(repository, *, request=subprocess.check_output, acceptance=False, ci=False):
     """Fail on broken transport instead of silently compiling without the cache."""
-    cache = reference(repository, acceptance=acceptance)
+    cache = reference(repository, acceptance=acceptance, ci=ci)
     legacy_cache = reference(repository, legacy=True)
     context = request(["docker", "context", "show"], text=True, timeout=60).strip()
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", context):
@@ -69,7 +74,7 @@ def prepare(repository, *, request=subprocess.check_output, acceptance=False):
         print(
             "Registry confirms the acceptance tools cache is absent; only "
             "package/tool setup is needed, using the verified SDK unchanged."
-            if acceptance
+            if acceptance or ci
             else "Registry confirms the application cache is absent; retained qualified "
             "dependency objects remain required before application compilation.",
             flush=True,
@@ -90,9 +95,11 @@ def prepare(repository, *, request=subprocess.check_output, acceptance=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
-    parser.add_argument("--acceptance", action="store_true")
+    stage = parser.add_mutually_exclusive_group()
+    stage.add_argument("--acceptance", action="store_true")
+    stage.add_argument("--ci", action="store_true")
     args = parser.parse_args()
-    outputs = prepare(args.repository, acceptance=args.acceptance)
+    outputs = prepare(args.repository, acceptance=args.acceptance, ci=args.ci)
     if destination := os.environ.get("GITHUB_OUTPUT"):
         with open(destination, "a") as stream:
             for name, value in outputs.items():

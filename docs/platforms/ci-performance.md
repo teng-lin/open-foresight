@@ -1170,3 +1170,20 @@ later-page errors. Receipts, successful upload attempts, upload windows and
 checksums remain mandatory. The two qualified measurements above remain part of
 the diagnostic record; the five-execution gate restarts on the pagination
 correction's new source. No five-sample median is established by these results.
+
+
+### Publish the Linux CI tooling cache before switching runners
+
+The dedicated `linux-cache-publish.yml` workflow can populate the CI tooling
+layer from reviewed main without waiting for the platform switch. It consumes
+a qualified SDK and the verified historical dependency seed, then exports only
+`application-dependencies`, `ci`, and `acceptance-dependencies`. It retains the
+original producer provenance and never builds an SDK or publishes application
+candidates. Existing checks and their guarded cache publishers remain in place.
+PR runs cannot enter this workflow or write its registry tags.
+
+After this workflow lands on main, dispatch it with
+`gh workflow run linux-cache-publish.yml --ref main`. The job checks current main
+before setup and immediately before publication; retry a failed job after
+reading its logs. Cache publication is a prerequisite to measure the later
+runner switch, and does not establish a performance improvement by itself.
