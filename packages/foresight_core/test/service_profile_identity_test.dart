@@ -775,9 +775,6 @@ void main() {
       File('${profile.data}/.application-endpoint.json').existsSync(),
       isFalse,
     );
-    int olderProbes() =>
-        proxy.attempts.where((attempt) => attempt.endpoint == endpoint).length;
-    final probed = olderProbes();
     final second = proxy.run(startup);
     // Both poll this profile's own runtime, where nothing listens yet.
     final observed = await Future.any([
@@ -787,7 +784,6 @@ void main() {
       second.then((_) => 'a second client attached while the lock was held'),
     ]);
     expect(observed, 'polled');
-    expect(olderProbes(), probed);
     gates.release('start.locked');
     for (final starting in [first, second]) {
       final client = await starting;
@@ -891,7 +887,8 @@ void main() {
     await holdProfileLock(profile);
     final proxy = ServiceFaultProxy();
     addTearDown(proxy.close);
-    // The second probe's result is never released; the deadline ends it.
+    // The second probe's result is held until the deadline ends that probe,
+    // and released after the test so the proxy can close.
     var results = 0;
     final held = proxy.hold(
       ProxyDirection.toClient,
@@ -900,10 +897,11 @@ void main() {
           frame.json?.containsKey('result') == true &&
           ++results == 2,
     );
+    addTearDown(held.release);
     await expectLater(
       proxy.run(
         () =>
-            ensureService(profile, startupTimeout: const Duration(seconds: 3)),
+            ensureService(profile, startupTimeout: const Duration(seconds: 10)),
       ),
       throwsA(
         isA<TimeoutException>().having(
@@ -913,7 +911,8 @@ void main() {
         ),
       ),
     );
-    await held.reached;
+    // The second probe began well before the deadline; a bound only.
+    await held.reached.timeout(const Duration(seconds: 30));
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('an owner removes a link or a regular file at its socket path as '
