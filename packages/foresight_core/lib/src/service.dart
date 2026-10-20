@@ -1243,9 +1243,10 @@ class ApplicationService {
     }
   }
 
-  /// Returns whether [message] itself was written. A reply that is too large
-  /// or cannot be encoded is replaced by an error; such an event is dropped.
-  bool _send(Socket client, Map<String, Object?> message) {
+  /// Writes [message] to [client] and says whether it got there. A reply that
+  /// is too large or cannot be encoded is replaced by an error; such an event
+  /// is dropped. A failed write closes the connection.
+  EventDelivery _send(Socket client, Map<String, Object?> message) {
     try {
       _traceServiceTransport(
         'worker send peer=${identityHashCode(client)} id=${message['id']} '
@@ -1253,17 +1254,20 @@ class ApplicationService {
       );
       Uint8List? frame;
       String? failure;
+      var delivery = EventDelivery.sent;
       try {
         frame = utf8.encode(jsonEncode(message));
         // A client drops its whole connection on a frame over the limit, and
         // losing the desktop's connection stops its recording. Fail only the
         // request instead.
         if (frame.length + 1 > _maxServiceFrame) {
+          delivery = EventDelivery.tooLarge;
           failure =
               'Reply exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
               'request fewer items.';
         }
       } on JsonUnsupportedObjectError {
+        delivery = EventDelivery.unencodable;
         failure =
             'Reply contains a value JSON cannot represent, such as NaN or '
             'Infinity.';
@@ -1276,7 +1280,7 @@ class ApplicationService {
         );
         // A dropped snapshot is superseded by the next one. The approval gate
         // fails its request instead of waiting for a decision.
-        if (id == null) return false;
+        if (id == null) return delivery;
         // No later frame may follow this request's terminal error.
         if (id is int) _cancel(client, id);
         frame = utf8.encode(
@@ -1290,10 +1294,10 @@ class ApplicationService {
       client
         ..add(frame!)
         ..add(const [10]);
-      return failure == null;
+      return delivery;
     } catch (_) {
       client.destroy();
-      return false;
+      return EventDelivery.writeFailed;
     }
   }
 

@@ -77,13 +77,28 @@ class ImportPolicy {
   }
 }
 
+/// Whether an event reached a connection, and if not, why.
+enum EventDelivery {
+  sent,
+
+  /// The event exceeds the frame limit, so it was dropped.
+  tooLarge,
+
+  /// The event holds a value JSON cannot represent, such as NaN or Infinity,
+  /// so it was dropped.
+  unencodable,
+
+  /// Writing to the connection failed; the connection has been closed.
+  writeFailed,
+}
+
 /// Approval decisions belong to a single live desktop connection and request.
 /// Tokens authenticate the desktop; they never grant agent connections rights.
 class AgentAccessGate {
   final String desktopToken;
 
-  /// Returns whether the event reached the host's connection.
-  final bool Function(Object host, Map<String, Object?> event) send;
+  /// Writes an event to the host's connection and says whether it got there.
+  final EventDelivery Function(Object host, Map<String, Object?> event) send;
   final Duration timeout;
   final DateTime Function() now;
   final _recent =
@@ -188,7 +203,7 @@ class AgentAccessGate {
         'approval-${[for (var i = 0; i < 8; i++) _random.nextInt(256).toRadixString(16).padLeft(2, '0')].join()}';
     final done = Completer<bool>();
     _pending[id] = (client: client, done: done);
-    final shown = send(host, {
+    final delivery = send(host, {
       'event': 'approval',
       'approval_id': id,
       'method': method,
@@ -205,12 +220,24 @@ class AgentAccessGate {
     });
     // Waiting for a decision on an approval the desktop never received would
     // only end at the timeout.
-    if (!shown) {
+    if (delivery != EventDelivery.sent) {
       _pending.remove(id);
-      throw RpcError(
-        RpcErrorCode.invalidArgument,
-        'Request is too large to show for approval',
-      );
+      throw switch (delivery) {
+        EventDelivery.tooLarge => RpcError(
+          RpcErrorCode.invalidArgument,
+          'Request is too large to show for approval',
+        ),
+        EventDelivery.unencodable => RpcError(
+          RpcErrorCode.invalidArgument,
+          'Request contains a value JSON cannot represent, such as NaN or '
+          'Infinity, so it cannot be shown for approval',
+        ),
+        _ => RpcError(
+          RpcErrorCode.unavailable,
+          'The desktop approval window could not be reached; retry once the '
+          'desktop app is open',
+        ),
+      };
     }
     try {
       final allowed = await done.future.timeout(

@@ -36,6 +36,19 @@ class CountingRecording extends Recording {
   void dispose() {}
 }
 
+/// A desktop connection every write to fails, as one whose peer has gone
+/// before the service saw its end.
+class UnwritableSocket implements Socket {
+  var destroyed = false;
+  @override
+  void add(List<int> data) =>
+      throw const SocketException('Broken pipe', osError: OSError('', 32));
+  @override
+  void destroy() => destroyed = true;
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
 void main() {
   // The production grace, for tests that need the shutdown to happen.
   const shortGrace = Duration(seconds: 1);
@@ -503,6 +516,29 @@ void main() {
       await frames.cancel();
       raw.destroy();
     }
+  });
+  test('an approval the desktop connection cannot be written to fails its '
+      'request as unavailable, not as too large', () async {
+    final host = UnwritableSocket();
+    service.access.attach(
+      host,
+      File('${temp.path}/profile/.desktop-capability').readAsStringSync(),
+    );
+    await expectLater(
+      agent.call('sources.delete', {'id': 'source'}),
+      throwsA(
+        isA<RpcError>()
+            .having((error) => error.code, 'code', RpcErrorCode.unavailable)
+            .having(
+              (error) => error.message,
+              'message',
+              'The desktop approval window could not be reached; retry once '
+                  'the desktop app is open',
+            ),
+      ),
+    );
+    // The failed connection is closed.
+    expect(host.destroyed, isTrue);
   });
   test('frames JSON cannot encode fail alone, not the desktop', () async {
     await attach();
