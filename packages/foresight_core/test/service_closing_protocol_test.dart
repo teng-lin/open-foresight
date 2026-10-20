@@ -53,6 +53,21 @@ bool isClosingFrame(ServiceFrame frame) =>
     frame.error?['reason'] == 'closing' &&
     frame.error?['message'] == closingMessage;
 
+/// [startup], which runs under its own deadline, awaited for at most
+/// [startupBound] from here: a startup that outlives its deadline fails with
+/// what [launcher] launched instead of hanging until the test times out.
+Future<T> boundedStartup<T>(
+  Future<T> startup,
+  ServiceLauncher launcher,
+) => startup.timeout(
+  startupBound,
+  onTimeout: () => fail(
+    'Startup did not finish within $startupBound; launched '
+    '${launcher.launched}; launch log: '
+    '${launcher.log.existsSync() ? launcher.log.readAsStringSync() : '(none)'}',
+  ),
+);
+
 /// Whether [startup] has completed, observed without waiting for it.
 bool Function() settledFlag(Future<Object?> startup) {
   var settled = false;
@@ -74,16 +89,19 @@ Matcher rpcError(RpcErrorCode code, String message, String? reason) =>
         .having((error) => error.toJson()['reason'], 'reason', reason);
 
 /// One raw request and its terminal frame, as a client that predates the
-/// `reason` field reads it: newline-delimited JSON, nothing else.
+/// `reason` field reads it: newline-delimited JSON, nothing else. A missing
+/// reply fails with the lines that did arrive, within [bound].
 Future<Map<String, dynamic>> rawRequest(
   String endpoint,
   int id,
-  String method,
-) async {
+  String method, {
+  Duration bound = const Duration(seconds: 60),
+}) async {
   final socket = await Socket.connect(
     InternetAddress(endpoint, type: InternetAddressType.unix),
     0,
   );
+  final received = <String>[];
   try {
     socket.add(
       utf8.encode('${jsonEncode({'id': id, 'method': method, 'args': {}})}\n'),
@@ -91,7 +109,23 @@ Future<Map<String, dynamic>> rawRequest(
     final line = await utf8.decoder
         .bind(socket)
         .transform(const LineSplitter())
-        .firstWhere((line) => (jsonDecode(line) as Map)['id'] == id);
+        .firstWhere(
+          (line) {
+            received.add(line);
+            return (jsonDecode(line) as Map)['id'] == id;
+          },
+          orElse: () => fail(
+            '$endpoint closed before replying to $method (id $id); '
+            'received $received',
+          ),
+        )
+        .timeout(
+          bound,
+          onTimeout: () => fail(
+            'No reply to $method (id $id) from $endpoint within $bound; '
+            'received $received',
+          ),
+        );
     return jsonDecode(line) as Map<String, dynamic>;
   } finally {
     socket.destroy();
@@ -112,10 +146,35 @@ Future<Process> holdProfileLock(String lock) async {
     await utf8.decoder
         .bind(holder.stdout)
         .transform(const LineSplitter())
-        .first,
+        .first
+        .timeout(startupBound),
     'locked',
   );
   return holder;
+}
+
+/// Kills at teardown every background lock holder whose pid a launch wrapper
+/// appended to [pids], so a test that fails or times out before a holder
+/// lets go leaves none running. Only a process that still holds [lock] in
+/// its command line is signalled, never a reused pid.
+void killLockHoldersAtTeardown(File pids, String lock) {
+  addTearDown(() async {
+    if (!pids.existsSync()) return;
+    for (final line in pids.readAsLinesSync()) {
+      final pid = int.tryParse(line.trim());
+      if (pid == null) continue;
+      final command = await Process.run('/bin/ps', [
+        '-ww',
+        '-p',
+        '$pid',
+        '-o',
+        'command=',
+      ]);
+      if (command.stdout.toString().contains(lock)) {
+        Process.killPid(pid, ProcessSignal.sigkill);
+      }
+    }
+  });
 }
 
 /// True when another process holds the profile's POSIX ownership lock.
@@ -420,7 +479,7 @@ void main() {
         'shutdown_verified': true,
       });
       expect(await owner.exited(), 0, reason: owner.output);
-      attached = await startup;
+      attached = await boundedStartup<ServiceClient>(startup, launcher);
       final status = await attached.call('status') as Map;
       expect(launcher.launched, [status['pid']]);
       // Every probe the closing owner received got a structured refusal;
@@ -494,7 +553,7 @@ void main() {
         owner.release('frontend.draining');
         // The process reports the worker's failure.
         expect(await owner.exited(), isNot(0), reason: owner.output);
-        replacement = await startup;
+        replacement = await boundedStartup<ServiceClient>(startup, launcher);
         expect(launcher.launched, [
           (await replacement.call('status') as Map)['pid'],
         ]);
@@ -681,107 +740,96 @@ void main() {
   );
 
   // A desktop's startup snapshot reserves the owner's lifetime, so the race
-  // left is the grace ending before that reservation arrives.
-  for (final held in ['status']) {
-    test(
-      'a desktop starting as the detach grace ends follows the owner to its '
-      'replacement and attaches approvals once (held $held) (SL-9)',
-      () async {
-        // The launched replacement records its canonical data path.
-        final directory = createServiceTestDirectorySync('of-grace-');
-        final profile = ProfilePaths(
-          '${directory.path}/data',
-          '${directory.path}/run',
-        );
-        // This in-process owner reads the gate directory as it closes.
-        final gates = await ServiceGates.create(directory);
-        runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
-            gates.directory.path;
-        gates.hold('close.begin');
-        final launcher = await launcherFor(profile);
-        // In process, an unset helper disables it; replacements get ''.
-        runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
-        final service = await ApplicationService.start(
-          profile,
-          desktopDetachGrace: Duration.zero,
-        );
-        runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
-        final proxy = ServiceFaultProxy();
-        ServiceClient? previous;
-        RemoteDomain? remote;
-        try {
-          previous = await ServiceClient.connect(serviceEndpoint(profile));
-          await previous.call('security.attach_desktop', {
-            'token': File(
-              '${profile.data}/.desktop-capability',
-            ).readAsStringSync(),
-          });
-          // The second status is the desktop's reserving snapshot.
-          var statuses = 0;
-          final request = proxy.hold(
-            ProxyDirection.toService,
-            where: (frame) =>
-                frame.method == held && (held != 'status' || ++statuses == 2),
-          );
-          final connecting = proxy.run(() async {
-            final domain = await RemoteDomain.connect(profile);
-            await domain.enableDesktopApprovals((_) {});
-            return domain;
-          });
-          await request.reached;
-          // The previous desktop leaves while the new one is between its
-          // calls; the grace ends and the owner begins closing.
-          await previous.close();
-          await gates.reached('close.begin');
-          runtimeConfiguration.environment.remove('FORESIGHT_SERVICE_GATES');
-          // The owner refuses the snapshot; startup then waits for this
-          // owner inside the same handoff.
-          final refused = proxy
-              .seen(ProxyDirection.toClient, where: isClosingFrame)
-              .timeout(const Duration(seconds: 60));
-          request.release();
-          await refused;
-          expect(launcher.launched, isEmpty);
-          final oldConnections = proxy.connections.toSet();
-          gates.release('close.begin');
-          await service.closed;
-          remote = await connecting;
-          final pid = (await remote.command(Operation.status) as Map)['pid'];
-          expect(launcher.launched, [pid]);
-          Iterable<ServiceFrame> sent(String method, bool toClosingOwner) =>
-              proxy.frames.where(
-                (frame) =>
-                    frame.direction == ProxyDirection.toService &&
-                    frame.method == method &&
-                    oldConnections.contains(frame.connection) == toClosingOwner,
-              );
-          // Approvals are attached once on the replacement; nothing other
-          // than status and that attach was ever sent.
-          expect(sent('security.attach_desktop', false), hasLength(1));
-          expect(
-            sent('security.attach_desktop', true),
-            hasLength(held == 'status' ? 0 : 1),
-          );
-          expect(
-            proxy.frames
-                .where((frame) => frame.direction == ProxyDirection.toService)
-                .map((frame) => frame.method)
-                .toSet(),
-            {'status', 'security.attach_desktop'},
-          );
-        } finally {
-          gates.releaseAll();
-          await previous?.close();
-          remote?.close();
-          remote?.store.close();
-          await proxy.close();
-          await service.close();
-          await launcher.stopAll();
-        }
-      },
-      timeout: const Timeout(Duration(minutes: 3)),
+  // left is the grace ending before that reservation arrives: the held
+  // request is that snapshot's status.
+  test('a desktop starting as the detach grace ends follows the owner to its '
+      'replacement and attaches approvals once (held status) (SL-9)', () async {
+    // The launched replacement records its canonical data path.
+    final directory = createServiceTestDirectorySync('of-grace-');
+    final profile = ProfilePaths(
+      '${directory.path}/data',
+      '${directory.path}/run',
     );
-  }
+    // This in-process owner reads the gate directory as it closes.
+    final gates = await ServiceGates.create(directory);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
+        gates.directory.path;
+    gates.hold('close.begin');
+    final launcher = await launcherFor(profile);
+    // In process, an unset helper disables it; replacements get ''.
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    final service = await ApplicationService.start(
+      profile,
+      desktopDetachGrace: Duration.zero,
+    );
+    runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
+    final proxy = ServiceFaultProxy();
+    ServiceClient? previous;
+    RemoteDomain? remote;
+    try {
+      previous = await ServiceClient.connect(serviceEndpoint(profile));
+      await previous.call('security.attach_desktop', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      });
+      // The second status is the desktop's reserving snapshot.
+      var statuses = 0;
+      final request = proxy.hold(
+        ProxyDirection.toService,
+        where: (frame) => frame.method == 'status' && ++statuses == 2,
+      );
+      final connecting = proxy.run(() async {
+        final domain = await RemoteDomain.connect(profile);
+        await domain.enableDesktopApprovals((_) {});
+        return domain;
+      });
+      await request.reached;
+      // The previous desktop leaves while the new one is between its
+      // calls; the grace ends and the owner begins closing.
+      await previous.close();
+      await gates.reached('close.begin');
+      runtimeConfiguration.environment.remove('FORESIGHT_SERVICE_GATES');
+      // The owner refuses the snapshot; startup then waits for this
+      // owner inside the same handoff.
+      final refused = proxy
+          .seen(ProxyDirection.toClient, where: isClosingFrame)
+          .timeout(const Duration(seconds: 60));
+      request.release();
+      await refused;
+      expect(launcher.launched, isEmpty);
+      final oldConnections = proxy.connections.toSet();
+      gates.release('close.begin');
+      await service.closed;
+      remote = await boundedStartup<RemoteDomain>(connecting, launcher);
+      final pid = (await remote.command(Operation.status) as Map)['pid'];
+      expect(launcher.launched, [pid]);
+      Iterable<ServiceFrame> sent(String method, bool toClosingOwner) =>
+          proxy.frames.where(
+            (frame) =>
+                frame.direction == ProxyDirection.toService &&
+                frame.method == method &&
+                oldConnections.contains(frame.connection) == toClosingOwner,
+          );
+      // Approvals are attached once on the replacement; nothing other
+      // than status and that attach was ever sent.
+      expect(sent('security.attach_desktop', false), hasLength(1));
+      expect(sent('security.attach_desktop', true), isEmpty);
+      expect(
+        proxy.frames
+            .where((frame) => frame.direction == ProxyDirection.toService)
+            .map((frame) => frame.method)
+            .toSet(),
+        {'status', 'security.attach_desktop'},
+      );
+    } finally {
+      gates.releaseAll();
+      await previous?.close();
+      remote?.close();
+      remote?.store.close();
+      await proxy.close();
+      await service.close();
+      await launcher.stopAll();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test(
     'a replacement that fails to start reports its cause at once (L3)',
@@ -988,47 +1036,31 @@ void main() {
     final lock = '${profile.data}/.application.lock';
     File(lock).writeAsStringSync('');
     // Another process holds the profile lock until its stdin closes.
-    final holder = await Process.start('python3', [
-      '-c',
-      'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
-          'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
-          'sys.stdin.read()',
-      lock,
-    ]);
-    try {
-      expect(
-        await utf8.decoder
-            .bind(holder.stdout)
-            .transform(const LineSplitter())
-            .first,
-        'locked',
-      );
-      expect(
-        await awaitProfileRelease(
-          profile,
-          holder.pid,
-          timeout: const Duration(milliseconds: 200),
-        ),
-        isFalse,
-      );
-      // A process that is gone has released its profile, whoever holds
-      // the lock now.
-      // From PATH: macOS has no /bin/true.
-      final gone = await Process.start('true', []);
-      await gone.exitCode.timeout(startupBound);
-      expect(await awaitProfileRelease(profile, gone.pid), isTrue);
-      await holder.stdin.close();
-      await holder.exitCode.timeout(startupBound);
-      final waited = await awaitProfileRelease(
+    final holder = await holdProfileLock(lock);
+    expect(
+      await awaitProfileRelease(
         profile,
-        pid,
-        timeout: const Duration(seconds: 30),
-      );
-      expect(waited, isTrue);
-    } finally {
-      holder.kill(ProcessSignal.sigkill);
-    }
-  });
+        holder.pid,
+        timeout: const Duration(milliseconds: 200),
+      ),
+      isFalse,
+    );
+    // A process that is gone has released its profile, whoever holds
+    // the lock now.
+    // From PATH: macOS has no /bin/true.
+    final gone = await Process.start('true', []);
+    await gone.exitCode.timeout(startupBound);
+    expect(await awaitProfileRelease(profile, gone.pid), isTrue);
+    await holder.stdin.close();
+    await holder.exitCode.timeout(startupBound);
+    final waited = await awaitProfileRelease(
+      profile,
+      pid,
+      timeout: const Duration(seconds: 30),
+    );
+    expect(waited, isTrue);
+    // Above each inner bound, so a hang reports which wait it was.
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('a startup probe that the closing owner ends with outcomeUnknown hands '
       'off to one replacement', () async {
@@ -1322,6 +1354,8 @@ void main() {
     final directory = Directory(profile.data).parent;
     final release = '${directory.path}/holder.release';
     final locked = '${directory.path}/holder.locked';
+    final holders = File('${directory.path}/holders');
+    killLockHoldersAtTeardown(holders, '${profile.data}/.application.lock');
     // A momentary holder, such as another launcher's or --stop's probe,
     // takes the lock just before the first launch tries it.
     runtimeConfiguration.environment['FORESIGHT_SERVICE'] = firstLaunchWrapper(
@@ -1333,6 +1367,7 @@ f=open(sys.argv[1],"a")
 fcntl.lockf(f,fcntl.LOCK_EX)
 open(sys.argv[2],"w").close()
 while not os.path.exists(sys.argv[3]): time.sleep(0.005)' "\$FORESIGHT_DATA/.application.lock" ${shellQuote(locked)} ${shellQuote(release)} &
+  echo \$! >> ${shellQuote(holders.path)}
   while [ ! -e ${shellQuote(locked)} ]; do sleep 0.01; done''',
     );
     ServiceClient? client;
@@ -1466,6 +1501,8 @@ while not os.path.exists(sys.argv[3]): time.sleep(0.005)' "\$FORESIGHT_DATA/.app
     final directory = Directory(profile.data).parent;
     // Before every launch, another process takes the lock and keeps it
     // until that launch has recorded that it lost.
+    final holders = File('${directory.path}/holders');
+    killLockHoldersAtTeardown(holders, '${profile.data}/.application.lock');
     final wrapper = File('${directory.path}/launch-held')
       ..writeAsStringSync('''#!/bin/sh
 locked=${shellQuote(directory.path)}/locked-\$\$
@@ -1478,6 +1515,7 @@ while True:
         if json.load(open(sys.argv[3]))["state"]=="contended": break
     except Exception: pass
     time.sleep(0.005)' "\$FORESIGHT_DATA/.application.lock" "\$locked" "\$FORESIGHT_STARTUP_STATUS" &
+echo \$! >> ${shellQuote(holders.path)}
 while [ ! -e "\$locked" ]; do sleep 0.01; done
 exec ${shellQuote(launcher.executable)} "\$@"
 ''');

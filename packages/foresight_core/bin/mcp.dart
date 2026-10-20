@@ -144,13 +144,15 @@ Future<void> main() async {
               if (args['idempotency_key'] != null) {
                 text +=
                     ' The change may have been applied. Retry with the same '
-                    'idempotency_key to apply it at most once.';
+                    'idempotency_key to apply it at most once in the same '
+                    'workspace (pass workspace_epoch).';
               } else {
                 text += ' It may have completed; check before retrying.';
                 if (Operation.parse(operation).acceptsIdempotencyKey) {
                   text +=
                       ' Pass an idempotency_key next time, so a retry '
-                      'applies the change at most once.';
+                      'applies the change at most once in the same workspace '
+                      '(pass workspace_epoch).';
                 }
               }
             }

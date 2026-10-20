@@ -18,7 +18,8 @@ transaction. A failure or process exit before commit rolls back schema, backfill
 and version together; reopening retries the pending steps. No per-open table or
 column repair occurs after the current version has been committed. The same
 transaction creates the `workspaceEpoch` preference when it is missing and prunes
-request keys older than seven days; neither changes the schema.
+request keys older than 24 hours (`Store.requestKeyLifetime`); neither changes
+the schema.
 
 | Version | Change |
 | --- | --- |

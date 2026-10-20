@@ -252,7 +252,7 @@ List<RpcTool> get rpcTools {
     minLength: 1,
     maxLength: 256,
     description:
-        'Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once and the retry returns its result. Use a new key for a different change.',
+        'Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once in the same workspace (pass workspace_epoch) and the retry returns its result. Use a new key for a different change.',
   );
   const retry =
       ' If a call fails with reason outcomeUnknown, retry with the same idempotency_key.'

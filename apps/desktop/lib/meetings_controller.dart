@@ -40,7 +40,13 @@ class _MeetingsController extends _FeatureController {
   /// A retry of an unconfirmed create reuses its key, so it creates once.
   final newNoteKey = PendingRequestKey(),
       newMeetingKey = PendingRequestKey(),
-      quickStartKey = PendingRequestKey();
+      quickStartKey = PendingRequestKey(),
+      transcriptImportKey = PendingRequestKey();
+
+  /// The meeting, file and text of the transcript import that
+  /// [transcriptImportKey] belongs to. Choosing the same file again retries
+  /// that import; any other choice is a new import.
+  (int, String, String)? transcriptImport;
 
   /// The note editor's text as last loaded or saved.
   (String, String) noteBaseline = ('', '');
@@ -182,10 +188,23 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> startRecording({bool accessReviewed = false}) async {
+    final id = meetingId, epoch = d.workspaceEpoch;
     if (!accessReviewed && !await integrationFeature.ensureRecordingAccess())
       return;
     if (!mounted) return;
-    await d.command(Operation.meetingsStart, {'id': meetingId!});
+    // The OS access prompt can stay open while another client clears the
+    // workspace, which closes this meeting. Never record into another one.
+    if (d.workspaceEpoch != epoch)
+      throw StateError(
+        'Recording did not start: the workspace was cleared while recording '
+        'access was requested.',
+      );
+    if (id == null || meetingId != id)
+      throw StateError(
+        'Recording did not start: the meeting was closed while recording '
+        'access was requested.',
+      );
+    await d.command(Operation.meetingsStart, {'id': id});
     syncCapture();
     if (mounted) setState(() {});
   }
@@ -1141,12 +1160,22 @@ class _MeetingsController extends _FeatureController {
       ],
     );
     if (file == null) return;
-    await d.command(Operation.meetingsTranscript, {
-      'id': id,
-      'text': await File(file.path).readAsString(),
-      'source': 'imported transcript',
-      if (epoch != null) 'workspace_epoch': epoch,
-    });
+    final text = await File(file.path).readAsString();
+    // An append is not idempotent: retrying an import whose reply was lost
+    // must not add its segments twice.
+    final chosen = (id, file.path, text);
+    if (transcriptImport != chosen) {
+      transcriptImportKey.reset();
+      transcriptImport = chosen;
+    }
+    await transcriptImportKey.run(
+      {'id': id, 'text': text, 'source': 'imported transcript'},
+      (keyed) => d.command(Operation.meetingsTranscript, {
+        ...keyed,
+        if (epoch != null) 'workspace_epoch': epoch,
+      }),
+    );
+    transcriptImport = null;
   }
 
   Widget meetingNotesEditor(

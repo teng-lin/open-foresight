@@ -244,6 +244,8 @@ void main() {
         'id': id,
         'text': transcript.readAsStringSync(),
         'source': 'imported transcript',
+        // A retry after a lost reply reuses it, so the import appends once.
+        'idempotency_key': isA<String>(),
         // The meeting ID belongs to the workspace the picker opened in.
         'workspace_epoch': f.store.workspaceEpoch,
       });

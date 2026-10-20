@@ -629,7 +629,8 @@ class Store {
   );
 
   /// Returns the note's ID. An update that finds no note fails rather than
-  /// reporting a save that wrote nothing.
+  /// reporting a save that wrote nothing. Notes leave no tombstone, so a
+  /// missing note may never have existed.
   int saveNote(int? id, String title, String body) {
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     if (id == null) {
@@ -645,7 +646,10 @@ class Store {
       [title, body, timestamp, id],
     );
     if (db.updatedRows != 1) {
-      throw RpcError(RpcErrorCode.notFound, 'This note no longer exists.');
+      throw RpcError(
+        RpcErrorCode.notFound,
+        'No note has this ID; omit id to create one.',
+      );
     }
     return id;
   }
@@ -1286,13 +1290,22 @@ class Store {
     }
   }
 
-  void requireSource(String id) {
-    if (rows(
-      'SELECT 1 FROM sources JOIN source_details ON source_id=id WHERE id=? AND deleted=0',
+  /// Fails unless [id] names a live source. Only a deleted source's
+  /// tombstone shows that it existed; [forImport] adds how to create one.
+  void requireSource(String id, {bool forImport = false}) {
+    final row = rows(
+      'SELECT deleted,source_id FROM sources LEFT JOIN source_details ON source_id=id WHERE id=?',
       [id],
-    ).isEmpty) {
-      throw RpcError(RpcErrorCode.notFound, 'This source no longer exists.');
-    }
+    ).firstOrNull;
+    if (row != null && row['deleted'] == 0 && row['source_id'] != null) return;
+    throw RpcError(
+      RpcErrorCode.notFound,
+      row != null && row['deleted'] != 0
+          ? 'This source no longer exists.'
+          : forImport
+          ? 'No source has this ID; omit id to create one.'
+          : 'No source has this ID.',
+    );
   }
 
   void labels(String id, List<String> labels) {

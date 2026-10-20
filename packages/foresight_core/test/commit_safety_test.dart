@@ -81,9 +81,13 @@ void main() {
         }))['id'];
         store.db.execute('DELETE FROM notes WHERE id=?', [id]);
         final before = changes();
+        // Notes leave no tombstone, so this cannot tell deleted from never.
         await expectLater(
           app.call('notes.save', {'id': id, 'title': 'Lost', 'body': 'v2'}),
-          throwsRpc(RpcErrorCode.notFound, 'This note no longer exists.'),
+          throwsRpc(
+            RpcErrorCode.notFound,
+            'No note has this ID; omit id to create one.',
+          ),
         );
         expect(changes(), before);
         expect(store.rows('SELECT * FROM notes'), isEmpty);
@@ -460,17 +464,30 @@ void main() {
         'index': false,
       }))['id'];
       await app.call('sources.delete', {'id': deleted});
-      for (final id in [deleted, 'never-existed']) {
+      // Only the deleted source's tombstone shows it ever existed.
+      for (final (id, message) in [
+        (deleted, 'This source no longer exists.'),
+        ('never-existed', 'No source has this ID; omit id to create one.'),
+      ]) {
         await expectLater(
           app.call('sources.import', {
             'id': id,
             'title': 'Revived',
             'text': 'should not land',
           }),
-          throwsRpc(RpcErrorCode.notFound, 'This source no longer exists.'),
+          throwsRpc(RpcErrorCode.notFound, message),
           reason: id as String,
         );
       }
+      // Other operations on a source never offer to create one.
+      await expectLater(
+        app.call('sources.index', {'id': 'never-existed'}),
+        throwsRpc(RpcErrorCode.notFound, 'No source has this ID.'),
+      );
+      await expectLater(
+        app.call('sources.index', {'id': deleted}),
+        throwsRpc(RpcErrorCode.notFound, 'This source no longer exists.'),
+      );
       expect(store.sources.map((row) => row['id']), [kept]);
       expect(
         store.rows('SELECT 1 FROM sources WHERE id=?', ['never-existed']),

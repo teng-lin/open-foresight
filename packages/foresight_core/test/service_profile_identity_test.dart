@@ -10,6 +10,9 @@ import 'package:foresight_test_support/hooked_service.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:test/test.dart';
 
+import 'service_shutdown_handoff_test.dart'
+    show expireDeadlineDuring, ladderTimeout, startupFailure;
+
 // Profile identity (fix plan, PR 4; SL-7): an owner says which profile it
 // serves, and no client, administration command or owner of another profile
 // attaches to it, stops it or deletes its socket. The real bin/service.dart
@@ -17,6 +20,25 @@ import 'package:test/test.dart';
 
 /// A bound only: a command of a compiled service child under parallel load.
 const commandBound = Duration(minutes: 2);
+
+/// Startup deadlines for tests whose deadline must cut a status probe short,
+/// for [expireDeadlineDuring]. The last rung allows the time the suite allows
+/// elsewhere.
+const probeDeadlines = [
+  Duration(seconds: 2),
+  Duration(seconds: 10),
+  Duration(seconds: 90),
+];
+
+/// [probeDeadlines] for a startup that launches a real service first.
+const launchProbeDeadlines = [
+  Duration(seconds: 10),
+  Duration(seconds: 30),
+  Duration(seconds: 90),
+];
+
+/// Above every rung, so the deadline, not the probe limit, ends a held probe.
+const probeLimit = Duration(minutes: 3);
 
 /// A profile's identity as its owner reports it, computed here from the data
 /// path rather than through ProfilePaths.
@@ -885,35 +907,49 @@ void main() {
     // This profile's lock is held, so no launch replaces the record and the
     // startup polls until its deadline.
     await holdProfileLock(profile);
-    final proxy = ServiceFaultProxy();
-    addTearDown(proxy.close);
-    // The second probe's result is held until the deadline ends that probe,
-    // and released after the test so the proxy can close.
-    var results = 0;
-    final held = proxy.hold(
-      ProxyDirection.toClient,
-      where: (frame) =>
-          frame.method == 'status' &&
-          frame.json?.containsKey('result') == true &&
-          ++results == 2,
-    );
-    addTearDown(held.release);
-    await expectLater(
-      proxy.run(
-        () =>
-            ensureService(profile, startupTimeout: const Duration(seconds: 10)),
-      ),
-      throwsA(
-        isA<TimeoutException>().having(
-          (error) => error.message,
-          'message',
-          staleRecordRefusal(profile, endpoint, owner.pid),
-        ),
-      ),
-    );
-    // The second probe began well before the deadline; a bound only.
-    await held.reached.timeout(const Duration(seconds: 30));
-  }, timeout: const Timeout(Duration(minutes: 3)));
+    await expireDeadlineDuring('the second status probe', (deadline) async {
+      // A proxy per attempt, so an earlier attempt's rule holds nothing here.
+      final proxy = ServiceFaultProxy();
+      // The second probe's result is held until the deadline ends that probe,
+      // and released once the attempt is over so the proxy can close.
+      var results = 0;
+      final held = proxy.hold(
+        ProxyDirection.toClient,
+        where: (frame) =>
+            frame.method == 'status' &&
+            frame.json?.containsKey('result') == true &&
+            ++results == 2,
+      );
+      var cut = false;
+      unawaited(held.reached.then((_) => cut = true));
+      try {
+        final failure = await startupFailure(
+          proxy.run(
+            () => ensureService(
+              profile,
+              startupTimeout: deadline,
+              statusProbeLimit: probeLimit,
+            ),
+          ),
+        );
+        // A deadline between probes names the record too; only one that
+        // ends the held probe tests the cut-short path.
+        if (!cut) return false;
+        expect(
+          failure,
+          isA<TimeoutException>().having(
+            (error) => error.message,
+            'message',
+            staleRecordRefusal(profile, endpoint, owner.pid),
+          ),
+        );
+        return true;
+      } finally {
+        held.release();
+        await proxy.close();
+      }
+    }, deadlines: probeDeadlines);
+  }, timeout: ladderTimeout(probeDeadlines));
 
   test('a probe of this profile\'s own slowly starting service that the '
       'deadline cuts short keeps its own message', () async {
@@ -924,43 +960,59 @@ void main() {
       ProfilePaths('${directory.path}/a', shared),
     );
     await other.ready();
-    // A stale record makes this startup launch this profile's own service.
-    final profile = ProfilePaths(
-      '${directory.path}/b',
-      '${directory.path}/own',
-    );
-    writeCrashRecord(profile, shared);
-    final launcher = await build.launcher(directory);
-    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
-    final proxy = ServiceFaultProxy();
-    addTearDown(proxy.close);
-    // Its first status result is held until the deadline ends that probe.
-    final own = '${profile.runtime}/application.sock';
-    final held = proxy.hold(
-      ProxyDirection.toClient,
-      where: (frame) =>
-          frame.connection.endpoint == own &&
-          frame.method == 'status' &&
-          frame.json?.containsKey('result') == true,
-    );
-    addTearDown(held.release);
-    await expectLater(
-      proxy.run(
-        () =>
-            ensureService(profile, startupTimeout: const Duration(seconds: 20)),
-      ),
-      throwsA(
-        isA<TimeoutException>().having(
-          (error) => error.message,
-          'message',
-          'Application service did not answer its startup status probe',
-        ),
-      ),
-    );
-    // A bound only.
-    await held.reached.timeout(const Duration(seconds: 30));
-    expect(launcher.launched, hasLength(1));
-  }, timeout: const Timeout(Duration(minutes: 3)));
+    await expireDeadlineDuring("the own service's first status probe", (
+      deadline,
+    ) async {
+      // A fresh profile per attempt: an earlier attempt's launch may serve
+      // its profile by now.
+      final attempt = createServiceTestDirectorySync('of-slow-');
+      // A stale record makes this startup launch this profile's own service.
+      final profile = ProfilePaths('${attempt.path}/b', '${attempt.path}/own');
+      writeCrashRecord(profile, shared);
+      final launcher = await build.launcher(attempt);
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] =
+          launcher.executable;
+      final proxy = ServiceFaultProxy();
+      // Its first status result is held until the deadline ends that probe.
+      final own = '${profile.runtime}/application.sock';
+      final held = proxy.hold(
+        ProxyDirection.toClient,
+        where: (frame) =>
+            frame.connection.endpoint == own &&
+            frame.method == 'status' &&
+            frame.json?.containsKey('result') == true,
+      );
+      var cut = false;
+      unawaited(held.reached.then((_) => cut = true));
+      try {
+        final failure = await startupFailure(
+          proxy.run(
+            () => ensureService(
+              profile,
+              startupTimeout: deadline,
+              statusProbeLimit: probeLimit,
+            ),
+          ),
+        );
+        // A deadline that ends the launch before its service answers says
+        // the service did not start instead.
+        if (!cut) return false;
+        expect(
+          failure,
+          isA<TimeoutException>().having(
+            (error) => error.message,
+            'message',
+            'Application service did not answer its startup status probe',
+          ),
+        );
+        expect(launcher.launched, hasLength(1));
+        return true;
+      } finally {
+        held.release();
+        await proxy.close();
+      }
+    }, deadlines: launchProbeDeadlines);
+  }, timeout: ladderTimeout(launchProbeDeadlines));
 
   test('an owner removes a link or a regular file at its socket path as '
       'stale, never what a link points to', () async {

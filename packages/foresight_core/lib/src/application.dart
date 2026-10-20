@@ -725,7 +725,9 @@ class Application implements ModelGate {
           final imported = once(() {
             // A caller's ID edits a live source; it never revives a deleted
             // one or chooses the ID of a new one.
-            if (a['id'] != null) store.requireSource(a['id'] as String);
+            if (a['id'] != null) {
+              store.requireSource(a['id'] as String, forImport: true);
+            }
             return {
               'id': store.importText(
                 a['title'] as String,
