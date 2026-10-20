@@ -29,7 +29,17 @@ Future<void> main(List<String> args) async {
           'Usage: foresight-service [--status|--stop|--stop-if-idle[=PID]]',
         );
       }
-      final client = await ServiceClient.connect(serviceEndpoint(profile));
+      final record = readEndpointRecord(profile);
+      if (record is EndpointInvalid) {
+        stderr.writeln(
+          'The application endpoint record '
+          '${profile.data}/.application-endpoint.json was ignored because '
+          '${record.reason}.',
+        );
+      }
+      final client = await ServiceClient.connect(
+        serviceEndpoint(profile, record),
+      );
       try {
         if (mode == '--stop-if-idle') {
           final result =

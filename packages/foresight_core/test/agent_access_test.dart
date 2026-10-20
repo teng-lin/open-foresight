@@ -77,11 +77,10 @@ void main() {
       var now = DateTime.utc(2026);
       final events = <Map<String, Object?>>[];
       final host = Object(), client = Object();
-      final gate = AgentAccessGate(
-        'token',
-        (_, event) => events.add(event),
-        now: () => now,
-      );
+      final gate = AgentAccessGate('token', (_, event) {
+        events.add(event);
+        return true;
+      }, now: () => now);
       gate.attach(host, 'token');
       for (var i = 0; i < 3; i++) {
         final work = gate.authorize(client, 'sources.import_url', {
@@ -124,11 +123,10 @@ void main() {
       agent = Object();
       stranger = Object();
       events = [];
-      gate = AgentAccessGate(
-        'private-token',
-        (_, event) => events.add(event),
-        timeout: const Duration(milliseconds: 50),
-      );
+      gate = AgentAccessGate('private-token', (_, event) {
+        events.add(event);
+        return true;
+      }, timeout: const Duration(milliseconds: 50));
     });
     test(
       'reads work without desktop; protected operations fail closed',

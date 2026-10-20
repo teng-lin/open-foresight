@@ -5,7 +5,12 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart'
-    show serviceEndpoint, serviceLaunchCommand, writeServiceStartupEnvironment;
+    show
+        EndpointInvalid,
+        readEndpointRecord,
+        serviceEndpoint,
+        serviceLaunchCommand,
+        writeServiceStartupEnvironment;
 
 void main() {
   test('crash and delay hooks require an explicit test compilation', () {
@@ -524,11 +529,24 @@ void main() {
         serviceEndpoint(ProfilePaths(data, '${scratch.path}/other')),
         '$runtime/application.sock',
       );
+      // A record naming a non-private runtime is never used. Clients fall back
+      // to their own runtime instead of failing on record content, and that
+      // runtime must be private too.
       Process.runSync('/bin/chmod', ['755', runtime]);
       expect(
         () => serviceEndpoint(ProfilePaths(data, runtime)),
         throwsStateError,
       );
+      final other = ProfilePaths(data, '${scratch.path}/other');
+      expect(
+        readEndpointRecord(other),
+        isA<EndpointInvalid>().having(
+          (record) => record.reason,
+          'reason',
+          contains('Requires private user-owned directory: $runtime'),
+        ),
+      );
+      expect(serviceEndpoint(other), '${other.runtime}/application.sock');
     },
   );
 

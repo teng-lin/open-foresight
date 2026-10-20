@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 import 'dart:math';
 import 'agent_access.dart';
 import 'domain.dart';
@@ -17,6 +18,10 @@ import 'store.dart';
 import 'service_socket.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
+// Clients count bytes per socket read, not per frame, so a frame at their
+// limit followed by more bytes in the same read still fails. Keep frames 1 MiB
+// under it; clients already released need this headroom too.
+const _maxServiceFrame = maxServiceMessage - 1024 * 1024;
 const _serviceClosingMessage =
     'Application service is shutting down; retry after it exits.';
 
@@ -51,29 +56,155 @@ void _traceServiceTransport(String message) {
   }
 }
 
+/// What a profile's endpoint record says. Reading never fails on its content:
+/// an unusable record must not stop clients or a replacement owner.
+sealed class EndpointRecord {
+  const EndpointRecord();
+}
+
+final class EndpointAbsent extends EndpointRecord {
+  const EndpointAbsent();
+}
+
+final class EndpointValid extends EndpointRecord {
+  final String runtime;
+  const EndpointValid(this.runtime);
+}
+
+final class EndpointInvalid extends EndpointRecord {
+  /// A clause such as "it is not valid JSON (...)", for diagnostics.
+  final String reason;
+  const EndpointInvalid(this.reason);
+}
+
+const _endpointRecordName = '.application-endpoint.json';
+final _endpointTemporary = RegExp(r'^\.application-endpoint\.json\.\d+$');
+final _endpointQuarantine = RegExp(
+  r'^\.application-endpoint\.json\.invalid-(\d+)$',
+);
+
 /// The profile lock is independent of runtime overrides. An endpoint record lets
 /// clients attach to that owner even when launched with a different runtime.
-String serviceEndpoint(ProfilePaths profile) {
+EndpointRecord readEndpointRecord(ProfilePaths profile) {
   privateDirectory(profile.data, repairOwnedPermissions: true);
-  final record = File('${profile.data}/.application-endpoint.json');
-  if (FileSystemEntity.typeSync(record.path, followLinks: false) ==
-      FileSystemEntityType.link) {
-    throw StateError('Service endpoint record must not be a symbolic link');
+  final path = '${profile.data}/$_endpointRecordName';
+  final type = FileSystemEntity.typeSync(path, followLinks: false);
+  if (type == FileSystemEntityType.notFound) return const EndpointAbsent();
+  if (type == FileSystemEntityType.link) {
+    return const EndpointInvalid('it is a symbolic link');
   }
-  final String contents;
+  if (type != FileSystemEntityType.file) {
+    return EndpointInvalid('it is a $type, not a file');
+  }
+  final Object? value;
   try {
-    contents = record.readAsStringSync();
+    value = jsonDecode(File(path).readAsStringSync());
   } on PathNotFoundException {
     // A closing owner may remove its record between the type check and read.
-    return '${profile.runtime}/application.sock';
+    return const EndpointAbsent();
+  } on FileSystemException catch (error) {
+    return EndpointInvalid(
+      'it cannot be read (${error.osError?.message ?? error.message})',
+    );
+  } on FormatException catch (error) {
+    return EndpointInvalid('it is not valid JSON (${error.message})');
   }
-  final value = jsonDecode(contents) as Map;
-  if (value['data'] != profile.data || value['runtime'] is! String) {
-    throw StateError('Invalid application service endpoint record');
+  if (value is! Map ||
+      value['data'] is! String ||
+      value['runtime'] is! String) {
+    return const EndpointInvalid(
+      'it is not an object with string data and runtime fields',
+    );
+  }
+  if (value['data'] != profile.data) {
+    return EndpointInvalid('it names another profile (${value['data']})');
   }
   final runtime = value['runtime'] as String;
-  privateDirectory(runtime);
-  return '$runtime/application.sock';
+  if (!runtime.startsWith('/')) {
+    return EndpointInvalid('its runtime is not an absolute path ($runtime)');
+  }
+  // dart:io would truncate the path at the NUL and use another directory.
+  if (runtime.contains('\u0000')) {
+    return const EndpointInvalid('its runtime contains a NUL character');
+  }
+  try {
+    privateDirectory(runtime);
+  } on StateError catch (error) {
+    return EndpointInvalid('its runtime is unusable (${error.message})');
+  } on FileSystemException catch (error) {
+    return EndpointInvalid(
+      'its runtime is unusable (${error.message}: '
+      '${error.osError?.message ?? error.path})',
+    );
+  }
+  return EndpointValid(runtime);
+}
+
+/// Only a valid record redirects clients; otherwise they use their own runtime,
+/// which must be private just as a recorded one must. Pass [record] to reuse
+/// a record the caller has already read.
+String serviceEndpoint(ProfilePaths profile, [EndpointRecord? record]) {
+  if ((record ?? readEndpointRecord(profile)) case EndpointValid(
+    :final runtime,
+  )) {
+    return '$runtime/application.sock';
+  }
+  privateDirectory(profile.runtime);
+  return '${profile.runtime}/application.sock';
+}
+
+// Match the listed path's last segment, not its URI: a directory's URI ends
+// with a separator.
+String _entryName(String path) => path.substring(path.lastIndexOf('/') + 1);
+
+List<String> _endpointEntries(String data, RegExp name) => [
+  for (final entry in Directory(data).listSync(followLinks: false))
+    if (name.hasMatch(_entryName(entry.path))) entry.path,
+];
+
+// Renaming or deleting a symbolic link acts on the link, never its target.
+void _renameEndpointEntry(String path, String target) =>
+    switch (FileSystemEntity.typeSync(path, followLinks: false)) {
+      FileSystemEntityType.directory => Directory(path).renameSync(target),
+      FileSystemEntityType.link => Link(path).renameSync(target),
+      _ => File(path).renameSync(target),
+    };
+
+void _deleteEndpointEntry(String path) {
+  try {
+    switch (FileSystemEntity.typeSync(path, followLinks: false)) {
+      case FileSystemEntityType.notFound:
+        return;
+      case FileSystemEntityType.directory:
+        Directory(path).deleteSync(recursive: true);
+      case FileSystemEntityType.link:
+        Link(path).deleteSync();
+      default:
+        File(path).deleteSync();
+    }
+  } on FileSystemException catch (error) {
+    // Leftovers are only clutter; they must not block a new owner.
+    stderr.writeln('Endpoint record cleanup: $error');
+  }
+}
+
+/// Under the profile lock, set an invalid record aside for diagnosis and keep
+/// the newest three, so the owner can publish its own record.
+void _quarantineEndpointRecord(String data, String reason) {
+  final record = '$data/$_endpointRecordName';
+  final target = '$record.invalid-${DateTime.now().millisecondsSinceEpoch}';
+  _renameEndpointEntry(record, target);
+  stderr.writeln(
+    'Moved an invalid application endpoint record to $target: $reason.',
+  );
+  // A stamp too long for an int is not one this code wrote; drop it first.
+  int stamp(String path) =>
+      int.tryParse(_endpointQuarantine.firstMatch(_entryName(path))![1]!) ?? 0;
+  final quarantined = _endpointEntries(data, _endpointQuarantine)
+    ..sort((a, b) => stamp(a).compareTo(stamp(b)));
+  for (final old in quarantined.take(max(0, quarantined.length - 3))) {
+    _deleteEndpointEntry(old);
+  }
 }
 
 // Only the local transport can create this marker. A peer's serialized error
@@ -187,8 +318,22 @@ class ServiceClient {
         }
       },
     );
-    if (_closed) {
+    final frame = _closed
+        ? null
+        : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
+    if (frame == null) {
       controller.addError(_failure ?? _ServiceTransportLost());
+      unawaited(controller.close());
+    } else if (frame.length + 1 > _maxServiceFrame) {
+      // The service drops a connection whose request exceeds its limit, which
+      // for the desktop also stops recording. It counts bytes per read too.
+      controller.addError(
+        RpcError(
+          RpcErrorCode.invalidArgument,
+          'Request exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
+          'send less data.',
+        ),
+      );
       unawaited(controller.close());
     } else {
       _pending[id] = controller;
@@ -196,7 +341,9 @@ class ServiceClient {
       if (args['requestId'] is String) {
         _requestIds[id] = args['requestId'] as String;
       }
-      socket.writeln(jsonEncode({'id': id, 'method': method, 'args': args}));
+      socket
+        ..add(frame)
+        ..add(const [10]);
     }
     return controller.stream
         .where((v) => v.containsKey('result') || v.containsKey('error'))
@@ -422,24 +569,35 @@ class ApplicationService {
     Helper? helper;
     Application? startedApplication;
     ServiceSocketBinding? binding;
-    final endpointRecord = File('${profile.data}/.application-endpoint.json');
-    // A predecessor's record names the runtime this attempt adopts. Keep it if
-    // startup fails; remove only a record this attempt published itself.
-    final adoptedRecord =
-        FileSystemEntity.typeSync(endpointRecord.path, followLinks: false) !=
-        FileSystemEntityType.notFound;
-    if (adoptedRecord) {
-      stderr.writeln(
-        'Application service: the previous owner left its endpoint record; '
-        'adopting its runtime.',
-      );
-    }
+    final endpointRecord = File('${profile.data}/$_endpointRecordName');
+    final temporary = File('${endpointRecord.path}.$pid');
+    // A predecessor's valid record names the runtime this attempt adopts. Keep
+    // it if startup fails; remove only a record this attempt published itself.
+    var adoptedRecord = false;
     var publishedRecord = false;
     try {
+      // Only an owner writes temporary records, so any left now are stale.
+      _endpointEntries(
+        profile.data,
+        _endpointTemporary,
+      ).forEach(_deleteEndpointEntry);
       // An unclean predecessor can leave a healthy helper at this endpoint.
-      // Reuse that runtime until a clean shutdown releases its workers.
-      path = serviceEndpoint(profile);
-      profile = ProfilePaths(profile.data, File(path).parent.path);
+      // Reuse that runtime until a clean shutdown releases its workers. An
+      // invalid record names no usable runtime, so it is not adopted.
+      switch (readEndpointRecord(profile)) {
+        case EndpointValid(:final runtime):
+          adoptedRecord = true;
+          stderr.writeln(
+            'Application service: the previous owner left its endpoint '
+            'record; adopting its runtime.',
+          );
+          profile = ProfilePaths(profile.data, runtime);
+        case EndpointInvalid(:final reason):
+          _quarantineEndpointRecord(profile.data, reason);
+        case EndpointAbsent():
+          break;
+      }
+      path = '${profile.runtime}/application.sock';
       // Every supported public socket path must also fit the private endpoint.
       if (internalWorker) path = '${profile.runtime}/worker.sock';
       final stale = File(path);
@@ -471,9 +629,9 @@ class ApplicationService {
       });
       application.startBackground();
       binding = await ServiceSocketBinding.bind(path);
-      final temporary = File('${endpointRecord.path}.$pid');
       temporary.writeAsStringSync(
         jsonEncode({'data': profile.data, 'runtime': profile.runtime}),
+        flush: true,
       );
       if (Process.runSync('/bin/chmod', ['600', temporary.path]).exitCode !=
           0) {
@@ -548,6 +706,12 @@ class ApplicationService {
             endpointRecord.deleteSync();
           }
         });
+        await cleanup(() {
+          if (FileSystemEntity.typeSync(temporary.path, followLinks: false) ==
+              FileSystemEntityType.file) {
+            temporary.deleteSync();
+          }
+        });
       } finally {
         lock.closeSync();
       }
@@ -555,15 +719,57 @@ class ApplicationService {
     }
   }
 
-  void _send(Socket client, Map<String, Object?> message) {
+  /// Returns whether [message] itself was written. A reply that is too large
+  /// or cannot be encoded is replaced by an error; such an event is dropped.
+  bool _send(Socket client, Map<String, Object?> message) {
     try {
       _traceServiceTransport(
         'worker send peer=${identityHashCode(client)} id=${message['id']} '
         'event=${message['event']} done=${message['done']}',
       );
-      client.writeln(jsonEncode(message));
+      Uint8List? frame;
+      String? failure;
+      try {
+        frame = utf8.encode(jsonEncode(message));
+        // A client drops its whole connection on a frame over the limit, and
+        // losing the desktop's connection stops its recording. Fail only the
+        // request instead.
+        if (frame.length + 1 > _maxServiceFrame) {
+          failure =
+              'Reply exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
+              'request fewer items.';
+        }
+      } on JsonUnsupportedObjectError {
+        failure =
+            'Reply contains a value JSON cannot represent, such as NaN or '
+            'Infinity.';
+      }
+      if (failure != null) {
+        final id = message['id'];
+        _traceServiceTransport(
+          'worker unsendable peer=${identityHashCode(client)} id=$id '
+          'event=${message['event']} bytes=${frame?.length} $failure',
+        );
+        // A dropped snapshot is superseded by the next one. The approval gate
+        // fails its request instead of waiting for a decision.
+        if (id == null) return false;
+        // No later frame may follow this request's terminal error.
+        if (id is int) _cancel(client, id);
+        frame = utf8.encode(
+          jsonEncode({
+            'id': id,
+            'error': RpcError(RpcErrorCode.internal, failure).toJson(),
+            'done': true,
+          }),
+        );
+      }
+      client
+        ..add(frame!)
+        ..add(const [10]);
+      return failure == null;
     } catch (_) {
       client.destroy();
+      return false;
     }
   }
 
@@ -1365,7 +1571,13 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
       parent.send(['closing']);
       return frontendClosed.future;
     };
-    parent.send(['ready', service.path, serviceEndpoint(profile)]);
+    // The public socket belongs beside the worker socket, in the runtime this
+    // start created or adopted. Reading the record again could disagree.
+    parent.send([
+      'ready',
+      service.path,
+      '${File(service.path).parent.path}/application.sock',
+    ]);
     await Future.any([stop.future, service.closed]);
     _traceServiceTransport('worker close begin');
     await service.close();
@@ -1473,7 +1685,8 @@ bool _profileOwnerAvailable(
       rethrow;
     }
     // A record without a lock owner means the previous owner exited
-    // uncleanly. The replacement adopts that record's runtime in _start.
+    // uncleanly. The replacement adopts that record's runtime in _start, or
+    // sets the record aside if it is invalid.
     if (FileSystemEntity.typeSync(
           '${profile.data}/.application-endpoint.json',
           followLinks: false,
@@ -1572,15 +1785,24 @@ Future<ServiceClient> ensureService(
   String? executable;
   String? startupLog;
   File? handoff;
-  TimeoutException deadlineFailure() => TimeoutException(
-    launched
+  String? ignoredRecord;
+  TimeoutException deadlineFailure() {
+    final failure = launched
         ? startupLog != null
               ? 'Application service did not start. Inspect $startupLog.'
               : 'Application service did not start. Run $executable directly to inspect the startup error.'
         : closingOwner
         ? 'Application service owner handoff did not finish'
-        : 'Application service profile lock is still held; its owner is not serving the endpoint.',
-  );
+        : 'Application service profile lock is still held; its owner is not serving the endpoint.';
+    return TimeoutException(
+      ignoredRecord == null
+          ? failure
+          : '${failure.endsWith('.') ? failure : '$failure.'} The endpoint '
+                'record ${profile.data}/$_endpointRecordName was ignored '
+                'because $ignoredRecord.',
+    );
+  }
+
   Duration remaining() {
     final left = startupTimeout - startup.elapsed;
     if (left <= Duration.zero) throw deadlineFailure();
@@ -1647,8 +1869,12 @@ Future<ServiceClient> ensureService(
   try {
     while (true) {
       try {
+        // An invalid record is treated as absent. Only an owner holding the
+        // profile lock may move it aside.
+        final record = readEndpointRecord(profile);
+        ignoredRecord = record is EndpointInvalid ? record.reason : null;
         return await _connectCompatibleService(
-          serviceEndpoint(profile),
+          serviceEndpoint(profile, record),
           remaining,
         );
       } on _ClosingService catch (closing) {

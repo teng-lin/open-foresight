@@ -34,6 +34,8 @@ class ControllerConnection extends TestDesktopConnection {
   final deleted = <String>[];
   Stream<String> Function(String, String, int?)? answerStream;
   Object? graphFailure;
+  Future<Map<String, List<double>>> Function(List<Map<String, Object?>>)?
+  graphReply;
   final graphRequests = <List<String>>[];
   Map<String, dynamic>? googleState;
   Map<String, dynamic> captureState = {};
@@ -68,6 +70,7 @@ class ControllerConnection extends TestDesktopConnection {
   ) {
     graphRequests.add(sources.map((source) => source['id'] as String).toList());
     if (graphFailure != null) return Future.error(graphFailure!);
+    if (graphReply != null) return graphReply!(sources);
     return super.graphEmbeddings(sources);
   }
 

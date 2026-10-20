@@ -1,9 +1,12 @@
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:test/test.dart';
 
 class FailingDetachRecording extends Recording {
@@ -17,6 +20,20 @@ class FailingDetachRecording extends Recording {
   Future<void> stop() async => throw StateError('capture stop failed');
   @override
   void dispose() => throw StateError('capture cleanup failed');
+}
+
+class CountingRecording extends Recording {
+  int stops = 0;
+  CountingRecording()
+    : super(
+        Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
+        (_) {},
+        (_, __, ___, ____) {},
+      );
+  @override
+  Future<void> stop() async => stops++;
+  @override
+  void dispose() {}
 }
 
 void main() {
@@ -56,6 +73,117 @@ void main() {
     'token': File(
       '${temp.path}/profile/.desktop-capability',
     ).readAsStringSync(),
+  });
+  // Store one note so that the notes.list reply to request [id], with its
+  // newline, is exactly [bytes] long.
+  void sizeNotesReply(int bytes, {int id = 1}) {
+    final store = service.domain.store;
+    store.saveNote(null, 'Sized', '');
+    final note = store.db.lastInsertRowId;
+    int frame() =>
+        utf8
+            .encode(
+              jsonEncode({
+                'id': id,
+                'result': store.rows('SELECT * FROM notes ORDER BY id'),
+                'done': false,
+              }),
+            )
+            .length +
+        1;
+    var body = 0;
+    for (var i = 0; i < 3 && frame() != bytes; i++) {
+      body += bytes - frame();
+      store.saveNote(note, 'Sized', 'x' * body);
+    }
+    expect(frame(), bytes);
+  }
+
+  test(
+    'a reply of exactly the client limit fails its request, not the connection',
+    () async {
+      // Its completion frame follows in the same socket read. Clients count
+      // bytes per read, so delivering this reply would exceed their limit.
+      sizeNotesReply(maxServiceMessage);
+      final client = await ServiceClient.connect(service.path);
+      try {
+        await expectLater(
+          client.call('notes.list'),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.internal)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Reply exceeds 15 MiB; request fewer items.',
+                ),
+          ),
+        );
+        expect(client.isClosed, isFalse);
+        expect((await client.call('status') as Map)['pid'], pid);
+      } finally {
+        await client.close();
+      }
+    },
+  );
+  test('a reply at the frame cap reaches the client intact', () async {
+    sizeNotesReply(maxServiceMessage - 1024 * 1024);
+    final client = await ServiceClient.connect(service.path);
+    try {
+      final notes = await client.call('notes.list') as List;
+      expect(notes.single['title'], 'Sized');
+      expect(client.isClosed, isFalse);
+      expect((await client.call('status') as Map)['pid'], pid);
+    } finally {
+      await client.close();
+    }
+  });
+  // 'é' is two UTF-8 bytes but one UTF-16 code unit, so these replies tell a
+  // byte cap from one that counts characters.
+  String notesReply() => jsonEncode({
+    'id': 1,
+    'result': service.domain.store.rows('SELECT * FROM notes ORDER BY id'),
+    'done': false,
+  });
+  test('the reply cap counts UTF-8 bytes, not characters', () async {
+    const cap = maxServiceMessage - 1024 * 1024;
+    service.domain.store.saveNote(null, 'Wide', 'é' * (cap ~/ 2 + 64 * 1024));
+    final reply = notesReply();
+    expect(reply.length, lessThan(cap));
+    expect(utf8.encode(reply).length, greaterThan(cap));
+    final client = await ServiceClient.connect(service.path);
+    try {
+      await expectLater(
+        client.call('notes.list'),
+        throwsA(
+          isA<RpcError>()
+              .having((error) => error.code, 'code', RpcErrorCode.internal)
+              .having(
+                (error) => error.message,
+                'message',
+                'Reply exceeds 15 MiB; request fewer items.',
+              ),
+        ),
+      );
+      expect(client.isClosed, isFalse);
+      expect((await client.call('status') as Map)['pid'], pid);
+    } finally {
+      await client.close();
+    }
+  });
+  test('a multibyte reply under the byte cap arrives intact', () async {
+    const cap = maxServiceMessage - 1024 * 1024;
+    final body = 'é' * (cap ~/ 2 - 64 * 1024);
+    service.domain.store.saveNote(null, 'Wide', body);
+    expect(utf8.encode(notesReply()).length, lessThan(cap));
+    final client = await ServiceClient.connect(service.path);
+    try {
+      final notes = await client.call('notes.list') as List;
+      expect(notes.single['body'], body);
+      expect(client.isClosed, isFalse);
+    } finally {
+      await client.close();
+    }
   });
   test(
     'desktop socket closure shuts down service and persists committed data',
@@ -124,6 +252,243 @@ void main() {
       expect(app.recording, isNull);
     },
   );
+
+  test(
+    'an oversized reply fails its request without dropping the desktop or its recording',
+    () async {
+      await attach();
+      final app = service.domain.application;
+      final recording = CountingRecording();
+      app.recording = recording;
+      app.recordingMeeting = service.domain.store.meeting('Recording');
+      // Together these notes exceed one reply frame.
+      final body = 'x' * (6 * 1024 * 1024);
+      for (var i = 0; i < 3; i++) {
+        service.domain.store.saveNote(null, 'Large $i', body);
+      }
+      try {
+        await expectLater(
+          desktop.call('notes.list'),
+          throwsA(
+            isA<RpcError>()
+                .having((error) => error.code, 'code', RpcErrorCode.internal)
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Reply exceeds 15 MiB; request fewer items.',
+                ),
+          ),
+        );
+        // The same connection still answers, so the service never saw its
+        // host leave and never stopped the recording.
+        expect(desktop.isClosed, isFalse);
+        expect((await desktop.call('status') as Map)['pid'], pid);
+        expect(service.access.hasHost, isTrue);
+        expect(recording.stops, 0);
+        expect(app.recording, same(recording));
+      } finally {
+        app.recording = null;
+        app.recordingMeeting = null;
+      }
+    },
+  );
+  test('an oversized reply is the last frame of its request', () async {
+    final body = 'x' * (6 * 1024 * 1024);
+    for (var i = 0; i < 3; i++) {
+      service.domain.store.saveNote(null, 'Large $i', body);
+    }
+    // A raw socket sees every frame; ServiceClient ignores finished requests.
+    final raw = await Socket.connect(
+      InternetAddress(service.path, type: InternetAddressType.unix),
+      0,
+    );
+    final frames = StreamIterator(
+      raw
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .map((line) => jsonDecode(line) as Map)
+          .where((frame) => frame['event'] == null),
+    );
+    try {
+      raw.writeln(jsonEncode({'id': 1, 'method': 'notes.list', 'args': {}}));
+      expect(await frames.moveNext(), isTrue);
+      expect(frames.current, {
+        'id': 1,
+        'error': {
+          'code': 'internal',
+          'message': 'Reply exceeds 15 MiB; request fewer items.',
+        },
+        'done': true,
+      });
+      // Its own completion frame would have been written before this reply.
+      raw.writeln(jsonEncode({'id': 2, 'method': 'status', 'args': {}}));
+      expect(await frames.moveNext(), isTrue);
+      expect(frames.current['id'], 2);
+      expect((frames.current['result'] as Map)['pid'], pid);
+    } finally {
+      await frames.cancel();
+      raw.destroy();
+    }
+  });
+  test('an approval too large to show fails its request at once', () async {
+    await attach();
+    final approvals = <Map<String, dynamic>>[];
+    final subscription = desktop.events.stream
+        .where((event) => event['event'] == 'approval')
+        .listen(approvals.add);
+    // The service still accepts this request, but its approval event, which
+    // carries the arguments, exceeds the frame cap.
+    final raw = await Socket.connect(
+      InternetAddress(service.path, type: InternetAddressType.unix),
+      0,
+    );
+    final frames = StreamIterator(
+      raw
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .map((line) => jsonDecode(line) as Map)
+          .where((frame) => frame['event'] == null),
+    );
+    try {
+      raw.writeln(
+        jsonEncode({
+          'id': 1,
+          'method': 'sources.import',
+          'args': {
+            'title': 'Large',
+            'content': 'x' * (maxServiceMessage - 1024 * 1024),
+          },
+        }),
+      );
+      // Without a delivered approval this would wait for the two-minute
+      // approval timeout; bound it well below that.
+      expect(
+        await frames.moveNext().timeout(const Duration(seconds: 10)),
+        isTrue,
+      );
+      expect(frames.current, {
+        'id': 1,
+        'error': {
+          'code': 'invalidArgument',
+          'message': 'Request is too large to show for approval',
+        },
+        'done': true,
+      });
+      expect(approvals, isEmpty);
+      expect(await desktop.call('notes.list'), isEmpty);
+      expect(service.domain.store.sources, isEmpty);
+    } finally {
+      await subscription.cancel();
+      await frames.cancel();
+      raw.destroy();
+    }
+  });
+  test('frames JSON cannot encode fail alone, not the desktop', () async {
+    await attach();
+    final app = service.domain.application;
+    final recording = CountingRecording();
+    app.recording = recording;
+    app.recordingMeeting = service.domain.store.meeting('Recording');
+    try {
+      // Status replies and level events both carry these levels.
+      recording.currentVolumes.add(double.nan);
+      app.captureLevelChanges.add(null);
+      await expectLater(
+        desktop.call('status'),
+        throwsA(
+          isA<RpcError>()
+              .having((error) => error.code, 'code', RpcErrorCode.internal)
+              .having(
+                (error) => error.message,
+                'message',
+                contains('JSON cannot represent'),
+              ),
+        ),
+      );
+      expect(desktop.isClosed, isFalse);
+      expect(await desktop.call('notes.list'), isEmpty);
+      expect(service.access.hasHost, isTrue);
+      expect(recording.stops, 0);
+    } finally {
+      app.recording = null;
+      app.recordingMeeting = null;
+    }
+  });
+  test(
+    'an oversized request is refused locally without dropping the desktop',
+    () async {
+      await attach();
+      final app = service.domain.application;
+      final recording = CountingRecording();
+      app.recording = recording;
+      app.recordingMeeting = service.domain.store.meeting('Recording');
+      try {
+        // Sent, this would exceed the service's request limit, and the
+        // service would close the connection.
+        await expectLater(
+          desktop.call('notes.save', {
+            'title': 'Large',
+            'body': 'x' * maxServiceMessage,
+          }),
+          throwsA(
+            isA<RpcError>()
+                .having(
+                  (error) => error.code,
+                  'code',
+                  RpcErrorCode.invalidArgument,
+                )
+                .having(
+                  (error) => error.message,
+                  'message',
+                  'Request exceeds 15 MiB; send less data.',
+                ),
+          ),
+        );
+        expect(desktop.isClosed, isFalse);
+        expect(await desktop.call('notes.list'), isEmpty);
+        expect(service.access.hasHost, isTrue);
+        expect(recording.stops, 0);
+      } finally {
+        app.recording = null;
+        app.recordingMeeting = null;
+      }
+    },
+  );
+  test('an oversized event is dropped without dropping the desktop', () async {
+    await attach();
+    final app = service.domain.application;
+    final recording = CountingRecording();
+    app.recording = recording;
+    app.recordingMeeting = service.domain.store.meeting('Recording');
+    final levels = <List<Object?>>[];
+    final subscription = desktop.events.stream
+        .where((event) => event['event'] == 'capture_levels')
+        .listen((event) => levels.add(event['volumes'] as List<Object?>));
+    try {
+      // About 24 MB of levels exceed one frame.
+      recording.currentVolumes.addAll(List.filled(2000000, 0.123456789));
+      app.captureLevelChanges.add(null);
+      // The service handles the level change before this request arrives,
+      // and writes frames in order, so a sent event would arrive first.
+      // Status would carry the same levels, so use a reply without them.
+      expect(await desktop.call('notes.list'), isEmpty);
+      expect(levels, isEmpty);
+      recording.currentVolumes
+        ..clear()
+        ..add(0.5);
+      app.captureLevelChanges.add(null);
+      await eventually(() => levels.isNotEmpty);
+      expect(levels.single, [0.5]);
+      expect(desktop.isClosed, isFalse);
+      expect(recording.stops, 0);
+    } finally {
+      await subscription.cancel();
+      app.recording = null;
+      app.recordingMeeting = null;
+    }
+  });
 
   test(
     'raw socket cannot self-declare desktop or mutate without visible host',
