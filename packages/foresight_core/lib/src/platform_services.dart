@@ -8,7 +8,11 @@ import 'dart:io';
 const foresightTestHooksEnabled = bool.fromEnvironment(
   'FORESIGHT_ENABLE_TEST_HOOKS',
 );
-const _testHookKeys = {'FORESIGHT_CRASH_AT', 'FORESIGHT_TEST_DELAY_MS'};
+const _testHookKeys = {
+  'FORESIGHT_CRASH_AT',
+  'FORESIGHT_TEST_DELAY_MS',
+  'FORESIGHT_SERVICE_GATES',
+};
 
 /// The same immutable resource map is used by Finder, MCP and detached workers.
 /// Paths in runtime.json are relative to Contents/Resources, never the cwd.

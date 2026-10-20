@@ -56,6 +56,43 @@ void _traceServiceTransport(String message) {
   }
 }
 
+/// Whether lifecycle gates are active. Only a build compiled with
+/// -DFORESIGHT_ENABLE_TEST_HOOKS=true keeps FORESIGHT_SERVICE_GATES in its
+/// runtime configuration. Callers check this before awaiting [serviceGate],
+/// so production code gains no await at a gate point.
+bool get serviceGatesEnabled =>
+    runtimeConfiguration['FORESIGHT_SERVICE_GATES'] != null;
+
+final _serviceGateNames = RegExp(r'^[A-Za-z0-9_.-]+$');
+
+/// A named point where lifecycle tests can hold the service, in both the
+/// frontend and the worker isolate. With FORESIGHT_SERVICE_GATES naming a
+/// directory, it publishes `<point>.reached` (this pid) there. If the test
+/// armed the point with `<point>.hold`, it then waits for `<point>.release`
+/// or `release-all`. Polling only delays a release; the test decides the
+/// order. Without the key it returns at once.
+Future<void> serviceGate(String point) async {
+  final directory = runtimeConfiguration['FORESIGHT_SERVICE_GATES'];
+  if (directory == null) return;
+  if (!_serviceGateNames.hasMatch(point)) {
+    throw ArgumentError.value(point, 'point');
+  }
+  try {
+    final staging = File('$directory/.$point.$pid.${Random().nextInt(1 << 32)}')
+      ..writeAsStringSync('$pid', flush: true);
+    staging.renameSync('$directory/$point.reached');
+    if (!File('$directory/$point.hold').existsSync()) return;
+    _traceServiceTransport('gate held $point');
+    while (!File('$directory/$point.release').existsSync() &&
+        !File('$directory/release-all').existsSync()) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+  } on FileSystemException catch (error) {
+    // A missing .reached file tells the test; shutdown itself must go on.
+    stderr.writeln('Service gate $point: $error');
+  }
+}
+
 /// What a profile's endpoint record says. Reading never fails on its content:
 /// an unusable record must not stop clients or a replacement owner.
 sealed class EndpointRecord {
@@ -1126,7 +1163,14 @@ class ApplicationService {
         'Recording requires an open desktop indicator',
       );
     }
-    return application.call(method, args, current: () => !lease.cancelled);
+    final result = await application.call(
+      method,
+      args,
+      current: () => !lease.cancelled,
+    );
+    // The operation has committed; a lifecycle test may hold its reply here.
+    if (serviceGatesEnabled) await serviceGate('request.committed.$method');
+    return result;
   }
 
   void _cancel(Socket client, int id) {
@@ -1178,6 +1222,8 @@ class ApplicationService {
       }
     }
 
+    // New requests are refused and in-flight leases cancelled from here.
+    if (serviceGatesEnabled) await serviceGate('close.begin');
     // Application.close synchronously rejects new business calls and cancels
     // background timers before its first await.
     await attempt(application.close);
@@ -1188,27 +1234,34 @@ class ApplicationService {
     await attempt(domain.close);
     await attempt(() => domain.generator?.close());
     await attempt(domain.helper.close);
+    if (serviceGatesEnabled) await serviceGate('close.helper_closed');
     for (final client in _clients.toList()) {
       if (client != acknowledgementClient) client.destroy();
     }
     await attempt(listener.close);
+    if (serviceGatesEnabled) await serviceGate('close.listener_closed');
     await attempt(domain.store.close);
-    await attempt(() {
+    await attempt(() async {
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         File(path).deleteSync();
       }
       final endpoint = File(
         '${File(domain.store.path).parent.path}/.application-endpoint.json',
       );
+      if (serviceGatesEnabled) {
+        await serviceGate('close.before_record_delete');
+      }
       if (domain.helper.shutdownVerified &&
           failure == null &&
           endpoint.existsSync()) {
         endpoint.deleteSync();
       }
     });
+    if (serviceGatesEnabled) await serviceGate('close.before_frontend_release');
     await attempt(() async {
       await _beforeReleaseOwnership?.call();
     });
+    if (serviceGatesEnabled) await serviceGate('close.before_lock_release');
     await attempt(lock.closeSync);
     await attempt(() => installationLock?.closeSync());
     if (failure != null) {

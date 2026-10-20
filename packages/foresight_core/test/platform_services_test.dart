@@ -13,11 +13,13 @@ import 'package:foresight_core/src/service.dart'
         writeServiceStartupEnvironment;
 
 void main() {
+  // CI also runs this test with -DFORESIGHT_ENABLE_TEST_HOOKS=true by name.
   test('crash and delay hooks require an explicit test compilation', () {
     final configuration = RuntimeConfiguration.resolve(
       environment: {
         'FORESIGHT_CRASH_AT': 'commit',
         'FORESIGHT_TEST_DELAY_MS': '500',
+        'FORESIGHT_SERVICE_GATES': '/gates',
       },
       executable: '/service',
     );
@@ -28,6 +30,11 @@ void main() {
     expect(
       configuration['FORESIGHT_TEST_DELAY_MS'],
       foresightTestHooksEnabled ? '500' : isNull,
+    );
+    // Lifecycle gates are test hooks too: a release service never holds.
+    expect(
+      configuration['FORESIGHT_SERVICE_GATES'],
+      foresightTestHooksEnabled ? '/gates' : isNull,
     );
   });
 

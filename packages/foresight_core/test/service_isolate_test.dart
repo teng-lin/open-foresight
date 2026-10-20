@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:convert';
+import 'package:foresight_test_support/gated_helper.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/foresight_core.dart';
@@ -359,25 +360,8 @@ void main() {
         runtimeConfiguration.environment.remove(key);
       }
       final directory = createTestTempDirectorySync('of-shutdown-');
-      final started = File('${directory.path}/started');
-      final stopping = File('${directory.path}/stopping');
-      final release = File('${directory.path}/release');
-      final helper = File('${directory.path}/helper-fixture');
-      helper.writeAsStringSync('''#!/usr/bin/env python3
-import os,pathlib,signal,time
-started=pathlib.Path(${jsonEncode(started.path)})
-stopping=pathlib.Path(${jsonEncode(stopping.path)})
-release=pathlib.Path(${jsonEncode(release.path)})
-def shutdown(signum, frame):
- stopping.touch()
- while not release.exists(): time.sleep(.005)
- raise SystemExit(0)
-signal.signal(signal.SIGTERM,shutdown)
-started.write_text(str(os.getpid()))
-while True: signal.pause()
-''');
-      await Process.run('/bin/chmod', ['700', helper.path]);
-      runtimeConfiguration.environment['FORESIGHT_HELPER'] = helper.path;
+      final helper = await GatedHelper.create(directory);
+      runtimeConfiguration.environment['FORESIGHT_HELPER'] = helper.executable;
       final profile = ProfilePaths(
         '${directory.path}/data',
         '${directory.path}/run',
@@ -388,12 +372,12 @@ while True: signal.pause()
         host = await IsolatedApplicationService.start(profile);
         client = await ServiceClient.connect(serviceEndpoint(profile));
         expect(await client.call('status'), isA<Map>());
-        await eventually(() => started.existsSync());
+        await helper.started();
         final disconnected = client.events.stream.drain<void>();
         var workerClosed = false;
         unawaited(host.closed.then((_) => workerClosed = true));
         final shutdown = host.close();
-        await eventually(() => stopping.existsSync());
+        await helper.stopping();
         expect(
           workerClosed,
           isFalse,
@@ -410,10 +394,12 @@ while True: signal.pause()
         } finally {
           await rejected.close();
         }
-        release.writeAsStringSync('release');
+        helper.release();
         await shutdown.timeout(const Duration(seconds: 10));
+        // The hold ended through release, not the service's 5 s SIGKILL.
+        expect(helper.released, isTrue);
       } finally {
-        release.writeAsStringSync('release');
+        helper.release();
         await client?.close();
         await host?.close();
         directory.deleteSync(recursive: true);
