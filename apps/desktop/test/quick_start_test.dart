@@ -271,6 +271,48 @@ void main() {
     },
   );
 
+  // The OS access prompt can stay open while the meeting goes away.
+  for (final (closedBy, message) in [
+    (
+      'a workspace clear',
+      'Recording did not start: the workspace was cleared while recording '
+          'access was requested.',
+    ),
+    (
+      'closing the meeting',
+      'Recording did not start: the meeting was closed while recording '
+          'access was requested.',
+    ),
+  ]) {
+    testWidgets(
+      '$closedBy during the recording access check stops without recording',
+      (tester) async {
+        await tester.runAsync(registerSpeech);
+        final meeting = store.meeting('Existing meeting');
+        await show(tester);
+        final dynamic state = tester.state(find.byType(Workspace));
+        // As the Start button does; it stops at the access check.
+        final started =
+            state.meetingFeature.recordExistingMeeting(meeting) as Future<void>;
+        expect(state.meetingFeature.meetingId, meeting);
+        if (closedBy == 'a workspace clear') {
+          // Another client clears the workspace; this desktop resets.
+          store.renewWorkspaceEpoch();
+          state.serviceChanged();
+        } else {
+          state.update(() => state.meetingFeature.meetingId = null);
+        }
+        await tester.pumpAndSettle();
+        await started;
+        expect(state.error, message);
+        expect(domain.operations, isNot(contains('meetings.start')));
+        expect(state.busy, false);
+        expect(tester.takeException(), isNull);
+        await dispose(tester);
+      },
+    );
+  }
+
   testWidgets(
     'creation failure is visible and a pending creation ignores reentry',
     (tester) async {

@@ -188,10 +188,23 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> startRecording({bool accessReviewed = false}) async {
+    final id = meetingId, epoch = d.workspaceEpoch;
     if (!accessReviewed && !await integrationFeature.ensureRecordingAccess())
       return;
     if (!mounted) return;
-    await d.command(Operation.meetingsStart, {'id': meetingId!});
+    // The OS access prompt can stay open while another client clears the
+    // workspace, which closes this meeting. Never record into another one.
+    if (d.workspaceEpoch != epoch)
+      throw StateError(
+        'Recording did not start: the workspace was cleared while recording '
+        'access was requested.',
+      );
+    if (id == null || meetingId != id)
+      throw StateError(
+        'Recording did not start: the meeting was closed while recording '
+        'access was requested.',
+      );
+    await d.command(Operation.meetingsStart, {'id': id});
     syncCapture();
     if (mounted) setState(() {});
   }
