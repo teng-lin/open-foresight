@@ -616,6 +616,44 @@ class MainEvidenceTests(unittest.TestCase):
             )
             self.assertIn("qualified=true", github_output.read_text())
 
+    def test_qualification_cases_derive_from_actual_evidence_not_flags(self):
+        actual = {
+            "status": "completed",
+            "conclusion": "success",
+            "aggregates_success": True,
+            "jobs": {name: {"result": "success"} for name in evidence.APPLICATION},
+        }
+        proposal = {
+            "source": SOURCE,
+            "decision": "validated",
+            "actual_main": actual,
+            "jobs": {"macos": {"source": SOURCE}},
+        }
+        self.assertEqual(evidence.observation_case(proposal), "identical")
+        proposal["jobs"]["macos"]["source"] = BEFORE
+        self.assertEqual(evidence.observation_case(proposal), "partially-selected")
+        proposal.update(decision="sweep", reason="API evidence missing")
+        self.assertIsNone(evidence.observation_case(proposal))
+        proposal["reason"] = "Final PR and reviewed main trees differ"
+        self.assertEqual(evidence.observation_case(proposal), "divergent")
+        actual["historical_failure"] = True
+        self.assertEqual(evidence.observation_case(proposal), "failed-rerun")
+        actual["status"] = "in_progress"
+        self.assertIsNone(evidence.observation_case(proposal))
+
+    def test_actual_rerun_case_requires_an_observed_earlier_failed_job(self):
+        current = run(40, source=SOURCE, event="push")
+        current["run_attempt"] = 2
+        self.reader.origins.append(current)
+        self.reader.job_rows[40] = deepcopy(self.reader.job_rows[10])
+        self.assertIs(
+            self.reader.actual(SOURCE, self.selected)["historical_failure"], False
+        )
+        self.reader.job_rows[40].append(job(9999, "historical", "failure", 1))
+        self.assertIs(
+            self.reader.actual(SOURCE, self.selected)["historical_failure"], True
+        )
+
 
 class SweepTests(unittest.TestCase):
     def setUp(self):
