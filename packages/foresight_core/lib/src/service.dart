@@ -71,25 +71,69 @@ String anotherProfileMessage(
           "serves. Starting this profile's service replaces the record."
     : _sharedRuntimeMessage(endpoint, pid: pid);
 
-/// Whether [status] comes from the service of a profile other than
-/// [profile]. A service released before profile identity reports none; every
-/// released version holds its profile's lock, so it is accepted only while
-/// this profile's lock is held (S4).
-bool servesAnotherProfile(Map<Object?, Object?> status, ProfilePaths profile) {
+/// Whether [status], answered at [endpoint], comes from the service of a
+/// profile other than [profile]. A service released before profile identity
+/// reports none, and every released version holds its profile's lock (S4).
+/// Such a service is accepted only while this profile's endpoint record
+/// still leads to [endpoint], because a new owner claims the record as soon
+/// as it takes the lock. On Linux its status pid must also hold this
+/// profile's lock. macOS has no /proc/locks, so there any holder counts: a
+/// service of another profile that shares an explicit FORESIGHT_RUNTIME could
+/// pass while this profile's new owner is starting.
+bool servesAnotherProfile(
+  Map<Object?, Object?> status,
+  ProfilePaths profile,
+  String endpoint,
+) {
   final owner = status['profile_id'];
   if (owner != null) return owner != profile.identity;
-  return !_profileHeld(profile);
-}
-
-/// Whether an owner holds [profile]'s lock, in this process or another.
-bool _profileHeld(ProfilePaths profile) {
+  // An owner in this process is current, so it reports its profile.
   if (_localServiceOwners.containsKey(canonicalProfilePath(profile.data))) {
     return true;
   }
   final lock = '${profile.data}/.application.lock';
-  return FileSystemEntity.typeSync(lock, followLinks: false) ==
-          FileSystemEntityType.file &&
-      !_profileLockFree(lock);
+  if (FileSystemEntity.typeSync(lock, followLinks: false) !=
+          FileSystemEntityType.file ||
+      serviceEndpoint(profile) != endpoint) {
+    return true;
+  }
+  if (Platform.isLinux) {
+    final holders = _posixLockHolders(lock);
+    final pid = status['pid'];
+    return holders == null || pid is! int || !holders.contains(pid);
+  }
+  return _profileLockFree(lock);
+}
+
+/// The pids holding a POSIX write lock on [lock], from /proc/locks, or null
+/// if that cannot be read. Only the inode is compared: btrfs reports a
+/// subvolume's device to stat but the file system's in /proc/locks, and a
+/// lock on another file with the same inode would also need this pid.
+Set<int>? _posixLockHolders(String lock) {
+  final stat = Process.runSync('/usr/bin/stat', ['-c', '%i', lock]);
+  final inode = int.tryParse(stat.stdout.toString().trim());
+  if (stat.exitCode != 0 || inode == null) return null;
+  final String table;
+  try {
+    table = File('/proc/locks').readAsStringSync();
+  } on FileSystemException {
+    return null;
+  }
+  final holders = <int>{};
+  for (final line in const LineSplitter().convert(table)) {
+    // "1: POSIX  ADVISORY  WRITE 4242 00:1d:2173873 0 EOF"; a blocked waiter
+    // has "->" after its index and is skipped.
+    final fields = line.trim().split(RegExp(r'\s+'));
+    if (fields.length < 8 || fields[1] != 'POSIX' || fields[3] != 'WRITE') {
+      continue;
+    }
+    final file = fields[5].split(':');
+    final pid = int.tryParse(fields[4]);
+    if (pid != null && file.length == 3 && int.tryParse(file[2]) == inode) {
+      holders.add(pid);
+    }
+  }
+  return holders;
 }
 
 // POSIX locks belong to the OS process, not a Dart isolate or file handle.
@@ -240,9 +284,11 @@ final _endpointQuarantine = RegExp(
 
 /// The profile lock is independent of runtime overrides. An endpoint record lets
 /// clients attach to that owner even when launched with a different runtime.
-EndpointRecord readEndpointRecord(ProfilePaths profile) {
+EndpointRecord readEndpointRecord(ProfilePaths profile) =>
+    _readEndpointRecordAt(profile, '${profile.data}/$_endpointRecordName');
+
+EndpointRecord _readEndpointRecordAt(ProfilePaths profile, String path) {
   privateDirectory(profile.data, repairOwnedPermissions: true);
-  final path = '${profile.data}/$_endpointRecordName';
   final type = FileSystemEntity.typeSync(path, followLinks: false);
   if (type == FileSystemEntityType.notFound) return const EndpointAbsent();
   if (type == FileSystemEntityType.link) {
@@ -343,14 +389,23 @@ void _deleteEndpointEntry(String path) {
   }
 }
 
-/// Under the profile lock, set an invalid record aside for diagnosis and keep
-/// the newest three, so the owner can publish its own record.
-void _quarantineEndpointRecord(String data, String reason) {
+/// Under the profile lock, set the record at [from] aside for diagnosis and
+/// keep the newest three, so the owner can publish its own record. [inUse]
+/// says it was valid, but another service uses its runtime.
+void _quarantineEndpointRecord(
+  String data,
+  String reason, {
+  required String from,
+  bool inUse = false,
+}) {
   final record = '$data/$_endpointRecordName';
   final target = '$record.invalid-${DateTime.now().millisecondsSinceEpoch}';
-  _renameEndpointEntry(record, target);
+  _renameEndpointEntry(from, target);
   stderr.writeln(
-    'Moved an invalid application endpoint record to $target: $reason.',
+    inUse
+        ? 'Set aside the application endpoint record as $target (runtime in '
+              'use): $reason.'
+        : 'Moved an invalid application endpoint record to $target: $reason.',
   );
   // A stamp too long for an int is not one this code wrote; drop it first.
   int stamp(String path) =>
@@ -360,6 +415,22 @@ void _quarantineEndpointRecord(String data, String reason) {
   for (final old in quarantined.take(max(0, quarantined.length - 3))) {
     _deleteEndpointEntry(old);
   }
+}
+
+/// Under the profile lock, take the predecessor's endpoint record out of
+/// clients' sight at once, before this owner decides whether to adopt it, so
+/// that no client reaches the runtime it names meanwhile (S4). An owner that
+/// crashed while starting can leave a claimed record; it stays claimed unless
+/// a newer record replaced it. Returns the claimed record's path.
+String _claimEndpointRecord(String data) {
+  final record = '$data/$_endpointRecordName';
+  final claimed = '$record.claimed';
+  if (FileSystemEntity.typeSync(record, followLinks: false) !=
+      FileSystemEntityType.notFound) {
+    _deleteEndpointEntry(claimed);
+    _renameEndpointEntry(record, claimed);
+  }
+  return claimed;
 }
 
 // Only the local transport can create this marker. A peer's serialized error
@@ -925,9 +996,11 @@ class ApplicationService {
     // it if startup fails; remove only a record this attempt published itself.
     var adoptedRecord = false;
     var publishedRecord = false;
+    String? claimed;
     try {
-      // This owner holds the profile lock; the endpoint record is a
-      // predecessor's.
+      // This owner holds the profile lock; any endpoint record is a
+      // predecessor's. Claim it before anything that can wait.
+      claimed = _claimEndpointRecord(profile.data);
       if (serviceGatesEnabled) await serviceGate('start.locked');
       // Only an owner writes temporary records, so any left now are stale.
       _endpointEntries(
@@ -937,7 +1010,7 @@ class ApplicationService {
       // An unclean predecessor can leave a healthy helper at this endpoint.
       // Reuse that runtime until a clean shutdown releases its workers. An
       // invalid record names no usable runtime, so it is not adopted.
-      switch (readEndpointRecord(profile)) {
+      switch (_readEndpointRecordAt(profile, claimed)) {
         case EndpointValid(:final runtime):
           // Another profile's service may use that runtime by now, for
           // example one sharing it; then this profile starts in its own (S1).
@@ -945,7 +1018,9 @@ class ApplicationService {
           if (inUse != null) {
             _quarantineEndpointRecord(
               profile.data,
-              "another profile's service uses its runtime ($inUse)",
+              "another profile's service uses it ($inUse)",
+              from: claimed,
+              inUse: true,
             );
             break;
           }
@@ -956,7 +1031,7 @@ class ApplicationService {
           );
           profile = ProfilePaths(profile.data, runtime);
         case EndpointInvalid(:final reason):
-          _quarantineEndpointRecord(profile.data, reason);
+          _quarantineEndpointRecord(profile.data, reason, from: claimed);
         case EndpointAbsent():
           break;
       }
@@ -999,6 +1074,8 @@ class ApplicationService {
       }
       temporary.renameSync(endpointRecord.path);
       publishedRecord = true;
+      // The published record names the adopted runtime, if any.
+      _deleteEndpointEntry(claimed);
       final service = ApplicationService._(
         domain,
         binding,
@@ -1068,6 +1145,16 @@ class ApplicationService {
                   ) !=
                   FileSystemEntityType.notFound) {
             endpointRecord.deleteSync();
+          }
+        });
+        // A claimed record this attempt neither set aside nor replaced goes
+        // back, so the next owner adopts its runtime again.
+        await cleanup(() {
+          if (!publishedRecord &&
+              claimed != null &&
+              FileSystemEntity.typeSync(claimed, followLinks: false) !=
+                  FileSystemEntityType.notFound) {
+            _renameEndpointEntry(claimed, endpointRecord.path);
           }
         });
         await cleanup(() {
@@ -2245,7 +2332,7 @@ Future<ServiceStartup> _connectCompatibleService(
     // probe checks this before a desktop snapshot sends its capability. A
     // service without profile_id that this startup already refused stays
     // refused, even once this profile's own new owner holds the lock (S4).
-    if (servesAnotherProfile(value, profile) ||
+    if (servesAnotherProfile(value, profile, path) ||
         (value['profile_id'] == null && refused.contains(path))) {
       final pid = value['pid'];
       throw _ForeignOwner(

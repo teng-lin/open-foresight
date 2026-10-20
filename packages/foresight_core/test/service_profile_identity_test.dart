@@ -50,8 +50,8 @@ final refusedForAnotherProfile = isStateError.having(
 );
 
 /// Hold [profile]'s ownership lock from another process, as every released
-/// owner does, until the test ends.
-Future<void> holdProfileLock(ProfilePaths profile) async {
+/// owner does, until the test ends. Returns that process's pid.
+Future<int> holdProfileLock(ProfilePaths profile) async {
   privateDirectory(profile.data);
   final holder = await Process.start('python3', [
     '-c',
@@ -71,6 +71,7 @@ Future<void> holdProfileLock(ProfilePaths profile) async {
         .first,
     'locked',
   );
+  return holder.pid;
 }
 
 /// Write the endpoint record a crashed owner of [profile] leaves, naming
@@ -216,23 +217,27 @@ void main() {
       '${directory.path}/legacy',
       '${directory.path}/old',
     );
-    await holdProfileLock(legacy);
+    // The released service is the process that holds the lock.
+    final holder = await holdProfileLock(legacy);
     privateDirectory(legacy.runtime);
-    final server = await legacyOwner('${legacy.runtime}/application.sock', 42);
+    final server = await legacyOwner(
+      '${legacy.runtime}/application.sock',
+      holder,
+    );
     addTearDown(server.close);
     final attached = await ensureService(
       legacy,
       startupTimeout: const Duration(seconds: 30),
     );
     try {
-      expect((await attached.call('status') as Map)['pid'], 42);
+      expect((await attached.call('status') as Map)['pid'], holder);
     } finally {
       await attached.close();
     }
     final status = await serviceCommand(legacy, '--status');
     expect(status.exitCode, 0, reason: '${status.stderr}');
     expect(jsonDecode(status.stdout as String), {
-      'pid': 42,
+      'pid': holder,
       'application_api_version': 1,
     });
   }, timeout: const Timeout(Duration(minutes: 3)));
@@ -753,42 +758,100 @@ void main() {
       contains(staleRecordRefusal(profile, endpoint, process.pid)),
     );
     expect(await isRunning(process.pid), isTrue);
-    // This profile's new owner holds its lock before it sets the record
-    // aside. Meanwhile the older service must stay refused.
+    // This profile's new owner holds its lock and has claimed the record
+    // before it decides about it. Meanwhile neither the launching client nor
+    // another one reaches the older service.
     final gates = await ServiceGates.create(directory);
     gates.hold('start.locked');
     final launcher = await build.launcher(directory, gates: gates);
     runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
     final proxy = ServiceFaultProxy();
     addTearDown(proxy.close);
-    final starting = proxy.run(
-      () => ensureService(profile, startupTimeout: const Duration(seconds: 90)),
-    );
+    Future<ServiceClient> startup() =>
+        ensureService(profile, startupTimeout: const Duration(seconds: 90));
+    final first = proxy.run(startup);
     await gates.reached('start.locked');
-    // Two more probes of the older service while this profile's lock is
-    // held, and no attach to it.
+    expect(
+      File('${profile.data}/.application-endpoint.json').existsSync(),
+      isFalse,
+    );
+    int olderProbes() =>
+        proxy.attempts.where((attempt) => attempt.endpoint == endpoint).length;
+    final probed = olderProbes();
+    final second = proxy.run(startup);
+    // Both poll this profile's own runtime, where nothing listens yet.
     final observed = await Future.any([
-      proxy
-          .seen(
-            ProxyDirection.toClient,
-            where: (frame) => frame.json?.containsKey('result') == true,
-            count: 2,
-          )
-          .then((_) => 'probed twice'),
-      // Only observes: the client is checked below once the gate opens.
-      starting.then((_) => 'attached while the lock was held'),
+      proxy.attempt(refused: true, count: 4).then((_) => 'polled'),
+      // Only observe: the clients are checked once the gate opens.
+      first.then((_) => 'the first client attached while the lock was held'),
+      second.then((_) => 'a second client attached while the lock was held'),
     ]);
-    expect(observed, 'probed twice');
+    expect(observed, 'polled');
+    expect(olderProbes(), probed);
     gates.release('start.locked');
-    final client = await starting;
+    for (final starting in [first, second]) {
+      final client = await starting;
+      try {
+        final reply = await client.call('status') as Map;
+        expect(reply['pid'], launcher.launched.single);
+        expect(reply['profile_id'], identityOf(profile.data));
+      } finally {
+        await client.close();
+      }
+    }
+    expect(recordedRuntime(profile), profile.runtime);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('on Linux a service without profile_id is accepted only from the '
+      'process that holds this profile\'s lock (S4)', () async {
+    if (!Platform.isLinux) {
+      markTestSkipped('/proc/locks is Linux only; macOS accepts any holder');
+      return;
+    }
+    final directory = createServiceTestDirectorySync('of-holder-');
+    final shared = '${directory.path}/old';
+    final endpoint = '$shared/application.sock';
+    final profile = ProfilePaths(
+      '${directory.path}/b',
+      '${directory.path}/own',
+    );
+    // This profile's lock is held, but not by the older service its record
+    // names, as while a new owner starts before it claims the record.
+    final holder = await holdProfileLock(profile);
+    final process = await Process.start('sleep', ['600']);
+    addTearDown(() => process.kill(ProcessSignal.sigkill));
+    privateDirectory(shared);
+    final other = await legacyOwner(endpoint, process.pid);
+    writeCrashRecord(profile, shared);
+    await expectLater(
+      ensureService(profile, startupTimeout: const Duration(seconds: 3)),
+      throwsA(
+        isA<TimeoutException>().having(
+          (error) => error.message,
+          'message',
+          staleRecordRefusal(profile, endpoint, process.pid),
+        ),
+      ),
+    );
+    final status = await serviceCommand(profile, '--status');
+    expect(status.exitCode, 1);
+    expect(
+      status.stderr,
+      contains(staleRecordRefusal(profile, endpoint, process.pid)),
+    );
+    // The process that holds the lock is this profile's older service.
+    await other.close();
+    final own = await legacyOwner(endpoint, holder);
+    addTearDown(own.close);
+    final client = await ensureService(
+      profile,
+      startupTimeout: const Duration(seconds: 30),
+    );
     try {
-      final reply = await client.call('status') as Map;
-      expect(reply['pid'], launcher.launched.single);
-      expect(reply['profile_id'], identityOf(profile.data));
+      expect((await client.call('status') as Map)['pid'], holder);
     } finally {
       await client.close();
     }
-    expect(recordedRuntime(profile), profile.runtime);
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('the directory a default runtime lives in is private too (S5)', () {

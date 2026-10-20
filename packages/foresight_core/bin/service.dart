@@ -61,7 +61,7 @@ Future<void> main(List<String> args) async {
       try {
         final state = await client.call('status') as Map;
         // Never report on, stop or signal another profile's owner (SL-7).
-        if (servesAnotherProfile(state, profile)) {
+        if (servesAnotherProfile(state, profile, client.endpoint)) {
           final owner = state['pid'];
           throw AnotherProfileServing(
             anotherProfileMessage(
