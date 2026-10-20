@@ -21,6 +21,7 @@ GATES = (
 # Standalone quality/maintenance controls do not change installed application bytes.
 MAINTENANCE = {
     "tools/ci_stats.py",
+    "tools/ci_stats_snapshot.py",
     "tests/test_ci_stats.py",
     ".coveragerc",
     "pytest.ini",
