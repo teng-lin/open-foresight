@@ -366,8 +366,11 @@ void main() {
   );
   test('old completed agent work keeps the desktop departure grace', () async {
     await agent.call('notes.list');
+    final stamp = service.lastAgentActivity;
     final d = await desktop();
     now = now.add(const Duration(minutes: 31));
+    await d.call('notes.list');
+    expect(service.lastAgentActivity, stamp);
     await d.close();
     await departed();
     expect(service.desktopShutdownScheduled, true);
@@ -379,6 +382,28 @@ void main() {
     await tick();
     await exited();
   });
+  for (final host in [false, true]) {
+    test(
+      '${host ? 'attached' : 'reserved'} desktop business requests preserve an unset agent stamp and departure grace',
+      () async {
+        final d = await desktop(host: host);
+        expect((await lifetime())['pinned_by_desktop'], true);
+        now = now.add(const Duration(minutes: 1));
+        await d.call('notes.list');
+        expect((await lifetime())['last_agent_activity'], null);
+        await d.close();
+        await departed();
+        expect(service.desktopShutdownScheduled, true);
+        expect(
+          (await lifetime())['exit_after'],
+          now.add(const Duration(seconds: 1)).millisecondsSinceEpoch,
+        );
+        now = now.add(const Duration(seconds: 1));
+        await tick();
+        await exited();
+      },
+    );
+  }
   test(
     'recent completed agent work selects the idle branch at departure',
     () async {
@@ -602,6 +627,54 @@ void main() {
       rag.release.complete();
       await work;
       await exited();
+    },
+  );
+  test(
+    'desktop departure waits for its cancelled leased import indexing drain',
+    () async {
+      final rag = DelayedIndexService();
+      final server = Server.create(services: [rag]);
+      await server.serve(
+        address: InternetAddress(
+          service.domain.helper.socket,
+          type: InternetAddressType.unix,
+        ),
+        port: 0,
+      );
+      addTearDown(server.shutdown);
+      addTearDown(() {
+        if (!rag.release.isCompleted) rag.release.complete();
+      });
+      final d = await desktop(host: true);
+      final work = d.call('sources.import', {
+        'title': 'Desktop import',
+        'text': 'Committed desktop content',
+      });
+      final disconnected = expectLater(work, throwsA(isA<RpcError>()));
+      await rag.started.future;
+      final id = service.domain.store.sources.single['id'];
+      expect(service.lastAgentActivity, null);
+      await d.close();
+      await disconnected;
+      await departed();
+      expect(service.desktopShutdownScheduled, true);
+      expect(service.dispatchedCount, 1);
+      now = now.add(const Duration(seconds: 1));
+      await lifetime();
+      expect(service.domain.mutating, 1);
+      expect(service.domain.store.sources.single['state'], 'indexing');
+      expect(lastTimerDelay, const Duration(seconds: 30));
+      rag.release.complete();
+      await exited();
+      final store = Store('${profile.data}/application.db');
+      try {
+        expect(store.sources.single['id'], id);
+        expect(store.sources.single['state'], 'indexed');
+        expect(store.sources.single['content'], 'Committed desktop content');
+      } finally {
+        store.close();
+      }
+      expect(service.lastAgentActivity, null);
     },
   );
   test(

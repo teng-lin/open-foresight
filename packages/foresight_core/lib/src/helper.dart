@@ -392,6 +392,10 @@ class Helper {
         final identity = await verifyAdoptedIdentity();
         if (identity == AdoptedIdentity.gone) {
           shutdownVerified = true;
+        } else if (identity == AdoptedIdentity.unknown) {
+          stderr.writeln(
+            'Could not verify adopted helper ownership; leaving it running',
+          );
         } else if (identity == AdoptedIdentity.matches) {
           final pid = int.parse(snapshot!.instanceId.split('-').first);
           Process.killPid(pid, ProcessSignal.sigterm);
