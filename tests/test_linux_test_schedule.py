@@ -165,30 +165,32 @@ def test_partial_launch_reaps_previously_started_branches(runner, monkeypatch):
 
 def test_cancellation_reaps_owned_branch_and_descendant(runner):
     root, env = runner
-    process = subprocess.Popen(
-        [sys.executable, str(root / "tools/linux_test_schedule.py")],
-        env={**env, "CANCEL_MODE": "1"},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    try:
-        deadline = time.monotonic() + 8
-        while not (root / "descendant.ready").exists():
-            assert process.poll() is None
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        process.send_signal(signal.SIGTERM)
-        assert process.wait(timeout=8) == 143
-        deadline = time.monotonic() + 3
-        while not (root / "descendant.stopped").exists():
-            assert time.monotonic() < deadline
-            time.sleep(0.01)
-        assert not (root / "service.started").exists()
-        assert (root / "test-results/linux-test-schedule/core.log").exists()
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=8)
+    log = root / "scheduler-parent.log"
+    with log.open("wb") as output:
+        process = subprocess.Popen(
+            [sys.executable, str(root / "tools/linux_test_schedule.py")],
+            env={**env, "CANCEL_MODE": "1"},
+            stdout=output,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            deadline = time.monotonic() + 8
+            while not (root / "descendant.ready").exists():
+                assert process.poll() is None, log.read_text()
+                assert time.monotonic() < deadline, log.read_text()
+                time.sleep(0.01)
+            process.send_signal(signal.SIGTERM)
+            assert process.wait(timeout=8) == 143, log.read_text()
+            deadline = time.monotonic() + 3
+            while not (root / "descendant.stopped").exists():
+                assert time.monotonic() < deadline, log.read_text()
+                time.sleep(0.01)
+            assert not (root / "service.started").exists()
+            assert (root / "test-results/linux-test-schedule/core.log").exists()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=8)
 
 
 @pytest.mark.parametrize("mode", [None, "0", "1", "bad"])

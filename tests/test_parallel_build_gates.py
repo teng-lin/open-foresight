@@ -2,10 +2,12 @@
 
 import importlib.util
 from pathlib import Path
+import signal
 import sys
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location(
     "parallel_build_gates",
@@ -85,8 +87,6 @@ class ParallelBuildGatesTest(unittest.TestCase):
                 process = original(*args, **kwargs)
                 return process
 
-            from unittest.mock import patch
-
             with patch.object(gates.subprocess, "Popen", side_effect=launch):
                 with self.assertRaisesRegex(OSError, "Fixture launch failure"):
                     gates.run_gates(
@@ -100,3 +100,87 @@ class ParallelBuildGatesTest(unittest.TestCase):
                         root / "logs",
                     )
             self.assertIsNotNone(process.poll())
+
+    def test_cleanup_reaps_zombies_and_signals_descendants_of_exited_leaders(self):
+        """Model Darwin's zombie-only EPERM without hiding live descendants."""
+
+        class Owner:
+            def __init__(self, pid, *, exited, descendant=False):
+                self.pid = pid
+                self.exited = exited
+                self.descendant = descendant
+                self.reaped = False
+                self.signals = []
+
+            def poll(self):
+                if self.exited:
+                    self.reaped = True
+                    return 0
+                return None
+
+            def wait(self, timeout):
+                assert self.exited
+                self.reaped = True
+                return 0
+
+        owners = [
+            Owner(10001, exited=True),
+            Owner(10002, exited=True, descendant=True),
+            Owner(10003, exited=False),
+        ]
+        streams = []
+
+        def launch(*args, **kwargs):
+            streams.append(kwargs["stdout"])
+            if len(streams) > len(owners):
+                raise OSError("Fixture launch failure")
+            return owners[len(streams) - 1]
+
+        def signal_group(pid, sig):
+            owner = next(owner for owner in owners if owner.pid == pid)
+            if owner.exited and not owner.descendant:
+                if not owner.reaped:
+                    raise PermissionError("Darwin zombie-only process group")
+                raise ProcessLookupError("Group has no members")
+            owner.signals.append(sig)
+            owner.exited = True
+            if sig == signal.SIGKILL:
+                owner.descendant = False
+
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.object(gates.subprocess, "Popen", side_effect=launch),
+                patch.object(gates.os, "killpg", side_effect=signal_group),
+            ):
+                with self.assertRaisesRegex(OSError, "Fixture launch failure"):
+                    gates.run_gates(
+                        [(str(i), ["fixture"]) for i in range(4)], Path(directory)
+                    )
+        self.assertTrue(all(owner.reaped for owner in owners))
+        self.assertFalse(any(owner.descendant for owner in owners))
+        self.assertEqual(owners[1].signals, [signal.SIGTERM, signal.SIGKILL])
+        self.assertIn(signal.SIGTERM, owners[2].signals)
+        self.assertTrue(all(stream.closed for stream in streams))
+
+    def test_cleanup_does_not_suppress_real_permission_failure(self):
+        owner = unittest.mock.Mock(pid=10001)
+        owner.poll.return_value = None
+        with tempfile.TemporaryDirectory() as directory:
+            with (
+                patch.object(
+                    gates.subprocess,
+                    "Popen",
+                    side_effect=[owner, OSError("Fixture launch failure")],
+                ) as launch,
+                patch.object(
+                    gates.os, "killpg", side_effect=PermissionError("Live group denied")
+                ),
+            ):
+                with self.assertRaisesRegex(PermissionError, "Live group denied"):
+                    gates.run_gates(
+                        [("first", ["fixture"]), ("second", ["fixture"])],
+                        Path(directory),
+                    )
+            self.assertTrue(
+                all(call.kwargs["stdout"].closed for call in launch.call_args_list)
+            )
