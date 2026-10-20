@@ -28,6 +28,10 @@ const _outcomeUnknownMessage =
     'not have completed.';
 // The whole flush of closing connections, not each one.
 const _closingFlushBound = Duration(seconds: 2);
+// How long a retired connection waits for its owner's remaining answers. A
+// closing owner sends them all before its first await, then flushes them
+// within its flush bound; the margin covers scheduling under load.
+const _retiredConnectionGrace = Duration(seconds: 5);
 
 Future<void> _flushQuietly(Socket socket) async {
   try {
@@ -71,15 +75,41 @@ String anotherProfileMessage(
           "serves. Starting this profile's service replaces the record."
     : _sharedRuntimeMessage(endpoint, pid: pid);
 
+/// A service released before profile identity answers where this
+/// profile's owner would, and this profile's lock is held, but the lock's
+/// holder cannot be read (/proc/locks or stat is unavailable) or seen (it
+/// runs outside this pid namespace). Waiting cannot tell more.
+class UnverifiableServiceOwner extends StateError {
+  UnverifiableServiceOwner(int? pid)
+    : super(
+        'Cannot verify the running older Open Foresight service'
+        '${pid == null ? '' : ' (pid $pid)'} for this profile; stop it '
+        'with its own --stop, then retry.',
+      );
+}
+
+/// Reads the pids that hold a lock file's POSIX write lock, or null if they
+/// cannot be read. Tests replace it to model such a host.
+Set<int>? Function(String lock) readPosixLockHolders = _posixLockHolders;
+
 /// Whether [status], answered at [endpoint], comes from the service of a
 /// profile other than [profile]. A service released before profile identity
 /// reports none, and every released version holds its profile's lock (S4).
 /// Such a service is accepted only while this profile's endpoint record
 /// still leads to [endpoint], because a new owner claims the record as soon
 /// as it takes the lock. On Linux its status pid must also hold this
-/// profile's lock. macOS has no /proc/locks, so there any holder counts: a
-/// service of another profile that shares an explicit FORESIGHT_RUNTIME could
-/// pass while this profile's new owner is starting.
+/// profile's lock; when the holder cannot be read or seen while the lock is
+/// held and the record still leads here, this throws
+/// [UnverifiableServiceOwner].
+/// macOS has no /proc/locks, so there any holder counts: a service of
+/// another profile that shares an explicit FORESIGHT_RUNTIME could pass
+/// while this profile's new owner is starting.
+///
+/// The macOS check, and the Linux one when the holders cannot be read,
+/// probe the lock. Never call this from a process that hosts an owner of
+/// [profile]: POSIX record locks belong to the process, so closing the
+/// probe's descriptor drops the owner's lock. [_localServiceOwners] skips
+/// the probe only in the isolate that started that owner.
 bool servesAnotherProfile(
   Map<Object?, Object?> status,
   ProfilePaths profile,
@@ -97,9 +127,20 @@ bool servesAnotherProfile(
     return true;
   }
   if (Platform.isLinux) {
-    final holders = _posixLockHolders(lock);
+    final holders = readPosixLockHolders(lock);
     final pid = status['pid'];
-    if (holders == null || pid is! int || !holders.contains(pid)) return true;
+    // No listed holder, or pid 0, is a holder this pid namespace cannot see,
+    // unless nothing holds the lock at all.
+    if (holders == null || holders.isEmpty || holders.contains(0)) {
+      // No owner of this profile runs, or the lock holder claimed the
+      // record away from here: either way this service is not its owner.
+      if (_profileLockFree(lock) || serviceEndpoint(profile) != endpoint) {
+        return true;
+      }
+      // Polling to the startup deadline would only blame another profile.
+      throw UnverifiableServiceOwner(pid is int ? pid : null);
+    }
+    if (pid is! int || !holders.contains(pid)) return true;
   } else if (_profileLockFree(lock)) {
     return true;
   }
@@ -109,12 +150,14 @@ bool servesAnotherProfile(
 }
 
 /// The pids holding a POSIX write lock on [lock], from /proc/locks, or null
-/// if that cannot be read; callers then refuse. Only the inode is compared,
-/// because btrfs reports a subvolume's device to stat (0:31, 0:58) but the
-/// file system's (00:1d) in /proc/locks. That fails open only if the same
-/// pid also locks a file with this inode in another subvolume, which is very
-/// unlikely. In another pid namespace, such as a flatpak sandbox, pids differ
-/// and the check fails closed.
+/// if that cannot be read. Only the inode is compared, because btrfs
+/// reports a subvolume's device to stat (0:31, 0:58) but the file system's
+/// (00:1d) in /proc/locks. That fails open only if the same pid also locks a
+/// file with this inode in another subvolume, which is very unlikely. The
+/// kernel leaves out a holder this pid namespace cannot see, such as one
+/// outside a flatpak sandbox; callers treat a holder listed as pid 0 the
+/// same. A holder inside another pid namespace has another pid there than
+/// here, and the check fails closed.
 Set<int>? _posixLockHolders(String lock) {
   final ProcessResult stat;
   try {
@@ -149,6 +192,8 @@ Set<int>? _posixLockHolders(String lock) {
 
 // POSIX locks belong to the OS process, not a Dart isolate or file handle.
 // Local hosts must finish before a launcher probes its own process's lock.
+// Like every top-level variable, this is per isolate: it guards only probes
+// made in the isolate that started the owner.
 final _localServiceOwners = <String, int>{};
 void Function() _retainLocalServiceOwner(String data) {
   privateDirectory(data, repairOwnedPermissions: true);
@@ -524,8 +569,17 @@ class ServiceClient {
   final events = StreamController<Map<String, dynamic>>.broadcast();
   int _next = 0;
   bool _closed = false;
+  bool _retired = false;
+  Timer? _retirement;
   RpcError? _failure;
-  bool get isClosed => _closed;
+
+  /// Whether no request is sent on this connection any more: it is closed,
+  /// or [retire]d and waiting for its last answers.
+  bool get isClosed => _closed || _retired;
+  final _closedSignal = Completer<void>();
+
+  /// Completes once this connection is closed, by either side.
+  Future<void> get closed => _closedSignal.future;
   ServiceClient._(this.socket, this._maxMessageBytes, this.endpoint) {
     unawaited(socket.done.catchError((Object _) {}));
     final frames = _FrameSplitter(_maxMessageBytes);
@@ -576,7 +630,28 @@ class ServiceClient {
       _methods.remove(value['id']);
       _requestIds.remove(value['id']);
       unawaited(controller.close());
+      _closeIfSettled();
     }
+  }
+
+  /// Stop sending on this connection, but let the requests already written
+  /// settle. A closing owner that refused one of them answers every other
+  /// itself, with a refusal or its own outcomeUnknown, before it ends the
+  /// connection. Closing at once would fail them all locally as
+  /// outcomeUnknown, so a refused one would never be sent to the next owner
+  /// and its caller would be told it may have completed. Later requests fail
+  /// at once as notSent. The connection closes when its last pending request
+  /// settles, or after [grace].
+  void retire({Duration grace = _retiredConnectionGrace}) {
+    if (_closed || _retired) return;
+    _retired = true;
+    _traceServiceTransport('client retired with ${_pending.length} pending');
+    _retirement = Timer(grace, () => unawaited(close()));
+    _closeIfSettled();
+  }
+
+  void _closeIfSettled() {
+    if (_retired && _pending.isEmpty) unawaited(close());
   }
 
   /// Bound each reply frame; the default matches the service's 16 MiB limit.
@@ -612,6 +687,8 @@ class ServiceClient {
   void _fail(RpcError inFlight, RpcError later) {
     if (_closed) return;
     _closed = true;
+    _retirement?.cancel();
+    _closedSignal.complete();
     _failure ??= later;
     for (final c in _pending.values) {
       c.addError(inFlight);
@@ -636,10 +713,11 @@ class ServiceClient {
         _requestIds.remove(id);
         if (_pending.remove(id) != null && !_closed) {
           socket.writeln(jsonEncode({'cancel': id}));
+          _closeIfSettled();
         }
       },
     );
-    final frame = _closed
+    final frame = isClosed
         ? null
         : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
     if (frame == null) {
@@ -704,6 +782,7 @@ class ServiceClient {
       pending?.addError(RpcError(RpcErrorCode.cancelled, 'Answer cancelled'));
       if (pending != null) unawaited(pending.close());
     }
+    if (ids.isNotEmpty) _closeIfSettled();
     return ids.isNotEmpty;
   }
 
@@ -735,6 +814,8 @@ bool _resendable(RpcError error) =>
 class ServiceConnection {
   final ProfilePaths profile;
   ServiceClient? _client;
+  // Replaced connections still waiting for their owner's answers.
+  final _retired = <ServiceClient>{};
   Future<ServiceClient>? _connecting;
   bool _closed = false;
   ServiceConnection(this.profile);
@@ -793,12 +874,13 @@ class ServiceConnection {
                   _resendable(error)) {
                 handedOff = true;
                 _traceServiceTransport('connection resends $method: $error');
-                unawaited(() async {
-                  // A closing owner keeps the refused connection open.
-                  if (identical(_client, client)) _client = null;
-                  await client.close();
-                  await send(resent: true);
-                }());
+                // New requests go to the next owner. The closing owner
+                // answers this connection's other requests itself, so it is
+                // retired rather than closed: closing it would report them
+                // as possibly completed, and never resend a refused one.
+                if (identical(_client, client)) _client = null;
+                _retire(client);
+                unawaited(send(resent: true));
                 return;
               }
               output.addError(error, stack);
@@ -821,8 +903,18 @@ class ServiceConnection {
     return output.stream;
   }
 
+  void _retire(ServiceClient client) {
+    _retired.add(client);
+    unawaited(client.closed.then((_) => _retired.remove(client)));
+    client.retire();
+  }
+
+  /// Close the connection and any replaced one still waiting for answers.
   Future<void> close() async {
     _closed = true;
+    for (final retired in _retired.toList()) {
+      await retired.close();
+    }
     await _client?.close();
   }
 }
@@ -1181,9 +1273,10 @@ class ApplicationService {
     }
   }
 
-  /// Returns whether [message] itself was written. A reply that is too large
-  /// or cannot be encoded is replaced by an error; such an event is dropped.
-  bool _send(Socket client, Map<String, Object?> message) {
+  /// Writes [message] to [client] and says whether it got there. A reply that
+  /// is too large or cannot be encoded is replaced by an error; such an event
+  /// is dropped. A failed write closes the connection.
+  EventDelivery _send(Socket client, Map<String, Object?> message) {
     try {
       _traceServiceTransport(
         'worker send peer=${identityHashCode(client)} id=${message['id']} '
@@ -1191,17 +1284,20 @@ class ApplicationService {
       );
       Uint8List? frame;
       String? failure;
+      var delivery = EventDelivery.sent;
       try {
         frame = utf8.encode(jsonEncode(message));
         // A client drops its whole connection on a frame over the limit, and
         // losing the desktop's connection stops its recording. Fail only the
         // request instead.
         if (frame.length + 1 > _maxServiceFrame) {
+          delivery = EventDelivery.tooLarge;
           failure =
               'Reply exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
               'request fewer items.';
         }
       } on JsonUnsupportedObjectError {
+        delivery = EventDelivery.unencodable;
         failure =
             'Reply contains a value JSON cannot represent, such as NaN or '
             'Infinity.';
@@ -1214,7 +1310,7 @@ class ApplicationService {
         );
         // A dropped snapshot is superseded by the next one. The approval gate
         // fails its request instead of waiting for a decision.
-        if (id == null) return false;
+        if (id == null) return delivery;
         // No later frame may follow this request's terminal error.
         if (id is int) _cancel(client, id);
         frame = utf8.encode(
@@ -1228,10 +1324,10 @@ class ApplicationService {
       client
         ..add(frame!)
         ..add(const [10]);
-      return failure == null;
+      return delivery;
     } catch (_) {
       client.destroy();
-      return false;
+      return EventDelivery.writeFailed;
     }
   }
 
@@ -2379,12 +2475,8 @@ Future<ServiceStartup> _connectCompatibleService(
     if (snapshot) initial = await status(desktop: true);
     return (client: client, status: initial);
   } on RpcError catch (error) {
-    // A closing owner refused the probe, or ended it as it began closing.
-    // Status is read-only, so both mean: wait for this owner, then hand off.
-    if (isClosingRefusal(error) ||
-        (error.code == RpcErrorCode.unavailable &&
-            error.reason == RpcErrorReason.outcomeUnknown &&
-            error is! _ServiceTransportLost)) {
+    // Status is read-only, so this means: wait for this owner, then hand off.
+    if (closingOwnerEndedProbe(error)) {
       // Transfer ownership of this specific socket to the startup handoff.
       throw _ClosingService(client);
     }
@@ -2395,6 +2487,15 @@ Future<ServiceStartup> _connectCompatibleService(
     rethrow;
   }
 }
+
+/// Whether [error] ended a read-only status probe because its owner is
+/// closing: the owner refused the probe, or ended it as it began closing.
+/// A lost connection is not this owner's answer.
+bool closingOwnerEndedProbe(RpcError error) =>
+    isClosingRefusal(error) ||
+    (error.code == RpcErrorCode.unavailable &&
+        error.reason == RpcErrorReason.outcomeUnknown &&
+        error is! _ServiceTransportLost);
 
 bool _profileOwnerAvailable(
   ProfilePaths profile, {
@@ -2445,6 +2546,8 @@ bool _lockContended(FileSystemException error) =>
 /// Whether no other process holds the profile lock at [path]. Only call this
 /// from a process that hosts no owner of the profile: POSIX record locks
 /// belong to the process, and closing this probe's descriptor drops them all.
+/// Callers that check [_localServiceOwners] first are safe only in the
+/// isolate that started the owner; another isolate does not see it there.
 bool _profileLockFree(String path) {
   // Keep this probe synchronous: opening and closing another descriptor must
   // not interleave with a local owner.
@@ -2477,27 +2580,32 @@ Future<bool> _processRunning(int pid) async {
 
 /// After `--stop` signalled the owner [ownerPid] and saw its connection close,
 /// wait until the owner released the profile: its lock is free, or the
-/// process is gone. EOF alone comes before the helper stops and the lock is
-/// released (L6). Returns false if neither happens within [timeout]. Never
-/// call this from a process that hosts an owner of the profile.
+/// process is gone. EOF comes once the helper has stopped, but before the
+/// owner closes its store, removes its sockets and endpoint record, and
+/// releases the lock (L6). Without [ownerPid], as for an owner that refused
+/// its status because it was already stopping, only the lock decides.
+/// Returns false if neither happens within [timeout]. Never call this from a
+/// process that hosts an owner of the profile, in any isolate: it probes the
+/// lock, POSIX record locks belong to the process, and closing the probe's
+/// descriptor drops the owner's lock.
 Future<bool> awaitProfileRelease(
   ProfilePaths profile,
-  int ownerPid, {
+  int? ownerPid, {
   Duration timeout = const Duration(seconds: 30),
 }) async {
-  final lock = '${profile.data}/.application.lock';
   final waited = Stopwatch()..start();
   var held = false;
   while (true) {
-    if (!await _processRunning(ownerPid) ||
-        FileSystemEntity.typeSync(lock, followLinks: false) ==
-            FileSystemEntityType.notFound ||
-        _profileLockFree(lock)) {
+    if ((ownerPid != null && !await _processRunning(ownerPid)) ||
+        profileReleased(profile)) {
       return true;
     }
     if (!held) {
       held = true;
-      _traceServiceTransport('stop: service $ownerPid still holds its profile');
+      _traceServiceTransport(
+        'stop: service${ownerPid == null ? '' : ' $ownerPid'} still holds '
+        'its profile',
+      );
     }
     if (waited.elapsed >= timeout) return false;
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -2507,31 +2615,41 @@ Future<bool> awaitProfileRelease(
 /// [awaitProfileRelease], failing with a message when it times out.
 Future<void> requireProfileRelease(
   ProfilePaths profile,
-  int ownerPid, {
+  int? ownerPid, {
   Duration timeout = const Duration(seconds: 30),
 }) async {
   if (!await awaitProfileRelease(profile, ownerPid, timeout: timeout)) {
     throw StateError(
-      'The application service (pid $ownerPid) closed its connections but '
-      'did not release its profile within ${_describeDuration(timeout)}.',
+      'The application service${ownerPid == null ? '' : ' (pid $ownerPid)'} '
+      'closed its connections but did not release its profile within '
+      '${_describeDuration(timeout)}.',
     );
   }
 }
 
+/// Whether no process holds [profile]'s lock: the lock file is missing or
+/// free. Never call this from a process that hosts an owner of the profile,
+/// in any isolate: it probes the lock, POSIX record locks belong to the
+/// process, and closing the probe's descriptor drops the owner's lock.
+bool profileReleased(ProfilePaths profile) {
+  final lock = '${profile.data}/.application.lock';
+  return FileSystemEntity.typeSync(lock, followLinks: false) ==
+          FileSystemEntityType.notFound ||
+      _profileLockFree(lock);
+}
+
 /// Whether the profile has no owner but still has an endpoint record: the
 /// last owner did not shut down cleanly, and the next one recovers its
-/// runtime. Never call this from a process that hosts an owner.
-bool profileLeftUnclean(ProfilePaths profile) {
-  final lock = '${profile.data}/.application.lock';
-  return FileSystemEntity.typeSync(
-            '${profile.data}/$_endpointRecordName',
-            followLinks: false,
-          ) !=
-          FileSystemEntityType.notFound &&
-      (FileSystemEntity.typeSync(lock, followLinks: false) ==
-              FileSystemEntityType.notFound ||
-          _profileLockFree(lock));
-}
+/// runtime. Never call this from a process that hosts an owner of the
+/// profile, in any isolate: it probes the lock, POSIX record locks belong to
+/// the process, and closing the probe's descriptor drops the owner's lock.
+bool profileLeftUnclean(ProfilePaths profile) =>
+    FileSystemEntity.typeSync(
+          '${profile.data}/$_endpointRecordName',
+          followLinks: false,
+        ) !=
+        FileSystemEntityType.notFound &&
+    profileReleased(profile);
 
 /// Start packaged services as applications through LaunchServices so macOS can
 /// attribute protected operations to the service bundle. Installed TCC attribution
@@ -2704,6 +2822,12 @@ const _maxLaunches = 3;
 /// Attach first; competing launchers may race safely on the service's OS lock.
 ///
 /// [statusProbeLimit] bounds each startup status probe; tests shorten it.
+///
+/// Deciding whether to launch probes the profile lock. Never call this from
+/// a process that hosts an owner of [profile] in another isolate: POSIX
+/// record locks belong to the process, so closing the probe's descriptor
+/// drops the owner's lock. [_localServiceOwners] skips the probe only in the
+/// isolate that started the owner.
 Future<ServiceClient> ensureService(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
@@ -2717,7 +2841,8 @@ Future<ServiceClient> ensureService(
 /// Reserve desktop socket lifetime and obtain its final startup snapshot.
 /// This does not grant the visible desktop's approval-host capability.
 /// Closing/transport failures here use the original startup deadline and owner
-/// handoff; no business operation is retried.
+/// handoff; no business operation is retried. The restriction of
+/// [ensureService] on processes that host an owner applies.
 Future<ServiceStartup> ensureServiceSnapshot(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),

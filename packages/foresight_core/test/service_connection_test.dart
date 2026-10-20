@@ -138,6 +138,151 @@ void main() {
     });
   }
 
+  test('a closing refusal leaves the other requests on its connection to '
+      'the owner\'s own answers: a refused one is sent once more, a '
+      'dispatched one is outcomeUnknown (SL-9)', () async {
+    const ownerUnknown =
+        'Application service stopped before this request finished; it may '
+        'or may not have completed.';
+    final connection = ServiceConnection(f.profile);
+    final previous = await connection.connect();
+    final closing = f.sockets.last;
+    final held = <Map<String, dynamic>>[];
+    void answer(Map<String, dynamic> request, Map<String, Object?> error) =>
+        closing.writeln(
+          jsonEncode({'id': request['id'], 'error': error, 'done': true}),
+        );
+    const refusal = {
+      'code': 'unavailable',
+      'message': closingText,
+      'reason': 'closing',
+    };
+    f.handler = (socket, request) {
+      final method = request['method'] as String;
+      if (!identical(socket, closing)) {
+        f.reply(socket, request, 'next owner: $method');
+        // The closing owner's other answers arrive only after the first
+        // refused request reached the next owner.
+        if (method == 'notes.list') {
+          for (final request in held) {
+            answer(
+              request,
+              request['method'] == 'meetings.list'
+                  ? refusal
+                  : {
+                      'code': 'unavailable',
+                      'message': ownerUnknown,
+                      'reason': 'outcomeUnknown',
+                    },
+            );
+          }
+        }
+        return;
+      }
+      if (method == 'notes.list') {
+        answer(request, refusal);
+      } else {
+        held.add(request);
+      }
+    };
+    final first = connection.stream('notes.list').toList();
+    final second = connection.stream('meetings.list').toList();
+    final dispatched = connection
+        .stream('notes.save')
+        .toList()
+        .then<Object?>(
+          (value) => fail('Expected a failure, got $value'),
+          onError: (Object error) => error,
+        );
+    expect(await first, ['next owner: notes.list']);
+    expect(await second, ['next owner: meetings.list']);
+    expect(
+      await dispatched,
+      rpcError(RpcErrorCode.unavailable, ownerUnknown, 'outcomeUnknown'),
+    );
+    for (final (method, count) in [
+      ('notes.list', 2),
+      ('meetings.list', 2),
+      ('notes.save', 1),
+    ]) {
+      expect(f.requests.where((r) => r['method'] == method), hasLength(count));
+    }
+    // With nothing left pending, the retired connection closed (the owner
+    // sees its end), and new requests use the next owner's.
+    await eventually(() => f.ended.contains(closing));
+    expect(await connection.connect(), isNot(same(previous)));
+    await connection.close();
+  });
+
+  test('closing a connection also closes a replaced one that still waits '
+      'for its owner\'s answers', () async {
+    final connection = ServiceConnection(f.profile);
+    await connection.connect();
+    final closing = f.sockets.last;
+    f.handler = (socket, request) {
+      if (!identical(socket, closing)) {
+        f.reply(socket, request, 'next owner');
+      } else if (request['method'] == 'notes.list') {
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {
+              'code': 'unavailable',
+              'message': closingText,
+              'reason': 'closing',
+            },
+            'done': true,
+          }),
+        );
+      }
+      // The closing owner has not answered notes.save yet.
+    };
+    final saved = connection
+        .stream('notes.save')
+        .toList()
+        .then<Object?>((value) => value, onError: (Object error) => error);
+    await eventually(() => f.requests.any((r) => r['method'] == 'notes.save'));
+    expect(await connection.stream('notes.list').toList(), ['next owner']);
+    // The refused connection is retired, still waiting for notes.save.
+    expect(f.ended.contains(closing), isFalse);
+    await connection.close();
+    // Well before the retired connection's own grace.
+    await eventually(() => f.ended.contains(closing));
+    expect(await saved, disconnected('outcomeUnknown'));
+  });
+
+  test('a retired client sends nothing new and closes once its pending '
+      'requests settle, or after its grace', () async {
+    final client = await ServiceClient.connect(
+      '${f.profile.runtime}/application.sock',
+    );
+    final answered = client.call('fixture.answered');
+    final unanswered = client.call('fixture.unanswered');
+    final failure = expectLater(
+      unanswered,
+      throwsA(disconnected('outcomeUnknown')),
+    );
+    await eventually(
+      () => f.requests.any((r) => r['method'] == 'fixture.unanswered'),
+    );
+    client.retire(grace: const Duration(seconds: 3));
+    expect(client.isClosed, isTrue);
+    await expectLater(
+      client.call('after.retire'),
+      throwsA(disconnected('notSent')),
+    );
+    // The owner still answers a request written before the retirement.
+    f.reply(
+      f.sockets.last,
+      f.requests.singleWhere((r) => r['method'] == 'fixture.answered'),
+      'answered',
+    );
+    expect(await answered, 'answered');
+    // One that is never answered fails at the grace.
+    await failure;
+    expect(f.requests.where((r) => r['method'] == 'after.retire'), isEmpty);
+  });
+
   test('a request is resent at most once', () async {
     final connection = ServiceConnection(f.profile);
     f.handler = (socket, request) => socket.writeln(
@@ -302,6 +447,100 @@ void main() {
       await server?.close();
     }
   });
+
+  // No /proc/locks or stat; or a holder outside this pid namespace, which
+  // the kernel leaves out (or lists as pid 0).
+  for (final (recorded, holders) in <(bool, Set<int>?)>[
+    (false, null),
+    (true, null),
+    (true, {}),
+    (true, {0}),
+  ]) {
+    test('an older owner whose lock holder cannot be read fails startup at '
+        'once and says so (record: $recorded, holders: $holders)', () async {
+      // An owner released before profile identity holds this profile's
+      // lock and answers status without profile_id.
+      final profile = ProfilePaths(
+        '${f.root.path}/older-data',
+        '${f.root.path}/own-run',
+      );
+      final runtime = recorded ? '${f.root.path}/older-run' : profile.runtime;
+      privateDirectory(profile.data);
+      privateDirectory(runtime);
+      final holder = await Process.start('python3', [
+        '-c',
+        'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
+            'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
+            'sys.stdin.read()',
+        '${profile.data}/.application.lock',
+      ]);
+      addTearDown(() => holder.kill(ProcessSignal.sigkill));
+      expect(
+        await utf8.decoder
+            .bind(holder.stdout)
+            .transform(const LineSplitter())
+            .first,
+        'locked',
+      );
+      final server = await ServerSocket.bind(
+        InternetAddress(
+          '$runtime/application.sock',
+          type: InternetAddressType.unix,
+        ),
+        0,
+      );
+      addTearDown(server.close);
+      server.listen((socket) {
+        unawaited(socket.done.catchError((Object _) {}));
+        utf8.decoder.bind(socket).transform(const LineSplitter()).listen((
+          line,
+        ) {
+          final request = jsonDecode(line) as Map;
+          socket.writeln(
+            jsonEncode({
+              'id': request['id'],
+              'result': {'pid': holder.pid, 'application_api_version': 1},
+              'done': true,
+            }),
+          );
+        }, onError: (Object _) {});
+      });
+      if (recorded) {
+        // The record it wrote names its runtime.
+        File('${profile.data}/.application-endpoint.json').writeAsStringSync(
+          jsonEncode({'data': profile.data, 'runtime': runtime}),
+        );
+      }
+      final reader = readPosixLockHolders;
+      readPosixLockHolders = (_) => holders;
+      addTearDown(() => readPosixLockHolders = reader);
+      final startup = Stopwatch()..start();
+      await expectLater(
+        ensureService(profile, startupTimeout: const Duration(seconds: 60)),
+        throwsA(
+          isA<UnverifiableServiceOwner>().having(
+            (error) => error.message,
+            'message',
+            'Cannot verify the running older Open Foresight service (pid '
+                '${holder.pid}) for this profile; stop it with its own '
+                '--stop, then retry.',
+          ),
+        ),
+      );
+      // Well before the startup deadline.
+      expect(startup.elapsed, lessThan(const Duration(seconds: 20)));
+      // Once nothing holds this profile's lock, a service without
+      // profile_id is another profile's, as before.
+      holder.kill(ProcessSignal.sigkill);
+      await holder.exitCode;
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] =
+          '/missing/fixture-service';
+      await expectLater(
+        ensureService(profile, startupTimeout: const Duration(seconds: 5)),
+        throwsA(isNot(isA<UnverifiableServiceOwner>())),
+      );
+    });
+  }
 
   test(
     'closing during connect rejects the late connection and leaves no usable client',

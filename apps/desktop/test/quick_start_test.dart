@@ -74,7 +74,7 @@ class ConsentDesktopConnection extends TestDesktopConnection {
   void Function(Map<String, dynamic>)? events;
   late final gate = AgentAccessGate('fixture-token', (_, event) {
     events?.call(Map<String, dynamic>.from(event));
-    return true;
+    return EventDelivery.sent;
   });
 
   @override
