@@ -42,6 +42,9 @@ class RemoteFixture {
         root.resolveSymbolicLinksSync(),
         root.resolveSymbolicLinksSync(),
       );
+      // A current service names its profile; clients refuse one without
+      // that name unless the profile's lock is held.
+      status['profile_id'] = profile.identity;
       owner = openStore('${profile.data}/application.db');
       _hasOwner = true;
       File(

@@ -281,7 +281,7 @@ void main() {
                 socket.writeln(
                   jsonEncode({
                     'id': request['id'],
-                    'result': {'pid': pid},
+                    'result': {'pid': pid, 'profile_id': profile.identity},
                     'done': true,
                   }),
                 );

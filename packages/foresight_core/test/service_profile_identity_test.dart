@@ -25,10 +25,68 @@ String identityOf(String data) => sha256
     .toString()
     .substring(0, 24);
 
-/// What a client of another profile reports for [endpoint].
-String foreignOwner(String endpoint) =>
-    'Another Open Foresight profile is serving $endpoint. Set '
-    'FORESIGHT_RUNTIME for this profile.';
+/// What a profile reports when another profile's service (pid [pid])
+/// serves [endpoint] in the runtime both profiles use.
+String sharedRuntimeRefusal(String endpoint, {int? pid}) =>
+    "Another Open Foresight profile's service"
+    "${pid == null ? '' : ' (pid $pid)'} serves $endpoint: both profiles use "
+    'runtime ${File(endpoint).parent.path}. Give this profile its own '
+    'FORESIGHT_RUNTIME, or unset it.';
+
+/// What [profile] reports when its endpoint record names the runtime of
+/// [endpoint], where another profile's service (pid [pid]) serves.
+String staleRecordRefusal(ProfilePaths profile, String endpoint, int pid) =>
+    'The endpoint record ${profile.data}/.application-endpoint.json names '
+    'runtime ${File(endpoint).parent.path}, where another Open Foresight '
+    "profile's service (pid $pid) serves. Starting this profile's service "
+    'replaces the record.';
+
+/// The dedicated refusal of another profile's service, matched by name so
+/// this file also runs against code that predates it.
+final refusedForAnotherProfile = isStateError.having(
+  (error) => error.runtimeType.toString(),
+  'type',
+  'AnotherProfileServing',
+);
+
+/// Hold [profile]'s ownership lock from another process, as every released
+/// owner does, until the test ends.
+Future<void> holdProfileLock(ProfilePaths profile) async {
+  privateDirectory(profile.data);
+  final holder = await Process.start('python3', [
+    '-c',
+    'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
+        'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
+        'sys.stdin.read()',
+    '${profile.data}/.application.lock',
+  ]);
+  addTearDown(() async {
+    holder.kill(ProcessSignal.sigkill);
+    await holder.exitCode;
+  });
+  expect(
+    await utf8.decoder
+        .bind(holder.stdout)
+        .transform(const LineSplitter())
+        .first,
+    'locked',
+  );
+}
+
+/// Write the endpoint record a crashed owner of [profile] leaves, naming
+/// [runtime].
+void writeCrashRecord(ProfilePaths profile, String runtime) {
+  privateDirectory(profile.data);
+  final record = File('${profile.data}/.application-endpoint.json')
+    ..writeAsStringSync(jsonEncode({'data': profile.data, 'runtime': runtime}));
+  protectPrivateFile(record.path);
+}
+
+/// The endpoint records an owner of [profile] set aside.
+List<String> quarantinedRecords(ProfilePaths profile) => [
+  for (final entry in Directory(profile.data).listSync())
+    if (entry.path.contains('.application-endpoint.json.invalid-')) entry.path,
+];
 
 /// The runtime that [profile]'s endpoint record names, if it has one.
 String? recordedRuntime(ProfilePaths profile) {
@@ -151,12 +209,14 @@ void main() {
     }
     expect(await owner.stop(), 0, reason: owner.output);
 
-    // An owner released before this change reports no identity. A client
-    // and the administration commands accept it.
+    // An owner released before this change reports no identity. While it
+    // holds this profile's lock, as every released owner does, a client and
+    // the administration commands accept it.
     final legacy = ProfilePaths(
       '${directory.path}/legacy',
       '${directory.path}/old',
     );
+    await holdProfileLock(legacy);
     privateDirectory(legacy.runtime);
     final server = await legacyOwner('${legacy.runtime}/application.sock', 42);
     addTearDown(server.close);
@@ -227,108 +287,21 @@ void main() {
     runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
     await owner.ready();
     final endpoint = '${profiles.owner.runtime}/application.sock';
-    // The budget only bounds the wait for the owner to go away.
+    // It fails at once, within the whole startup budget: a service that
+    // answers status is not closing and does not go away by waiting (Q3).
     await expectLater(
-      ensureService(
-        profiles.other,
-        startupTimeout: const Duration(seconds: 10),
-      ),
+      ensureService(profiles.other).timeout(const Duration(seconds: 60)),
       throwsA(
-        isA<TimeoutException>().having(
+        refusedForAnotherProfile.having(
           (error) => error.message,
           'message',
-          foreignOwner(endpoint),
+          sharedRuntimeRefusal(endpoint, pid: owner.pid),
         ),
       ),
     );
     expect(launcher.launched, isEmpty);
     expect(await statusPid(endpoint), owner.pid);
   }, timeout: const Timeout(Duration(minutes: 3)));
-
-  for (final cut in ['connect', 'status probe']) {
-    test('startup still names another profile\'s owner when its deadline '
-        'cuts a later $cut short (SL-7)', () async {
-      final profiles = sharedRuntime('of-foreign-late-');
-      final owner = await HookedServiceProcess.start(build, profiles.owner);
-      final launcher = await build.launcher(
-        Directory(profiles.other.runtime).parent,
-      );
-      runtimeConfiguration.environment['FORESIGHT_SERVICE'] =
-          launcher.executable;
-      await owner.ready();
-      final endpoint = '${profiles.owner.runtime}/application.sock';
-      Future<ServiceClient> startup() => ensureService(
-        profiles.other,
-        startupTimeout: const Duration(seconds: 10),
-      );
-      // The first attempt reaches the other profile's owner. The next one
-      // runs into the deadline.
-      final Future<ServiceClient> starting;
-      final Future<Object?> cutShort;
-      if (cut == 'connect') {
-        // Every later connect times out, as one the deadline cuts short does.
-        var connects = 0;
-        final later = Completer<void>();
-        final outer = Zone.current;
-        starting = IOOverrides.runZoned(
-          startup,
-          socketConnect:
-              (host, port, {sourceAddress, sourcePort = 0, timeout}) {
-                if (host is InternetAddress &&
-                    host.address == endpoint &&
-                    ++connects > 1) {
-                  if (!later.isCompleted) later.complete();
-                  return Future<Socket>.error(
-                    SocketException(
-                      'Connection timed out',
-                      osError: const OSError('Connection timed out', 110),
-                      address: host,
-                    ),
-                  );
-                }
-                return outer.run(
-                  () => Socket.connect(
-                    host,
-                    port,
-                    sourceAddress: sourceAddress,
-                    sourcePort: sourcePort,
-                    timeout: timeout,
-                  ),
-                );
-              },
-        );
-        cutShort = later.future;
-      } else {
-        // The second status result is never released; the deadline ends
-        // that probe. An owner ends each reply with a separate done frame.
-        final proxy = ServiceFaultProxy();
-        addTearDown(proxy.close);
-        var results = 0;
-        cutShort = proxy
-            .hold(
-              ProxyDirection.toClient,
-              where: (frame) =>
-                  frame.method == 'status' &&
-                  frame.json?.containsKey('result') == true &&
-                  ++results == 2,
-            )
-            .reached;
-        starting = proxy.run(startup);
-      }
-      await expectLater(
-        starting,
-        throwsA(
-          isA<TimeoutException>().having(
-            (error) => error.message,
-            'message',
-            foreignOwner(endpoint),
-          ),
-        ),
-      );
-      await cutShort;
-      expect(launcher.launched, isEmpty);
-    }, timeout: const Timeout(Duration(minutes: 3)));
-  }
 
   test('--status, --stop-if-idle and --stop never act on another profile\'s '
       'owner (SL-7)', () async {
@@ -340,7 +313,11 @@ void main() {
       final result = await serviceCommand(profiles.other, argument);
       expect(result.exitCode, 1, reason: argument);
       expect(result.stdout, isEmpty, reason: argument);
-      expect(result.stderr, contains(foreignOwner(endpoint)), reason: argument);
+      expect(
+        result.stderr,
+        contains(sharedRuntimeRefusal(endpoint, pid: owner.pid)),
+        reason: argument,
+      );
       // The owner of the other profile is still serving.
       expect(await statusPid(endpoint), owner.pid, reason: argument);
     }
@@ -358,10 +335,10 @@ void main() {
     await expectLater(
       ApplicationService.start(profiles.other),
       throwsA(
-        isStateError.having(
+        refusedForAnotherProfile.having(
           (error) => error.message,
           'message',
-          foreignOwner(endpoint),
+          sharedRuntimeRefusal(endpoint),
         ),
       ),
     );
@@ -372,7 +349,9 @@ void main() {
         isStateError.having(
           (error) => error.message,
           'message',
-          contains(foreignOwner('${profiles.owner.runtime}/worker.sock')),
+          contains(
+            sharedRuntimeRefusal('${profiles.owner.runtime}/worker.sock'),
+          ),
         ),
       ),
     );
@@ -472,10 +451,10 @@ void main() {
       await expectLater(
         IsolatedApplicationService.start(profiles.other),
         throwsA(
-          isStateError.having(
+          refusedForAnotherProfile.having(
             (error) => error.message,
             'message',
-            foreignOwner(endpoint),
+            sharedRuntimeRefusal(endpoint),
           ),
         ),
       );
@@ -571,11 +550,248 @@ void main() {
       result.stderr,
       allOf(
         contains('${record.path} was ignored because it is not valid JSON'),
-        contains(foreignOwner(endpoint)),
+        contains(sharedRuntimeRefusal(endpoint, pid: owner.pid)),
       ),
     );
     expect(await statusPid(endpoint), owner.pid);
     expect(await owner.stop(), 0, reason: owner.output);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('a profile is refused at once while another profile\'s service shares '
+      'its runtime, and starts its own once that service stops listening '
+      '(SL-7)', () async {
+    final profiles = sharedRuntime('of-gone-');
+    final owner = await HookedServiceProcess.start(
+      build,
+      profiles.owner,
+      hold: ['frontend.listener_closed'],
+    );
+    final launcher = await build.launcher(
+      Directory(profiles.other.runtime).parent,
+    );
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
+    await owner.ready();
+    final endpoint = '${profiles.owner.runtime}/application.sock';
+    await expectLater(
+      ensureService(profiles.other).timeout(const Duration(seconds: 60)),
+      throwsA(refusedForAnotherProfile),
+    );
+    owner.signal(ProcessSignal.sigterm);
+    // Its listener is closed and its socket still there, so a connect is
+    // refused (ECONNREFUSED).
+    await owner.reached('frontend.listener_closed');
+    final client = await ensureService(profiles.other);
+    try {
+      final status = await client.call('status') as Map;
+      expect(status['pid'], launcher.launched.single);
+      expect(status['profile_id'], identityOf(profiles.other.data));
+    } finally {
+      await client.close();
+    }
+    owner.release('frontend.listener_closed');
+    expect(await owner.exited(), 0, reason: owner.output);
+    // The closing service left the new one's socket alone.
+    expect(await statusPid(endpoint), launcher.launched.single);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  for (final lockFile in [true, false]) {
+    test('a profile that meets another profile\'s closing service in its '
+        'runtime ${lockFile ? 'starts its own once it is gone' : 'and has '
+                  'no lock file is refused with the reason'} (SL-7)', () async {
+      final profiles = sharedRuntime('of-closing-');
+      final owner = await HookedServiceProcess.start(
+        build,
+        profiles.owner,
+        hold: ['close.helper_closed'],
+      );
+      final launcher = await build.launcher(
+        Directory(profiles.other.runtime).parent,
+      );
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] =
+          launcher.executable;
+      await owner.ready();
+      final endpoint = '${profiles.owner.runtime}/application.sock';
+      if (lockFile) {
+        // An earlier owner of this profile left its lock file.
+        privateDirectory(profiles.other.data);
+        final lock = File('${profiles.other.data}/.application.lock')
+          ..writeAsStringSync('');
+        protectPrivateFile(lock.path);
+      }
+      owner.signal(ProcessSignal.sigterm);
+      await owner.reached('close.helper_closed');
+      final proxy = ServiceFaultProxy();
+      addTearDown(proxy.close);
+      // A closing refusal says nothing about whose service it is.
+      final refused = proxy.seen(
+        ProxyDirection.toClient,
+        where: (frame) => frame.error?['reason'] == 'closing',
+      );
+      final startup = proxy.run(() => ensureService(profiles.other));
+      await refused;
+      owner.release('close.helper_closed');
+      if (lockFile) {
+        final client = await startup.timeout(const Duration(seconds: 120));
+        try {
+          final status = await client.call('status') as Map;
+          expect(status['pid'], launcher.launched.single);
+          expect(status['profile_id'], identityOf(profiles.other.data));
+        } finally {
+          await client.close();
+        }
+        expect(await owner.exited(), 0, reason: owner.output);
+        expect(await statusPid(endpoint), launcher.launched.single);
+      } else {
+        await expectLater(
+          startup,
+          throwsA(
+            refusedForAnotherProfile.having(
+              (error) => error.message,
+              'message',
+              allOf(
+                contains('does not own this profile'),
+                contains('Give this profile its own FORESIGHT_RUNTIME'),
+              ),
+            ),
+          ),
+        );
+        expect(launcher.launched, isEmpty);
+        expect(await owner.exited(), 0, reason: owner.output);
+      }
+    }, timeout: const Timeout(Duration(minutes: 3)));
+  }
+
+  test('a crash record naming a runtime another profile\'s service now uses '
+      'is replaced by this profile\'s own service (S1)', () async {
+    final directory = createServiceTestDirectorySync('of-stale-');
+    final shared = '${directory.path}/run';
+    final other = ProfilePaths('${directory.path}/a', shared);
+    final profile = ProfilePaths(
+      '${directory.path}/b',
+      '${directory.path}/own',
+    );
+    final owner = await HookedServiceProcess.start(build, other);
+    await owner.ready();
+    final endpoint = '$shared/application.sock';
+    writeCrashRecord(profile, shared);
+    // The administration commands name the record, not a shared runtime.
+    final status = await serviceCommand(profile, '--status');
+    expect(status.exitCode, 1);
+    expect(
+      status.stderr,
+      contains(staleRecordRefusal(profile, endpoint, owner.pid)),
+    );
+    // A client never attaches there. This profile's lock is free, so it
+    // starts this profile's service, which sets the record aside and serves
+    // from its own runtime.
+    final launcher = await build.launcher(directory);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
+    final client = await ensureService(
+      profile,
+      startupTimeout: const Duration(seconds: 60),
+    );
+    try {
+      final reply = await client.call('status') as Map;
+      expect(reply['pid'], launcher.launched.single);
+      expect(reply['profile_id'], identityOf(profile.data));
+    } finally {
+      await client.close();
+    }
+    expect(recordedRuntime(profile), profile.runtime);
+    expect(quarantinedRecords(profile), hasLength(1));
+    expect(await statusPid(endpoint), owner.pid);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('an owner never adopts a recorded runtime another profile\'s service '
+      'uses, and starts in its own (S1)', () async {
+    final directory = createServiceTestDirectorySync('of-adopt-');
+    final shared = '${directory.path}/run';
+    final other = ProfilePaths('${directory.path}/a', shared);
+    final profile = ProfilePaths(
+      '${directory.path}/b',
+      '${directory.path}/own',
+    );
+    final owner = await HookedServiceProcess.start(build, other);
+    await owner.ready();
+    writeCrashRecord(profile, shared);
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    final service = await ApplicationService.start(profile);
+    try {
+      expect(service.path, '${profile.runtime}/application.sock');
+      expect(recordedRuntime(profile), profile.runtime);
+      expect(quarantinedRecords(profile), hasLength(1));
+      expect(await statusPid('$shared/application.sock'), owner.pid);
+    } finally {
+      await service.close();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('a service without profile_id is another profile\'s unless this '
+      'profile\'s lock is held (S4)', () async {
+    final directory = createServiceTestDirectorySync('of-older-');
+    // An owner released before profile identity serves the shared runtime
+    // of earlier versions and holds its own profile's lock.
+    final shared = '${directory.path}/old';
+    final older = ProfilePaths('${directory.path}/a', shared);
+    await holdProfileLock(older);
+    final process = await Process.start('sleep', ['600']);
+    addTearDown(() => process.kill(ProcessSignal.sigkill));
+    privateDirectory(shared);
+    final server = await legacyOwner('$shared/application.sock', process.pid);
+    addTearDown(server.close);
+    final endpoint = '$shared/application.sock';
+    // This profile's crash record still names that runtime.
+    final profile = ProfilePaths(
+      '${directory.path}/b',
+      '${directory.path}/own',
+    );
+    writeCrashRecord(profile, shared);
+    final stop = await serviceCommand(profile, '--stop');
+    expect(stop.exitCode, 1);
+    expect(
+      stop.stderr,
+      contains(staleRecordRefusal(profile, endpoint, process.pid)),
+    );
+    expect(await isRunning(process.pid), isTrue);
+    // This profile's new owner holds its lock before it sets the record
+    // aside. Meanwhile the older service must stay refused.
+    final gates = await ServiceGates.create(directory);
+    gates.hold('start.locked');
+    final launcher = await build.launcher(directory, gates: gates);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
+    final proxy = ServiceFaultProxy();
+    addTearDown(proxy.close);
+    final starting = proxy.run(
+      () => ensureService(profile, startupTimeout: const Duration(seconds: 90)),
+    );
+    await gates.reached('start.locked');
+    // Two more probes of the older service while this profile's lock is
+    // held, and no attach to it.
+    final observed = await Future.any([
+      proxy
+          .seen(
+            ProxyDirection.toClient,
+            where: (frame) => frame.json?.containsKey('result') == true,
+            count: 2,
+          )
+          .then((_) => 'probed twice'),
+      starting.then((client) async {
+        final attached = (await client.call('status') as Map)['pid'];
+        await client.close();
+        return 'attached to $attached';
+      }),
+    ]);
+    expect(observed, 'probed twice');
+    gates.release('start.locked');
+    final client = await starting;
+    try {
+      final reply = await client.call('status') as Map;
+      expect(reply['pid'], launcher.launched.single);
+      expect(reply['profile_id'], identityOf(profile.data));
+    } finally {
+      await client.close();
+    }
+    expect(recordedRuntime(profile), profile.runtime);
   }, timeout: const Timeout(Duration(minutes: 3)));
 
   /// A desktop facade for [profile], closed with everything it opened at the
