@@ -411,10 +411,12 @@ void main() {
     }
   });
 
-  // No /proc/locks or stat; or a holder outside this pid namespace (pid 0).
+  // No /proc/locks or stat; or a holder outside this pid namespace, which
+  // the kernel leaves out (or lists as pid 0).
   for (final (recorded, holders) in <(bool, Set<int>?)>[
     (false, null),
     (true, null),
+    (true, {}),
     (true, {0}),
   ]) {
     test('an older owner whose lock holder cannot be read fails startup at '

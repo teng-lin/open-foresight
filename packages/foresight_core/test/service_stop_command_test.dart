@@ -169,6 +169,52 @@ void main() {
     return StopRun(process);
   }
 
+  test('--status run in another pid namespace than this profile\'s older '
+      'owner says it cannot verify that owner', () async {
+    // A user and pid namespace with its own /proc, as in a sandbox. The
+    // kernel leaves the owner, outside it, out of that /proc/locks.
+    final probe = await Process.run('unshare', [
+      '-Urpf',
+      '--mount-proc',
+      'true',
+    ]);
+    if (probe.exitCode != 0) {
+      markTestSkipped('unshare is not permitted here: ${probe.stderr}');
+      return;
+    }
+    final profile = newProfile('of-namespace-');
+    final owner = await releasedOwner(
+      profile,
+      finalizing: const Duration(seconds: 1),
+    );
+    final status = await Process.run(
+      'unshare',
+      [
+        '-Urpf',
+        '--mount-proc',
+        Platform.resolvedExecutable,
+        build.kernel,
+        '--status',
+      ],
+      environment: {
+        for (final entry in Platform.environment.entries)
+          if (!entry.key.startsWith('FORESIGHT_')) entry.key: entry.value,
+        'FORESIGHT_DATA': profile.data,
+        'FORESIGHT_RUNTIME': profile.runtime,
+      },
+      includeParentEnvironment: false,
+    ).timeout(const Duration(seconds: 120));
+    expect(status.exitCode, 1, reason: '${status.stdout}${status.stderr}');
+    expect(
+      status.stderr,
+      contains(
+        'Cannot verify the running older Open Foresight service (pid '
+        '${owner.pid}) for this profile; stop it with its own --stop, then '
+        'retry.',
+      ),
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   test(
     '--stop waits past the release bound of a current owner for a '
     'released owner, which finalizes after it ends its connections',

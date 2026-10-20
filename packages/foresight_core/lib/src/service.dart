@@ -129,8 +129,9 @@ bool servesAnotherProfile(
   if (Platform.isLinux) {
     final holders = readPosixLockHolders(lock);
     final pid = status['pid'];
-    // Pid 0 is a holder this pid namespace cannot see.
-    if (holders == null || holders.contains(0)) {
+    // No listed holder, or pid 0, is a holder this pid namespace cannot see,
+    // unless nothing holds the lock at all.
+    if (holders == null || holders.isEmpty || holders.contains(0)) {
       // No owner of this profile runs, or the lock holder claimed the
       // record away from here: either way this service is not its owner.
       if (_profileLockFree(lock) || serviceEndpoint(profile) != endpoint) {
@@ -152,10 +153,11 @@ bool servesAnotherProfile(
 /// if that cannot be read. Only the inode is compared, because btrfs
 /// reports a subvolume's device to stat (0:31, 0:58) but the file system's
 /// (00:1d) in /proc/locks. That fails open only if the same pid also locks a
-/// file with this inode in another subvolume, which is very unlikely. A
-/// holder this pid namespace cannot see, such as one outside a flatpak
-/// sandbox, is listed as pid 0. A holder inside another pid namespace has
-/// another pid there than here, and the check fails closed.
+/// file with this inode in another subvolume, which is very unlikely. The
+/// kernel leaves out a holder this pid namespace cannot see, such as one
+/// outside a flatpak sandbox; callers treat a holder listed as pid 0 the
+/// same. A holder inside another pid namespace has another pid there than
+/// here, and the check fails closed.
 Set<int>? _posixLockHolders(String lock) {
   final ProcessResult stat;
   try {
