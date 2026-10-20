@@ -270,6 +270,11 @@ void main() {
       );
       final helper = await GatedHelper.create(directory);
       final gates = await ServiceGates.create(directory);
+      // Every gate is armed to hold, and also to crash the isolate reaching
+      // it; a hook-free build must do neither.
+      for (final point in [...closeGates, 'request.committed.status']) {
+        File('${gates.directory.path}/$point.crash').writeAsStringSync('');
+      }
       final owner = await HookedServiceProcess.start(
         build,
         profile,

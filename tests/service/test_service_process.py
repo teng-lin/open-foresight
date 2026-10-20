@@ -1269,8 +1269,10 @@ def test_release_service_ignores_lifecycle_gates(tmp_path):
     assert SERVICE.is_file(), "Build the service executable first"
     data, runtime, gates = tmp_path / "data", tmp_path / "run", tmp_path / "gates"
     gates.mkdir(mode=0o700)
+    # Every gate is armed to hold, and also to crash the isolate reaching it.
     for point in LIFECYCLE_GATES:
         (gates / f"{point}.hold").write_text("")
+        (gates / f"{point}.crash").write_text("")
     helper = GatedHelper(tmp_path)
     env = os.environ.copy()
     for key in (
@@ -1315,7 +1317,9 @@ def test_release_service_ignores_lifecycle_gates(tmp_path):
             # A hook-enabled build would hold close.begin before this.
             helper.published("stopping", deadline, process)
             assert sorted(path.name for path in gates.iterdir()) == sorted(
-                f"{point}.hold" for point in LIFECYCLE_GATES
+                f"{point}.{arm}"
+                for point in LIFECYCLE_GATES
+                for arm in ("hold", "crash")
             )
             helper.release()
             assert process.wait(timeout=30) == 0
@@ -1405,15 +1409,12 @@ def test_mcp_startup_joins_a_closing_owner_and_attaches_to_one_replacement(
             # while it is still held does the owner provably hold the lock.
             try:
                 os.kill(held, 0)
-                still_held = True
             except ProcessLookupError:
-                still_held = False
-            if still_held:
-                assert not launches.exists()
+                pytest.fail("hold window missed: the helper was killed first")
+            assert not launches.exists()
             helper.release()
             assert owner.wait(timeout=30) == 0
-            if still_held:
-                assert helper.released()
+            assert helper.released(), "hold window missed: the helper was killed"
             mcp.initialize()
             status = mcp.tool("get_status")["structuredContent"]["result"]
             replacement = status["pid"]

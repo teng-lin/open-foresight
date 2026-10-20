@@ -225,7 +225,7 @@ void main() {
       expect(committedNotes(profile), ['Committed before close']);
       owner.release('request.committed.notes.save');
       owner.release('close.leases_terminated');
-      expect(await owner.exitCode, 0, reason: owner.output);
+      expect(await owner.exited(), 0, reason: owner.output);
     } finally {
       await writer?.close();
       await desktop?.close();
@@ -331,8 +331,11 @@ void main() {
       expect(error['reason'], 'closing');
       expect(error.keys, unorderedEquals(['code', 'message', 'reason']));
       owner.release('close.helper_closed');
-      expect(await idle, {'stopped': true, 'shutdown_verified': true});
-      expect(await owner.exitCode, 0, reason: owner.output);
+      expect(await idle.timeout(startupBound), {
+        'stopped': true,
+        'shutdown_verified': true,
+      });
+      expect(await owner.exited(), 0, reason: owner.output);
     } finally {
       await stopper?.close();
       await owner.stop();
@@ -374,8 +377,11 @@ void main() {
       expect(launcher.launched, isEmpty);
       final toOldOwner = proxy.connections.length;
       owner.release('close.helper_closed');
-      expect(await idle, {'stopped': true, 'shutdown_verified': true});
-      expect(await owner.exitCode, 0, reason: owner.output);
+      expect(await idle.timeout(startupBound), {
+        'stopped': true,
+        'shutdown_verified': true,
+      });
+      expect(await owner.exited(), 0, reason: owner.output);
       attached = await startup;
       final status = await attached.call('status') as Map;
       expect(launcher.launched, [status['pid']]);
@@ -449,12 +455,16 @@ void main() {
         expect(launcher.launched, isEmpty);
         owner.release('frontend.draining');
         // The process reports the worker's failure.
-        expect(await owner.exitCode, isNot(0), reason: owner.output);
+        expect(await owner.exited(), isNot(0), reason: owner.output);
         replacement = await startup;
         expect(launcher.launched, [
           (await replacement.call('status') as Map)['pid'],
         ]);
-        // The old frontend left the replacement's public socket alone.
+        // The replacement serves at the public socket path. The old process
+        // could not have removed it: its own removal ran, under its leaked
+        // lock, before the replacement could start. SI's "a frontend whose
+        // worker died never unlinks a socket that replaced its own" covers
+        // the identity check itself.
         expect(
           FileSystemEntity.typeSync(serviceEndpoint(profile)),
           FileSystemEntityType.unixDomainSock,
@@ -539,7 +549,7 @@ void main() {
       expect(await next(1), 'refused');
       expect(launcher.launched, isEmpty);
       owner.release('close.helper_closed');
-      expect(await owner.exitCode, 0, reason: owner.output);
+      expect(await owner.exited(), 0, reason: owner.output);
       final attached = {await next(0), await next(1)};
       expect(attached, hasLength(1));
       final pid = int.parse(attached.single.split(' ').last);
@@ -547,7 +557,7 @@ void main() {
       // Each launches at most once; a losing replacement exits.
       expect(launcher.launched.length, inInclusiveRange(1, 2));
       for (final process in launchers) {
-        expect(await process.exitCode, 0);
+        expect(await process.exitCode.timeout(startupBound), 0);
       }
       for (final other in launcher.launched.where((other) => other != pid)) {
         await eventually(
@@ -600,7 +610,7 @@ void main() {
         expect(launcher.launched, isEmpty);
         final oldConnections = proxy.connections.toSet();
         owner.release('close.helper_closed');
-        expect(await owner.exitCode, 0, reason: owner.output);
+        expect(await owner.exited(), 0, reason: owner.output);
         expect(await listed, [isEmpty]);
         expect(await commanded, isEmpty);
         final pids = {
@@ -938,10 +948,10 @@ void main() {
       // A process that is gone has released its profile, whoever holds
       // the lock now.
       final gone = await Process.start('/bin/true', []);
-      await gone.exitCode;
+      await gone.exitCode.timeout(startupBound);
       expect(await awaitProfileRelease(profile, gone.pid), isTrue);
       await holder.stdin.close();
-      await holder.exitCode;
+      await holder.exitCode.timeout(startupBound);
       final waited = await awaitProfileRelease(
         profile,
         pid,
@@ -1157,7 +1167,7 @@ void main() {
       expect(status.existsSync(), isFalse);
     } finally {
       holder.kill(ProcessSignal.sigkill);
-      await holder.exitCode;
+      await holder.exitCode.timeout(startupBound);
     }
   }, timeout: const Timeout(Duration(minutes: 3)));
 
