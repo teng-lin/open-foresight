@@ -17,6 +17,28 @@ import 'store.dart';
 import 'service_socket.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
+const _serviceClosingMessage =
+    'Application service is shutting down; retry after it exits.';
+
+// POSIX locks belong to the OS process, not a Dart isolate or file handle.
+// Local hosts must finish before a launcher probes its own process's lock.
+final _localServiceOwners = <String, int>{};
+void Function() _retainLocalServiceOwner(String data) {
+  privateDirectory(data, repairOwnedPermissions: true);
+  final key = Directory(data).resolveSymbolicLinksSync();
+  _localServiceOwners[key] = (_localServiceOwners[key] ?? 0) + 1;
+  var released = false;
+  return () {
+    if (released) return;
+    released = true;
+    final count = _localServiceOwners[key]!;
+    if (count == 1) {
+      _localServiceOwners.remove(key);
+    } else {
+      _localServiceOwners[key] = count - 1;
+    }
+  };
+}
 
 void _traceServiceTransport(String message) {
   if (runtimeConfiguration['FORESIGHT_SERVICE_TRACE'] == '1') {
@@ -38,16 +60,27 @@ String serviceEndpoint(ProfilePaths profile) {
       FileSystemEntityType.link) {
     throw StateError('Service endpoint record must not be a symbolic link');
   }
-  if (record.existsSync()) {
-    final value = jsonDecode(record.readAsStringSync()) as Map;
-    if (value['data'] != profile.data || value['runtime'] is! String) {
-      throw StateError('Invalid application service endpoint record');
-    }
-    final runtime = value['runtime'] as String;
-    privateDirectory(runtime);
-    return '$runtime/application.sock';
+  final String contents;
+  try {
+    contents = record.readAsStringSync();
+  } on PathNotFoundException {
+    // A closing owner may remove its record between the type check and read.
+    return '${profile.runtime}/application.sock';
   }
-  return '${profile.runtime}/application.sock';
+  final value = jsonDecode(contents) as Map;
+  if (value['data'] != profile.data || value['runtime'] is! String) {
+    throw StateError('Invalid application service endpoint record');
+  }
+  final runtime = value['runtime'] as String;
+  privateDirectory(runtime);
+  return '$runtime/application.sock';
+}
+
+// Only the local transport can create this marker. A peer's serialized error
+// remains an ordinary RpcError, even if it copies the disconnect message.
+class _ServiceTransportLost extends RpcError {
+  _ServiceTransportLost()
+    : super(RpcErrorCode.unavailable, 'Application service disconnected');
 }
 
 /// Newline framed, multiplexed local RPC. No network listener is opened.
@@ -60,6 +93,7 @@ class ServiceClient {
   final events = StreamController<Map<String, dynamic>>.broadcast();
   int _next = 0;
   bool _closed = false;
+  RpcError? _failure;
   bool get isClosed => _closed;
   ServiceClient._(this.socket, this._maxMessageBytes) {
     unawaited(socket.done.catchError((Object _) {}));
@@ -98,13 +132,7 @@ class ServiceClient {
             }
           },
           onError: (Object e, StackTrace st) => _fail(e, st),
-          onDone: () => _fail(
-            RpcError(
-              RpcErrorCode.unavailable,
-              'Application service disconnected',
-            ),
-            StackTrace.current,
-          ),
+          onDone: () => _fail(_ServiceTransportLost(), StackTrace.current),
         );
   }
 
@@ -112,6 +140,7 @@ class ServiceClient {
   static Future<ServiceClient> connect(
     String path, {
     int maxMessageBytes = maxServiceMessage,
+    Duration connectTimeout = const Duration(seconds: 2),
   }) async {
     if (maxMessageBytes < 1) {
       throw ArgumentError.value(maxMessageBytes, 'maxMessageBytes');
@@ -120,7 +149,7 @@ class ServiceClient {
       await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
         0,
-        timeout: const Duration(seconds: 2),
+        timeout: connectTimeout,
       ),
       maxMessageBytes,
     );
@@ -129,6 +158,9 @@ class ServiceClient {
   void _fail(Object error, StackTrace st) {
     if (_closed) return;
     _closed = true;
+    _failure ??= error is SocketException
+        ? _ServiceTransportLost()
+        : RpcError.from(error);
     for (final c in _pending.values) {
       c.addError(error, st);
       unawaited(c.close());
@@ -156,9 +188,7 @@ class ServiceClient {
       },
     );
     if (_closed) {
-      controller.addError(
-        RpcError(RpcErrorCode.unavailable, 'Application service disconnected'),
-      );
+      controller.addError(_failure ?? _ServiceTransportLost());
       unawaited(controller.close());
     } else {
       _pending[id] = controller;
@@ -213,6 +243,12 @@ class ServiceClient {
   }
 
   Future<void> close() async {
+    if (!_closed) {
+      _failure = RpcError(
+        RpcErrorCode.unavailable,
+        'Application service disconnected',
+      );
+    }
     _fail(StateError('Client closed'), StackTrace.current);
   }
 }
@@ -334,14 +370,19 @@ class ApplicationService {
   }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
+    void Function()? releaseLocalOwner;
     try {
-      return await _start(
+      releaseLocalOwner = _retainLocalServiceOwner(profile.data);
+      final service = await _start(
         profile,
         installationLock,
         webSearch: webSearch,
         internalWorker: internalWorker,
       );
+      unawaited(service.closed.whenComplete(releaseLocalOwner));
+      return service;
     } catch (_) {
+      releaseLocalOwner?.call();
       installationLock?.closeSync();
       rethrow;
     }
@@ -540,7 +581,7 @@ class ApplicationService {
                   'id': id,
                   'error': RpcError(
                     RpcErrorCode.unavailable,
-                    'Application service is shutting down; retry after it exits.',
+                    _serviceClosingMessage,
                   ).toJson(),
                   'done': true,
                 });
@@ -985,6 +1026,8 @@ class IsolatedApplicationService {
     });
     var spawned = false;
     try {
+      final releaseLocalOwner = _retainLocalServiceOwner(profile.data);
+      unawaited(host.closed.whenComplete(releaseLocalOwner));
       await Isolate.spawn(
         _applicationServiceWorker,
         [
@@ -1175,7 +1218,7 @@ class IsolatedApplicationService {
         ownership = await File(
           '$_dataPath/.application.lock',
         ).open(mode: FileMode.append);
-        await ownership.lock(FileLock.exclusive);
+        ownership.lockSync(FileLock.exclusive);
         _traceServiceTransport('frontend ownership reacquired');
       } on FileSystemException {
         await ownership?.close();
@@ -1295,19 +1338,97 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
   }
 }
 
-Future<ServiceClient> _connectCompatibleService(String path) async {
-  final client = await ServiceClient.connect(path);
-  if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
-    try {
-      validateServiceCompatibility(
-        await client.call(Operation.status.wire) as Map,
-      );
-    } catch (_) {
-      await client.close();
-      rethrow;
+class _ClosingService implements Exception {
+  final ServiceClient client;
+  _ClosingService(this.client);
+}
+
+Future<ServiceClient> _connectCompatibleService(
+  String path,
+  Duration Function() remaining,
+) async {
+  final left = remaining();
+  final client = await ServiceClient.connect(
+    path,
+    connectTimeout: left < const Duration(seconds: 2)
+        ? left
+        : const Duration(seconds: 2),
+  );
+  try {
+    // Even development launches must not hand a closing owner to the desktop.
+    final statusTimeout = remaining();
+    final status =
+        await client
+                .call(Operation.status.wire)
+                .timeout(
+                  statusTimeout,
+                  onTimeout: () => throw TimeoutException(
+                    'Application service did not answer its startup status probe',
+                  ),
+                )
+            as Map;
+    if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
+      validateServiceCompatibility(status);
     }
+  } on RpcError catch (error) {
+    if (error.code == RpcErrorCode.unavailable &&
+        error.message == _serviceClosingMessage) {
+      // Transfer ownership of this specific socket to the startup handoff.
+      throw _ClosingService(client);
+    }
+    await client.close();
+    rethrow;
+  } catch (_) {
+    await client.close();
+    rethrow;
   }
   return client;
+}
+
+bool _profileOwnerAvailable(
+  ProfilePaths profile, {
+  required bool closingOwner,
+}) {
+  final key = Directory(profile.data).resolveSymbolicLinksSync();
+  if (_localServiceOwners.containsKey(key)) return false;
+  final path = '${profile.data}/.application.lock';
+  final type = FileSystemEntity.typeSync(path, followLinks: false);
+  if (!closingOwner && type == FileSystemEntityType.notFound) return true;
+  if (type != FileSystemEntityType.file) {
+    throw StateError(
+      'Application service ownership lock is missing or unsafe: $path',
+    );
+  }
+  // POSIX record locks belong to the process. Keep this probe synchronous:
+  // opening and closing another FD must not interleave with a local owner.
+  final ownership = File(path).openSync(mode: FileMode.append);
+  try {
+    try {
+      ownership.lockSync(FileLock.exclusive);
+    } on FileSystemException catch (error) {
+      // F_SETLK may report contention as EACCES or EAGAIN/EWOULDBLOCK.
+      // This catch only covers lockSync; opening an inaccessible file still fails.
+      if (error.osError?.errorCode == 11 ||
+          error.osError?.errorCode == 13 ||
+          error.osError?.errorCode == 35) {
+        return false;
+      }
+      rethrow;
+    }
+    if (closingOwner &&
+        FileSystemEntity.typeSync(
+              '${profile.data}/.application-endpoint.json',
+              followLinks: false,
+            ) !=
+            FileSystemEntityType.notFound) {
+      throw StateError(
+        'Previous application service released ownership without clean shutdown',
+      );
+    }
+    return true;
+  } finally {
+    ownership.closeSync();
+  }
 }
 
 /// Start packaged services as applications through LaunchServices so macOS can
@@ -1379,85 +1500,136 @@ Future<File> writeServiceStartupEnvironment(
 }
 
 /// Attach first; competing launchers may race safely on the service's OS lock.
-Future<ServiceClient> ensureService(ProfilePaths profile) async {
-  var path = serviceEndpoint(profile);
-  try {
-    return await _connectCompatibleService(path);
-  } on SocketException {
-    /* launch */
+Future<ServiceClient> ensureService(
+  ProfilePaths profile, {
+  Duration startupTimeout = const Duration(minutes: 3),
+}) async {
+  if (startupTimeout <= Duration.zero ||
+      startupTimeout > const Duration(minutes: 3)) {
+    throw ArgumentError.value(startupTimeout, 'startupTimeout');
   }
-  privateDirectory(profile.data, repairOwnedPermissions: true);
-  privateDirectory(profile.runtime);
-  final executable = runtimeConfiguration['FORESIGHT_SERVICE'];
-  if (executable == null || !File(executable).existsSync()) {
-    throw StateError(
-      'Set FORESIGHT_SERVICE to the application-service executable',
-    );
+  final startup = Stopwatch()..start();
+  var closingOwner = false;
+  var launched = false;
+  String? executable;
+  String? startupLog;
+  File? handoff;
+  TimeoutException deadlineFailure() => TimeoutException(
+    launched
+        ? startupLog != null
+              ? 'Application service did not start. Inspect $startupLog.'
+              : 'Application service did not start. Run $executable directly to inspect the startup error.'
+        : closingOwner
+        ? 'Application service owner handoff did not finish'
+        : 'Application service profile lock is still held; its owner is not serving the endpoint.',
+  );
+  Duration remaining() {
+    final left = startupTimeout - startup.elapsed;
+    if (left <= Duration.zero) throw deadlineFailure();
+    return left;
   }
-  final environment = {
-    ...runtimeConfiguration.environment,
-    'FORESIGHT_DATA': profile.data,
-    'FORESIGHT_RUNTIME': profile.runtime,
-  };
-  final handoff = Platform.isMacOS
-      ? await writeServiceStartupEnvironment(
-          Directory(profile.runtime),
-          environment,
-        )
-      : null;
-  try {
-    final launch = serviceLaunchCommand(
-      executable,
-      environment,
-      startupEnvironmentFile: handoff?.path,
-    );
-    String? startupLog;
-    if (launch.executable == '/usr/bin/open') {
-      startupLog = '${profile.runtime}/service-startup.log';
-      if (FileSystemEntity.typeSync(startupLog, followLinks: false) ==
-          FileSystemEntityType.link) {
-        throw StateError(
-          'Service startup log must not be a symbolic link: $startupLog',
-        );
-      }
-      File(startupLog).openSync(mode: FileMode.append).closeSync();
-      final protect = await Process.run('/bin/chmod', ['600', startupLog]);
-      if (protect.exitCode != 0) throw StateError('Cannot protect $startupLog');
-      launch.arguments.insertAll(2, ['--stderr', startupLog]);
-      final result = await Process.run(launch.executable, launch.arguments);
-      if (result.exitCode != 0) {
-        throw StateError(
-          'LaunchServices could not start the application service: ${result.stderr}. See $startupLog.',
-        );
-      }
-    } else {
-      await Process.start(
-        launch.executable,
-        launch.arguments,
-        mode: ProcessStartMode.detached,
-        environment: environment,
+
+  Future<void> launchOnce() async {
+    final serviceExecutable = runtimeConfiguration['FORESIGHT_SERVICE'];
+    if (serviceExecutable == null || !File(serviceExecutable).existsSync()) {
+      throw StateError(
+        'Set FORESIGHT_SERVICE to the application-service executable',
       );
     }
-    // Every registered model is rehashed before the service binds its socket.
-    // Production models can take longer than ten seconds even on a warm disk.
-    final startup = Stopwatch()..start();
-    while (startup.elapsed < const Duration(minutes: 3)) {
-      try {
-        path = serviceEndpoint(profile);
-        return await _connectCompatibleService(path);
-      } on SocketException {
-        await Future<void>.delayed(const Duration(milliseconds: 100));
+    executable = serviceExecutable;
+    final environment = {
+      ...runtimeConfiguration.environment,
+      'FORESIGHT_DATA': profile.data,
+      'FORESIGHT_RUNTIME': profile.runtime,
+    };
+    handoff = Platform.isMacOS
+        ? await writeServiceStartupEnvironment(
+            Directory(profile.runtime),
+            environment,
+          )
+        : null;
+    {
+      final launch = serviceLaunchCommand(
+        serviceExecutable,
+        environment,
+        startupEnvironmentFile: handoff?.path,
+      );
+      if (launch.executable == '/usr/bin/open') {
+        final logPath = '${profile.runtime}/service-startup.log';
+        startupLog = logPath;
+        if (FileSystemEntity.typeSync(logPath, followLinks: false) ==
+            FileSystemEntityType.link) {
+          throw StateError(
+            'Service startup log must not be a symbolic link: $startupLog',
+          );
+        }
+        File(logPath).openSync(mode: FileMode.append).closeSync();
+        final protect = await Process.run('/bin/chmod', ['600', logPath]);
+        if (protect.exitCode != 0) {
+          throw StateError('Cannot protect $startupLog');
+        }
+        launch.arguments.insertAll(2, ['--stderr', logPath]);
+        final result = await Process.run(launch.executable, launch.arguments);
+        if (result.exitCode != 0) {
+          throw StateError(
+            'LaunchServices could not start the application service: ${result.stderr}. See $startupLog.',
+          );
+        }
+      } else {
+        await Process.start(
+          launch.executable,
+          launch.arguments,
+          mode: ProcessStartMode.detached,
+          environment: environment,
+        );
       }
     }
-    throw StateError(
-      startupLog == null
-          ? 'Application service did not start. Run $executable directly to inspect the startup error.'
-          : 'Application service did not start. Inspect $startupLog for startup diagnostics.',
-    );
+  }
+
+  try {
+    while (true) {
+      try {
+        return await _connectCompatibleService(
+          serviceEndpoint(profile),
+          remaining,
+        );
+      } on _ClosingService catch (closing) {
+        closingOwner = true;
+        try {
+          // EOF alone precedes the worker's final profile-lock release.
+          await closing.client.socket.done.timeout(
+            remaining(),
+            onTimeout: () => throw deadlineFailure(),
+          );
+        } finally {
+          await closing.client.close();
+        }
+      } on _ServiceTransportLost {
+        // An isolated frontend can accept while its worker is already gone.
+        // Retry only this startup status probe, never a business operation.
+      } on SocketException {
+        // A starting or closing owner may still hold the profile lock.
+      }
+      remaining();
+      if (!launched &&
+          _profileOwnerAvailable(profile, closingOwner: closingOwner)) {
+        privateDirectory(profile.runtime);
+        launched = true;
+        await launchOnce();
+      }
+      // This read-only startup loop can attach to a competing legitimate owner.
+      // It never replays a business operation or launches a second replacement.
+      final left = remaining();
+      await Future<void>.delayed(
+        left < const Duration(milliseconds: 100)
+            ? left
+            : const Duration(milliseconds: 100),
+      );
+    }
   } finally {
-    if (handoff != null && handoff.existsSync()) {
-      await handoff.delete();
-      await handoff.parent.delete();
+    if (handoff != null && handoff!.existsSync()) {
+      await handoff!.delete();
+      await handoff!.parent.delete();
     }
   }
 }

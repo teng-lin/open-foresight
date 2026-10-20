@@ -13,6 +13,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
 from tools import sdk_approval_bridge as bridge  # noqa: E402
+from tools.ci_producer_trust import PRODUCERS  # noqa: E402
 
 
 def git_source(root, commit):
@@ -101,7 +102,8 @@ def build_entry(
         or payload.get("name") != artifacts.name(component, legacy_identity)
         or payload.get("workflow_run", {}).get("id") != run.get("id")
         or run.get("head_sha") != producer
-        or run.get("path") != ".github/workflows/ci-dependencies.yml"
+        or run.get("path") not in PRODUCERS["dependency-sdk"].workflows
+        or not PRODUCERS["dependency-sdk"].matches_receipt(reference["source_receipt"])
         or run.get("head_repository", {}).get("full_name") != repository
     ):
         raise ValueError("Original producer provenance does not match")

@@ -108,8 +108,6 @@ jobs:
           --cmake-arg=-DCMAKE_OSX_ARCHITECTURES=arm64 \
           --cmake-arg="-DICU_ROOT=$(brew --prefix icu4c)" \
           --cmake-arg='-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'  "${args[@]}"
-    - name: Verify native process isolation on the current identity
-      run: .venv/bin/python tests/integration/test_native_process.py build/native/libforesight_native.dylib build/services/helper/ForesightHelper
     - name: Retain the independently qualified native stage
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:

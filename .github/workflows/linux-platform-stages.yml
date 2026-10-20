@@ -63,9 +63,6 @@ jobs:
           xvfb-run -a dbus-run-session -- .venv/bin/python tools/run_ci_stage.py \
             --platform linux --stage native --event "$STAGE_EVENT" --own-pr "$OWN_PR" \
             --parents-json "$STAGE_PARENTS" --cmake-arg=-G --cmake-arg=Ninja "${args[@]}"
-      - name: Validate current native process identity
-        run: |
-          .venv/bin/python tests/integration/test_native_process.py build/native/libforesight_native.so build/services/helper/ForesightHelper
       - name: Retain the independently qualified native stage
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

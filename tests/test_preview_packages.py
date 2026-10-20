@@ -55,7 +55,11 @@ def test_success_watermark_and_force_full_semantics(force, validation, build):
 
     with (
         patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main", "GITHUB_RUN_ID": "2"}),
-        patch.object(preview, "retained", return_value=True),
+        patch.object(
+            preview,
+            "previous_nightly",
+            return_value=None if build else {"summary": "green"},
+        ),
         patch.object(preview, "request", side_effect=request),
         patch.object(preview.subprocess, "check_output", return_value=SHA),
         patch.object(preview, "stale", return_value=[]),
@@ -70,8 +74,6 @@ def test_success_watermark_and_force_full_semantics(force, validation, build):
         )
     assert result["build"] == str(build).lower()
     assert allocate.call_count == int(build)
-    if not build:
-        assert result["reuse_run"] == ("1" if validation == "full" else "0")
     if build:
         assert result["source"] == SHA and result["build_number"] == "12"
         assert result["package_version"].startswith("0.1.2~nightly.")
@@ -257,7 +259,12 @@ def test_preview_workflow_has_no_release_publication_and_gates_downloads():
     assert workflow["jobs"]["build"]["with"]["preview"] is True
     assert "gh release" not in json.dumps(workflow)
     official = parse_workflow((ROOT / ".github/workflows/release.yml").read_text())
-    assert official["concurrency"]["group"] == workflow["concurrency"]["group"]
+    assert official["concurrency"]["group"] == "distribution-packages"
+    assert "preview-packages-exercise" in workflow["concurrency"]["group"]
+    assert "inputs.exercise_failure_path" in workflow["concurrency"]["group"]
+    assert all(
+        "concurrency" not in official["jobs"][name] for name in ("prepare", "publish")
+    )
     builds = parse_workflow((ROOT / ".github/workflows/macos.yml").read_text())
     assert builds["jobs"]["distribution-number"]["permissions"]["contents"] == "write"
     assert (

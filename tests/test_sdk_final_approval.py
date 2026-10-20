@@ -8,6 +8,7 @@ import pytest
 from tools import ci_artifacts as artifacts
 from tools import sdk_final_approval as approval
 from tools import sdk_producer_trust as trust
+from test_sdk_producer_trust import git_api
 
 REPO = "owner/repo"
 ORIGINAL = "a" * 40
@@ -89,6 +90,75 @@ def test_final_approval_preserves_original_run_and_uses_authoritative_final():
     original = copy.deepcopy(candidate)
     assert evidence.qualify(candidate)
     assert candidate == original
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "legacy",
+        "new",
+        "changed-table",
+        "changed-mode",
+        "introduced-table",
+        "missing-import",
+    ],
+)
+def test_final_approval_checks_historical_control_closure(case):
+    evidence = Evidence()
+    old = {"packer.py": b"reviewed legacy packer"}
+    if case in {"new", "changed-table", "changed-mode", "missing-import"}:
+        old["packer.py"] = b"from tools.ci_producer_trust import PRODUCERS\n"
+    if case in {"new", "changed-table", "changed-mode"}:
+        old[trust.TRUST_TABLE] = b"reviewed identities"
+    new = dict(old)
+    if case == "changed-table":
+        new[trust.TRUST_TABLE] = b"broadened identities"
+    elif case == "introduced-table":
+        new[trust.TRUST_TABLE] = b"new table after original build"
+    apis = {ORIGINAL: git_api(old, commit=ORIGINAL), FINAL: git_api(new, commit=FINAL)}
+
+    def immutable_api(repository, commit, route):
+        response = apis[commit](repository, route)
+        if (
+            case == "changed-mode"
+            and commit == FINAL
+            and route.startswith("git/trees/")
+        ):
+            response = copy.deepcopy(response)
+            for entry in response["tree"]:
+                if entry["path"] == trust.TRUST_TABLE:
+                    entry["mode"] = "100755"
+        return response
+
+    def qualify():
+        return approval.approved_final_source(
+            REPO,
+            run(),
+            "macos-sdk",
+            api=evidence.api,
+            merged_source=evidence.merged,
+            fingerprint_at=evidence.fingerprint,
+            read_source=lambda repository, commit, **kwargs: (
+                trust.read_producer_controls(
+                    repository,
+                    commit,
+                    api=lambda repo, route: immutable_api(repo, commit, route),
+                    **kwargs,
+                )
+            ),
+            controls=("packer.py", trust.TRUST_TABLE),
+        )
+
+    if case in {"legacy", "new"}:
+        assert qualify()
+    elif case == "missing-import":
+        with pytest.raises(
+            ValueError, match="references a missing producer trust table"
+        ):
+            qualify()
+    else:
+        with pytest.raises(ValueError, match="producer controls changed"):
+            qualify()
 
 
 def test_rebased_history_member_can_qualify_without_ancestry():

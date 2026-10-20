@@ -4,6 +4,7 @@ protobuf==6.33.5
 pytest==9.0.2
 pytest-cov==7.1.0
 numpy==2.5.1
+sentencepiece==0.2.1
 
 PyYAML==6.0.3
 ruff==0.17.1

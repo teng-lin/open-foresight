@@ -117,7 +117,7 @@ def test_exact_successful_component_attempt_required(field, value):
     assert not verified(*values)
 
 
-def git_api(contents, *, corrupt=False, truncated=False, mode="100644"):
+def git_api(contents, *, corrupt=False, truncated=False, mode="100644", commit=HEAD):
     tree_sha = "f" * 40
     objects = {}
     entries = []
@@ -135,8 +135,8 @@ def git_api(contents, *, corrupt=False, truncated=False, mode="100644"):
 
     def api(repository, route):
         assert repository == "owner/repo"
-        if route == f"git/commits/{HEAD}":
-            return {"sha": HEAD, "tree": {"sha": tree_sha}}
+        if route == f"git/commits/{commit}":
+            return {"sha": commit, "tree": {"sha": tree_sha}}
         if route == f"git/trees/{tree_sha}?recursive=1":
             return {"sha": tree_sha, "truncated": truncated, "tree": entries}
         return objects[route.removeprefix("git/blobs/")]
@@ -189,6 +189,54 @@ def test_missing_required_input_is_not_a_valid_old_recipe():
         trust.read_source("owner/repo", HEAD, api=git_api({}), paths={"recipe.py"})
 
 
+def test_legacy_controls_do_not_require_an_unconsumed_new_table():
+    paths = ("packer.py", trust.TRUST_TABLE)
+    assert trust.read_producer_controls(
+        "owner/repo",
+        HEAD,
+        api=git_api({"packer.py": b"reviewed"}),
+        paths=paths,
+    ) == {"packer.py": ("100644", b"reviewed")}
+    with pytest.raises(ValueError, match="missing required"):
+        trust.read_producer_controls("owner/repo", HEAD, api=git_api({}), paths=paths)
+    with pytest.raises(ValueError, match="missing required"):
+        trust.read_source(
+            "owner/repo", HEAD, api=git_api({"packer.py": b"reviewed"}), paths=paths
+        )
+
+
+@pytest.mark.parametrize(
+    "reference",
+    [
+        b"from tools.ci_producer_trust import PRODUCERS",
+        b"from tools import ci_producer_trust",
+        b'importlib.import_module("tools.ci_producer_trust")',
+        b'Path("tools/ci_producer_trust.py").read_bytes()',
+    ],
+)
+def test_consumed_table_cannot_be_omitted(reference):
+    with pytest.raises(ValueError, match="references a missing producer trust table"):
+        trust.read_producer_controls(
+            "owner/repo",
+            HEAD,
+            api=git_api({"packer.py": reference}),
+            paths=("packer.py", trust.TRUST_TABLE),
+        )
+
+
+@pytest.mark.parametrize(
+    "options", [{"corrupt": True}, {"truncated": True}, {"mode": "120000"}]
+)
+def test_conditional_table_keeps_git_integrity_checks(options):
+    with pytest.raises(ValueError):
+        trust.read_producer_controls(
+            "owner/repo",
+            HEAD,
+            api=git_api({trust.TRUST_TABLE: b"reviewed"}, **options),
+            paths=(trust.TRUST_TABLE,),
+        )
+
+
 def test_compatible_running_earlier_head_is_preserved_and_current_rerun_selected():
     run = {"id": 10, "head_sha": HEAD, "status": "in_progress", "run_attempt": 2}
     jobs = [
@@ -225,12 +273,12 @@ def test_compatible_producer_deadline_never_starts_duplicate_compiler(tmp_path):
         patch.object(macos, "waiting_producers", return_value=[10]),
         patch.object(macos.subprocess, "run") as build,
     ):
-        with pytest.raises(RuntimeError, match="preserving their work"):
+        with pytest.raises(RuntimeError, match="1800-second wait expired"):
             macos.ensure("macos-sdk", tmp_path, "owner/repo", HEAD, 23, wait=0)
         build.assert_not_called()
 
 
-def test_waiting_producers_queries_other_heads_and_verifies_their_recipe():
+def test_waiting_producers_ignores_other_heads_without_fetching_their_recipe():
     run = {
         "id": 10,
         "head_sha": "c" * 40,
@@ -246,6 +294,11 @@ def test_waiting_producers_queries_other_heads_and_verifies_their_recipe():
         patch.object(macos, "source_fingerprint", return_value=IDENTITY) as source,
         patch.object(macos, "dependency_jobs", return_value=[]),
     ):
-        assert macos.waiting_producers("owner/repo", "macos-sdk", HEAD, 23) == [10]
-        assert all("head_sha=" not in call.args[1] for call in api.call_args_list)
-        assert source.call_args.args[1] == "c" * 40
+        assert macos.waiting_producers("owner/repo", "macos-sdk", HEAD, 23) == []
+        assert api.call_count == 2
+        assert all("status=" not in call.args[1] for call in api.call_args_list)
+        assert all(
+            f"head_sha={HEAD}" in call.args[1] or "branch=main" in call.args[1]
+            for call in api.call_args_list
+        )
+        source.assert_not_called()

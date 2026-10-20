@@ -76,7 +76,7 @@ def test_main_sdk_is_loaded_before_dependency_inspection():
         "resolve --prefix build/sdk-descriptor --load --discard-archive" in sdk["run"]
     )
     assert steps.index(sdk) < steps.index(seed)
-    assert "ci_artifacts.py pull --component linux-sdk" in sdk["run"]
+    assert "ci_dependency_wait.py --component linux-sdk" in sdk["run"]
 
 
 def test_acceptance_dependency_cache_is_read_only_for_prs_and_main_published():

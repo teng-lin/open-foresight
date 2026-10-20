@@ -17,9 +17,13 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.request
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.ci_producer_trust import PRODUCERS  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "teng-lin/open-foresight"
@@ -103,13 +107,12 @@ def verify_producer(request=subprocess.check_output):
         run.get("repository", {}).get("full_name") != REPOSITORY
         or run.get("head_sha") != SOURCE
         or run.get("head_branch") != "main"
-        or run.get("event") != "push"
-        or run.get("path") != ".github/workflows/macos.yml"
+        or not PRODUCERS["dependency-seed"].matches_run(run)
         or run.get("status") != "completed"
         or run.get("conclusion") != "success"
         or job.get("run_id") != RUN
         or job.get("run_attempt") != 1
-        or job.get("name") != "linux-bundle"
+        or not PRODUCERS["dependency-seed"].matches_job(job)
         or job.get("conclusion") != "success"
     ):
         raise ValueError("The approved main dependency-cache producer is not qualified")

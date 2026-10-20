@@ -12,22 +12,19 @@ from pathlib import Path, PurePosixPath
 import re
 import tempfile
 
+from tools.ci_producer_trust import PRODUCERS
+
 COMMIT = re.compile(r"[a-f0-9]{40}")
-WORKFLOW = ".github/workflows/ci-dependencies.yml"
+WORKFLOW = PRODUCERS["dependency-sdk"].workflows[0]
 JOBS = {
-    "macos-sdk": "Build macOS sdk",
-    "macos-vendor": "Build macOS vendor",
-    "macos-runtime": "Build macOS runtime",
-    "linux-core": "Build Linux core",
-    "linux-litert": "Build Linux litert",
-    "linux-whisper": "Build Linux whisper",
-    "linux-sdk": "Assemble Linux SDK",
+    component: jobs[0] for component, jobs in PRODUCERS["dependency-sdk"].jobs.items()
 }
 PRODUCER_CONTROLS = (
     "tools/ci_artifacts.py",
     "tools/linux_sdk_artifacts.py",
     "tools/ci_verify_dependency.py",
     "tools/sdk_producer_trust.py",
+    "tools/ci_producer_trust.py",
     "tools/sdk_approval_bridge.py",
     "tools/sdk_final_approval.py",
     "tools/sdk_approved_legacy.json",
@@ -35,6 +32,32 @@ PRODUCER_CONTROLS = (
     "tools/sdk_transport_contract.json",
     "tools/sdk_build_transport.py",
 )
+TRUST_TABLE = "tools/ci_producer_trust.py"
+
+
+def read_producer_controls(repository, commit, *, api, paths=PRODUCER_CONTROLS):
+    """Compare legacy producers under the controls they actually consumed.
+
+    Before WS2-0 the table did not exist. Its absence is acceptable only when
+    none of that source's other controls reference it. Present tables retain
+    byte/mode verification; all other controls and all recipe inputs stay
+    mandatory. This does not qualify source approval or artifact bytes itself.
+    """
+    conditional = {TRUST_TABLE}.intersection(paths)
+    source = read_source(
+        repository,
+        commit,
+        api=api,
+        paths=set(paths) - conditional,
+        optional_paths=conditional,
+    )
+    if (
+        conditional
+        and TRUST_TABLE not in source
+        and any(b"ci_producer_trust" in data for _, data in source.values())
+    ):
+        raise ValueError("SDK producer references a missing producer trust table")
+    return source
 
 
 def producer_controls_match(repository, commit, *, api, root, paths=PRODUCER_CONTROLS):
@@ -44,7 +67,7 @@ def producer_controls_match(repository, commit, *, api, root, paths=PRODUCER_CON
     or exact approved migration may instead be qualified by the caller. A
     mismatch needs requalification of existing bytes, not a cold compilation.
     """
-    source = read_source(repository, commit, api=api, paths=paths)
+    source = read_producer_controls(repository, commit, api=api, paths=paths)
     for name, (mode, data) in source.items():
         path = Path(root) / name
         if path.is_symlink() or not path.is_file():
@@ -93,10 +116,14 @@ def source_fingerprint(
         return fingerprint(component, root)
 
 
-def read_source(repository, commit, *, api, paths=None, directories=()):
+def read_source(
+    repository, commit, *, api, paths=None, directories=(), optional_paths=()
+):
     """Read immutable regular Git blobs as {path: (Git mode, bytes)}.
 
     Explicit paths must all exist; directories include every new descendant.
+    Optional paths, when requested by a control-closure reader, are verified if
+    present without weakening the explicit required paths.
     With paths=None this reads the whole tree (including no producer execution).
     """
     if not isinstance(commit, str) or not COMMIT.fullmatch(commit):
@@ -118,6 +145,7 @@ def read_source(repository, commit, *, api, paths=None, directories=()):
         if (
             paths is not None
             and name not in paths
+            and name not in optional_paths
             and not any(name.startswith(directory + "/") for directory in directories)
         ):
             continue
@@ -199,6 +227,7 @@ def verify_producer_source(
     head = run.get("head_sha", "")
     if (
         run.get("path") != WORKFLOW
+        or not PRODUCERS["dependency-sdk"].matches_receipt(receipt)
         or (run.get("head_repository") or {}).get("full_name") != repository
         or not isinstance(head, str)
         or not COMMIT.fullmatch(head)
@@ -240,7 +269,7 @@ def compatible_producers(
             job for job in component_jobs if job.get("run_attempt", 1) == attempt
         ]
         if current and all(
-            job.get("conclusion") in ("failure", "cancelled", "timed_out", "skipped")
+            job.get("conclusion") is not None
             for job in current
         ):
             continue

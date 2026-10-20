@@ -127,7 +127,7 @@ void main() {
       }
 
       final tones = {
-        for (final f in [437, 997, 1699]) f: tone(f),
+        for (final f in [0, 437, 997, 1699]) f: tone(f),
       };
       Future<Process> play(String target, int frequency) async {
         final process = await Process.start('pw-play', [
@@ -148,6 +148,135 @@ void main() {
         player.kill();
         await player.exitCode.timeout(const Duration(seconds: 5));
         players.remove(player);
+      }
+
+      Future<void> drainPausedRoutes(List<int> pausedCounts) async {
+        final targets = ['$prefix-input', '$prefix-remote'];
+        final probes = <Process>[];
+        final silencePlayers = <Process>[];
+        final files = <File>[];
+        final diagnostics = <StringBuffer>[];
+        final diagnosticReads = <Future<void>>[];
+        final exits = <int, int>{};
+        final silenceExits = <int, int>{};
+        final offsets = [0, 0], silentSamples = [0, 0];
+        final evidence = <String, Object>{};
+        report['pause_drain'] = evidence;
+        try {
+          for (final target in ['$prefix-local', '$prefix-remote']) {
+            final player = await play(target, 0);
+            final index = silencePlayers.length;
+            silencePlayers.add(player);
+            unawaited(
+              player.exitCode.then<void>((code) => silenceExits[index] = code),
+            );
+          }
+          for (var channel = 0; channel < targets.length; channel++) {
+            final file = File('${directory.path}/pause-drain-$channel.raw');
+            files.add(file);
+            final diagnostic = StringBuffer();
+            diagnostics.add(diagnostic);
+            final probe = await Process.start('pw-record', [
+              '--format',
+              's16',
+              '--rate',
+              '48000',
+              '--channels',
+              '1',
+              '--target',
+              targets[channel],
+              '--properties',
+              '{ ${channel == 1 ? 'stream.capture.sink = true ' : ''}'
+                  'node.dont-fallback = true node.dont-reconnect = true }',
+              file.path,
+            ]);
+            probes.add(probe);
+            final index = channel;
+            unawaited(probe.exitCode.then<void>((code) => exits[index] = code));
+            // Like production capture, .raw owns PCM; stdout is diagnostics.
+            for (final stream in [probe.stdout, probe.stderr]) {
+              diagnosticReads.add(
+                stream.transform(utf8.decoder).forEach((text) {
+                  final remaining = 4096 - diagnostic.length;
+                  if (remaining > 0) {
+                    diagnostic.write(
+                      text.length > remaining
+                          ? text.substring(0, remaining)
+                          : text,
+                    );
+                  }
+                }),
+              );
+            }
+          }
+          final deadline = DateTime.now().add(const Duration(seconds: 10));
+          while (true) {
+            expect(recording!.sampleCounts, pausedCounts);
+            expect(recording.captures, isEmpty);
+            if (silenceExits.isNotEmpty) {
+              throw StateError('Silence playback exited early: $silenceExits');
+            }
+            for (var channel = 0; channel < probes.length; channel++) {
+              if (exits.containsKey(channel)) {
+                throw StateError(
+                  'Pause drain ${targets[channel]} exited ${exits[channel]}: '
+                  '${diagnostics[channel]}',
+                );
+              }
+              final file = files[channel];
+              if (file.existsSync()) {
+                final input = file.openSync();
+                try {
+                  input.setPositionSync(offsets[channel]);
+                  final length = (input.lengthSync() - offsets[channel]) & ~1;
+                  final bytes = ByteData.sublistView(input.readSync(length));
+                  for (var i = 0; i < bytes.lengthInBytes; i += 2) {
+                    silentSamples[channel] =
+                        bytes.getInt16(i, Endian.little).abs() <= 16
+                        ? silentSamples[channel] + 1
+                        : 0;
+                  }
+                  offsets[channel] += bytes.lengthInBytes;
+                } finally {
+                  input.closeSync();
+                }
+              }
+              evidence[targets[channel]] = {
+                'samples': offsets[channel] ~/ 2,
+                'trailing_silent_samples': silentSamples[channel],
+              };
+            }
+            // Observe 500ms of contiguous downstream PCM, rather than an
+            // upstream sink IDLE state that can retain remap-source audio.
+            if (silentSamples.every((count) => count >= 24000)) break;
+            if (DateTime.now().isAfter(deadline)) {
+              throw StateError(
+                'Owned capture routes did not drain to silence: $evidence; '
+                'diagnostics=$diagnostics',
+              );
+            }
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+        } finally {
+          for (final probe in probes) {
+            probe.kill();
+          }
+          for (final probe in probes) {
+            try {
+              await probe.exitCode.timeout(const Duration(seconds: 5));
+            } on TimeoutException {
+              probe.kill(ProcessSignal.sigkill);
+              await probe.exitCode.timeout(const Duration(seconds: 5));
+            }
+          }
+          await Future.wait(
+            diagnosticReads,
+          ).timeout(const Duration(seconds: 5));
+          for (final player in silencePlayers) {
+            await stopPlayer(player);
+          }
+          expect(recording!.sampleCounts, pausedCounts);
+        }
       }
 
       final before = await defaults();
@@ -232,27 +361,7 @@ print(' '.join(labels))
         expect(recording.sampleCounts, pausedCounts);
         await stopPlayer(localPlayer);
         await stopPlayer(remotePlayer);
-        // Wait for the owned routes to drain instead of assuming a fixed
-        // waveform tail duration after stopping the paused marker players.
-        await eventually(() async {
-          final sinks =
-              jsonDecode(
-                    await command('pactl', ['--format=json', 'list', 'sinks']),
-                  )
-                  as List;
-          final owned = sinks
-              .where(
-                (sink) =>
-                    sink['name'] == '$prefix-local' ||
-                    sink['name'] == '$prefix-remote',
-              )
-              .toList();
-          return owned.length == 2 &&
-              owned.every(
-                (sink) =>
-                    sink['state'] == 'IDLE' || sink['state'] == 'SUSPENDED',
-              );
-        }, timeout: const Duration(seconds: 10));
+        await drainPausedRoutes(pausedCounts);
         recording.resume();
         localPlayer = await play('$prefix-local', 437);
         remotePlayer = await play('$prefix-remote', 997);

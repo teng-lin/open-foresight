@@ -24,7 +24,7 @@ from tools.ci_artifacts import (
 from tools.github_release import release_for_tag
 
 
-def candidate_runs(repository, commit, run_id=None):
+def candidate_runs(repository, commit, run_id=None, *, consumer="release-preparation"):
     result = {}
     for component in ("linux-app", "macos-app"):
         artifact_name = name(component, commit)
@@ -39,12 +39,13 @@ def candidate_runs(repository, commit, run_id=None):
                 continue
             run = api(repository, f"actions/runs/{producer}")
             if (
-                (
-                    run["head_sha"] == commit
-                    or run.get("event") == "workflow_dispatch"
+                (run["head_sha"] == commit or run.get("event") == "workflow_dispatch")
+                and trusted_run(
+                    run, component, repository=repository, consumer=consumer
                 )
-                and trusted_run(run, component, repository=repository)
-                and application_jobs(repository, run, component, artifact)
+                and application_jobs(
+                    repository, run, component, artifact, consumer=consumer
+                )
             ):
                 result[component] = producer
                 break
@@ -65,7 +66,9 @@ def require_candidates(repository, commit, wait, fresh=False, candidate_run=0):
         runs = candidate_runs(repository, commit, candidate_run or None)
         if len(runs) == 2:
             identities = [
-                application_descriptor(repository, component, commit, run)
+                application_descriptor(
+                    repository, component, commit, run, consumer="release-preparation"
+                )
                 for component, run in runs.items()
             ]
             if identities[0] != identities[1]:
@@ -91,9 +94,9 @@ def require_candidates(repository, commit, wait, fresh=False, candidate_run=0):
                 or run.get("head_sha") == commit
                 or run.get("id") in runs.values()
             )
-            and run.get("head_branch") == "main"
-            and run.get("path") == ".github/workflows/macos.yml"
-            and run.get("head_repository", {}).get("full_name") == repository
+            and trusted_run(
+                run, "linux-app", repository=repository, consumer="release-preparation"
+            )
             for run in active
         )
         if not pending or time.monotonic() >= deadline:

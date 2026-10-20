@@ -19,15 +19,19 @@ test support such as `conftest.py`, application tests, and unknown paths keep
 platform validation. Mixed changes take the union; forced validation still
 selects every platform.
 
-Dependency producers and macOS consumers check out the PR head. Advancing main
-therefore cannot make consumers request a merge-tree identity that no producer
-built. A trusted completed artifact is used when available. Consumers wait for a
-compatible running producer across application-only commits instead of starting
-a duplicate build. Prefer compatible verified outputs before source builds. Fork PRs retain local validation without publishing
-artifacts with repository credentials. Follow [AGENTS.md](../../AGENTS.md):
-preserve artifact integrity and prefer reuse. A content-addressed miss or expiry
-may cause one rebuild; justify SDK or toolchain input changes in the PR.
-Preserve successful dependency outputs when unrelated application checks fail.
+Dependency producers and macOS consumers check out the PR head, so advancing
+main cannot request an identity that no producer built. Consumers try verified
+artifacts first, then wait for a same-head live producer or a trusted main
+producer with the same verified component identity for at most 1,800
+seconds. If none remains, they fail with the missing identity and producer;
+they do not silently compile replacement SDKs. Explicit fork validation may
+build pinned sources locally, without publishing shared outputs. Dependabot
+never takes that fallback. Timeouts preserve the dedicated producer.
+
+Follow [AGENTS.md](../../AGENTS.md) for artifact integrity and reuse defaults.
+A content-addressed miss or expiry may cause a dedicated producer to rebuild;
+justify SDK or toolchain input changes in the PR and preserve successful
+dependency outputs when unrelated application checks fail.
 
 Component identities include consumed recipes, source trees, relevant pins,
 build settings and parent identities. Receipt handling, cache transport and
@@ -71,6 +75,56 @@ and control equivalence. The exact-manifest historical SDK approval bridge
 retains its separate policy and history bound. Qualification refactors do not
 change SDK build identities: existing approved merged producers and exact
 manifest originals keep their verified reuse paths, original receipts and bytes.
+
+## Consumer-scoped producer trust (WS2-0)
+
+`tools/ci_producer_trust.py` is the shared workflow/event/job allowlist for PR
+application handoff, fork SDK handoff, release candidates, dependency SDKs,
+sanitizer SDKs, the frozen dependency seed and installer-acceptance reuse. Caller
+prefixes such as `acceptance / acceptance` are explicit. Each row records its
+receipt tier; `None` means today's legacy receipts have no tier requirement.
+The rows retain today's names and events. In particular, neither PR artifacts
+nor preview producers qualify as release candidates, and scheduled sanitizer
+runs do not qualify as SDK producers. Future producer names and tier requirements
+must be introduced with their consumer's proof and negative fixtures.
+
+Application rows are separate for artifact pulls, release preparation and PR
+package fixtures; SDK registry aliases have their own dependency-producer row.
+Release-only requirements can therefore tighten without affecting unrelated
+consumers. Every receipt consumer enforces its row's `receipt_tier` when set;
+`None` preserves the legacy schema-1 behavior. SDK approval helpers derive their
+workflow identity from the same table, retaining their separate merged-source
+and exact-manifest proof. These rows introduce no new producer names or events.
+
+The table only identifies producers. Consumers retain their repository and source
+policy, successful original-attempt proof, upload-window binding, receipt checks
+and byte checksums. Producer controls include the table, independently of SDK
+build-input fingerprints, so extracting this policy does not invalidate compiled
+SDKs or authorize a rebuild. The seed row remains restricted to its original
+main-push `linux-bundle` producer until a later workstream requalifies it.
+
+This refactor changes no workflow execution or runner-minute baseline. Its direct
+deletion is the duplicated SDK job allowlists; hosted savings come from subsequent
+producer/consumer restructuring.
+
+Historical final-head approval reads the producer's actual control closure.
+Before this extraction, `ci_producer_trust.py` did not exist; it is conditional
+only when the immutable producer controls do not reference it. A present table
+is still verified and compared by bytes and Git mode. A referenced missing
+table, another missing control, changed producer/final control, corrupt blob or
+incomplete Git tree fails closed. SDK recipe reads remain strict. This preserves
+the merged-final proof for older outputs without omitting a newer producer's
+consumed table or changing any build fingerprint.
+
+The real 2026-10-19 receipt probes qualify macOS runtime artifact `12154159175`
+from run `39177548843`, successful job `117823344728`, original attempt 1. Its
+producer `d5a33af49f1692665591dbf1d60e629fbc3e56ce` belongs to merged PR #110;
+its build/control closure matches reviewed final head
+`c8e031f02d154a676961f2d3a3712f5316940c29`. The payload's recorded digest is
+`sha256:485980a96a60de46c7c496a1c9f8ef601b67f13590278d8b099fa4fd5a9b552f`.
+The macOS SDK probe retains approved original `12144094861` from run
+`39148967092`. These metadata/receipt probes transfer no large SDK payload and
+compile nothing; subsequent downloads retain full checksum/receipt validation.
 
 ## Python validation ownership and parallel workflow lint
 
@@ -229,9 +283,9 @@ Suite membership is not a claim that production dependencies are disjoint. In
 particular, meeting summary depends on generation/retrieval and the shared service,
 so their changes select every phase. Retain observations across representative
 PRs and compare actual outcomes before broadening this map or allowing skips.
-The fallback is now genuinely nightly at 05:43 UTC (`43 5 * * *`), replacing the
-previous Monday-only schedule. Main completion and manual validation remain full.
-The first scheduled execution is still pending; no skip policy relies on it yet.
+The acceptance fallback runs weekly on Monday at 05:43 UTC (`43 5 * * 1`).
+Main completion and manual validation remain full. The separate preview nightly
+adds an in-run aggregate; no per-phase skip policy relies on this observer.
 
 The older CPU-model and audio phases totaled about nine runner-minutes, with
 software Vulkan roughly another minute. Those are possible future phase savings,
@@ -578,12 +632,14 @@ workflow**, select **main**, then choose:
 | --- | --- |
 | `validation: standard` | Full source/build gates, package integrity, install/startup, service/MCP, reinstall/removal and user-data preservation checks |
 | `validation: full` | Standard checks plus installed inference/speech model acceptance and live cloud checks against bundled distribution configuration |
-| `candidate_run` | Recover a retained preview's original applications/installers and distribution identity |
-| `force: false` | Reuse successful previews or recover available outputs for this main commit |
-| `force: true` with `rebuild_reason` | Explicitly replace the preview identity after documenting why existing outputs cannot be reused |
+| `force: false` | Skip after green `nightly-checks`, or retry failed jobs once in the original producer run |
+| `force: true` with `rebuild_reason` | Explicitly replace the preview identity for a concrete output-affecting change |
+| `exercise_failure_path` / `exercise_recovery` | Open/close the isolated exercise issue without building or publishing |
 
-Full mode can validate the original standard-preview installers without
-allocating a new build number or compiling the application again. Missing
+Validation is selected when a new preview is created; original-run retries keep
+that validation mode and distribution identity. Cross-run recovery/revalidation
+is removed. An unchanged green nightly is skipped even if a later dispatch
+requests a different mode; the summary names the earlier run. Missing
 cloud configuration fails full validation; it is not treated as a pass. Standard
 Linux smoke checks retain the existing small Whisper fixture, but do not run the
 full inference/embedding/cloud acceptance suite. Physical-device audio, GPU,
@@ -595,21 +651,22 @@ From the CLI:
 ```sh
 gh workflow run preview-packages.yml --ref main -f validation=standard
 gh workflow run preview-packages.yml --ref main -f validation=full
-# Recover a retained preview, including one from an earlier reviewed main commit:
-preview_run=REPLACE_WITH_PREVIEW_RUN_ID
-gh workflow run preview-packages.yml --ref main \
-  -f candidate_run="$preview_run" -f validation=full
+# Retry only failed jobs in their original run; keep successful builds:
+gh run rerun REPLACE_WITH_PREVIEW_RUN_ID --failed
+# Exercise tracking without building or publishing:
+gh workflow run preview-packages.yml --ref main -f exercise_failure_path=true
 ```
 
 The nightly schedule checks main at **07:23 UTC**. It builds only if that exact
-commit has no reusable preview. Failed attempts do not advance the successful
-commit watermark; retries recover surviving application and installer outputs
-with their original source and build number. A skip links to the previous
-successful workflow run. Artifacts expire after 14 days. Inspect retained outputs
-before replacement; partial or incompatible recovery inputs fail closed. An
-intentional replacement requires `force` and a concrete `rebuild_reason`, while
-compatible SDKs and compiler work remain reusable. The schedule is best effort
-and can be delayed by GitHub; manual dispatch remains available.
+commit has no green `nightly-checks`. A failed aggregate triggers one retry of the
+original producer's failed jobs and exits without waiting; that original run's
+aggregate and issue job report the result. Pre-rollout runs without the aggregate
+cannot authorize a skip or automatic retry. Exhausted retries fail with an
+actionable diagnostic, preserving compatible SDKs and successful jobs.
+Application intermediates expire after 14 days; final installer downloads are
+retained for 90 days. An intentional new identity requires `force` and a concrete
+output-affecting `rebuild_reason`. The schedule is best effort and can be delayed
+by GitHub; manual dispatch remains available.
 
 Only reviewed main is supported by the preview coordinator. It freezes one SHA
 before starting either platform and fails if main advanced before planning. Main
@@ -669,8 +726,10 @@ but does **not** relabel an already tested stable application candidate.
 
 ### Relationship to official releases
 
-Preview and official distribution coordinators share a concurrency group, so a
-nightly cannot reserve/publish between a stable build and its publication.
+Preview uses its own `preview-packages` concurrency group. Official release
+workflows serialize through `distribution-packages`, while the
+compare-and-swap allocator protects build numbers. A release can start while a
+nightly runs.
 Official release preparation discovers existing exact-product candidates and
 does not dispatch a build. Each platform retains its original successful producer
 run; source, version and distribution identity must match across the pair. A
@@ -753,3 +812,203 @@ The minimal Ubuntu base bootstraps HTTPS with a dated Mozilla CA bundle fetched 
 ### WS-P policy adoption (2026-10-19)
 
 The [restructuring plan](../plans/2026-10-19-ci-restructure-plan.md) keeps repository, source, input identity, original producer attempt, upload-window and checksum checks mandatory. Cost rules are defaults; dedicated producers stay non-cancelling and normal producer waits are bounded at 30 minutes. Main-only publication and removal of stage-result reuse roll out with WS2b/WS2c; the current guarded workflows remain during that transition. This documentation change modifies no SDK input and compiles nothing. Runtime measurements remain at the plan baseline until implementation lands.
+
+## WS0: measured baseline and inventory follow-ups
+
+The restructuring baseline is the configuration after #148, main `b62e5e02`,
+measured from runs since 2026-10-19 13:57 UTC. These are historical observations,
+not forecasts or results of the follow-ups:
+
+| Measure | Baseline |
+| --- | ---: |
+| App PR final push to green, p50 (6 pushes) | 36.9 min |
+| All green PR commits, p50 / p90 (11 pushes) | 37.2 / 56.6 min |
+| Runner-minutes per app PR push, p50 (20 pushes) | 85 |
+| macOS minutes per app PR push, p50 (range) | 31.6 (27–44) |
+| macOS jobs per app PR push | 6 |
+| Time at the five-macOS-job cap | 59 / 264 min (22%) |
+| Main minutes per identical-tree merge | 84–91 |
+| Acceptance chain floor | 29.5 min |
+| Main acceptance history | 6/6 accepted; `88cf883e` red and untracked |
+
+`tools/ci_stats.py SNAPSHOT_DIRECTORY` reports JSON for each PR push and merged
+PR, plus percentile and mean summaries. Capture REST runs into `runs.jsonl`,
+all-attempt job records into `jobs/<run-id>.jsonl`, PR metadata into `prs.json`,
+and resolved Git trees into `trees.txt` (`SHA TREE [PARENTS]`). PR metadata needs
+`number`, `state`, `headRefName`, `headRefOid`, `mergedAt`, and `mergeCommit.oid`.
+For merged PRs whose REST run association is empty, only an unambiguous branch
+name in that snapshot may restore attribution. Reused ambiguous branch names are
+left unassigned. Closed unmerged PRs are excluded from push-to-green samples, while their
+runner-minute costs remain in the per-push accounting.
+Every required check must succeed; missing or skipped required checks never count
+as green. First workflow creation approximates push time, including queue delay.
+
+For `workflow_run` acceptance, save its actual candidate-selection log as
+`logs/<run-id>.txt`. The parser reads the logged source JSON or `source=SHA`;
+it does not equate the workflow's own `head_sha` with the candidate it tested.
+Missing or conflicting candidate evidence is reported as unattributed. Missing
+merge runs and missing tree identities remain explicit unknowns, never zero-cost
+merges. Historical repeated successful jobs are counted once across attempts.
+Per-merge cost includes direct main pushes and the known
+`integration-acceptance.yml` `workflow_run` chain with a logged candidate source.
+Scheduled drift, nightly, release and cache-publish dispatch work is reported
+separately in `non_merge_runs` and `non_merge_runner_minutes`, even when it shares
+a merge SHA. Each excluded run records its workflow, event, minutes and reason.
+Unsupported downstream workflows and missing source evidence also stay explicit.
+Dispatches are not identified as main sweeps from their display title: these
+snapshots do not contain the selection receipts required to prove sweep identity.
+WS5a must add verified sweep evidence before those dispatch costs enter the
+per-merge KPI. A shared commit SHA alone never proves that a merge caused a run.
+Use a snapshot bounded to the measurement window and `--current-since TIMESTAMP`
+to distinguish shapes observed in the current configuration from older shapes
+not observed since that cutoff. A shape's absence is an observation, not proof
+that its workflow was deleted. The mixed Oct 16–19 snapshot cannot reproduce the
+current-configuration baseline without filtering and candidate log evidence.
+
+`tools/ci_stats.py --lines` counts physical code lines, excluding blanks,
+comments, and Python docstrings, without Git metadata. It inventories workflows,
+`tools/ci_*`, `tests/test_ci_*`, and its explicit set of historically named CI
+helpers and their tests. The same inventory must be used for the final deletion
+comparison; the frozen pre-WS0 file counts are in
+[ci-restructure-baseline.json](ci-restructure-baseline.json).
+
+The host runner now reads its fresh JUnit report and fails if any assigned file
+is absent or wholly skipped. `test_rpm_scriptlets.py` runs with `rpmspec` in the
+Fedora contract. The opt-in BuildKit fixture runs enabled in Ubuntu acceptance,
+after the pinned Ubuntu base is already present; it compiles no SDK or vendor
+code. `test_litert_identity.py` belongs to the existing `native_litert_identity`
+CTest target rather than an ordinary pytest invocation that always skips it.
+The pinned sentencepiece wheel activates the legacy executor's ordinary math
+contracts on both hosts; authenticated original-model cases retain their
+existing opt-in requirement. These changes preserve the PR suites.
+
+The sentencepiece lock addition changes the assembled Linux SDK image because
+that image installs the development lock. Its core, LiteRT and Whisper build
+inputs are unchanged: reuse those verified component images, and only assemble
+the new SDK layer that installs the additional wheel. No vendor library needs
+recompilation for this Python contract dependency.
+
+Acceptance runs weekly on Mondays at 05:43 UTC. PR selection resolves the merge
+base before calling the common classifier, which is equivalent to diffing
+`base...HEAD` and avoids selecting changes introduced only by advancing main.
+At least five hosted follow-up runs are still needed before claiming measured
+latency or runner-minute savings; no after-value is claimed from local tests.
+
+### WS-Na nightly safety net (2026-10-19)
+
+`nightly-checks` requires the current run's selected platform suites, installer lifecycle jobs and final download artifact to succeed. It explicitly excludes the separate main model/audio acceptance until WS2b moves those gates in-run. Unchanged main skips only after a successful `nightly-checks`; a failed producer retries only its failed jobs once, preserving the original run and successful outputs, then returns without waiting. Planning-only triggers cannot recursively retry an exhausted producer.
+
+`ci-nightly` issues track failing jobs, the range since the last green aggregate and PRs in that range. Older reruns cannot overwrite or close newer results. Dispatch `exercise_failure_path: true` to fail without reserving a build number, building or publishing; `exercise_recovery: true` closes the separate `ci-nightly-exercise` issue. Exercise runs are excluded from real-night selection and retry. The preview group is `preview-packages`; official releases retain workflow-level serialization in a separate group, allowing release preparation to start while a nightly is active without letting a queued draft displace an older publication.
+
+Deleted: cross-run preview recovery/revalidation jobs, `preview_reuse.py` and obsolete recovery-only tests. Retry uploads replace only their original run's own artifacts. No SDK recipe or compiled dependency input changes. Offline contract tests cover green/skip/failure evidence, original-run retry, pagination, stale results and isolated issue open/update/close. Hosted exercises, a real failed-job retry, two consecutive green nights and release/nightly concurrency still need proof; no latency savings are claimed before the five-run measurement gate.
+
+### WS-Nb daily drift safety net (2026-10-19)
+
+Sanitizers run daily even when main is unchanged. Scheduled jobs restore and
+verify existing instrumented SDKs; they skip the SDK build, cache save, SDK pack
+and SDK upload steps. A missing verified SDK fails with the existing restoration
+diagnostic and cannot authorize compilation. The verifier continues rejecting
+scheduled runs as producers. Push and explicit dispatch producer paths remain
+non-cancelling, in concurrency groups separate from scheduled consumers. TSan
+probation remains available for PRs and explicit runs, while scheduled races fail
+the job. The issue tracker reads actual job conclusions in every case.
+
+`arch-drift.yml` runs the full `tools/build.sh` gate and Linux host Python
+contracts daily in the pinned Arch container, with its rolling pacman toolchain
+list inlined. It records the compiler and complete package inventory before the
+build, restores existing compatible Flutter/pub caches and verifies Flutter's
+exact commit. It uses Arch's installed gRPC/protobuf and never builds an SDK.
+Before the Arch application build, `ci_native_work.py` searches retained verified
+native-stage compiler payloads, including FlatBuffers/SentencePiece outputs.
+It qualifies the exact compiler, complete package inventory, absolute workspace,
+CMake arguments and native flags; Mac callers additionally bind SDK bytes/prefix,
+Xcode and Apple SDK. Ubuntu objects cannot substitute for different Arch inputs.
+The original successful producer receipt and checksums stay authoritative.
+Only proven Dart coverage/scheduling controls and report/SDK locators are excluded
+from compiler compatibility; successful stage identities still bind those
+validation settings. Unknown flags and native hooks remain strict. Search/API
+failures stop the job, while a completed miss records actual incompatible fields.
+Changed CMake inputs remove only the old CMake cache, retaining objects and
+fetched dependencies. Every hit still runs current configure/build/CTest and all
+application gates; neither old test success nor a new cache publication is used. Before a manual hosted probe, inspect existing
+verified artifacts and identify any actual toolchain/input drift or missing
+compatible work. This workflow neither deletes dependency caches nor publishes
+compiler outputs. Its temporary PR trigger selects only its own workflow path;
+remove that trigger after the rollout probe passes.
+
+Main-ref-only final jobs open/update `ci-sanitizers` and `ci-arch-drift` issues on
+failure and close them on a passing run. Missing or skipped suites fail closed;
+older reruns cannot overwrite newer results. No PR job receives an issue-write
+token. Contract fixtures cover these paths, the schedule's read-only SDK policy,
+the unchanged recipe/cache keys and the Arch toolchain/gate inventory. Hosted
+scheduled SDK restoration and the Arch runtime gate still require proof before
+removing any existing PR checks. These jobs add independent drift coverage;
+runner-minute savings remain unclaimed until measured over five hosted runs.
+
+### WS1 explicit fork-local validation
+
+Ordinary macOS consumers now fail with the missing identity and producer when
+neither a same-head producer nor a compatible trusted main producer remains,
+instead of silently compiling dependencies. An application-only head can thus
+retain main's earlier dependency producer without waiting for another PR.
+Fork PR validation may explicitly pass `--allow-local-build`; both compiler-SDK
+and runtime steps derive that flag from nonempty head/base repository metadata
+on an actual fork `pull_request` event. The explicit permission propagates to
+the vendor dependency needed by a fork runtime. Dependabot never uses that local
+fallback, and an exhausted wait for a still-running producer always fails.
+Existing verified artifacts are attempted first in every mode. This changes no
+SDK recipe, component identity or vendor input.
+
+### WS1 quick wins (2026-10-19)
+
+Platform `changes` publishes `ci-selection.json` and a step summary listing the
+revision range, force/platform overrides, selected gates and each changed path's
+contribution. Locally, run `python tools/ci_changes.py --explain origin/main...HEAD`;
+it needs no GitHub environment. Unknown paths select full validation; explicit packaging files and `packaging/ci/`
+retain their narrower selection. The unreachable duplicate `packaging/ci/` branch
+in the Linux-only rule is removed.
+
+Quality owns the required `contracts` job: generated Dart binding drift and
+protobuf descriptors. The separate RPC workflow, repeated RPC Dart analysis and
+subset tests are deleted; full core suites retain those Dart tests. Native
+process integration remains covered by CTest, without separate repeat steps.
+The macOS assembly job runs only `CompiledMacComponentTests` from the tooling
+file; the host inventory owns the remaining tooling tests. The duplicate explicit
+integration inventory command is removed; its quality test remains.
+
+Superseded PR platform and acceptance runs cancel, with platform groups scoped
+to the caller workflow. Main, release and preview work stays non-cancelling;
+dedicated dependency producers remain non-cancelling. `ubuntu-application`
+no longer deletes preinstalled toolchains. The four Linux registry producers
+clean only after both the verified reuse probe and immutable-image lookup miss.
+Linux compile jobs and `ubuntu-package` record `df -h / /mnt` and `docker system df`
+at start and end, including failed jobs. Compile cleanup remains on cold builds;
+Docker relocation to `/mnt` is reserved for measured low-space runs.
+
+The baseline records 96 seconds median (354 seconds maximum, 36 runs) for
+`ubuntu-application` cleanup, and 47–344 seconds of promotion cleanup. Removing
+these steps is structurally verified, while the before/after runner-minute and
+latency comparison still requires at least five completed hosted runs. No SDK
+input or component identity changed in this workstream. Transport allowlisting
+explicitly accounts for storage probes and conditional cleanup without making
+them compilation inputs. The net change and test evidence are recorded in the PR.
+
+Retry diagnostics now allow replacement throughout the nightly's called-workflow
+closure, including development packages, document sandbox evidence and distro
+installer evidence. A fixture-only BuildKit PR selects the Linux consumer that
+runs its opt-in Docker proof rather than leaving that file wholly skipped.
+Drift issue writers require an explicit main-ref and allowed-event guard. Their
+serialized surviving invocation reconciles the newest completed actual suites;
+empty, pending and cancelled suite jobs provide no result. A cancelled/replaced
+issue job does not discard its run's otherwise completed test evidence, and a
+stale queued writer reports the newer tests instead of assuming a replacement
+writer will run.
+
+SDK consumer waits ignore skipped alternatives with duplicate display names.
+GitHub may expose the skipped main-registry job before its PR-archive counterpart
+is created after parent jobs finish. That placeholder is not proof that the
+component finished. Linux application consumers use `ci_dependency_wait.py` to
+share the qualified source/identity wait with macOS, capped at 1,800 seconds.
+Network and provenance failures remain fatal. This consumer-only correction
+preserves every SDK producer-control byte, allowing the already running producer
+and its eventual original artifact to remain qualified without recompilation.

@@ -236,7 +236,7 @@ Replace the AGENTS.md section "Reuse SDKs, libraries, and build caches before re
    - Set `cancel-in-progress: ${{ github.event_name == 'pull_request' }}` in `macos.yml` and `integration-acceptance.yml`, with group names distinct per caller.
    - Losing inline macOS dependency compiles or fork SDK builds is accepted.
 3. **Bounded wait.**
-   - Keep polling only while a `ci-dependencies` run for the same head SHA is queued or running, for at most 1,800 s. Otherwise fail at once, naming the missing identity and the producer.
+   - Keep polling only while a trusted `ci-dependencies` run for the same head SHA, or a trusted main producer with a verified matching component identity, is queued or running, for at most 1,800 s. Never wait for another PR's producer. Otherwise fail at once, naming the missing identity and the producer.
    - Dependabot PRs fail red with a step summary and `::error`.
 4. **Fold RPC into Quality** as a job named `contracts`, running `check_dart_bindings.py` and the descriptor tests. Delete `rpc-contracts.yml`, its `dart analyze` and its duplicate Dart tests.
 5. **Remove the D14 repeats.**
@@ -260,7 +260,7 @@ Replace the AGENTS.md section "Reuse SDKs, libraries, and build caches before re
    - A dispatch input `exercise_failure_path` runs plan → a synthetic failing check → the issue job, with no build or publish. Those runs are named distinctly and excluded from the skip logic, the rerun logic and build-number allocation.
 4. **Concurrency.**
    - Preview gets its own group, `preview-packages`.
-   - `release.yml`'s workflow-level `distribution-packages` group (`release.yml:30-32`) moves to its draft and publish jobs.
+   - `release.yml` retains workflow-level `distribution-packages` serialization, independent of the preview group. Serializing only its draft/publish jobs lets a newer queued draft cancel an older pending publication, so the whole official release remains serialized.
    - Build numbers already use compare-and-swap (`tools/build_sequence.py:77`).
 
 **WS-Nb: drift.**

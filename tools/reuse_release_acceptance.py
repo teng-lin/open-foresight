@@ -12,18 +12,14 @@ from tools.ci_artifacts import api, dependency_jobs, download_zip, in_producer_a
 from tools.github_release import release_for_tag
 from tools.release_acceptance_report import gpu_status
 from tools.release_asset_acceptance import select_asset
+from tools.ci_producer_trust import PRODUCERS
 
 
 def restore(repository, tag, run_id, evidence=""):
     run = api(repository, f"actions/runs/{run_id}")
     if (
-        run.get("path")
-        not in (
-            ".github/workflows/release.yml",
-            ".github/workflows/release-acceptance.yml",
-        )
+        not PRODUCERS["release-acceptance"].matches_run(run)
         or run.get("head_branch") != "main"
-        or run.get("event") != "workflow_dispatch"
         or run.get("head_repository", {}).get("full_name") != repository
     ):
         raise ValueError("Acceptance must come from a trusted reviewed main workflow")
@@ -43,7 +39,7 @@ def restore(repository, tag, run_id, evidence=""):
     jobs = [
         job
         for job in dependency_jobs(repository, run_id)
-        if job.get("name") in ("acceptance", "acceptance / acceptance")
+        if PRODUCERS["release-acceptance"].matches_job(job)
         and job.get("conclusion") == "success"
         and in_producer_attempt(item, job)
     ]
@@ -59,9 +55,14 @@ def restore(repository, tag, run_id, evidence=""):
             ):
                 raise ValueError("Invalid acceptance archive")
             report = json.loads(bundle.read("release-acceptance.json"))
-    if report.get("tag") != tag or report.get("status") not in (
-        "passed",
-        "automated_passed_manual_pending",
+    if (
+        not PRODUCERS["release-acceptance"].matches_receipt(report)
+        or report.get("tag") != tag
+        or report.get("status")
+        not in (
+            "passed",
+            "automated_passed_manual_pending",
+        )
     ):
         raise ValueError(
             "Original automated acceptance is incomplete or for another release"

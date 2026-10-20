@@ -11,6 +11,8 @@ import json
 from pathlib import Path, PurePosixPath
 import re
 
+from tools.ci_producer_trust import PRODUCERS
+
 MANIFEST = Path(__file__).with_name("sdk_approved_legacy.json")
 SHA = re.compile(r"[a-f0-9]{40}")
 IDENTITY = re.compile(r"[a-f0-9]{64}")
@@ -202,7 +204,8 @@ def matches_original(entry, run, component, identity, receipt, artifact):
         and identity == entry["legacy_identity"]
         and run.get("id") == entry["producer_run"]
         and run.get("head_sha") == entry["producer_source"]
-        and run.get("path") == ".github/workflows/ci-dependencies.yml"
+        and run.get("path") in PRODUCERS["dependency-sdk"].workflows
+        and PRODUCERS["dependency-sdk"].matches_receipt(receipt)
         and run.get("head_repository", {}).get("full_name") == entry["repository"]
         and run.get("event") == entry.get("producer_event", "pull_request")
         and run.get("head_branch")

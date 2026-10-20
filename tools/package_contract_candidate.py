@@ -36,10 +36,17 @@ def retrieve(repository, base, destination, run_id=0):
             if run_id and producer != run_id:
                 continue
             run = ci_artifacts.api(repository, f"actions/runs/{producer}")
-            if not ci_artifacts.application_jobs(repository, run, "linux-app", item):
+            if not ci_artifacts.application_jobs(
+                repository, run, "linux-app", item, consumer="pr-package-contract"
+            ):
                 continue
             if not ci_artifacts.pull(
-                repository, "linux-app", source, destination, source_run=producer
+                repository,
+                "linux-app",
+                source,
+                destination,
+                source_run=producer,
+                consumer="pr-package-contract",
             ):
                 raise ValueError(
                     "Qualified package fixture became unavailable; preserve outputs and inspect artifacts"

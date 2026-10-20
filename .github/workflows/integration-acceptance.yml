@@ -2,7 +2,7 @@ name: Model and virtual audio acceptance
 on:
   workflow_dispatch:
   schedule:
-    - cron: '43 5 * * *'
+    - cron: '43 5 * * 1'
   workflow_run:
     workflows: [Platform candidates and checks]
     branches: [main]
@@ -14,7 +14,7 @@ permissions:
   packages: read
 concurrency:
   group: integration-${{ github.event_name == 'pull_request' && github.ref || github.event.workflow_run.head_sha || github.sha }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   changes:
     if: github.event_name != 'workflow_run' || (github.event.workflow_run.head_repository.full_name == github.repository && github.event.workflow_run.head_branch == 'main' && (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch'))
@@ -61,6 +61,8 @@ jobs:
               echo 'linux_bundle=false' >> "$GITHUB_OUTPUT"
             fi
             exit 0
+          elif [[ "$EVENT" == pull_request ]]; then
+            BASE=$(git merge-base "$BASE" HEAD)
           elif [[ "$EVENT" == push ]]; then
             # Deleted/recreated branches and unavailable history must fail safe.
             if [[ ! "$BASE" =~ ^[0-9a-f]{40}$ || "$BASE" == 0000000000000000000000000000000000000000 ]] ||
@@ -104,8 +106,10 @@ jobs:
       sdk_id: ${{ steps.fork-sdk.outputs.artifact-id }}
       sdk_digest: ${{ steps.fork-sdk.outputs.artifact-digest }}
     steps:
-      - name: Free hosted-runner space for SDK and model fixtures
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Record initial runner storage
+        run: |
+          df -h / /mnt
+          docker system df
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
@@ -142,7 +146,7 @@ jobs:
             echo 'image=foresight-sdk:pr' >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+          python tools/ci_dependency_wait.py --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --load --discard-archive
       - name: Restore qualified application dependency outputs without compilation
         if: github.event_name == 'pull_request'
@@ -245,12 +249,21 @@ jobs:
           path: build/app-dependency-seed/qualification.json
           if-no-files-found: ignore
           overwrite: true
+      - name: Record final runner storage
+        if: always()
+        run: |
+          df -h / /mnt
+          docker system df
   ubuntu-package:
     needs: [changes, ubuntu-application]
     if: ${{ !cancelled() && needs.changes.outputs.linux_bundle == 'true' && (github.event_name != 'pull_request' || needs.ubuntu-application.result == 'success') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
+      - name: Record initial runner storage
+        run: |
+          df -h / /mnt
+          docker system df
       - name: Free hosted-runner space for SDK and model fixtures
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -304,7 +317,7 @@ jobs:
             python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
             exit 0
           fi
-          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/sdk-descriptor --wait 12600 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
+          python tools/ci_dependency_wait.py --component linux-sdk --prefix build/sdk-descriptor --wait 1800 --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
           python tools/linux_sdk_artifacts.py resolve --prefix build/sdk-descriptor --discard-archive
       - name: Retrieve the verified main application instead of compiling it again
         if: github.event_name != 'pull_request'
@@ -374,7 +387,14 @@ jobs:
             cp dist/packages/*.tar.gz dist/packages/*.tar.gz.sha256 artifacts/
           fi
           docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work -e SOURCE_DATE_EPOCH ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac bash packaging/ci/package-and-test.sh deb "$VERSION" "$RELEASE"
+      - name: Verify real BuildKit dependency-cache behavior with the cached pinned base
+        env:
+          FORESIGHT_DOCKER_CACHE_TEST: '1'
+        run: |
+          python -m pip install --require-hashes -r requirements-dev.lock
+          python -m pytest tests/test_acceptance_image_cache.py -ra
       - name: Test Debian 13 with the same Ubuntu-built DEB
+        if: ${{ !cancelled() }}
         run: |
           docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work:ro" -v "$PWD/dist/packages:/packages:ro" debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 bash /work/packaging/ci/test-debian.sh
       # Package, CPU, GPU and audio checks share the image but report failures
@@ -433,3 +453,8 @@ jobs:
           path: |
             test-results/
             build/app-dependency-seed/qualification.json
+      - name: Record final runner storage
+        if: always()
+        run: |
+          df -h / /mnt
+          docker system df

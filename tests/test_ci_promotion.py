@@ -133,6 +133,7 @@ def test_release_waits_for_existing_missing_platform_without_dispatch():
     pending = {
         "head_sha": SOURCE,
         "status": "in_progress",
+        "event": "push",
         "head_branch": "main",
         "path": ".github/workflows/macos.yml",
         "head_repository": {"full_name": REPO},

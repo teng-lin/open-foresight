@@ -244,6 +244,10 @@ jobs:
       IDENTITY: ${{ needs.plan.outputs['linux-core'] }}
     # sdk-recipe: linux-core end
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     # sdk-recipe: linux-core begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -258,8 +262,6 @@ jobs:
     # sdk-recipe: linux-core begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
     # sdk-recipe: linux-core end
-    - name: Free hosted-runner space for retained image promotion
-      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
@@ -304,6 +306,9 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Free hosted-runner space for retained image promotion
+      if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     # sdk-recipe: linux-core begin
     - name: Build and publish core
       if: steps.lookup.outputs.build == 'true'
@@ -352,6 +357,11 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
   litert:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Build Linux litert
@@ -378,6 +388,10 @@ jobs:
       IDENTITY: ${{ needs.plan.outputs['linux-litert'] }}
     # sdk-recipe: linux-litert end
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     # sdk-recipe: linux-litert begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -392,8 +406,6 @@ jobs:
     # sdk-recipe: linux-litert begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
     # sdk-recipe: linux-litert end
-    - name: Free hosted-runner space for retained image promotion
-      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
@@ -438,6 +450,9 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Free hosted-runner space for retained image promotion
+      if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     # sdk-recipe: linux-litert begin
     - name: Build and publish litert
       if: steps.lookup.outputs.build == 'true'
@@ -486,6 +501,11 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
   whisper:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Build Linux whisper
@@ -512,6 +532,10 @@ jobs:
       IDENTITY: ${{ needs.plan.outputs['linux-whisper'] }}
     # sdk-recipe: linux-whisper end
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     # sdk-recipe: linux-whisper begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -526,8 +550,6 @@ jobs:
     # sdk-recipe: linux-whisper begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
     # sdk-recipe: linux-whisper end
-    - name: Free hosted-runner space for retained image promotion
-      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
@@ -572,6 +594,9 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Free hosted-runner space for retained image promotion
+      if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     # sdk-recipe: linux-whisper begin
     - name: Build and publish whisper
       if: steps.lookup.outputs.build == 'true'
@@ -620,6 +645,11 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
   sdk:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Assemble Linux SDK
@@ -648,6 +678,10 @@ jobs:
       IDENTITY: ${{ needs.plan.outputs['linux-sdk'] }}
     # sdk-recipe: linux-sdk end
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     # sdk-recipe: linux-sdk begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -662,8 +696,6 @@ jobs:
     # sdk-recipe: linux-sdk begin
     - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
     # sdk-recipe: linux-sdk end
-    - name: Free hosted-runner space for retained image promotion
-      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     - name: Authenticate SDK registry
       env:
         REGISTRY_TOKEN: ${{ github.token }}
@@ -708,6 +740,9 @@ jobs:
     - name: Inspect immutable dependency image
       id: lookup
       run: python tools/ci_registry.py "${{ steps.tag.outputs.image }}"
+    - name: Free hosted-runner space for retained image promotion
+      if: steps.shared.outputs.hit != 'true' && steps.lookup.outputs.build == 'true'
+      run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
     # sdk-recipe: linux-sdk begin
     - name: Build and publish sdk
       if: steps.lookup.outputs.build == 'true'
@@ -759,6 +794,11 @@ jobs:
         overwrite: true
         if-no-files-found: error
         compression-level: 0
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
   linux-pr-core:
     name: Build Linux core
     if: github.event_name == 'pull_request'
@@ -785,6 +825,10 @@ jobs:
       OWN_PR: ${{ github.event.pull_request.number }}
     # sdk-recipe: linux-core end
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     # sdk-recipe: linux-core begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -852,6 +896,11 @@ jobs:
         if-no-files-found: error
         compression-level: 0
       if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
   linux-pr-runtime:
     name: Build Linux ${{ matrix.component }}
     if: github.event_name == 'pull_request'
@@ -888,6 +937,10 @@ jobs:
       OWN_PR: ${{ github.event.pull_request.number }}
     # sdk-recipe: linux-litert,linux-whisper end
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     # sdk-recipe: linux-litert,linux-whisper begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -955,6 +1008,11 @@ jobs:
         if-no-files-found: error
         compression-level: 0
       if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
   linux-pr:
     name: Assemble Linux SDK
     if: github.event_name == 'pull_request'
@@ -983,6 +1041,10 @@ jobs:
       OWN_PR: ${{ github.event.pull_request.number }}
     # sdk-recipe: linux-sdk end
     steps:
+    - name: Record initial runner storage
+      run: |
+        df -h / /mnt
+        docker system df
     # sdk-recipe: linux-sdk begin
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
@@ -1050,6 +1112,11 @@ jobs:
         if-no-files-found: error
         compression-level: 0
       if: steps.probe.outputs.hit != 'true' && steps.component.outputs.original != 'true'
+    - name: Record final runner storage
+      if: always()
+      run: |
+        df -h / /mnt
+        docker system df
   macos-vendor:
     name: Build macOS vendor
     needs: plan

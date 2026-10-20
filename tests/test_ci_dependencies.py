@@ -773,7 +773,7 @@ def test_shared_dmg_packaging_selects_package_contracts_without_compilation():
 @pytest.mark.parametrize(
     "own_head,own_pr", [("a" * 40, 23), ("fork-head", 24), ("main-head", 0)]
 )
-def test_macos_dependencies_build_locally_when_no_trusted_artifact_exists(
+def test_explicit_macos_fork_validation_reuses_artifacts_before_building(
     tmp_path, artifact, own_head, own_pr
 ):
     from tools import ci_macos_dependencies as macos
@@ -785,9 +785,14 @@ def test_macos_dependencies_build_locally_when_no_trusted_artifact_exists(
         patch.object(macos, "verify") as verify,
         patch.object(macos.subprocess, "run") as build,
     ):
-        assert macos.ensure("macos-sdk", tmp_path, "owner/repo", own_head, own_pr) == (
-            "artifact" if artifact else "local"
-        )
+        assert macos.ensure(
+            "macos-sdk",
+            tmp_path,
+            "owner/repo",
+            own_head,
+            own_pr,
+            allow_local_build=True,
+        ) == ("artifact" if artifact else "local")
         assert pull.call_args.kwargs == {"own_head": own_head, "own_pr": own_pr}
         assert build.call_count == (0 if artifact else 1)
         verify.assert_called_once_with("macos-sdk", tmp_path)
@@ -803,7 +808,9 @@ def test_macos_runtime_local_fallback_builds_vendor_before_worker(tmp_path):
         patch.object(macos, "verify"),
         patch.object(macos.subprocess, "run") as build,
     ):
-        macos.ensure("macos-runtime", tmp_path / "runtime", "owner/repo")
+        macos.ensure(
+            "macos-runtime", tmp_path / "runtime", "owner/repo", allow_local_build=True
+        )
     assert "build_macos_vendor.py" in build.call_args_list[0].args[0][1]
     assert "build_macos_runtimes.py" in build.call_args_list[1].args[0][1]
 
@@ -851,7 +858,7 @@ def test_macos_consumer_waits_for_matching_inflight_producer_then_uses_artifact(
         build.assert_not_called()
 
 
-def test_macos_consumer_falls_back_when_inflight_producer_stops_or_deadline_expires(
+def test_explicit_fork_validation_can_build_when_inflight_producer_stops(
     tmp_path,
 ):
     from tools import ci_macos_dependencies as macos
@@ -865,7 +872,15 @@ def test_macos_consumer_falls_back_when_inflight_producer_stops_or_deadline_expi
         patch.object(macos.subprocess, "run") as build,
     ):
         assert (
-            macos.ensure("macos-sdk", tmp_path, "owner/repo", "a" * 40, 23) == "local"
+            macos.ensure(
+                "macos-sdk",
+                tmp_path,
+                "owner/repo",
+                "a" * 40,
+                23,
+                allow_local_build=True,
+            )
+            == "local"
         )
         build.assert_called_once()
 
@@ -886,7 +901,11 @@ def test_macos_inflight_selection_rejects_fork_and_failed_producers(failed):
     }
     fork = {**base, "id": 124, "head_repository": {"full_name": "fork/repo"}}
     with (
-        patch.object(macos, "api", return_value={"workflow_runs": [base, fork]}),
+        patch.object(
+            macos,
+            "api",
+            side_effect=lambda repo, route: {"workflow_runs": [base, fork]},
+        ),
         patch.object(
             macos, "source_fingerprint", return_value=macos.fingerprint("macos-sdk")
         ),

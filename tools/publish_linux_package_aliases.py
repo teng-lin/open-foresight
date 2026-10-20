@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import ci_artifacts as artifacts  # noqa: E402
 from tools import ci_registry as registry  # noqa: E402
 from tools.linux_sdk_artifacts import COMPONENTS, record  # noqa: E402
+from tools.ci_producer_trust import PRODUCERS  # noqa: E402
 
 MAX_DESCRIPTOR_BYTES = 16 * 1024 * 1024
 
@@ -52,7 +53,7 @@ def published_descriptor(repository, component, identity):
             if (run.get("repository") or {}).get(
                 "full_name"
             ) != repository or not artifacts.trusted_run(
-                run, component, repository=repository
+                run, component, repository=repository, consumer="package-alias"
             ):
                 continue
             with tempfile.TemporaryDirectory() as directory:
@@ -73,8 +74,11 @@ def published_descriptor(repository, component, identity):
                             raise ValueError("Oversized registry descriptor member")
                         (source / member).write_bytes(stream.read(member))
                 receipt = json.loads((source / "identity.json").read_text())
+                if not PRODUCERS["package-alias"].matches_receipt(receipt):
+                    raise ValueError("Registry alias receipt tier is not qualified")
                 if not any(
-                    job.get("status") == "completed"
+                    PRODUCERS["package-alias"].matches_job(job, component)
+                    and job.get("status") == "completed"
                     and artifacts.candidate_verified(
                         repository, run, component, identity, receipt, job, item, errors
                     )

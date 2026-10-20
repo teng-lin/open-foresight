@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from tools import run_ci_stage as runner
+from tools import ci_native_work as native_work
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -104,7 +105,7 @@ def preserve_artifact(root, destination, legacy=False):
     }
 
 
-def validate(root, work=None):
+def validate(root, work=None, generator="Ninja"):
     if work:
         work = {
             **work,
@@ -129,7 +130,7 @@ def validate(root, work=None):
             112,
             "pull_request",
             False,
-            ["-G", "Ninja"],
+            ["-G", generator],
         )
 
 
@@ -251,3 +252,69 @@ def test_pin_changes_refresh_consumed_cmake_defaults_and_keep_unrelated_objects(
     assert (root / "build/Testing/fixture_runs.txt").read_text().splitlines() == [
         "validated"
     ] * 3
+
+
+@pytest.mark.skipif(
+    not all(shutil.which(tool) for tool in ("cmake", "ninja", "make", "c++", "git")),
+    reason="Tiny compiler-only restore proof needs CMake, Make, Ninja and compiler",
+)
+@pytest.mark.parametrize("generator", ["Ninja", "Unix Makefiles"])
+def test_compiler_only_restore_keeps_objects_and_always_runs_current_build_and_tests(
+    tmp_path, generator
+):
+    root = tmp_path / "project"
+    project(root)
+    script = root / "tools/build.sh"
+    script.write_text(script.read_text().replace("-G Ninja", '-G "' + generator + '"'))
+    commit(root)
+    validate(root, generator=generator)
+    stable = object_path(root, "stable.cpp")
+    stable_time, stable_bytes = stable.stat().st_mtime_ns, stable.read_bytes()
+    original = preserve_artifact(root, tmp_path / "original")
+    if generator == "Ninja":
+        configuration = root / "CMakeLists.txt"
+        configuration.write_text(
+            configuration.read_text().replace(
+                "set(FIXTURE_DEFAULT 0", "set(FIXTURE_DEFAULT 5"
+            )
+        )
+    else:
+        (root / "validation.txt").write_text("current validation contract")
+    revision = commit(root)
+    original["configuration_changed"] = native_work.cache.changed_configuration(
+        root, original["receipt"]["source_commit"]
+    )
+    shutil.rmtree(root / "build")
+    with (
+        patch.object(native_work.cache, "find_native_work", return_value=original),
+        patch.object(
+            native_work.cache, "find", side_effect=AssertionError("result reuse")
+        ),
+        patch.object(
+            native_work.cache, "publish", side_effect=AssertionError("publication")
+        ),
+    ):
+        result = native_work.restore(
+            root,
+            "linux",
+            {},
+            ["-G", generator],
+            "fixture/repository",
+            event="schedule",
+            branch="main",
+        )
+    assert result["run_id"] == 123
+    assert (root / "build/CMakeCache.txt").exists() == (generator != "Ninja")
+    assert stable.stat().st_mtime_ns == stable_time
+    # Restoration cannot stand in for current configure, compilation and CTest.
+    print(command(root, "bash", str(script)))
+    assert stable.stat().st_mtime_ns == stable_time
+    assert stable.read_bytes() == stable_bytes
+    helper = root / "build/services/helper/ForesightHelper"
+    assert command(root, str(helper), "--build-id").endswith(revision[:12])
+    assert command(root / "build", str(helper), "--value") == (
+        "23" if generator == "Ninja" else "18"
+    )
+    assert (root / "build/Testing/fixture_runs.txt").read_text().splitlines() == [
+        "validated"
+    ] * 2
