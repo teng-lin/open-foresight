@@ -1452,4 +1452,49 @@ while not os.path.exists(sys.argv[3]): time.sleep(0.005)' "\$FORESIGHT_DATA/.app
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+  test('a launch whose lock is taken again at each launch fails at once with '
+      'that cause (L3)', () async {
+    final profile = newProfile('of-held-');
+    final launcher = await launcherFor(profile);
+    final directory = Directory(profile.data).parent;
+    // Before every launch, another process takes the lock and keeps it
+    // until that launch has recorded that it lost.
+    final wrapper = File('${directory.path}/launch-held')
+      ..writeAsStringSync('''#!/bin/sh
+locked=${shellQuote(directory.path)}/locked-\$\$
+python3 -c 'import fcntl,json,os,sys,time
+f=open(sys.argv[1],"a")
+fcntl.lockf(f,fcntl.LOCK_EX)
+open(sys.argv[2],"w").close()
+while True:
+    try:
+        if json.load(open(sys.argv[3]))["state"]=="contended": break
+    except Exception: pass
+    time.sleep(0.005)' "\$FORESIGHT_DATA/.application.lock" "\$locked" "\$FORESIGHT_STARTUP_STATUS" &
+while [ ! -e "\$locked" ]; do sleep 0.01; done
+exec ${shellQuote(launcher.executable)} "\$@"
+''');
+    expect(Process.runSync('/bin/chmod', ['700', wrapper.path]).exitCode, 0);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = wrapper.path;
+    final failure = await failureOf(
+      ensureService(profile, startupTimeout: const Duration(minutes: 3)),
+    );
+    expect(
+      failure,
+      isA<StateError>().having(
+        (error) => error.message,
+        'message',
+        'Application service could not take the profile lock: another '
+            'process kept holding it for each of 3 launches.',
+      ),
+    );
+    expect(launcher.launched, hasLength(3));
+    for (final pid in launcher.launched) {
+      await eventually(
+        () async => !await isRunning(pid),
+        timeout: startupBound,
+      );
+    }
+    expect(lockHeld(profile), isFalse);
+  }, timeout: const Timeout(Duration(minutes: 4)));
 }

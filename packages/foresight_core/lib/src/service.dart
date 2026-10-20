@@ -2616,8 +2616,13 @@ Future<ServiceStartup> _ensureService(
         // to another launcher's or --stop's momentary probe. If nobody holds
         // it now, launch again; otherwise attach to the owner that does.
         case _StartupContended()
-            when launches < _maxLaunches &&
-                _profileOwnerAvailable(profile, closingOwner: false):
+            when _profileOwnerAvailable(profile, closingOwner: false):
+          if (launches >= _maxLaunches) {
+            throw StateError(
+              'Application service could not take the profile lock: another '
+              'process kept holding it for each of $_maxLaunches launches.',
+            );
+          }
           await _deleteLaunchFiles(startupStatus, handoff);
           launches++;
           await launchOnce();
