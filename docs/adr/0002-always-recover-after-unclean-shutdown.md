@@ -21,5 +21,6 @@ Rejected: fail every launcher consistently and require a manual recovery step.
 ## Consequences
 
 - One outcome for every launcher: exactly one launch, and all attach to the replacement.
-- The `closingOwner` `StateError` and parameter are gone.
+- The "released ownership without clean shutdown" `StateError` is gone. The `closingOwner` parameter of `_profileOwnerAvailable` stays: a closing refusal observed without this profile's lock file now ends in `AnotherProfileServing` (ADR 0005, fix-plan step 4), not in a relaunch.
+- Adoption has exceptions. An invalid record, or one that names another profile's live runtime, is set aside (quarantined, at most three kept) and the owner starts in its own runtime. A starting owner claims the record by renaming it to `.claimed` right after taking the lock, adopts the runtime it names, and restores the record if startup fails.
 - "Record present" now means the owner is live, draining, or crashed; [ADR 0003](0003-structured-closing-refusals.md) tightens the order so the record is deleted after the public socket.

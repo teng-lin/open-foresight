@@ -18,5 +18,8 @@ Rejected: `AUTOINCREMENT` on `notes` and `meetings` through a table-rebuild migr
 
 ## Consequences
 
-- No schema change is needed for the epoch.
+- No schema change is needed for the epoch. `workspaceEpoch` cannot be set through `preferences.set`.
+- Keyed creates carry the epoch too: a keyed retry after a clear is rejected with "nothing was saved" instead of replaying into the new workspace.
+- The epoch check runs before approval, so a stale request never prompts the desktop.
+- `changed` events carry `workspace_epoch`, so clients learn of a clear without polling status.
 - A desktop whose `workspace.clear` ended in `outcomeUnknown` refreshes status and runs its UI reset if the epoch changed ([fix plan 5.3](../plans/2026-10-19-service-lifecycle-fix-plan.md)).
