@@ -23,6 +23,9 @@ class RemoteFixture {
   late ServerSocket server;
   late RemoteDomain remote;
   final sockets = <Socket>[];
+
+  /// Accepted connections whose client side has ended (EOF or an error).
+  final ended = <Socket>{};
   final requests = <Map<String, dynamic>>[];
   Map<String, dynamic> status = {
     'capture': <String, dynamic>{},
@@ -91,20 +94,24 @@ class RemoteFixture {
         .cast<List<int>>()
         .transform(utf8.decoder)
         .transform(const LineSplitter())
-        .listen((line) {
-          final message = jsonDecode(line) as Map<String, dynamic>;
-          requests.add(message);
-          if (message.containsKey('cancel')) return;
-          if (message['method'] == 'status') {
-            if (rejectStatus) {
-              socket.destroy();
+        .listen(
+          (line) {
+            final message = jsonDecode(line) as Map<String, dynamic>;
+            requests.add(message);
+            if (message.containsKey('cancel')) return;
+            if (message['method'] == 'status') {
+              if (rejectStatus) {
+                socket.destroy();
+              } else {
+                reply(socket, message, status);
+              }
             } else {
-              reply(socket, message, status);
+              handler?.call(socket, message);
             }
-          } else {
-            handler?.call(socket, message);
-          }
-        }, onError: (Object _) {});
+          },
+          onError: (Object _) => ended.add(socket),
+          onDone: () => ended.add(socket),
+        );
   }
 
   void reply(

@@ -619,6 +619,41 @@ void main() {
     );
   });
 
+  test('closing the desktop also closes a replaced connection that still '
+      'waits for its owner\'s answers', () async {
+    final closing = f.sockets.last;
+    f.handler = (socket, request) {
+      if (!identical(socket, closing)) {
+        f.reply(socket, request, 'next owner');
+      } else if (request['method'] == 'notes.list') {
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {
+              'code': 'unavailable',
+              'message':
+                  'Application service is shutting down; retry after it exits.',
+              'reason': 'closing',
+            },
+            'done': true,
+          }),
+        );
+      }
+      // The closing owner has not answered notes.save yet.
+    };
+    final saved = f.remote
+        .command(Operation.notesSave, {'title': 'T', 'body': 'B'})
+        .then<Object?>((value) => value, onError: (Object error) => error);
+    await eventually(() => f.requests.any((r) => r['method'] == 'notes.save'));
+    expect(await f.remote.command(Operation.notesList), 'next owner');
+    // The refused connection is retired, still waiting for notes.save.
+    expect(f.ended.contains(closing), isFalse);
+    f.remote.close();
+    // Well before the retired connection's own grace.
+    await eventually(() => f.ended.contains(closing));
+    expect(await saved, isA<RpcError>());
+  });
+
   // The desktop cancels with no request ID (generator.cancel()).
   for (final cancelled in <String?>['gen-3', null, 'another-answer']) {
     test('a cancel during the handoff stops only that answer\'s resend '

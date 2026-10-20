@@ -304,7 +304,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       } catch (error, stack) {
         // Requests may already have gone to [next], for example while its
         // attach timed out; the owner may still answer them.
-        next?.retire();
+        if (next != null) _retire(next);
         helper.state = 'application service reconnect failed: $error';
         helper.changed?.call();
         attempt.completeError(error, stack);
@@ -361,6 +361,14 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     }
   }
 
+  // Replaced connections still waiting for their owner's answers.
+  final _retired = <ServiceClient>{};
+  void _retire(ServiceClient connection) {
+    _retired.add(connection);
+    unawaited(connection.closed.then((_) => _retired.remove(connection)));
+    connection.retire();
+  }
+
   /// Whether a service accepts connections at this profile's endpoint now.
   Future<bool> _endpointAccepts() async {
     try {
@@ -401,7 +409,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     // the connection now would fail them all locally as outcomeUnknown, so
     // it is retired: nothing new is sent on it, and it closes once they
     // settle. The handoff in ensureService waits for the owner itself.
-    failed.retire();
+    _retire(failed);
     try {
       await attempt;
     } catch (_) {
@@ -746,6 +754,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     if (pause != null && !pause.isCompleted) pause.complete();
     unawaited(_captureLevels.close());
     unawaited(_events?.cancel());
+    for (final retired in _retired.toList()) {
+      unawaited(retired.close());
+    }
     unawaited(client.close());
   }
 }

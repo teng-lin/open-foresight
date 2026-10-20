@@ -576,6 +576,10 @@ class ServiceClient {
   /// Whether no request is sent on this connection any more: it is closed,
   /// or [retire]d and waiting for its last answers.
   bool get isClosed => _closed || _retired;
+  final _closedSignal = Completer<void>();
+
+  /// Completes once this connection is closed, by either side.
+  Future<void> get closed => _closedSignal.future;
   ServiceClient._(this.socket, this._maxMessageBytes, this.endpoint) {
     unawaited(socket.done.catchError((Object _) {}));
     final frames = _FrameSplitter(_maxMessageBytes);
@@ -684,6 +688,7 @@ class ServiceClient {
     if (_closed) return;
     _closed = true;
     _retirement?.cancel();
+    _closedSignal.complete();
     _failure ??= later;
     for (final c in _pending.values) {
       c.addError(inFlight);
@@ -809,6 +814,8 @@ bool _resendable(RpcError error) =>
 class ServiceConnection {
   final ProfilePaths profile;
   ServiceClient? _client;
+  // Replaced connections still waiting for their owner's answers.
+  final _retired = <ServiceClient>{};
   Future<ServiceClient>? _connecting;
   bool _closed = false;
   ServiceConnection(this.profile);
@@ -872,7 +879,7 @@ class ServiceConnection {
                 // retired rather than closed: closing it would report them
                 // as possibly completed, and never resend a refused one.
                 if (identical(_client, client)) _client = null;
-                client.retire();
+                _retire(client);
                 unawaited(send(resent: true));
                 return;
               }
@@ -896,8 +903,18 @@ class ServiceConnection {
     return output.stream;
   }
 
+  void _retire(ServiceClient client) {
+    _retired.add(client);
+    unawaited(client.closed.then((_) => _retired.remove(client)));
+    client.retire();
+  }
+
+  /// Close the connection and any replaced one still waiting for answers.
   Future<void> close() async {
     _closed = true;
+    for (final retired in _retired.toList()) {
+      await retired.close();
+    }
     await _client?.close();
   }
 }

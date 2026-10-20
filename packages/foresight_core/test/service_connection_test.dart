@@ -214,6 +214,43 @@ void main() {
     await connection.close();
   });
 
+  test('closing a connection also closes a replaced one that still waits '
+      'for its owner\'s answers', () async {
+    final connection = ServiceConnection(f.profile);
+    await connection.connect();
+    final closing = f.sockets.last;
+    f.handler = (socket, request) {
+      if (!identical(socket, closing)) {
+        f.reply(socket, request, 'next owner');
+      } else if (request['method'] == 'notes.list') {
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {
+              'code': 'unavailable',
+              'message': closingText,
+              'reason': 'closing',
+            },
+            'done': true,
+          }),
+        );
+      }
+      // The closing owner has not answered notes.save yet.
+    };
+    final saved = connection
+        .stream('notes.save')
+        .toList()
+        .then<Object?>((value) => value, onError: (Object error) => error);
+    await eventually(() => f.requests.any((r) => r['method'] == 'notes.save'));
+    expect(await connection.stream('notes.list').toList(), ['next owner']);
+    // The refused connection is retired, still waiting for notes.save.
+    expect(f.ended.contains(closing), isFalse);
+    await connection.close();
+    // Well before the retired connection's own grace.
+    await eventually(() => f.ended.contains(closing));
+    expect(await saved, disconnected('outcomeUnknown'));
+  });
+
   test('a retired client sends nothing new and closes once its pending '
       'requests settle, or after its grace', () async {
     final client = await ServiceClient.connect(
