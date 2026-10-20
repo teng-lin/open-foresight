@@ -1394,6 +1394,31 @@ API failures do not authorize partial evidence, alternate provenance or SDK
 compilation. Upgrade acceptance, preview lifecycle separation, and the immutable
 draft DMG preflight remain enforced.
 
+### Dedicated tooling and cache maintenance
+
+PR consumers restore immutable main-produced tooling receipts or build only the
+tool layer after a confirmed identity miss. They retain the SDK and dependency
+seed provenance and verify ABI compatibility. The tooling identity contains the
+SDK image identity, pinned snapshot and recipe bytes plus Git executable mode;
+application changes and checkout umask do not change it.
+
+Main push and half-hourly schedules run read-only cache reconciliation, then
+dispatch the dedicated main-only publisher when necessary. Language/model caches
+warm only missing exact keys. Registry maintenance runs after a new main source,
+a failed publisher, explicit consumer qualification or a 24-hour freshness miss;
+an active publisher suppresses duplicates for at most 30 minutes. This metadata
+only schedules maintenance and never establishes that restored bytes are valid.
+Scheduled reconciliation itself does not write shared caches. Legacy guarded
+writers and restore fallbacks remain until replacement qualification permits
+their retirement.
+
+Tooling receipt publication and dependency-cache export intentionally share one
+atomic publisher result. An export failure remains a visible maintenance failure
+and its tooling upload is unavailable for reuse until a successful original job
+qualifies it. This conservative boundary avoids duplicate SDK downloads in
+separate publisher jobs; consumers may still use an older qualified receipt with
+the same inputs, or prepare local tooling without rebuilding the SDK.
+
 ### Frozen reliability and runtime observations
 
 Collect read-only GitHub metadata into a new, immutable snapshot directory:

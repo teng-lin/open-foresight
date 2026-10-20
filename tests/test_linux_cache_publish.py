@@ -87,6 +87,7 @@ def test_maintenance_is_independent_main_only_and_preserves_original_upload_proo
 def test_only_dispatched_jobs_publish_shared_bytes_and_schedule_only_dispatches():
     config = yaml.safe_load((ROOT / ".github/workflows/linux-cache-publish.yml").read_text())
     jobs = config["jobs"]
+    assert '"push","workflow_dispatch","schedule"' in jobs["reconcile"]["if"]
     assert "registry_needed" in jobs["reconcile"]["outputs"]
     assert "QUALIFY_CONSUMERS" in next(
         step["env"] for step in jobs["reconcile"]["steps"] if step.get("id") == "source"
