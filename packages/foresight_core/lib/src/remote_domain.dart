@@ -258,9 +258,12 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   static String _helperSocket(ServiceClient client) =>
       '${File(client.endpoint).parent.path}/helper.sock';
 
+  /// [createdForTesting] sees the domain once it is built, including one
+  /// a failed connect disposes of.
   static Future<RemoteDomain> connect(
     ProfilePaths profile, {
     Duration startupTimeout = const Duration(minutes: 3),
+    void Function(RemoteDomain domain)? createdForTesting,
   }) async {
     final startup = await ensureServiceSnapshot(
       profile,
@@ -277,6 +280,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         RemoteRuntime(startup.client),
         profile,
       );
+      createdForTesting?.call(domain);
       domain._apply(startup.status);
       return domain;
     } catch (_) {
