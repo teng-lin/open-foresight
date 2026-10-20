@@ -138,8 +138,9 @@ dist/open-foresight/open-foresight-service --stop
 `--stop` gracefully finalizes active recording, and returns only once the
 service has released its profile (its lock is free or its process is gone),
 failing if that takes more than 30 s after the service closed its
-connections. It can therefore take as long as the helper's shutdown plus
-30 s, so scripts should allow it at least 60 s. If the service stopped
+connections. The service closes them only after any recording finalizes
+(--stop waits up to 30 minutes for that), then stops its helper. Scripts
+should therefore allow at least 60 s plus any recording finalization. If the service stopped
 without a clean shutdown, `--stop` still succeeds and prints a warning; the
 next start recovers its runtime. For installers,
 `--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
