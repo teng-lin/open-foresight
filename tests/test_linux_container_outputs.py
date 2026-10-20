@@ -23,6 +23,10 @@ def write_script(path, body):
 
 @pytest.fixture
 def driver(tmp_path):
+    # Insert both container mount names into real host paths. Namespace mapping
+    # must never rewrite text that an earlier substitution already inserted.
+    tmp_path = tmp_path / "src/out"
+    tmp_path.mkdir(parents=True)
     checkout = tmp_path / "checkout"
     tools = checkout / "tools"
     tools.mkdir(parents=True)
@@ -104,6 +108,7 @@ def driver(tmp_path):
             """
             import os
             from pathlib import Path
+            import re
             import subprocess
             import sys
             args = sys.argv[1:]
@@ -119,7 +124,15 @@ def driver(tmp_path):
             output = Path(mounts['/out'])
             if args[-1].endswith('linux_container_test.sh'):
                 assert (Path(mounts['/handoff']) / 'revision').is_file()
+                if os.environ['FIXTURE_TEST_FAILURE'] == '1':
+                    message = 'fixture runner failed before writing service results'
+                    (output / 'runner.log').write_text(message)
+                    print(message, file=sys.stderr)
+                    sys.exit(17)
                 (output / 'tested').write_text(os.environ['SOURCE_REVISION'])
+                service = output / 'test-results/service/results.xml'
+                service.parent.mkdir(parents=True, exist_ok=True)
+                service.write_text('<testsuite tests="1"><testcase name="old-service"/></testsuite>')
                 sys.exit(0)
             assert args[-1] == '/workspace/tools/linux_container_build.sh'
             workspace = Path(mounts['/workspace'])
@@ -132,8 +145,8 @@ def driver(tmp_path):
             paths = {'/workspace': workspace, '/src': container / 'src',
                      '/out': output, '/ci-inputs.json': Path(mounts['/ci-inputs.json']),
                      '/run/secrets': container / 'secrets'}
-            for before, after in paths.items():
-                script = script.replace(before, str(after))
+            script = re.sub('|'.join(map(re.escape, paths)),
+                            lambda match: str(paths[match[0]]), script)
             runner = container / 'build.sh'
             runner.write_text(script)
             subprocess.run(['bash', str(runner)], check=True, timeout=30)
@@ -143,7 +156,7 @@ def driver(tmp_path):
     docker.chmod(0o755)
     output = tmp_path / "output"
 
-    def run(payload, revision, mode):
+    def run(payload, revision, mode, *, test_failure=False):
         (checkout / "payload.json").write_text(json.dumps(payload))
         environment = {
             **os.environ,
@@ -163,6 +176,7 @@ def driver(tmp_path):
             "VERSION": "1.0.0",
             "RELEASE": "1",
             "FIXTURE_CONTAINERS": str(tmp_path / "container-count"),
+            "FIXTURE_TEST_FAILURE": "1" if test_failure else "0",
         }
         result = subprocess.run(
             [
@@ -177,7 +191,11 @@ def driver(tmp_path):
             text=True,
             timeout=60,
         )
-        assert result.returncode == 0, result.stdout + result.stderr
+        transcript = result.stdout + result.stderr
+        (tmp_path / "last-driver.log").write_text(transcript)
+        assert result.returncode == (17 if test_failure else 0), transcript
+        if test_failure:
+            assert "fixture runner failed before writing service results" in transcript
         return output
 
     return run
@@ -219,3 +237,24 @@ def test_repeated_all_mode_extracts_into_fresh_dist(driver):
     assert (output / "dist/open-foresight/revision").read_text() == "b" * 40
     assert not (output / "dist/open-foresight/removed").exists()
     assert (output / "evidence/tested").read_text() == "b" * 40
+
+
+def test_failed_test_only_keeps_new_diagnostics_without_old_passing_evidence(driver):
+    output = driver({"current": "first"}, "a" * 40, [])
+    assert (output / "evidence/test-results/service/results.xml").is_file()
+    handoff = {
+        path.relative_to(output / "handoff"): path.read_bytes()
+        for path in (output / "handoff").rglob("*")
+        if path.is_file()
+    }
+    driver({}, "a" * 40, ["--test-only"], test_failure=True)
+    assert not (output / "evidence/test-results/service/results.xml").exists()
+    assert not (output / "evidence/tested").exists()
+    assert (output / "evidence/runner.log").read_text() == (
+        "fixture runner failed before writing service results"
+    )
+    assert {
+        path.relative_to(output / "handoff"): path.read_bytes()
+        for path in (output / "handoff").rglob("*")
+        if path.is_file()
+    } == handoff

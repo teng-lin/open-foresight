@@ -71,6 +71,9 @@ def test_local_and_ci_container_paths_keep_secrets_out_of_layers_and_exact_packa
     test = (ROOT / "tools/linux_container_test.sh").read_text()
     dockerfile = (ROOT / "packaging/build.Dockerfile").read_text()
     assert "/workspace/tools/linux_container_build.sh" in wrapper
+    # The macOS host installer does not guarantee sha256sum for this fixture;
+    # retain a syntax contract for Bash 3.2 even in Linux-only quality runs.
+    assert ",,}" not in wrapper and "^^}" not in wrapper
     assert "/workspace/tools/linux_container_test.sh" in wrapper
     assert "--cache-from" in wrapper
     assert "--cache-to" not in wrapper
@@ -134,6 +137,7 @@ def test_shadow_consumers_override_skipped_main_only_ancestors():
     # after a failed step. Only a normally reached final step marks their work
     # complete; artifact qualification still verifies the actual API job result.
     for name in ("linux-build", "linux-test"):
+        assert not any("continue-on-error" in step for step in jobs[name]["steps"])
         assert jobs[name]["outputs"]["complete"] == (
             "${{ steps.complete.outputs.complete }}"
         )

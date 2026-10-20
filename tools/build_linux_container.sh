@@ -75,6 +75,7 @@ if [[ "$task_mode" != test-only ]]; then
     "$task_image" bash /workspace/tools/linux_container_build.sh
 fi
 if [[ "$task_mode" != build-only ]]; then
+  rm -rf -- "$task_output/evidence"
   mkdir -p "$task_output/evidence"
   task_security=(--cap-add SYS_PTRACE --security-opt seccomp=unconfined --security-opt systempaths=unconfined)
   if [[ -n "${FORESIGHT_CONTAINER_APPARMOR:-}" ]]; then
