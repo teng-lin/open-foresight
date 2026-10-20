@@ -34,6 +34,13 @@ def checksum(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def timestamp(value):
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        raise ValueError("Snapshot timestamps require an explicit timezone")
+    return parsed.astimezone(timezone.utc)
+
+
 def validate_observations(value):
     """Allow documented annotations without overriding frozen API outcomes."""
     allowed_runs = {
@@ -83,7 +90,11 @@ def verify(directory):
     if not path.exists():
         return None  # Legacy reporting inputs remain readable, explicitly unstamped.
     manifest = json.loads(path.read_text())
-    if manifest.get("schema") != 1 or manifest.get("complete") is not True:
+    if (
+        type(manifest.get("schema")) is not int
+        or manifest.get("schema") != 1
+        or manifest.get("complete") is not True
+    ):
         raise ValueError("CI snapshot collection is incomplete or incompatible")
     required = {"runs.jsonl", "prs.json", "trees.txt"}
     if not required <= set(manifest.get("checksums", {})):
@@ -123,9 +134,12 @@ def verify(directory):
 def collect(repository, since, directory, request=api, observations=None, until=None):
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("Explicit repository required")
-    beginning = datetime.fromisoformat(since.replace("Z", "+00:00"))
-    if until and datetime.fromisoformat(until.replace("Z", "+00:00")) <= beginning:
+    beginning = timestamp(since)
+    end = timestamp(until) if until else None
+    if end is not None and end <= beginning:
         raise ValueError("Snapshot end must follow its beginning")
+    since = beginning.isoformat().replace("+00:00", "Z")
+    until = end.isoformat().replace("+00:00", "Z") if end else None
     validate_observations(observations or {})
     directory.mkdir(parents=True, exist_ok=False)
     (directory / "jobs").mkdir()
@@ -206,14 +220,28 @@ def collect(repository, since, directory, request=api, observations=None, until=
                 if pull.get("merged_at")
                 else None,
                 "mergedAt": pull.get("merged_at"),
+                "measurement_window": bool(
+                    pull.get("merged_at")
+                    and timestamp(pull["merged_at"]) >= beginning
+                    and (end is None or timestamp(pull["merged_at"]) <= end)
+                ),
             }
             for pull in pulls
         ]
         (directory / "prs.json").write_text(json.dumps(prs, indent=2) + "\n")
         revisions = {run["head_sha"] for run in runs}
-        revisions.update(pull["headRefOid"] for pull in prs)
+        branches = {
+            run.get("head_branch") for run in runs if run["event"] == "pull_request"
+        }
         revisions.update(
-            pull["mergeCommit"]["oid"] for pull in prs if pull["mergeCommit"]
+            pull["headRefOid"]
+            for pull in prs
+            if pull["measurement_window"] or pull["headRefName"] in branches
+        )
+        revisions.update(
+            pull["mergeCommit"]["oid"]
+            for pull in prs
+            if pull["mergeCommit"] and pull["measurement_window"]
         )
         trees = []
         for revision in sorted(revisions):

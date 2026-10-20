@@ -62,6 +62,28 @@ def test_collect_freezes_every_page_and_attempt_with_checksums_and_sources(tmp_p
         snapshot.collect("owner/repository", "2026-10-19T00:00:00Z", root, request)
 
 
+def test_measurement_window_uses_actual_timestamps_and_excludes_historical_merges(
+    tmp_path,
+):
+    root = tmp_path / "window"
+    snapshot.collect(
+        "owner/repository",
+        "2026-10-18T20:05:00.500-04:00",
+        root,
+        request,
+        until="2026-10-19T01:00:00Z",
+    )
+    manifest = snapshot.verify(root)
+    assert manifest["since"] == "2026-10-19T00:05:00.500000Z"
+    runs, prs, trees = stats.load(root)
+    assert prs[0]["measurement_window"] is False
+    assert B not in trees
+    data = stats.report(runs, prs, trees, "2026-10-19T00:00:00Z")
+    assert data["merges"] == []
+    with pytest.raises(ValueError, match="explicit timezone"):
+        snapshot.timestamp("2026-10-19T00:00:00")
+
+
 @pytest.mark.parametrize(
     "invalid",
     [
