@@ -684,4 +684,67 @@ void main() {
       timeout: const Timeout(Duration(minutes: 3)),
     );
   }
+
+  test(
+    'a replacement that fails to start reports its cause at once (L3)',
+    () async {
+      final profile = newProfile('of-dead-');
+      final launcher = await launcherFor(profile);
+      // The service refuses a capability link after it takes the lock.
+      Directory(profile.data).createSync(recursive: true);
+      Link(
+        '${profile.data}/.desktop-capability',
+      ).createSync('${profile.data}/elsewhere');
+      final failure = await failureOf(
+        ensureService(profile, startupTimeout: const Duration(minutes: 3)),
+      );
+      expect(
+        failure,
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          allOf(
+            startsWith('Application service failed to start: '),
+            contains('Desktop capability must not be a symbolic link'),
+            isNot(contains('\n')),
+          ),
+        ),
+      );
+      expect(launcher.launched, hasLength(1));
+      await eventually(
+        () async => !await isRunning(launcher.launched.single),
+        timeout: startupBound,
+      );
+      // The launcher removed the status file the service wrote for it.
+      expect(
+        Directory(profile.runtime).listSync().map((entry) => entry.path),
+        everyElement(isNot(contains('startup-'))),
+      );
+      expect(launcher.log.readAsStringSync(), contains('symbolic link'));
+    },
+    timeout: const Timeout(Duration(minutes: 4)),
+  );
+
+  test('a startup status is written only inside the profile runtime', () {
+    final profile = newProfile('of-status-');
+    Directory(profile.runtime).createSync(recursive: true);
+    final outside = '${Directory(profile.runtime).parent.path}/startup-x.json';
+    for (final path in [
+      outside,
+      '${profile.runtime}/application.sock',
+      '${profile.runtime}/startup-../x.json',
+    ]) {
+      runtimeConfiguration.environment['FORESIGHT_STARTUP_STATUS'] = path;
+      recordServiceStartupFailure(profile, StateError('failed'));
+      expect(File(path).existsSync(), isFalse, reason: path);
+    }
+    final inside = '${profile.runtime}/startup-1-2-3.json';
+    runtimeConfiguration.environment['FORESIGHT_STARTUP_STATUS'] = inside;
+    recordServiceStartupFailure(profile, StateError('Startup broke'));
+    expect(jsonDecode(File(inside).readAsStringSync()), {
+      'state': 'failed',
+      'error': 'Startup broke',
+    });
+    expect(FileStat.statSync(inside).mode & 0x1ff, 0x180);
+  });
 }

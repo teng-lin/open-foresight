@@ -837,6 +837,39 @@ void main() {
     timeout: ladderTimeout(handoffDeadlines),
   );
 
+  test('a stalled owner fails startup at the probe limit, not after the whole '
+      'budget (L1)', () async {
+    final f = HandoffFixture();
+    await f.start(errorMessage: 'stall');
+    try {
+      // The full three-minute budget; only the probe limit is shortened.
+      final failure = await startupFailure(
+        f.proxy.run(
+          () => ensureService(
+            f.profile,
+            statusProbeLimit: const Duration(milliseconds: 200),
+          ),
+        ),
+      );
+      expect(
+        failure,
+        isA<TimeoutException>().having(
+          (error) => error.message,
+          'message',
+          'Application service at ${f.ownerRuntime}/application.sock '
+              'accepted the connection but did not answer status within '
+              '200 ms; it may be busy or hung.',
+        ),
+      );
+      // One probe; a stalled live owner is never replaced.
+      expect(f.proxy.connections, hasLength(1));
+      await f.proxy.connections.single.ended(ProxyDirection.toService);
+      expect(f.launched, isFalse);
+    } finally {
+      await f.close();
+    }
+  }, timeout: const Timeout(Duration(seconds: 60)));
+
   test(
     'a closing post-launch owner remains bounded without another launch',
     () async {

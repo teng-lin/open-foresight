@@ -282,6 +282,8 @@ void main() {
         'FORESIGHT_QUERY_WORKER': '/attacker-query',
         'FORESIGHT_RUNTIME_REVISION': 'attacker-revision',
         'FORESIGHT_DATA': '${scratch.path}/requested-profile',
+        // A launcher's status file; the service validates its location.
+        'FORESIGHT_STARTUP_STATUS': '${scratch.path}/runtime/startup-1.json',
       };
       for (final handoff in [false, true]) {
         final file = handoff
@@ -305,6 +307,10 @@ void main() {
         expect(settings['FORESIGHT_QUERY_WORKER'], isNull);
         expect(settings['FORESIGHT_RUNTIME_REVISION'], 'trusted-revision');
         expect(settings['FORESIGHT_DATA'], injected['FORESIGHT_DATA']);
+        expect(
+          settings['FORESIGHT_STARTUP_STATUS'],
+          injected['FORESIGHT_STARTUP_STATUS'],
+        );
       }
       expect(
         RuntimeConfiguration.resolve(

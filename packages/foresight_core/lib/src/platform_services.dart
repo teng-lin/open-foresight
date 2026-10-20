@@ -65,6 +65,8 @@ class RuntimeConfiguration {
               'FORESIGHT_DATA',
               'FORESIGHT_RUNTIME',
               'FORESIGHT_SERVICE_TRACE',
+              // The service checks that it names a file in its runtime.
+              'FORESIGHT_STARTUP_STATUS',
             }.contains(key),
       );
     }

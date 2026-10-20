@@ -2021,10 +2021,16 @@ class _ClosingService implements Exception {
 
 typedef ServiceStartup = ({ServiceClient client, Map<String, dynamic> status});
 
+String _describeDuration(Duration duration) =>
+    duration.inMilliseconds % 1000 == 0
+    ? '${duration.inSeconds} s'
+    : '${duration.inMilliseconds} ms';
+
 Future<ServiceStartup> _connectCompatibleService(
   ProfilePaths profile,
   String path,
-  Duration Function() remaining, {
+  Duration Function() remaining,
+  Duration statusProbeLimit, {
   required bool snapshot,
 }) async {
   final left = remaining();
@@ -2035,7 +2041,9 @@ Future<ServiceStartup> _connectCompatibleService(
         : const Duration(seconds: 2),
   );
   Future<Map<String, dynamic>> status({bool desktop = false}) async {
-    final statusTimeout = remaining();
+    // A stalled owner must not hold startup for the whole budget (L1).
+    final deadline = remaining();
+    final capped = deadline > statusProbeLimit;
     final args = desktop
         ? <String, dynamic>{
             'desktop': true,
@@ -2047,9 +2055,14 @@ Future<ServiceStartup> _connectCompatibleService(
     final reply = await client
         .call(Operation.status.wire, args)
         .timeout(
-          statusTimeout,
+          capped ? statusProbeLimit : deadline,
           onTimeout: () => throw TimeoutException(
-            'Application service did not answer its startup status probe',
+            capped
+                ? 'Application service at $path accepted the connection but '
+                      'did not answer status within '
+                      '${_describeDuration(statusProbeLimit)}; it may be busy '
+                      'or hung.'
+                : 'Application service did not answer its startup status probe',
           ),
         );
     final value = Map<String, dynamic>.from(reply as Map);
@@ -2206,12 +2219,62 @@ Future<File> writeServiceStartupEnvironment(
   }
 }
 
+final _startupStatusName = RegExp(r'^startup-[A-Za-z0-9_-]+\.json$');
+
+/// Record why this service failed to start, for the launcher waiting on it.
+/// FORESIGHT_STARTUP_STATUS names the file; it must be a startup status in
+/// [profile]'s runtime directory, and anything else is ignored.
+void recordServiceStartupFailure(ProfilePaths profile, Object error) {
+  final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
+  if (path == null) return;
+  try {
+    if (!_startupStatusName.hasMatch(_entryName(path)) ||
+        canonicalProfilePath(File(path).parent.path) != profile.runtime) {
+      stderr.writeln('Ignoring a startup status outside the runtime: $path');
+      return;
+    }
+    final staging = File('$path.$pid')
+      ..writeAsStringSync(
+        jsonEncode({
+          'state': 'failed',
+          'error': error is StateError ? error.message : '$error',
+        }),
+        flush: true,
+      );
+    protectPrivateFile(staging.path);
+    staging.renameSync(path);
+  } catch (failure) {
+    stderr.writeln('Cannot record the startup failure: $failure');
+  }
+}
+
+/// The cause a launched service recorded in [status], if it failed to start.
+String? _recordedStartupFailure(File status) {
+  try {
+    final value = jsonDecode(status.readAsStringSync());
+    if (value is Map && value['state'] == 'failed') {
+      return '${value['error']}'.split('\n').first;
+    }
+  } on FileSystemException {
+    // Not written: the service has not failed, or not yet.
+  } on FormatException {
+    // Not a status this client understands.
+  }
+  return null;
+}
+
 /// Attach first; competing launchers may race safely on the service's OS lock.
+///
+/// [statusProbeLimit] bounds each startup status probe; tests shorten it.
 Future<ServiceClient> ensureService(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
-}) async =>
-    (await _ensureService(profile, startupTimeout: startupTimeout)).client;
+  Duration statusProbeLimit = const Duration(seconds: 30),
+}) async => (await _ensureService(
+  profile,
+  startupTimeout: startupTimeout,
+  statusProbeLimit: statusProbeLimit,
+)).client;
 
 /// Reserve desktop socket lifetime and obtain its final startup snapshot.
 /// This does not grant the visible desktop's approval-host capability.
@@ -2220,16 +2283,26 @@ Future<ServiceClient> ensureService(
 Future<ServiceStartup> ensureServiceSnapshot(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
-}) => _ensureService(profile, startupTimeout: startupTimeout, snapshot: true);
+  Duration statusProbeLimit = const Duration(seconds: 30),
+}) => _ensureService(
+  profile,
+  startupTimeout: startupTimeout,
+  statusProbeLimit: statusProbeLimit,
+  snapshot: true,
+);
 
 Future<ServiceStartup> _ensureService(
   ProfilePaths profile, {
   required Duration startupTimeout,
+  required Duration statusProbeLimit,
   bool snapshot = false,
 }) async {
   if (startupTimeout <= Duration.zero ||
       startupTimeout > const Duration(minutes: 3)) {
     throw ArgumentError.value(startupTimeout, 'startupTimeout');
+  }
+  if (statusProbeLimit <= Duration.zero) {
+    throw ArgumentError.value(statusProbeLimit, 'statusProbeLimit');
   }
   final startup = Stopwatch()..start();
   var closingOwner = false;
@@ -2237,6 +2310,8 @@ Future<ServiceStartup> _ensureService(
   String? executable;
   String? startupLog;
   File? handoff;
+  // Where a launched service records a failed start.
+  File? startupStatus;
   String? ignoredRecord;
   TimeoutException deadlineFailure() {
     final failure = launched
@@ -2269,10 +2344,18 @@ Future<ServiceStartup> _ensureService(
       );
     }
     executable = serviceExecutable;
+    final launchId = [
+      pid,
+      DateTime.now().microsecondsSinceEpoch,
+      Random.secure().nextInt(1 << 32),
+    ].join('-');
+    startupStatus = File('${profile.runtime}/startup-$launchId.json');
     final environment = {
       ...runtimeConfiguration.environment,
       'FORESIGHT_DATA': profile.data,
       'FORESIGHT_RUNTIME': profile.runtime,
+      // On macOS this travels through the private startup handoff.
+      'FORESIGHT_STARTUP_STATUS': startupStatus!.path,
     };
     handoff = Platform.isMacOS
         ? await writeServiceStartupEnvironment(
@@ -2329,6 +2412,7 @@ Future<ServiceStartup> _ensureService(
           profile,
           serviceEndpoint(profile, record),
           remaining,
+          statusProbeLimit,
           snapshot: snapshot,
         );
       } on _ClosingService catch (closing) {
@@ -2355,6 +2439,15 @@ Future<ServiceStartup> _ensureService(
         launched = true;
         await launchOnce();
       }
+      // A replacement that died says why at once (L3). One that lost the
+      // lock to another owner fails too; that owner will answer instead.
+      final failure = startupStatus == null
+          ? null
+          : _recordedStartupFailure(startupStatus!);
+      if (failure != null &&
+          _profileOwnerAvailable(profile, closingOwner: false)) {
+        throw StateError('Application service failed to start: $failure');
+      }
       // This read-only startup loop can attach to a competing legitimate owner.
       // It never replays a business operation or launches a second replacement.
       final left = remaining();
@@ -2368,6 +2461,9 @@ Future<ServiceStartup> _ensureService(
     if (handoff != null && handoff!.existsSync()) {
       await handoff!.delete();
       await handoff!.parent.delete();
+    }
+    if (startupStatus != null && startupStatus!.existsSync()) {
+      await startupStatus!.delete();
     }
   }
 }

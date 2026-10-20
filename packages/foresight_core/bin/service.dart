@@ -79,7 +79,13 @@ Future<void> main(List<String> args) async {
       }
       return;
     }
-    service = await IsolatedApplicationService.start(profile);
+    try {
+      service = await IsolatedApplicationService.start(profile);
+    } catch (error) {
+      // A detached launch has no stderr; tell the launcher why (L3).
+      recordServiceStartupFailure(profile, error);
+      rethrow;
+    }
     final done = Completer<void>();
     final signals = [
       ProcessSignal.sigterm.watch().listen((_) {
