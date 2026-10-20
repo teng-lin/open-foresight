@@ -418,6 +418,7 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
         patch.object(shadow.waiter, "fetch", side_effect=fetch),
         patch.object(shadow.sdk, "produce", side_effect=produce) as producer,
         patch.object(shadow.sdk, "resolve", return_value="verified-image") as resolve,
+        patch.object(shadow.sdk, "inspect", return_value="sha256:" + "a" * 64),
         patch.object(shadow.sdk, "write_outputs") as write,
         patch.object(shadow.application, "save_sdk") as save,
     ):
@@ -437,7 +438,9 @@ def test_shadow_sdk_reuses_before_component_scoped_fallback(
         assert calls[0][0][5] == 1800
         assert calls[0][1] == {"optional": True}
         resolve.assert_called_once_with(prefix, load_registry=True)
-        write.assert_called_once_with("verified-image")
+        write.assert_called_once_with(
+            "foresight-sdk:pr" if case == "fork" else "verified-image"
+        )
         if case == "fork":
             producer.assert_called_once()
             save.assert_called_once_with(

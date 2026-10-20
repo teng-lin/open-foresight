@@ -1102,3 +1102,71 @@ Every candidate still passes the original source, successful-attempt, receipt an
 checksum checks, and rejected candidates retain their qualification error. The
 follow-up lands after the foundation's merged-final approval so its unchanged SDK
 recipes can reuse those original verified bytes despite consumer-control edits.
+
+### Hosted shadow diagnostics
+
+The [D313 transport/benchmark run](https://github.com/teng-lin/open-foresight/actions/runs/39368931590)
+verified the canonical SDK tag, original qualification and restored build inputs.
+Its source/build archive was 106,639,256 bytes (110,482,468-byte artifact ZIP),
+with all 14,675 payload entries and 1,008 tracked source entries verified.
+No SDK or dependency compilation was needed. An offline diagnostic comparison of
+the downloaded native, core, desktop, service and host-Python artifacts matched
+the same-head Arch outcomes. The hosted comparison job was skipped; this offline
+match does not replace that gate. Compiled service/MCP had 22 passes and zero
+skips. The separate
+[acceptance run](https://github.com/teng-lin/open-foresight/actions/runs/39368931645)
+passed private virtual-audio desktop/core/meeting checks (2/1/1, zero skips).
+
+The same-host core benchmark ran plain then covered: 220s and 191s, respectively,
+with identical 1,105-pass/10-skip outcomes and 92.61% core coverage. This single
+ordered observation does not establish a coverage speedup or ordinary latency.
+The build job took 310s; the test job took 804s and failed its final host Docker
+cache fixture because loading an SDK does not restore the base image's own
+reference. It is diagnostic evidence, not a passing timing sample. The host step
+now inspects the same pinned Ubuntu base and pulls it when missing, before
+running the offline fixture.
+
+Normal measurements require a new PR event with `ci:validate-sdk-transport` and
+`ci:benchmark-core` removed beforehand. Rerunning an old labeled event is not an ordinary sample.
+Record each fresh build/test/comparison execution by run ID, attempt and job IDs;
+report a shared event explicitly when using targeted build-job retries. Exclude
+failed, skipped and special executions from ordinary p50 values. Preserve the
+original successful producer attempt, upload window and checksums on every retry.
+
+The [first ordinary event](https://github.com/teng-lin/open-foresight/actions/runs/39375443052)
+passed attempt 1 (build 360s, test 654s, comparison 13s). Attempt 2 built in
+322s but failed a host-Python fixture: its historical SDK receipt inherited the
+consumer's attempt 2 while its successful original producer job was attempt 1.
+The verifier correctly rejected that mismatch. Fixture packing now supplies the
+historical attempt explicitly, including the forged-receipt negative case;
+regressions exercise consumer attempts 2 and 7 and still reject a wrong producer
+attempt. Full-suite rerun validation also exposed the same inherited-attempt
+assumption in historical sanitizer and candidate-selection fixtures; their real
+packing now supplies the original attempt too. No production provenance rule
+changed. The failed attempt is excluded
+and the five-execution measurement must restart on the corrected source.
+
+The subsequent `575ef4e3` measurements use run `39381008467`. These are fresh
+application job executions on one PR event, with targeted build-job reruns;
+they are not independent pushes or representative PR workloads. Two attempts
+qualified before the pagination correction:
+
+| Attempt | Build job (seconds) | Test job (seconds) | Comparison job (seconds) |
+| --- | --- | --- | --- |
+| 1 | `118489943107` (349) | `118491795737` (618) | `118495044588` (9) |
+| 4 | `118508574379` (550) | `118511943647` (974) | `118517946884` (8) |
+
+Attempt 2 failed on Ubuntu snapshot HTTP 500/502 before application tests;
+attempt 3 recovered only that test job and retains the original build, so it is
+excluded from fresh build timings. Attempt 5 built successfully but exhausted
+three GitHub HTTP 502 responses while qualifying its producer, again before
+application tests. Attempt 6 retried only the failed test with attempt 5's
+successful build and failed on the same API response; it is also excluded.
+
+The same 100-job API page still failed on inspection; 10-, 30- and 50-job pages
+and the attempt-specific endpoint succeeded. Producer enumeration now uses
+30-job pages with `filter=all`, retaining every original attempt and propagating
+later-page errors. Receipts, successful upload attempts, upload windows and
+checksums remain mandatory. The two qualified measurements above remain part of
+the diagnostic record; the five-execution gate restarts on the pagination
+correction's new source. No five-sample median is established by these results.

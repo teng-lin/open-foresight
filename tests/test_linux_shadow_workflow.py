@@ -71,6 +71,9 @@ def test_local_and_ci_container_paths_keep_secrets_out_of_layers_and_exact_packa
     test = (ROOT / "tools/linux_container_test.sh").read_text()
     dockerfile = (ROOT / "packaging/build.Dockerfile").read_text()
     assert "/workspace/tools/linux_container_build.sh" in wrapper
+    # The macOS host installer does not guarantee sha256sum for this fixture;
+    # retain a syntax contract for Bash 3.2 even in Linux-only quality runs.
+    assert ",,}" not in wrapper and "^^}" not in wrapper
     assert "/workspace/tools/linux_container_test.sh" in wrapper
     assert "--cache-from" in wrapper
     assert "--cache-to" not in wrapper
@@ -113,3 +116,32 @@ def test_shadow_rollout_does_not_delay_or_fail_nightly_preview():
     assert jobs["linux-shadow-comparison"]["needs"] == ["linux-native", "linux-test"]
     for name in ("linux-build", "linux-test", "linux-shadow-comparison"):
         assert jobs[name]["continue-on-error"] is True
+
+
+def test_shadow_consumers_override_skipped_main_only_ancestors():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())["jobs"]
+    # distribution-number is skipped on PRs. GitHub's implicit success() also
+    # considers skipped ancestors, even after linux-build explicitly ran and
+    # succeeded. Both downstream jobs must override that implicit status check.
+    assert jobs["linux-test"]["if"] == (
+        "!cancelled() && needs.linux-build.result == 'success' && "
+        "needs.linux-build.outputs.complete == 'true' && "
+        "needs.linux-build.outputs.handoff_id != ''"
+    )
+    assert jobs["linux-shadow-comparison"]["if"] == (
+        "!cancelled() && needs.linux-native.result == 'success' && "
+        "needs.linux-test.result == 'success' && "
+        "needs.linux-test.outputs.complete == 'true'"
+    )
+    # Probationary continue-on-error jobs can appear successful in needs even
+    # after a failed step. Only a normally reached final step marks their work
+    # complete; artifact qualification still verifies the actual API job result.
+    for name in ("linux-build", "linux-test"):
+        assert not any("continue-on-error" in step for step in jobs[name]["steps"])
+        assert jobs[name]["outputs"]["complete"] == (
+            "${{ steps.complete.outputs.complete }}"
+        )
+        marker = jobs[name]["steps"][-1]
+        assert marker["id"] == "complete"
+        assert "if" not in marker  # Default success(), never an always() marker.
+        assert marker["run"] == "echo 'complete=true' >> \"$GITHUB_OUTPUT\""

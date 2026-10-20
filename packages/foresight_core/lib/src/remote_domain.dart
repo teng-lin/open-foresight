@@ -123,8 +123,15 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       while (!_disposed) {
         helper.state = 'application service disconnected; reconnecting';
         helper.changed?.call();
+        ServiceClient? next;
         try {
-          final next = await ensureService(profile);
+          final startup = await ensureServiceSnapshot(profile);
+          next = startup.client;
+          if (_disposed) {
+            await next.close();
+            return;
+          }
+          await _events?.cancel();
           if (_disposed) {
             await next.close();
             return;
@@ -132,15 +139,12 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
           client = next;
           runtime.client = next;
           _listen();
+          _apply(startup.status);
           final approvals = _approvalEvents;
           if (approvals != null) await enableDesktopApprovals(approvals);
-          _apply(
-            Map<String, dynamic>.from(
-              await next.call(Operation.status.wire) as Map,
-            ),
-          );
           return;
         } catch (error) {
+          await next?.close();
           helper.state = 'application service reconnect failed: $error';
           helper.changed?.call();
           await Future<void>.delayed(const Duration(seconds: 1));
@@ -151,24 +155,36 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     }
   }
 
-  static Future<RemoteDomain> connect(ProfilePaths profile) async {
-    final client = await ensureService(profile);
-    final runtime = RemoteRuntime(client);
-    final domain = RemoteDomain._(
-      Store.readOnly('${profile.data}/application.db'),
-      RemoteHelper(
-        '${File(serviceEndpoint(profile)).parent.path}/helper.sock',
-        '${profile.data}/helper',
-      ),
-      client,
-      runtime,
+  static Future<RemoteDomain> connect(
+    ProfilePaths profile, {
+    Duration startupTimeout = const Duration(minutes: 3),
+  }) async {
+    final startup = await ensureServiceSnapshot(
       profile,
+      startupTimeout: startupTimeout,
     );
-    final status = Map<String, dynamic>.from(
-      await client.call(Operation.status.wire) as Map,
-    );
-    domain._apply(status);
-    return domain;
+    Store? store;
+    RemoteDomain? domain;
+    try {
+      store = Store.readOnly('${profile.data}/application.db');
+      domain = RemoteDomain._(
+        store,
+        RemoteHelper(
+          '${File(serviceEndpoint(profile)).parent.path}/helper.sock',
+          '${profile.data}/helper',
+        ),
+        startup.client,
+        RemoteRuntime(startup.client),
+        profile,
+      );
+      domain._apply(startup.status);
+      return domain;
+    } catch (_) {
+      domain?.close();
+      store?.close();
+      await startup.client.close();
+      rethrow;
+    }
   }
 
   @override

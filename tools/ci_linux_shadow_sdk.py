@@ -48,7 +48,14 @@ def reference(prefix, repository):
                     stream.write(
                         f"producer_run={run_id}\nproducer_artifact_id={artifact_id}\nproducer_artifact_digest={checksum}\n"
                     )
-            return
+            return {
+                "producer_run": run_id,
+                "artifact_id": artifact_id,
+                "artifact_digest": checksum,
+                "source_receipt": value.get(
+                    "source_receipt", value.get("original_source_receipt")
+                ),
+            }
     raise ValueError("Verified SDK lacks its original producer qualification")
 
 
@@ -61,15 +68,77 @@ def load(prefix, *, retain_archive=False):
     return image
 
 
-def prepare(repository, source, own_pr, fork, directory):
+def forward(prefix, directory, source, image, *, reuse_archive):
+    # Registry and archive resolution load this same job-local tag. Both
+    # runners must request it so the exact seed qualification stays identical.
+    local_image = sdk.local_tag("linux-sdk")
+    if sdk.inspect(local_image) != sdk.inspect(image):
+        raise ValueError("Verified SDK local tag differs from the forwarded image")
+    application.save_sdk(
+        source,
+        image,
+        directory / "in-run",
+        shadow=True,
+        source_prefix=prefix,
+        reuse_archive=reuse_archive,
+    )
+    shutil.rmtree(prefix)
+    sdk.write_outputs(local_image)
+    if output := os.environ.get("GITHUB_OUTPUT"):
+        with open(output, "a") as stream:
+            stream.write("in_run=true\n")
+    return True
+
+
+def prepare(repository, source, own_pr, fork, directory, *, validate_in_run=False):
+    if validate_in_run:
+        ref = re.fullmatch(
+            r"refs/pull/([1-9][0-9]*)/(?:merge|head)", os.getenv("GITHUB_REF", "")
+        )
+        if (
+            os.getenv("GITHUB_EVENT_NAME") != "pull_request"
+            or ref is None
+            or int(ref[1]) != own_pr
+            or os.getenv("CI_TIER") != "pr"
+            or os.getenv("SHADOW_PREVIEW", "false") != "false"
+        ):
+            raise ValueError(
+                "SDK transport validation requires this PR's ref and pr tier, without preview"
+            )
     identity = artifacts.fingerprint("linux-sdk")
     prefix = directory / "verified"
     if waiter.fetch(
-        repository, "linux-sdk", prefix, source, own_pr, 1800, optional=fork
+        repository,
+        "linux-sdk",
+        prefix,
+        source,
+        own_pr,
+        1800,
+        optional=fork or validate_in_run,
     ):
-        reference(prefix, repository)
+        original = reference(prefix, repository)
+        if validate_in_run:
+            descriptor = sdk.record(prefix, "linux-sdk")
+            reuse_archive = descriptor.get("transport", "registry") == "docker-archive"
+            image = load(prefix, retain_archive=reuse_archive)
+            print(
+                "Shadow SDK transport validation: forwarding the current qualified image "
+                "with its original provenance; transport export is not an SDK compilation.",
+                flush=True,
+            )
+            print(
+                "Original SDK qualification: " + json.dumps(original, sort_keys=True),
+                flush=True,
+            )
+            return forward(
+                prefix, directory, source, image, reuse_archive=reuse_archive
+            )
         sdk.write_outputs(load(prefix))
         return False
+    if validate_in_run:
+        raise RuntimeError(
+            "SDK transport validation requires an existing qualified SDK; no SDK build is allowed"
+        )
     if not fork:
         raise RuntimeError(artifacts.unavailable_message("linux-sdk", identity))
     print(
@@ -90,20 +159,7 @@ def prepare(repository, source, own_pr, fork, directory):
     if result != "built":
         raise ValueError("Unexpected SDK producer result")
     image = load(prefix, retain_archive=True)
-    application.save_sdk(
-        source,
-        image,
-        directory / "in-run",
-        shadow=True,
-        source_prefix=prefix,
-        reuse_archive=True,
-    )
-    shutil.rmtree(prefix)
-    sdk.write_outputs(image)
-    if output := os.environ.get("GITHUB_OUTPUT"):
-        with open(output, "a") as stream:
-            stream.write("in_run=true\n")
-    return True
+    return forward(prefix, directory, source, image, reuse_archive=True)
 
 
 def main():
@@ -111,6 +167,11 @@ def main():
     parser.add_argument("--source", required=True)
     parser.add_argument("--own-pr", type=int, default=0)
     parser.add_argument("--fork", action="store_true")
+    parser.add_argument(
+        "--validate-in-run-transport",
+        action="store_true",
+        help="PR-only: forward an existing qualified SDK through an in-run archive without compiling",
+    )
     parser.add_argument("--directory", type=Path, required=True)
     args = parser.parse_args()
     prepare(
@@ -119,6 +180,7 @@ def main():
         args.own_pr,
         args.fork,
         args.directory,
+        validate_in_run=args.validate_in_run_transport,
     )
 
 

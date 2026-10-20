@@ -269,7 +269,9 @@ def test_foreign_open_pr_and_workflow_rejected_but_reviewed_merge_can_share():
 
 
 @pytest.fixture
-def producer(source, abi, tmp_path):
+def producer(source, abi, tmp_path, monkeypatch, request):
+    if getattr(request, "param", None) is not None:
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", request.param)
     prefix = tmp_path / "prefix"
     installed(source, prefix, abi)
     with (
@@ -286,7 +288,11 @@ def producer(source, abi, tmp_path):
         sdk.restore(
             source, "address", prefix, REPOSITORY, 119, "old-key", cache_hit="true"
         )
-        sdk.pack(source, "address", prefix, tmp_path / "artifact")
+        # This historical upload belongs to job attempt 1, independently of
+        # whichever attempt is currently running its consumer tests.
+        with monkeypatch.context() as packing:
+            packing.setenv("GITHUB_RUN_ATTEMPT", "1")
+            sdk.pack(source, "address", prefix, tmp_path / "artifact")
     receipt = json.loads((tmp_path / "artifact/identity.json").read_text())
     run = {
         "id": 100,
@@ -434,10 +440,12 @@ def test_copied_cache_is_requalified_only_against_verified_artifact(
     assert sdk.inventory(prefix) == before
 
 
+@pytest.mark.parametrize("producer", [None, "2", "7"], indirect=True)
 def test_verified_successful_main_artifact_crosses_pr_scope(
     source, abi, producer, tmp_path
 ):
     restored = tmp_path / "new-prefix"
+    assert producer[0]["source_run_attempt"] == producer[3]["run_attempt"] == 1
     assert find_fixture(source, abi, producer, restored)["run_id"] == 100
     assert (restored / "bin/protoc").is_file()
 

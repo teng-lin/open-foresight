@@ -44,6 +44,9 @@ class RemoteFixture {
       );
       owner = openStore('${profile.data}/application.db');
       _hasOwner = true;
+      File(
+        '${profile.data}/.desktop-capability',
+      ).writeAsStringSync('remote-fixture-desktop-token');
       server = await ServerSocket.bind(
         InternetAddress(
           '${profile.runtime}/application.sock',

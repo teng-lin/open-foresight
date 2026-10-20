@@ -179,21 +179,49 @@ def test_optional_api_does_not_swallow_unparseable_transport_errors(monkeypatch,
         artifacts.optional_api(REPOSITORY, "actions/artifacts/1")
 
 
-def test_job_pagination_keeps_successful_later_page(monkeypatch):
+@pytest.mark.parametrize("count", [0, 29, 30, 31, 60, 61, 110])
+def test_job_pagination_keeps_every_original_attempt_on_small_pages(monkeypatch, count):
+    # The hosted jobs API timed out for a 100-row response on a retried run.
+    # Keep all original/copy rows, including failures and an old successful
+    # producer beyond the first page, for the unchanged receipt verifier.
+    jobs = [
+        {
+            "id": 1000 + index,
+            "run_id": 99,
+            "head_sha": "a" * 40,
+            "name": "Build Linux core",
+            "run_attempt": 1 if index == count - 1 else 2,
+            "conclusion": "success" if index == count - 1 else "failure",
+            "steps": [{"name": "Build SDK", "conclusion": "success"}],
+        }
+        for index in range(count)
+    ]
     routes = []
 
-    def api(repo, route):
+    def api(repository, route):
+        assert repository == REPOSITORY
+        page = len(routes) + 1
+        assert route == f"actions/runs/99/jobs?filter=all&per_page=30&page={page}"
         routes.append(route)
-        return {
-            "jobs": [{"name": "unrelated"}] * 100
-            if len(routes) == 1
-            else [{"name": "Build Linux core", "conclusion": "success"}]
-        }
+        return {"jobs": jobs[(page - 1) * 30 : page * 30]}
 
     monkeypatch.setattr(artifacts, "api", api)
-    assert len(artifacts.dependency_jobs(REPOSITORY, 99)) == 101
-    assert routes[-1].endswith("page=2")
+    assert artifacts.dependency_jobs(REPOSITORY, 99) == jobs
+    assert len(routes) == count // 30 + 1
     assert not artifacts.in_producer_attempt({"created_at": "invalid"}, {})
+
+
+def test_job_pagination_does_not_return_partial_provenance_after_read_failure(
+    monkeypatch,
+):
+    original = [{"id": index, "name": "Build Linux core"} for index in range(30)]
+    failure = subprocess.CalledProcessError(1, "gh", stderr="HTTP 502")
+    request = Mock(side_effect=[{"jobs": original}, failure])
+    monkeypatch.setattr(artifacts, "api", request)
+    with pytest.raises(subprocess.CalledProcessError) as result:
+        artifacts.dependency_jobs(REPOSITORY, 99)
+    assert result.value is failure
+    assert request.call_count == 2
 
 
 @pytest.mark.parametrize("failure", ["members", "receipt"])

@@ -15,7 +15,9 @@ IDENTITY = "a" * 64
 
 
 @pytest.fixture
-def candidates(tmp_path, monkeypatch):
+def candidates(tmp_path, monkeypatch, request):
+    if getattr(request, "param", None) is not None:
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", request.param)
     payload = tmp_path / "payload"
     payload.mkdir()
     (payload / "retained").write_text("verified SDK fixture")
@@ -28,6 +30,7 @@ def candidates(tmp_path, monkeypatch):
 
     with monkeypatch.context() as packing:
         packing.setattr(artifacts.subprocess, "check_output", revision)
+        packing.setenv("GITHUB_RUN_ATTEMPT", "1")
         artifacts.pack(COMPONENT, IDENTITY, payload, packed)
     receipt = json.loads((packed / "identity.json").read_text())
     archives = {}
@@ -141,6 +144,7 @@ def lookup(mode, state, **kwargs):
 
 
 @pytest.mark.parametrize("mode", ["probe", "pull"])
+@pytest.mark.parametrize("candidates", [None, "2", "7"], indirect=True)
 def test_unqualified_first_candidate_does_not_hide_later_valid_candidate(
     candidates, mode
 ):

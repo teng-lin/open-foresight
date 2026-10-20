@@ -39,6 +39,7 @@ RUN cmake -G "Unix Makefiles" -S /src -B /src/build -DCMAKE_BUILD_TYPE=Release &
 # Secret-free test environment shared by independent shadow build/test runners.
 # This is application tooling; it never changes component SDK recipe identities.
 FROM application-dependencies AS ci
+LABEL org.openforesight.ci-handoff="source-scoped-sdk-transport"
 ENV FORESIGHT_PYTHON=/opt/dev-python/bin/python \
     FORESIGHT_PARALLEL_GATES=1 FORESIGHT_REQUIRE_APP_DEPENDENCY_REUSE=${REQUIRE_DEPENDENCY_REUSE}
 RUN apt-get -o Acquire::Retries=3 -o APT::Update::Error-Mode=any --snapshot "$UBUNTU_SNAPSHOT" update && \

@@ -449,15 +449,18 @@ def merged_source(repository, run):
 
 def dependency_jobs(repository, run_id):
     """Retain completed producers when a later workflow attempt reruns failures."""
+    # Large retried runs can time out while GitHub assembles 100 job/step rows.
+    # Smaller pages retain every original attempt without weakening provenance.
+    page_size = 30
     jobs = []
     page = 1
     while True:
         batch = api(
             repository,
-            f"actions/runs/{run_id}/jobs?filter=all&per_page=100&page={page}",
+            f"actions/runs/{run_id}/jobs?filter=all&per_page={page_size}&page={page}",
         )["jobs"]
         jobs.extend(batch)
-        if len(batch) < 100:
+        if len(batch) < page_size:
             return jobs
         page += 1
 
