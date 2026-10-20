@@ -539,35 +539,57 @@ void main() {
   test(
     'desktop final snapshot shares the original overall startup deadline',
     () async {
-      final f = HandoffFixture();
-      await f.start(
-        errorMessage: 'healthy-then-stall',
-        firstProbeDelayMs: 1500,
-      );
-      Store('${f.profile.data}/application.db').close();
-      try {
-        final failure = expectLater(
-          RemoteDomain.connect(
-            f.profile,
-            startupTimeout: const Duration(seconds: 2),
-          ),
-          throwsA(isA<TimeoutException>()),
+      // The probe limit caps a status call only while more than it remains
+      // of the startup deadline. The owner holds its first reply long enough
+      // that less than the limit remains, so the stalled final snapshot ends
+      // uncapped, at the original deadline. A fresh budget for it would
+      // exceed the limit and end capped, with a message naming the limit.
+      await expireDeadlineDuring('the final snapshot', (deadline) async {
+        final f = HandoffFixture();
+        await f.start(
+          errorMessage: 'healthy-then-stall',
+          firstProbeDelayMs: (deadline * 0.25).inMilliseconds,
         );
-        await f.next('healthy-observed');
-        await f.next('final-observed');
-        await failure.timeout(const Duration(milliseconds: 1200));
-        await eventually(
-          () => File('${f.profile.data}/old-peer-closed').existsSync(),
-        );
-        expect(f.launched, isFalse);
-        expect(
-          File('${f.profile.data}/old-connections').readAsStringSync(),
-          '1',
-        );
-      } finally {
-        await f.close();
-      }
+        try {
+          ServiceFrame? last;
+          unawaited(
+            f.proxy
+                .seen(
+                  ProxyDirection.toService,
+                  method: 'status',
+                  where: (frame) =>
+                      (frame.json?['args'] as Map?)?['desktop'] == true,
+                )
+                .then((frame) => last = frame),
+          );
+          final failure = await startupFailure(
+            f.proxy.run(
+              () => ensureServiceSnapshot(
+                f.profile,
+                startupTimeout: deadline,
+                statusProbeLimit: deadline * 0.9,
+              ),
+            ),
+          );
+          expect(failure, isA<TimeoutException>());
+          // Only a final snapshot that reached the stalled owner tests it.
+          if (last == null) return false;
+          expect((failure as TimeoutException).message, probeTimeoutMessage);
+          await eventually(
+            () => File('${f.profile.data}/old-peer-closed').existsSync(),
+          );
+          expect(f.launched, isFalse);
+          expect(
+            File('${f.profile.data}/old-connections').readAsStringSync(),
+            '1',
+          );
+          return true;
+        } finally {
+          await f.close();
+        }
+      });
     },
+    timeout: ladderTimeout(handoffDeadlines),
   );
 
   test('desktop final snapshot follows an owner that closes uncleanly to one '
