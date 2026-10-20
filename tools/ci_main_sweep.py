@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""Prepare isolated main sweep exercises without enabling production skipping."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tools.ci_main_evidence import PLATFORM, Reader, require_source, scoped_run  # noqa: E402
+
+
+def application_selection():
+    from tools.ci_selection import application_selection as application
+
+    return application()
+
+
+def guard(reader, source, current_run):
+    """Only already executing earlier sweeps can supersede this execution.
+
+    Queued duplicates must not mutually skip. A completed title alone is not
+    evidence: the original selection artifact and every application gate must
+    qualify before it can eliminate fresh work.
+    """
+    require_source(source)
+    if reader.get("commits/main")["sha"] != source:
+        return "Source is no longer main HEAD"
+    current = reader.run(current_run)
+    scoped_run(current, reader.repository, PLATFORM, source, ("workflow_dispatch",))
+    for run in reader.runs(PLATFORM, source):
+        if run["id"] >= current_run or not run.get("display_title", "").startswith(
+            "Main sweep "
+        ):
+            continue
+        scoped_run(run, reader.repository, PLATFORM, source, ("workflow_dispatch",))
+        if run.get("status") == "in_progress":
+            try:
+                selection, _ = reader.selection(run)
+            except ValueError:
+                continue
+            if selection.get("sweep") is True and selection.get("superseded") is False:
+                return "An earlier qualified sweep is executing"
+        elif run.get("status") == "completed":
+            try:
+                qualify(reader, run)
+            except ValueError:
+                continue
+            return "An earlier sweep already validated this source"
+    return ""
+
+
+def qualify(reader, run):
+    from tools import ci_release_candidates as candidate
+    from tools.ci_main_evidence import job_proof, selection_jobs
+
+    scoped_run(
+        run, reader.repository, PLATFORM, run["head_sha"], ("workflow_dispatch",)
+    )
+    selection, proof = reader.selection(run)
+    if (
+        selection.get("sweep") is not True
+        or selection.get("selection") != application_selection()
+    ):
+        raise ValueError("Sweep must execute the complete application owner closure")
+    jobs = reader.jobs(run)
+    for name in ("platform-checks", "acceptance-checks", "workflow-lint"):
+        candidate.latest(jobs, name)
+    for name, required in selection_jobs(selection).items():
+        if required:
+            job_proof(jobs, name)
+    return proof
+
+
+def dispatch(reader, *, source, exercise=False, index=None, root=None):
+    require_source(source)
+    if not exercise:
+        from tools.ci_main_coordinator import authorize
+
+        authorize(reader, source, index=index, root=root)
+    if reader.get("commits/main")["sha"] != source:
+        return {"source": source, "status": "superseded"}
+    # This entrypoint is also used by scheduled reconciliation. The workflow's
+    # repository-wide coordinator group serializes decisions, not SDK producers.
+    for run in reader.runs(PLATFORM, source):
+        if run.get("display_title", "").startswith("Main sweep ") and run.get(
+            "status"
+        ) in ("queued", "in_progress", "waiting", "pending"):
+            scoped_run(run, reader.repository, PLATFORM, source, ("workflow_dispatch",))
+            return {"source": source, "status": "already-active", "run": run["id"]}
+    reader.api(
+        reader.repository,
+        "actions/workflows/macos.yml/dispatches",
+        "POST",
+        {
+            "ref": "main",
+            "inputs": {"source": source, "sweep": True},
+        },
+    )
+    return {
+        "source": source,
+        "status": "exercise-dispatched" if exercise else "dispatched",
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("guard", "exercise"))
+    parser.add_argument("--source", required=True)
+    parser.add_argument("--output", type=Path, default=Path("ci-selection.json"))
+    args = parser.parse_args()
+    if os.environ.get("GITHUB_REF") != "refs/heads/main" or os.environ.get(
+        "GITHUB_EVENT_NAME"
+    ) not in ("workflow_dispatch", "schedule", "push", "workflow_run"):
+        raise ValueError("Sweep control requires reviewed main controls")
+    reader = Reader(os.environ["GITHUB_REPOSITORY"])
+    if args.command == "exercise":
+        result = dispatch(reader, source=args.source, exercise=True)
+    else:
+        reason = guard(reader, args.source, int(os.environ["GITHUB_RUN_ID"]))
+        selected = application_selection()
+        if reason:
+            selected = dict.fromkeys(selected, False)
+        result = {
+            "range": args.source,
+            "selection": selected,
+            "superseded": bool(reason),
+            "sweep": True,
+            "reason": reason,
+            "paths": [],
+            "force": False,
+        }
+        if output := os.environ.get("GITHUB_OUTPUT"):
+            with open(output, "a") as stream:
+                stream.write(
+                    "selection=" + json.dumps(selected, separators=(",", ":")) + "\n"
+                )
+                for name, value in selected.items():
+                    stream.write(f"{name.replace('-', '_')}={str(value).lower()}\n")
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    print(json.dumps(result))
+
+
+if __name__ == "__main__":
+    main()
