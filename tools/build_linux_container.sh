@@ -35,6 +35,7 @@ docker buildx build --builder "$task_builder" --platform linux/amd64 --load \
   --file packaging/build.Dockerfile --target ci \
   --build-context "appdeps_seed=$task_seed" --build-arg "SDK_IMAGE=$task_sdk" \
   --build-arg REQUIRE_DEPENDENCY_REUSE=1 \
+  --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:ci-tools-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:app-deps-buildcache-v1" \
   --cache-from "type=registry,ref=ghcr.io/$task_repository/linux-sdk:app-buildcache-x86-64" \
   --tag "$task_image" .

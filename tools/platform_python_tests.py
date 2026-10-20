@@ -26,6 +26,8 @@ SHARED = (
     "tests/test_linux_packages.py",
     "tests/test_linux_ci_handoff.py",
     "tests/test_litert_build_snapshot.py",
+    "tests/test_macos_cmake_cache.py",
+    "tests/test_macos_one_job.py",
     "tests/test_native_incremental_work.py",
     "tests/test_parallel_build_gates.py",
     "tests/test_profile_migration.py",

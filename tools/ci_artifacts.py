@@ -907,6 +907,21 @@ def pull(
     artifact_id=0,
     artifact_digest="",
 ):
+    if component.endswith("-app") and consumer not in (
+        "artifact-pull",
+        "release-preparation",
+    ):
+        raise ValueError(f"Unsupported application consumer: {consumer}")
+    if component.endswith("-app") and consumer == "release-preparation":
+        if not source_run:
+            raise ValueError("Release packaging requires an exact tested candidate run")
+        from tools.ci_release_candidates import authorize
+
+        consumer = authorize(repository, identity, source_run, component)
+    if component.endswith("-app") and consumer == "legacy-release-candidate":
+        from tools.ci_release_candidates import require_legacy
+
+        require_legacy(repository, identity)
     if bool(artifact_id) != bool(artifact_digest) or (
         artifact_id
         and (
@@ -1108,6 +1123,20 @@ def application_descriptor(
     repository, component, source, run_id, *, consumer="artifact-pull"
 ):
     """Prefer a small verified receipt; legacy candidates retain full verification."""
+    if component.endswith("-app") and consumer not in (
+        "artifact-pull",
+        "release-preparation",
+    ):
+        raise ValueError(f"Unsupported application consumer: {consumer}")
+    public_consumer = consumer
+    if consumer == "release-preparation":
+        from tools.ci_release_candidates import authorize
+
+        consumer = authorize(repository, source, run_id, component)
+    if consumer == "legacy-release-candidate":
+        from tools.ci_release_candidates import require_legacy
+
+        require_legacy(repository, source)
     run = api(repository, f"actions/runs/{run_id}")
     metadata_name = receipt_name(component, source)
     items = api(repository, f"actions/artifacts?name={metadata_name}&per_page=100")[
@@ -1162,7 +1191,9 @@ def application_descriptor(
         return distribution
     with tempfile.TemporaryDirectory() as temporary:
         prefix = Path(temporary) / "candidate"
-        options = {"consumer": consumer} if consumer != "artifact-pull" else {}
+        options = (
+            {"consumer": public_consumer} if public_consumer != "artifact-pull" else {}
+        )
         if not pull(
             repository, component, source, prefix, source_run=run_id, **options
         ):
@@ -1177,14 +1208,19 @@ def main():
     )
     parser.add_argument("--component", choices=(*FILES, "macos-app", "linux-app"))
     parser.add_argument("--identity")
-    parser.add_argument("--prefix", type=Path)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--artifact-id", type=int)
     parser.add_argument("--artifact-digest", default="")
     parser.add_argument(
         "--tier", choices=("pr", "sweep", "preview", "release", "local")
     )
     parser.add_argument("--label", default="")
+    parser.add_argument(
+        "--consumer",
+        choices=("artifact-pull", "release-preparation"),
+        default="artifact-pull",
+    )
+    parser.add_argument("--prefix", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--artifact-id", type=int)
     parser.add_argument(
         "--repository",
         default=os.environ.get("GITHUB_REPOSITORY", "teng-lin/open-foresight"),
@@ -1268,6 +1304,7 @@ def main():
         args.own_head,
         args.own_pr,
         source_run=args.run_id,
+        **({"consumer": args.consumer} if args.consumer != "artifact-pull" else {}),
         artifact_id=args.artifact_id or 0,
         artifact_digest=args.artifact_digest,
     ):

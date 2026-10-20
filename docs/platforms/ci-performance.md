@@ -289,9 +289,11 @@ Suite membership is not a claim that production dependencies are disjoint. In
 particular, meeting summary depends on generation/retrieval and the shared service,
 so their changes select every phase. Retain observations across representative
 PRs and compare actual outcomes before broadening this map or allowing skips.
-The acceptance fallback runs weekly on Monday at 05:43 UTC (`43 5 * * 1`).
-Main completion and manual validation remain full. The separate preview nightly
-adds an in-run aggregate; no per-phase skip policy relies on this observer.
+The scheduled nightly preview provides the weekly consume-only external audit.
+Each night retries selection until a qualified completion receipt proves that
+this UTC week's three external gates actually ran successfully. A superseded
+Monday or active same-source producer therefore does not lose the whole week.
+Main completion and explicit full manual validation retain all selected gates.
 
 The older CPU-model and audio phases totaled about nine runner-minutes, with
 software Vulkan roughly another minute. Those are possible future phase savings,
@@ -300,12 +302,14 @@ run. The 149-second meeting and 126-second Gemma tests retain their assertions.
 
 ## Application stages
 
-Linux native regression and macOS validation run four separate jobs: native,
+The retained legacy Arch Linux regression runs four separate jobs: native,
 core, desktop and service. Core and desktop run in parallel after native;
-service consumes the native/core binaries and all three qualification identities. `tools/build.sh --stage` uses these same
+service consumes the native/core binaries and all three qualification identities.
+The required Linux build/test pair and consolidated macOS job run fresh tests
+against their verified SDK and application inputs; they do not reuse test results. `tools/build.sh --stage` uses these same
 boundaries locally; its default still builds and tests the complete application.
 
-A PR stage may reuse a completed successful result from the same PR or main.
+A retained legacy PR stage may reuse a completed successful result from the same PR or main.
 The verifier independently checks the producing workflow, job, attempt, commit,
 artifact digest and content manifest. Its key includes the complete relevant
 source inventory, actual compiler/runtime/system packages, extracted SDK bytes,
@@ -376,33 +380,22 @@ match, allowing Ninja to retain valid object files. Distribution stamping makes
 the input tree derived, so those results are not reusable as clean PR results.
 
 Ubuntu package lifecycle and model/audio acceptance share the exact application
-bundle. The PR `ubuntu-application` producer builds it once and completes after
-uploading its checksummed source/attempt receipt. The separate `ubuntu-package`
-job restores that exact artifact and mounts the application read-only into an
-acceptance-tools image. It verifies the repository, workflow, source, successful
-producer job and original attempt, upload bounds, ZIP and payload checksums, and
-distribution metadata. Rerunning failed acceptance jobs retains the successful
-producer; it neither compiles an application nor relabels the original attempt.
-When the run-wide jobs API reports that exact producer as pending, restore checks
-the individual job endpoint, requiring the same job ID, name, run, source and
-attempt. If that job is also pending, restore polls for up to 60 seconds before
-failing. It still requires completed success and the
-original upload window before downloading any bytes; failed, ambiguous or
-incorrectly scoped producers are never accepted.
-A fork's locally built SDK is also retained for this successful source-scoped
-producer, so its acceptance job does not build the SDK again. Those artifacts
-never enter the trusted main SDK or release-candidate pools.
+bundle from the successful in-run `linux-build` producer. Independent
+`acceptance-cpu`, `acceptance-audio` and `acceptance-deb` jobs verify the repository,
+workflow, source, successful original job attempt, upload bounds, ZIP and payload
+checksums, and distribution metadata before mounting the application read-only.
+Rerunning failed acceptance jobs retains that original producer and never compiles
+or relabels it. Fork-local verified SDK artifacts remain scoped to their PR; they
+never enter the main SDK or release-candidate pools. DEB acceptance skips the SDK
+download because its package lifecycle checks use only the portable application.
 Pinned snapshot package setup retries transient failures, requires a complete
 index update, and preserves downloaded work between attempts. On main,
 acceptance starts after a successful
 `linux-bundle` producer job and downloads its verified exact-source candidate;
-manual and scheduled acceptance select the newest retained verified candidate
-on reviewed main without compiling an application. Historical dispatches resolve
-the product source from the producer artifact, independently of its controller
-commit. Acceptance checks out that original product for its Dart/Flutter test
-packages while retaining the current acceptance-image recipe. The tools image installs test prerequisites but has no application
-or SDK build step. The package job creates the DEB and installs it in Ubuntu
-24.04 to test dependencies, layout, service lifecycle and document parsing.
+nightly acceptance uses its same-run, separately labelled preview bundle.
+The tools image installs test prerequisites without building an application or
+SDK. DEB acceptance creates and installs the package in Ubuntu 24.04 to check
+dependencies, layout, service lifecycle and document parsing.
 
 The main `linux-bundle` job loads the verified SDK into its shared Docker daemon
 before inspecting it to qualify existing dependency objects. Resolving a registry
@@ -410,9 +403,9 @@ descriptor alone does not load an image; failed inspection must never authorize
 recompiling the SDK or dependencies.
 
 Acceptance tooling has its own `acceptance-tools-buildcache-v1` registry cache.
-The dedicated main-only `linux-cache-publish.yml` workflow and retained guarded
-`linux-bundle` job can publish it; PR and acceptance consumers have read-only
-registry access. Its dependency stage binds
+The dedicated reviewed-main `publish-caches` job and the main-only
+`linux-cache-publish.yml` workflow can publish it. PR and acceptance consumers
+have read-only registry access. Its dependency stage binds
 the immutable SDK, snapshot package recipe, Flutter verification and all local
 package manifests/lockfiles. Sources are copied afterward, so ordinary source or
 test edits reuse package setup and dependency downloads. Registry authentication,
@@ -543,9 +536,8 @@ archive; a separate container driver cannot see that archive's local tag. The
 fixed same-repository application caches are imported even when the SDK comes from
 an approved legacy archive. Registry errors stop the job instead of silently
 starting an uncached dependency build. PR acceptance reads the cache. The
-dedicated main-only `linux-cache-publish.yml` workflow and retained guarded
-Linux bundle job export the secret-free `application-dependencies` stage to
-`app-deps-buildcache-v1`. They never overwrite the original
+dedicated main-only `linux-cache-publish.yml` workflow and `publish-caches` job
+export the secret-free `application-dependencies` stage to `app-deps-buildcache-v1`. They never overwrite the original
 `app-buildcache-x86-64` tag: that tag keeps the reviewed migration manifest and
 layers referenced while both caches remain importable. Packaging
 stages containing distribution secrets never export caches.
@@ -896,7 +888,8 @@ inputs are unchanged: reuse those verified component images, and only assemble
 the new SDK layer that installs the additional wheel. No vendor library needs
 recompilation for this Python contract dependency.
 
-Acceptance runs weekly on Mondays at 05:43 UTC. PR selection resolves the merge
+The scheduled preview selects a consume-only external audit until the current
+UTC week has a verified completion. PR selection resolves the merge
 base before calling the common classifier, which is equivalent to diffing
 `base...HEAD` and avoids selecting changes introduced only by advancing main.
 At least five hosted follow-up runs are still needed before claiming measured
@@ -1012,17 +1005,19 @@ issue job does not discard its run's otherwise completed test evidence, and a
 stale queued writer reports the newer tests instead of assuming a replacement
 writer will run.
 
-## WS2a Ubuntu shadow build and test
+## Ubuntu build and test handoff (WS2a origin)
 
-The additional `linux-build`, `linux-test` and `linux-shadow-comparison` jobs in
-`macos.yml` observe the Ubuntu design on pull requests only. All three jobs are
-nonblocking during this shadow phase; main and called nightly previews skip them,
-so preview packaging neither waits for them nor inherits their failures. The required platform and
-acceptance aggregates keep their current dependencies. These jobs never publish
-registry images or caches. They restore the existing verified SDK and qualified
-Make dependency seed before building the secret-free Docker `ci` target. A cache
-miss may rebuild that application test image, while unchanged SDKs and dependency
-objects remain verified and reused.
+`linux-build` and `linux-test` in `macos.yml` are required by the platform
+aggregate in this held successor, including main and nightly calls when selected.
+The former nonblocking WS2a comparison job is removed. Application registry
+consumers are
+read-only; the dedicated main-ref `publish-caches` job owns the three Linux
+registry build caches and `integration-models-v1`. Other guarded legacy writers
+remain until their planned replacements land. The build
+restores the verified SDK and qualified Make dependency seed before building the
+secret-free Docker `ci` target. A miss may rebuild the application test image;
+unchanged SDKs and dependency objects remain verified and reused. The switch stays
+local until the hosted shadow safety and measurement gates pass.
 
 `tools/build.sh --build-only` compiles native products, service/MCP AOT and Flutter
 release without running suites. `--test-only` first rejects any nonempty full
@@ -1044,7 +1039,7 @@ configuration secrets read-only outside the image. Distribution stamping happens
 on the verified host checkout. Packaging retains the exact GPU runtime flags,
 Google-client requirement, ABI report and tar package used by the existing builder.
 Only the host's Git checkout writes the application receipt, including tier/label.
-The shadow bundle uses `linux-bundle-<run>-<attempt>`, never candidate lookup names.
+The PR handoff uses `linux-bundle-<run>-<attempt>`, never candidate lookup names.
 
 The input identity covers the SDK image ID, dependency-seed qualification digest,
 CI/dependency Docker recipe and pinned Ubuntu snapshot. A rebuilt CI image may
@@ -1181,7 +1176,7 @@ layer from reviewed main without waiting for the platform switch. It consumes
 a qualified SDK and the verified historical dependency seed, then exports only
 `application-dependencies`, `ci`, and `acceptance-dependencies`. It retains the
 original producer provenance and never builds an SDK or publishes application
-candidates. Existing checks and their guarded cache publishers remain in place.
+candidates. The prerequisite retained existing checks and guarded cache writers.
 PR runs cannot enter this workflow or write its registry tags.
 
 After this workflow lands on main, dispatch it with
@@ -1192,6 +1187,152 @@ For a transient failure while that SHA is still current, read the logs and retry
 only the failed job. Cache publication is a prerequisite to measure the later
 runner switch, and does not establish a performance improvement by itself.
 
-The retained legacy writer can replace the acceptance cache with layers keyed
-on stamped manifests. The later measurement must verify actual cache reuse;
-publication alone does not prove a hit for every consumer.
+At the prerequisite stage, the retained legacy writer could replace the
+acceptance cache with layers keyed on stamped manifests. This combined graph
+moves those exports to `publish-caches`. Measurements must verify actual cache
+reuse; publication alone does not prove a hit for every consumer.
+
+### Combined platform and on-demand candidate rollout
+
+This stacked batch combines WS2b, WS2b-2, WS4 and WS5b-1 on PR #154's
+final head `39c7e0ad`, retaining its main-only cache publisher and cleanup
+protection. Reviewed main `20063921` has the same tree as PR #153's final head
+`4ac0f997`. PR #153 merged the corrective shadow path; the platform switch
+remains subject to the hosted gates below.
+
+The current normal shadow series, run `39394748912` on `4ac0f997`, has three
+qualified executions: attempt 1 took 348 seconds for `linux-build` and 737 seconds
+for `linux-test`; attempt 2 took 456 and 834 seconds; attempt 4 took 432 and 851
+seconds. Each includes successful per-test comparison, original producer and artifact qualification,
+and the real host Docker fixture. These are repeated executions of one event,
+not independent PR pushes. They do not establish the required five-execution
+median, and all three test times exceed the 660-second target. Attempt 3 failed
+on snapshot HTTP 500/502 before compilation and is excluded. Further cold
+repetitions stopped before cache publication. Snapshot installation
+accounts for most variation; subtracting its duration is not a measured cache hit
+or a passing performance result.
+
+The Linux test-only runner first verifies the restored no-build plan and runs
+native CTest. It then runs core, desktop followed by fast tests, and host Python
+contracts concurrently in separate display and temporary sessions. Compiled
+service/MCP and UI checks follow after every branch succeeds. Desktop, fast and
+service Flutter commands remain sequential; no branch invokes a nested parallel
+runner. `FORESIGHT_LINUX_TEST_SCHEDULE=0` retains the legacy sequence. This is a
+scheduling change, not measured savings. The next stable-source measurement
+series records actual cache state and requires five qualified executions;
+cold-source results above remain in the record.
+
+Hosted parity, archive-SDK, fork-style and Docker-recipe exercises and the
+latency/size evidence remain rollout gates. Final combined-source Mac validation
+is required before every push. Local fixtures and lint do not establish those
+hosted or Mac runtime results.
+
+In this graph, `platform-checks` requires `linux-build` and `linux-test` rather
+than the old native stage chain. Completion markers retain the current explicit
+skipped-ancestor override and bind consumers to a normally completed producer.
+CPU, audio/software-Vulkan and DEB acceptance run independently using the exact
+successful in-run Linux artifact, original attempt, receipt and checksum. Main
+acceptance continues to use the stamped per-merge `linux-bundle` candidate until
+WS5b changes that release path. The dedicated main-only `publish-caches` job
+publishes only dependency and tooling stages; PR consumers remain read-only.
+In a nightly call, this job is blocking: a publication failure fails the build
+call, prevents preview publication, and keeps that run ineligible for green-nightly
+rollout evidence.
+The consume-only weekly audit qualifies a green same-source preview without
+compiling another application. Nightly Linux matrix jobs have explicit format-only
+names so the actual API job names match the required green closure. Weekly
+completion requires a checksum-verified receipt from the original successful
+main preview audit attempt, its upload window, and all three performed audit
+steps plus the completion marker. A successful job whose gates were skipped
+does not satisfy the week. A queued or running canonical same-source preview
+defers selection to the next nightly without dispatching or waiting; missing or
+failed producers still fail with an actionable message. Deferral uses the
+canonical API queue-update or running-attempt start time and ends after 30
+minutes; missing, future or stale timestamps fail with retry guidance when no
+qualified retained bundle or fresh canonical producer exists. Retained qualified
+bundles are examined before scheduling-only deferrals, so a newer stale queue
+cannot hide an older green bundle. Artifact identity and checksum errors still
+fail immediately; only the specific deferral-age error is postponed while
+alternatives are evaluated.
+A receipt left by a failed or cancelled original audit, or by missing/skipped
+audit steps, cannot suppress the week and is ignored before downloading bytes.
+Ambiguous identities and known upload-window, ZIP, digest or receipt
+contradictions still fail closed.
+
+The Linux document-import consumer restores its existing pinned Flutter cache
+without saving. The dedicated main-ref `publish-caches` job warms that same
+path and key using the pinned toolchain, verifies current main before warming
+and immediately before saving, and saves only a cache miss. If main advances,
+it skips only this toolchain cache work and preserves the existing registry and
+model publishers. Invalid ref, event, checkout or metadata transport still fails.
+It compiles no application or vendor library for this cache.
+
+Package contracts consume the same run's verified Linux bundle and keep native
+DEB/RPM/Arch lifecycle checks plus the separate signed DMG fixture. The single
+`macos` job reuses the qualified SDK, runs fresh native,
+core, desktop and compiled service/MCP gates in one workspace, then assembles and
+smokes the application. Nightly callers explicitly request the Mac coverage
+report, and the job retains the core/desktop coverage files as evidence. The
+compiler-work
+restore is opportunistic reuse of verified legacy artifacts, whose producer is
+retired by this switch; it is not a persistent warm path. Record genuine cold
+native compilation on the first hosted runs and use cold samples for the WS4
+latency gate. A warm restore cannot establish that gate. Add a compiler cache only
+if the plan's measured threshold calls for it, with separately reviewed inputs.
+Mac Flutter/pub consumers are restore-only. The scheduled nightly preview calls
+the dedicated `macos-cache-publish.yml` publisher only after a successful plan
+selects a build. Unlike the Linux publisher, its result does not block preview
+publication or the product's `nightly-checks`. No-build nights skip it, preserving
+the original failed producer's retry selection. The workflow also permits an
+explicit main dispatch. It has no independent schedule. The publisher warms the
+same pinned SDK and enforced lockfiles,
+checks that its checkout is still current main immediately before publication,
+and saves only missing keys. It compiles no SDK or application. Retained legacy
+Arch stage failures remain blocking in the nightly; the audit does not ignore
+them. Current application/calendar/service source, SDK approval and wait
+proofs, BSD-safe source copying, and rerun output isolation remain intact.
+
+Installers stay outside the source/build archive. Its authenticated manifest
+records only the original portable tar name, size and digest plus checksum and
+build-sidecar digests. The API-qualified original handoff step exports the exact
+manifest digest and producer job; the successful Linux consumer requires those
+outputs before recording consumption evidence. It checks the separately verified
+portable bytes and sidecars against that compact record, as well as the source,
+tier, label, original producer and source/build archive checksum. Substituting an
+unqualified or locally changed manifest cannot produce a consumption receipt.
+
+Per-main application builds, the dependency-seed historical attempt-1
+qualification, and the retained Arch stage helpers remain. The WS5b-1 transition
+below changes candidate naming and authorization; WS2c, WS5b-2, WS5b-3 and
+post-merge receipt reuse remain separate later steps.
+
+
+### On-demand tested release candidates (WS5b-1)
+
+`release.yml` resolves the reviewed source and verifies reusable tested candidates
+before allocating a distribution number or compiling an application. Its
+`candidates_only` dispatch runs the same required platform, package, acceptance
+and consume-only sanitizer gates, then stops after the candidate receipt without
+creating a draft release. Only this release tier uploads canonical `ci-*-app`
+candidates. Per-merge main bundles remain available under `main-*` names for
+main acceptance during the transition; they do not count as tested candidates.
+Preview bytes remain ineligible for release.
+
+The release Linux test consumes the API-qualified source/build manifest and its
+original successful producer job together with the separately qualified portable
+archive. The compact manifest binds the portable filename, size, content digest
+and checksum/build-sidecar digests; `dist` remains excluded from the source/build
+archive. Changing a local manifest or substituting another producer cannot
+satisfy the external qualifier outputs.
+
+Before the first hosted candidate dispatch, configure `RELEASE_SOURCE_FLOOR` to
+the authoritative merged WS5b-1 commit. The committed policy deliberately leaves
+that value empty until the merge exists; preflight fails closed without the
+reviewed floor. Sources below it retain the bounded legacy path until WS5b-3 or
+the policy expiry. Missing or expired original artifacts can require a fully
+gated rebuild, while surviving invalid evidence fails closed. Original job
+attempts and checksums remain authoritative when forwarding existing bytes.
+
+This stage keeps per-merge builds enabled. The on-demand switch requires two
+successful hosted `candidates_only` runs, or one such run and a release. Local
+fixtures do not establish those hosted gates or release readiness.

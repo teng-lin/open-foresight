@@ -5,9 +5,17 @@ on:
       tag:
         description: New stable tag matching main's application version
         type: string
-        required: true
+        required: false
+      source:
+        description: Reviewed product SHA for candidates_only; otherwise resolved from the immutable tag
+        type: string
+        default: ''
+      candidates_only:
+        description: Produce fully tested candidates without drafting or packaging a release
+        type: boolean
+        default: false
       candidate_run:
-        description: Existing successful main candidate run to verify and reuse; 0 discovers existing platform candidates
+        description: Original fully tested candidate run to verify and reuse; 0 discovers existing tested candidates
         type: string
         required: false
         default: '0'
@@ -30,9 +38,121 @@ permissions:
 concurrency:
   group: distribution-packages
   cancel-in-progress: false
+env:
+  RELEASE_SOURCE_FLOOR: ${{ vars.RELEASE_SOURCE_FLOOR }}
 jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source: ${{ steps.preflight.outputs.source }}
+      mode: ${{ steps.preflight.outputs.mode }}
+      reuse: ${{ steps.preflight.outputs.reuse }}
+      candidate_run: ${{ steps.preflight.outputs.candidate_run }}
+      linux_candidate_run: ${{ steps.preflight.outputs.linux_candidate_run }}
+      macos_candidate_run: ${{ steps.preflight.outputs.macos_candidate_run }}
+      source_floor: ${{ steps.preflight.outputs.source_floor }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Resolve reviewed source and existing fully tested candidates before allocating or building
+        id: preflight
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          SOURCE: ${{ inputs.source }}
+          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATES_ONLY: ${{ inputs.candidates_only }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+        run: |
+          task_args=()
+          if [[ "$CANDIDATES_ONLY" == true ]]; then task_args+=(--candidates-only); fi
+          if [[ "$PUBLISH_ONLY" == true ]]; then task_args+=(--publish-only); fi
+          python tools/ci_release_candidates.py preflight --tag "$RELEASE_TAG" --source "$SOURCE" --candidate-run "$CANDIDATE_RUN" "${task_args[@]}"
+  candidates:
+    needs: preflight
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.publish_only && needs.preflight.outputs.mode == 'release' && needs.preflight.outputs.reuse != 'true' }}
+    permissions:
+      contents: write
+      actions: read
+      packages: write
+      pull-requests: read
+    uses: ./.github/workflows/macos.yml
+    with:
+      source: ${{ needs.preflight.outputs.source }}
+      request_id: release-${{ github.run_id }}-${{ github.run_attempt }}
+      tier: release
+      acceptance: full
+      macos_coverage: true
+    secrets: inherit
+  candidate-receipt:
+    needs: [preflight, candidates]
+    if: ${{ !cancelled() && !inputs.publish_only && needs.preflight.result == 'success' && (needs.candidates.result == 'success' || (needs.candidates.result == 'skipped' && needs.preflight.outputs.reuse == 'true')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      candidate_run: ${{ steps.original.outputs.candidate_run }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.13'
+      - name: Verify every authoritative candidate gate and its exact consumed bytes
+        if: needs.preflight.outputs.reuse != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.preflight.outputs.source }}
+          CANDIDATE_OUTPUTS: ${{ toJSON(needs.candidates.outputs) }}
+        run: python tools/ci_release_candidates.py receipt --source "$SOURCE" --output candidate-evidence/release-candidate.json
+      - name: Retain the tested index for the original successful candidate jobs
+        if: needs.preflight.outputs.reuse != 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-release-candidate-${{ needs.preflight.outputs.source }}
+          path: candidate-evidence/release-candidate.json
+          overwrite: true
+          retention-days: 90
+          if-no-files-found: error
+      - name: Forward original candidate evidence without claiming a new build
+        if: needs.preflight.outputs.reuse == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.preflight.outputs.source }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          CANDIDATE_RUN: ${{ needs.preflight.outputs.candidate_run }}
+          CANDIDATES_ONLY: ${{ inputs.candidates_only }}
+        run: |
+          task_args=()
+          if [[ "$CANDIDATES_ONLY" == true ]]; then task_args+=(--candidates-only); fi
+          python tools/ci_release_candidates.py evidence --tag "$RELEASE_TAG" --source "$SOURCE" --candidate-run "$CANDIDATE_RUN" --output candidate-evidence/original-candidate.json "${task_args[@]}"
+      - name: Retain an explicit original-run evidence locator
+        if: needs.preflight.outputs.reuse == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-release-evidence-${{ needs.preflight.outputs.source }}
+          path: candidate-evidence/original-candidate.json
+          overwrite: true
+          retention-days: 90
+          if-no-files-found: error
+      - id: original
+        env:
+          REUSE: ${{ needs.preflight.outputs.reuse }}
+          ORIGINAL_RUN: ${{ needs.preflight.outputs.candidate_run }}
+        run: |
+          task_run=$GITHUB_RUN_ID
+          if [[ "$REUSE" == true ]]; then task_run=$ORIGINAL_RUN; fi
+          echo "candidate_run=$task_run" >> "$GITHUB_OUTPUT"
   prepare:
-    if: ${{ !inputs.publish_only }}
+    needs: [preflight, candidates, candidate-receipt]
+    if: ${{ !cancelled() && !inputs.publish_only && !inputs.candidates_only && needs.preflight.result == 'success' && needs.candidate-receipt.result == 'success' && (needs.candidates.result == 'success' || (needs.candidates.result == 'skipped' && needs.preflight.outputs.reuse == 'true')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 190
     permissions:
@@ -56,7 +176,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-          CANDIDATE_RUN: ${{ inputs.candidate_run }}
+          CANDIDATE_RUN: ${{ needs.candidate-receipt.outputs.candidate_run }}
         run: python tools/prepare_release.py --tag "$RELEASE_TAG" --candidate-run "$CANDIDATE_RUN"
   linux:
     needs: prepare
@@ -82,8 +202,8 @@ jobs:
       tag: ${{ needs.prepare.outputs.tag }}
       candidate_run: ${{ needs.prepare.outputs.macos_candidate_run }}
   acceptance:
-    if: ${{ !cancelled() && (inputs.publish_only || (needs.prepare.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success')) }}
-    needs: [prepare, linux, macos]
+    if: ${{ !cancelled() && !inputs.candidates_only && needs.preflight.result == 'success' && (inputs.publish_only || (needs.prepare.result == 'success' && needs.linux.result == 'success' && needs.macos.result == 'success')) }}
+    needs: [preflight, prepare, linux, macos]
     permissions:
       # Draft release metadata/assets are visible only with push access.
       contents: write
@@ -95,8 +215,8 @@ jobs:
       acceptance_run: ${{ inputs.acceptance_run }}
   publish:
     timeout-minutes: 10
-    if: always()
-    needs: [prepare, linux, macos, acceptance]
+    if: ${{ always() && !inputs.candidates_only }}
+    needs: [preflight, candidates, candidate-receipt, prepare, linux, macos, acceptance]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -120,12 +240,13 @@ jobs:
           TAG: ${{ inputs.tag }}
           RESULTS: ${{ toJSON(needs) }}
           PUBLISH_ONLY: ${{ inputs.publish_only }}
+          CANDIDATE_REUSE: ${{ needs.preflight.outputs.reuse }}
         run: |
           python3 - <<'PY'
           import json, os, sys
           sys.path.insert(0, 'tools')
           from release_acceptance_report import require_coordinator
-          require_coordinator(json.loads(os.environ['RESULTS']), os.environ['GITHUB_REF'], os.environ['PUBLISH_ONLY'] == 'true')
+          require_coordinator(json.loads(os.environ['RESULTS']), os.environ['GITHUB_REF'], os.environ['PUBLISH_ONLY'] == 'true', reuse=os.environ['CANDIDATE_REUSE'] == 'true')
           PY
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
           gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/published-releases.json"

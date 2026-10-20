@@ -24,7 +24,11 @@ from tools.ci_artifacts import (
 from tools.github_release import release_for_tag
 
 
-def candidate_runs(repository, commit, run_id=None, *, consumer="release-preparation"):
+def legacy_candidate_runs(repository, commit, run_id=None, *, consumer="artifact-pull"):
+    if consumer == "legacy-release-candidate":
+        from tools.ci_release_candidates import require_legacy
+
+        require_legacy(repository, commit)
     result = {}
     for component in ("linux-app", "macos-app"):
         artifact_name = name(component, commit)
@@ -38,6 +42,10 @@ def candidate_runs(repository, commit, run_id=None, *, consumer="release-prepara
             if run_id is not None and producer != run_id:
                 continue
             run = api(repository, f"actions/runs/{producer}")
+            if consumer == "legacy-release-candidate" and (
+                run.get("status") != "completed" or run.get("conclusion") != "success"
+            ):
+                continue
             if (
                 (run["head_sha"] == commit or run.get("event") == "workflow_dispatch")
                 and trusted_run(
@@ -50,6 +58,37 @@ def candidate_runs(repository, commit, run_id=None, *, consumer="release-prepara
                 result[component] = producer
                 break
     return result
+
+
+def candidate_runs(repository, commit, run_id=None, *, consumer="release-preparation"):
+    if consumer not in ("release-preparation", "release-candidate"):
+        return legacy_candidate_runs(repository, commit, run_id, consumer=consumer)
+    from tools import ci_release_candidates as tested
+
+    if consumer == "release-candidate" and not os.environ.get("RELEASE_SOURCE_FLOOR"):
+        # Allocation must not count main/preview bundles while floor setup is
+        # pending; preflight itself always fails closed without the merge SHA.
+        return {}
+    if consumer == "release-preparation":
+        control = api(repository, "commits/main")["sha"]
+        if tested.source_policy(repository, commit, control) == "legacy":
+            runs = legacy_candidate_runs(
+                repository, commit, run_id, consumer="legacy-release-candidate"
+            )
+            for component, producer in runs.items():
+                tested.legacy_component(repository, commit, producer, component)
+            return runs
+    record = tested.find(
+        repository,
+        commit,
+        run_id or 0,
+        current_run=int(os.environ.get("GITHUB_RUN_ID", "0")),
+    )
+    return (
+        {component: record["run_id"] for component in ("linux-app", "macos-app")}
+        if record
+        else {}
+    )
 
 
 def candidates_ready(repository, commit, run_id=None):
@@ -83,7 +122,8 @@ def require_candidates(repository, commit, wait, fresh=False, candidate_run=0):
             [api(repository, f"actions/runs/{candidate_run}")]
             if candidate_run
             else api(
-                repository, "actions/workflows/macos.yml/runs?branch=main&per_page=100"
+                repository,
+                "actions/runs?branch=main&event=workflow_dispatch&per_page=100",
             )["workflow_runs"]
         )
         pending = any(
@@ -104,7 +144,7 @@ def require_candidates(repository, commit, wait, fresh=False, candidate_run=0):
             raise ValueError(
                 f"Verified candidates unavailable for {commit}: {missing}. "
                 "Preserve completed outputs; inspect existing producers, then "
-                "dispatch macos.yml with source and platforms only for missing outputs. "
+                "rerun the affected candidate gates or use release.yml candidates_only for supported sources. "
                 "Packaging never recompiles applications or SDKs."
             )
         print(

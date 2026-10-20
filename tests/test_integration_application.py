@@ -49,7 +49,7 @@ def producer(tmp_path, request):
         patch.object(artifacts.subprocess, "check_output", return_value=SOURCE + "\n"),
         patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}),
     ):
-        artifacts.pack("linux-app", SOURCE, payload, packed)
+        artifacts.pack("linux-app", SOURCE, payload, packed, tier="pr")
     if request.param:
         original_zip = tmp_path / "original.zip"
         with zipfile.ZipFile(original_zip, "w") as archive:
@@ -71,7 +71,7 @@ def producer(tmp_path, request):
             ),
             patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}),
         ):
-            artifacts.pack("linux-app", SOURCE, payload, packed)
+            artifacts.pack("linux-app", SOURCE, payload, packed, tier="pr")
     saved = tmp_path / "application.zip"
     with zipfile.ZipFile(saved, "w") as archive:
         for name in ("identity.json", "payload.tar.gz"):
@@ -79,7 +79,7 @@ def producer(tmp_path, request):
     checksum = artifacts.digest(saved)
     run = {
         "id": RUN,
-        "path": ".github/workflows/integration-acceptance.yml",
+        "path": ".github/workflows/macos.yml",
         "event": "pull_request",
         "head_sha": SOURCE,
         "run_attempt": 2,
@@ -88,7 +88,7 @@ def producer(tmp_path, request):
     }
     artifact = {
         "id": ARTIFACT,
-        "name": artifacts.name("linux-app", SOURCE),
+        "name": f"linux-bundle-{RUN}-1",
         "digest": "sha256:" + checksum,
         "expired": False,
         "workflow_run": {"id": RUN, "head_sha": SOURCE},
@@ -96,7 +96,7 @@ def producer(tmp_path, request):
     }
     job = {
         "id": JOB,
-        "name": "ubuntu-application",
+        "name": "linux-build",
         "run_id": RUN,
         "head_sha": SOURCE,
         "run_attempt": 1,
@@ -118,6 +118,8 @@ def restore(
     refresh=None,
     job_states=None,
     direct_job=None,
+    ancestry="ahead",
+    **options,
 ):
     payload, saved, checksum, run, artifact, job = producer
     queried = 0
@@ -126,6 +128,8 @@ def restore(
     def api(repository, route):
         nonlocal queried, direct_queried
         assert repository == REPOSITORY
+        if route.startswith("compare/"):
+            return {"status": ancestry}
         if route == f"actions/runs/{RUN}":
             return run
         if route == f"actions/artifacts/{ARTIFACT}":
@@ -182,6 +186,7 @@ def restore(
             destination,
             component=component,
             producer_wait=producer_wait,
+            **options,
         )
     return payload, destination, result
 
@@ -388,7 +393,11 @@ def test_fork_sdk_is_saved_without_building_and_reused_only_in_its_successful_so
             patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}),
         ):
             artifacts.pack(
-                "linux-sdk", artifacts.fingerprint("linux-sdk"), prefix, saved_sdk
+                "linux-sdk",
+                artifacts.fingerprint("linux-sdk"),
+                prefix,
+                saved_sdk,
+                tier="pr",
             )
     saved = tmp_path / "sdk.zip"
     with zipfile.ZipFile(saved, "w") as archive:
@@ -397,7 +406,7 @@ def test_fork_sdk_is_saved_without_building_and_reused_only_in_its_successful_so
     checksum = artifacts.digest(saved)
     run, artifact, job = copy.deepcopy(producer[3:])
     run["head_repository"]["full_name"] = "fork/foresight"
-    artifact.update(name=f"integration-sdk-{SOURCE}-1", digest="sha256:" + checksum)
+    artifact.update(name=f"shadow-sdk-{SOURCE}-1", digest="sha256:" + checksum)
     values = (prefix, saved, checksum, run, artifact, job)
     if bad_field:
         with pytest.raises(ValueError, match="source-scoped recipe|archive checksum"):
@@ -694,3 +703,109 @@ def test_api_zip_digest_cannot_replace_payload_integrity_or_archive_inventory(
     with pytest.raises(ValueError, match="artifact members|payload checksum"):
         restore(tmp_path, (payload, saved, checksum, run, artifact, job))
     assert not (tmp_path / "restored").exists()
+
+
+def changed_receipt(producer, **changes):
+    payload, saved, _, run, artifact, job = producer
+    with zipfile.ZipFile(saved) as archive:
+        receipt = json.loads(archive.read("identity.json"))
+        content = archive.read("payload.tar.gz")
+    content_stream = io.BytesIO()
+    with tarfile.open(fileobj=content_stream, mode="w:gz") as archive:
+        archive.add(payload, arcname="payload")
+    content = content_stream.getvalue()
+    import hashlib
+
+    receipt["sha256"] = hashlib.sha256(content).hexdigest()
+    receipt.update(changes)
+    for name in ("tier", "label"):
+        if receipt.get(name) is None:
+            receipt.pop(name, None)
+    with zipfile.ZipFile(saved, "w") as archive:
+        archive.writestr("identity.json", json.dumps(receipt))
+        archive.writestr("payload.tar.gz", content)
+    checksum = artifacts.digest(saved)
+    artifact["digest"] = "sha256:" + checksum
+    return payload, saved, checksum, run, artifact, job
+
+
+@pytest.mark.parametrize(
+    "tier,label", [(None, ""), ("release", ""), ("preview", "nightly"), ("pr", "other")]
+)
+def test_pr_inrun_receipt_cannot_claim_a_different_tier_or_label(
+    tmp_path, producer, tier, label
+):
+    changed = changed_receipt(producer, tier=tier, label=label)
+    with pytest.raises(ValueError, match="tier"):
+        restore(tmp_path, changed)
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize("purpose", ["acceptance", "package-contract"])
+@pytest.mark.parametrize("kind", ["pr", "sweep", "preview", "main", "release"])
+def test_own_run_consumers_require_their_actual_producer_tier(
+    tmp_path, producer, purpose, kind
+):
+    if kind != "pr":
+        producer[3].update(event="push", head_branch="main")
+    if kind == "preview":
+        producer[3].update(
+            path=".github/workflows/preview-packages.yml", event="schedule"
+        )
+        producer[5]["name"] = "build / linux-build"
+        (producer[0] / "distribution-stamp.json").write_text(
+            json.dumps(
+                {
+                    "version": "0.1.2",
+                    "build_number": 3,
+                    "label": "nightly",
+                    "source_commit": SOURCE,
+                }
+            )
+        )
+    if kind == "main":
+        producer[4]["name"] = f"main-linux-bundle-{SOURCE}"
+        producer[5]["name"] = "linux-bundle"
+    if kind == "release":
+        producer[3].update(
+            path=".github/workflows/release.yml", event="workflow_dispatch"
+        )
+        producer[4]["name"] = artifacts.name("linux-app", SOURCE)
+        producer[5]["name"] = "candidates / linux-build"
+    changed = changed_receipt(
+        producer,
+        tier="sweep" if kind == "main" else kind,
+        label="nightly" if kind == "preview" else "",
+    )
+    if kind == "main" and purpose == "package-contract":
+        with pytest.raises(ValueError, match="Legacy main"):
+            restore(tmp_path, changed, purpose=purpose, main_candidate=True)
+        return
+    _, restored, qualification = restore(
+        tmp_path,
+        changed,
+        purpose=purpose,
+        main_candidate=kind == "main",
+        label="nightly" if kind == "preview" else "",
+    )
+    assert (restored / "application.tar.gz").is_file()
+    assert qualification["producer_run"] == RUN
+
+
+@pytest.mark.parametrize(
+    "status,allowed",
+    [("ahead", True), ("identical", True), ("behind", False), ("diverged", False)],
+)
+def test_reviewed_dispatch_source_can_be_behind_main_only_with_api_ancestry(
+    tmp_path, producer, status, allowed
+):
+    producer[3].update(event="workflow_dispatch", head_branch="main", head_sha="b" * 40)
+    producer[4]["workflow_run"]["head_sha"] = "b" * 40
+    producer[5]["head_sha"] = "b" * 40
+    changed = changed_receipt(producer, tier="sweep", label="")
+    if allowed:
+        restore(tmp_path, changed, ancestry=status)
+    else:
+        with pytest.raises(ValueError, match="ancestry"):
+            restore(tmp_path, changed, ancestry=status)
+    assert (tmp_path / "restored").exists() == allowed

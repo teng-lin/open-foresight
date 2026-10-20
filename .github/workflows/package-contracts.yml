@@ -1,11 +1,38 @@
 name: Package recipe contracts
 on:
   workflow_call:
+    inputs:
+      source:
+        type: string
+        required: true
+      bundle_id:
+        type: string
+        default: ''
+      bundle_digest:
+        type: string
+        default: ''
+      producer_attempt:
+        type: string
+        default: ''
+      tier:
+        type: string
+        default: ''
+      label:
+        type: string
+        default: ''
+      head_repository:
+        type: string
+        required: true
+      linux_enabled:
+        type: boolean
+        default: true
 permissions:
   contents: read
   actions: read
 jobs:
   linux:
+    name: linux-${{ matrix.format }}
+    if: inputs.linux_enabled
     strategy:
       fail-fast: false
       matrix:
@@ -21,23 +48,53 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
-      - name: Reuse a verified application fixture from reviewed main
-        id: candidate
+      - name: Verify this run's original successful application bundle
+        id: bundle
         env:
           GH_TOKEN: ${{ github.token }}
-          BASE: ${{ github.event.pull_request.base.sha || github.sha }}
-        run: python -m tools.package_contract_candidate --base "$BASE" --directory artifacts
+          SOURCE: ${{ inputs.source }}
+          HEAD_REPOSITORY: ${{ inputs.head_repository }}
+          ARTIFACT_ID: ${{ inputs.bundle_id }}
+          ARTIFACT_DIGEST: ${{ inputs.bundle_digest }}
+          PRODUCER_ATTEMPT: ${{ inputs.producer_attempt }}
+          BUILD_LABEL: ${{ inputs.label }}
+          BUNDLE_TIER: ${{ inputs.tier }}
+        run: |
+          python -m tools.integration_application --source "$SOURCE" --head-repository "$HEAD_REPOSITORY" \
+            --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" \
+            --attempt "$PRODUCER_ATTEMPT" --purpose package-contract --label "$BUILD_LABEL" --directory artifacts
+          python - <<'PYCODE'
+          import json, os
+          from pathlib import Path
+          from tools.ci_artifacts import application_distribution
+          qualification = json.loads(Path('artifacts/source-qualification.json').read_text())
+          if qualification['source_receipt']['tier'] != os.environ['BUNDLE_TIER']:
+              raise ValueError('Package contract bundle tier differs from its producer output')
+          identity = application_distribution(Path('artifacts'), 'linux-app', os.environ['SOURCE'])
+          label = qualification['source_receipt']['label']
+          version = identity['version'] + ('~' + label if label else '')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('version=' + version + '\n')
+          PYCODE
+      - name: Retain original bundle provenance
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: package-contract-provenance-${{ matrix.format }}
+          overwrite: true
+          path: artifacts/source-qualification.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Allow isolated document namespaces in package-test containers
         run: bash tools/ci_package_sandbox.sh
       - name: Prepare the disposable package environment and test real RPM expansion
         env:
           FORMAT: ${{ matrix.format }}
           IMAGE: ${{ matrix.image }}
-          VERSION: ${{ steps.candidate.outputs.version }}
+          VERSION: ${{ steps.bundle.outputs.version }}
         run: |
           docker run --rm -d --name "$PACKAGE_CONTAINER" --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work" -w /work "$IMAGE" sleep infinity
           docker exec "$PACKAGE_CONTAINER" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" 1 prepare
@@ -51,7 +108,7 @@ jobs:
       - name: Create installer bytes without recompiling the application
         env:
           FORMAT: ${{ matrix.format }}
-          VERSION: ${{ steps.candidate.outputs.version }}
+          VERSION: ${{ steps.bundle.outputs.version }}
         run: docker exec "$PACKAGE_CONTAINER" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" 1 build
       - name: Retain installer bytes independently of test results
         if: always()
@@ -65,8 +122,13 @@ jobs:
       - name: Install, smoke test, reinstall and remove the original bytes
         env:
           FORMAT: ${{ matrix.format }}
-          VERSION: ${{ steps.candidate.outputs.version }}
+          VERSION: ${{ steps.bundle.outputs.version }}
         run: docker exec "$PACKAGE_CONTAINER" bash packaging/ci/package-and-test.sh "$FORMAT" "$VERSION" 1 test
+      - name: Cross-install the identical Ubuntu-built DEB on Debian 13
+        if: matrix.format == 'deb'
+        run: |
+          (cd dist/packages && sha256sum --check ./*.deb.sha256)
+          docker run --rm --cap-add NET_ADMIN --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt apparmor=foresight-ci-document-sandbox -v "$PWD:/work:ro" -v "$PWD/dist/packages:/packages:ro" debian:13@sha256:913f6706df59a68922d1dd08f78c2476560a8d367897200a6005b00e5f67c2d5 bash /work/packaging/ci/test-debian.sh
       - name: Remove disposable test container
         if: always()
         run: docker rm -f "$PACKAGE_CONTAINER" 2>/dev/null || true
@@ -77,7 +139,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source }}
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'

@@ -1,4 +1,4 @@
-"""Stage setup does no compiler-SDK or language work for unrelated roles."""
+"""Linux roles stay narrow; macOS warms the complete application prerequisites."""
 
 import json
 import os
@@ -24,7 +24,7 @@ def step_named(platform, fragment):
     return next(step for step in action(platform) if fragment in step.get("name", ""))
 
 
-@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("platform", ["linux"])
 def test_every_caller_declares_its_role(platform):
     path = ROOT / f".github/workflows/{platform}-platform-stages.yml"
     jobs = yaml.safe_load(path.read_text())["jobs"]
@@ -35,40 +35,29 @@ def test_every_caller_declares_its_role(platform):
             if step.get("uses") == f"./.github/actions/setup-{platform}-stage"
         )
         assert setup["with"]["stage"] == role
-    if platform == "macos":
-        job = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())[
-            "jobs"
-        ]["macos"]
-        setup = next(
-            step
-            for step in job["steps"]
-            if step.get("uses") == "./.github/actions/setup-macos-stage"
-        )
-        assert setup["with"]["stage"] == "packaging"
 
 
-def test_only_mac_native_fetches_and_hashes_the_compiler_sdk():
-    sdk = step_named("macos", "Fetch the qualified compiler SDK")
-    assert sdk["if"] == "inputs.stage == 'native'"
-    assert "ci_macos_dependencies.py --component macos-sdk" in sdk["run"]
-    identity = step_named("macos", "Record the compiler")
-    assert identity["if"] == "inputs.stage != 'packaging'"
-    assert (
-        'if [[ "$STAGE" == native ]]; then args+=(--sdk-prefix build/sdk); fi'
-        in identity["run"]
+def test_macos_setup_fetches_one_verified_sdk_without_stage_roles():
+    config = yaml.safe_load(
+        (ROOT / ".github/actions/setup-macos-stage/action.yml").read_text()
     )
-    for platform in ("macos", "linux"):
-        verify = step_named(platform, "Verify the pinned")
-        assert verify["if"] == "inputs.stage != 'native'"
-        for step in action(platform):
-            if step.get("id") in ("flutter", "pub"):
-                assert step["if"] == "inputs.stage != 'native'"
+    assert "stage" not in config["inputs"]
+    sdk = step_named("macos", "Fetch the qualified compiler SDK")
+    assert "if" not in sdk
+    assert "ci_macos_dependencies.py --component macos-sdk" in sdk["run"]
+    assert "--allow-local-build" in sdk["run"]
+    assert "github.event_name == 'pull_request'" in sdk["env"]["ALLOW_LOCAL_BUILD"]
+    assert not any(
+        "ci_stage_environment" in step.get("run", "") for step in action("macos")
+    )
+    for step in action("linux"):
+        if step.get("id") in ("flutter", "pub"):
+            assert step["if"] == "inputs.stage != 'native'"
 
 
 @pytest.mark.parametrize(
     "platform,role",
-    [("linux", role) for role in ("core", "desktop", "service")]
-    + [("macos", role) for role in ("core", "desktop", "service", "packaging")],
+    [("linux", role) for role in ("core", "desktop", "service")],
 )
 def test_pub_resolution_runs_only_the_packages_needed_by_the_role(
     tmp_path, platform, role
@@ -91,8 +80,8 @@ def test_pub_resolution_runs_only_the_packages_needed_by_the_role(
         env={
             **os.environ,
             "PATH": str(binary) + os.pathsep + os.environ["PATH"],
-            "STAGE": role,
             "ROLE_TEST_LOG": str(log),
+            "STAGE": role,
         },
         check=True,
         capture_output=True,
@@ -118,17 +107,7 @@ def test_pub_resolution_runs_only_the_packages_needed_by_the_role(
     assert commands == expected
 
 
-@pytest.mark.parametrize(
-    "role,packages",
-    [
-        ("native", ["cmake", "ninja", "icu4c"]),
-        ("core", ["icu4c"]),
-        ("desktop", ["cocoapods", "git-lfs", "icu4c"]),
-        ("service", ["cocoapods", "git-lfs", "icu4c"]),
-        ("packaging", ["icu4c"]),
-    ],
-)
-def test_mac_brew_dependencies_match_actual_role(tmp_path, role, packages):
+def test_mac_brew_dependencies_match_complete_application(tmp_path):
     step = step_named("macos", "Install build tools")
     binary = tmp_path / "bin"
     binary.mkdir()
@@ -141,7 +120,6 @@ def test_mac_brew_dependencies_match_actual_role(tmp_path, role, packages):
         env={
             **os.environ,
             "PATH": str(binary) + os.pathsep + os.environ["PATH"],
-            "STAGE": role,
             "ROLE_TEST_LOG": str(log),
         },
         check=True,
@@ -149,7 +127,14 @@ def test_mac_brew_dependencies_match_actual_role(tmp_path, role, packages):
         text=True,
         timeout=10,
     )
-    assert log.read_text().splitlines() == ["install", *packages]
+    assert log.read_text().splitlines() == [
+        "install",
+        "cmake",
+        "ninja",
+        "cocoapods",
+        "git-lfs",
+        "icu4c",
+    ]
 
 
 def test_linux_fast_ui_checks_are_fresh_in_desktop_and_identity_stays_native():
@@ -191,7 +176,7 @@ def test_environment_does_not_require_unconsumed_tools(tmp_path, role):
     assert ("flutter" in calls) == (role not in ("native", "core"))
 
 
-@pytest.mark.parametrize("platform", ["linux", "macos"])
+@pytest.mark.parametrize("platform", ["linux"])
 def test_language_caches_separate_roles_and_restore_compatible_legacy_entries(platform):
     steps = action(platform)
     select = step_named(platform, "Select the language cache role")
@@ -219,19 +204,12 @@ def test_language_caches_separate_roles_and_restore_compatible_legacy_entries(pl
         in pub["with"]["key"]
     )
     assert "|| hashFiles('packages/foresight_core/pubspec.lock')" in pub["with"]["key"]
-    if platform == "macos":
-        assert (
-            "pub-macos-${{ hashFiles('**/pubspec.lock') }}"
-            in pub["with"]["restore-keys"]
-        )
-    else:
-        assert pub["with"]["path"] == "${{ github.workspace }}/.cache/foresight-pub"
+    assert pub["with"]["path"] == "${{ github.workspace }}/.cache/foresight-pub"
 
 
 @pytest.mark.parametrize(
     "platform,role",
-    [("linux", role) for role in ("core", "desktop", "service")]
-    + [("macos", role) for role in ("core", "desktop", "service", "packaging")],
+    [("linux", role) for role in ("core", "desktop", "service")],
 )
 def test_actual_engine_and_pub_commands_finish_before_their_caches_are_saved(
     tmp_path, platform, role
@@ -305,3 +283,46 @@ def test_actual_engine_and_pub_commands_finish_before_their_caches_are_saved(
             assert all(command[3] == env["PUB_CACHE"] for command in commands)
         saved.append(step["with"]["path"])
     assert len(saved) == 2
+
+
+def test_consolidated_mac_fetches_verified_sdk_once_and_linux_keeps_stage_roles():
+    sdk = step_named("macos", "Fetch the qualified compiler SDK")
+    assert "if" not in sdk
+    assert "ci_macos_dependencies.py --component macos-sdk" in sdk["run"]
+    assert "ci_verify_dependency.py --component macos-sdk" in sdk["run"]
+    assert (
+        sum(
+            "ci_macos_dependencies.py --component macos-sdk" in step.get("run", "")
+            for step in action("macos")
+        )
+        == 1
+    )
+    verify = step_named("linux", "Verify the pinned")
+    assert verify["if"] == "inputs.stage != 'native'"
+    for step in action("linux"):
+        if step.get("id") in ("flutter", "pub"):
+            assert step["if"] == "inputs.stage != 'native'"
+
+
+def test_consolidated_mac_brew_dependencies_are_installed_once(tmp_path):
+    packages = ["cmake", "ninja", "cocoapods", "git-lfs", "icu4c"]
+    step = step_named("macos", "Install build tools")
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    log = tmp_path / "brew.args"
+    brew = binary / "brew"
+    brew.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$ROLE_TEST_LOG"\n')
+    brew.chmod(0o755)
+    subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", step["run"]],
+        env={
+            **os.environ,
+            "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+            "ROLE_TEST_LOG": str(log),
+        },
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert log.read_text().splitlines() == ["install", *packages]

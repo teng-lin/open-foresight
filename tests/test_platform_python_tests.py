@@ -149,10 +149,10 @@ def test_full_quality_coverage_is_the_unchanged_authoritative_gate():
 def test_platform_workflows_run_host_contracts_instead_of_full_python_suite(platform):
     import yaml
 
-    workflow = yaml.safe_load(
-        (ROOT / f".github/workflows/{platform}-platform-stages.yml").read_text()
-    )
-    steps = workflow["jobs"][f"native-{platform}"]["steps"]
+    filename = "macos.yml" if platform == "macos" else "linux-platform-stages.yml"
+    workflow = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text())
+    job = "macos" if platform == "macos" else "native-linux"
+    steps = workflow["jobs"][job]["steps"]
     commands = [step.get("run", "") for step in steps]
     assert (
         sum(
@@ -185,7 +185,6 @@ def test_workflow_lint_runs_alongside_platform_jobs_without_blocking_selection()
         return set(needs).union(*(ancestors(parent) for parent in needs))
 
     for name in (
-        "macos-stages",
         "macos",
         "linux-native",
         "linux-document-imports",
@@ -267,7 +266,13 @@ def test_platform_lists_execute_once_under_required_aggregate():
                 for child in called["jobs"].values()
                 for step in child.get("steps", [])
             ]
-        return [step.get("run", "") for step in job.get("steps", [])]
+        runs = [step.get("run", "") for step in job.get("steps", [])]
+        if name == "linux-test":
+            assert any("build_linux_container.sh --test-only" in run for run in runs)
+            # The sole required Linux test runner executes this transferred-tree
+            # entrypoint, where platform inventory and actual JUnit audit run.
+            runs.append((ROOT / "tools/linux_container_test.sh").read_text())
+        return runs
 
     required = main["jobs"]["platform-checks"]["needs"]
     runs = [command for name in required for command in commands(main, name)]
@@ -284,8 +289,8 @@ def test_platform_lists_execute_once_under_required_aggregate():
     fedora = (workflows / "package-contracts.yml").read_text()
     assert 'if [[ "$FORMAT" == rpm ]]' in fedora
     assert "-p test_rpm_scriptlets.py" in fedora
-    acceptance = yaml.safe_load((workflows / "integration-acceptance.yml").read_text())
-    steps = acceptance["jobs"]["ubuntu-package"]["steps"]
+    acceptance = main
+    steps = acceptance["jobs"]["linux-test"]["steps"]
     fixture = next(
         i
         for i, step in enumerate(steps)
@@ -293,17 +298,25 @@ def test_platform_lists_execute_once_under_required_aggregate():
     )
     assert steps[fixture]["env"]["FORESIGHT_DOCKER_CACHE_TEST"] == "1"
     assert any(
-        "ubuntu:24.04@sha256:" in step.get("run", "") for step in steps[:fixture]
+        "build_linux_container.sh --test-only" in step.get("run", "")
+        for step in steps[:fixture]
+    )
+    assert "FROM ${SDK_IMAGE}" in (ROOT / "packaging/build.Dockerfile").read_text()
+    assert (
+        "ubuntu:24.04@sha256:" in (ROOT / "packaging/sdk-core.Dockerfile").read_text()
     )
 
 
 def test_acceptance_weekly_and_pr_selection_uses_merge_base():
-    text = (ROOT / ".github/workflows/integration-acceptance.yml").read_text()
-    assert "cron: '43 5 * * 1'" in text
-    assert (
-        'elif [[ "$EVENT" == pull_request ]]; then\n            BASE=$(git merge-base "$BASE" HEAD)'
-        in text
-    )
+    text = (ROOT / ".github/workflows/macos.yml").read_text()
+    assert 'BASE=$(git merge-base "$BASE" HEAD)' in text
+    preview = (ROOT / ".github/workflows/preview-packages.yml").read_text()
+    assert "cron: '23 7 * * *'" in preview
+    assert 'tools/ci_preview_audit.py plan --source "$SOURCE"' in preview
+    audit = (ROOT / "tools/ci_preview_audit.py").read_text()
+    assert "if not full and audited_this_week(repository, now):" in audit
+    assert "weekly-external-audit-completion-" in audit
+    assert not (ROOT / ".github/workflows/integration-acceptance.yml").exists()
 
 
 def test_loader_identity_retains_real_ctest_ownership():

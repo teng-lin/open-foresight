@@ -1,0 +1,114 @@
+name: Publish macOS toolchain caches
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: macos-toolchain-cache-publish
+  cancel-in-progress: false
+jobs:
+  publish-macos-caches:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      contains(fromJSON('["schedule","workflow_dispatch"]'), github.event_name) &&
+      (github.workflow_ref == format('{0}/.github/workflows/preview-packages.yml@refs/heads/main', github.repository) ||
+       (github.event_name == 'workflow_dispatch' && github.workflow_ref == format('{0}/.github/workflows/macos-cache-publish.yml@refs/heads/main', github.repository)))
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ github.sha }}
+    - name: Verify Apple Silicon host
+      shell: bash
+      run: |
+        test "$RUNNER_ARCH" = ARM64
+        test "$(uname -m)" = arm64
+    - name: Verify reviewed current main before warming
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ github.sha }}
+      run: |
+        test "$GITHUB_REF" = refs/heads/main
+        case "$GITHUB_EVENT_NAME:$GITHUB_WORKFLOW_REF" in
+          "schedule:$GITHUB_REPOSITORY/.github/workflows/preview-packages.yml@refs/heads/main"|\
+          "workflow_dispatch:$GITHUB_REPOSITORY/.github/workflows/preview-packages.yml@refs/heads/main"|\
+          "workflow_dispatch:$GITHUB_REPOSITORY/.github/workflows/macos-cache-publish.yml@refs/heads/main") ;;
+          *) exit 1 ;;
+        esac
+        test "$(git rev-parse HEAD)" = "$SOURCE"
+        task_main=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+        if [[ "$SOURCE" != "$task_main" ]]; then
+          echo 'Cache publication requires the current reviewed main source; rerun on main.' >&2
+          exit 1
+        fi
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: flutter
+      with:
+        path: ${{ runner.temp }}/flutter
+        key: flutter-macos-arm64-3.35.7-ui-v2
+        restore-keys: |
+          flutter-macos-arm64-3.35.7-ui-
+          flutter-macos-arm64-3.35.7-v1
+          flutter-macos-arm64-3.35.7-
+    - name: Verify the pinned macOS Flutter SDK
+      shell: bash
+      run: |
+        if [[ ! -x "$RUNNER_TEMP/flutter/bin/flutter" ]]; then
+          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter"
+        fi
+        test "$(git -C "$RUNNER_TEMP/flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
+        echo "$RUNNER_TEMP/flutter/bin" >> "$GITHUB_PATH"
+        echo "FORESIGHT_FLUTTER_EXECUTABLE=$RUNNER_TEMP/flutter/bin/flutter" >> "$GITHUB_ENV"
+        "$RUNNER_TEMP/flutter/bin/flutter" config --enable-macos-desktop --enable-swift-package-manager --no-analytics
+        "$RUNNER_TEMP/flutter/bin/dart" --version
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: pub
+      with:
+        path: ~/.pub-cache
+        key: pub-macos-ui-v2-${{ hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') }}
+        restore-keys: |
+          pub-macos-ui-v2-
+          pub-macos-${{ hashFiles('**/pubspec.lock') }}
+          pub-macos-
+    - name: Warm the pinned desktop engine cache
+      shell: bash
+      run: flutter precache --macos
+    - name: Resolve locked language prerequisites
+      shell: bash
+      run: |
+        (cd packages/foresight_core && dart pub get --enforce-lockfile)
+        (cd apps/desktop && flutter pub get --enforce-lockfile)
+    - name: Verify current main before publishing
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ github.sha }}
+      run: |
+        test "$GITHUB_REF" = refs/heads/main
+        case "$GITHUB_EVENT_NAME:$GITHUB_WORKFLOW_REF" in
+          "schedule:$GITHUB_REPOSITORY/.github/workflows/preview-packages.yml@refs/heads/main"|\
+          "workflow_dispatch:$GITHUB_REPOSITORY/.github/workflows/preview-packages.yml@refs/heads/main"|\
+          "workflow_dispatch:$GITHUB_REPOSITORY/.github/workflows/macos-cache-publish.yml@refs/heads/main") ;;
+          *) exit 1 ;;
+        esac
+        test "$(git rev-parse HEAD)" = "$SOURCE"
+        task_main=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+        if [[ "$SOURCE" != "$task_main" ]]; then
+          echo 'Cache publication requires the current reviewed main source; rerun on main.' >&2
+          exit 1
+        fi
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.flutter.outputs.cache-hit != 'true'
+      with:
+        path: ${{ runner.temp }}/flutter
+        key: flutter-macos-arm64-3.35.7-ui-v2
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.pub.outputs.cache-hit != 'true'
+      with:
+        path: ~/.pub-cache
+        key: pub-macos-ui-v2-${{ hashFiles('packages/foresight_core/pubspec.lock', 'apps/desktop/pubspec.lock') }}

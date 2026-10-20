@@ -130,7 +130,7 @@ def aggregate(results, exercise=False):
     scope = (
         "Synthetic exercise only; no build or publication."
         if exercise
-        else "In-run platform suites and installer lifecycle checks. Main model/audio acceptance remains a separate per-candidate workflow until WS2b."
+        else "In-run platform suites, CPU model/audio acceptance, and installer lifecycle checks."
     )
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary, "a") as stream:

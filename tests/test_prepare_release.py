@@ -106,7 +106,7 @@ class PrepareReleaseTest(unittest.TestCase):
                     )
                 command.assert_not_called()
 
-    def test_resume_requires_both_artifacts_from_the_requested_trusted_run(self):
+    def test_legacy_resume_requires_both_artifacts_from_the_requested_trusted_run(self):
         run = {
             "id": 42,
             "head_sha": "a" * 40,
@@ -167,10 +167,14 @@ class PrepareReleaseTest(unittest.TestCase):
             patch.object(release, "api", side_effect=response),
             patch.object(ci_artifacts, "api", side_effect=response),
         ):
-            self.assertTrue(release.candidates_ready("owner/repo", "a" * 40, 42))
+            self.assertTrue(
+                len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
+            )
             for component in ("linux-app", "macos-app"):
                 missing.add(component)
-                self.assertFalse(release.candidates_ready("owner/repo", "a" * 40, 42))
+                self.assertFalse(
+                    len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
+                )
                 missing.clear()
             for change in (
                 {"expired": True},
@@ -178,7 +182,9 @@ class PrepareReleaseTest(unittest.TestCase):
                 {"name": "ci-macos-app-" + "b" * 40},
             ):
                 artifact_overrides.update(change)
-                self.assertFalse(release.candidates_ready("owner/repo", "a" * 40, 42))
+                self.assertFalse(
+                    len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
+                )
                 artifact_overrides.clear()
             for change in (
                 {"head_branch": "unreviewed"},
@@ -187,7 +193,9 @@ class PrepareReleaseTest(unittest.TestCase):
             ):
                 original = dict(run)
                 run.update(change)
-                self.assertFalse(release.candidates_ready("owner/repo", "a" * 40, 42))
+                self.assertFalse(
+                    len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
+                )
                 run.clear()
                 run.update(original)
 
@@ -260,7 +268,7 @@ class PrepareReleaseTest(unittest.TestCase):
             command.call_args.args[0][:4], ["gh", "release", "create", "v0.1.1"]
         )
 
-    def test_candidate_requires_successful_exact_main_and_both_platforms(self):
+    def test_legacy_candidate_requires_successful_exact_main_and_both_platforms(self):
         commit = "a" * 40
         run = dict(
             id=1,
@@ -304,7 +312,9 @@ class PrepareReleaseTest(unittest.TestCase):
             patch.object(release, "api", side_effect=response),
             patch.object(ci_artifacts, "api", side_effect=response),
         ):
-            self.assertTrue(release.candidates_ready("owner/repo", commit))
+            self.assertTrue(
+                len(release.legacy_candidate_runs("owner/repo", commit)) == 2
+            )
             for change in (
                 {"head_sha": "b" * 40},
                 {"head_branch": "other"},
@@ -312,11 +322,15 @@ class PrepareReleaseTest(unittest.TestCase):
             ):
                 original = dict(run)
                 run.update(change)
-                self.assertFalse(release.candidates_ready("owner/repo", commit))
+                self.assertFalse(
+                    len(release.legacy_candidate_runs("owner/repo", commit)) == 2
+                )
                 run.clear()
                 run.update(original)
         with patch.object(release, "api", return_value={"artifacts": []}):
-            self.assertFalse(release.candidates_ready("owner/repo", commit))
+            self.assertFalse(
+                len(release.legacy_candidate_runs("owner/repo", commit)) == 2
+            )
 
     def test_missing_candidate_fails_without_building_or_tagging(
         self,

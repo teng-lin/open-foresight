@@ -95,14 +95,21 @@ def test_publication_mode_requires_acceptance_and_exact_build_states(publish_onl
     expected = "skipped" if publish_only else "success"
     results = {job: {"result": expected} for job in ("prepare", "linux", "macos")}
     results["acceptance"] = {"result": "success"}
-    require_coordinator(results, "refs/heads/main", publish_only)
+    results["preflight"] = {"result": "success"}
+    results["candidates"] = {"result": expected}
+    results["candidate-receipt"] = {"result": expected}
+    require_coordinator(results, "refs/heads/main", publish_only, reuse=publish_only)
     with pytest.raises(ValueError, match="reviewed main"):
-        require_coordinator(results, "refs/heads/feature", publish_only)
+        require_coordinator(
+            results, "refs/heads/feature", publish_only, reuse=publish_only
+        )
     for job in results:
         for state in ("failure", "cancelled", "timed_out"):
             failed = {**results, job: {"result": state}}
             with pytest.raises(ValueError, match="unpublished"):
-                require_coordinator(failed, "refs/heads/main", publish_only)
+                require_coordinator(
+                    failed, "refs/heads/main", publish_only, reuse=publish_only
+                )
     with pytest.raises(ValueError):
         require_coordinator(results, "refs/heads/main", not publish_only)
 

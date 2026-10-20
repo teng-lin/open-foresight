@@ -105,10 +105,8 @@ def test_macos_offline_contracts_run_after_the_pinned_sdk_protoc_is_available():
     assert sdk["run"].index("ci_verify_dependency.py") < sdk["run"].index(
         'echo "$GITHUB_WORKSPACE/build/sdk/bin" >> "$GITHUB_PATH"'
     )
-    workflow = parse_workflow(
-        (ROOT / ".github/workflows/macos-platform-stages.yml").read_text()
-    )
-    native = workflow["jobs"]["native-macos"]["steps"]
+    workflow = parse_workflow((ROOT / ".github/workflows/macos.yml").read_text())
+    native = workflow["jobs"]["macos"]["steps"]
     setup_index = next(
         i
         for i, step in enumerate(native)

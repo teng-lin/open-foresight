@@ -30,7 +30,7 @@ def source_version(source):
 
 def number(repository, source, platforms="all", reason=""):
     version, minimum = source_version(source)
-    runs = candidate_runs(repository, source, consumer="artifact-pull")
+    runs = candidate_runs(repository, source, consumer="release-candidate")
     requested = (
         {"linux-app", "macos-app"} if platforms == "all" else {platforms + "-app"}
     )
@@ -44,7 +44,9 @@ def number(repository, source, platforms="all", reason=""):
         return allocate(repository, minimum)
     numbers = set()
     for component, run in runs.items():
-        metadata = application_descriptor(repository, component, source, run)
+        metadata = application_descriptor(
+            repository, component, source, run, consumer="release-preparation"
+        )
         value = metadata.get("build_number")
         if (
             metadata.get("version") != version

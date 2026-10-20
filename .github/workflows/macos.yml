@@ -3,34 +3,25 @@ run-name: ${{ inputs.request_id && format('Release candidate {0}', inputs.reques
 permissions:
   contents: read
   actions: read
+env:
+  RELEASE_SOURCE_FLOOR: ${{ vars.RELEASE_SOURCE_FLOOR }}
 concurrency:
   group: platform-checks-${{ github.workflow }}-${{ inputs.request_id || (inputs.preview && format('preview-{0}', github.run_id) || (github.event_name == 'pull_request' && github.ref || inputs.source || github.sha)) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  macos-stages:
-    needs:
-    - changes
-    - distribution-number
-    if: '!cancelled() && needs.changes.outputs.macos == ''true'' && (inputs.preview || github.ref != ''refs/heads/main'' || needs.distribution-number.result == ''success'')'
-    uses: ./.github/workflows/macos-platform-stages.yml
-    with:
-      source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
-      own_pr: ${{ github.event.pull_request.number || 0 }}
-      event: ${{ github.event_name }}
-      release: ${{ inputs.preview || github.ref == 'refs/heads/main' }}
-      version: ${{ inputs.version || needs.distribution-number.outputs.version }}
-      build_number: ${{ inputs.build_number || needs.distribution-number.outputs.build_number }}
-      label: ${{ inputs.label }}
-      core_coverage_benchmark: ${{ inputs.core_coverage_benchmark || false }}
   macos:
     runs-on: macos-15
     timeout-minutes: 180
+    outputs:
+      bundle_id: ${{ steps.macos-candidate.outputs.artifact-id }}
+      bundle_digest: ${{ steps.macos-candidate.outputs.artifact-digest }}
+      attempt: ${{ steps.macos-receipt.outputs.attempt }}
     env:
       MACOSX_DEPLOYMENT_TARGET: '15.0'
       FORESIGHT_BUILD_JOBS: '3'
       FORESIGHT_PARALLEL_GATES: '1'
-      FORESIGHT_COVERAGE: '1'
-      FORESIGHT_CORE_COVERAGE_MIN: '90'
+      FORESIGHT_COVERAGE: ${{ (inputs.tier == 'release' || inputs.macos_coverage) && github.event_name != 'pull_request' && '1' || '0' }}
+      FORESIGHT_CORE_COVERAGE_MIN: '0'
       FORESIGHT_HELPER: ${{ github.workspace }}/build/services/helper/ForesightHelper
       FORESIGHT_MACOS_UI_TEST: '1'
       FORESIGHT_REQUIRE_NATIVE_UI_TEST: '1'
@@ -42,45 +33,42 @@ jobs:
         fetch-depth: 0
     - uses: ./.github/actions/setup-macos-stage
       with:
-        stage: packaging
         source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         own-pr: ${{ github.event.pull_request.number || 0 }}
         version: ${{ inputs.version || needs.distribution-number.outputs.version }}
         build-number: ${{ inputs.build_number || needs.distribution-number.outputs.build_number }}
         label: ${{ inputs.label }}
-    - name: Download qualified native outputs
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-      with:
-        name: ${{ needs.macos-stages.outputs.native_artifact_name }}
-        path: build/ci-input/native
-    - name: Download qualified core outputs
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-      with:
-        name: ${{ needs.macos-stages.outputs.core_artifact_name }}
-        path: build/ci-input/core
-    - name: Download qualified desktop outputs
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-      with:
-        name: ${{ needs.macos-stages.outputs.desktop_artifact_name }}
-        path: build/ci-input/desktop
-    - name: Validate exact-source stage receipts before packaging
+    - name: Run macOS source and SDK contracts
+      run: .venv/bin/python tools/platform_python_tests.py --platform macos
+    - name: Build and test the complete macOS application once
       env:
-        STAGE_PARENTS: '{"native":"${{ needs.macos-stages.outputs.native_identity }}","core":"${{ needs.macos-stages.outputs.core_identity }}","desktop":"${{ needs.macos-stages.outputs.desktop_identity }}"}'
-      run: |-
-        .venv/bin/python - <<'PYCODE'
-        import json, os
-        from pathlib import Path
-        from tools.run_ci_stage import restore_input
-        from tools.ci_stage_cache import git
-        root = Path.cwd()
-        source = git(root, 'rev-parse', 'HEAD').decode().strip()
-        for stage, identity in json.loads(os.environ['STAGE_PARENTS']).items():
-            restore_input(root, 'macos', stage, root / 'build/ci-input' / stage, identity, source)
-        PYCODE
+        GH_TOKEN: ${{ github.token }}
+        OWN_PR: ${{ github.event.pull_request.number || 0 }}
+        NATIVE_EVENT: ${{ github.event_name }}
+        NATIVE_BRANCH: ${{ github.head_ref || github.ref_name }}
+      run: |
+        task_cmake_args=(
+          -G Ninja
+          "-DCMAKE_PREFIX_PATH=$PWD/build/sdk"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+          -DCMAKE_OSX_ARCHITECTURES=arm64
+          "-DICU_ROOT=$(brew --prefix icu4c)"
+          '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
+        )
+        # Restore only compiler work; current configure, build and tests always run.
+        .venv/bin/python tools/ci_native_work.py --platform macos --sdk-prefix build/sdk \
+          --own-pr "$OWN_PR" --event "$NATIVE_EVENT" --branch "$NATIVE_BRANCH" \
+          --output test-results/macos/native-work.json -- "${task_cmake_args[@]}"
+        # Qualify resolved dependency roots before compiling any application code.
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+          "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"
+        .venv/bin/python tools/verify_macos_cmake_cache.py build/CMakeCache.txt \
+          --sdk build/sdk --icu "$(brew --prefix icu4c)"
+        tools/build.sh --platform macos --stage all "${task_cmake_args[@]}"
     - name: Fetch verified macos-runtime
       env:
         GH_TOKEN: ${{ github.token }}
-        OWN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        OWN_HEAD: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
         ALLOW_LOCAL_BUILD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != '' && github.event.pull_request.base.repo.full_name == github.repository && github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name }}
       run: |-
@@ -130,10 +118,14 @@ jobs:
           build/macos-runtimes/runtime-manifest.json
           build/Testing/Temporary/LastTest.log
           test-results/
+          coverage/
+          apps/desktop/coverage/lcov.info
         if-no-files-found: ignore
     - name: Archive the exact tested application candidate
+      id: macos-receipt
       env:
         PREVIEW: ${{ inputs.preview }}
+        CI_TIER: ${{ inputs.tier == 'release' && 'release' || 'sweep' }}
         SOURCE: ${{ inputs.source || github.sha }}
       if: github.ref == 'refs/heads/main'
       run: |-
@@ -141,27 +133,28 @@ jobs:
         ditto -c -k --keepParent 'dist/Open Foresight.app' build/candidate/Open-Foresight-macos-arm64.zip
         cp 'dist/Open Foresight.manifest.json' build/candidate/
         if [[ "$PREVIEW" != true ]]; then
-          python tools/ci_artifacts.py pack --component macos-app --identity "$SOURCE" --prefix build/candidate --output build/candidate-upload
+          python tools/ci_artifacts.py pack --component macos-app --identity "$SOURCE" --prefix build/candidate --output build/candidate-upload --tier "$CI_TIER" --label ""
+          echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
         fi
     - id: macos-candidate
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: github.ref == 'refs/heads/main' && !inputs.preview
       with:
-        name: ci-macos-app-${{ inputs.source || github.sha }}
+        name: ${{ inputs.tier == 'release' && 'ci-macos-app' || 'main-macos-app' }}-${{ inputs.source || github.sha }}
         overwrite: true
         path: build/candidate-upload/
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
     - name: Publish small macos candidate identity receipt
-      if: github.ref == 'refs/heads/main' && !inputs.preview
+      if: inputs.tier == 'release' && github.ref == 'refs/heads/main' && !inputs.preview
       env:
         GH_TOKEN: ${{ github.token }}
         SOURCE: ${{ inputs.source || github.sha }}
         ARTIFACT_ID: ${{ steps.macos-candidate.outputs.artifact-id }}
       run: python tools/ci_artifacts.py publish-receipt --component macos-app --identity "$SOURCE" --prefix build/candidate-upload --artifact-id "$ARTIFACT_ID" --output build/candidate-receipt
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      if: github.ref == 'refs/heads/main' && !inputs.preview
+      if: inputs.tier == 'release' && github.ref == 'refs/heads/main' && !inputs.preview
       with:
         name: receipt-ci-macos-app-${{ inputs.source || github.sha }}
         overwrite: true
@@ -180,11 +173,16 @@ jobs:
     needs:
     - changes
     - distribution-number
-    - macos-stages
-    if: '!cancelled() && needs.macos-stages.result == ''success'' && needs.changes.outputs.macos == ''true'' && (inputs.preview || github.ref != ''refs/heads/main'' || needs.distribution-number.result == ''success'')'
+    if: '!cancelled() && needs.changes.outputs.macos == ''true'' && (inputs.preview || github.ref != ''refs/heads/main'' || needs.distribution-number.result == ''success'')'
+  sanitizers:
+    if: inputs.tier == 'release'
+    uses: ./.github/workflows/native-sanitizers.yml
+    with:
+      source: ${{ inputs.source }}
+      consume_only: true
   linux-native:
     needs: changes
-    if: needs.changes.outputs.linux_native == 'true'
+    if: inputs.tier != 'release' && needs.changes.outputs.linux_build == 'true'
     uses: ./.github/workflows/linux-platform-stages.yml
     with:
       source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
@@ -206,7 +204,7 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y --no-install-recommends bubblewrap poppler-utils unrtf apparmor
-    - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: ${{ runner.temp }}/foresight-document-flutter
         key: flutter-linux-document-host-3.35.7-v1
@@ -238,7 +236,8 @@ jobs:
     outputs:
       selection: ${{ steps.changes.outputs.selection }}
       macos: ${{ steps.changes.outputs.macos }}
-      linux_native: ${{ steps.changes.outputs.linux_native }}
+      linux_build: ${{ steps.changes.outputs.linux_build }}
+      linux_test: ${{ steps.changes.outputs.linux_test }}
       linux_document_imports: ${{ steps.changes.outputs.linux_document_imports }}
       linux_bundle: ${{ steps.changes.outputs.linux_bundle }}
       packaging: ${{ steps.changes.outputs.packaging }}
@@ -246,7 +245,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ github.sha }}
+        ref: ${{ inputs.source || github.sha }}
         fetch-depth: 0
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
@@ -260,13 +259,42 @@ jobs:
         test "${#SOURCE}" = 40
         [[ "$SOURCE" =~ ^[0-9a-f]+$ ]]
         git merge-base --is-ancestor "$SOURCE" origin/main
+    - name: Require the release-tier interface before selecting producers
+      env:
+        TIER: ${{ inputs.tier }}
+        SOURCE: ${{ inputs.source }}
+        REQUEST_ID: ${{ inputs.request_id }}
+        PREVIEW: ${{ inputs.preview }}
+        BUILD_LABEL: ${{ inputs.label }}
+      run: |
+        if [[ -n "$TIER" ]]; then
+          test "$TIER" = release
+          test "$GITHUB_REF" = refs/heads/main
+          test -n "$SOURCE"
+          test -n "$REQUEST_ID"
+          test "$PREVIEW" != true
+          test -z "$BUILD_LABEL"
+        fi
     - name: Select affected platform checks
       id: changes
       env:
         BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        PUSH_BASE: ${{ github.event.before }}
+        EVENT: ${{ github.event_name }}
         PLATFORMS: ${{ inputs.platforms || 'all' }}
-        FORCE: ${{ (inputs.preview || github.event_name == 'workflow_dispatch') && '--force' || '' }}
+        FORCE: ${{ (inputs.tier == 'release' || inputs.preview || github.event_name == 'workflow_dispatch') && '--force' || '' }}
       run: |-
+        if [[ "$EVENT" == pull_request ]]; then
+          BASE=$(git merge-base "$BASE" HEAD)
+        elif [[ "$EVENT" == push ]]; then
+          if [[ "$PUSH_BASE" =~ ^[0-9a-f]{40}$ ]] && git cat-file -e "$PUSH_BASE^{commit}" 2>/dev/null && git merge-base --is-ancestor "$PUSH_BASE" HEAD; then
+            BASE=$PUSH_BASE
+          else
+            echo 'Push base is unavailable or unrelated; run all selected platform suites' >&2
+            BASE=HEAD
+            FORCE=--force
+          fi
+        fi
         task_args=(--base "$BASE")
         if [[ "$FORCE" == --force ]]; then
           task_args+=(--force)
@@ -279,6 +307,22 @@ jobs:
         overwrite: true
         path: ci-selection.json
         if-no-files-found: error
+    - name: Observe acceptance dependencies without skipping phases
+      continue-on-error: true
+      env:
+        BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        EVENT: ${{ github.event_name }}
+      run: python3 tools/ci_acceptance_plan.py --base "$BASE" --event "$EVENT" --output test-results/acceptance-selection.json
+    - name: Retain acceptance dependency observations
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: acceptance-selection-observation
+        overwrite: true
+        path: test-results/acceptance-selection.json
+        if-no-files-found: error
+        retention-days: 30
     - name: Validate release version copies
       run: python tools/app_version.py --check
   workflow-lint:
@@ -288,7 +332,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ github.sha }}
+        ref: ${{ inputs.source || github.sha }}
     - name: Require ShellCheck for embedded workflow scripts
       run: command -v shellcheck
     - name: Lint every Actions workflow
@@ -296,7 +340,7 @@ jobs:
   distribution-number:
     timeout-minutes: 5
     needs: changes
-    if: github.ref == 'refs/heads/main' && !inputs.preview && (needs.changes.outputs.macos == 'true' || needs.changes.outputs.linux_bundle == 'true')
+    if: github.ref == 'refs/heads/main' && contains(fromJSON('["push","workflow_dispatch","schedule"]'), github.event_name) && !inputs.preview && (needs.changes.outputs.macos == 'true' || needs.changes.outputs.linux_bundle == 'true')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -308,7 +352,7 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ github.sha }}
+        ref: ${{ inputs.source || github.sha }}
         fetch-depth: 0
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
@@ -328,11 +372,14 @@ jobs:
     - distribution-number
     permissions:
       contents: read
-      packages: write
+      packages: read
       actions: read
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     outputs:
+      candidate_id: ${{ steps.linux-candidate.outputs.artifact-id }}
+      candidate_digest: ${{ steps.linux-candidate.outputs.artifact-digest }}
+      attempt: ${{ steps.legacy-receipt.outputs.attempt }}
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
       epoch: ${{ steps.version.outputs.epoch }}
@@ -408,40 +455,6 @@ jobs:
         path: build/app-dependency-seed/qualification.json
         if-no-files-found: error
         retention-days: 30
-    - name: Publish only the secret-free application dependency cache
-      if: github.ref == 'refs/heads/main' && inputs.source == ''
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-      with:
-        context: .
-        file: packaging/build.Dockerfile
-        build-contexts: appdeps_seed=./build/app-dependency-seed
-        builder: ${{ steps.app-cache.outputs.builder }}
-        target: application-dependencies
-        build-args: |
-          SDK_IMAGE=${{ steps.sdk.outputs.image }}
-          REQUIRE_DEPENDENCY_REUSE=1
-        cache-from: |
-          type=registry,ref=${{ steps.app-cache.outputs.legacy_cache }}
-          type=registry,ref=${{ steps.app-cache.outputs.cache }}
-        cache-to: ${{ format('type=registry,ref={0},mode=max,image-manifest=true', steps.app-cache.outputs.cache) }}
-    - name: Validate acceptance tools cache transport
-      if: github.ref == 'refs/heads/main' && inputs.source == ''
-      id: acceptance-cache
-      run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY" --acceptance
-    - name: Publish reusable acceptance dependencies without application compilation
-      # Historical product overrides retain their original Dockerfile recipe.
-      if: github.ref == 'refs/heads/main' && inputs.source == ''
-      uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
-      with:
-        context: .
-        file: packaging/acceptance.Dockerfile
-        target: acceptance-dependencies
-        builder: ${{ steps.acceptance-cache.outputs.builder }}
-        build-args: SDK_IMAGE=${{ steps.sdk.outputs.image }}
-        cache-from: |
-          type=registry,ref=${{ steps.acceptance-cache.outputs.legacy_cache }}
-          type=registry,ref=${{ steps.acceptance-cache.outputs.cache }}
-        cache-to: ${{ format('type=registry,ref={0},mode=max,image-manifest=true', steps.acceptance-cache.outputs.cache) }}
     - name: Build and test the current application without exporting its layers
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
       with:
@@ -488,35 +501,23 @@ jobs:
         python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight --format tar --version "$VERSION" --release "$RELEASE"
         cp build/portable/dist/abi.json dist/packages/abi.json
     - name: Archive exact tested Linux candidate
+      id: legacy-receipt
       if: ${{ !inputs.preview }}
       env:
         SOURCE: ${{ inputs.source || github.sha }}
-      run: python tools/ci_artifacts.py pack --component linux-app --identity "$SOURCE" --prefix dist/packages --output build/candidate-upload
+      run: |
+        python tools/ci_artifacts.py pack --component linux-app --identity "$SOURCE" --prefix dist/packages --output build/candidate-upload --tier sweep --label ""
+        echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
     - id: linux-candidate
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: ${{ !inputs.preview }}
       with:
-        name: ci-linux-app-${{ inputs.source || github.sha }}
+        name: main-linux-bundle-${{ inputs.source || github.sha }}
         overwrite: true
         path: build/candidate-upload/
         retention-days: 90
         if-no-files-found: error
         compression-level: 0
-    - name: Publish small linux candidate identity receipt
-      if: github.ref == 'refs/heads/main' && !inputs.preview
-      env:
-        GH_TOKEN: ${{ github.token }}
-        SOURCE: ${{ inputs.source || github.sha }}
-        ARTIFACT_ID: ${{ steps.linux-candidate.outputs.artifact-id }}
-      run: python tools/ci_artifacts.py publish-receipt --component linux-app --identity "$SOURCE" --prefix build/candidate-upload --artifact-id "$ARTIFACT_ID" --output build/candidate-receipt
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-      if: github.ref == 'refs/heads/main' && !inputs.preview
-      with:
-        name: receipt-ci-linux-app-${{ inputs.source || github.sha }}
-        overwrite: true
-        path: build/candidate-receipt/
-        retention-days: 90
-        if-no-files-found: error
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: inputs.preview
       with:
@@ -531,16 +532,24 @@ jobs:
       run: |
         df -h / /mnt
         docker system df
-    if: '!cancelled() && needs.changes.outputs.linux_bundle == ''true'' && github.ref == ''refs/heads/main'' && (inputs.preview || needs.distribution-number.result == ''success'')'
+    if: '!cancelled() && inputs.tier != ''release'' && needs.changes.outputs.linux_bundle == ''true'' && github.ref == ''refs/heads/main'' && (inputs.preview || needs.distribution-number.result == ''success'')'
   packaging:
-    needs: changes
-    if: needs.changes.outputs.packaging == 'true'
+    needs: [changes, linux-build]
+    if: "!cancelled() && needs.changes.outputs.packaging == 'true' && contains(fromJSON('[\"success\",\"skipped\"]'), needs.linux-build.result)"
     uses: ./.github/workflows/package-contracts.yml
+    with:
+      source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+      bundle_id: ${{ needs.linux-build.outputs.bundle_id }}
+      bundle_digest: ${{ needs.linux-build.outputs.bundle_digest }}
+      producer_attempt: ${{ needs.linux-build.outputs.attempt }}
+      tier: ${{ needs.linux-build.outputs.tier }}
+      label: ${{ needs.linux-build.outputs.label }}
+      head_repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      linux_enabled: ${{ needs.changes.outputs.linux_build == 'true' }}
   linux-build:
     name: linux-build
-    continue-on-error: true
     needs: [changes, distribution-number]
-    if: "!cancelled() && github.event_name == 'pull_request' && !inputs.preview && needs.changes.outputs.linux_native == 'true'"
+    if: "!cancelled() && needs.changes.outputs.linux_build == 'true' && (inputs.preview || github.ref != 'refs/heads/main' || needs.distribution-number.result == 'success')"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -548,9 +557,16 @@ jobs:
       actions: read
       packages: read
     outputs:
+      complete: ${{ steps.complete.outputs.complete }}
+      bundle_id: ${{ steps.bundle.outputs.artifact-id }}
+      bundle_digest: ${{ steps.bundle.outputs.artifact-digest }}
+      source: ${{ steps.receipt.outputs.source }}
+      tier: ${{ steps.receipt.outputs.tier }}
+      label: ${{ steps.receipt.outputs.label }}
+      version: ${{ steps.receipt.outputs.version }}
+      build_number: ${{ steps.receipt.outputs.build_number }}
       handoff_id: ${{ steps.handoff.outputs.artifact-id }}
       handoff_digest: ${{ steps.handoff.outputs.artifact-digest }}
-      complete: ${{ steps.complete.outputs.complete }}
       attempt: ${{ steps.receipt.outputs.attempt }}
       sdk_id: ${{ steps.fork-sdk.outputs.artifact-id }}
       sdk_digest: ${{ steps.fork-sdk.outputs.artifact-digest }}
@@ -581,7 +597,9 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Validate application cache transport
-      run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY"
+      run: |
+        python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY"
+        python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY" --ci
     - name: Resolve verified SDKs before a component-scoped fork fallback
       id: sdk
       env:
@@ -590,7 +608,7 @@ jobs:
         OWN_PR: ${{ github.event.pull_request.number || 0 }}
         FORK_PR: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
         VALIDATE_SDK_TRANSPORT: ${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:validate-sdk-transport') }}
-        CI_TIER: pr
+        CI_TIER: ${{ inputs.tier || (inputs.preview && 'preview' || (github.event_name == 'pull_request' && 'pr' || 'sweep')) }}
         SHADOW_PREVIEW: ${{ inputs.preview && 'true' || 'false' }}
       run: |
         task_args=()
@@ -621,7 +639,7 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.sdk.outputs.image }}
         SOURCE_REVISION: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
-        CI_TIER: ${{ inputs.preview && 'preview' || (github.event_name == 'pull_request' && 'pr' || 'sweep') }}
+        CI_TIER: ${{ inputs.tier == 'release' && 'release' || inputs.preview && 'preview' || (github.event_name == 'pull_request' && 'pr' || 'sweep') }}
         BUILD_LABEL: ${{ inputs.label }}
         REQUIRE_GOOGLE_CLIENT: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
         FORESIGHT_GOOGLE_CLIENT_JSON: ${{ secrets.FORESIGHT_GOOGLE_CLIENT_JSON }}
@@ -629,24 +647,57 @@ jobs:
         FORESIGHT_WEB_CONTENT_API_KEY: ${{ secrets.FORESIGHT_WEB_CONTENT_API_KEY }}
         FORESIGHT_QUERY_TERMS_URL: ${{ vars.FORESIGHT_QUERY_TERMS_URL }}
       run: bash tools/build_linux_container.sh --build-only --output build/linux-shadow
+    - name: Retain the build's exact original SDK reference in its qualified bundle
+      env:
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        SDK_RUN: ${{ steps.sdk.outputs.producer_run }}
+        SDK_ID: ${{ steps.sdk.outputs.producer_artifact_id }}
+        SDK_DIGEST: ${{ steps.sdk.outputs.producer_artifact_digest }}
+        FORK_SDK_ID: ${{ steps.fork-sdk.outputs.artifact-id }}
+        FORK_SDK_DIGEST: ${{ steps.fork-sdk.outputs.artifact-digest && format('sha256:{0}', steps.fork-sdk.outputs.artifact-digest) }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+      run: python tools/ci_linux_sdk_reference.py write --source "$SOURCE" --reference build/linux-shadow/packages/sdk-reference.json
     - name: Bind the shadow bundle on the verified source checkout
       id: receipt
       env:
         SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
-        CI_TIER: ${{ inputs.preview && 'preview' || (github.event_name == 'pull_request' && 'pr' || 'sweep') }}
+        CI_TIER: ${{ inputs.tier == 'release' && 'release' || inputs.preview && 'preview' || (github.event_name == 'pull_request' && 'pr' || 'sweep') }}
         BUILD_LABEL: ${{ inputs.label }}
       run: |
         python tools/ci_artifacts.py pack --component linux-app --identity "$SOURCE" --prefix build/linux-shadow/packages --output build/linux-shadow/bundle-receipt --tier "$CI_TIER" --label "$BUILD_LABEL"
-        echo "attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-    - name: Retain the exact shadow bundle without candidate naming
+        {
+          echo "attempt=$GITHUB_RUN_ATTEMPT"
+          echo "source=$SOURCE"
+          echo "tier=$CI_TIER"
+          echo "label=$BUILD_LABEL"
+          echo "version=$(python tools/app_version.py)"
+          echo "build_number=$(python tools/app_version.py --build-number)"
+        } >> "$GITHUB_OUTPUT"
+    - name: Retain the exact in-run bundle without candidate naming
+      id: bundle
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: linux-bundle-${{ github.run_id }}-${{ github.run_attempt }}
+        name: ${{ inputs.tier == 'release' && format('ci-linux-app-{0}', inputs.source) || format('linux-bundle-{0}-{1}', github.run_id, github.run_attempt) }}
         path: build/linux-shadow/bundle-receipt/
         if-no-files-found: error
-        retention-days: 14
+        retention-days: ${{ inputs.tier == 'release' && 90 || 14 }}
         compression-level: 0
         overwrite: true
+    - name: Publish original release Linux candidate identity receipt
+      if: inputs.tier == 'release'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source }}
+        ARTIFACT_ID: ${{ steps.bundle.outputs.artifact-id }}
+      run: python tools/ci_artifacts.py publish-receipt --component linux-app --identity "$SOURCE" --prefix build/linux-shadow/bundle-receipt --artifact-id "$ARTIFACT_ID" --output build/linux-shadow/candidate-receipt
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: inputs.tier == 'release'
+      with:
+        name: receipt-ci-linux-app-${{ inputs.source }}
+        path: build/linux-shadow/candidate-receipt/
+        overwrite: true
+        retention-days: 90
+        if-no-files-found: error
     - name: Retain the exact source and build tree for the test runner
       id: handoff
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -662,22 +713,21 @@ jobs:
       run: |
         df -h / /mnt
         docker system df
-    - name: Mark successful shadow build completion
+    - name: Mark successful Linux build completion
       id: complete
       run: echo 'complete=true' >> "$GITHUB_OUTPUT"
   linux-test:
     name: linux-test
-    continue-on-error: true
     needs: linux-build
     if: "!cancelled() && needs.linux-build.result == 'success' && needs.linux-build.outputs.complete == 'true' && needs.linux-build.outputs.handoff_id != ''"
+    outputs:
+      complete: ${{ steps.complete.outputs.complete }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
       actions: read
       packages: read
-    outputs:
-      complete: ${{ steps.complete.outputs.complete }}
     steps:
     - name: Record initial shadow test storage
       run: |
@@ -706,8 +756,11 @@ jobs:
         REGISTRY_TOKEN: ${{ github.token }}
       run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
     - name: Validate application cache transport
-      run: python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY"
+      run: |
+        python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY"
+        python tools/ci_app_build_transport.py --repository "$GITHUB_REPOSITORY" --ci
     - name: Qualify and retrieve the exact original source/build artifact
+      id: handoff-proof
       env:
         GH_TOKEN: ${{ github.token }}
         SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
@@ -736,6 +789,16 @@ jobs:
           python tools/ci_artifacts.py pull --component linux-sdk --prefix build/shadow-sdk --run-id "$SDK_RUN" --artifact-id "$SDK_ID" --artifact-digest "$SDK_DIGEST" --own-head "$OWN_HEAD" --own-pr "$OWN_PR"
         fi
         python tools/linux_sdk_artifacts.py resolve --prefix build/shadow-sdk --load --discard-archive
+    - name: Qualify the release bundle tested by this handoff
+      if: inputs.tier == 'release'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        ARTIFACT_ID: ${{ needs.linux-build.outputs.bundle_id }}
+        ARTIFACT_DIGEST: ${{ needs.linux-build.outputs.bundle_digest }}
+        PRODUCER_ATTEMPT: ${{ needs.linux-build.outputs.attempt }}
+      run: python -m tools.integration_application --source "$SOURCE" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --directory artifacts
     - name: Test the restored bytes without rebuilding the application
       env:
         GH_TOKEN: ${{ github.token }}
@@ -753,6 +816,22 @@ jobs:
         # SDK archive loading does not restore the base image's own reference.
         docker image inspect "$CACHE_FIXTURE_BASE" >/dev/null 2>&1 || docker pull "$CACHE_FIXTURE_BASE"
         python -m pytest tests/test_acceptance_image_cache.py -ra
+    - name: Record the verified linux-test release input after success
+      if: inputs.tier == 'release'
+      env:
+        HANDOFF_MANIFEST_SHA256: ${{ steps.handoff-proof.outputs.manifest_sha256 }}
+        HANDOFF_PRODUCER_JOB: ${{ steps.handoff-proof.outputs.producer_job }}
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+      run: python tools/ci_linux_acceptance.py --record-input --gate linux-test --source "$SOURCE" --output test-results/consumption/linux-test/consumption.json --handoff build/linux-shadow/handoff --handoff-manifest-sha256 "$HANDOFF_MANIFEST_SHA256" --handoff-producer-job "$HANDOFF_PRODUCER_JOB"
+    - name: Retain the actual linux-test release consumption receipt
+      if: inputs.tier == 'release'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-release-input-linux-test-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        overwrite: true
+        path: test-results/consumption/linux-test/consumption.json
+        if-no-files-found: error
+        retention-days: 90
     - name: Retain independent shadow test results and coverage
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -767,44 +846,349 @@ jobs:
       run: |
         df -h / /mnt
         docker system df
-    - name: Mark successful shadow test completion
+    - name: Mark successful Linux test completion
       id: complete
       run: echo 'complete=true' >> "$GITHUB_OUTPUT"
-  linux-shadow-comparison:
-    continue-on-error: true
-    needs: [linux-native, linux-test]
-    if: "!cancelled() && needs.linux-native.result == 'success' && needs.linux-test.result == 'success' && needs.linux-test.outputs.complete == 'true'"
+  publish-caches:
+    needs: linux-build
+    if: "!cancelled() && inputs.tier != 'release' && github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"workflow_dispatch\",\"schedule\"]'), github.event_name) && needs.linux-build.result == 'success' && (inputs.source == '' || inputs.source == github.sha)"
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      packages: write
     steps:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        ref: ${{ inputs.source || github.sha }}
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
       with:
         python-version: '3.13'
-    - name: Retrieve this run's Arch results
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+    - name: Verify current main before publishing the document toolchain cache
+      id: document-current
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.sha }}
+      run: |
+        test "$GITHUB_REF" = refs/heads/main
+        case "$GITHUB_EVENT_NAME" in push|workflow_dispatch|schedule) ;; *) exit 1 ;; esac
+        test "$(git rev-parse HEAD)" = "$SOURCE"
+        task_main=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+        if [[ "$SOURCE" == "$task_main" ]]; then
+          echo 'current=true' >> "$GITHUB_OUTPUT"
+        else
+          echo 'Main advanced; skip only the document toolchain cache work.' >&2
+          echo 'current=false' >> "$GITHUB_OUTPUT"
+        fi
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: document-flutter
+      if: steps.document-current.outputs.current == 'true'
       with:
-        pattern: linux-*-evidence
-        path: build/shadow-compare/arch
-    - name: Retrieve this run's independent Ubuntu results
-      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        path: ${{ runner.temp }}/foresight-document-flutter
+        key: flutter-linux-document-host-3.35.7-v1
+    - name: Install pinned Dart through the reviewed Flutter SDK
+      if: steps.document-current.outputs.current == 'true'
+      run: |
+        task_document_flutter="$RUNNER_TEMP/foresight-document-flutter"
+        if [[ ! -x "$task_document_flutter/bin/flutter" ]]; then
+          git clone --depth 1 --branch 3.35.7 https://github.com/flutter/flutter.git "$task_document_flutter"
+        fi
+        test "$(git -C "$task_document_flutter" rev-parse HEAD)" = adc901062556672b4138e18a4dc62a4be8f4b3c2
+        echo "$task_document_flutter/bin" >> "$GITHUB_PATH"
+        "$task_document_flutter/bin/dart" --disable-analytics
+    - name: Verify current main immediately before saving the document toolchain cache
+      id: document-save-current
+      if: steps.document-current.outputs.current == 'true' && steps.document-flutter.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SOURCE: ${{ inputs.source || github.sha }}
+      run: |
+        test "$GITHUB_REF" = refs/heads/main
+        case "$GITHUB_EVENT_NAME" in push|workflow_dispatch|schedule) ;; *) exit 1 ;; esac
+        test "$(git rev-parse HEAD)" = "$SOURCE"
+        task_main=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+        if [[ "$SOURCE" == "$task_main" ]]; then
+          echo 'current=true' >> "$GITHUB_OUTPUT"
+        else
+          echo 'Main advanced; skip only the document toolchain cache work.' >&2
+          echo 'current=false' >> "$GITHUB_OUTPUT"
+        fi
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.document-current.outputs.current == 'true' && steps.document-flutter.outputs.cache-hit != 'true' && steps.document-save-current.outputs.current == 'true'
       with:
-        name: ubuntu-linux-shadow-evidence
-        path: build/shadow-compare/ubuntu
-    - name: Require equivalent complete per-test outcomes
-      run: python tools/ci_linux_shadow_compare.py --arch build/shadow-compare/arch --ubuntu build/shadow-compare/ubuntu --output test-results/linux-shadow-comparison.json
-    - name: Retain the measured suite counts
+        path: ${{ runner.temp }}/foresight-document-flutter
+        key: flutter-linux-document-host-3.35.7-v1
+    - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+      with:
+        daemon-config: '{"features":{"containerd-snapshotter":true}}'
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        driver: docker
+    - name: Authenticate the dedicated cache publisher
+      env:
+        REGISTRY_TOKEN: ${{ github.token }}
+      run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+    - name: Restore a compatible verified SDK without compiling it
+      id: sdk
+      env:
+        GH_TOKEN: ${{ github.token }}
+        OWN_HEAD: ${{ inputs.source || github.sha }}
+      run: |
+        python tools/ci_dependency_wait.py --component linux-sdk --prefix build/publisher-sdk --wait 1800 --own-head "$OWN_HEAD"
+        python tools/linux_sdk_artifacts.py resolve --prefix build/publisher-sdk --load --discard-archive
+    - name: Publish only dependency, CI-tool and acceptance-tool layers
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SDK_IMAGE: ${{ steps.sdk.outputs.image }}
+      run: bash tools/publish_linux_ci_caches.sh
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      id: models
+      with:
+        path: build/acceptance-models
+        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+    - name: Prepare only missing checksum-pinned external models
+      if: steps.models.outputs.cache-hit != 'true'
+      run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output test-results/model-download
+    - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+      if: steps.models.outputs.cache-hit != 'true'
+      with:
+        path: build/acceptance-models
+        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+  acceptance-cpu:
+    needs: [changes, linux-build, linux-bundle]
+    if: ${{ !cancelled() && needs.linux-build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.linux-bundle.result) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+    - name: Restore this run's verified portable application and SDK
+      id: consumer
+      uses: ./.github/actions/setup-linux-consumer
+      with:
+        source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        head-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        artifact-id: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.candidate_id || needs.linux-build.outputs.bundle_id }}
+        artifact-digest: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.candidate_digest || needs.linux-build.outputs.bundle_digest }}
+        attempt: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.attempt || needs.linux-build.outputs.attempt }}
+        legacy-main: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' }}
+        sdk-id: ${{ needs.linux-build.outputs.sdk_id }}
+        sdk-digest: ${{ needs.linux-build.outputs.sdk_digest }}
+        sdk-attempt: ${{ needs.linux-build.outputs.attempt }}
+        producer-sdk-run: ${{ needs.linux-build.outputs.producer_sdk_run }}
+        producer-sdk-id: ${{ needs.linux-build.outputs.producer_sdk_id }}
+        producer-sdk-digest: ${{ needs.linux-build.outputs.producer_sdk_digest }}
+        own-pr: ${{ github.event.pull_request.number || 0 }}
+        label: ${{ inputs.label }}
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: build/acceptance-models
+        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+    - name: Run independent cpu acceptance against the restored bytes
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SDK_IMAGE: ${{ steps.consumer.outputs.image }}
+        VERSION: ${{ steps.consumer.outputs.version }}
+        ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
+        PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
+      run: bash tools/linux_acceptance.sh cpu
+    - name: Record the verified acceptance-cpu release input after success
+      if: inputs.tier == 'release'
+      env:
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+      run: python tools/ci_linux_acceptance.py --record-input --gate acceptance-cpu --source "$SOURCE" --output test-results/consumption/acceptance-cpu/consumption.json
+    - name: Retain the actual acceptance-cpu release consumption receipt
+      if: inputs.tier == 'release'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-release-input-acceptance-cpu-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        overwrite: true
+        path: test-results/consumption/acceptance-cpu/consumption.json
+        if-no-files-found: error
+        retention-days: 90
+    - name: Retain independent cpu acceptance evidence
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
-        name: linux-shadow-comparison
-        path: test-results/linux-shadow-comparison.json
+        name: acceptance-cpu-evidence
         overwrite: true
+        path: |
+          test-results/
+          artifacts/*.build.json
+          artifacts/source-qualification.json
+          artifacts/distribution-stamp.json
+          dist/packages/*.build.json
         if-no-files-found: warn
         retention-days: 30
+  acceptance-audio:
+    needs: [changes, linux-build, linux-bundle]
+    if: ${{ !cancelled() && needs.linux-build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.linux-bundle.result) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+    - name: Restore this run's verified portable application and SDK
+      id: consumer
+      uses: ./.github/actions/setup-linux-consumer
+      with:
+        source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        head-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        artifact-id: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.candidate_id || needs.linux-build.outputs.bundle_id }}
+        artifact-digest: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.candidate_digest || needs.linux-build.outputs.bundle_digest }}
+        attempt: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.attempt || needs.linux-build.outputs.attempt }}
+        legacy-main: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' }}
+        sdk-id: ${{ needs.linux-build.outputs.sdk_id }}
+        sdk-digest: ${{ needs.linux-build.outputs.sdk_digest }}
+        sdk-attempt: ${{ needs.linux-build.outputs.attempt }}
+        producer-sdk-run: ${{ needs.linux-build.outputs.producer_sdk_run }}
+        producer-sdk-id: ${{ needs.linux-build.outputs.producer_sdk_id }}
+        producer-sdk-digest: ${{ needs.linux-build.outputs.producer_sdk_digest }}
+        own-pr: ${{ github.event.pull_request.number || 0 }}
+        label: ${{ inputs.label }}
+    - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+      with:
+        path: build/acceptance-models
+        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+    - name: Run independent audio acceptance against the restored bytes
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SDK_IMAGE: ${{ steps.consumer.outputs.image }}
+        VERSION: ${{ steps.consumer.outputs.version }}
+        ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
+        PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
+      run: bash tools/linux_acceptance.sh audio
+    - name: Record the verified acceptance-audio release input after success
+      if: inputs.tier == 'release'
+      env:
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+      run: python tools/ci_linux_acceptance.py --record-input --gate acceptance-audio --source "$SOURCE" --output test-results/consumption/acceptance-audio/consumption.json
+    - name: Retain the actual acceptance-audio release consumption receipt
+      if: inputs.tier == 'release'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-release-input-acceptance-audio-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        overwrite: true
+        path: test-results/consumption/acceptance-audio/consumption.json
+        if-no-files-found: error
+        retention-days: 90
+    - name: Retain independent audio acceptance evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: acceptance-audio-evidence
+        overwrite: true
+        path: |
+          test-results/
+          artifacts/*.build.json
+          artifacts/source-qualification.json
+          artifacts/distribution-stamp.json
+          dist/packages/*.build.json
+        if-no-files-found: warn
+        retention-days: 30
+  acceptance-deb:
+    needs: [changes, linux-build, linux-bundle]
+    if: ${{ !cancelled() && needs.linux-build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.linux-bundle.result) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read
+      packages: read
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        fetch-depth: 0
+        ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+    - name: Restore this run's verified portable application
+      id: consumer
+      uses: ./.github/actions/setup-linux-consumer
+      with:
+        restore-sdk: 'false'
+        source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        head-repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        artifact-id: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.candidate_id || needs.linux-build.outputs.bundle_id }}
+        artifact-digest: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.candidate_digest || needs.linux-build.outputs.bundle_digest }}
+        attempt: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' && needs.linux-bundle.outputs.attempt || needs.linux-build.outputs.attempt }}
+        legacy-main: ${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' }}
+        sdk-id: ${{ needs.linux-build.outputs.sdk_id }}
+        sdk-digest: ${{ needs.linux-build.outputs.sdk_digest }}
+        sdk-attempt: ${{ needs.linux-build.outputs.attempt }}
+        producer-sdk-run: ${{ needs.linux-build.outputs.producer_sdk_run }}
+        producer-sdk-id: ${{ needs.linux-build.outputs.producer_sdk_id }}
+        producer-sdk-digest: ${{ needs.linux-build.outputs.producer_sdk_digest }}
+        own-pr: ${{ github.event.pull_request.number || 0 }}
+        label: ${{ inputs.label }}
+    - name: Run independent deb acceptance against the restored bytes
+      env:
+        GH_TOKEN: ${{ github.token }}
+        SDK_IMAGE: ${{ steps.consumer.outputs.image }}
+        VERSION: ${{ steps.consumer.outputs.version }}
+        ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
+        PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
+      run: bash tools/linux_acceptance.sh deb
+    - name: Record the verified acceptance-deb release input after success
+      if: inputs.tier == 'release'
+      env:
+        SOURCE: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+      run: python tools/ci_linux_acceptance.py --record-input --gate acceptance-deb --source "$SOURCE" --output test-results/consumption/acceptance-deb/consumption.json
+    - name: Retain the actual acceptance-deb release consumption receipt
+      if: inputs.tier == 'release'
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ci-release-input-acceptance-deb-${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
+        overwrite: true
+        path: test-results/consumption/acceptance-deb/consumption.json
+        if-no-files-found: error
+        retention-days: 90
+    - name: Retain independent deb acceptance evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: acceptance-deb-evidence
+        overwrite: true
+        path: |
+          test-results/
+          artifacts/*.build.json
+          artifacts/source-qualification.json
+          artifacts/distribution-stamp.json
+          dist/packages/*.build.json
+        if-no-files-found: warn
+        retention-days: 30
+  acceptance-checks:
+    if: always()
+    needs: [changes, linux-build, linux-bundle, acceptance-cpu, acceptance-audio, acceptance-deb]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      with:
+        persist-credentials: false
+        ref: ${{ inputs.source || github.sha }}
+    - name: Require every selected acceptance consumer and successful producer
+      env:
+        NEEDS: ${{ toJSON(needs) }}
+        SELECTED: ${{ needs.changes.outputs.linux_build }}
+      run: python3 tools/ci_linux_acceptance.py --check-gates
   platform-checks:
     timeout-minutes: 5
     if: always()
@@ -812,8 +1196,8 @@ jobs:
     - changes
     - workflow-lint
     - macos
-    - macos-stages
-    - linux-native
+    - linux-build
+    - linux-test
     - linux-document-imports
     - linux-bundle
     - packaging
@@ -822,12 +1206,12 @@ jobs:
     - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       with:
         persist-credentials: false
-        ref: ${{ github.sha }}
+        ref: ${{ inputs.source || github.sha }}
     - name: Require all selected platform gates
       env:
         NEEDS: ${{ toJSON(needs) }}
         SELECTION: ${{ needs.changes.outputs.selection }}
-        MAIN: ${{ github.ref == 'refs/heads/main' }}
+        MAIN: ${{ github.ref == 'refs/heads/main' && inputs.tier != 'release' }}
         WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
       run: |
         test "$WORKFLOW_LINT" = success
@@ -839,8 +1223,13 @@ jobs:
   pull_request: null
   workflow_dispatch:
     inputs:
+      acceptance:
+        description: Standard portable acceptance or full external and Debian 13 coverage
+        type: choice
+        options: [standard, full]
+        default: standard
       core_coverage_benchmark:
-        description: Compare full macOS core plain and covered with full Linux core coverage
+        description: Compare full Linux core plain and covered test execution
         type: boolean
         default: false
       rebuild_reason:
@@ -861,7 +1250,45 @@ jobs:
         type: string
         default: ''
   workflow_call:
+    outputs:
+      macos_bundle_id:
+        description: Original macOS candidate artifact ID
+        value: ${{ jobs.macos.outputs.bundle_id }}
+      macos_bundle_digest:
+        description: Original macOS candidate uploaded ZIP SHA-256
+        value: ${{ jobs.macos.outputs.bundle_digest }}
+      macos_bundle_attempt:
+        description: Original successful macOS producer attempt
+        value: ${{ jobs.macos.outputs.attempt }}
+      source:
+        description: Exact Linux application source
+        value: ${{ jobs.linux-build.outputs.source }}
+      version:
+        description: Numeric application version before preview label
+        value: ${{ jobs.linux-build.outputs.version }}
+      build_number:
+        description: Embedded application build number
+        value: ${{ jobs.linux-build.outputs.build_number }}
+      linux_bundle_id:
+        description: Exact in-run Linux bundle artifact ID
+        value: ${{ jobs.linux-build.outputs.bundle_id }}
+      linux_bundle_digest:
+        description: Exact uploaded ZIP SHA-256, bare hexadecimal
+        value: ${{ jobs.linux-build.outputs.bundle_digest }}
+      linux_bundle_attempt:
+        description: Original successful producer attempt
+        value: ${{ jobs.linux-build.outputs.attempt }}
     inputs:
+      macos_coverage:
+        description: Collect non-gating nightly macOS coverage
+        type: boolean
+        default: false
+      acceptance:
+        type: string
+        default: standard
+      tier:
+        type: string
+        default: ''
       core_coverage_benchmark:
         type: boolean
         default: false

@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tarfile
 from unittest.mock import patch
+import zipfile
 
 import pytest
 
@@ -210,6 +212,18 @@ def qualified_handoff(tmp_path, monkeypatch):
     source = tmp_path / "source"
     source.mkdir()
     (source / "compiled").write_bytes(b"compiled bytes")
+    packages = source / "dist/packages"
+    packages.mkdir(parents=True)
+    package = packages / "application.tar.gz"
+    with tarfile.open(package, "w:gz") as stream:
+        stream.add(source / "compiled", arcname="application")
+    checksum = handoff.digest(package)
+    package.with_name(package.name + ".sha256").write_text(
+        f"{checksum}  {package.name}\n"
+    )
+    package.with_name(package.name + ".build.json").write_text(
+        json.dumps({"format": "tar", "revision": "a" * 40, "sha256": checksum})
+    )
     inputs = tmp_path / "inputs"
     inputs.write_text("{}")
     upload = tmp_path / "upload"
@@ -824,3 +838,167 @@ def test_approval_backed_reuse_retains_original_verified_payload_without_redownl
         5,
     ]  # One small sidecar and one original SDK ZIP.
     assert not (tmp_path / "unused").exists()
+
+
+def test_qualifier_outputs_the_exact_authenticated_compact_manifest_hash_and_job(
+    qualified_handoff, tmp_path, monkeypatch
+):
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    proof = qualify_fixture(qualified_handoff)
+    directory = qualified_handoff["output"]
+    manifest = json.loads((directory / "source-build.json").read_text())
+    assert proof == {
+        "manifest_sha256": handoff.digest(directory / "source-build.json"),
+        "producer_job": 61,
+    }
+    assert dict(line.split("=", 1) for line in output.read_text().splitlines()) == {
+        key: str(value) for key, value in proof.items()
+    }
+    assert manifest["portable_package"]["size"] > 0
+    assert not any(name.startswith("dist") for name in manifest["files"])
+    with tarfile.open(directory / "source-build.tar.gz") as stream:
+        assert not any(member.name.endswith(".tar.gz") for member in stream)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "package-link",
+        "checksum-link",
+        "metadata-link",
+        "duplicate-package",
+        "duplicate-metadata",
+        "wrong-source",
+        "wrong-digest",
+        "wrong-format",
+        "invalid-metadata",
+        "directory-link",
+    ],
+)
+def test_compact_handoff_record_rejects_unqualified_package_inventory(
+    qualified_handoff, tmp_path, change
+):
+    import shutil
+
+    directory = tmp_path / "source/dist/packages"
+    package = directory / "application.tar.gz"
+    metadata = directory / "application.tar.gz.build.json"
+    checksum = directory / "application.tar.gz.sha256"
+    if change.endswith("-link") and change != "directory-link":
+        target = {
+            "package-link": package,
+            "checksum-link": checksum,
+            "metadata-link": metadata,
+        }[change]
+        original = tmp_path / ("original-" + target.name)
+        target.rename(original)
+        target.symlink_to(original)
+    elif change == "duplicate-package":
+        shutil.copy2(package, directory / "other.tar.gz")
+    elif change == "duplicate-metadata":
+        shutil.copy2(metadata, directory / "other.build.json")
+    elif change == "directory-link":
+        original = tmp_path / "original-packages"
+        directory.rename(original)
+        directory.symlink_to(original, target_is_directory=True)
+    else:
+        value = json.loads(metadata.read_text())
+        if change == "wrong-source":
+            value["revision"] = "b" * 40
+        elif change == "wrong-digest":
+            value["sha256"] = "0" * 64
+        elif change == "wrong-format":
+            value["format"] = "zip"
+        else:
+            value = []
+        metadata.write_text(json.dumps(value))
+    with pytest.raises(ValueError):
+        handoff.portable_input(directory, "a" * 40, required=True)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "valid",
+        "behind-main",
+        "unreviewed-source",
+        "event",
+        "branch",
+        "repository",
+        "job",
+        "tier",
+        "label",
+        "attempt",
+        "window",
+    ],
+)
+def test_release_handoff_qualifies_original_compact_manifest_without_payload_duplication(
+    qualified_handoff, tmp_path, monkeypatch, change
+):
+    # Exercise the real release consumer row, original successful upload, ZIP
+    # checksum and compact manifest together. The portable tar stays separate.
+    fixture = qualified_handoff
+    fixture["run"].update(
+        path=".github/workflows/release.yml",
+        event="workflow_dispatch",
+        head_branch="main",
+        head_repository={"full_name": "owner/repo"},
+    )
+    fixture["job"]["name"] = "candidates / linux-build"
+    if change in ("behind-main", "unreviewed-source"):
+        from tools import ci_artifacts as artifacts
+
+        original_api = artifacts.api
+        fixture["run"]["head_sha"] = "b" * 40
+        fixture["job"]["head_sha"] = "b" * 40
+
+        def api(repository, route):
+            if route == f"compare/{'a' * 40}...{'b' * 40}":
+                assert repository == "owner/repo"
+                return {"status": "ahead" if change == "behind-main" else "diverged"}
+            return original_api(repository, route)
+
+        monkeypatch.setattr(artifacts, "api", api)
+    upload = tmp_path / "upload"
+    manifest_path = upload / "source-build.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest.update(tier="release", label="")
+    if change == "event":
+        fixture["run"]["event"] = "push"
+    elif change == "branch":
+        fixture["run"]["head_branch"] = "feature"
+    elif change == "repository":
+        fixture["run"]["head_repository"]["full_name"] = "fork/repo"
+    elif change == "job":
+        fixture["job"]["name"] = "linux-build"
+    elif change == "tier":
+        manifest["tier"] = "sweep"
+    elif change == "label":
+        manifest["label"] = "preview"
+    elif change == "attempt":
+        fixture["job"]["run_attempt"] = 1
+    elif change == "window":
+        fixture["artifact"]["created_at"] = "2026-10-19T10:02:00Z"
+    manifest_path.write_text(json.dumps(manifest))
+    archive = tmp_path / "artifact.zip"
+    with zipfile.ZipFile(archive, "w") as stream:
+        for name in ("source-build.json", "source-build.tar.gz"):
+            stream.write(upload / name, name)
+    fixture["checksum"] = handoff.digest(archive)
+    fixture["artifact"]["digest"] = "sha256:" + fixture["checksum"]
+    if change not in ("valid", "behind-main"):
+        with pytest.raises(ValueError):
+            qualify_fixture(fixture)
+        return
+    proof = qualify_fixture(fixture)
+    assert proof == {
+        "manifest_sha256": handoff.digest(fixture["output"] / "source-build.json"),
+        "producer_job": 61,
+    }
+    assert manifest["portable_package"]["sha256"] == handoff.digest(
+        tmp_path / "source/dist/packages/application.tar.gz"
+    )
+    assert not any(name.startswith("dist") for name in manifest["files"])
+    with tarfile.open(fixture["output"] / "source-build.tar.gz") as stream:
+        assert not any(name.startswith("dist") for name in stream.getnames())

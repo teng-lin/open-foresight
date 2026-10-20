@@ -133,9 +133,9 @@ def test_release_waits_for_existing_missing_platform_without_dispatch():
     pending = {
         "head_sha": SOURCE,
         "status": "in_progress",
-        "event": "push",
+        "event": "workflow_dispatch",
         "head_branch": "main",
-        "path": ".github/workflows/macos.yml",
+        "path": ".github/workflows/release.yml",
         "head_repository": {"full_name": REPO},
     }
     with (
@@ -211,7 +211,9 @@ def test_historical_source_candidate_is_discovered_without_rebuilding(
     artifact, run, job = candidate(tmp_path, monkeypatch)
     run.update(head_sha="b" * 40, event="workflow_dispatch")
     monkeypatch.setattr(release, "api", artifacts.api)
-    assert release.candidate_runs(REPO, SOURCE) == {"linux-app": 42}
+    assert release.candidate_runs(REPO, SOURCE, consumer="artifact-pull") == {
+        "linux-app": 42
+    }
     assert artifacts.pull(REPO, "linux-app", SOURCE, tmp_path / "restored")
     assert artifacts.application_distribution(
         tmp_path / "restored", "linux-app", SOURCE

@@ -557,10 +557,12 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assert_selection([path], changes.GATES[1:])
 
-    def test_packaging_controls_require_contracts_without_application_builds(self):
+    def test_packaging_controls_require_contracts_and_their_exact_own_run_bundle(self):
         for path in (*changes.PACKAGING_FILES, "packaging/ci/test-debian.sh"):
             with self.subTest(path=path):
-                self.assert_selection([path], ["packaging"])
+                self.assert_selection(
+                    [path], ["packaging", "linux-build", "linux-test", "linux-bundle"]
+                )
 
     def test_shared_unknown_and_selector_changes_keep_full_validation(self):
         for path in (
@@ -617,7 +619,6 @@ class SelectionTests(unittest.TestCase):
                         for name, required in selected.items()
                     },
                 }
-                jobs["macos-stages"] = {"result": jobs["macos"]["result"]}
                 changes.check_gates(jobs, selected, main)
                 for name in jobs:
                     for result in ("success", "cancelled", "failure", "skipped"):
@@ -762,11 +763,13 @@ def test_zip_download_checks_github_digest_before_unpacking(tmp_path):
             )
 
 
-def test_shared_dmg_packaging_selects_package_contracts_without_compilation():
+def test_shared_dmg_packaging_selects_contracts_with_this_runs_linux_bundle():
     selected = changes.select_gates(["tools/create_dmg.py"])
     assert selected["packaging"]
     assert not selected["macos"]
-    assert not selected["linux-native"]
+    assert (
+        selected["linux-build"] and selected["linux-test"] and selected["linux-bundle"]
+    )
 
 
 @pytest.mark.parametrize("artifact", [True, False])
@@ -920,3 +923,11 @@ def test_macos_inflight_selection_rejects_fork_and_failed_producers(failed):
         assert macos.waiting_producers("owner/repo", "macos-sdk", "a" * 40, 23) == (
             [] if failed else [123]
         )
+
+
+def test_shared_dmg_packaging_selects_own_bundle_without_macos_application_compile():
+    selected = changes.select_gates(["tools/create_dmg.py"])
+    assert selected["packaging"]
+    assert not selected["macos"]
+    assert selected["linux-build"] and selected["linux-test"]
+    assert not selected["macos"]

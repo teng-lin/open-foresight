@@ -59,6 +59,14 @@ on:
       - 'packaging/minimal-grpc.cmake'
       - 'packaging/sanitizer-grpc.cmake'
       - '.github/workflows/native-sanitizers.yml'
+  workflow_call:
+    inputs:
+      source:
+        type: string
+        required: true
+      consume_only:
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       allow_sdk_build:
@@ -73,7 +81,7 @@ permissions:
   contents: read
   actions: read
 concurrency:
-  group: native-sanitizers-${{ github.event_name }}-${{ github.ref }}
+  group: native-sanitizers-${{ inputs.consume_only && github.run_id || github.event_name }}-${{ github.ref }}
   # Finish and cache the instrumented SDK before validating newer PR heads.
   # Only the newest pending head waits, then reuses the compiler/recipe cache.
   cancel-in-progress: false
@@ -95,7 +103,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
       - name: Trust this checked-out workspace for container Git provenance checks
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Install artifact transport without updating compiler packages
@@ -126,7 +134,7 @@ jobs:
           OWN_PR: ${{ github.event.pull_request.number || 0 }}
           CACHE_KEY: ${{ steps.sdk-cache.outputs.cache-primary-key }}
           CACHE_HIT: ${{ steps.sdk-cache.outputs.cache-hit }}
-          ALLOW_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_sdk_build }}
+          ALLOW_BUILD: ${{ !inputs.consume_only && github.event_name == 'workflow_dispatch' && inputs.allow_sdk_build }}
           REBUILD_REASON: ${{ inputs.sdk_rebuild_reason }}
         run: |
           args=()
@@ -134,23 +142,24 @@ jobs:
           .venv/bin/python tools/ci_sanitizer_artifacts.py restore --kind address \
             --prefix build/sanitizer-sdk --own-pr "$OWN_PR" --cache-key "$CACHE_KEY" --cache-hit "$CACHE_HIT" "${args[@]}"
       - name: Build the pinned instrumented gRPC and protobuf closure
-        if: github.event_name != 'schedule'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' }}
         run: python tools/build_sanitizer_sdk.py --jobs 2
       - name: Save the validated SDK before application checks
-        if: github.event_name != 'schedule' && steps.sdk-cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' && steps.sdk-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: build/sanitizer-sdk
           key: ${{ steps.sdk-cache.outputs.cache-primary-key }}
       - name: Archive the verified installed address SDK without rebuilding
-        if: github.event_name != 'schedule'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' }}
         id: sdk-artifact
         run: .venv/bin/python tools/ci_sanitizer_artifacts.py pack --kind address --prefix build/sanitizer-sdk --output build/sanitizer-sdk-artifact
       - name: Share the installed address SDK independently of branch-scoped caches
-        if: github.event_name != 'schedule'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ steps.sdk-artifact.outputs.artifact_name }}
+          overwrite: true
           path: |
             build/sanitizer-sdk-artifact/identity.json
             build/sanitizer-sdk-artifact/payload.tar.gz
@@ -177,6 +186,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: native-sanitizer-evidence
+          overwrite: true
           path: |
             test-results/sanitizers/
             test-results/sanitizer-probes/
@@ -201,12 +211,12 @@ jobs:
     needs: thread-policy
     runs-on: ubuntu-24.04
     timeout-minutes: 180
-    continue-on-error: ${{ github.event_name != 'schedule' && needs.thread-policy.outputs.probation == 'true' }}
+    continue-on-error: ${{ !inputs.consume_only && github.event_name != 'schedule' && needs.thread-policy.outputs.probation == 'true' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
       # All 65 recorded compiler/ABI package versions from successful SDK
       # artifact 12152850851 are available in this immutable Ubuntu snapshot.
       - name: Select the verified Ubuntu repository snapshot before compiler installation
@@ -252,7 +262,7 @@ jobs:
           OWN_PR: ${{ github.event.pull_request.number || 0 }}
           CACHE_KEY: ${{ steps.thread-cache.outputs.cache-primary-key }}
           CACHE_HIT: ${{ steps.thread-cache.outputs.cache-hit }}
-          ALLOW_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_sdk_build }}
+          ALLOW_BUILD: ${{ !inputs.consume_only && github.event_name == 'workflow_dispatch' && inputs.allow_sdk_build }}
           REBUILD_REASON: ${{ inputs.sdk_rebuild_reason }}
         run: |
           args=()
@@ -260,22 +270,23 @@ jobs:
           .venv/bin/python tools/ci_sanitizer_artifacts.py restore --kind thread \
             --prefix build/thread-sdk --own-pr "$OWN_PR" --cache-key "$CACHE_KEY" --cache-hit "$CACHE_HIT" "${args[@]}"
       - name: Build the separately instrumented TSan SDK
-        if: github.event_name != 'schedule'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' }}
         run: python3 tools/build_sanitizer_sdk.py --sanitizer thread --prefix build/thread-sdk --sources build/thread-sdk-sources --jobs 2
       - uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
-        if: github.event_name != 'schedule' && steps.thread-cache.outputs.cache-hit != 'true'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' && steps.thread-cache.outputs.cache-hit != 'true' }}
         with:
           path: build/thread-sdk
           key: ${{ steps.thread-cache.outputs.cache-primary-key }}
       - name: Archive the verified installed thread SDK without rebuilding
-        if: github.event_name != 'schedule'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' }}
         id: sdk-artifact
         run: .venv/bin/python tools/ci_sanitizer_artifacts.py pack --kind thread --prefix build/thread-sdk --output build/thread-sdk-artifact
       - name: Share the installed thread SDK independently of branch-scoped caches
-        if: github.event_name != 'schedule'
+        if: ${{ !inputs.consume_only && github.event_name != 'schedule' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: ${{ steps.sdk-artifact.outputs.artifact_name }}
+          overwrite: true
           path: |
             build/thread-sdk-artifact/identity.json
             build/thread-sdk-artifact/payload.tar.gz
@@ -296,28 +307,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: thread-sanitizer-evidence
+          overwrite: true
           path: |
             test-results/thread/
             test-results/thread-probe/
             build/thread/Testing/
           if-no-files-found: warn
-  drift-issue:
-    needs: [native-sanitizers, thread-policy, native-thread-sanitizer]
-    if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    concurrency:
-      group: ci-sanitizers-issue
-      cancel-in-progress: false
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-      issues: write
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          persist-credentials: false
-      - name: Track actual sanitizer failures including probation reports
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: python3 tools/ci_drift_issue.py native-sanitizers.yml
