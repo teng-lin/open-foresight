@@ -33,7 +33,10 @@ mutually skip; completed duplicates must qualify their actual selected execution
 The dispatch namespace is bound in both the run title and selection artifact.
 Exercise sweeps cannot satisfy production receipts or suppress a production sweep;
 the production namespace additionally requires independent rollout authorization.
-Sweep execution does not write production shared cache references. Ordinary
+Sweep execution excludes the application `publish-caches` job. Retained
+main-ref native stages keep their existing guarded cache behavior until the
+replacement publishers qualify; an exercise namespace is not a claim that every
+legacy main-only cache save has already been removed. Ordinary
 manual dispatch, preview and release selection keep their existing semantics.
 
 Activation still requires the reviewed plan's real hosted observation parity,
