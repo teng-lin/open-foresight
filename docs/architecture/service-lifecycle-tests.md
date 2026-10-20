@@ -42,12 +42,12 @@ This matrix records which tests cover each service boundary through each lifecyc
 
 ## Summary
 
-**P**: production on both sides. **F**: fixture only. **G**: gap. **–**: n/a. A cell with both P and G covers some cases and misses others; the detail tables below say which.
+**P**: production on both sides. **F**: fixture only. **G**: gap. **–**: n/a. A cell with G and another mark covers some cases and misses others; the detail tables below say which.
 
 | Boundary | Start/ready | Closing | Closed | Crash | Replacement | Reconnect | EOF before reply | Malformed or partial frame | Slow reply | Duplicate launch |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Desktop ↔ service | P | P | P | F | P | P, G | F | P, F | G | G |
-| MCP/CLI ↔ service | P | P | P | P | P | P | P, F | P, F | F | P |
+| Desktop ↔ service | P | P | P | F | P | P, G | F | P, F | F, G | G |
+| MCP/CLI ↔ service | P | P | P | P | P | P | P, F | P, F | F, G | P |
 | Frontend isolate ↔ worker isolate | P | P | P | P | – | – | P | P, F | G | P |
 | Service ↔ helper | P | F | P | P | P | F | F | G | F | G |
 | Launcher ↔ spawned service | P | P | P | P | P | – | P | P, F | F | P |

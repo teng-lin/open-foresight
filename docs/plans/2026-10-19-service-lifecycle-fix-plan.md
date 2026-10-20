@@ -369,7 +369,7 @@ Branch: `fix/service-commit-safety`. Depends on PR 3's reasons.
 
 ### 5.2 Idempotency keys for creates and appends (SL-4)
 
-1. **Schema.** Add schema version 13 (check `Store.schemaVersion`, currently 12). It creates `request_keys(key TEXT PRIMARY KEY, operation TEXT NOT NULL, result TEXT NOT NULL, created INTEGER NOT NULL)`. Prune rows older than 7 days at startup. `workspace.clear` empties the table.
+1. **Schema.** Add schema version 13 (check `Store.schemaVersion`, currently 12). It creates `request_keys(key TEXT PRIMARY KEY, operation TEXT NOT NULL, result TEXT NOT NULL, created INTEGER NOT NULL)`. Prune rows older than 24 hours (`Store.requestKeyLifetime`) at startup and before each keyed write. `workspace.clear` empties the table.
 2. **Scope.** Audit `Operation` for non-idempotent operations. At least these are in scope: `notes.save` without an ID, `meetings.create`, `sources.import` without an ID, and `meetings.transcript` (it appends). Check `sources.import_url`, `sources.import_file` and the `google.import_*` operations: if they already deduplicate by URL, path or Drive ID, say so in the PR description and exclude them.
 3. **Service.** An optional `idempotency_key` argument. The handler checks the key, then writes the row and the key **in one transaction**. A repeated key returns the stored result without writing. Wrap handlers that are not transactional today.
 4. **MCP.**
