@@ -188,8 +188,9 @@ Future<void> _awaitStopped(
   required bool current,
 }) async {
   await ended.timeout(const Duration(minutes: 30));
-  // The connection closes before the helper stops and the profile lock is
-  // released; report success only after that (L6).
+  // An owner ends its connections after its helper stops, but before it
+  // closes its store, removes its sockets and endpoint record, and releases
+  // the profile lock; report success only after that (L6).
   stderr.writeln(
     'Waiting for the application service'
     '${owner == null ? '' : ' (pid $owner)'} to release its profile.',

@@ -2561,12 +2561,13 @@ Future<bool> _processRunning(int pid) async {
 
 /// After `--stop` signalled the owner [ownerPid] and saw its connection close,
 /// wait until the owner released the profile: its lock is free, or the
-/// process is gone. EOF alone comes before the helper stops and the lock is
-/// released (L6). Without [ownerPid], as for an owner that refused its
-/// status because it was already stopping, only the lock decides. Returns
-/// false if neither happens within [timeout]. Never call this from a process
-/// that hosts an owner of the profile, in any isolate: it probes the lock,
-/// POSIX record locks belong to the process, and closing the probe's
+/// process is gone. EOF comes once the helper has stopped, but before the
+/// owner closes its store, removes its sockets and endpoint record, and
+/// releases the lock (L6). Without [ownerPid], as for an owner that refused
+/// its status because it was already stopping, only the lock decides.
+/// Returns false if neither happens within [timeout]. Never call this from a
+/// process that hosts an owner of the profile, in any isolate: it probes the
+/// lock, POSIX record locks belong to the process, and closing the probe's
 /// descriptor drops the owner's lock.
 Future<bool> awaitProfileRelease(
   ProfilePaths profile,
