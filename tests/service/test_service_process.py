@@ -1245,6 +1245,7 @@ def test_gated_helper_twin_matches_the_dart_fixture():
 # Every gate point in service.dart. A hook-enabled build holds armed points.
 LIFECYCLE_GATES = (
     "close.begin",
+    "close.leases_terminated",
     "close.helper_closed",
     "close.listener_closed",
     "close.before_record_delete",

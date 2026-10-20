@@ -17,9 +17,34 @@ import 'package:test/test.dart';
 
 const closingMessage =
     'Application service is shutting down; retry after it exits.';
+const outcomeUnknownMessage =
+    'Application service stopped before this request finished; it may or may '
+    'not have completed.';
 
 /// A bound only: startup of a compiled service child under parallel load.
 const startupBound = Duration(seconds: 90);
+
+/// The note titles committed to [profile]'s database, read directly.
+List<String> committedNotes(ProfilePaths profile) {
+  final store = Store.readOnly('${profile.data}/application.db');
+  try {
+    return [
+      for (final row in store.rows('SELECT title FROM notes ORDER BY id'))
+        row['title'] as String,
+    ];
+  } finally {
+    store.close();
+  }
+}
+
+/// The error [request] failed with; a bound only, so a missing terminal frame
+/// fails the test instead of hanging it.
+Future<Object> failureOf(Future<Object?> request) => request
+    .then<Object>(
+      (value) => fail('Expected a failure, got $value'),
+      onError: (Object error) => error,
+    )
+    .timeout(const Duration(seconds: 60));
 
 /// An RpcError with [code], [message] and the wire reason [reason]. Reading
 /// the reason through toJson keeps this file runnable against older clients.
@@ -90,6 +115,52 @@ void main() {
     runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
     return launcher;
   }
+
+  test('a request in flight when the worker begins closing gets a terminal '
+      'outcomeUnknown frame (SL-4)', () async {
+    final profile = newProfile('of-drain-');
+    final owner = await HookedServiceProcess.start(
+      build,
+      profile,
+      hold: ['request.committed.notes.save', 'close.leases_terminated'],
+    );
+    ServiceClient? writer, desktop;
+    try {
+      await owner.ready();
+      writer = await ServiceClient.connect(serviceEndpoint(profile));
+      desktop = await ServiceClient.connect(serviceEndpoint(profile));
+      await desktop.call('security.attach_desktop', {
+        'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
+      });
+      final save = writer.call('notes.save', {
+        'title': 'Committed before close',
+        'body': 'its reply is lost',
+      });
+      await owner.reached('request.committed.notes.save');
+      // The desktop leaving starts a worker-initiated close after its
+      // reattach grace; the frontend keeps relaying attached clients.
+      await desktop.close();
+      expect(
+        await failureOf(save),
+        rpcError(
+          RpcErrorCode.unavailable,
+          outcomeUnknownMessage,
+          'outcomeUnknown',
+        ),
+      );
+      // The frame was sent before any later close step.
+      await owner.reached('close.leases_terminated');
+      expect(owner.gates.isReached('close.helper_closed'), isFalse);
+      expect(committedNotes(profile), ['Committed before close']);
+      owner.release('request.committed.notes.save');
+      owner.release('close.leases_terminated');
+      expect(await owner.exitCode, 0, reason: owner.output);
+    } finally {
+      await writer?.close();
+      await desktop?.close();
+      await owner.stop();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test(
     'a status reply cut off by EOF is retried and attaches to the live owner '

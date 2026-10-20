@@ -30,6 +30,20 @@ const _serviceClosingMessage =
 // Those owners also refused from _execute with this shorter text.
 const _legacyExecuteClosingMessage = 'Application service is shutting down';
 
+const _outcomeUnknownMessage =
+    'Application service stopped before this request finished; it may or may '
+    'not have completed.';
+// The whole flush of closing connections, not each one.
+const _closingFlushBound = Duration(seconds: 2);
+
+Future<void> _flushQuietly(Socket socket) async {
+  try {
+    await socket.flush();
+  } catch (_) {
+    // The peer has gone; nothing is left to deliver.
+  }
+}
+
 /// The refusal a closing owner sends for a request it did not dispatch.
 RpcError _closingRefusal() => RpcError(
   RpcErrorCode.unavailable,
@@ -1314,8 +1328,17 @@ class ApplicationService {
     _closing = true;
     _heartbeat?.cancel();
     _desktopShutdown?.cancel();
+    // Every request in flight gets a terminal frame before its lease is
+    // cancelled. Nothing awaits before this loop, so no request can complete
+    // in between: a client sees either its result or this error (SL-4).
+    final unknown = RpcError(
+      RpcErrorCode.unavailable,
+      _outcomeUnknownMessage,
+      reason: RpcErrorReason.outcomeUnknown,
+    ).toJson();
     for (final client in _leases.keys.toList()) {
       for (final id in _leases[client]!.keys.toList()) {
+        _send(client, {'id': id, 'error': unknown, 'done': true});
         _cancel(client, id);
       }
     }
@@ -1330,6 +1353,8 @@ class ApplicationService {
 
     // New requests are refused and in-flight leases cancelled from here.
     if (serviceGatesEnabled) await serviceGate('close.begin');
+    // Every request that was in flight has been sent its terminal frame.
+    if (serviceGatesEnabled) await serviceGate('close.leases_terminated');
     // Application.close synchronously rejects new business calls and cancels
     // background timers before its first await.
     await attempt(application.close);
@@ -1341,10 +1366,20 @@ class ApplicationService {
     await attempt(() => domain.generator?.close());
     await attempt(domain.helper.close);
     if (serviceGatesEnabled) await serviceGate('close.helper_closed');
-    for (final client in _clients.toList()) {
-      if (client != acknowledgementClient) client.destroy();
-    }
+    // Stop accepting first, so every connection is flushed and closed below.
     await attempt(listener.close);
+    // Deliver terminal frames and closing refusals before the connections
+    // close, but never let a client that stopped reading hold shutdown.
+    final peers = [
+      for (final client in _clients)
+        if (client != acknowledgementClient) client,
+    ];
+    await Future.wait([
+      for (final peer in peers) _flushQuietly(peer),
+    ]).timeout(_closingFlushBound, onTimeout: () => const []);
+    for (final peer in peers) {
+      peer.destroy();
+    }
     if (serviceGatesEnabled) await serviceGate('close.listener_closed');
     await attempt(domain.store.close);
     await attempt(() async {

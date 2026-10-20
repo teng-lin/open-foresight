@@ -10,6 +10,7 @@ import 'package:test/test.dart';
 
 const closeGates = [
   'close.begin',
+  'close.leases_terminated',
   'close.helper_closed',
   'close.listener_closed',
   'close.before_record_delete',
@@ -137,8 +138,8 @@ void main() {
               expect(gates.isReached(later), isFalse, reason: later);
             }
             switch (point) {
-              case 'close.begin':
-                // The helper is closed only after this point.
+              case 'close.begin' || 'close.leases_terminated':
+                // The helper is closed only after these points.
                 expect(helper.isStopping, isFalse);
               case 'close.helper_closed':
                 // The helper exited through its release, not a SIGKILL.
@@ -150,7 +151,7 @@ void main() {
                 expect(socket.existsSync(), isFalse);
                 expect(lockHeld(profile), isTrue);
             }
-            if (point == 'close.begin') {
+            if (point == 'close.leases_terminated') {
               owner.release(point);
               await helper.stopping();
               helper.release();
