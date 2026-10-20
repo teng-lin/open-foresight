@@ -51,8 +51,14 @@ def job(number, name, conclusion="success", attempt=1):
 
 
 class FixtureReader(evidence.Reader):
+    @staticmethod
+    def fixture_api(repository, route, *args, **kwargs):
+        if route.startswith("actions/artifacts?name=ci-qualification-index"):
+            return {"artifacts": []}
+        raise AssertionError("Unconfigured fixture API request: " + route)
+
     def __init__(self):
-        super().__init__(REPOSITORY)
+        super().__init__(REPOSITORY, api=self.fixture_api)
         self.main = SOURCE
         self.origin = run(10)
         self.quality = run(20, ".github/workflows/quality.yml")
