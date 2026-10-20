@@ -270,6 +270,25 @@ void main() {
     );
   }
 
+  test('a recorded runtime containing NUL is ignored and never created', () {
+    record().writeAsStringSync(
+      jsonEncode({
+        'data': profile.data,
+        'runtime': '${root.path}/truncated\u0000rest',
+      }),
+    );
+    expect(
+      readEndpointRecord(profile),
+      isA<EndpointInvalid>().having(
+        (record) => record.reason,
+        'reason',
+        contains('NUL'),
+      ),
+    );
+    expect(serviceEndpoint(profile), '${profile.runtime}/application.sock');
+    expect(Directory('${root.path}/truncated').existsSync(), isFalse);
+  });
+
   test(
     'a client names the ignored record when another owner holds the lock',
     () async {

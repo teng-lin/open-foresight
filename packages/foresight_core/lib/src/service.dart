@@ -123,6 +123,10 @@ EndpointRecord readEndpointRecord(ProfilePaths profile) {
   if (!runtime.startsWith('/')) {
     return EndpointInvalid('its runtime is not an absolute path ($runtime)');
   }
+  // dart:io would truncate the path at the NUL and use another directory.
+  if (runtime.contains('\u0000')) {
+    return const EndpointInvalid('its runtime contains a NUL character');
+  }
   try {
     privateDirectory(runtime);
   } on StateError catch (error) {
