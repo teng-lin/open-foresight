@@ -697,7 +697,34 @@ class ApplicationService {
         'worker send peer=${identityHashCode(client)} id=${message['id']} '
         'event=${message['event']} done=${message['done']}',
       );
-      client.writeln(jsonEncode(message));
+      var frame = utf8.encode(jsonEncode(message));
+      // A client drops its whole connection on a frame over the limit, and
+      // losing the desktop's connection stops its recording. Fail only the
+      // request instead.
+      if (frame.length + 1 > maxServiceMessage) {
+        final id = message['id'];
+        _traceServiceTransport(
+          'worker oversized peer=${identityHashCode(client)} id=$id '
+          'event=${message['event']} bytes=${frame.length}',
+        );
+        // Events are snapshots; the next one supersedes a dropped one.
+        if (id == null) return;
+        // No later frame may follow this request's terminal error.
+        if (id is int) _cancel(client, id);
+        frame = utf8.encode(
+          jsonEncode({
+            'id': id,
+            'error': RpcError(
+              RpcErrorCode.internal,
+              'Reply exceeds 16 MiB; request fewer items.',
+            ).toJson(),
+            'done': true,
+          }),
+        );
+      }
+      client
+        ..add(frame)
+        ..add(const [10]);
     } catch (_) {
       client.destroy();
     }
