@@ -294,7 +294,9 @@ void main() {
       await client.call('notes.list');
       var counted = false;
       unawaited(second.then((_) => counted = true));
-      // Only one status request has been sent so far.
+      // Let a completed observer run its callback before checking it: only
+      // one status request has been sent so far.
+      await pumpEventQueue();
       expect(counted, isFalse);
       await client.call('status');
       expect((await second).id, 3);
