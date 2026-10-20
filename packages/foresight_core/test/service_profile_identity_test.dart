@@ -933,6 +933,41 @@ void main() {
     File('${profile.runtime}/application.sock').writeAsStringSync('stale');
     service = await ApplicationService.start(profile);
     await service.close();
+    // A dangling link, which File.rename takes for a missing file (mac:
+    // found by HanSolo), and a link to a directory.
+    final directoryTarget = Directory('${directory.path}/target-directory')
+      ..createSync();
+    for (final linked in ['${directory.path}/missing', directoryTarget.path]) {
+      Link('${profile.runtime}/application.sock').createSync(linked);
+      service = await ApplicationService.start(profile);
+      await service.close();
+    }
+    expect(directoryTarget.existsSync(), isTrue);
+  });
+
+  test('an owner never removes a link to a live socket at its socket path '
+      '(SL-7)', () async {
+    final directory = createServiceTestDirectorySync('of-linked-');
+    final profile = ProfilePaths(
+      '${directory.path}/data',
+      '${directory.path}/run',
+    );
+    privateDirectory(profile.runtime);
+    // Another profile's live socket, reached through a link at this path.
+    final live = '${directory.path}/live.sock';
+    final server = await ServerSocket.bind(
+      InternetAddress(live, type: InternetAddressType.unix),
+      0,
+    );
+    addTearDown(server.close);
+    final path = '${profile.runtime}/application.sock';
+    Link(path).createSync(live);
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    await expectLater(
+      ApplicationService.start(profile),
+      throwsA(refusedForAnotherProfile),
+    );
+    expect(Link(path).targetSync(), live);
   });
 
   test('the directory a default runtime lives in is private too (S5)', () {

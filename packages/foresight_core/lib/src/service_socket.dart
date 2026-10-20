@@ -46,18 +46,39 @@ Future<String?> fileIdentity(String path) async {
   );
 }
 
-/// Unlink the socket at [path] only if it is still the file [expected]
-/// names. It is first renamed to a private name in the same directory, so
-/// nothing can replace it between the check and the unlink; anything else
-/// is linked back, unless a newer socket took the path meanwhile. Returns
-/// whether it removed the socket.
+/// Unlink the socket, file or link at [path] only if it is still the entry
+/// [expected] names. It is checked, renamed to a private name in the same
+/// directory, so nothing can replace it between the check and the unlink,
+/// and checked again; anything else is linked back, unless a newer entry
+/// took the path meanwhile. A link is renamed and removed as a link, never
+/// followed. Returns whether it removed the entry.
 Future<bool> _removeIfStill(String path, String expected) async {
+  final type = FileSystemEntity.typeSync(path, followLinks: false);
+  final link = type == FileSystemEntityType.link;
+  // A directory, or anything else, is not a stale socket to remove.
+  if (!link &&
+      type != FileSystemEntityType.unixDomainSock &&
+      type != FileSystemEntityType.file) {
+    return false;
+  }
+  // What was probed may have been replaced since.
+  try {
+    if (await fileIdentity(path) != expected) return false;
+  } on FileSystemException {
+    return false;
+  }
+  // File.rename resolves a link first, so a dangling link would look absent
+  // (mac: found by HanSolo).
+  void rename(String from, String to) =>
+      link ? Link(from).renameSync(to) : File(from).renameSync(to);
+  void delete(String entry) =>
+      link ? Link(entry).deleteSync() : File(entry).deleteSync();
   final random = Random.secure();
   final aside =
       '${File(path).parent.path}/.r'
       '${base64Url.encode(List.generate(6, (_) => random.nextInt(256)))}';
   try {
-    File(path).renameSync(aside);
+    rename(path, aside);
   } on PathNotFoundException {
     return false;
   }
@@ -68,10 +89,17 @@ Future<bool> _removeIfStill(String path, String expected) async {
     moved = null;
   }
   if (moved == expected) {
-    File(aside).deleteSync();
+    delete(aside);
     return true;
   }
-  if (_linkPath(aside, path)) File(aside).deleteSync();
+  if (_linkPath(aside, path)) {
+    delete(aside);
+  } else {
+    stderr.writeln(
+      'Left $aside behind: it replaced $path while that was being removed, '
+      'and a newer entry has taken the path since.',
+    );
+  }
   return false;
 }
 
@@ -107,14 +135,15 @@ class SocketPathInUse implements Exception {
 /// there or nobody listens, otherwise why the path is in use.
 Future<SocketPathInUse?> probeSocketPath(String path) async {
   final type = FileSystemEntity.typeSync(path, followLinks: false);
-  // Nothing can listen on a regular file or a link (which is never
-  // followed), so either is stale.
+  // Nothing can listen on a regular file, so it is stale. A connect follows
+  // a link, so a link to a live socket is a live endpoint; a dead link is
+  // still removed as a link.
   if (type == FileSystemEntityType.notFound ||
-      type == FileSystemEntityType.file ||
-      type == FileSystemEntityType.link) {
+      type == FileSystemEntityType.file) {
     return null;
   }
-  if (type != FileSystemEntityType.unixDomainSock) {
+  if (type != FileSystemEntityType.unixDomainSock &&
+      type != FileSystemEntityType.link) {
     return SocketPathInUse(path, cause: 'it is a $type, not a socket');
   }
   const bound = Duration(milliseconds: 200);
