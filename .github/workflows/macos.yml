@@ -1,5 +1,5 @@
 name: Platform candidates and checks
-run-name: ${{ inputs.sweep && format('Main sweep {0}', inputs.source || github.sha) || (inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name)) }}
+run-name: ${{ inputs.sweep && format('Main sweep {0} [{1}]', inputs.source || github.sha, inputs.sweep_namespace) || (inputs.request_id && format('Release candidate {0}', inputs.request_id) || format('Platform checks {0}', github.ref_name)) }}
 permissions:
   contents: read
   actions: read
@@ -277,13 +277,14 @@ jobs:
         PUSH_BASE: ${{ github.event.before }}
         EVENT: ${{ github.event_name }}
         SWEEP: ${{ inputs.sweep }}
+        SWEEP_NAMESPACE: ${{ inputs.sweep_namespace }}
         SOURCE: ${{ inputs.source || github.sha }}
         GH_TOKEN: ${{ github.token }}
         PR_NUMBER: ${{ github.event.pull_request.number || '' }}
         FORCE: ${{ (inputs.tier == 'release' || inputs.preview || github.event_name == 'workflow_dispatch') && '--force' || '' }}
       run: |-
         if [[ "$SWEEP" == true ]]; then
-          python tools/ci_main_sweep.py guard --source "$SOURCE"
+          python tools/ci_main_sweep.py guard --source "$SOURCE" --namespace "$SWEEP_NAMESPACE"
           exit 0
         fi
         if [[ "$EVENT" == pull_request ]]; then
@@ -1067,6 +1068,11 @@ jobs:
         description: Exercise the complete application tier on current reviewed main without stamping
         type: boolean
         default: false
+      sweep_namespace:
+        description: Isolated qualification or independently authorized production evidence
+        type: choice
+        options: [exercise, production]
+        default: exercise
       acceptance:
         description: Standard portable acceptance or full external and Debian 13 coverage
         type: choice
