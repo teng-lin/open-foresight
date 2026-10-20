@@ -143,13 +143,10 @@ void main() {
               case 'close.helper_closed':
                 // The helper exited through its release, not a SIGKILL.
                 expect(helper.released, isTrue);
-              case 'close.before_record_delete':
-                expect(record.existsSync(), isTrue);
-                expect(socket.existsSync(), isTrue);
-              case 'close.before_frontend_release':
-                expect(record.existsSync(), isFalse);
-                expect(socket.existsSync(), isTrue);
               case 'close.before_lock_release':
+                // Today's order and PR 3's agree here; the pinned test below
+                // covers where they differ.
+                expect(record.existsSync(), isFalse);
                 expect(socket.existsSync(), isFalse);
                 expect(lockHeld(profile), isTrue);
             }
@@ -171,6 +168,38 @@ void main() {
       },
       timeout: const Timeout(Duration(minutes: 2)),
     );
+
+    test('PINNED (SL-3, reordered by PR 3): the isolated close deletes the '
+        'record while its public socket still exists', () async {
+      final directory = createTestTempDirectorySync('of-order-');
+      final profile = ProfilePaths(
+        '${directory.path}/data',
+        '${directory.path}/run',
+      );
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['close.before_record_delete', 'close.before_frontend_release'],
+      );
+      try {
+        await owner.ready();
+        final record = File('${profile.data}/.application-endpoint.json');
+        final socket = File('${profile.runtime}/application.sock');
+        owner.signal(ProcessSignal.sigterm);
+        await owner.reached('close.before_record_delete');
+        expect(record.existsSync(), isTrue);
+        expect(socket.existsSync(), isTrue);
+        owner.release('close.before_record_delete');
+        // PR 3 removes the public socket before the record instead.
+        await owner.reached('close.before_frontend_release');
+        expect(record.existsSync(), isFalse);
+        expect(socket.existsSync(), isTrue);
+        owner.release('close.before_frontend_release');
+        expect(await owner.exited(), 0, reason: owner.output);
+      } finally {
+        await owner.stop();
+      }
+    }, timeout: const Timeout(Duration(minutes: 2)));
 
     test(
       'a committed request waits at its gate before the reply is sent',

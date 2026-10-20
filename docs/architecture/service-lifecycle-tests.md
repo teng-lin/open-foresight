@@ -39,7 +39,7 @@ This matrix records which tests cover each service boundary through each lifecyc
 
 | Boundary | Start/ready | Closing | Closed | Crash | Replacement | Reconnect | EOF before reply | Malformed or partial frame | Slow reply | Duplicate launch |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Desktop ↔ service | P | F, G | P | G | P | P, G | F | F, G | G | G |
+| Desktop ↔ service | P | F, G | P | F | P | P, G | F | F, G | G | G |
 | MCP/CLI ↔ service | P | G | P | G | P | P | F | G | G | P |
 | Frontend isolate ↔ worker isolate | P | P, G | P | F, G | – | – | P | F | G | P |
 | Service ↔ helper | P | F | P | P | P | F | F | G | F | G |
@@ -55,7 +55,7 @@ The desktop reaches the service through `RemoteDomain`, which connects with `ens
 | Start/ready | PY: `test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations`. PY: `test_native_desktop_and_mcp_share_service` runs only with a configured display. |
 | Closing | **fixture** HO: `desktop startup joins the closing owner before one replacement launch`, and its separate-owner-runtime variant (startup only). An already connected `RemoteDomain` meeting a closing owner is a **GAP** (PR 3 test 7). |
 | Closed | PY: `test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations` (SIGTERM). |
-| Crash | **GAP** for an attached `RemoteDomain`. Startup after a crash goes through `ensureService`, which SL: `a killed owner is replaced once and its recorded runtime is adopted` covers. |
+| Crash | **fixture** RD: `abrupt service loss reconnects and refreshes snapshots without replaying a write` (the fixture service drops the attached desktop's socket). No test crashes a real service under an attached `RemoteDomain`. Startup after a crash goes through `ensureService`, which SL: `a killed owner is replaced once and its recorded runtime is adopted` covers. |
 | Replacement | PY: `test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations`. |
 | Reconnect | PY: `test_desktop_facade_reads_changes_and_reconnects_without_replaying_mutations`. **fixture** RD: `abrupt service loss reconnects and refreshes snapshots without replaying a write`. **fixture** SC: `connection coalesces concurrent opens and reconnects without replaying uncertain writes`. **fixture** SAA: `desktop reconnect during grace period keeps service alive` (a raw socket stands in for the desktop). Re-attaching approvals is a **GAP** (PR 3 test 8, PR 5). |
 | EOF before reply | **fixture** RD: `abrupt service loss reconnects and refreshes snapshots without replaying a write`. |
@@ -85,7 +85,7 @@ The desktop reaches the service through `RemoteDomain`, which connects with `ens
 | Transition | Coverage |
 |---|---|
 | Start/ready | SI: `startup handoff reaches the real worker and custom profile controls`. SI: `concurrent isolated startup protects both sockets before the first RPC`. |
-| Closing | SG: `the isolated worker stops at every close gate in order` (SIGTERM, real child, gate order and file state). SI: `explicit shutdown disconnects clients before the worker finishes cleanup` (frontend-initiated; clients get EOF). SI: `isolated domain preserves multiplexing, committed writes and idle shutdown acknowledgement` (worker-initiated; acknowledgement through the bridge). A client arriving during a worker-initiated close is a **GAP** (PR 3 test 2). |
+| Closing | SG: `the isolated worker stops at every close gate in order` (SIGTERM, real child, gate order). SG: `PINNED (SL-3, reordered by PR 3): the isolated close deletes the record while its public socket still exists`. SI: `explicit shutdown disconnects clients before the worker finishes cleanup` (frontend-initiated; clients get EOF). SI: `isolated domain preserves multiplexing, committed writes and idle shutdown acknowledgement` (worker-initiated; acknowledgement through the bridge). A client arriving during a worker-initiated close (`service.stop_if_idle`) is a **GAP**; PR 3 test 1 closes it. PR 3 test 2 covers a client arriving during a frontend-initiated (SIGTERM) close. |
 | Closed | SI: `private worker preserves the public Unix socket path limit`. SI: `isolated domain preserves multiplexing, committed writes and idle shutdown acknowledgement`. |
 | Crash | **fixture** SI: `fatal isolate failures retain their separate error channel` (diagnostic worker only). A real worker exiting unexpectedly is a **GAP** (PR 3 test 10). |
 | Replacement | n/a: a worker is never replaced inside its process. |
@@ -132,7 +132,7 @@ The desktop reaches the service through `RemoteDomain`, which connects with `ens
 | Transition | Coverage |
 |---|---|
 | Start/ready | SO: `two runtimes and canonical aliases share a profile owner and committed writes`. SFI: `startup replaces a stale endpoint and retains interrupted work after indexing fails`. SS: `closing a retired listener preserves its replacement endpoint`. SER: `an endpoint record that is empty lets clients attach and a new owner start`, with its other invalid-record variants. |
-| Closing | SG: `the isolated worker stops at every close gate in order` (record, sockets and lock at each gate). HO: `a local closing owner retains its process lock (isolated: false)`. HO: `a local closing owner retains its process lock (isolated: true)`. |
+| Closing | SG: `the isolated worker stops at every close gate in order` (lock held until the last gate). SG: `PINNED (SL-3, reordered by PR 3): the isolated close deletes the record while its public socket still exists`. HO: `a local closing owner retains its process lock (isolated: false)`. HO: `a local closing owner retains its process lock (isolated: true)`. |
 | Closed | SID: `idle shutdown acknowledges only after cleanup and rejects a following mutation`. |
 | Crash | SL: `a killed owner is replaced once and its recorded runtime is adopted`. SO: `two runtimes and canonical aliases share a profile owner and committed writes`. PY: `test_unexpected_service_death_interrupts_capture_and_reuses_profile`. |
 | Replacement | SO: `two runtimes and canonical aliases share a profile owner and committed writes`. SS: `cancelled publication cannot replace a newer owner after a pause`. SSR: `failed startup keeps an adopted endpoint record before releasing ownership`. SSR: `failed startup removes its own endpoint record before releasing ownership`. |
