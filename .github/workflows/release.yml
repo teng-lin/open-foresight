@@ -226,6 +226,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+      - name: Install checksum-verified GitHub CLI for release evidence
+        run: python3 tools/ci_release_gh.py
       - name: Re-verify and retain original T5 evidence locators
         env:
           GH_TOKEN: ${{ github.token }}
@@ -246,6 +248,8 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+      - name: Install checksum-verified GitHub CLI for release evidence
+        run: python3 tools/ci_release_gh.py
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: release-acceptance-summary-${{ needs.acceptance.outputs.summary_attempt }}
