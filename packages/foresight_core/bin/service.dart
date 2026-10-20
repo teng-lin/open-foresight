@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:foresight_core/src/profile_paths.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
 
 Future<void> main(List<String> args) async {
@@ -59,7 +60,36 @@ Future<void> main(List<String> args) async {
         return;
       }
       try {
-        final state = await client.call('status') as Map;
+        final Map state;
+        try {
+          // A stalled owner must not hold an administrator forever (L1).
+          state =
+              await client
+                      .call('status')
+                      .timeout(
+                        _statusProbeLimit,
+                        onTimeout: () => throw TimeoutException(
+                          'Application service at ${client.endpoint} '
+                          'accepted the connection but did not answer '
+                          'status within ${_statusProbeLimit.inSeconds} s; '
+                          'it may be busy or hung.',
+                        ),
+                      )
+                  as Map;
+        } on RpcError catch (error) {
+          // An owner that is already stopping refuses the probe. Nothing
+          // is signalled; --stop waits for it like for one it stopped.
+          if (mode != '--stop' || !closingOwnerEndedProbe(error)) rethrow;
+          stderr.writeln('The application service is already stopping.');
+          await _awaitStopped(
+            profile,
+            client.events.stream.drain<void>(),
+            null,
+            // Only owners with profile identity send the reason.
+            current: error.reason != null,
+          );
+          return;
+        }
         // Never report on, stop or signal another profile's owner (SL-7).
         if (servesAnotherProfile(state, profile, client.endpoint)) {
           final owner = state['pid'];
@@ -103,31 +133,12 @@ Future<void> main(List<String> args) async {
           if (!Process.killPid(owner, ProcessSignal.sigterm)) {
             throw StateError('Could not stop application service');
           }
-          await stopped.timeout(const Duration(minutes: 30));
-          // The connection closes before the helper stops and the profile
-          // lock is released; report success only after that (L6).
-          stderr.writeln(
-            'Waiting for the application service (pid $owner) to release '
-            'its profile.',
-          );
-          final bound = int.tryParse(
-            runtimeConfiguration['FORESIGHT_TEST_STOP_RELEASE_MS'] ?? '',
-          );
-          await requireProfileRelease(
+          await _awaitStopped(
             profile,
+            stopped,
             owner,
-            timeout: bound == null
-                ? const Duration(seconds: 30)
-                : Duration(milliseconds: bound),
+            current: state['profile_id'] != null,
           );
-          // The service stopped; tell the user its next start recovers.
-          if (_leftUnclean(profile)) {
-            stderr.writeln(
-              'The application service stopped without a clean shutdown; '
-              'its endpoint record remains, and the next start recovers its '
-              'runtime.',
-            );
-          }
         }
       } finally {
         await client.close();
@@ -158,6 +169,49 @@ Future<void> main(List<String> args) async {
   } catch (error, stack) {
     stderr.writeln('$error\n$stack');
     exitCode = 1;
+  }
+}
+
+/// The bound on a status probe, as clients have.
+const _statusProbeLimit = Duration(seconds: 30);
+
+/// Wait until the stopping owner [owner] (null if it refused its status)
+/// ended this connection ([ended]) and then released its profile, and warn
+/// if it stopped without a clean shutdown. A [current] owner, one with
+/// profile identity, ends its connections only after it finished its work,
+/// recording finalization included. A released owner ends them at SIGTERM
+/// and may finalize a recording for up to 30 minutes after.
+Future<void> _awaitStopped(
+  ProfilePaths profile,
+  Future<void> ended,
+  int? owner, {
+  required bool current,
+}) async {
+  await ended.timeout(const Duration(minutes: 30));
+  // The connection closes before the helper stops and the profile lock is
+  // released; report success only after that (L6).
+  stderr.writeln(
+    'Waiting for the application service'
+    '${owner == null ? '' : ' (pid $owner)'} to release its profile.',
+  );
+  final scaled = int.tryParse(
+    runtimeConfiguration['FORESIGHT_TEST_STOP_RELEASE_MS'] ?? '',
+  );
+  final bound = scaled == null
+      ? const Duration(seconds: 30)
+      : Duration(milliseconds: scaled);
+  // A test's shortened bound keeps the ratio between the two.
+  await requireProfileRelease(
+    profile,
+    owner,
+    timeout: current ? bound : bound * 60,
+  );
+  // The service stopped; tell the user its next start recovers.
+  if (_leftUnclean(profile)) {
+    stderr.writeln(
+      'The application service stopped without a clean shutdown; its '
+      'endpoint record remains, and the next start recovers its runtime.',
+    );
   }
 }
 

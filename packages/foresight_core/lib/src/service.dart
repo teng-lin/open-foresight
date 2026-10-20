@@ -2413,12 +2413,8 @@ Future<ServiceStartup> _connectCompatibleService(
     if (snapshot) initial = await status(desktop: true);
     return (client: client, status: initial);
   } on RpcError catch (error) {
-    // A closing owner refused the probe, or ended it as it began closing.
-    // Status is read-only, so both mean: wait for this owner, then hand off.
-    if (isClosingRefusal(error) ||
-        (error.code == RpcErrorCode.unavailable &&
-            error.reason == RpcErrorReason.outcomeUnknown &&
-            error is! _ServiceTransportLost)) {
+    // Status is read-only, so this means: wait for this owner, then hand off.
+    if (closingOwnerEndedProbe(error)) {
       // Transfer ownership of this specific socket to the startup handoff.
       throw _ClosingService(client);
     }
@@ -2429,6 +2425,15 @@ Future<ServiceStartup> _connectCompatibleService(
     rethrow;
   }
 }
+
+/// Whether [error] ended a read-only status probe because its owner is
+/// closing: the owner refused the probe, or ended it as it began closing.
+/// A lost connection is not this owner's answer.
+bool closingOwnerEndedProbe(RpcError error) =>
+    isClosingRefusal(error) ||
+    (error.code == RpcErrorCode.unavailable &&
+        error.reason == RpcErrorReason.outcomeUnknown &&
+        error is! _ServiceTransportLost);
 
 bool _profileOwnerAvailable(
   ProfilePaths profile, {
@@ -2512,18 +2517,20 @@ Future<bool> _processRunning(int pid) async {
 /// After `--stop` signalled the owner [ownerPid] and saw its connection close,
 /// wait until the owner released the profile: its lock is free, or the
 /// process is gone. EOF alone comes before the helper stops and the lock is
-/// released (L6). Returns false if neither happens within [timeout]. Never
-/// call this from a process that hosts an owner of the profile.
+/// released (L6). Without [ownerPid], as for an owner that refused its
+/// status because it was already stopping, only the lock decides. Returns
+/// false if neither happens within [timeout]. Never call this from a process
+/// that hosts an owner of the profile.
 Future<bool> awaitProfileRelease(
   ProfilePaths profile,
-  int ownerPid, {
+  int? ownerPid, {
   Duration timeout = const Duration(seconds: 30),
 }) async {
   final lock = '${profile.data}/.application.lock';
   final waited = Stopwatch()..start();
   var held = false;
   while (true) {
-    if (!await _processRunning(ownerPid) ||
+    if ((ownerPid != null && !await _processRunning(ownerPid)) ||
         FileSystemEntity.typeSync(lock, followLinks: false) ==
             FileSystemEntityType.notFound ||
         _profileLockFree(lock)) {
@@ -2531,7 +2538,10 @@ Future<bool> awaitProfileRelease(
     }
     if (!held) {
       held = true;
-      _traceServiceTransport('stop: service $ownerPid still holds its profile');
+      _traceServiceTransport(
+        'stop: service${ownerPid == null ? '' : ' $ownerPid'} still holds '
+        'its profile',
+      );
     }
     if (waited.elapsed >= timeout) return false;
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -2541,13 +2551,14 @@ Future<bool> awaitProfileRelease(
 /// [awaitProfileRelease], failing with a message when it times out.
 Future<void> requireProfileRelease(
   ProfilePaths profile,
-  int ownerPid, {
+  int? ownerPid, {
   Duration timeout = const Duration(seconds: 30),
 }) async {
   if (!await awaitProfileRelease(profile, ownerPid, timeout: timeout)) {
     throw StateError(
-      'The application service (pid $ownerPid) closed its connections but '
-      'did not release its profile within ${_describeDuration(timeout)}.',
+      'The application service${ownerPid == null ? '' : ' (pid $ownerPid)'} '
+      'closed its connections but did not release its profile within '
+      '${_describeDuration(timeout)}.',
     );
   }
 }
