@@ -8,7 +8,13 @@ from pathlib import Path
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tools.ci_main_evidence import PLATFORM, Reader, require_source, scoped_run  # noqa: E402
+from tools.ci_main_evidence import (
+    PLATFORM,
+    Reader,
+    require_ready,
+    require_source,
+    scoped_run,
+)  # noqa: E402
 
 
 def application_selection():
@@ -17,7 +23,13 @@ def application_selection():
     return application()
 
 
-def guard(reader, source, current_run):
+def sweep_title(source, namespace):
+    if namespace not in ("exercise", "production"):
+        raise ValueError("Unknown sweep evidence namespace")
+    return f"Main sweep {source} [{namespace}]"
+
+
+def guard(reader, source, current_run, *, namespace="exercise"):
     """Only already executing earlier sweeps can supersede this execution.
 
     Queued duplicates must not mutually skip. A completed title alone is not
@@ -25,14 +37,13 @@ def guard(reader, source, current_run):
     qualify before it can eliminate fresh work.
     """
     require_source(source)
+    title = sweep_title(source, namespace)
     if reader.get("commits/main")["sha"] != source:
         return "Source is no longer main HEAD"
     current = reader.run(current_run)
     scoped_run(current, reader.repository, PLATFORM, source, ("workflow_dispatch",))
     for run in reader.runs(PLATFORM, source):
-        if run["id"] >= current_run or not run.get("display_title", "").startswith(
-            "Main sweep "
-        ):
+        if run["id"] >= current_run or run.get("display_title") != title:
             continue
         scoped_run(run, reader.repository, PLATFORM, source, ("workflow_dispatch",))
         if run.get("status") == "in_progress":
@@ -40,27 +51,34 @@ def guard(reader, source, current_run):
                 selection, _ = reader.selection(run)
             except ValueError:
                 continue
-            if selection.get("sweep") is True and selection.get("superseded") is False:
+            if (
+                selection.get("sweep") is True
+                and selection.get("superseded") is False
+                and selection.get("sweep_namespace") == namespace
+            ):
                 return "An earlier qualified sweep is executing"
         elif run.get("status") == "completed":
             try:
-                qualify(reader, run)
+                qualify(reader, run, namespace=namespace)
             except ValueError:
                 continue
             return "An earlier sweep already validated this source"
     return ""
 
 
-def qualify(reader, run):
+def qualify(reader, run, *, namespace="production"):
     from tools import ci_release_candidates as candidate
     from tools.ci_main_evidence import job_proof, selection_jobs
 
     scoped_run(
         run, reader.repository, PLATFORM, run["head_sha"], ("workflow_dispatch",)
     )
+    require_ready(run)
     selection, proof = reader.selection(run)
     if (
         selection.get("sweep") is not True
+        or selection.get("sweep_namespace") != namespace
+        or run.get("display_title") != sweep_title(run["head_sha"], namespace)
         or selection.get("selection") != application_selection()
     ):
         raise ValueError("Sweep must execute the complete application owner closure")
@@ -79,14 +97,19 @@ def dispatch(reader, *, source, exercise=False, index=None, root=None):
         from tools.ci_main_coordinator import authorize
 
         authorize(reader, source, index=index, root=root)
+    namespace = "exercise" if exercise else "production"
+    title = sweep_title(source, namespace)
     if reader.get("commits/main")["sha"] != source:
         return {"source": source, "status": "superseded"}
     # This entrypoint is also used by scheduled reconciliation. The workflow's
     # repository-wide coordinator group serializes decisions, not SDK producers.
     for run in reader.runs(PLATFORM, source):
-        if run.get("display_title", "").startswith("Main sweep ") and run.get(
-            "status"
-        ) in ("queued", "in_progress", "waiting", "pending"):
+        if run.get("display_title") == title and run.get("status") in (
+            "queued",
+            "in_progress",
+            "waiting",
+            "pending",
+        ):
             scoped_run(run, reader.repository, PLATFORM, source, ("workflow_dispatch",))
             return {"source": source, "status": "already-active", "run": run["id"]}
     reader.api(
@@ -95,7 +118,7 @@ def dispatch(reader, *, source, exercise=False, index=None, root=None):
         "POST",
         {
             "ref": "main",
-            "inputs": {"source": source, "sweep": True},
+            "inputs": {"source": source, "sweep": True, "sweep_namespace": namespace},
         },
     )
     return {
@@ -108,6 +131,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("guard", "exercise"))
     parser.add_argument("--source", required=True)
+    parser.add_argument(
+        "--namespace", choices=("exercise", "production"), default="exercise"
+    )
     parser.add_argument("--output", type=Path, default=Path("ci-selection.json"))
     args = parser.parse_args()
     if os.environ.get("GITHUB_REF") != "refs/heads/main" or os.environ.get(
@@ -118,7 +144,16 @@ def main():
     if args.command == "exercise":
         result = dispatch(reader, source=args.source, exercise=True)
     else:
-        reason = guard(reader, args.source, int(os.environ["GITHUB_RUN_ID"]))
+        if args.namespace == "production":
+            from tools.ci_main_coordinator import authorize
+
+            authorize(reader, args.source)
+        reason = guard(
+            reader,
+            args.source,
+            int(os.environ["GITHUB_RUN_ID"]),
+            namespace=args.namespace,
+        )
         selected = application_selection()
         if reason:
             selected = dict.fromkeys(selected, False)
@@ -127,6 +162,7 @@ def main():
             "selection": selected,
             "superseded": bool(reason),
             "sweep": True,
+            "sweep_namespace": args.namespace,
             "reason": reason,
             "paths": [],
             "force": False,

@@ -31,6 +31,7 @@ def run(number, path=evidence.PLATFORM, source=HEAD, event="pull_request"):
         "head_repository": {"full_name": REPOSITORY},
         "check_suite_id": number + 1000,
         "status": "completed",
+        "conclusion": "success",
         "run_attempt": 1,
         "run_started_at": STAMP,
         "display_title": "Platform checks",
@@ -58,6 +59,7 @@ class FixtureReader(evidence.Reader):
         self.origins = [self.origin, self.quality]
         self.selection_record = {
             "superseded": False,
+            "sweep_namespace": "production",
             "selection": sweep.application_selection(),
         }
         self.proof = {
@@ -255,6 +257,28 @@ class MainEvidenceTests(unittest.TestCase):
         self.assertEqual(self.proposal()["decision"], "sweep")
         with self.assertRaisesRegex(ValueError, "Latest required job"):
             self.reader.verify_origin(original)
+
+    def test_new_unfinished_or_failed_run_attempt_invalidates_old_green_jobs(self):
+        for status, conclusion in (
+            ("queued", None),
+            ("in_progress", None),
+            ("completed", "cancelled"),
+            ("completed", "failure"),
+        ):
+            with self.subTest(status=status, conclusion=conclusion):
+                self.setUp()
+                self.reader.origin.update(
+                    run_attempt=2, status=status, conclusion=conclusion
+                )
+                self.assertEqual(self.proposal()["decision"], "sweep")
+                # Read-only comparison still reports actual incomplete work.
+                current = run(40, source=SOURCE, event="push")
+                current.update(status=status, conclusion=conclusion)
+                self.reader.origins.append(current)
+                self.reader.job_rows[40] = self.reader.job_rows[10]
+                self.assertEqual(
+                    self.reader.actual(SOURCE, self.selected)["status"], status
+                )
 
     def test_missing_gate_and_changed_origin_require_fresh_evidence(self):
         origin = self.proposal()["jobs"]["macos"]
@@ -522,6 +546,7 @@ class SweepTests(unittest.TestCase):
     def setUp(self):
         self.reader = FixtureReader()
         self.current = run(40, source=SOURCE, event="workflow_dispatch")
+        self.reader.selection_record["sweep_namespace"] = "exercise"
         self.reader.origins.append(self.current)
 
     def test_sweep_application_mode_keeps_packaging_unselected(self):
@@ -541,7 +566,9 @@ class SweepTests(unittest.TestCase):
 
     def test_only_earlier_executing_marked_sweep_supersedes(self):
         duplicate = run(30, source=SOURCE, event="workflow_dispatch")
-        duplicate.update(display_title="Main sweep " + SOURCE, status="queued")
+        duplicate.update(
+            display_title=sweep.sweep_title(SOURCE, "exercise"), status="queued"
+        )
         self.reader.origins.append(duplicate)
         self.assertEqual(sweep.guard(self.reader, SOURCE, 40), "")
         duplicate["status"] = "in_progress"
@@ -552,7 +579,7 @@ class SweepTests(unittest.TestCase):
 
     def test_completed_sweep_requires_real_full_job_execution(self):
         duplicate = run(30, source=SOURCE, event="workflow_dispatch")
-        duplicate["display_title"] = "Main sweep " + SOURCE
+        duplicate["display_title"] = sweep.sweep_title(SOURCE, "exercise")
         self.reader.origins.append(duplicate)
         self.reader.job_rows[30] = self.reader.job_rows[10]
         self.assertEqual(sweep.guard(self.reader, SOURCE, 40), "")
@@ -561,6 +588,21 @@ class SweepTests(unittest.TestCase):
         self.reader.job_rows[30][2]["conclusion"] = "skipped"
         self.assertEqual(sweep.guard(self.reader, SOURCE, 40), "")
 
+    def test_sweep_rejects_failed_or_unfinished_latest_attempt_with_old_green_jobs(
+        self,
+    ):
+        self.reader.job_rows[40] = self.reader.job_rows[10]
+        self.reader.selection_record["sweep"] = True
+        for status, conclusion in (
+            ("queued", None),
+            ("in_progress", None),
+            ("completed", "cancelled"),
+            ("completed", "failure"),
+        ):
+            self.current.update(status=status, conclusion=conclusion, run_attempt=2)
+            with self.assertRaisesRegex(ValueError, "Latest validation run attempt"):
+                sweep.qualify(self.reader, self.current)
+
     def test_production_dispatch_disabled_and_exercise_is_idempotent(self):
         with self.assertRaises(ValueError):
             sweep.dispatch(self.reader, source=SOURCE)
@@ -568,9 +610,12 @@ class SweepTests(unittest.TestCase):
             result = sweep.dispatch(self.reader, source=SOURCE, exercise=True)
             self.assertEqual(result["status"], "exercise-dispatched")
             self.assertEqual(
-                api.call_args.args[3]["inputs"], {"source": SOURCE, "sweep": True}
+                api.call_args.args[3]["inputs"],
+                {"source": SOURCE, "sweep": True, "sweep_namespace": "exercise"},
             )
-        self.current.update(status="queued", display_title="Main sweep " + SOURCE)
+        self.current.update(
+            status="queued", display_title=sweep.sweep_title(SOURCE, "exercise")
+        )
         self.assertEqual(
             sweep.dispatch(self.reader, source=SOURCE, exercise=True)["status"],
             "already-active",
@@ -647,7 +692,9 @@ class CoordinatorTests(unittest.TestCase):
 
     def test_failed_sweep_reruns_failed_jobs_once_and_never_restarts_successes(self):
         run_record = run(40, source=SOURCE, event="workflow_dispatch")
-        run_record.update(display_title="Main sweep " + SOURCE, conclusion="failure")
+        run_record.update(
+            display_title=sweep.sweep_title(SOURCE, "production"), conclusion="failure"
+        )
         self.reader.origins.append(run_record)
         self.reader.job_rows[40] = [job(99, "changes", "failure")]
         with (
@@ -671,7 +718,7 @@ class CoordinatorTests(unittest.TestCase):
 
     def test_fresh_sweep_receipt_qualifies_actual_jobs(self):
         run_record = run(40, source=SOURCE, event="workflow_dispatch")
-        run_record["display_title"] = "Main sweep " + SOURCE
+        run_record["display_title"] = sweep.sweep_title(SOURCE, "production")
         self.reader.origins.append(run_record)
         self.reader.job_rows[40] = self.reader.job_rows[10]
         self.reader.selection_record["sweep"] = True
@@ -788,6 +835,31 @@ class CoordinatorTests(unittest.TestCase):
                 coordinator.reconcile(self.reader, SOURCE, BEFORE)["decision"],
                 "sweep-requested",
             )
+
+    def test_fully_green_exercise_cannot_supply_a_production_receipt(self):
+        exercise = run(40, source=SOURCE, event="workflow_dispatch")
+        exercise["display_title"] = sweep.sweep_title(SOURCE, "exercise")
+        self.reader.origins.append(exercise)
+        self.reader.job_rows[40] = self.reader.job_rows[10]
+        self.reader.selection_record.update(sweep=True, sweep_namespace="exercise")
+        sweep.qualify(self.reader, exercise, namespace="exercise")
+        with self.assertRaisesRegex(ValueError, "application owner closure"):
+            coordinator.sweep_receipt(self.reader, exercise, BEFORE)
+        with (
+            patch.object(coordinator, "authorize"),
+            patch.object(coordinator, "selected_on_push", return_value={}),
+            patch.object(self.reader, "proposal", return_value={"decision": "sweep"}),
+            patch.object(self.reader, "api") as api,
+        ):
+            result = coordinator.reconcile(self.reader, SOURCE, BEFORE)
+            self.assertEqual(result["decision"], "sweep-requested")
+            self.assertEqual(
+                api.call_args.args[3]["inputs"]["sweep_namespace"], "production"
+            )
+
+    def test_namespace_unknown_is_rejected_before_any_dispatch(self):
+        with self.assertRaisesRegex(ValueError, "namespace"):
+            sweep.sweep_title(SOURCE, "preview")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ from tools.ci_main_evidence import (  # noqa: E402
     scoped_run,
     selected_on_push,
 )
-from tools.ci_main_sweep import dispatch, qualify  # noqa: E402
+from tools.ci_main_sweep import dispatch, qualify, sweep_title  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs/platforms/ci-rollout-index.json"
@@ -103,7 +103,7 @@ def reconcile(reader, source, before, *, root=ROOT, index=None):
     sweeps = [
         run
         for run in reader.runs(PLATFORM, source)
-        if run.get("display_title", "").startswith("Main sweep ")
+        if run.get("display_title") == sweep_title(source, "production")
     ]
     if sweeps:
         run = sweeps[0]
