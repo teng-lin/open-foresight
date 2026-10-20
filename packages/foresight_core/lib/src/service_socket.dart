@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
@@ -24,32 +25,96 @@ bool _linkPath(String from, String to) {
   }
 }
 
-/// The device and inode of [path] itself, without following a link, or null
-/// when it is missing. Throws when it exists but cannot be inspected.
+// statx(2) on Linux has the same layout on every architecture; the app
+// ships for macOS on arm64 only, where lstat(2) fills the 64-bit-inode
+// struct stat.
+const _atFdCwd = -100;
+const _atSymlinkNoFollow = 0x100;
+const _statxBasicStats = 0x7ff;
+const _statxSize = 256;
+const _darwinStatSize = 144;
+
+final int Function(int, Pointer<Utf8>, int, int, Pointer<Uint8>)? _statx =
+    Platform.isLinux
+    ? DynamicLibrary.process().lookupFunction<
+        Int32 Function(Int32, Pointer<Utf8>, Int32, Uint32, Pointer<Uint8>),
+        int Function(int, Pointer<Utf8>, int, int, Pointer<Uint8>)
+      >('statx')
+    : null;
+
+final int Function(Pointer<Utf8>, Pointer<Uint8>)? _lstat = Platform.isMacOS
+    ? DynamicLibrary.process().lookupFunction<
+        Int32 Function(Pointer<Utf8>, Pointer<Uint8>),
+        int Function(Pointer<Utf8>, Pointer<Uint8>)
+      >('lstat')
+    : null;
+
+/// The identity of the entry at [path] itself, without following a link, or
+/// null when it is missing. Throws when it exists but cannot be inspected.
 ///
-/// On Linux the modification time, to the nanosecond, is part of it: ext4
-/// and overlay filesystems hand a freed inode number to the next file at
-/// once, so a socket that replaced a dead one can carry its old inode. A
-/// socket's modification time is set when it is bound; linking, renaming
-/// and chmod leave it alone. APFS never reuses inode numbers.
+/// It is the device and inode, read in process: spawning a process here would
+/// fork the service while its other isolates run. On Linux the modification
+/// time, to the nanosecond, is part of it: ext4 and overlay filesystems hand
+/// a freed inode number to the next file at once, so a socket that replaced a
+/// dead one can carry its old inode. A socket's modification time is set when
+/// it is bound; linking, renaming and chmod leave it alone. APFS never reuses
+/// inode numbers.
 Future<String?> fileIdentity(String path) async {
+  if (path.contains('\u0000')) {
+    throw ArgumentError.value(path, 'path', 'Path contains a NUL character');
+  }
+  final nativePath = path.toNativeUtf8(allocator: calloc);
+  final buffer = calloc<Uint8>(_statxSize);
+  try {
+    final String? identity;
+    if (_statx case final statx?) {
+      identity =
+          statx(
+                _atFdCwd,
+                nativePath,
+                _atSymlinkNoFollow,
+                _statxBasicStats,
+                buffer,
+              ) ==
+              0
+          ? _linuxIdentity(buffer)
+          : null;
+    } else if (_lstat case final lstat?) {
+      identity = lstat(nativePath, buffer) == 0
+          ? _darwinIdentity(buffer)
+          : null;
+    } else {
+      throw UnsupportedError('No file identity on ${Platform.operatingSystem}');
+    }
+    if (identity != null) return identity;
+  } finally {
+    calloc.free(buffer);
+    calloc.free(nativePath);
+  }
   if (FileSystemEntity.typeSync(path, followLinks: false) ==
       FileSystemEntityType.notFound) {
     return null;
   }
-  final result = await Process.run(
-    '/usr/bin/stat',
-    Platform.isMacOS ? ['-f', '%d:%i', path] : ['-c', '%d:%i:%y', path],
-  );
-  if (result.exitCode == 0) return result.stdout.toString().trim();
-  if (FileSystemEntity.typeSync(path, followLinks: false) ==
-      FileSystemEntityType.notFound) {
-    return null;
-  }
-  throw FileSystemException(
-    'Cannot inspect ${result.stderr.toString().trim()}',
-    path,
-  );
+  throw FileSystemException('Cannot inspect', path);
+}
+
+/// dev_major:dev_minor:ino:mtime from a struct statx.
+String _linuxIdentity(Pointer<Uint8> statx) {
+  final view = ByteData.sublistView(statx.asTypedList(_statxSize));
+  final ino = view.getUint64(32, Endian.host);
+  final mtimeSeconds = view.getInt64(112, Endian.host);
+  final mtimeNanos = view.getUint32(120, Endian.host);
+  final major = view.getUint32(136, Endian.host);
+  final minor = view.getUint32(140, Endian.host);
+  return '$major:$minor:$ino:$mtimeSeconds.$mtimeNanos';
+}
+
+/// dev:ino from a 64-bit-inode struct stat on macOS.
+String _darwinIdentity(Pointer<Uint8> stat) {
+  final view = ByteData.sublistView(stat.asTypedList(_darwinStatSize));
+  final dev = view.getInt32(0, Endian.host);
+  final ino = view.getUint64(8, Endian.host);
+  return '$dev:$ino';
 }
 
 /// Unlink the socket, file or link at [path] only if it is still the entry

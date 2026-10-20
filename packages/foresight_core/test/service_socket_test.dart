@@ -197,4 +197,44 @@ void main() {
       await server.close();
     }
   });
+
+  test('a file identity reads the same device and inode as stat(1)', () async {
+    final directory = createTestTempDirectorySync('of-identity-');
+    final path = '${directory.path}/application.sock';
+    final server = await ServerSocket.bind(
+      InternetAddress(path, type: InternetAddressType.unix),
+      0,
+    );
+    final link = Link('${directory.path}/alias')..createSync(path);
+    try {
+      for (final entry in [path, link.path]) {
+        final identity = (await fileIdentity(entry))!.split(':');
+        final stat = await Process.run(
+          '/usr/bin/stat',
+          Platform.isMacOS ? ['-f', '%d %i', entry] : ['-c', '%d %i %Y', entry],
+        );
+        expect(stat.exitCode, 0, reason: '${stat.stderr}');
+        final fields = stat.stdout.toString().trim().split(' ');
+        if (Platform.isMacOS) {
+          expect(identity, [fields[0], fields[1]]);
+        } else {
+          // stat(1) prints the device as glibc's makedev(major, minor).
+          final major = int.parse(identity[0]), minor = int.parse(identity[1]);
+          final device =
+              ((major & 0xfff) << 8) |
+              ((major & ~0xfff) << 32) |
+              (minor & 0xff) |
+              ((minor & ~0xff) << 12);
+          expect('$device', fields[0]);
+          expect(identity[2], fields[1]);
+          expect(identity[3].split('.').first, fields[2]);
+        }
+      }
+      // The link has its own identity; it is never followed.
+      expect(await fileIdentity(link.path), isNot(await fileIdentity(path)));
+      expect(await fileIdentity('${directory.path}/missing'), isNull);
+    } finally {
+      await server.close();
+    }
+  });
 }
