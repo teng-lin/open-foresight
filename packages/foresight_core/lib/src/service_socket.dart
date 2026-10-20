@@ -232,6 +232,11 @@ bool nobodyListening(SocketException error) =>
       error.osError?.errorCode,
     );
 
+/// Whether [error] is ECONNRESET (54 on macOS, 104 on Linux): the listener a
+/// connect reached closed while the connect waited in its backlog.
+bool _listenerReset(SocketException error) =>
+    error.osError?.errorCode == (Platform.isMacOS ? 54 : 104);
+
 /// A socket path that a new listener must not take: something accepts
 /// connections there, or a connect could not tell (for example it timed out,
 /// or failed with EAGAIN or EACCES).
@@ -268,6 +273,7 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
   final elapsed = Stopwatch()..start();
   for (var attempt = 1; ; attempt++) {
     final left = bound - elapsed.elapsed;
+    final SocketException error;
     try {
       final live = await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
@@ -276,22 +282,37 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
       );
       live.destroy();
       return SocketPathInUse(path);
-    } on SocketException catch (error) {
-      if (!nobodyListening(error)) return SocketPathInUse(path, cause: error);
-      // On macOS a live listener whose backlog is full refuses like a dead
-      // socket (M1). A live owner drains its backlog, so ask up to three
-      // times within the bound. A connect cannot tell a backlog that never
-      // drains from a dead socket, so such a listener is replaced; it can
-      // only be another profile's owner sharing an explicitly set runtime,
-      // since macOS runtimes are per profile by default.
-      if (!Platform.isMacOS ||
-          error.osError?.errorCode != 61 ||
-          attempt >= 3 ||
-          elapsed.elapsed >= bound) {
-        return null;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+    } on SocketException catch (failure) {
+      error = failure;
+    } on OSError catch (failure) {
+      // A connect that waited and then failed reports the socket's pending
+      // error as a bare OSError, not a SocketException.
+      error = SocketException(
+        'Connection failed',
+        osError: failure,
+        address: InternetAddress(path, type: InternetAddressType.unix),
+      );
     }
+    // The listener this connect reached closed while it waited: its owner
+    // stopped, or the last copy went, such as one a child process inherited
+    // until it called exec. Ask again what is at the path now.
+    if (_listenerReset(error) && attempt < 3 && elapsed.elapsed < bound) {
+      continue;
+    }
+    if (!nobodyListening(error)) return SocketPathInUse(path, cause: error);
+    // On macOS a live listener whose backlog is full refuses like a dead
+    // socket (M1). A live owner drains its backlog, so ask up to three
+    // times within the bound. A connect cannot tell a backlog that never
+    // drains from a dead socket, so such a listener is replaced; it can
+    // only be another profile's owner sharing an explicitly set runtime,
+    // since macOS runtimes are per profile by default.
+    if (!Platform.isMacOS ||
+        error.osError?.errorCode != 61 ||
+        attempt >= 3 ||
+        elapsed.elapsed >= bound) {
+      return null;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 60));
   }
 }
 

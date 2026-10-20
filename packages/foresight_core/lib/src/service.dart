@@ -663,15 +663,23 @@ class ServiceClient {
     if (maxMessageBytes < 1) {
       throw ArgumentError.value(maxMessageBytes, 'maxMessageBytes');
     }
-    return ServiceClient._(
-      await Socket.connect(
-        InternetAddress(path, type: InternetAddressType.unix),
-        0,
-        timeout: connectTimeout,
-      ),
-      maxMessageBytes,
-      path,
-    );
+    final address = InternetAddress(path, type: InternetAddressType.unix);
+    try {
+      return ServiceClient._(
+        await Socket.connect(address, 0, timeout: connectTimeout),
+        maxMessageBytes,
+        path,
+      );
+    } on OSError catch (error) {
+      // A connect that waited and then failed, for example because a closing
+      // owner's listener went while it waited, reports the socket's pending
+      // error as a bare OSError. Callers expect a SocketException.
+      throw SocketException(
+        'Connection failed',
+        osError: error,
+        address: address,
+      );
+    }
   }
 
   void _lose(String cause) {
