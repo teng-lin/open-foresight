@@ -104,7 +104,7 @@ The capability file is not a sandbox against arbitrary malicious programs runnin
 | `start_recording`, `pause_recording`, `resume_recording`, `stop_recording` | Use the shared microphone/playback capture and transcription lifecycle. Pause releases capture devices and retains queued pre-pause speech; Resume reacquires the same routes. |
 | `ask` | Generate a grounded answer with checked citations using the configured local generator. |
 
-Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
+Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
 The operation identities, tool schemas, descriptions, annotations, and helper readiness policy live in `packages/foresight_core/lib/src/operations.dart`. Application dispatch switches exhaustively over that enum; desktop command interfaces and remote facades accept those identities and convert them to wire names at the transport. The RPC contracts CI job checks dispatch coverage, rejects raw desktop operation names, and invokes every MCP tool over stdio against a controlled service socket.
 
@@ -115,6 +115,8 @@ The owned helper API is `foresight.helper.v1.RagService`; all failures use non-O
 Launching either client attaches to an existing service or starts one. A per-profile OS lock prevents two launchers from creating competing owners. Clients can disconnect independently. Closing or hiding the desktop stops capture because its on-screen indicator is no longer available. Closing the MCP adapter leaves the meeting running while the desktop remains visible; neither client disconnect unloads the generator.
 
 There is one recording and one active generation per profile. A second recording or simultaneous generation returns a busy error. Model configuration is rejected while another configuration, generation, or recording is active. Clients receive change events; the desktop observes content written through MCP and reconnects after a service restart. MCP reconnects on its next request after a lost connection. An in-flight mutation that loses its connection fails visibly and is not replayed automatically.
+
+A closing service answers every request it will not run with a closing refusal (`unavailable`, reason `closing`, and the unchanged text "Application service is shutting down; retry after it exits."), including requests on new connections while it drains. Requests already in flight get `unavailable` with reason `outcomeUnknown` before their connection closes. A bare EOF means the service crashed. The desktop and MCP send a refused request once more to the next owner, after the startup handoff; they never resend one whose outcome is unknown. The owner removes its sockets before its endpoint record and releases its profile lock last, so a record always names a live, draining or crashed owner. A replacement that fails to start records why in a per-launch status file, and the launcher reports that cause at once.
 
 Cancellation belongs to the connection and request that started an operation. Canceling one answer cannot cancel another client's generation. Canceled model setup cannot replace the previous registration. Bulk import cancellation stops further files; already committed content and accepted indexing work are retained. Stopping a recording finishes transcription even if the requesting client disconnects. Source indexing/deletion are serialized, source revisions gate index publication and citations, and changed original notes invalidate in-flight enhancement output.
 
@@ -133,7 +135,9 @@ dist/open-foresight/open-foresight-service --status
 dist/open-foresight/open-foresight-service --stop
 ```
 
-`--stop` gracefully finalizes active recording. For installers,
+`--stop` gracefully finalizes active recording, and returns only once the
+service has released its profile (its lock is free or its process is gone),
+failing if that takes more than 30 s. For installers,
 `--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
 atomically refuses active/finalizing recording and in-flight operations, then
 blocks new calls before shutdown begins. It acknowledges success only after
