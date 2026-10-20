@@ -1087,6 +1087,33 @@ projection is unchanged by this workstream; the foundation's SentencePiece Pytho
 wheel change affects only the assembled Linux SDK Python layer, retaining all
 core, LiteRT, Whisper and macOS component identities.
 
+### Hosted shadow diagnostics
+
+The [D313 transport/benchmark run](https://github.com/teng-lin/open-foresight/actions/runs/39368931590)
+verified the canonical SDK tag, original qualification and restored build inputs.
+Its source/build archive was 106,639,256 bytes (110,482,468-byte artifact ZIP),
+with all 14,675 payload entries and 1,008 tracked source entries verified.
+No SDK or dependency compilation was needed. Its independently compared native,
+core, desktop, service and host-Python test outcomes matched the same-head Arch
+chain; service/UI had 22 passes and zero skips. The separate
+[acceptance run](https://github.com/teng-lin/open-foresight/actions/runs/39368931645)
+passed private virtual-audio desktop/core/meeting checks (2/1/1, zero skips).
+
+The same-host core benchmark ran plain then covered: 220s and 191s, respectively,
+with identical 1,105-pass/10-skip outcomes and 92.61% core coverage. This single
+ordered observation does not establish a coverage speedup or ordinary latency.
+The build job took 310s; the test job took 804s and failed its final host Docker
+cache fixture because loading an SDK does not restore the base image's own
+reference. It is diagnostic evidence, not a passing timing sample. The host step
+now explicitly loads the same pinned Ubuntu base before the offline fixture.
+
+Normal measurements require a new PR event with both special validation labels
+removed beforehand. Rerunning an old labeled event is not an ordinary sample.
+Record each fresh build/test/comparison execution by run ID, attempt and job IDs;
+report a shared event explicitly when using targeted build-job retries. Exclude
+failed, skipped and special executions from ordinary p50 values. Preserve the
+original successful producer attempt, upload window and checksums on every retry.
+
 SDK consumer waits ignore skipped alternatives with duplicate display names.
 GitHub may expose the skipped main-registry job before its PR-archive counterpart
 is created after parent jobs finish. That placeholder is not proof that the
