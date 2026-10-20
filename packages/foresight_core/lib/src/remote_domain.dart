@@ -3,6 +3,7 @@ import 'operations.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:math' show min;
 import 'google_auth.dart';
 import 'desktop_connection.dart';
 import 'helper.dart';
@@ -212,9 +213,23 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     () => _reconnection = null,
   );
 
+  /// Waits between failed reconnect attempts. Tests replace it to observe
+  /// the backoff without waiting it out.
+  Future<void> Function(Duration pause) reconnectPause = Future<void>.delayed;
+
+  /// The pause after [failures] consecutive failed reconnect attempts: 1 s,
+  /// doubling up to 30 s.
+  static Duration reconnectBackoff(int failures) =>
+      Duration(seconds: min(1 << min(failures - 1, 5), 30));
+
   Future<void> _reconnectLoop() async {
     // Waiters see only failures they await; an unobserved one is not an error.
     var attempt = _attempt = Completer<void>()..future.ignore();
+    // A start that keeps failing, such as one with a corrupt database or an
+    // update in progress, now fails at once; retrying every second would
+    // launch a service every second for as long as the desktop runs. The
+    // first attempt is immediate and a success starts over.
+    var failures = 0;
     while (!_disposed) {
       helper.state = 'application service disconnected; reconnecting';
       helper.changed?.call();
@@ -249,7 +264,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         helper.changed?.call();
         attempt.completeError(error, stack);
         attempt = _attempt = Completer<void>()..future.ignore();
-        await Future<void>.delayed(const Duration(seconds: 1));
+        await reconnectPause(reconnectBackoff(++failures));
       }
     }
     attempt.completeError(RpcError(RpcErrorCode.cancelled, 'Workspace closed'));

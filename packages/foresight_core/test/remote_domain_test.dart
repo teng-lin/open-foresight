@@ -812,6 +812,72 @@ void main() {
       }
     },
   );
+  test('a reconnect whose launches keep failing backs off from 1 s to 30 s, '
+      'and a success starts over', () async {
+    final previous = runtimeConfiguration.environment['FORESIGHT_SERVICE'];
+    addTearDown(() {
+      if (previous == null) {
+        runtimeConfiguration.environment.remove('FORESIGHT_SERVICE');
+      } else {
+        runtimeConfiguration.environment['FORESIGHT_SERVICE'] = previous;
+      }
+    });
+    // Each launch fails at once and says why, as a start with a corrupt
+    // database or a failed migration does.
+    final launches = File('${f.root.path}/launches');
+    final service = File('${f.root.path}/failing-service')
+      ..writeAsStringSync(
+        '#!/bin/sh\n'
+        "echo launched >> '${launches.path}'\n"
+        'printf \'{"state":"failed","error":"database disk image is '
+        'malformed"}\' > "\$FORESIGHT_STARTUP_STATUS"\n',
+      );
+    expect(
+      (await Process.run('/bin/chmod', ['700', service.path])).exitCode,
+      0,
+    );
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = service.path;
+    int launched() =>
+        launches.existsSync() ? launches.readAsLinesSync().length : 0;
+    final pauses = <Duration>[];
+    final served = Completer<void>();
+    f.remote.reconnectPause = (pause) async {
+      pauses.add(pause);
+      if (pauses.length == 7) await served.future;
+      // Hold the loop after the restart's first failure.
+      if (pauses.length == 8) await Completer<void>().future;
+    };
+    await f.stopListening();
+    f.sockets.last.destroy();
+    await eventually(
+      () => pauses.length == 7,
+      timeout: const Duration(seconds: 60),
+    );
+    expect(pauses, [
+      for (final seconds in [1, 2, 4, 8, 16, 30, 30])
+        Duration(seconds: seconds),
+    ]);
+    // One launch per failed attempt.
+    expect(launched(), 7);
+    expect(f.remote.helper.state, contains('database disk image is malformed'));
+    // An owner serves again; the next attempt reconnects.
+    await f.listen();
+    final connections = f.sockets.length;
+    served.complete();
+    await eventually(
+      () => f.sockets.length > connections && !f.remote.client.isClosed,
+    );
+    // The next run of failures starts again at 1 s.
+    await f.stopListening();
+    f.sockets.last.destroy();
+    await eventually(
+      () => pauses.length == 8,
+      timeout: const Duration(seconds: 30),
+    );
+    expect(pauses.last, const Duration(seconds: 1));
+    expect(launched(), 8);
+  });
+
   test(
     'request-specific cancellation leaves another desktop generation active',
     () async {
