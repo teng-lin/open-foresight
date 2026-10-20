@@ -11,12 +11,32 @@ enum RpcErrorCode {
   internal,
 }
 
+/// Whether a failed request may have taken effect. Optional on the wire:
+/// peers that predate it omit it, and old clients ignore it.
+enum RpcErrorReason {
+  /// The service refused the request before dispatching it, because it is
+  /// closing. Retrying after the ownership handoff is safe.
+  closing,
+
+  /// The request was dispatched, or written to the socket, and no terminal
+  /// frame arrived. It may have committed.
+  outcomeUnknown,
+
+  /// Client-local: the request never reached a live socket. Retrying is safe.
+  notSent,
+}
+
 // Preserve existing StateError catches while giving callers a stable wire code.
 // Its message is never serialized through StateError.toString().
 class RpcError extends StateError {
   final RpcErrorCode code;
-  RpcError(this.code, String message) : super(message);
-  Map<String, Object?> toJson() => {'code': code.name, 'message': message};
+  final RpcErrorReason? reason;
+  RpcError(this.code, String message, {this.reason}) : super(message);
+  Map<String, Object?> toJson() => {
+    'code': code.name,
+    'message': message,
+    if (reason != null) 'reason': reason!.name,
+  };
   @override
   String toString() => message;
 
@@ -29,6 +49,10 @@ class RpcError extends StateError {
           orElse: () => RpcErrorCode.internal,
         ),
         error['message']?.toString() ?? 'Application service error',
+        // A reason this client does not know says nothing it can act on.
+        reason: RpcErrorReason.values
+            .where((reason) => reason.name == error['reason'])
+            .firstOrNull,
       );
     }
     if (error is GrpcError) {

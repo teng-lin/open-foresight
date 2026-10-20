@@ -16,6 +16,8 @@ import 'package:test/test.dart';
 
 const closingMessage =
     'Application service is shutting down; retry after it exits.';
+// v0.1.x owners refused requests that reached _execute with this text.
+const legacyClosingMessage = 'Application service is shutting down';
 const probeTimeoutMessage =
     'Application service did not answer its startup status probe';
 
@@ -715,6 +717,31 @@ void main() {
           File('${f.profile.data}/requests').readAsLinesSync(),
           everyElement('status'),
         );
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  test(
+    'a legacy owner refusing with its shorter closing text is handed off (L2)',
+    () async {
+      // A legacy owner sends no reason, only one of its two closing texts.
+      final f = HandoffFixture();
+      await f.start(errorMessage: legacyClosingMessage);
+      try {
+        final pending = f.connect();
+        final success = expectLater(pending, completes);
+        await f.next('closing-observed');
+        expect(f.launched, isFalse);
+        await f.release();
+        final client = await pending.timeout(const Duration(seconds: 15));
+        await success;
+        expect((await client.call('status') as Map)['pid'], isNot(f.old.pid));
+        expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+          'launch',
+        ]);
+        expect(f.lostLaunch, isFalse);
       } finally {
         await f.close();
       }

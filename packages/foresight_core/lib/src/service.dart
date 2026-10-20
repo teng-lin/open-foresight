@@ -22,8 +22,32 @@ const maxServiceMessage = 16 * 1024 * 1024;
 // limit followed by more bytes in the same read still fails. Keep frames 1 MiB
 // under it; clients already released need this headroom too.
 const _maxServiceFrame = maxServiceMessage - 1024 * 1024;
+// Clients released before the reason field (v0.1.0-v0.1.2) match this text,
+// so it must stay byte-identical.
 const _serviceClosingMessage =
     'Application service is shutting down; retry after it exits.';
+// Those owners also refused from _execute with this shorter text.
+const _legacyExecuteClosingMessage = 'Application service is shutting down';
+
+/// The refusal a closing owner sends for a request it did not dispatch.
+RpcError _closingRefusal() => RpcError(
+  RpcErrorCode.unavailable,
+  _serviceClosingMessage,
+  reason: RpcErrorReason.closing,
+);
+
+/// Whether [error] is a closing owner's refusal: the request was never
+/// dispatched, so it is safe to send again once ownership is handed off.
+/// Owners that predate [RpcErrorReason] are recognized by their message.
+bool isClosingRefusal(RpcError error) =>
+    error.code == RpcErrorCode.unavailable &&
+    switch (error.reason) {
+      RpcErrorReason.closing => true,
+      null =>
+        error.message == _serviceClosingMessage ||
+            error.message == _legacyExecuteClosingMessage,
+      _ => false,
+    };
 
 // POSIX locks belong to the OS process, not a Dart isolate or file handle.
 // Local hosts must finish before a launcher probes its own process's lock.
@@ -868,10 +892,7 @@ class ApplicationService {
               if (_closing) {
                 _send(client, {
                   'id': id,
-                  'error': RpcError(
-                    RpcErrorCode.unavailable,
-                    _serviceClosingMessage,
-                  ).toJson(),
+                  'error': _closingRefusal().toJson(),
                   'done': true,
                 });
                 return;
@@ -1165,19 +1186,10 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) async {
-    if (_closing) {
-      throw RpcError(
-        RpcErrorCode.unavailable,
-        'Application service is shutting down',
-      );
-    }
+    // Nothing has been dispatched yet, so these are closing refusals too.
+    if (_closing) throw _closingRefusal();
     if (Operation.parse(method).requiresHelper) await _ready;
-    if (_closing) {
-      throw RpcError(
-        RpcErrorCode.unavailable,
-        'Application service is shutting down',
-      );
-    }
+    if (_closing) throw _closingRefusal();
     if ((method == Operation.meetingsStart.wire ||
             method == Operation.meetingsResume.wire) &&
         !access.hasHost) {
@@ -1725,8 +1737,7 @@ Future<ServiceStartup> _connectCompatibleService(
     if (snapshot) initial = await status(desktop: true);
     return (client: client, status: initial);
   } on RpcError catch (error) {
-    if (error.code == RpcErrorCode.unavailable &&
-        error.message == _serviceClosingMessage) {
+    if (isClosingRefusal(error)) {
       // Transfer ownership of this specific socket to the startup handoff.
       throw _ClosingService(client);
     }
