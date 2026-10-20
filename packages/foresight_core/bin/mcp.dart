@@ -136,9 +136,19 @@ Future<void> main() async {
               },
             );
           } catch (error) {
+            final failure = RpcError.from(error);
+            var text = failure.message;
+            // A change whose reply was lost may have been applied.
+            if (!readOnly && failure.reason == RpcErrorReason.outcomeUnknown) {
+              if (!text.endsWith('.')) text += '.';
+              text += Operation.parse(operation).acceptsIdempotencyKey
+                  ? ' The change may have been applied. Retry with the same '
+                        'idempotency_key to apply it at most once.'
+                  : ' It may have completed; check before retrying.';
+            }
             return CallToolResult(
-              content: [TextContent(text: RpcError.from(error).message)],
-              structuredContent: {'error': RpcError.from(error).toJson()},
+              content: [TextContent(text: text)],
+              structuredContent: {'error': failure.toJson()},
               isError: true,
             );
           }

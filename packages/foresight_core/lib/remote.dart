@@ -3,3 +3,4 @@ export 'src/service.dart' show ServiceClient, ensureService;
 export 'src/desktop_connection.dart';
 export 'src/operations.dart' show Operation;
 export 'src/pending_request_key.dart';
+export 'src/rpc_error.dart' show RpcError, RpcErrorCode, RpcErrorReason;

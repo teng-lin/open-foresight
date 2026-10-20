@@ -162,6 +162,17 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     helper.changed?.call();
   }
 
+  /// Events a connection sends before it is listened to are lost, and its
+  /// startup status can predate a clear among them. The profile already
+  /// holds that clear's epoch, so read it once the connection is listened to.
+  void _recheckWorkspace() {
+    final stored = store.workspaceEpoch;
+    if (stored.isEmpty || stored == _serviceEpoch) return;
+    _serviceEpoch = stored;
+    _workspaceEpoch ??= stored;
+    helper.changed?.call();
+  }
+
   // Approvals shown for the current connection that have not closed yet.
   final _openApprovals = <String>{};
 
@@ -218,6 +229,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         helper.retarget(_helperSocket(next));
         _listen();
         _apply(startup.status);
+        _recheckWorkspace();
         if (_approvalEvents != null) await _attachDesktop(next);
         attempt.complete();
         return;
@@ -317,6 +329,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       );
       createdForTesting?.call(domain);
       domain._apply(startup.status);
+      domain._recheckWorkspace();
       return domain;
     } catch (_) {
       // No caller holds this domain: end its connection, any reconnect,
@@ -344,10 +357,20 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
             : File(path).parent.path,
       });
     }
-    final result = await _call(
-      operation.wire,
-      operation.scopedToWorkspace(args, _workspaceEpoch),
-    );
+    final epochBefore = _serviceEpoch;
+    final Object? result;
+    try {
+      result = await _call(
+        operation.wire,
+        operation.scopedToWorkspace(args, _workspaceEpoch),
+      );
+    } on RpcError catch (error) {
+      if (operation != Operation.workspaceClear ||
+          error.reason != RpcErrorReason.outcomeUnknown) {
+        rethrow;
+      }
+      return _settleLostClear(error, epochBefore);
+    }
     if (operation == Operation.workspaceClear) {
       try {
         _apply(
@@ -361,6 +384,25 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       }
     }
     return result;
+  }
+
+  /// A clear whose reply was lost renews the epoch in its own transaction, so
+  /// the next owner's status shows whether it committed.
+  Future<Object?> _settleLostClear(RpcError lost, String? before) async {
+    if (before == null) throw lost;
+    try {
+      _apply(
+        Map<String, dynamic>.from(await _call(Operation.status.wire) as Map),
+      );
+    } catch (_) {
+      throw lost;
+    }
+    if (_serviceEpoch != before) return null;
+    throw RpcError(
+      RpcErrorCode.unavailable,
+      'The service stopped before clearing the workspace; nothing was '
+      'cleared. Try again.',
+    );
   }
 
   Stream<Object?> _streamCurrent(
