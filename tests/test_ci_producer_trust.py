@@ -3,17 +3,14 @@
 import itertools
 import ast
 from dataclasses import replace
-import hashlib
-import json
 from pathlib import Path
-import zipfile
 
 import pytest
 
 from tools import ci_artifacts
 from tools import sdk_producer_trust
 from tools.ci_producer_trust import PRODUCERS
-from test_ci_promotion import candidate, SOURCE, REPO
+from test_ci_release_candidates import producer as producer, SOURCE, REPOSITORY
 
 
 # Freeze the migration boundary: future jobs/tiers must be enabled deliberately
@@ -34,20 +31,10 @@ EXPECTED = {
         ("pull_request", "push", "workflow_dispatch", "schedule"),
         {"": ("linux-build", "build / linux-build")},
     ),
-    "main-acceptance": (
-        ("macos.yml",),
-        ("push", "workflow_dispatch"),
-        {"": ("linux-bundle",)},
-    ),
     "dependency-seed-current": (
         ("macos.yml", "preview-packages.yml"),
         ("push", "workflow_dispatch", "schedule"),
         {"": ("publish-caches", "build / publish-caches")},
-    ),
-    "artifact-pull": (
-        ("macos.yml",),
-        ("push", "workflow_dispatch"),
-        {"linux-app": ("linux-bundle",), "macos-app": ("macos",)},
     ),
     "dependency-sdk": (
         ("ci-dependencies.yml",),
@@ -79,7 +66,6 @@ EXPECTED = {
     ),
 }
 
-EXPECTED["release-preparation"] = EXPECTED["artifact-pull"]
 EXPECTED["package-alias"] = (
     EXPECTED["dependency-sdk"][0],
     EXPECTED["dependency-sdk"][1],
@@ -106,11 +92,7 @@ EXPECTED["release-candidate-receipt"] = (
     {"": ("candidate-receipt",)},
 )
 EXPECTED["release-preparation"] = EXPECTED["release-candidate"]
-EXPECTED["legacy-release-candidate"] = (
-    ("macos.yml",),
-    ("push",),
-    EXPECTED["artifact-pull"][2],
-)
+EXPECTED["artifact-pull"] = EXPECTED["release-candidate"]
 
 EXPECTED["release-inrun-application"] = (
     ("release.yml",),
@@ -137,6 +119,7 @@ def test_exact_legacy_rows_have_no_tier_requirement_yet():
             "release"
             if consumer
             in (
+                "artifact-pull",
                 "release-preparation",
                 "release-candidate",
                 "release-candidate-receipt",
@@ -171,8 +154,8 @@ def test_workflow_event_cross_product_is_scoped_to_consumer(consumer):
 @pytest.mark.parametrize("component", ["linux-app", "macos-app"])
 def test_release_candidates_reject_pr_fork_preview_and_unreviewed_branch(component):
     run = {
-        "path": ".github/workflows/macos.yml",
-        "event": "push",
+        "path": ".github/workflows/release.yml",
+        "event": "workflow_dispatch",
         "head_branch": "main",
         "head_repository": {"full_name": "owner/repo"},
     }
@@ -204,7 +187,7 @@ def test_sdk_job_names_share_the_single_table_without_changing_recipe_inputs():
 
 
 def test_receipt_tier_is_optional_but_enforced_when_a_consumer_specifies_it():
-    legacy = PRODUCERS["artifact-pull"]
+    legacy = PRODUCERS["dependency-seed"]
     assert legacy.matches_receipt({})
     strict = replace(legacy, receipt_tier="release")
     assert strict.matches_receipt({"tier": "release"})
@@ -221,21 +204,21 @@ def test_receipt_tier_is_optional_but_enforced_when_a_consumer_specifies_it():
 
 @pytest.mark.parametrize("tier", [None, "preview", "release"])
 def test_release_tier_restriction_does_not_change_other_consumers(
-    tmp_path, monkeypatch, tier
+    producer, monkeypatch, tier
 ):
-    artifact, _, _ = candidate(tmp_path, monkeypatch)
     monkeypatch.setitem(
         PRODUCERS,
         "tier-fixture",
-        replace(PRODUCERS["artifact-pull"], receipt_tier="release"),
+        replace(PRODUCERS["release-candidate"], receipt_tier="release"),
     )
+
     from tools import ci_release_candidates
 
     authorizations = []
 
     def authorize(repository, source, run_id, component):
         assert (repository, source, run_id, component) == (
-            REPO,
+            REPOSITORY,
             SOURCE,
             42,
             "linux-app",
@@ -244,29 +227,23 @@ def test_release_tier_restriction_does_not_change_other_consumers(
         return "tier-fixture"
 
     monkeypatch.setattr(ci_release_candidates, "authorize", authorize)
-    # Real ZIP/receipt/payload hashes remain authoritative when adding a tier.
-    archive = tmp_path / "artifact.zip"
-    with zipfile.ZipFile(archive) as stream:
-        files = {name: stream.read(name) for name in stream.namelist()}
-    receipt = json.loads(files["identity.json"])
-    if tier is not None:
-        receipt["tier"] = tier
-    files["identity.json"] = json.dumps(receipt).encode()
-    with zipfile.ZipFile(archive, "w") as stream:
-        for name, data in files.items():
-            stream.writestr(name, data)
-    artifact["digest"] = "sha256:" + hashlib.sha256(archive.read_bytes()).hexdigest()
-    assert ci_artifacts.pull(
-        REPO, "linux-app", SOURCE, tmp_path / "artifact-pull", consumer="artifact-pull"
-    )
+
+    # Real metadata ZIP/checksum and its original payload reference stay binding.
+    def change(record):
+        receipt = record["source_receipt"]
+        receipt.pop("tier", None)
+        if tier is not None:
+            receipt["tier"] = tier
+
+    producer.change(ci_artifacts.receipt_name("linux-app", SOURCE), change)
     if tier == "release":
         assert ci_artifacts.application_descriptor(
-            REPO, "linux-app", SOURCE, 42, consumer="release-preparation"
-        ) == {"version": "0.1.2", "build_number": 10}
+            REPOSITORY, "linux-app", SOURCE, 42, consumer="release-preparation"
+        ) == {"version": "1.2.3", "build_number": 7}
     else:
-        with pytest.raises(ValueError, match="receipt differs"):
+        with pytest.raises(ValueError, match="does not bind the original payload"):
             ci_artifacts.application_descriptor(
-                REPO, "linux-app", SOURCE, 42, consumer="release-preparation"
+                REPOSITORY, "linux-app", SOURCE, 42, consumer="release-preparation"
             )
 
     assert authorizations

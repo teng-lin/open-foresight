@@ -23,10 +23,10 @@ def test_required_build_test_and_acceptance_jobs_use_one_successful_producer():
     assert jobs["linux-test"]["needs"] == "linux-build"
     for name in ("acceptance-cpu", "acceptance-audio", "acceptance-deb"):
         job = jobs[name]
-        assert job["needs"] == ["changes", "linux-build", "linux-bundle"]
+        assert job["needs"] == ["changes", "linux-build"]
         assert "!cancelled()" in job["if"]
         assert "needs.linux-build.result == 'success'" in job["if"]
-        assert "needs.linux-bundle.result" in job["if"]
+        assert "linux-bundle" not in job["if"]
         setup = next(
             step
             for step in job["steps"]
@@ -34,9 +34,8 @@ def test_required_build_test_and_acceptance_jobs_use_one_successful_producer():
         )
         inputs = setup["with"]
         for key in ("artifact-id", "artifact-digest", "attempt"):
-            assert "needs.linux-bundle.outputs" in inputs[key]
             assert "needs.linux-build.outputs" in inputs[key]
-        assert "!inputs.preview" in inputs["legacy-main"]
+        assert "legacy-main" not in inputs
         assert (
             inputs["head-repository"]
             == "${{ github.event.pull_request.head.repo.full_name || github.repository }}"
@@ -47,7 +46,6 @@ def test_required_build_test_and_acceptance_jobs_use_one_successful_producer():
     assert set(aggregate["needs"]) == {
         "changes",
         "linux-build",
-        "linux-bundle",
         "acceptance-cpu",
         "acceptance-audio",
         "acceptance-deb",
@@ -58,36 +56,11 @@ def test_required_build_test_and_acceptance_jobs_use_one_successful_producer():
     )
 
 
-@pytest.mark.parametrize(
-    "build,bundle,expected",
-    [
-        ("success", "success", True),
-        ("success", "skipped", True),
-        ("failure", "skipped", False),
-        ("cancelled", "success", False),
-        ("skipped", "success", False),
-        ("success", "failure", False),
-    ],
-)
-def test_acceptance_dependency_condition_includes_pr_skips_but_rejects_bad_producers(
-    build, bundle, expected
-):
-    # Evaluate the exact protocol represented by the structural condition above.
-    assert (build == "success" and bundle in ("success", "skipped")) == expected
-
-
 def test_package_contracts_force_their_own_build_and_keep_explicit_macos_scope():
     selection = ci_changes.selection_report(["packaging/ci/package-and-test.sh"])[
         "selection"
     ]
-    assert all(
-        selection[name]
-        for name in ("packaging", "linux-build", "linux-test", "linux-bundle")
-    )
-    scoped = ci_changes.selection_report(
-        ["packaging/ci/package-and-test.sh"], platforms="macos"
-    )["selection"]
-    assert scoped["packaging"] and not scoped["linux-build"]
+    assert all(selection[name] for name in ("packaging", "linux-build", "linux-test"))
     caller = workflow()["jobs"]["packaging"]
     assert caller["needs"] == ["changes", "linux-build"]
     assert "!cancelled()" in caller["if"]
@@ -355,9 +328,8 @@ def test_deb_acceptance_skips_unused_sdk_but_keeps_exact_portable_qualification(
     )
     assert consumer["with"]["restore-sdk"] == "false"
     assert "needs.linux-build.outputs.bundle_id" in consumer["with"]["artifact-id"]
-    assert (
-        "needs.linux-bundle.outputs.candidate_digest"
-        in consumer["with"]["artifact-digest"]
+    assert consumer["with"]["artifact-digest"] == (
+        "${{ needs.linux-build.outputs.bundle_digest }}"
     )
 
 

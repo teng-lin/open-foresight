@@ -213,7 +213,8 @@ def test_workflow_lint_runs_alongside_platform_jobs_without_blocking_selection()
         "macos",
         "linux-native",
         "linux-document-imports",
-        "linux-bundle",
+        "linux-build",
+        "linux-test",
         "packaging",
     ):
         assert "workflow-lint" not in ancestors(name)

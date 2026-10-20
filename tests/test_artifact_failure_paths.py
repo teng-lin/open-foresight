@@ -292,3 +292,13 @@ def test_cli_without_output_file_has_no_implicit_side_effects(monkeypatch):
         sys, "argv", ["artifacts", "probe", "--component", "linux-core"]
     )
     artifacts.main()
+
+
+@pytest.mark.parametrize("component", ["linux-app", "macos-app"])
+def test_application_recovery_names_on_demand_candidate_coordinator(component):
+    message = artifacts.unavailable_message(component, "a" * 40)
+    assert "release.yml" in message
+    assert "candidates_only=true" in message
+    assert "original candidate run" in message
+    assert "macos.yml" not in message
+    assert "1800-second" not in message

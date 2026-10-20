@@ -349,7 +349,8 @@ def main():
                     [str(helper_bundle / "open-foresight-service"), "--stop"],
                     env={**os.environ, **env},
                     capture_output=True,
-                    timeout=30,
+                    # Allow 30 min finalization, 60 s status/release, and margin.
+                    timeout=32 * 60,
                     check=False,
                 )
                 for process in Path("/proc").iterdir():

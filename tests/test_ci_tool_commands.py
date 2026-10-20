@@ -436,10 +436,7 @@ def test_macos_consumer_cli_keeps_running_producer_parameters(
     assert ensure.call_args.kwargs == {"allow_local_build": allow_local_build}
 
 
-@pytest.mark.parametrize("platform", ["all", "macos", "linux"])
-def test_change_cli_preserves_nul_paths_and_platform_selection(
-    tmp_path, monkeypatch, platform
-):
+def test_change_cli_preserves_nul_paths_and_platform_selection(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     destination = tmp_path / "outputs"
     monkeypatch.setenv("GITHUB_OUTPUT", str(destination))
@@ -451,14 +448,12 @@ def test_change_cli_preserves_nul_paths_and_platform_selection(
 
     monkeypatch.setattr(changes.subprocess, "check_output", output)
     monkeypatch.setattr(changes.subprocess, "run", Mock())
-    monkeypatch.setattr(
-        sys, "argv", ["changes", "--base", "0" * 40, "--platforms", platform]
-    )
+    monkeypatch.setattr(sys, "argv", ["changes", "--base", "0" * 40])
     changes.main()
     selected = json.loads(
         destination.read_text().splitlines()[0].removeprefix("selection=")
     )
     assert selected["packaging"] is True
-    assert selected["macos"] == (platform != "linux")
-    assert selected["linux-build"] == (platform != "macos")
+    assert selected["macos"] is True
+    assert selected["linux-build"] is True
     assert calls[1][-3:] == ["a" * 40, "HEAD", "--"]

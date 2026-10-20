@@ -162,9 +162,7 @@ def test_release_commands_preserve_immutable_source_and_existing_evidence(
         monkeypatch.setattr(
             candidate_identity, "source_version", lambda source: ("1.2.3", 1)
         )
-        monkeypatch.setattr(
-            sys, "argv", ["candidate", "--source", source, "--platforms", "macos"]
-        )
+        monkeypatch.setattr(sys, "argv", ["candidate", "--source", source])
         candidate_identity.main()
         assert output.read_text() == "version=1.2.3\nbuild_number=42\n"
     elif command == "inputs":

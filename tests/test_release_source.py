@@ -75,8 +75,10 @@ class ReleaseSourceTest(unittest.TestCase):
             patch.object(release, "api", return_value={"workflow_runs": []}),
             patch.object(release.subprocess, "run") as command,
         ):
-            with self.assertRaisesRegex(ValueError, "Verified candidates unavailable"):
-                release.require_candidates("owner/repo", self.product, 0)
+            with self.assertRaisesRegex(
+                ValueError, "Fully tested release candidates are unavailable"
+            ):
+                release.verified_candidates("owner/repo", self.product, 42)
             command.assert_not_called()
 
     def test_retry_gates_and_draft_use_product_commit_and_record_control_separately(
@@ -86,7 +88,9 @@ class ReleaseSourceTest(unittest.TestCase):
             output = Path(directory) / "output"
             summary = Path(directory) / "summary"
             with (
-                patch.object(sys, "argv", ["prepare", "--tag", self.tag]),
+                patch.object(
+                    sys, "argv", ["prepare", "--tag", self.tag, "--candidate-run", "42"]
+                ),
                 patch.dict(
                     os.environ,
                     {
@@ -103,8 +107,8 @@ class ReleaseSourceTest(unittest.TestCase):
                 patch.object(release, "release_source", return_value=self.product),
                 patch.object(
                     release,
-                    "require_candidates",
-                    return_value={"linux-app": 41, "macos-app": 42},
+                    "verified_candidates",
+                    return_value={"linux-app": 42, "macos-app": 42},
                 ) as candidates,
                 patch.object(release, "create_draft", return_value="2") as draft,
             ):
@@ -112,8 +116,7 @@ class ReleaseSourceTest(unittest.TestCase):
             candidates.assert_called_once_with(
                 "teng-lin/open-foresight",
                 self.product,
-                10800,
-                candidate_run=0,
+                42,
             )
             draft.assert_called_once_with(
                 "teng-lin/open-foresight", self.tag, self.product
@@ -157,15 +160,13 @@ class ReleaseSourceTest(unittest.TestCase):
                 patch.object(release, "release_source", return_value=self.product),
                 patch.object(
                     release,
-                    "require_candidates",
+                    "verified_candidates",
                     return_value={"linux-app": 42, "macos-app": 42},
                 ) as candidates,
                 patch.object(release, "create_draft", return_value="2") as draft,
             ):
                 release.main()
-            candidates.assert_called_once_with(
-                "owner/repo", self.product, 10800, candidate_run=42
-            )
+            candidates.assert_called_once_with("owner/repo", self.product, 42)
             draft.assert_called_once_with("owner/repo", self.tag, self.product)
             self.assertIn("candidate_run=42\n", output.read_text())
             self.assertIn(
@@ -175,13 +176,15 @@ class ReleaseSourceTest(unittest.TestCase):
 
     def test_new_tag_cannot_use_a_different_current_application_version(self):
         with (
-            patch.object(sys, "argv", ["prepare", "--tag", self.tag]),
+            patch.object(
+                sys, "argv", ["prepare", "--tag", self.tag, "--candidate-run", "42"]
+            ),
             patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main"}),
             patch.object(release, "stale", return_value=[]),
             patch.object(release, "read_version", return_value=("0.2.0", 3)),
             patch.object(release.subprocess, "check_output", return_value=self.control),
             patch.object(release, "release_source", return_value=self.control),
-            patch.object(release, "require_candidates") as candidates,
+            patch.object(release, "verified_candidates") as candidates,
             patch.object(release, "create_draft") as draft,
         ):
             with self.assertRaisesRegex(ValueError, "new release tag"):

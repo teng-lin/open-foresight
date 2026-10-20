@@ -448,7 +448,7 @@ def plan(repository, source, event, full=False, *, now=None):
         matches = [
             item
             for item in items
-            if item.get("name") == f"linux-bundle-{run['id']}-{attempt}"
+            if item.get("name") == f"preview-linux-app-{run['id']}-{attempt}"
             and item.get("expired") is False
         ]
         if not matches:

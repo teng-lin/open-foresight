@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tools.app_version import read_version, set_version, stale  # noqa: E402
 from tools.build_sequence import allocate, request  # noqa: E402
 from tools.ci_nightly import previous_nightly
+from tools import ci_artifacts  # noqa: E402
 from tools.release_asset_acceptance import verify_checksum  # noqa: E402
 
 IDENTITY = ".distribution-build.json"
@@ -147,12 +148,45 @@ def manifest(directory, version, number, label, source, validation):
         if len(installers) != 1:
             raise ValueError(f"Missing or duplicate preview installer: {kind}")
         item = receipt(installers[0].parent, kind, source)
-        expected_version = version if kind == "dmg" else f"{version}~{label}"
+        expected_version = version if kind in ("dmg", "tar") else f"{version}~{label}"
         if item["version"] != expected_version:
             raise ValueError("Installer version differs from the preview identity")
+        if item["build_number"] != number:
+            raise ValueError("Installer build numbers differ across platforms")
+        if kind == "tar":
+            # Keep the exact numeric-version tar accepted by linux-test and
+            # acceptance. Its verified preview receipt and stamp carry the label.
+            parent = installers[0].parent
+            stamp = parent / "distribution-stamp.json"
+            qualification = parent / "source-qualification.json"
+            distribution = {"version": version, "build_number": number}
+            if any(
+                path.is_symlink() or not path.is_file()
+                for path in (stamp, qualification)
+            ):
+                raise ValueError(
+                    "Portable preview requires its verified stamp and receipt"
+                )
+            try:
+                original = json.loads(qualification.read_text()).get("source_receipt")
+                recorded = json.loads(stamp.read_text())
+            except (ValueError, AttributeError) as error:
+                raise ValueError(
+                    "Portable preview stamp or receipt differs from its identity"
+                ) from error
+            if (
+                recorded
+                != {**distribution, "label": label, "source_commit": source}
+                or not ci_artifacts.valid_receipt(original, "linux-app", source)
+                or original.get("source_commit") != source
+                or original.get("tier") != "preview"
+                or original.get("label") != label
+                or original.get("distribution") != distribution
+            ):
+                raise ValueError(
+                    "Portable preview stamp or receipt differs from its identity"
+                )
         receipts.append(item)
-    if any(item["build_number"] != number for item in receipts):
-        raise ValueError("Installer build numbers differ across platforms")
     result = {
         "source_commit": source,
         "version": version,

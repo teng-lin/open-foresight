@@ -44,65 +44,26 @@ def test_dependency_guard_rejects_unqualified_backend_without_compiling(
     assert precious.read_bytes() == b"verified expensive object"
 
 
-@pytest.mark.parametrize(
-    "failure", ["unstable-source", "version", "number", "below-minimum"]
-)
-def test_candidate_recovery_never_relabels_surviving_platforms(monkeypatch, failure):
+def test_unstable_candidate_source_stops_before_lookup_or_allocation(monkeypatch):
     monkeypatch.setattr(
-        candidates.subprocess,
-        "check_output",
-        lambda *a, **kw: (
-            "version: 1.2.3+4\n"
-            if failure != "unstable-source"
-            else "version: 1.2.3-dev+4\n"
-        ),
+        candidates.subprocess, "check_output", lambda *a, **kw: "version: 1.2.3-dev+4\n"
     )
-    candidate_runs = Mock(return_value={"macos-app": 41})
-    monkeypatch.setattr(candidates, "candidate_runs", candidate_runs)
-    allocate = Mock(side_effect=AssertionError("must retain allocated identity"))
+    lookup, allocate = Mock(), Mock()
+    monkeypatch.setattr(candidates, "candidate_runs", lookup)
     monkeypatch.setattr(candidates, "allocate", allocate)
-    monkeypatch.setattr(
-        candidates,
-        "application_descriptor",
-        lambda repo, component, *a, **kw: {
-            "version": "9.9.9" if failure == "version" else "1.2.3",
-            "build_number": True
-            if failure == "number"
-            else 3
-            if failure == "below-minimum"
-            else 5,
-        },
-    )
-    message = {
-        "unstable-source": "must declare a stable version",
-        "version": "distribution identity is incompatible",
-        "number": "distribution identity is incompatible",
-        "below-minimum": "distribution identity is incompatible",
-    }[failure]
-    with pytest.raises(ValueError, match=message):
-        candidates.number("owner/repo", SOURCE, "linux")
+    with pytest.raises(ValueError, match="must declare a stable version"):
+        candidates.number("owner/repo", SOURCE)
+    lookup.assert_not_called()
     allocate.assert_not_called()
-    if failure != "unstable-source":
-        candidate_runs.assert_called_once_with(
-            "owner/repo", SOURCE, consumer="release-candidate"
-        )
 
 
-def test_explicit_candidate_replacement_records_reason_before_allocating(
-    monkeypatch, capsys
-):
+def test_new_candidate_allocates_only_after_tested_candidate_lookup(monkeypatch):
     monkeypatch.setattr(candidates, "source_version", lambda *a: ("1.2.3", 4))
-    candidate_runs = Mock(return_value={"macos-app": 41})
+    candidate_runs = Mock(return_value={})
     monkeypatch.setattr(candidates, "candidate_runs", candidate_runs)
     allocate = Mock(return_value=7)
     monkeypatch.setattr(candidates, "allocate", allocate)
-    assert (
-        candidates.number(
-            "owner/repo", SOURCE, "macos", "Changed embedded OAuth registration"
-        )
-        == 7
-    )
-    assert "Changed embedded OAuth registration" in capsys.readouterr().out
+    assert candidates.number("owner/repo", SOURCE) == 7
     allocate.assert_called_once_with("owner/repo", 4)
     candidate_runs.assert_called_once_with(
         "owner/repo", SOURCE, consumer="release-candidate"

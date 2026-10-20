@@ -30,6 +30,7 @@ def preview(producer, monkeypatch):
         status="completed",
     )
     producer[5]["name"] = "build / linux-build"
+    producer[4]["name"] = f"preview-linux-app-{RUN}-1"
     (producer[0] / "distribution-stamp.json").write_text(
         json.dumps(
             {

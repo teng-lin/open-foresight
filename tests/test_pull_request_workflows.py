@@ -373,11 +373,7 @@ jobs:
             self.assertIn(
                 "needs.linux-build.outputs.bundle_id", consumer["with"]["artifact-id"]
             )
-            self.assertIn(
-                "needs.linux-bundle.outputs.candidate_id",
-                consumer["with"]["artifact-id"],
-            )
-            self.assertIn("!inputs.preview", consumer["with"]["legacy-main"])
+            self.assertNotIn("legacy-main", consumer["with"])
             for key in ("producer-sdk-run", "producer-sdk-id", "producer-sdk-digest"):
                 self.assertIn("needs.linux-build.outputs", consumer["with"][key])
         action = self.workflow("../actions/setup-linux-consumer/action.yml")["runs"][
@@ -485,7 +481,7 @@ jobs:
     def test_platform_selection_is_wired_per_job_and_enforced_by_aggregate(self):
         workflow = self.workflow("macos.yml")
         jobs = workflow["jobs"]
-        for name in ("macos", "linux-build", "linux-document-imports", "linux-bundle"):
+        for name in ("macos", "linux-build", "linux-document-imports"):
             output = name.replace("-", "_")
             self.assertEqual(
                 jobs["changes"]["outputs"][output],
@@ -626,7 +622,6 @@ jobs:
         self.assertEqual(
             consumers,
             {
-                ("macos.yml", "linux-bundle"),
                 ("macos.yml", "linux-build"),
                 ("macos.yml", "linux-test"),
             },
@@ -679,7 +674,8 @@ def test_installers_have_pinned_attestations_and_job_scoped_permissions():
 
 def test_candidate_dispatch_has_unique_display_name_and_concurrency_identity():
     workflow = parse_workflow((WORKFLOWS / "macos.yml").read_text())
-    assert "request_id" in workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "request_id" not in workflow["on"]["workflow_dispatch"]["inputs"]
+    assert "request_id" in workflow["on"]["workflow_call"]["inputs"]
     assert "Release candidate {0}" in workflow["run-name"]
     assert "inputs.request_id" in workflow["run-name"]
     assert "inputs.request_id" in workflow["concurrency"]["group"]
