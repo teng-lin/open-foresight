@@ -175,7 +175,9 @@ void main() {
       await gates.reached('request.committed.notes.save');
       expect((await lifetime())['busy'], true);
       await subscription.cancel();
+      now = now.add(const Duration(minutes: 31));
       expect((await lifetime())['busy'], true);
+      expect((await lifetime())['exit_after'], null);
       await expectLater(
         agent.call('service.stop_if_idle'),
         throwsA(
@@ -707,7 +709,7 @@ void main() {
     },
   );
   test(
-    'unleased note enhancement and its orphan transcript drain hold idle exit',
+    'unleased note enhancement and its transcript drain hold idle exit',
     () async {
       final rag = EmbeddingService()..embeddingGate = Completer<void>();
       final server = Server.create(services: [rag]);
@@ -789,4 +791,68 @@ void main() {
       await exited();
     },
   );
+  test(
+    'missing desktop approval fails before dispatch and never stamps agent activity',
+    () async {
+      final host = await desktop(host: true);
+      await host.call('security.detach_desktop');
+      await expectLater(
+        agent.call('sources.import', {'title': 'denied', 'content': 'body'}),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.denied)
+              .having((e) => e.reason, 'reason', RpcErrorReason.needsDesktop),
+        ),
+      );
+      expect((await lifetime())['last_agent_activity'], null);
+      expect(service.dispatchedCount, 0);
+    },
+  );
+  test(
+    'unleased meeting indexing holds idle exit only while its helper mutation executes',
+    () async {
+      final rag = DelayedIndexService();
+      final server = Server.create(services: [rag]);
+      await server.serve(
+        address: InternetAddress(
+          service.domain.helper.socket,
+          type: InternetAddressType.unix,
+        ),
+        port: 0,
+      );
+      addTearDown(server.shutdown);
+      addTearDown(() {
+        if (!rag.release.isCompleted) rag.release.complete();
+      });
+      final id = service.domain.store.meeting('Indexing meeting');
+      service.domain.store.transcript(
+        id,
+        'Captured evidence',
+        true,
+        0,
+        20,
+        'imported',
+      );
+      final work = service.application.indexMeeting(id);
+      await rag.started.future;
+      now = now.add(const Duration(minutes: 30));
+      expect(service.domain.mutating, 1);
+      expect((await lifetime())['exit_after'], null);
+      rag.release.complete();
+      await work;
+      await exited();
+    },
+  );
+  test('resume holds idle exit until its model load completes', () async {
+    await withAdoptableHelper((rag) async {
+      rag.release.complete();
+      await rag.configuring.future;
+      now = now.add(const Duration(minutes: 30));
+      expect((await lifetime())['exit_after'], null);
+      expect(service.domain.resumeInProgress, true);
+      rag.configured.complete();
+      await exited();
+      await eventually(() => !service.domain.resumeInProgress);
+    }, model: true);
+  });
 }

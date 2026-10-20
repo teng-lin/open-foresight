@@ -116,11 +116,12 @@ void main() {
           store.close();
         });
         final id = store.importText('Delete', 'body', 'text/plain', 'fixture');
-        if (pending)
+        if (pending) {
           store.db.execute(
             'INSERT INTO pending_helper_deletes(document_id,queued_at) VALUES(?,?)',
             [id, 0],
           );
+        }
         final work = pending
             ? domain.retryPendingHelperDeletes()
             : domain.delete(id);

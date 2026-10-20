@@ -358,8 +358,9 @@ class GoogleConnections implements ConnectedSources {
             );
             count++;
           } catch (error) {
-            if (current != null && !current())
+            if (current != null && !current()) {
               throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+            }
             failures.add(_importFailure('${file['name']}', error));
           }
         }
@@ -389,8 +390,9 @@ class GoogleConnections implements ConnectedSources {
           current: current,
         );
       } catch (error) {
-        if (current != null && !current())
+        if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add(_importFailure('${file['name']}', error));
       }
     }
@@ -682,8 +684,9 @@ class GoogleConnections implements ConnectedSources {
       try {
         await importDriveFile(id, current: current);
       } catch (error) {
-        if (current != null && !current())
+        if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add(_importFailure('${attachment['title']}', error));
       }
     }

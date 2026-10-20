@@ -961,7 +961,11 @@ class ApplicationService {
   DateTime? lastAgentActivity;
   DateTime? lastDesktopDeparture;
   final _dispatched = <_RequestLease>{};
+
+  /// Test-only observation of work that must drain after cancellation.
   int get dispatchedCount => _dispatched.length;
+
+  /// Test-only readiness barrier for helper-dependent operation fixtures.
   Future<void> get ready => _ready;
   double get _idleMinutes {
     final value =
@@ -1000,8 +1004,9 @@ class ApplicationService {
       _dispatched.any((lease) => lease.agent);
   DateTime? _exitAfter() {
     if (_closing || !_unpinned) return null;
-    if (lastDesktopDeparture != null)
+    if (lastDesktopDeparture != null) {
       return lastDesktopDeparture!.add(_desktopDetachGrace);
+    }
     final period = _period;
     if (period == null || _busy()) return null;
     return (lastAgentActivity ?? _started).add(period);
@@ -1035,8 +1040,9 @@ class ApplicationService {
     final after = _exitAfter();
     final now = domain.clock.now();
     var delay = const Duration(seconds: 30);
-    if (after != null && after.isAfter(now) && after.difference(now) < delay)
+    if (after != null && after.isAfter(now) && after.difference(now) < delay) {
       delay = after.difference(now);
+    }
     _lifetime = domain.createTimer(delay, _exitIfIdle);
   }
 
@@ -1061,8 +1067,9 @@ class ApplicationService {
 
   void _settle(_RequestLease lease) {
     if (!_dispatched.remove(lease)) return;
-    if (lease.agent && !_stampExempt(lease.method))
+    if (lease.agent && !_stampExempt(lease.method)) {
       lastAgentActivity = domain.clock.now();
+    }
     _exitIfIdle();
   }
 
@@ -1757,8 +1764,9 @@ class ApplicationService {
       lease.streamed = true;
       lease.helperWait = true;
       return Stream.fromFuture(_ready).asyncExpand((_) {
-        if (lease.cancelled)
+        if (lease.cancelled) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         _dispatch(lease);
         return (args['web_search'] == true
             ? application.askWithWebInConversation
@@ -1888,8 +1896,9 @@ class ApplicationService {
         'Recording requires an open desktop indicator',
       );
     }
-    if (lease.cancelled)
+    if (lease.cancelled) {
       throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+    }
     _dispatch(lease);
     final result = await application.call(
       method,
@@ -1898,8 +1907,9 @@ class ApplicationService {
     );
     // The operation has committed; a lifecycle test may hold its reply here.
     if (serviceGatesEnabled) await serviceGate('request.committed.$method');
-    if (method == Operation.status.wire)
+    if (method == Operation.status.wire) {
       return {...result as Map, 'lifetime': _lifetimeState()};
+    }
     return result;
   }
 
@@ -1915,8 +1925,9 @@ class ApplicationService {
       domain.generator?.cancel(requestId: lease.id);
     }
     final subscription = _subscriptions[client]?.remove(id);
-    if (subscription != null)
+    if (subscription != null) {
       unawaited(_cancelSubscription(subscription, lease));
+    }
     if (reevaluate) _exitIfIdle();
   }
 

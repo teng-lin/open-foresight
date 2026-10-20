@@ -598,6 +598,10 @@ class Application implements ModelGate {
 
   int _activeEnhancements = 0;
   int _proactiveWork = 0;
+
+  /// Test-only background-work observations, including orphaned producers.
+  bool get queryAcquiring => _queryAcquisition != null;
+  bool get configuringModel => _modelBusy;
   int get activeEnhancements => _activeEnhancements;
   int get proactiveWork => _proactiveWork;
   int get transcriptComputing => _noteTranscriptCache.computing;
@@ -1588,8 +1592,9 @@ class Application implements ModelGate {
       try {
         await importFile(file.path, current: current);
       } catch (e) {
-        if (current != null && !current())
+        if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add('${file.path.split('/').last}: $e');
       }
     }
@@ -1647,8 +1652,9 @@ class Application implements ModelGate {
           await domain.index(s['id'] as String, current: current);
         }
       } catch (e) {
-        if (current != null && !current())
+        if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add('${s['title']}: $e');
       }
     }
@@ -1656,8 +1662,9 @@ class Application implements ModelGate {
       try {
         await google.refresh(current: current);
       } catch (e) {
-        if (current != null && !current())
+        if (current != null && !current()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        }
         failures.add(e.toString());
       }
     }

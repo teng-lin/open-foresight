@@ -393,6 +393,31 @@ void main() {
     },
   );
 
+  test(
+    'desktop approval denial keeps needsDesktop in structured tool errors',
+    () async {
+      final id = fixture.request('tools/call', {
+        'name': 'import_text',
+        'arguments': {'title': 'Denied', 'text': 'body'},
+      });
+      final request = await fixture.serviceRequest();
+      fixture.sockets.last.writeln(
+        jsonEncode({
+          'id': request['id'],
+          'error': {
+            'code': 'denied',
+            'message': 'Open the desktop app to review this operation',
+            'reason': 'needsDesktop',
+          },
+          'done': true,
+        }),
+      );
+      final reply = (await fixture.response(id))['result'] as Map;
+      expect(reply['isError'], true);
+      expect(reply['structuredContent']['error']['reason'], 'needsDesktop');
+    },
+  );
+
   test('a malformed service frame is a protocol error, never invalid arguments '
       '(SL-6)', () async {
     final id = fixture.request('tools/call', {

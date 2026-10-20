@@ -1,8 +1,12 @@
 import 'package:foresight_test_support/test_recording.dart';
+import 'package:foresight_test_support/helper_adoption.dart';
+import 'package:grpc/grpc.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
+import 'dart:async';
+import 'package:foresight_test_support/poll.dart';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
@@ -179,6 +183,93 @@ void main() {
         ),
       );
       expect((await client.call('status') as Map)['pid'], pid);
+    },
+  );
+
+  test(
+    'unresolved adoption probe refuses idle shutdown without closing the owner',
+    () async {
+      await client.close();
+      await service.close();
+      final rag = HeldPing();
+      final server = Server.create(
+        services: [
+          rag,
+          AdoptionControl(
+            control.State(
+              referenceVersion: '1.0.3',
+              buildId: 'open-foresight-$openForesightVersion-0123456789ab',
+            ),
+          ),
+        ],
+      );
+      await server.serve(
+        address: InternetAddress(
+          '${profile.runtime}/helper.sock',
+          type: InternetAddressType.unix,
+        ),
+        port: 0,
+      );
+      addTearDown(server.shutdown);
+      addTearDown(() {
+        if (!rag.release.isCompleted) rag.release.complete();
+      });
+      runtimeConfiguration.environment['FORESIGHT_HELPER'] =
+          '/must-not-launch-a-second-helper';
+      service = await ApplicationService.start(
+        profile,
+        helperStartupProbeTimeout: const Duration(seconds: 10),
+      );
+      client = await ServiceClient.connect(service.path);
+      service.domain.helper.onReady = null;
+      await rag.entered.future;
+      expect(service.domain.helper.starting, true);
+      await expectLater(
+        client.call('service.stop_if_idle'),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.busy)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('helper is still starting'),
+              ),
+        ),
+      );
+      expect((await client.call('status') as Map)['pid'], pid);
+      rag.release.complete();
+      await service.ready;
+      expect(service.domain.helper.starting, false);
+    },
+  );
+
+  test(
+    'background model initialization refuses idle shutdown before teardown',
+    () async {
+      final initialized = Completer<void>();
+      service.domain.initialize(initialized.future);
+      addTearDown(() {
+        if (!initialized.isCompleted) initialized.complete();
+      });
+      await expectLater(
+        client.call('service.stop_if_idle'),
+        throwsA(
+          isA<RpcError>()
+              .having((e) => e.code, 'code', RpcErrorCode.busy)
+              .having(
+                (e) => e.message,
+                'message',
+                contains('Background model work'),
+              ),
+        ),
+      );
+      expect((await client.call('status') as Map)['pid'], pid);
+      initialized.complete();
+      await eventually(() => !service.domain.initializationPending);
+      expect(await client.call('service.stop_if_idle'), {
+        'stopped': true,
+        'shutdown_verified': true,
+      });
     },
   );
 

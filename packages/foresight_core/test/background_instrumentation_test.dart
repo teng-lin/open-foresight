@@ -1,6 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:foresight_core/src/helper.dart';
+import 'package:foresight_core/src/domain.dart';
+import 'package:foresight_core/src/store.dart';
+import 'package:foresight_core/src/application.dart';
+import 'package:foresight_core/src/dedicated_query_acquisition.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/platform_services.dart';
 import 'package:foresight_core/src/reference_note_transcript_cache.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
@@ -10,6 +15,57 @@ import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 
 void main() {
+  test(
+    'production query acquisition stays background busy until cancellation settles',
+    () async {
+      final root = createTestTempDirectorySync('acquisition-busy-');
+      final environment = Map.of(runtimeConfiguration.environment);
+      final executable = File('${root.path}/unused-worker')
+        ..writeAsStringSync('never launched');
+      runtimeConfiguration.environment.addAll({
+        'FORESIGHT_WEB_CONTENT_API_KEY': 'cancelled-fixture-key',
+        'FORESIGHT_QUERY_WORKER': executable.path,
+        'FORESIGHT_MODEL_CRYPTO': executable.path,
+        'FORESIGHT_QUERY_RUNTIME': executable.path,
+        'FORESIGHT_QUERY_TERMS_URL': 'https://example.invalid/terms',
+      });
+      final helper = Helper('${root.path}/h.sock', '${root.path}/helper');
+      final store = Store('${root.path}/app.db');
+      final domain = Domain(store, helper);
+      final app = Application(domain);
+      addTearDown(() async {
+        await app.close();
+        domain.close();
+        await helper.close();
+        store.close();
+        runtimeConfiguration.environment
+          ..clear()
+          ..addAll(environment);
+      });
+      store.setPreference(dedicatedQueryTermsKey, 'accepted');
+      // The real factory is platform restricted. Cancel immediately in this same
+      // event turn, before metadata can arrive; no download or worker is started.
+      final work = app.call('models.acquire_query', {});
+      final cancelled = expectLater(
+        work,
+        throwsA(
+          isA<RpcError>().having((e) => e.code, 'code', RpcErrorCode.cancelled),
+        ),
+      );
+      expect(app.queryAcquiring, true);
+      expect(app.configuringModel, true);
+      expect(app.backgroundBusy, true);
+      await app.call('models.cancel_query_acquisition', {});
+      await cancelled;
+      expect(app.queryAcquiring, false);
+      expect(app.configuringModel, false);
+      expect(app.backgroundBusy, false);
+    },
+    skip: Platform.isMacOS
+        ? false
+        : 'Production acquisition factory requires macOS',
+  );
+
   for (final discard in ['clear', 'invalidate', 'evict']) {
     test('embedding drain remains computing after $discard', () async {
       final entered = Completer<void>(), release = Completer<void>();

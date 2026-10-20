@@ -32,8 +32,9 @@ class PausingDomain extends Domain {
 
   @override
   Future<void> index(String id, {bool Function()? current}) async {
-    if (indexEntered != null && !indexEntered!.isCompleted)
+    if (indexEntered != null && !indexEntered!.isCompleted) {
       indexEntered!.complete();
+    }
     await indexRelease?.future;
     await super.index(id, current: current);
   }

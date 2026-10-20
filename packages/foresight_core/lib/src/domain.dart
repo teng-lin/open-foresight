@@ -98,6 +98,8 @@ class Domain {
   }
 
   final _cancellations = <CancellationWatch>{};
+
+  /// Test-only observation that every shared-work waiter disposes its watch.
   int get cancellationWatchCount => _cancellations.length;
   CancellationWatch whenCancelled(bool Function() current) {
     final watch = CancellationWatch(current, _cancellations.remove);

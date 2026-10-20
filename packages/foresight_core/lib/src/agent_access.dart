@@ -174,6 +174,7 @@ class AgentAccessGate {
       throw RpcError(
         RpcErrorCode.denied,
         'Open the desktop app to review this operation',
+        reason: RpcErrorReason.needsDesktop,
       );
     }
     final time = now();
