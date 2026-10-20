@@ -18,6 +18,7 @@ import tempfile
 import zipfile
 
 from tools import ci_artifacts as artifacts
+from tools.ci_selection import GATES
 
 ROOT = Path(__file__).resolve().parents[1]
 CAPABILITIES = {"main_receipts", "path_selection", "arch_retirement", "acceptance_narrowing"}
@@ -26,16 +27,16 @@ LEGACY = {
     "tools/run_ci_stage.py", "tools/ci_stage_artifacts.py", "tools/ci_stage_cache.py", "tools/ci_stage_environment.py",
 }
 SUFFIXES = {".py", ".sh", ".json", ".yml", ".yaml", ".toml", ".lock", ".cmake", ".txt", ".cc", ".cpp", ".h", ".hpp", ".mm", ".dart", ".plist", ".swift", ".patch", ".proto", ".ini", ".cfg"}
-IGNORED = {".git", ".venv", ".dart_tool", "__pycache__", "build", "dist", ".cache", "coverage", "test-results"}
+IGNORED = {".git", ".venv", ".dart_tool", "__pycache__", "build", "dist", ".cache", "coverage", "test-results", "ephemeral", ".symlinks", ".plugin_symlinks", ".flutter-plugins-dependencies", ".flutter-plugins", ".packages"}
 KINDS = {
     "nightly": (".github/workflows/preview-packages.yml", "nightly-checks"),
     "arch": (".github/workflows/arch-drift.yml", "arch"),
-    "observer": (".github/workflows/main-evidence.yml", "observer"),
-    "selector-replay": (".github/workflows/macos.yml", "qualification-selector-replay"),
-    "acceptance-replay": (".github/workflows/macos.yml", "qualification-acceptance-replay"),
-    "archive-sdk": (".github/workflows/macos.yml", "qualification-archive-sdk"),
-    "fork-sdk": (".github/workflows/macos.yml", "qualification-fork-sdk"),
-    "recipe-change": (".github/workflows/macos.yml", "qualification-recipe-change"),
+    "observer": (".github/workflows/main-evidence.yml", "observe"),
+    "selector-replay": (".github/workflows/ci-qualification.yml", "qualification-selector-replay"),
+    "acceptance-replay": (".github/workflows/ci-qualification.yml", "qualification-acceptance-replay"),
+    "archive-sdk": (".github/workflows/ci-qualification.yml", "qualification-archive-sdk"),
+    "fork-sdk": (".github/workflows/ci-qualification.yml", "qualification-fork-sdk"),
+    "recipe-change": (".github/workflows/ci-qualification.yml", "qualification-recipe-change"),
     "publisher": (".github/workflows/linux-cache-publish.yml", "qualification-consumers"),
 }
 
@@ -68,6 +69,24 @@ def closure(root=ROOT):
     return {"schema": 1, "sha256": checksum, "files": record}
 
 
+def control_closure(root=ROOT, *, full=None):
+    """Stable coordinator implementation/toolchain contract, not product source.
+
+    Current PR/sweep receipts independently bind application and test bytes.
+    Unknown CI tools/actions/configuration remain controls and invalidate this
+    contract; ordinary application code cannot revoke the already qualified
+    coordinator on every merge.
+    """
+    record = (full or closure(root))["files"]
+    controls = {}
+    for name, value in record.items():
+        path = Path(name)
+        if name.startswith((".github/", "tools/", "packaging/", "cmake/", "tests/fixtures/ci")) or path.name == "CMakeLists.txt" or path.suffix == ".cmake" or path.name in {"pubspec.yaml", "pubspec.lock", "Podfile", "Podfile.lock"} or (path.parent == Path(".") and (path.suffix in {".lock", ".toml", ".ini", ".cfg"} or name == ".coveragerc")) or (name.startswith("tests/test_ci_") and name.endswith(".py")):
+            controls[name] = value
+    checksum = hashlib.sha256(json.dumps(controls, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return {"schema": 2, "scope": "ci-controls", "sha256": checksum, "files": controls}
+
+
 def compare(qualified, current):
     """No retained-path change is approved merely because it is called cleanup."""
     if qualified != current:
@@ -81,10 +100,14 @@ def descriptor(source, *, root=ROOT, run_id, attempt, producer_job):
         raise ValueError("Qualification source must be an immutable commit")
     if any(type(value) is not int or value < 1 for value in (run_id, attempt)) or not producer_job:
         raise ValueError("Explicit original producer run, attempt and job required")
-    return {"schema": 1, "mode": "candidate-qualification", "source": source, "closure": closure(root), "superseded": False, "producer": {"run_id": run_id, "attempt": attempt, "job": producer_job}}
+    return {"schema": 1, "mode": "candidate-qualification", "source": source, "closure": closure(root), "superseded": False, "producer": {"run_id": run_id, "attempt": attempt, "job": producer_job}, "control_closure": control_closure(root)}
 
 
-def _qualified(entry, *, repository, expected, api, download):
+def full_candidate_selection(value):
+    return isinstance(value, dict) and value.get("qualification_mode") is True and value.get("superseded") is False and set(value.get("selection", {})) == set(GATES) and all(required is True for required in value["selection"].values())
+
+
+def _qualified(entry, *, repository, expected, api, download, controls=False):
     kind = entry.get("kind")
     if kind not in KINDS:
         raise ValueError("Unknown rollout qualification kind")
@@ -137,8 +160,16 @@ def _qualified(entry, *, repository, expected, api, download):
         raise ValueError("Missing active candidate qualification marker")
     if result.get("producer") != {"run_id": run["id"], "attempt": attempt, "job": uploaders[0]["name"]}:
         raise ValueError("Qualification receipt differs from original uploading job")
-    compare(result["closure"], expected)
-    return {"kind": kind, "run_id": run["id"], "source": source, "created_at": run["created_at"]}
+    if kind == "nightly" and not full_candidate_selection(result.get("qualification_selection")):
+        raise ValueError("Nightly did not actually execute the prepared candidate selector")
+    if kind in {"archive-sdk", "fork-sdk", "recipe-change"} and result.get("exercise", {}).get("kind") != kind:
+        raise ValueError("Qualification lacks its actual SDK transport/recipe exercise")
+    if kind == "selector-replay" and (result.get("selector_replay", {}).get("count", 0) < 50 or result.get("selector_replay", {}).get("known_escapes") != [102, 110, 112, 119, 137, 144]):
+        raise ValueError("Qualification lacks its full historical selector replay")
+    if kind == "observer" and result.get("observer_case") not in {"identical", "divergent", "partially-selected", "failed-rerun"}:
+        raise ValueError("Observation lacks its actual parity case")
+    compare(result["control_closure" if controls else "closure"], expected)
+    return {"kind": kind, "run_id": run["id"], "source": source, "created_at": run["created_at"], "observer_case": result.get("observer_case")}
 
 
 def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/open-foresight", api=None, download=None):
@@ -150,13 +181,18 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
         raise ValueError("Unknown or empty rollout capability request")
     if index.get("schema") != 1 or index.get("repository") != repository or not requested.issubset(index.get("capabilities", [])):
         raise ValueError("Cutover is inactive: missing reviewed-main qualification index")
-    if index.get("source") != source:
+    controls = "arch_retirement" not in requested
+    if not controls and index.get("source") != source:
         raise ValueError("Rollout source does not match the proposed activation")
-    expected = closure(root)
-    compare(index["closure"], expected)
+    if not re.fullmatch(r"[0-9a-f]{40}", index.get("source", "")):
+        raise ValueError("Rollout qualification baseline must be immutable")
+    if controls and (api or artifacts.api)(repository, f"compare/{index['source']}...main").get("status") not in ("ahead", "identical"):
+        raise ValueError("Qualified coordinator baseline is not reviewed main")
+    expected = control_closure(root) if controls else closure(root)
+    compare(index["control_closure" if controls else "closure"], expected)
     if len({(entry.get("kind"), entry.get("run_id"), entry.get("artifact_id"), entry.get("attempt")) for entry in index["evidence"]}) != len(index["evidence"]):
         raise ValueError("Duplicate qualification evidence cannot multiply green observations")
-    qualified = [_qualified(entry, repository=repository, expected=expected, api=api or artifacts.api, download=download or artifacts.download_zip) for entry in index["evidence"]]
+    qualified = [_qualified(entry, repository=repository, expected=expected, api=api or artifacts.api, download=download or artifacts.download_zip, controls=controls) for entry in index["evidence"]]
     kinds = {row["kind"] for row in qualified}
     needed: set[str] = set()
     if "main_receipts" in requested:
@@ -169,6 +205,8 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
         needed.update(("nightly", "arch", "archive-sdk", "fork-sdk", "recipe-change"))
     if not needed.issubset(kinds):
         raise ValueError("Missing actual hosted cutover exercises: " + ", ".join(sorted(needed - kinds)))
+    if "main_receipts" in requested and not {"identical", "divergent", "partially-selected", "failed-rerun"}.issubset({row["observer_case"] for row in qualified if row["kind"] == "observer"}):
+        raise ValueError("Main receipt activation lacks actual observer parity cases")
     nights = sorted((row for row in qualified if row["kind"] == "nightly"), key=lambda row: row["created_at"])
     if requested & {"arch_retirement", "acceptance_narrowing"} and len({row["run_id"] for row in nights}) < 2:
         raise ValueError("Retirement needs two distinct actual green nightlies")
@@ -193,7 +231,7 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
     if "acceptance_narrowing" in requested:
         if len({row["run_id"] for row in nights}) < 28 or datetime.fromisoformat(nights[-1]["created_at"].replace("Z", "+00:00")) - datetime.fromisoformat(nights[0]["created_at"].replace("Z", "+00:00")) < timedelta(weeks=4):
             raise ValueError("Acceptance narrowing needs four green weeks of actual observation")
-    return {"source": source, "closure_sha256": expected["sha256"], "capabilities": sorted(requested), "qualified": qualified}
+    return {"source": source, "qualified_source": index["source"], "closure_sha256": expected["sha256"], "capabilities": sorted(requested), "qualified": qualified}
 
 
 def main():
@@ -204,9 +242,25 @@ def main():
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--attempt", type=int, required=True)
     parser.add_argument("--producer-job", required=True)
+    parser.add_argument("--exercise-record", type=Path)
+    parser.add_argument("--selector-report", type=Path)
+    parser.add_argument("--selection-report", type=Path)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(descriptor(args.source, root=args.root, run_id=args.run_id, attempt=args.attempt, producer_job=args.producer_job), sort_keys=True, indent=2) + "\n")
+    value = descriptor(args.source, root=args.root, run_id=args.run_id, attempt=args.attempt, producer_job=args.producer_job)
+    if args.selection_report:
+        selection = json.loads(args.selection_report.read_text())
+        if not full_candidate_selection(selection):
+            parser.error("Incomplete actual full candidate selection")
+        value["qualification_selection"] = selection
+    if args.exercise_record:
+        value["exercise"] = json.loads(args.exercise_record.read_text())
+    if args.selector_report:
+        report = json.loads(args.selector_report.read_text())
+        if report.get("count", 0) < 50 or not {102, 110, 112, 119, 137, 144}.issubset({row["number"] for row in report.get("prs", [])}):
+            parser.error("Incomplete actual selector replay")
+        value["selector_replay"] = {"count": report["count"], "known_escapes": [102, 110, 112, 119, 137, 144], "sha256": digest(args.selector_report)}
+    args.output.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 
 if __name__ == "__main__":

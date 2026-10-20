@@ -86,6 +86,7 @@ jobs:
     secrets: inherit
     with:
       preview: true
+      qualification_mode: ${{ github.event_name == 'schedule' }}
       macos_coverage: true
       acceptance: ${{ needs.plan.outputs.validation }}
       source: ${{ needs.plan.outputs.source }}
@@ -511,6 +512,24 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
           EXERCISE: ${{ inputs.exercise_failure_path }}
         run: python3 tools/ci_nightly.py aggregate
+      - name: Download this run's actual candidate selection
+        if: github.event_name == 'schedule' && !inputs.exercise_failure_path && needs.plan.outputs.build == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ci-selection-platform
+          path: build/qualification/selection
+      - name: Record actual scheduled candidate closure after every gate
+        if: github.event_name == 'schedule' && !inputs.exercise_failure_path && needs.plan.outputs.build == 'true'
+        run: python3 -m tools.ci_rollout --source "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --producer-job nightly-checks --selection-report build/qualification/selection/ci-selection.json --output build/qualification/qualification.json
+      - name: Retain original scheduled candidate qualification
+        if: github.event_name == 'schedule' && !inputs.exercise_failure_path && needs.plan.outputs.build == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-rollout-qualification
+          path: build/qualification/qualification.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
   nightly-issue:
     needs: [plan, nightly-checks]
     if: always() && github.ref == 'refs/heads/main' && (needs.plan.outputs.build == 'true' || needs.plan.result != 'success' || inputs.exercise_failure_path)

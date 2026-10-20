@@ -21,6 +21,7 @@ FIXTURE = Path(__file__).parent / "fixtures/ci-selector-50-prs.json"
     ("tools/package_macos.py", "apple-input", {"macos", "dmg"}, {"linux-build"}),
     ("tests/test_macos_tools.py", "host-contract", {"macos", "dmg"}, {"linux-build"}),
     ("tests/test_dmg_contract.py", "host-contract", {"dmg"}, {"linux-build"}),
+    ("tests/test_linux_packages.py", "host-contract", {"macos", "packaging", "linux-build", "dmg"}, set()),
     ("tests/test_app_dependency_cmake.py", "host-contract", {"macos", "linux-build"}, set()),
     ("tests/test_rpm_scriptlets.py", "host-contract", {"packaging", "linux-build", "dmg"}, set()),
     ("packaging/acceptance.Dockerfile", "acceptance-input", {"linux-build", "linux-test"}, {"macos", "packaging"}),
@@ -174,3 +175,22 @@ def test_live_full_label_broadens_real_classifier_cli_after_event_snapshot(tmp_p
     assert calls == [("owner/repo", 17)]
     assert report["force"] is True and all(report["selection"].values())
     assert report["candidate"]["mode"] == "observe-only"
+
+
+@pytest.mark.parametrize("ref,event,force", [("refs/pull/999/merge", "pull_request", True), ("refs/heads/main", "workflow_dispatch", False), ("refs/heads/main", "push", True), ("refs/heads/main", "workflow_dispatch", True)])
+def test_candidate_cli_is_main_only_full_qualification(tmp_path, monkeypatch, ref, event, force):
+    output = tmp_path / "selection.json"
+    arguments = ["changes", "--base", "a" * 40, "--candidate", "--json-output", str(output)]
+    if force:
+        arguments.append("--force")
+    monkeypatch.setattr(sys, "argv", arguments)
+    monkeypatch.setenv("GITHUB_REF", ref)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    monkeypatch.setattr(ci_changes.subprocess, "check_output", lambda *args, **kwargs: b"docs/guide.md\0")
+    monkeypatch.setattr(ci_changes.subprocess, "run", lambda *args, **kwargs: None)
+    if ref == "refs/heads/main" and event == "workflow_dispatch" and force:
+        ci_changes.main()
+        assert json.loads(output.read_text())["qualification_mode"] is True
+    else:
+        with pytest.raises(ValueError, match="reviewed-main full"):
+            ci_changes.main()

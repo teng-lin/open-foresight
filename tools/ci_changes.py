@@ -265,6 +265,7 @@ def main():
     parser.add_argument("--json-output", default="ci-selection.json")
     parser.add_argument("--check-gates", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--candidate", action="store_true", help="Reviewed-main full candidate qualification only")
     parser.add_argument("--pull-request", type=int)
     parser.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"))
     parser.add_argument("--tier", default=os.environ.get("CI_TIER", ""))
@@ -305,6 +306,11 @@ def main():
         force=args.force,
         revision_range=args.explain or f"{revisions[0]}..HEAD",
     )
+    if args.candidate:
+        if os.environ.get("GITHUB_REF") != "refs/heads/main" or os.environ.get("GITHUB_EVENT_NAME") not in ("schedule", "workflow_dispatch") or not args.force:
+            raise ValueError("Candidate qualification requires reviewed-main full validation")
+        report["selection"] = report["candidate"]["selection"]
+        report["qualification_mode"] = True
     write_report(report, args.json_output)
 
 

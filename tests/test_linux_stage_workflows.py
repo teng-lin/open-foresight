@@ -501,6 +501,11 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     tools = repository / "tools"
     tools.mkdir()
     shutil.copy2(ROOT / "tools/ci_changes.py", tools / "ci_changes.py")
+    for name in ("ci_selection.py", "platform_python_tests.py"):
+        shutil.copy2(ROOT / "tools" / name, tools / name)
+    workflow_dir = repository / ".github/workflows"
+    workflow_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / ".github/workflows/native-sanitizers.yml", workflow_dir / "native-sanitizers.yml")
 
     def git(*arguments):
         return subprocess.check_output(

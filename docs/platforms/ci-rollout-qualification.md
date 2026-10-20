@@ -19,9 +19,15 @@ sides of renamed files; replay requires no Git metadata or network access.
 listed legacy implementation files whose removal is planned. It hashes source
 bytes and modes, includes unknown files under the retained source roots, and
 rejects symlinks, incomplete exports and any retained-path mismatch. The closure
-comparison is intentionally strict: a change requires fresh reviewed-main
-qualification. No caller may omit a changed input simply to make that comparison
-pass. SDK and the historical dependency-seed receipt formats are unchanged.
+comparison is intentionally strict for initial Arch retirement: a retained-path
+change requires fresh reviewed-main qualification. Ongoing coordinator and path
+selection eligibility use the separate schema-2 `control_closure`, which hashes
+CI tools/actions/recipes, dependency/toolchain declarations and CI contract tests.
+Application and ordinary product-test changes remain bound by fresh per-job
+PR/sweep evidence and do not revoke the qualified coordinator implementation.
+Unknown CI/control changes still fail closed. No caller may omit a changed
+control to make comparison pass. SDK and the historical dependency-seed receipt
+formats are unchanged.
 
 Candidate producers can prepare the following descriptor before identity
 stamping mutates source files. This command creates local metadata; it does not
@@ -38,8 +44,21 @@ reusable-workflow prefix. An authorized reviewed-main job must upload only that
 file as artifact `ci-rollout-qualification`. The qualification index identifies
 its artifact ID, run ID, original attempt, original uploading job ID and complete
 ZIP checksum. No current artifact without the candidate marker qualifies.
-Candidate proof production and the actual Docker/Apple exercises remain required
-hosted work; local fixture passes are not retirement evidence.
+The main-only `ci-qualification.yml` dispatch executes selector-replay,
+archive-SDK, source-scoped fork-format, and tooling-recipe-change exercises.
+Transport exercises load and export an existing verified SDK with the real Docker
+driver/containerd store, then execute the current application build and complete
+test driver. They never impersonate a PR event, compile an SDK, or publish SDKs.
+The source-scoped archive preserves its original provenance and is consumed only
+within that exercise. Recipe changes are restored after the run, including on
+failure. Logs retain failed subprocess output.
+
+Scheduled `nightly-checks` records proof only after its real platform, acceptance
+and installer closure succeeds and the full prepared selector actually ran.
+Scheduled Arch drift similarly records proof after its real validation. Synthetic
+exercises and unchanged/no-build nights emit no qualifying descriptor. All these
+hosted exercises remain pending until reviewed main executes them; local fixture
+passes are not retirement evidence.
 
 `ci_rollout.authorize` independently rereads repository, workflow/event/main ref,
 main reachability, exact original-attempt jobs, uploading-job success/window,
@@ -49,7 +68,8 @@ proofs and enumerates the full schedule history so a selected pair of green runs
 cannot hide an intervening failure. Missing, expired or conflicting evidence
 fails closed. An artifact left by a failed uploader never qualifies.
 
-The `main_receipts` capability needs observer and publisher-consumer evidence;
+The `main_receipts` capability needs publisher-consumer evidence and actual
+identical, divergent, partially selected and failed/rerun observer parity cases;
 `path_selection` needs the real selector replay. `arch_retirement` additionally
 needs two consecutive actual green nightlies, actual Arch drift, and archive-SDK,
 fork-SDK and recipe-change exercises on the qualified replacement closure.
