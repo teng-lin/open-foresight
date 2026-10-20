@@ -59,7 +59,7 @@ Use the packaged stdio launcher:
 }
 ```
 
-The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share/open-foresight`. Its default runtime directory on Linux is `$XDG_RUNTIME_DIR/open-foresight/<first 12 characters of profile hash>`, or `<profile>/runtime/<first 12 characters of profile hash>` without `XDG_RUNTIME_DIR`, so profiles never share a socket by default. Status reports the profile's identity, and clients, `--status`, `--stop` and `--stop-if-idle` refuse a service of another profile. Desktop and MCP must resolve the same profile and runtime directory. To choose an isolated profile, set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` in the launcher environment:
+The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share/open-foresight`. Its default runtime directory on Linux is `$XDG_RUNTIME_DIR/open-foresight/<first 12 characters of profile hash>`, or `<profile>/runtime/<first 12 characters of profile hash>` without `XDG_RUNTIME_DIR`, so profiles never share a socket by default. An empty or relative `XDG_RUNTIME_DIR` is ignored, `$XDG_RUNTIME_DIR/open-foresight` must be private like the runtime itself, and a runtime whose `application.sock` path would not fit a Unix socket address is refused. Desktop and MCP must resolve the same profile and runtime directory. To choose an isolated profile, set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` in the launcher environment:
 
 ```json
 {
@@ -74,6 +74,8 @@ The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share
   }
 }
 ```
+
+Status reports the profile's identity: the first 24 hexadecimal digits of the SHA-256 of the canonical profile path. Clients, `--status`, `--stop` and `--stop-if-idle` refuse at once a service that reports another profile's identity. A service released before profile identity reports none; it is accepted only while this profile's ownership lock is held, as every released service holds it. If a crashed owner's endpoint record names a runtime that another profile's service now uses, clients never attach there; they start this profile's service, which sets the record aside and serves from its own runtime. An owner never deletes or replaces a socket that still accepts connections. On macOS a live socket whose listen backlog is full refuses a connection just as a dead one does, so an owner asks three times within 200 ms before removing it; only another profile's service that stays stalled while sharing an explicitly set runtime can still lose its socket that way. On a case-insensitive file system, such as the default APFS on macOS, an identity computed before the profile directory exists keeps the spelling given for the missing part of the path; once the directory exists, every spelling resolves to the case it was created with.
 
 Both directories must be owned by the current user and inaccessible to other users. The launcher creates missing directories with mode 0700, and the service socket uses mode 0600. It opens no TCP listener. The adapter uses the pinned `mcp_dart` SDK for protocol negotiation, validation, stdio framing, progress, and cancellation. Stdout contains only MCP messages; diagnostics go to stderr.
 
