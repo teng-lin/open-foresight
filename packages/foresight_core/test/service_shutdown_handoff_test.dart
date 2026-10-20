@@ -23,12 +23,17 @@ Future<void> main() async {
   final data = Platform.environment['FORESIGHT_DATA']!;
   final runtime = Platform.environment['FORESIGHT_RUNTIME']!;
   final old = Platform.environment['OLD_OWNER'] == '1';
-  if (!old) {
-    File('$data/launches').writeAsStringSync('launch\n', mode: FileMode.append);
-    File('$data/replacement.pid').writeAsStringSync('$pid');
-  }
+  if (!old) File('$data/launches').writeAsStringSync('launch\n', mode: FileMode.append);
   final lock = File('$data/.application.lock').openSync(mode: FileMode.append);
-  lock.lockSync(FileLock.exclusive);
+  try {
+    lock.lockSync(FileLock.exclusive);
+  } on FileSystemException {
+    // Concurrent launchers may start two replacements; the loser exits.
+    if (old) rethrow;
+    File('$data/lost-launches').writeAsStringSync('$pid\n', mode: FileMode.append);
+    exit(3);
+  }
+  if (!old) File('$data/replacement.pid').writeAsStringSync('$pid');
   final endpoint = File('$data/.application-endpoint.json');
   endpoint.writeAsStringSync(jsonEncode({'data': data, 'runtime': runtime}));
   final path = '$runtime/application.sock';
@@ -544,32 +549,72 @@ while True: signal.pause()
     );
   }
 
+  for (final mode in [closingMessage, 'eof']) {
+    final observed = mode == 'eof' ? 'eof-observed' : 'closing-observed';
+    test(
+      'unclean owner shutdown hands off to one adopting replacement ($observed)',
+      () async {
+        final f = HandoffFixture();
+        await f.start(errorMessage: mode, keepEndpoint: true);
+        try {
+          final pending = f.connect();
+          final success = expectLater(pending, completes);
+          await f.next(observed);
+          expect(f.launched, isFalse);
+          // The old owner exits without deleting its record, as an owner does
+          // after an unverified helper shutdown or a crash.
+          await f.release();
+          final client = await pending.timeout(const Duration(seconds: 15));
+          await success;
+          expect(
+            (await client.call('status') as Map)['pid'],
+            int.parse(
+              File('${f.profile.data}/replacement.pid').readAsStringSync(),
+            ),
+          );
+          expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+            'launch',
+          ]);
+        } finally {
+          await f.close();
+        }
+      },
+    );
+  }
+
   test(
-    'unclean owner shutdown remains an actionable failure without a replacement',
+    'concurrent launchers after an unclean shutdown converge on one owner',
     () async {
       final f = HandoffFixture();
       await f.start(keepEndpoint: true);
+      ServiceClient? second;
       try {
-        final pending = f.connect();
-        final failure = expectLater(
-          pending,
-          throwsA(
-            isA<StateError>().having(
-              (error) => error.message,
-              'message',
-              contains('without clean shutdown'),
-            ),
-          ),
-        );
+        final first = f.connect();
+        final other = ensureService(f.profile);
+        // Each launcher's status probe receives the closing reply.
         await f.next('closing-observed');
-        await f.release();
-        await failure;
+        await f.next('closing-observed');
         expect(f.launched, isFalse);
+        await f.release();
+        final a = await first.timeout(const Duration(seconds: 15));
+        second = await other.timeout(const Duration(seconds: 15));
+        final owner = int.parse(
+          File('${f.profile.data}/replacement.pid').readAsStringSync(),
+        );
+        expect((await a.call('status') as Map)['pid'], owner);
+        expect((await second.call('status') as Map)['pid'], owner);
+        // Both launchers may launch; every extra replacement loses the lock.
+        final launches = File(
+          '${f.profile.data}/launches',
+        ).readAsLinesSync().length;
+        final lost = File('${f.profile.data}/lost-launches');
+        expect(launches, inInclusiveRange(1, 2));
         expect(
-          File('${f.profile.data}/.application-endpoint.json').existsSync(),
-          isTrue,
+          lost.existsSync() ? lost.readAsLinesSync().length : 0,
+          launches - 1,
         );
       } finally {
+        await second?.close();
         await f.close();
       }
     },

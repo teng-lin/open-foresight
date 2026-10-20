@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
@@ -120,4 +121,55 @@ void main() {
       }
     },
   );
+
+  for (final adopted in [false, true]) {
+    test('failed startup ${adopted ? 'keeps an adopted' : 'removes its own'} '
+        'endpoint record before releasing ownership', () async {
+      final original = Map.of(runtimeConfiguration.environment);
+      for (final key in [
+        'FORESIGHT_HELPER',
+        'FORESIGHT_NATIVE',
+        'FORESIGHT_RUNTIME_REVISION',
+        'FORESIGHT_INSTALL_ROOT',
+      ]) {
+        runtimeConfiguration.environment.remove(key);
+      }
+      final root = createTestTempDirectorySync('of-failed-start-');
+      final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
+      try {
+        privateDirectory(profile.data);
+        privateDirectory(profile.runtime);
+        final record = File('${profile.data}/.application-endpoint.json');
+        if (adopted) {
+          // An unclean predecessor's record names the runtime to adopt.
+          record.writeAsStringSync(
+            jsonEncode({'data': profile.data, 'runtime': profile.runtime}),
+          );
+        }
+        // The desktop capability check fails after the record is published.
+        final capability = Link('${profile.data}/.desktop-capability')
+          ..createSync('${root.path}/elsewhere');
+        await expectLater(
+          ApplicationService.start(profile),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('Desktop capability must not be a symbolic link'),
+            ),
+          ),
+        );
+        expect(record.existsSync(), adopted);
+        // Ownership was released: a corrected start acquires it.
+        capability.deleteSync();
+        final service = await ApplicationService.start(profile);
+        await service.close();
+      } finally {
+        runtimeConfiguration.environment
+          ..clear()
+          ..addAll(original);
+        root.deleteSync(recursive: true);
+      }
+    });
+  }
 }
