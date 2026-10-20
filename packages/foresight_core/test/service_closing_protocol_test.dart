@@ -98,6 +98,44 @@ Future<Map<String, dynamic>> rawRequest(
   }
 }
 
+/// Another process holding the profile [lock] file until its stdin closes.
+Future<Process> holdProfileLock(String lock) async {
+  final holder = await Process.start('python3', [
+    '-c',
+    'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
+        'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
+        'sys.stdin.read()',
+    lock,
+  ]);
+  addTearDown(() => holder.kill(ProcessSignal.sigkill));
+  expect(
+    await utf8.decoder
+        .bind(holder.stdout)
+        .transform(const LineSplitter())
+        .first,
+    'locked',
+  );
+  return holder;
+}
+
+/// True when another process holds the profile's POSIX ownership lock.
+bool lockHeld(ProfilePaths profile) {
+  final lock = File(
+    '${profile.data}/.application.lock',
+  ).openSync(mode: FileMode.append);
+  try {
+    lock.lockSync(FileLock.exclusive);
+    return false;
+  } on FileSystemException {
+    return true;
+  } finally {
+    lock.closeSync();
+  }
+}
+
+/// A shell quote for [value].
+String shellQuote(String value) => "'${value.replaceAll("'", r"'\''")}'";
+
 /// A running `--stop`, with its stderr lines as they arrive.
 class StopRun {
   StopRun(this.process) {
@@ -1148,8 +1186,8 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
 
-  test('a replacement that loses the profile lock records no startup failure '
-      '(L3)', () async {
+  test('a replacement that loses the profile lock records contention, never a '
+      'failure (L3)', () async {
     final profile = newProfile('of-contended-');
     privateDirectory(profile.data);
     privateDirectory(profile.runtime);
@@ -1157,21 +1195,8 @@ void main() {
     File(lock).writeAsStringSync('');
     // Another process holds the lock, as a winning replacement, or a
     // momentary probe by another launcher or --stop, would.
-    final holder = await Process.start('python3', [
-      '-c',
-      'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
-          'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
-          'sys.stdin.read()',
-      lock,
-    ]);
+    final holder = await holdProfileLock(lock);
     try {
-      expect(
-        await utf8.decoder
-            .bind(holder.stdout)
-            .transform(const LineSplitter())
-            .first,
-        'locked',
-      );
       final status = File('${profile.runtime}/startup-contended.json');
       final run = await Process.run(
         Platform.resolvedExecutable,
@@ -1188,10 +1213,8 @@ void main() {
       ).timeout(startupBound);
       expect(run.exitCode, isNot(0));
       expect(run.stderr, contains('Another application service owns'));
-      // Its launcher keeps waiting for the owner that holds the lock. The
-      // file is absent because the start chose not to record it, not because
-      // the status path was rejected or could not be written.
-      expect(status.existsSync(), isFalse);
+      // It did nothing, and says so; its launcher decides what follows.
+      expect(jsonDecode(status.readAsStringSync()), {'state': 'contended'});
       expect(run.stderr, isNot(contains('Ignoring a startup status')));
       expect(run.stderr, isNot(contains('Cannot record')));
     } finally {
@@ -1236,61 +1259,149 @@ void main() {
     },
   );
 
-  test(
-    'an owner waits out a momentary lock probe but not another owner (L3)',
-    () async {
-      final profile = newProfile('of-probed-');
-      privateDirectory(profile.data);
-      final path = '${profile.data}/.application.lock';
-      File(path).writeAsStringSync('');
-      Future<Process> holdLock() async {
-        // Another process holds the lock until its stdin closes.
-        final holder = await Process.start('python3', [
-          '-c',
-          'import fcntl,sys\nf=open(sys.argv[1],"a")\n'
-              'fcntl.lockf(f,fcntl.LOCK_EX)\nprint("locked",flush=True)\n'
-              'sys.stdin.read()',
-          path,
-        ]);
-        addTearDown(() => holder.kill(ProcessSignal.sigkill));
-        expect(
-          await utf8.decoder
-              .bind(holder.stdout)
-              .transform(const LineSplitter())
-              .first,
-          'locked',
-        );
-        return holder;
-      }
+  test('a start that lost the lock never becomes a later owner, even once the '
+      'lock is free', () async {
+    final profile = newProfile('of-loser-');
+    privateDirectory(profile.data);
+    final holder = await holdProfileLock('${profile.data}/.application.lock');
+    final loser = await HookedServiceProcess.start(
+      build,
+      profile,
+      hold: ['start.lock_contended'],
+    );
+    await loser.reached('start.lock_contended');
+    // The owner it lost to goes away while the loser is still starting.
+    await holder.stdin.close();
+    await holder.exitCode.timeout(startupBound);
+    expect(lockHeld(profile), isFalse);
+    loser.release('start.lock_contended');
+    expect(await loser.exited(), isNot(0), reason: loser.output);
+    expect(loser.output, contains('Another application service owns'));
+    // Nobody asked it to serve, so it took nothing.
+    expect(lockHeld(profile), isFalse);
+    expect(
+      File('${profile.data}/.application-endpoint.json').existsSync(),
+      isFalse,
+    );
+    expect(
+      FileSystemEntity.typeSync('${profile.runtime}/application.sock'),
+      FileSystemEntityType.notFound,
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
-      final lock = File(path).openSync(mode: FileMode.append);
-      try {
-        // A probe (another launcher's, or --stop's) ends after the first
-        // contended attempt: the owner takes the lock on a later one.
-        final probe = await holdLock();
-        var busy = 0;
-        await acquireProfileOwnership(
-          lock,
-          attempts: 1000,
-          onBusy: () {
-            if (busy++ == 0) unawaited(probe.stdin.close());
-          },
+  /// A FORESIGHT_SERVICE wrapper whose first launch starts [before] (shell
+  /// code run once, in the launch's environment), then runs [launcher].
+  String firstLaunchWrapper(
+    Directory directory,
+    String launcher,
+    String before,
+  ) {
+    final script = File('${directory.path}/launch-wrapper')
+      ..writeAsStringSync(
+        '#!/bin/sh\n'
+        'if [ ! -e ${shellQuote('${directory.path}/first-launch')} ]; then\n'
+        '  : > ${shellQuote('${directory.path}/first-launch')}\n'
+        '$before\n'
+        'fi\n'
+        'exec ${shellQuote(launcher)} "\$@"\n',
+      );
+    expect(Process.runSync('/bin/chmod', ['700', script.path]).exitCode, 0);
+    return script.path;
+  }
+
+  test('a launch that loses the lock to a momentary holder is launched again '
+      '(L3)', () async {
+    final profile = newProfile('of-relaunch-');
+    final launcher = await launcherFor(profile);
+    final directory = Directory(profile.data).parent;
+    final release = '${directory.path}/holder.release';
+    final locked = '${directory.path}/holder.locked';
+    // A momentary holder, such as another launcher's or --stop's probe,
+    // takes the lock just before the first launch tries it.
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = firstLaunchWrapper(
+      directory,
+      launcher.executable,
+      '''
+  python3 -c 'import fcntl,os,sys,time
+f=open(sys.argv[1],"a")
+fcntl.lockf(f,fcntl.LOCK_EX)
+open(sys.argv[2],"w").close()
+while not os.path.exists(sys.argv[3]): time.sleep(0.005)' "\$FORESIGHT_DATA/.application.lock" ${shellQuote(locked)} ${shellQuote(release)} &
+  while [ ! -e ${shellQuote(locked)} ]; do sleep 0.01; done''',
+    );
+    ServiceClient? client;
+    try {
+      final startup = ensureService(profile, startupTimeout: startupBound);
+      final settled = settledFlag(startup);
+      // The first launch lost the lock, recorded that, and exited.
+      await eventually(
+        () => launcher.launched.length == 1,
+        timeout: startupBound,
+      );
+      final first = launcher.launched.single;
+      await eventually(
+        () async => !await isRunning(first),
+        timeout: startupBound,
+      );
+      expect(settled(), isFalse);
+      expect(launcher.launched, [first]);
+      File(release).writeAsStringSync('');
+      client = await startup.timeout(startupBound);
+      final pid = (await client.call('status') as Map)['pid'];
+      // Launched once more only after the first provably did nothing.
+      expect(launcher.launched, [first, pid]);
+      expect(await isRunning(pid as int), isTrue);
+    } finally {
+      File(release).writeAsStringSync('');
+      await client?.close();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('a launch that loses the lock to a live owner attaches to it without '
+      'launching again (L3)', () async {
+    final profile = newProfile('of-lost-race-');
+    final launcher = await launcherFor(profile);
+    final directory = Directory(profile.data).parent;
+    final ownerPid = File('${directory.path}/owner.pid');
+    // Another owner starts and takes the lock just before the first
+    // launch tries it.
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = firstLaunchWrapper(
+      directory,
+      launcher.executable,
+      '''
+  env -u FORESIGHT_STARTUP_STATUS ${shellQuote(Platform.resolvedExecutable)} ${shellQuote(build.kernel)} >> ${shellQuote('${directory.path}/owner.log')} 2>&1 &
+  echo \$! > ${shellQuote(ownerPid.path)}
+  while [ ! -e "\$FORESIGHT_DATA/.application-endpoint.json" ]; do sleep 0.01; done''',
+    );
+    addTearDown(() {
+      if (ownerPid.existsSync()) {
+        Process.killPid(
+          int.parse(ownerPid.readAsStringSync().trim()),
+          ProcessSignal.sigterm,
         );
-        expect(busy, greaterThan(0));
-        lock.unlockSync();
-        await probe.exitCode.timeout(startupBound);
-        // An owner holds it throughout: the start gives up after its bound.
-        final owner = await holdLock();
-        busy = 0;
-        await expectLater(
-          acquireProfileOwnership(lock, attempts: 3, onBusy: () => busy++),
-          throwsA(isA<ServiceOwnershipContended>()),
-        );
-        expect(busy, 2);
-        await owner.stdin.close();
-      } finally {
-        lock.closeSync();
       }
-    },
-  );
+    });
+    ServiceClient? client;
+    try {
+      client = await ensureService(
+        profile,
+        startupTimeout: startupBound,
+      ).timeout(startupBound);
+      final owner = int.parse(ownerPid.readAsStringSync().trim());
+      expect((await client.call('status') as Map)['pid'], owner);
+      // The loser did nothing and was not launched again.
+      expect(launcher.launched, hasLength(1));
+      expect(launcher.launched.single, isNot(owner));
+      await eventually(
+        () async => !await isRunning(launcher.launched.single),
+        timeout: startupBound,
+      );
+      final output = launcher.log.readAsStringSync();
+      expect(output, contains('Another application service owns'));
+      expect(output, isNot(contains('Ignoring a startup status')));
+      expect(output, isNot(contains('Cannot record')));
+    } finally {
+      await client?.close();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }

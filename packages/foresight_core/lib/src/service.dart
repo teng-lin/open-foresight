@@ -783,7 +783,18 @@ class ApplicationService {
           0) {
         throw StateError('Cannot protect profile ownership lock');
       }
-      await acquireProfileOwnership(lock);
+      // One attempt only. A start that lost the lock must never take it
+      // later: the owner it lost to may exit in between, and nobody asked
+      // this start to serve then. Its launcher decides whether to relaunch.
+      try {
+        lock.lockSync(FileLock.exclusive);
+      } on FileSystemException catch (error) {
+        if (!_lockContended(error)) rethrow;
+        if (serviceGatesEnabled) await serviceGate('start.lock_contended');
+        throw ServiceOwnershipContended(
+          'Another application service owns this profile: $error',
+        );
+      }
     } catch (_) {
       lock.closeSync();
       rethrow;
@@ -2034,33 +2045,6 @@ class ServiceOwnershipContended extends StateError {
   ServiceOwnershipContended(super.message);
 }
 
-/// Take the profile [lock] for an owner that is starting. A launcher's lock
-/// probe, or `--stop`'s, holds it only for a moment, so contention is retried
-/// briefly; a lock still held after [attempts] belongs to another owner.
-/// [onBusy] observes each contended attempt that will be retried.
-Future<void> acquireProfileOwnership(
-  RandomAccessFile lock, {
-  int attempts = 10,
-  Duration retryDelay = const Duration(milliseconds: 20),
-  void Function()? onBusy,
-}) async {
-  for (var attempt = 1; ; attempt++) {
-    try {
-      lock.lockSync(FileLock.exclusive);
-      return;
-    } on FileSystemException catch (error) {
-      if (!_lockContended(error)) rethrow;
-      if (attempt >= attempts) {
-        throw ServiceOwnershipContended(
-          'Another application service owns this profile: $error',
-        );
-      }
-      onBusy?.call();
-      await Future<void>.delayed(retryDelay);
-    }
-  }
-}
-
 class _ClosingService implements Exception {
   final ServiceClient client;
   _ClosingService(this.client);
@@ -2373,14 +2357,14 @@ void _sweepStartupStatus(String runtime) {
   }
 }
 
-/// Record why this service failed to start, for the launcher waiting on it.
+/// Record why this service did not start, for the launcher waiting on it.
 /// FORESIGHT_STARTUP_STATUS names the file; it must be a startup status in
-/// [profile]'s runtime directory, and anything else is ignored.
+/// [profile]'s runtime directory, and anything else is ignored. A start that
+/// lost the profile lock records `contended`, never a failure: it did
+/// nothing, and its launcher attaches to the owner or launches again.
 void recordServiceStartupFailure(ProfilePaths profile, Object error) {
   final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
-  // A start that lost the profile lock is no failure: another owner holds
-  // it, or will after a momentary probe, and its launcher keeps waiting.
-  if (path == null || error is ServiceOwnershipContended) return;
+  if (path == null) return;
   try {
     if (!_startupStatusName.hasMatch(_entryName(path)) ||
         canonicalProfilePath(File(path).parent.path) != profile.runtime) {
@@ -2389,10 +2373,14 @@ void recordServiceStartupFailure(ProfilePaths profile, Object error) {
     }
     final staging = File('$path.$pid')
       ..writeAsStringSync(
-        jsonEncode({
-          'state': 'failed',
-          'error': error is StateError ? error.message : '$error',
-        }),
+        jsonEncode(
+          error is ServiceOwnershipContended
+              ? {'state': 'contended'}
+              : {
+                  'state': 'failed',
+                  'error': error is StateError ? error.message : '$error',
+                },
+        ),
         flush: true,
       );
     protectPrivateFile(staging.path);
@@ -2402,20 +2390,42 @@ void recordServiceStartupFailure(ProfilePaths profile, Object error) {
   }
 }
 
-/// The cause a launched service recorded in [status], if it failed to start.
-String? _recordedStartupFailure(File status) {
+/// What a launched service recorded in its startup status.
+sealed class _StartupOutcome {
+  const _StartupOutcome();
+}
+
+/// It lost the profile lock before touching the profile.
+final class _StartupContended extends _StartupOutcome {
+  const _StartupContended();
+}
+
+final class _StartupFailed extends _StartupOutcome {
+  final String cause;
+  const _StartupFailed(this.cause);
+}
+
+/// The outcome a launched service recorded in [status], if any yet.
+_StartupOutcome? _recordedStartupOutcome(File status) {
   try {
     final value = jsonDecode(status.readAsStringSync());
+    if (value is Map && value['state'] == 'contended') {
+      return const _StartupContended();
+    }
     if (value is Map && value['state'] == 'failed') {
-      return '${value['error']}'.split('\n').first;
+      return _StartupFailed('${value['error']}'.split('\n').first);
     }
   } on FileSystemException {
-    // Not written: the service has not failed, or not yet.
+    // Not written: the service has not stopped, or not yet.
   } on FormatException {
     // Not a status this client understands.
   }
   return null;
 }
+
+// Launches by one ensureService call; only a launch that provably did
+// nothing (it lost the profile lock) is followed by another.
+const _maxLaunches = 3;
 
 /// Attach first; competing launchers may race safely on the service's OS lock.
 ///
@@ -2460,15 +2470,15 @@ Future<ServiceStartup> _ensureService(
   }
   final startup = Stopwatch()..start();
   var closingOwner = false;
-  var launched = false;
+  var launches = 0;
   String? executable;
   String? startupLog;
   File? handoff;
-  // Where a launched service records a failed start.
+  // Where the latest launch records a start that did not happen.
   File? startupStatus;
   String? ignoredRecord;
   TimeoutException deadlineFailure() {
-    final failure = launched
+    final failure = launches > 0
         ? startupLog != null
               ? 'Application service did not start. Inspect $startupLog.'
               : 'Application service did not start. Run $executable directly to inspect the startup error.'
@@ -2588,23 +2598,35 @@ Future<ServiceStartup> _ensureService(
         // A starting or closing owner may still hold the profile lock.
       }
       remaining();
-      if (!launched &&
+      if (launches == 0 &&
           _profileOwnerAvailable(profile, closingOwner: closingOwner)) {
         privateDirectory(profile.runtime);
-        launched = true;
+        launches++;
         await launchOnce();
       }
-      // A replacement that died says why at once (L3). One that lost the
-      // lock to another owner fails too; that owner will answer instead.
-      final failure = startupStatus == null
+      switch (startupStatus == null
           ? null
-          : _recordedStartupFailure(startupStatus!);
-      if (failure != null &&
-          _profileOwnerAvailable(profile, closingOwner: false)) {
-        throw StateError('Application service failed to start: $failure');
+          : _recordedStartupOutcome(startupStatus!)) {
+        // A replacement that died says why at once (L3), unless another
+        // owner holds the profile and will answer instead.
+        case _StartupFailed(:final cause)
+            when _profileOwnerAvailable(profile, closingOwner: false):
+          throw StateError('Application service failed to start: $cause');
+        // The launch lost the lock before touching the profile, for example
+        // to another launcher's or --stop's momentary probe. If nobody holds
+        // it now, launch again; otherwise attach to the owner that does.
+        case _StartupContended()
+            when launches < _maxLaunches &&
+                _profileOwnerAvailable(profile, closingOwner: false):
+          await _deleteLaunchFiles(startupStatus, handoff);
+          launches++;
+          await launchOnce();
+        default:
+          break;
       }
-      // This read-only startup loop can attach to a competing legitimate owner.
-      // It never replays a business operation or launches a second replacement.
+      // This read-only startup loop can attach to a competing legitimate
+      // owner. It never replays a business operation, and it launches again
+      // only after a launch provably did nothing: it lost the profile lock.
       final left = remaining();
       await Future<void>.delayed(
         left < const Duration(milliseconds: 100)
@@ -2613,12 +2635,15 @@ Future<ServiceStartup> _ensureService(
       );
     }
   } finally {
-    if (handoff != null && handoff!.existsSync()) {
-      await handoff!.delete();
-      await handoff!.parent.delete();
-    }
-    if (startupStatus != null && startupStatus!.existsSync()) {
-      await startupStatus!.delete();
-    }
+    await _deleteLaunchFiles(startupStatus, handoff);
   }
+}
+
+/// Remove one launch's startup status and its unconsumed environment handoff.
+Future<void> _deleteLaunchFiles(File? status, File? handoff) async {
+  if (handoff != null && handoff.existsSync()) {
+    await handoff.delete();
+    await handoff.parent.delete();
+  }
+  if (status != null && status.existsSync()) await status.delete();
 }
