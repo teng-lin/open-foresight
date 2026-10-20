@@ -193,9 +193,10 @@ jobs:
         if: needs.plan.outputs.validation == 'full' && matrix.format == 'deb'
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.plan.outputs.source }}
         run: |
           dpkg-deb -x dist/packages/*.deb build/cloud-package
-          python tools/ci_linux_sdk_reference.py restore --source "${{ needs.plan.outputs.source }}" --reference artifacts/sdk-reference.json --directory build/cloud-sdk
+          python tools/ci_linux_sdk_reference.py restore --source "$SOURCE" --reference artifacts/sdk-reference.json --directory build/cloud-sdk
           task_sdk=$(python -c 'import json; print(json.load(open("build/cloud-sdk/image.json"))["image"])')
           docker run --rm -v "$PWD:/work" -w /work "$task_sdk" python3 tools/verify_preview_cloud.py --bundle build/cloud-package/opt/open-foresight --output reports/cloud.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

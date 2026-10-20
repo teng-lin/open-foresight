@@ -49,7 +49,8 @@ Read-only PR jobs retain each verified component as an Actions artifact for
 14 days. Same-repository application checks wait for those images rather than rebuilding an SDK;
 after review, main can publish the saved images without recompiling them.
 Application checks consume qualified image digests; release packaging consumes
-the exact-commit portable candidate from successful main CI. Fork PR checks retain
+the exact-commit portable release candidate produced on demand by `release.yml`
+from reviewed main source. Fork PR checks retain
 their local SDK build; same-repository consumers wait for verified artifacts.
 Registry authentication and transport errors
 fail before compilation. Component registry caches preserve completed layers.

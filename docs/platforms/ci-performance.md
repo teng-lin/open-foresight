@@ -248,9 +248,9 @@ covered; set `GITHUB_RUN_NUMBER=1` to exercise covered then plain. Report names
 always identify the suite, regardless of execution order. Repeat both orders on
 the same revision and record runner/toolchain versions and cache warmth: order
 alternation reduces systematic warm-up bias but does not remove it.
-Cross-platform timings alone cannot isolate instrumentation overhead. Keep the
-existing macOS coverage gate until a replacement has passed its unchanged
-threshold and platform-dependent execution has been accounted for. Report PR
+Cross-platform timings alone cannot isolate instrumentation overhead. Coverage
+placement changes must preserve the required thresholds and account for
+platform-dependent execution; the current placement is described below. Report PR
 elapsed time separately from summed runner time; parallel jobs can dominate the
 critical path even after another job becomes faster.
 

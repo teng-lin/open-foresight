@@ -56,16 +56,6 @@ def test_required_build_test_and_acceptance_jobs_use_one_successful_producer():
     )
 
 
-@pytest.mark.parametrize(
-    "build,expected",
-    [("success", True), ("failure", False), ("cancelled", False), ("skipped", False)],
-)
-def test_acceptance_dependency_condition_rejects_bad_original_producers(
-    build, expected
-):
-    assert (build == "success") == expected
-
-
 def test_package_contracts_force_their_own_build_and_keep_explicit_macos_scope():
     selection = ci_changes.selection_report(["packaging/ci/package-and-test.sh"])[
         "selection"

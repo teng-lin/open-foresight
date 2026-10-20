@@ -315,6 +315,19 @@ def test_portable_preview_requires_original_stamped_label_and_receipt(
         preview.manifest(tmp_path, "0.1.2", 12, LABEL, SHA, "standard")
 
 
+@pytest.mark.parametrize("filename", ["source-qualification.json", "distribution-stamp.json"])
+@pytest.mark.parametrize("contents", ["{", "[]", "null"])
+def test_portable_preview_rejects_malformed_metadata_with_identity_diagnostic(
+    tmp_path, filename, contents
+):
+    installers(tmp_path)
+    (tmp_path / "tar" / filename).write_text(contents)
+    with pytest.raises(
+        ValueError, match="Portable preview stamp or receipt differs from its identity"
+    ):
+        preview.manifest(tmp_path, "0.1.2", 12, LABEL, SHA, "standard")
+
+
 def test_missing_formats_and_foreign_source_cannot_be_published(tmp_path, monkeypatch):
     monkeypatch.setenv(
         "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + ".summary"))

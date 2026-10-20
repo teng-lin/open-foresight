@@ -167,9 +167,15 @@ def manifest(directory, version, number, label, source, validation):
                 raise ValueError(
                     "Portable preview requires its verified stamp and receipt"
                 )
-            original = json.loads(qualification.read_text()).get("source_receipt")
+            try:
+                original = json.loads(qualification.read_text()).get("source_receipt")
+                recorded = json.loads(stamp.read_text())
+            except (ValueError, AttributeError) as error:
+                raise ValueError(
+                    "Portable preview stamp or receipt differs from its identity"
+                ) from error
             if (
-                json.loads(stamp.read_text())
+                recorded
                 != {**distribution, "label": label, "source_commit": source}
                 or not ci_artifacts.valid_receipt(original, "linux-app", source)
                 or original.get("source_commit") != source
