@@ -1146,15 +1146,27 @@ packing now supplies the original attempt too. No production provenance rule
 changed. The failed attempt is excluded
 and the five-execution measurement must restart on the corrected source.
 
+The subsequent `575ef4e3` measurements use run `39381008467`. These are fresh
+application job executions on one PR event, with targeted build-job reruns;
+they are not independent pushes or representative PR workloads. Two attempts
+qualified before the pagination correction:
 
-The subsequent `575ef4e3` measurements qualified attempts 1 and 4. Attempt 2
-failed on Ubuntu snapshot HTTP 500/502 before application tests; attempt 3
-recovered only that test job and retains the original build, so it is excluded
-from fresh build timings. Attempt 5 built successfully but exhausted three GitHub
-HTTP 502 responses while qualifying its producer, again before application tests.
+| Attempt | Build job (seconds) | Test job (seconds) | Comparison job (seconds) |
+| --- | --- | --- | --- |
+| 1 | `118489943107` (349) | `118491795737` (618) | `118495044588` (9) |
+| 4 | `118508574379` (550) | `118511943647` (974) | `118517946884` (8) |
+
+Attempt 2 failed on Ubuntu snapshot HTTP 500/502 before application tests;
+attempt 3 recovered only that test job and retains the original build, so it is
+excluded from fresh build timings. Attempt 5 built successfully but exhausted
+three GitHub HTTP 502 responses while qualifying its producer, again before
+application tests. Attempt 6 retried only the failed test with attempt 5's
+successful build and failed on the same API response; it is also excluded.
+
 The same 100-job API page still failed on inspection; 10-, 30- and 50-job pages
 and the attempt-specific endpoint succeeded. Producer enumeration now uses
 30-job pages with `filter=all`, retaining every original attempt and propagating
 later-page errors. Receipts, successful upload attempts, upload windows and
-checksums remain mandatory. The two qualified measurements remain recorded;
-the five-execution gate must restart for the pagination correction's new source.
+checksums remain mandatory. The two qualified measurements above remain part of
+the diagnostic record; the five-execution gate restarts on the pagination
+correction's new source. No five-sample median is established by these results.
