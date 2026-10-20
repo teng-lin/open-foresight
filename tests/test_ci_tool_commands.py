@@ -349,9 +349,17 @@ def test_linux_sdk_cli_rejects_missing_inputs(monkeypatch, args):
         linux.main()
 
 
-@pytest.mark.parametrize("acceptance", [False, True])
+@pytest.mark.parametrize(
+    "flags,acceptance,ci",
+    [
+        ([], False, False),
+        (["--acceptance"], True, False),
+        (["--ci"], False, True),
+    ],
+    ids=["application", "acceptance", "ci"],
+)
 def test_application_transport_outputs_lowercase_boolean(
-    tmp_path, monkeypatch, capsys, acceptance
+    tmp_path, monkeypatch, capsys, flags, acceptance, ci
 ):
     output = tmp_path / "outputs"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
@@ -360,11 +368,10 @@ def test_application_transport_outputs_lowercase_boolean(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["transport", "--repository", "owner/repo"]
-        + (["--acceptance"] if acceptance else []),
+        ["transport", "--repository", "owner/repo", *flags],
     )
     transport.main()
-    prepare.assert_called_once_with("owner/repo", acceptance=acceptance)
+    prepare.assert_called_once_with("owner/repo", acceptance=acceptance, ci=ci)
     assert output.read_text() == "builder=default\ncache_available=false\n"
     assert json.loads(capsys.readouterr().out)["cache_available"] is False
 

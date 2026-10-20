@@ -32,6 +32,7 @@ class CleanupTests(unittest.TestCase):
             version(8, "old-alias", "current"),
             version(9, "app-deps-buildcache-v1"),
             version(10, "acceptance-tools-buildcache-v1"),
+            version(11, "ci-tools-buildcache-v1"),
         ]
         self.assertEqual(
             cleanup.candidates(versions, "new", {versions[6]["name"]}), [versions[5]]
@@ -59,6 +60,48 @@ class CleanupTests(unittest.TestCase):
             protected = cleanup.protected_manifests("linux-sdk", versions, "new")
         self.assertEqual(protected, {item["name"] for item in versions[:3]})
         self.assertEqual(cleanup.candidates(versions, "new", protected), versions[3:])
+
+    def test_plan_protects_ci_cache_and_recursive_child_manifests(self):
+        versions = [
+            version(1, "new"),
+            version(2, "ci-tools-buildcache-v1"),
+            version(3, "old-cache-child"),
+            version(4, "retired"),
+        ]
+        requested = []
+
+        def response(request, **kwargs):
+            url = request if isinstance(request, str) else request.full_url
+            requested.append(url)
+            if "/token?" in url:
+                value = {"token": "fixture-token"}
+            elif url.endswith(versions[1]["name"]):
+                value = {"manifests": [{"digest": versions[2]["name"]}]}
+            else:
+                value = {}
+            return io.BytesIO(json.dumps(value).encode())
+
+        def pages(path, key=None):
+            if path == cleanup.versions_path("linux-sdk"):
+                return versions
+            self.assertEqual(path, f"repos/{cleanup.REPO}/actions/artifacts")
+            self.assertEqual(key, "artifacts")
+            return []
+
+        with (
+            patch.object(cleanup, "COMPONENTS", ("linux-sdk",)),
+            patch.object(cleanup, "fingerprint", return_value="new"),
+            patch.object(cleanup.subprocess, "check_output", return_value="head"),
+            patch.object(cleanup, "api", return_value={"sha": "head"}) as api,
+            patch.object(cleanup, "pages", side_effect=pages),
+            patch.object(cleanup.urllib.request, "urlopen", side_effect=response),
+        ):
+            plan = cleanup.make_plan()
+        api.assert_called_once_with(f"repos/{cleanup.REPO}/commits/main")
+        self.assertEqual(plan["packages"]["linux-sdk"]["versions"], versions[3:])
+        self.assertTrue(any(url.endswith(versions[1]["name"]) for url in requested))
+        self.assertTrue(any(url.endswith(versions[2]["name"]) for url in requested))
+        self.assertEqual(plan["artifacts"], [])
 
     def test_missing_current_image_stops_cleanup(self):
         with self.assertRaisesRegex(RuntimeError, "not published"):

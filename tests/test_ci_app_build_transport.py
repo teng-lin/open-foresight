@@ -25,6 +25,8 @@ def cli(arguments, **_kwargs):
     assert arguments[4] in (
         "ghcr.io/teng-lin/open-foresight/linux-sdk:app-buildcache-x86-64",
         "ghcr.io/teng-lin/open-foresight/linux-sdk:app-deps-buildcache-v1",
+        "ghcr.io/teng-lin/open-foresight/linux-sdk:ci-tools-buildcache-v1",
+        "ghcr.io/teng-lin/open-foresight/linux-sdk:acceptance-tools-buildcache-v1",
     )
     assert arguments[5] == "--raw"
     return json.dumps(
@@ -41,10 +43,18 @@ def cli(arguments, **_kwargs):
     )
 
 
-def test_current_context_docker_builder_keeps_sdk_archive_visible():
-    assert transport.prepare("teng-lin/open-foresight", request=cli) == {
+@pytest.mark.parametrize(
+    "stage,tag",
+    [
+        ({}, "app-deps-buildcache-v1"),
+        ({"ci": True}, "ci-tools-buildcache-v1"),
+        ({"acceptance": True}, "acceptance-tools-buildcache-v1"),
+    ],
+)
+def test_current_context_docker_builder_keeps_sdk_archive_visible(stage, tag):
+    assert transport.prepare("teng-lin/open-foresight", request=cli, **stage) == {
         "builder": "setup-docker-action",
-        "cache": "ghcr.io/teng-lin/open-foresight/linux-sdk:app-deps-buildcache-v1",
+        "cache": "ghcr.io/teng-lin/open-foresight/linux-sdk:" + tag,
         "legacy_cache": "ghcr.io/teng-lin/open-foresight/linux-sdk:app-buildcache-x86-64",
         "cache_available": True,
     }
@@ -171,3 +181,67 @@ def test_registry_namespace_normalizes_github_repository_case():
     assert transport.reference("Teng-Lin/Open-Foresight") == transport.reference(
         "teng-lin/open-foresight"
     )
+
+
+@pytest.mark.parametrize("flags", [[], ["--ci"], ["--acceptance"]])
+def test_transport_cli_selects_only_one_cache_stage(monkeypatch, flags, capsys):
+    import sys
+
+    calls = []
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.setattr(
+        sys, "argv", ["ci_app_build_transport.py", "--repository", "owner/repo", *flags]
+    )
+
+    def prepare(repository, **options):
+        calls.append((repository, options))
+        return {"cache_available": True}
+
+    monkeypatch.setattr(transport, "prepare", prepare)
+    transport.main()
+    assert calls == [
+        ("owner/repo", {"ci": "--ci" in flags, "acceptance": "--acceptance" in flags})
+    ]
+    assert json.loads(capsys.readouterr().out) == {"cache_available": True}
+
+
+def test_transport_rejects_combined_ci_and_acceptance(monkeypatch):
+    import sys
+
+    with pytest.raises(ValueError, match="Choose one"):
+        transport.reference("owner/repo", ci=True, acceptance=True)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ci_app_build_transport.py",
+            "--repository",
+            "owner/repo",
+            "--ci",
+            "--acceptance",
+        ],
+    )
+    with pytest.raises(SystemExit) as result:
+        transport.main()
+    assert result.value.code == 2
+
+
+def test_missing_ci_tools_cache_keeps_verified_sdk_and_dependency_seed(capsys):
+    def request(arguments, **kwargs):
+        if arguments[:3] == ["docker", "buildx", "imagetools"] and arguments[
+            4
+        ].endswith(":ci-tools-buildcache-v1"):
+            raise subprocess.CalledProcessError(
+                1, arguments, stderr=arguments[4] + ": not found"
+            )
+        return cli(arguments, **kwargs)
+
+    result = transport.prepare("teng-lin/open-foresight", request=request, ci=True)
+    assert result["cache_available"] is False
+    assert result["cache"].endswith(":ci-tools-buildcache-v1")
+    assert result["legacy_cache"].endswith(":app-buildcache-x86-64")
+    message = capsys.readouterr().out
+    assert "CI tools cache is absent" in message
+    assert "verified SDK and qualified dependency seed unchanged" in message
+    assert "No SDK or dependency compilation is authorized" in message
+    assert "acceptance tools" not in message

@@ -16,6 +16,13 @@ from tools.ci_artifacts import fingerprint  # noqa: E402
 
 REPO = "teng-lin/open-foresight"
 COMPONENTS = ("linux-core", "linux-litert", "linux-whisper", "linux-sdk")
+PROTECTED_CACHE_TAGS = {
+    "buildcache",
+    "app-buildcache-x86-64",
+    "app-deps-buildcache-v1",
+    "ci-tools-buildcache-v1",
+    "acceptance-tools-buildcache-v1",
+}
 ACCEPT = ", ".join(
     (
         "application/vnd.oci.image.index.v1+json",
@@ -83,10 +90,7 @@ def candidates(versions, identity, protected, retained=()):
     keep = {
         identity,
         "current",
-        "buildcache",
-        "app-buildcache-x86-64",
-        "app-deps-buildcache-v1",
-        "acceptance-tools-buildcache-v1",
+        *PROTECTED_CACHE_TAGS,
         *retained,
     }
     return [
@@ -110,10 +114,7 @@ def protected_manifests(component, versions, identity, retained=()):
         & {
             identity,
             "current",
-            "buildcache",
-            "app-buildcache-x86-64",
-            "app-deps-buildcache-v1",
-            "acceptance-tools-buildcache-v1",
+            *PROTECTED_CACHE_TAGS,
             *retained,
         }
     }
