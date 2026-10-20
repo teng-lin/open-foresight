@@ -1194,9 +1194,10 @@ reuse; publication alone does not prove a hit for every consumer.
 
 ### Combined platform and on-demand candidate rollout
 
-This stacked batch combines WS2b, WS2b-2, WS4 and WS5b-1 on PR #154's
-final head `39c7e0ad`, retaining its main-only cache publisher and cleanup
-protection. Reviewed main `20063921` has the same tree as PR #153's final head
+This batch combines WS2b, WS2b-2, WS4 and WS5b-1 on reviewed main
+`ddab4116`, the merge of PR #154, retaining its main-only cache publisher and
+cleanup protection. That merge has the same tree as final head `39c7e0ad`.
+Earlier reviewed main `20063921` has the same tree as PR #153's final head
 `4ac0f997`. PR #153 merged the corrective shadow path; the platform switch
 remains subject to the hosted gates below.
 
