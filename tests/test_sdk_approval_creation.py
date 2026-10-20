@@ -8,15 +8,19 @@ import sys
 import zipfile
 
 import pytest
+import test_ci_release_candidates as candidate_fixtures
 from tools import ci_artifacts as artifacts
 from tools import create_sdk_approval as create
 from test_sdk_approval_bridge import original as original
 from test_sdk_approval_bridge import REPOSITORY, PRODUCER, FINAL
 from test_ci_release_candidates import (
-    producer as tested_producer,
     SOURCE as CANDIDATE_SOURCE,
     REPOSITORY as CANDIDATE_REPOSITORY,
 )
+
+
+# Expose the imported real fixture under the dependency name used below.
+tested_producer = candidate_fixtures.producer
 
 
 @pytest.fixture(autouse=True, params=[None, "refs/heads/main", "refs/pull/987/merge"])
