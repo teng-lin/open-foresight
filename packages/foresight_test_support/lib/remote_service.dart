@@ -23,6 +23,9 @@ class RemoteFixture {
   late ServerSocket server;
   late RemoteDomain remote;
   final sockets = <Socket>[];
+
+  /// Accepted connections whose client side has ended (EOF or an error).
+  final ended = <Socket>{};
   final requests = <Map<String, dynamic>>[];
   Map<String, dynamic> status = {
     'capture': <String, dynamic>{},
@@ -42,41 +45,15 @@ class RemoteFixture {
         root.resolveSymbolicLinksSync(),
         root.resolveSymbolicLinksSync(),
       );
+      // A current service names its profile; clients refuse one without
+      // that name unless the profile's lock is held.
+      status['profile_id'] = profile.identity;
       owner = openStore('${profile.data}/application.db');
       _hasOwner = true;
       File(
         '${profile.data}/.desktop-capability',
       ).writeAsStringSync('remote-fixture-desktop-token');
-      server = await ServerSocket.bind(
-        InternetAddress(
-          '${profile.runtime}/application.sock',
-          type: InternetAddressType.unix,
-        ),
-        0,
-      );
-      _hasServer = true;
-      server.listen((socket) {
-        sockets.add(socket);
-        unawaited(socket.done.catchError((Object _) {}));
-        socket
-            .cast<List<int>>()
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .listen((line) {
-              final message = jsonDecode(line) as Map<String, dynamic>;
-              requests.add(message);
-              if (message.containsKey('cancel')) return;
-              if (message['method'] == 'status') {
-                if (rejectStatus) {
-                  socket.destroy();
-                } else {
-                  reply(socket, message, status);
-                }
-              } else {
-                handler?.call(socket, message);
-              }
-            }, onError: (Object _) {});
-      });
+      await listen();
       remote = await RemoteDomain.connect(profile);
       _hasRemote = true;
     } catch (error, stack) {
@@ -87,6 +64,54 @@ class RemoteFixture {
       }
       Error.throwWithStackTrace(error, stack);
     }
+  }
+
+  /// Serve the profile's endpoint again after [stopListening], as a
+  /// replacement owner does.
+  Future<void> listen() async {
+    server = await ServerSocket.bind(
+      InternetAddress(
+        '${profile.runtime}/application.sock',
+        type: InternetAddressType.unix,
+      ),
+      0,
+    );
+    _hasServer = true;
+    server.listen(_accept);
+  }
+
+  /// Stop accepting connections and remove the socket, as an owner that
+  /// exits does. Connections already accepted stay open.
+  Future<void> stopListening() async {
+    _hasServer = false;
+    await server.close();
+  }
+
+  void _accept(Socket socket) {
+    sockets.add(socket);
+    unawaited(socket.done.catchError((Object _) {}));
+    socket
+        .cast<List<int>>()
+        .transform(utf8.decoder)
+        .transform(const LineSplitter())
+        .listen(
+          (line) {
+            final message = jsonDecode(line) as Map<String, dynamic>;
+            requests.add(message);
+            if (message.containsKey('cancel')) return;
+            if (message['method'] == 'status') {
+              if (rejectStatus) {
+                socket.destroy();
+              } else {
+                reply(socket, message, status);
+              }
+            } else {
+              handler?.call(socket, message);
+            }
+          },
+          onError: (Object _) => ended.add(socket),
+          onDone: () => ended.add(socket),
+        );
   }
 
   void reply(

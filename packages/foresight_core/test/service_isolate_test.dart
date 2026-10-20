@@ -2,11 +2,24 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:convert';
+import 'package:foresight_test_support/hooked_service.dart' show ServiceGates;
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/foresight_core.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:test/test.dart';
+
+/// A closing owner's refusal as it reaches a client: unavailable, with the
+/// reason or, from an older owner, only the unchanged text.
+final isClosingRefusal = isA<RpcError>()
+    .having((error) => error.code, 'code', RpcErrorCode.unavailable)
+    .having(
+      (error) => error.message,
+      'message',
+      'Application service is shutting down; retry after it exits.',
+    )
+    .having((error) => error.toJson()['reason'], 'reason', 'closing');
 
 void diagnosticWorker(SendPort parent) {
   final commands = ReceivePort();
@@ -347,10 +360,12 @@ void main() {
     },
   );
   test(
-    'explicit shutdown disconnects clients before the worker finishes cleanup',
+    'explicit shutdown refuses new requests and keeps clients until the worker '
+    'closes them (SL-3)',
     () async {
       final saved = Map<String, String>.from(runtimeConfiguration.environment);
       for (final key in [
+        'FORESIGHT_HELPER',
         'FORESIGHT_NATIVE',
         'FORESIGHT_INSTALL_ROOT',
         'FORESIGHT_RUNTIME_REVISION',
@@ -359,62 +374,87 @@ void main() {
         runtimeConfiguration.environment.remove(key);
       }
       final directory = createTestTempDirectorySync('of-shutdown-');
-      final started = File('${directory.path}/started');
-      final stopping = File('${directory.path}/stopping');
-      final release = File('${directory.path}/release');
-      final helper = File('${directory.path}/helper-fixture');
-      helper.writeAsStringSync('''#!/usr/bin/env python3
-import os,pathlib,signal,time
-started=pathlib.Path(${jsonEncode(started.path)})
-stopping=pathlib.Path(${jsonEncode(stopping.path)})
-release=pathlib.Path(${jsonEncode(release.path)})
-def shutdown(signum, frame):
- stopping.touch()
- while not release.exists(): time.sleep(.005)
- raise SystemExit(0)
-signal.signal(signal.SIGTERM,shutdown)
-started.write_text(str(os.getpid()))
-while True: signal.pause()
-''');
-      await Process.run('/bin/chmod', ['700', helper.path]);
-      runtimeConfiguration.environment['FORESIGHT_HELPER'] = helper.path;
+      // The worker inherits this, so it holds at the gate in this process.
+      final gates = await ServiceGates.create(directory);
+      runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
+          gates.directory.path;
+      gates.hold('close.helper_closed');
       final profile = ProfilePaths(
         '${directory.path}/data',
         '${directory.path}/run',
       );
       IsolatedApplicationService? host;
-      ServiceClient? client;
+      ServiceClient? client, latecomer;
       try {
         host = await IsolatedApplicationService.start(profile);
         client = await ServiceClient.connect(serviceEndpoint(profile));
         expect(await client.call('status'), isA<Map>());
-        await eventually(() => started.existsSync());
-        final disconnected = client.events.stream.drain<void>();
         var workerClosed = false;
         unawaited(host.closed.then((_) => workerClosed = true));
         final shutdown = host.close();
-        await eventually(() => stopping.existsSync());
+        await gates.reached('close.helper_closed');
+        expect(workerClosed, isFalse, reason: 'The gate holds worker cleanup');
+        // The attached client's bridge stays: the worker itself refuses.
         expect(
-          workerClosed,
-          isFalse,
-          reason: 'The helper still holds worker cleanup',
+          await client
+              .call('status')
+              .then<Object?>((_) => null, onError: (Object e) => e),
+          isClosingRefusal,
         );
-        await disconnected.timeout(const Duration(seconds: 1));
+        expect(client.isClosed, isFalse);
+        // A new client is refused by the frontend, not dropped.
+        latecomer = await ServiceClient.connect(serviceEndpoint(profile));
+        expect(
+          await latecomer
+              .call('status')
+              .then<Object?>((_) => null, onError: (Object e) => e),
+          isClosingRefusal,
+        );
+        expect(latecomer.isClosed, isFalse);
+        // A refused connection ignores cancels and drops malformed input.
+        final raw = await Socket.connect(
+          InternetAddress(
+            serviceEndpoint(profile),
+            type: InternetAddressType.unix,
+          ),
+          0,
+        );
+        final received = raw.fold<List<int>>(
+          [],
+          (all, chunk) => all..addAll(chunk),
+        );
+        raw.add(
+          utf8.encode(
+            '{"cancel":3}\n{"id":4,"method":"status","args":{}}\nnot-json\n',
+          ),
+        );
+        final lines = const LineSplitter().convert(utf8.decode(await received));
+        raw.destroy();
+        expect(lines, hasLength(1));
+        expect(jsonDecode(lines.single), {
+          'id': 4,
+          'error': {
+            'code': 'unavailable',
+            'message':
+                'Application service is shutting down; retry after it exits.',
+            'reason': 'closing',
+          },
+          'done': true,
+        });
+        final disconnected = [
+          client.events.stream.drain<void>(),
+          latecomer.events.stream.drain<void>(),
+        ];
+        gates.releaseAll();
+        await shutdown.timeout(const Duration(seconds: 30));
+        // Both connections end once the worker and the public socket close.
+        await Future.wait(disconnected).timeout(const Duration(seconds: 30));
         expect(client.isClosed, isTrue);
-        final rejected = await ServiceClient.connect(serviceEndpoint(profile));
-        try {
-          await rejected.events.stream.drain<void>().timeout(
-            const Duration(seconds: 1),
-          );
-          expect(rejected.isClosed, isTrue);
-        } finally {
-          await rejected.close();
-        }
-        release.writeAsStringSync('release');
-        await shutdown.timeout(const Duration(seconds: 10));
+        expect(latecomer.isClosed, isTrue);
       } finally {
-        release.writeAsStringSync('release');
+        gates.releaseAll();
         await client?.close();
+        await latecomer?.close();
         await host?.close();
         directory.deleteSync(recursive: true);
         runtimeConfiguration.environment
@@ -422,5 +462,74 @@ while True: signal.pause()
           ..addAll(saved);
       }
     },
+    // Above the 60 s gate wait and the 30 s waits, so a hang reports which.
+    timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test('a frontend whose worker died never unlinks a socket that replaced its '
+      'own (SL-3)', () async {
+    final saved = Map<String, String>.from(runtimeConfiguration.environment);
+    for (final key in [
+      'FORESIGHT_HELPER',
+      'FORESIGHT_NATIVE',
+      'FORESIGHT_INSTALL_ROOT',
+      'FORESIGHT_RUNTIME_REVISION',
+      'FORESIGHT_MODEL_MANIFEST',
+    ]) {
+      runtimeConfiguration.environment.remove(key);
+    }
+    final directory = createTestTempDirectorySync('of-replaced-');
+    final gates = await ServiceGates.create(directory);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
+        gates.directory.path;
+    final profile = ProfilePaths(
+      '${directory.path}/data',
+      '${directory.path}/run',
+    );
+    IsolatedApplicationService? crashed, replacement;
+    ServiceClient? client;
+    try {
+      crashed = await IsolatedApplicationService.start(profile);
+      // Hold the frontend once its listener is closed, just before it would
+      // unlink the public socket path.
+      gates.hold('frontend.listener_closed');
+      File(
+        '${gates.directory.path}/request.committed.notes.list.crash',
+      ).writeAsStringSync('');
+      client = await ServiceClient.connect(serviceEndpoint(profile));
+      await expectLater(client.call('notes.list'), throwsA(isA<RpcError>()));
+      await gates.reached('frontend.listener_closed');
+      // A dead worker leaves this process holding the profile lock, so the
+      // only replacement that can start now is another owner in this
+      // process. It takes over the public socket path. A new owner never
+      // deletes a socket that still accepts (SL-7), and the dead worker's
+      // listener stays open until this process exits; in another process
+      // it would be gone. Remove only its path, which nothing reaches now.
+      File('${profile.runtime}/worker.sock').deleteSync();
+      runtimeConfiguration.environment.remove('FORESIGHT_SERVICE_GATES');
+      replacement = await IsolatedApplicationService.start(profile);
+      gates.release('frontend.listener_closed');
+      await expectLater(crashed.close(), throwsStateError);
+      final probe = await ServiceClient.connect(serviceEndpoint(profile));
+      try {
+        expect((await probe.call('status') as Map)['pid'], pid);
+      } finally {
+        await probe.close();
+      }
+    } finally {
+      gates.releaseAll();
+      await client?.close();
+      try {
+        await crashed?.close();
+      } catch (_) {
+        // The crash is reported by close; teardown only needs it finished.
+      }
+      await replacement?.close();
+      directory.deleteSync(recursive: true);
+      runtimeConfiguration.environment
+        ..clear()
+        ..addAll(saved);
+    }
+    // Above the 60 s gate wait, so a hang reports it.
+  }, timeout: const Timeout(Duration(minutes: 2)));
 }

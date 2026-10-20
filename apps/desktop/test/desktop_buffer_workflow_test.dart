@@ -123,6 +123,127 @@ void main() {
     },
   );
   testWidgets(
+    'graph embeddings for many sources arrive in bounded batches that survive a failure',
+    (tester) async {
+      final f = await ControllerFixture.mount(tester);
+      f.store.db.execute('BEGIN');
+      final ids = [
+        for (var i = 0; i < 1500; i++)
+          f.store.importText(
+            'Source $i',
+            'Evidence $i',
+            'text/plain',
+            'fixture:$i',
+          ),
+      ];
+      for (final id in ids) {
+        f.store.state(id, 'indexed');
+      }
+      f.store.db.execute('COMMIT');
+      f.connection.helper.snapshot = control.State(
+        pipeline: 'ready',
+        instanceId: 'fixture',
+        model: control.ModelIdentity(
+          modelDigest: 'fixture',
+          tokenizerDigest: 'fixture',
+          preprocessing: 'fixture',
+          backend: 'fixture',
+          dimensions: 3,
+        ),
+      );
+      // Stand in for the service's reply cap at real embedding sizes. Answer
+      // each batch, then fail the one that completes the set.
+      var requested = 0;
+      f.connection.graphReply = (sources) async {
+        requested += sources.length;
+        if (sources.length > 128) {
+          throw StateError('Reply exceeds 16 MiB; request fewer items.');
+        }
+        if (requested == ids.length) {
+          throw StateError('Embedding worker disconnected');
+        }
+        return {
+          for (final source in sources) source['id'] as String: [1.0, 0, 0],
+        };
+      };
+      f.shell.update(() {
+        f.shell.tab = 0;
+        f.shell.sourceFeature.graphView = true;
+      });
+      await tester.pump();
+      await pumpUntil(
+        tester,
+        () => f.shell.sourceFeature.graphLayoutError.toString().isNotEmpty,
+      );
+      final requests = f.connection.graphRequests;
+      expect(
+        requests.map((batch) => batch.length),
+        everyElement(lessThanOrEqualTo(128)),
+      );
+      expect(requests, hasLength(greaterThanOrEqualTo(12)));
+      expect(requests.expand((batch) => batch), unorderedEquals(ids));
+      expect(
+        f.shell.sourceFeature.graphLayoutError,
+        contains('Embedding worker disconnected'),
+      );
+      // Earlier batches stay cached, so a later layout requests only the rest.
+      expect(
+        f.shell.sourceFeature.graphVectorCache,
+        hasLength(ids.length - requests.last.length),
+      );
+    },
+  );
+  testWidgets('graph embeddings from a replaced model run are not cached', (
+    tester,
+  ) async {
+    final f = await ControllerFixture.mount(tester);
+    final ids = [
+      for (final name in ['Alpha', 'Beta'])
+        f.store.importText(
+          name,
+          '$name evidence',
+          'text/plain',
+          'fixture:$name',
+        ),
+    ];
+    for (final id in ids) {
+      f.store.state(id, 'indexed');
+    }
+    control.State snapshot(String instance) => control.State(
+      pipeline: 'ready',
+      instanceId: instance,
+      model: control.ModelIdentity(
+        modelDigest: 'fixture',
+        tokenizerDigest: 'fixture',
+        preprocessing: 'fixture',
+        backend: 'fixture',
+        dimensions: 3,
+      ),
+    );
+    f.connection.helper.snapshot = snapshot('fixture');
+    final reply = Completer<Map<String, List<double>>>();
+    f.connection.graphReply = (_) => reply.future;
+    f.shell.update(() {
+      f.shell.tab = 0;
+      f.shell.sourceFeature.graphView = true;
+    });
+    await tester.pump();
+    await pumpUntil(tester, () => f.connection.graphRequests.isNotEmpty);
+    // The helper restarts while the batch is in flight, before any rebuild
+    // recomputes the layout key.
+    f.connection.helper.snapshot = snapshot('replacement');
+    // Registered after the controller's await, so it runs after that
+    // continuation.
+    var delivered = false;
+    unawaited(reply.future.then((_) => delivered = true));
+    reply.complete({
+      for (final id in ids) id: [1.0, 0, 0],
+    });
+    await pumpUntil(tester, () => delivered);
+    expect(f.shell.sourceFeature.graphVectorCache, isEmpty);
+    expect(f.connection.graphRequests, hasLength(1));
+  });
+  testWidgets(
     'custom export dates stay ordered when either boundary crosses the other and cancelled edits do not apply',
     (tester) async {
       final f = await ControllerFixture.mount(tester);

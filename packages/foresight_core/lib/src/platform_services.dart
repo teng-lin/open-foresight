@@ -8,7 +8,13 @@ import 'dart:io';
 const foresightTestHooksEnabled = bool.fromEnvironment(
   'FORESIGHT_ENABLE_TEST_HOOKS',
 );
-const _testHookKeys = {'FORESIGHT_CRASH_AT', 'FORESIGHT_TEST_DELAY_MS'};
+const _testHookKeys = {
+  'FORESIGHT_CRASH_AT',
+  'FORESIGHT_TEST_DELAY_MS',
+  'FORESIGHT_SERVICE_GATES',
+  // How long `--stop` waits for the owner to release its profile.
+  'FORESIGHT_TEST_STOP_RELEASE_MS',
+};
 
 /// The same immutable resource map is used by Finder, MCP and detached workers.
 /// Paths in runtime.json are relative to Contents/Resources, never the cwd.
@@ -61,6 +67,8 @@ class RuntimeConfiguration {
               'FORESIGHT_DATA',
               'FORESIGHT_RUNTIME',
               'FORESIGHT_SERVICE_TRACE',
+              // The service checks that it names a file in its runtime.
+              'FORESIGHT_STARTUP_STATUS',
             }.contains(key),
       );
     }
@@ -181,6 +189,16 @@ final int Function(Pointer<Utf8>, int) _chmod = Platform.isMacOS
         int Function(Pointer<Utf8>, int)
       >('chmod');
 
+final int Function(Pointer<Utf8>, int) _mkdir = Platform.isMacOS
+    ? DynamicLibrary.process().lookupFunction<
+        Int32 Function(Pointer<Utf8>, Uint16),
+        int Function(Pointer<Utf8>, int)
+      >('mkdir')
+    : DynamicLibrary.process().lookupFunction<
+        Int32 Function(Pointer<Utf8>, Uint32),
+        int Function(Pointer<Utf8>, int)
+      >('mkdir');
+
 /// Set mode 0600 before exposing a private local endpoint to its clients.
 void protectPrivateFile(String path) {
   if (path.contains('\u0000')) {
@@ -196,6 +214,15 @@ void protectPrivateFile(String path) {
   }
 }
 
+/// Create or check [profile]'s runtime directory as private, and the
+/// directory a default runtime lives in too (S5). An owned parent that only
+/// its user can write is tightened like the profile itself.
+void privateRuntime(ProfilePaths profile) {
+  final parent = profile.runtimeParent;
+  if (parent != null) privateDirectory(parent, repairOwnedPermissions: true);
+  privateDirectory(profile.runtime);
+}
+
 /// Refuse symlinks and foreign/public directories before using local RPC state.
 void privateDirectory(String path, {bool repairOwnedPermissions = false}) {
   final dir = Directory(path);
@@ -204,9 +231,31 @@ void privateDirectory(String path, {bool repairOwnedPermissions = false}) {
     throw StateError('Private directory must not be a symbolic link: $path');
   }
   if (!dir.existsSync()) {
-    dir.createSync(recursive: true);
-    if (Process.runSync('/bin/chmod', ['700', path]).exitCode != 0) {
-      throw StateError('Cannot protect $path');
+    if (path.contains('\u0000')) {
+      throw StateError('Private directory path contains a NUL character');
+    }
+    dir.parent.createSync(recursive: true);
+    // Create it with mode 0700: a directory created first and protected after
+    // looks public to another creator in between, such as a client resolving
+    // the endpoint while its owner starts, which then refuses it.
+    final nativePath = path.toNativeUtf8(allocator: calloc);
+    try {
+      if (_mkdir(nativePath, 0x1c0) == 0) {
+        // A umask stricter than 077 can strip the owner's own bits.
+        if ((dir.statSync().mode & 0x1ff) != 0x1c0 &&
+            _chmod(nativePath, 0x1c0) != 0) {
+          throw StateError('Cannot protect $path');
+        }
+      } else if (FileSystemEntity.typeSync(path, followLinks: false) !=
+          FileSystemEntityType.directory) {
+        // Not another creator winning the race. Creating it again reports
+        // the reason, such as a file in the way or an unwritable parent.
+        dir.createSync();
+        throw FileSystemException('Cannot create private directory', path);
+      }
+      // Otherwise another creator won the race; the checks below decide.
+    } finally {
+      calloc.free(nativePath);
     }
   }
   final owner = Process.runSync(

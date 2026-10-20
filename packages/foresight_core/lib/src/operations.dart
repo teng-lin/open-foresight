@@ -119,6 +119,52 @@ enum Operation {
     }.contains(this);
   }
 
+  /// Creates and appends that a retry after a lost reply would repeat. Their
+  /// optional `idempotency_key` makes the retry return the first result.
+  bool get acceptsIdempotencyKey => {
+    Operation.notesSave,
+    Operation.meetingsCreate,
+    Operation.sourcesImport,
+    Operation.meetingsTranscript,
+  }.contains(this);
+
+  /// Edits and appends whose `id` names a row that a workspace clear can hand
+  /// to a different item. The desktop sends its workspace epoch with them.
+  bool get carriesWorkspaceEpoch => {
+    Operation.notesSave,
+    Operation.sourcesImport,
+    Operation.sourcesIndex,
+    Operation.sourcesDelete,
+    Operation.meetingsNotes,
+    Operation.meetingsTranscript,
+    Operation.meetingsIndex,
+    Operation.meetingsGenerate,
+    Operation.meetingsEnhance,
+    Operation.meetingsStart,
+    Operation.meetingsRetryQuestion,
+    Operation.meetingsRetryDetection,
+    Operation.meetingsLinkAnswer,
+    Operation.artifactsEdit,
+    Operation.labelsPut,
+    Operation.labelsSet,
+    Operation.googleAttachments,
+  }.contains(this);
+
+  /// [args] with [epoch] added when this call edits an existing row by ID, or
+  /// is a keyed create that a retry must not replay into a cleared workspace,
+  /// and does not already name the epoch it was prepared in.
+  Map<String, dynamic> scopedToWorkspace(
+    Map<String, dynamic> args,
+    String? epoch,
+  ) {
+    final scoped =
+        (carriesWorkspaceEpoch && args['id'] != null) ||
+        (acceptsIdempotencyKey && args['idempotency_key'] != null);
+    return epoch != null && scoped && !args.containsKey('workspace_epoch')
+        ? {...args, 'workspace_epoch': epoch}
+        : args;
+  }
+
   bool get notifiesChanges => !{
     Operation.status,
     Operation.audioCapabilities,
@@ -198,6 +244,19 @@ class RpcTool {
 List<RpcTool> get rpcTools {
   final text = JsonSchema.string();
   final integer = JsonSchema.integer();
+  final epoch = JsonSchema.string(
+    description:
+        'Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.',
+  );
+  final idempotencyKey = JsonSchema.string(
+    minLength: 1,
+    maxLength: 256,
+    description:
+        'Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once in the same workspace (pass workspace_epoch) and the retry returns its result. Use a new key for a different change.',
+  );
+  const retry =
+      ' If a call fails with reason outcomeUnknown, retry with the same idempotency_key.'
+      ' Pass workspace_epoch from get_status too, so a retry after a workspace clear fails instead of applying the change again.';
   return [
     RpcTool(
       'audio_capabilities',
@@ -241,7 +300,7 @@ List<RpcTool> get rpcTools {
       'get_source',
       Operation.sourcesGet,
       'Read a complete active source by ID.',
-      {'id': text},
+      {'id': text, 'workspace_epoch': epoch},
       ['id'],
       readOnly: true,
     ),
@@ -256,8 +315,14 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'import_text',
       Operation.sourcesImport,
-      'Create or update a text source and index it. Supplying an existing ID replaces its content and increments its revision.',
-      {'title': text, 'text': text, 'id': text},
+      'Create or update a text source and index it. Supplying the ID of an existing source replaces its content and increments its revision; an ID that names no source fails with notFound.$retry',
+      {
+        'title': text,
+        'text': text,
+        'id': text,
+        'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
+      },
       ['title', 'text'],
     ),
     RpcTool(
@@ -305,7 +370,7 @@ List<RpcTool> get rpcTools {
       'delete_source',
       Operation.sourcesDelete,
       'Delete a source from the application and search index.',
-      {'id': text},
+      {'id': text, 'workspace_epoch': epoch},
       ['id'],
       destructive: true,
     ),
@@ -320,8 +385,14 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'save_note',
       Operation.notesSave,
-      'Create a personal note or update an existing note by ID.',
-      {'id': integer, 'title': text, 'body': text},
+      'Create a personal note or update an existing note by ID.$retry',
+      {
+        'id': integer,
+        'title': text,
+        'body': text,
+        'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
+      },
       ['title', 'body'],
     ),
     RpcTool(
@@ -335,15 +406,19 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'create_meeting',
       Operation.meetingsCreate,
-      'Create a meeting without starting audio capture.',
-      {'title': text},
+      'Create a meeting without starting audio capture.$retry',
+      {
+        'title': text,
+        'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
+      },
       ['title'],
     ),
     RpcTool(
       'get_meeting',
       Operation.meetingsGet,
       'Read meeting notes, transcript segments, and generated/edited artifacts.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       ['id'],
       readOnly: true,
     ),
@@ -351,19 +426,21 @@ List<RpcTool> get rpcTools {
       'save_meeting_notes',
       Operation.meetingsNotes,
       'Save original meeting notes. Live enhancement uses final transcript evidence when enabled.',
-      {'id': integer, 'body': text},
+      {'id': integer, 'body': text, 'workspace_epoch': epoch},
       ['id', 'body'],
     ),
     RpcTool(
       'import_transcript',
       Operation.meetingsTranscript,
-      'Append a final transcript segment and index the meeting.',
+      'Append a final transcript segment and index the meeting.$retry',
       {
         'id': integer,
         'text': text,
         'start': integer,
         'end': integer,
         'source': text,
+        'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
       },
       ['id', 'text'],
     ),
@@ -374,6 +451,7 @@ List<RpcTool> get rpcTools {
       {
         'id': integer,
         'kind': JsonSchema.string(enumValues: ['summary', 'actions']),
+        'workspace_epoch': epoch,
       },
       ['id', 'kind'],
     ),
@@ -381,35 +459,35 @@ List<RpcTool> get rpcTools {
       'enhance_meeting_notes',
       Operation.meetingsEnhance,
       'Generate an enhanced version of original meeting notes using final transcript evidence.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       ['id'],
     ),
     RpcTool(
       'edit_artifact',
       Operation.artifactsEdit,
       'Save an edited version of a meeting artifact while retaining its generated text.',
-      {'id': integer, 'text': text},
+      {'id': integer, 'text': text, 'workspace_epoch': epoch},
       ['id', 'text'],
     ),
     RpcTool(
       'start_recording',
       Operation.meetingsStart,
       'Request visible desktop confirmation to start microphone and playback recording. Requires an open desktop with a recording indicator. Only one meeting can record per profile.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       ['id'],
     ),
     RpcTool(
       'pause_recording',
       Operation.meetingsPause,
       'Pause microphone and playback capture, retaining pre-pause transcription. An optional meeting ID guards ownership.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       [],
     ),
     RpcTool(
       'resume_recording',
       Operation.meetingsResume,
       'Request visible desktop confirmation to resume a paused recording with the same audio routes and transcript timeline.',
-      {'id': integer},
+      {'id': integer, 'workspace_epoch': epoch},
       [],
     ),
     RpcTool(

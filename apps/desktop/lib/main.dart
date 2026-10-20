@@ -6,10 +6,12 @@ import 'package:foresight_core/foresight_core.dart'
 import 'background_store.dart';
 import 'store.dart' show outputWeekStart;
 import 'service_edit_dialog.dart';
+import 'failure_text.dart';
 import 'package:foresight_core/foresight_core.dart'
     show
         runtimeConfiguration,
         privateDirectory,
+        privateRuntime,
         writePrivateTextFile,
         configureProfileRuntime,
         openPlatformUri,
@@ -129,7 +131,7 @@ class _DesktopStartupState extends State<DesktopStartup> {
       final profile =
           widget.profile ?? ProfilePaths.resolve(Platform.environment);
       privateDirectory(profile.data, repairOwnedPermissions: true);
-      ensurePrivateDirectory(profile.runtime);
+      privateRuntime(profile);
       widget.configureRuntime(profile.data);
       final commandPath = '${profile.runtime}/commands.sock';
       final authUrl = widget.arguments
@@ -256,7 +258,6 @@ class _DesktopStartupState extends State<DesktopStartup> {
 }
 
 Future<void> openSourceLink(Uri uri) => openPlatformUri(uri);
-void ensurePrivateDirectory(String path) => privateDirectory(path);
 
 class Foresight extends StatelessWidget {
   final DesktopConnection domain;
@@ -325,7 +326,26 @@ class _WorkspaceState extends State<Workspace>
   late final DesktopMenu desktopMenu;
 
   Timer? serviceUiTimer;
+
+  /// Set while this desktop clears the workspace itself.
+  bool clearingWorkspace = false;
+
   void serviceChanged() {
+    // Another client cleared the workspace: views must not keep editing IDs
+    // that the service may hand to new items.
+    if (mounted && d.workspaceReplaced) {
+      final discarded = !clearingWorkspace && unsavedWorkspaceEdits();
+      update(resetWorkspaceViews);
+      if (discarded) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Workspace cleared elsewhere; unsaved edits were discarded.',
+            ),
+          ),
+        );
+      }
+    }
     if (!mounted || serviceUiTimer != null) return;
     serviceUiTimer = Timer(const Duration(milliseconds: 100), () {
       serviceUiTimer = null;
@@ -347,6 +367,8 @@ class _WorkspaceState extends State<Workspace>
   @override
   void initState() {
     super.initState();
+    // No view holds an ID yet, so a clear before startup needs no reset.
+    if (d.workspaceReplaced) d.adoptWorkspace();
     WidgetsBinding.instance.addObserver(this);
     desktopMenu = DesktopMenu(integrationFeature.activateMenuCommand);
     sourceFeature.graphMotionTicker = createTicker(
@@ -540,6 +562,69 @@ class _WorkspaceState extends State<Workspace>
     super.dispose();
   }
 
+  /// Whether the rows on screen belong to the workspace the views edit. A
+  /// clear elsewhere can commit before its event resets the views; until
+  /// then a row on screen may name an ID that the new workspace reuses, so
+  /// a dialog that edits one is not opened.
+  bool rowsAreCurrent() {
+    final stored = d.store.workspaceEpoch;
+    if (stored.isEmpty || stored == d.workspaceEpoch) return true;
+    update(
+      () => error =
+          'The workspace was cleared elsewhere. Wait for the views to '
+          'refresh, then try again.',
+    );
+    return false;
+  }
+
+  /// Whether a reset would drop text the user has not saved. Only whether,
+  /// never the text itself, is reported.
+  bool unsavedWorkspaceEdits() {
+    final meetings = meetingFeature;
+    final loaded = meetings.loadedMeetingNotes;
+    return meetings.meetingNoteSaves.hasWork ||
+        (loaded != null && meetings.meetingNoteSaves.isDirty(loaded)) ||
+        meetings.noteTitle.text != meetings.noteBaseline.$1 ||
+        meetings.noteBody.text != meetings.noteBaseline.$2 ||
+        chatFeature.questionDrafts.values.any((draft) => draft.text.isNotEmpty);
+  }
+
+  /// Drop every view and draft that holds an ID from the cleared workspace,
+  /// then let by-ID edits name the new one.
+  void resetWorkspaceViews() {
+    meetingFeature.meetingNoteSaves.discardAll();
+    meetingFeature.meetingId = null;
+    meetingFeature.meetingPreviewId = null;
+    sourceFeature.graphSelectedDocument = null;
+    meetingFeature.loadedMeetingNotes = null;
+    meetingFeature.meetingNotesController.clear();
+    meetingFeature.meetingEnhanceStatus = '';
+    sourceFeature.sourceQuery = '';
+    sourceFeature.sourceSearchController.clear();
+    meetingFeature.meetingQuery = '';
+    sourceFeature.labelFilter = '';
+    meetingFeature.noteId = null;
+    meetingFeature.noteTitle.clear();
+    meetingFeature.noteBody.clear();
+    meetingFeature.noteBaseline = ('', '');
+    chatFeature.hiddenAnswers.clear();
+    chatFeature.answer = '';
+    // Drafts are keyed by meeting ID, which the new workspace can reuse.
+    for (final draft in chatFeature.questionDrafts.values) {
+      draft.clear();
+    }
+    for (final key in [
+      meetingFeature.newNoteKey,
+      meetingFeature.newMeetingKey,
+      meetingFeature.quickStartKey,
+      meetingFeature.transcriptImportKey,
+    ]) {
+      key.reset();
+    }
+    meetingFeature.transcriptImport = null;
+    d.adoptWorkspace();
+  }
+
   void reportAsyncError(Object failure) {
     if (mounted) setState(() => error = failure.toString());
   }
@@ -553,11 +638,10 @@ class _WorkspaceState extends State<Workspace>
     try {
       await action();
     } catch (e) {
-      if (mounted)
-        setState(
-          () => error = e is StateError ? e.message.toString() : e.toString(),
-        );
-      await integrationFeature.notify('Operation failed: $e');
+      if (mounted) setState(() => error = failureText(e));
+      // The request may have committed: read the views again.
+      if (mounted && outcomeUnknown(e)) serviceUiRevision.value++;
+      await integrationFeature.notify('Operation failed: ${failureText(e)}');
     } finally {
       _operations--;
       if (mounted) setState(() => busy = _operations != 0);
@@ -641,6 +725,8 @@ class _WorkspaceState extends State<Workspace>
       ): () => update(() {
         tab = 2;
         meetingFeature.noteId = null;
+        meetingFeature.noteBaseline = ('', '');
+        meetingFeature.newNoteKey.reset();
         meetingFeature.noteTitle.clear();
         meetingFeature.noteBody.clear();
       }),

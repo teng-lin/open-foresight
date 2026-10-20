@@ -9,6 +9,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 import 'package:foresight_test_support/remote_service.dart';
+import 'package:foresight_test_support/service_fault_proxy.dart';
 
 void main() {
   late RemoteFixture f;
@@ -429,7 +430,10 @@ void main() {
       await connection.syncCalendar();
       await connection.refresh();
       await connection.importAttachments(19);
-      expect(f.requests.last['args'], {'id': 19});
+      expect(f.requests.last['args'], {
+        'id': 19,
+        'workspace_epoch': f.owner.workspaceEpoch,
+      });
       expect(connection.attachments(19), isEmpty);
       f.owner.db.execute(
         "INSERT INTO meetings(id,title,state) VALUES(19,'Fixture','ready')",
@@ -476,6 +480,342 @@ void main() {
       expect(f.remote.capture['state'], 'reconnected');
       expect(
         f.requests.where((r) => r['method'] == 'notes.save'),
+        hasLength(1),
+      );
+    },
+  );
+
+  test('a command refused by a closing owner is sent once more after the '
+      'reconnect reattaches approvals (SL-9)', () async {
+    File(
+      '${f.profile.data}/.desktop-capability',
+    ).writeAsStringSync('test-token');
+    var refusals = 1;
+    f.handler = (socket, request) {
+      if (request['method'] == 'notes.list' && refusals-- > 0) {
+        // An owner older than the reason field sends only the text.
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {
+              'code': 'unavailable',
+              'message':
+                  'Application service is shutting down; retry after it exits.',
+            },
+            'done': true,
+          }),
+        );
+      } else {
+        f.reply(socket, request, request['method'] == 'notes.list' ? [] : null);
+      }
+    };
+    await f.remote.enableDesktopApprovals((_) {});
+    final before = f.requests.length;
+    final previous = f.remote.client;
+    expect(await f.remote.command(Operation.notesList), isEmpty);
+    expect(f.remote.client, isNot(same(previous)));
+    expect(previous.isClosed, isTrue);
+    // Refused, then the reconnect's probe and reserving snapshot, its one
+    // approval attach, and the request once more.
+    expect(f.requests.skip(before).map((r) => r['method']), [
+      'notes.list',
+      'status',
+      'status',
+      'security.attach_desktop',
+      'notes.list',
+    ]);
+  });
+
+  test('a closing refusal leaves the other requests on its connection to '
+      'the owner\'s own answers: a refused one is sent once more, a '
+      'dispatched one is outcomeUnknown (SL-9)', () async {
+    const closingText =
+        'Application service is shutting down; retry after it exits.';
+    const ownerUnknown =
+        'Application service stopped before this request finished; it may '
+        'or may not have completed.';
+    final closing = f.sockets.last;
+    final previous = f.remote.client;
+    final held = <Map<String, dynamic>>[];
+    void answer(Map<String, dynamic> request, Map<String, Object?> error) =>
+        closing.writeln(
+          jsonEncode({'id': request['id'], 'error': error, 'done': true}),
+        );
+    f.handler = (socket, request) {
+      final method = request['method'] as String;
+      if (!identical(socket, closing)) {
+        // The next owner answers everything.
+        f.reply(socket, request, 'next owner: $method');
+        // The closing owner's other answers arrive only after the first
+        // refused request reached the next owner.
+        if (method == 'notes.list') {
+          for (final request in held) {
+            answer(
+              request,
+              request['method'] == 'meetings.list'
+                  ? {
+                      'code': 'unavailable',
+                      'message': closingText,
+                      'reason': 'closing',
+                    }
+                  : {
+                      'code': 'unavailable',
+                      'message': ownerUnknown,
+                      'reason': 'outcomeUnknown',
+                    },
+            );
+          }
+        }
+        return;
+      }
+      if (method == 'notes.list') {
+        answer(request, {
+          'code': 'unavailable',
+          'message': closingText,
+          'reason': 'closing',
+        });
+      } else {
+        held.add(request);
+      }
+    };
+    final first = f.remote.command(Operation.notesList);
+    final second = f.remote.command(Operation.meetingsList);
+    final dispatched = f.remote
+        .command(Operation.notesSave, {'title': 'T', 'body': 'B'})
+        .then<Object?>(
+          (value) => fail('Expected a failure, got $value'),
+          onError: (Object error) => error,
+        );
+    expect(await first, 'next owner: notes.list');
+    expect(await second, 'next owner: meetings.list');
+    expect(
+      await dispatched,
+      isA<RpcError>()
+          .having((error) => error.message, 'message', ownerUnknown)
+          .having(
+            (error) => error.toJson()['reason'],
+            'reason',
+            'outcomeUnknown',
+          ),
+    );
+    for (final (method, count) in [
+      ('notes.list', 2),
+      ('meetings.list', 2),
+      ('notes.save', 1),
+    ]) {
+      expect(f.requests.where((r) => r['method'] == method), hasLength(count));
+    }
+    // With nothing left pending, the retired connection closed: the owner
+    // sees its end.
+    await eventually(() => f.ended.contains(closing));
+    await expectLater(
+      previous.call('after.handoff'),
+      throwsA(
+        isA<RpcError>().having(
+          (error) => error.toJson()['reason'],
+          'reason',
+          'notSent',
+        ),
+      ),
+    );
+  });
+
+  test('closing the desktop also closes a replaced connection that still '
+      'waits for its owner\'s answers', () async {
+    final closing = f.sockets.last;
+    f.handler = (socket, request) {
+      if (!identical(socket, closing)) {
+        f.reply(socket, request, 'next owner');
+      } else if (request['method'] == 'notes.list') {
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {
+              'code': 'unavailable',
+              'message':
+                  'Application service is shutting down; retry after it exits.',
+              'reason': 'closing',
+            },
+            'done': true,
+          }),
+        );
+      }
+      // The closing owner has not answered notes.save yet.
+    };
+    final saved = f.remote
+        .command(Operation.notesSave, {'title': 'T', 'body': 'B'})
+        .then<Object?>((value) => value, onError: (Object error) => error);
+    await eventually(() => f.requests.any((r) => r['method'] == 'notes.save'));
+    expect(await f.remote.command(Operation.notesList), 'next owner');
+    // The refused connection is retired, still waiting for notes.save.
+    expect(f.ended.contains(closing), isFalse);
+    f.remote.close();
+    // Well before the retired connection's own grace.
+    await eventually(() => f.ended.contains(closing));
+    expect(await saved, isA<RpcError>());
+  });
+
+  // The desktop cancels with no request ID (generator.cancel()).
+  for (final cancelled in <String?>['gen-3', null, 'another-answer']) {
+    test('a cancel during the handoff stops only that answer\'s resend '
+        '(cancel $cancelled)', () async {
+      final proxy = ServiceFaultProxy();
+      try {
+        var refusals = 1;
+        f.handler = (socket, request) {
+          if (request['method'] != 'meetings.generate') return;
+          if (refusals-- > 0) {
+            socket.writeln(
+              jsonEncode({
+                'id': request['id'],
+                'error': {
+                  'code': 'unavailable',
+                  'message':
+                      'Application service is shutting down; retry after it exits.',
+                  'reason': 'closing',
+                },
+                'done': true,
+              }),
+            );
+          } else {
+            f.reply(socket, request, {'generated': true});
+          }
+        };
+        // Hold the handoff's startup probe for the next owner.
+        final probe = proxy.hold(ProxyDirection.toService, method: 'status');
+        final pending = proxy.run(
+          () => f.remote.command(Operation.meetingsGenerate, {
+            'id': 3,
+            'requestId': 'gen-3',
+          }),
+        );
+        await probe.reached;
+        // The refused request is on no connection, so nothing is sent.
+        expect(f.remote.runtime.cancel(requestId: cancelled), isFalse);
+        probe.release();
+        final generates = f.requests.where(
+          (r) => r['method'] == 'meetings.generate',
+        );
+        if (cancelled != 'another-answer') {
+          await expectLater(
+            pending,
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          expect(generates, hasLength(1));
+        } else {
+          expect(await pending, {'generated': true});
+          expect(generates, hasLength(2));
+        }
+      } finally {
+        await proxy.close();
+      }
+    });
+  }
+
+  test(
+    'a failed connect closes its connection and leaves nothing running',
+    () async {
+      final proxy = ServiceFaultProxy();
+      try {
+        // connect's own status call, after ensureService's probe.
+        var statuses = 0;
+        final second = proxy.hold(
+          ProxyDirection.toClient,
+          where: (frame) => frame.method == 'status' && ++statuses == 2,
+        );
+        final connecting = proxy.run(() => RemoteDomain.connect(f.profile));
+        final reply = await second.reached;
+        proxy.inject(ProxyDirection.toClient, {
+          'id': reply.id,
+          'error': {'code': 'internal', 'message': 'status failed'},
+          'done': true,
+        }, connection: reply.connection);
+        second.release();
+        await expectLater(
+          connecting,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.message,
+              'message',
+              'status failed',
+            ),
+          ),
+        );
+        // No caller holds the domain, so it closed its own connection.
+        await reply.connection
+            .ended(ProxyDirection.toService)
+            .timeout(const Duration(seconds: 30));
+        expect(proxy.connections, hasLength(1));
+      } finally {
+        await proxy.close();
+      }
+    },
+  );
+
+  test('a connect that fails after building its domain closes its '
+      'connection, read-only store and helper (T2)', () async {
+    // The snapshot reaches the domain, which rejects it.
+    f.status = {...f.status, 'capture': 'not a map'};
+    final connections = f.sockets.length;
+    RemoteDomain? created;
+    await expectLater(
+      RemoteDomain.connect(
+        f.profile,
+        createdForTesting: (domain) => created = domain,
+      ),
+      throwsA(isA<TypeError>()),
+    );
+    expect(created, isNotNull);
+    expect(() => created!.store.rows('SELECT 1'), throwsA(anything));
+    expect(created!.helper.stopping, isTrue);
+    expect(created!.client.isClosed, isTrue);
+    expect(f.sockets.length, greaterThan(connections));
+  });
+
+  test('a command whose outcome is unknown is never resent', () async {
+    f.handler = (socket, request) => socket.writeln(
+      jsonEncode({
+        'id': request['id'],
+        'error': {
+          'code': 'unavailable',
+          'message': 'stopped',
+          'reason': 'outcomeUnknown',
+        },
+        'done': true,
+      }),
+    );
+    await expectLater(
+      f.remote.command(Operation.notesSave, {'title': 'once'}),
+      throwsA(
+        isA<RpcError>().having(
+          (error) => error.toJson()['reason'],
+          'reason',
+          'outcomeUnknown',
+        ),
+      ),
+    );
+    expect(f.requests.where((r) => r['method'] == 'notes.save'), hasLength(1));
+  });
+
+  test(
+    'a command on a connection that already closed is sent once, on the next',
+    () async {
+      final lost = f.remote.client;
+      final closed = lost.events.stream.drain<void>();
+      f.sockets.last.destroy();
+      await closed;
+      // The reconnect has begun but not finished: the request is not sent.
+      expect(identical(f.remote.client, lost), isTrue);
+      f.handler = (socket, request) => f.reply(socket, request, ['listed']);
+      expect(await f.remote.command(Operation.notesList), ['listed']);
+      expect(
+        f.requests.where((r) => r['method'] == 'notes.list'),
         hasLength(1),
       );
     },
@@ -601,6 +941,216 @@ void main() {
       }
     },
   );
+  test('a reconnect whose launches keep failing backs off from 1 s to 30 s, '
+      'attaches to an owner that starts serving during a pause, and a '
+      'success starts over', () async {
+    final previous = runtimeConfiguration.environment['FORESIGHT_SERVICE'];
+    addTearDown(() {
+      if (previous == null) {
+        runtimeConfiguration.environment.remove('FORESIGHT_SERVICE');
+      } else {
+        runtimeConfiguration.environment['FORESIGHT_SERVICE'] = previous;
+      }
+    });
+    // Each launch fails at once and says why, as a start with a corrupt
+    // database or a failed migration does.
+    final launches = File('${f.root.path}/launches');
+    final service = File('${f.root.path}/failing-service')
+      ..writeAsStringSync(
+        '#!/bin/sh\n'
+        "echo launched >> '${launches.path}'\n"
+        'printf \'{"state":"failed","error":"database disk image is '
+        'malformed"}\' > "\$FORESIGHT_STARTUP_STATUS"\n',
+      );
+    expect(
+      (await Process.run('/bin/chmod', ['700', service.path])).exitCode,
+      0,
+    );
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = service.path;
+    int launched() =>
+        launches.existsSync() ? launches.readAsLinesSync().length : 0;
+    final pauses = <Duration>[];
+    f.remote.reconnectPause = (pause) async {
+      pauses.add(pause);
+      // From the seventh failure on, pauses last until something ends them.
+      if (pauses.length >= 7) await Completer<void>().future;
+    };
+    await f.stopListening();
+    f.sockets.last.destroy();
+    await eventually(
+      () => pauses.length == 7,
+      timeout: const Duration(seconds: 60),
+    );
+    expect(pauses, [
+      for (final seconds in [1, 2, 4, 8, 16, 30, 30])
+        Duration(seconds: seconds),
+    ]);
+    // One launch per failed attempt.
+    expect(launched(), 7);
+    expect(f.remote.helper.state, contains('database disk image is malformed'));
+    // An owner started elsewhere serves again; the desktop attaches to it
+    // without waiting out its pause.
+    final connections = f.sockets.length;
+    await f.listen();
+    await eventually(
+      () => f.sockets.length > connections && !f.remote.client.isClosed,
+      timeout: const Duration(seconds: 30),
+    );
+    // The next run of failures starts again at 1 s.
+    await f.stopListening();
+    f.sockets.last.destroy();
+    await eventually(
+      () => pauses.length == 8,
+      timeout: const Duration(seconds: 30),
+    );
+    expect(pauses.last, const Duration(seconds: 1));
+    expect(launched(), 8);
+  }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('a reconnect whose desktop attach is never answered fails, closes '
+      'that connection and tries again after the backoff', () async {
+    var answerAttach = true;
+    f.handler = (socket, request) {
+      // An owner that answers status but never the attach.
+      if (request['method'] == Operation.securityAttachDesktop.wire &&
+          !answerAttach) {
+        return;
+      }
+      f.reply(socket, request, null);
+    };
+    final approvals = <Map<String, dynamic>>[];
+    await f.remote.enableDesktopApprovals(approvals.add);
+    f.remote.attachLimit = const Duration(milliseconds: 200);
+    final pauses = <Duration>[];
+    final paused = Completer<void>();
+    f.remote.reconnectPause = (pause) async {
+      pauses.add(pause);
+      await paused.future;
+    };
+    int attaches() => f.requests
+        .where((r) => r['method'] == Operation.securityAttachDesktop.wire)
+        .length;
+    answerAttach = false;
+    f.sockets.last.destroy();
+    await eventually(
+      () => pauses.isNotEmpty,
+      timeout: const Duration(seconds: 30),
+    );
+    expect(pauses, [const Duration(seconds: 1)]);
+    expect(attaches(), 2);
+    expect(f.remote.helper.state, contains('did not attach'));
+    // The connection whose attach hung is closed, not kept.
+    expect(f.remote.client.isClosed, isTrue);
+    answerAttach = true;
+    f.remote.attachLimit = const Duration(seconds: 30);
+    paused.complete();
+    await eventually(
+      () => attaches() == 3 && !f.remote.client.isClosed,
+      timeout: const Duration(seconds: 30),
+    );
+    // The reattached desktop still receives approvals.
+    f.event({
+      'event': 'approval',
+      'approval_id': 'after-reconnect',
+      'method': 'sources.delete',
+      'args': {'id': 'source'},
+    });
+    await eventually(() => approvals.isNotEmpty);
+  });
+
+  test('a request sent on a reconnect whose attach then timed out still '
+      'gets its owner\'s answer', () async {
+    var answerAttach = true;
+    Map<String, dynamic>? held;
+    Socket? heldOn;
+    f.handler = (socket, request) {
+      if (!answerAttach) {
+        if (request['method'] == Operation.securityAttachDesktop.wire) return;
+        if (request['method'] == 'notes.list') {
+          held = request;
+          heldOn = socket;
+          return;
+        }
+      }
+      f.reply(socket, request, null);
+    };
+    await f.remote.enableDesktopApprovals((_) {});
+    f.remote.attachLimit = const Duration(milliseconds: 500);
+    var paused = false;
+    f.remote.reconnectPause = (_) {
+      paused = true;
+      return Completer<void>().future;
+    };
+    answerAttach = false;
+    f.sockets.last.destroy();
+    // The reconnect waits for its attach; a request goes to that connection.
+    await eventually(
+      () =>
+          f.requests
+              .where((r) => r['method'] == Operation.securityAttachDesktop.wire)
+              .length ==
+          2,
+      timeout: const Duration(seconds: 30),
+    );
+    final listed = f.remote.command(Operation.notesList);
+    await eventually(() => held != null);
+    // The attach timed out and the attempt failed.
+    await eventually(() => paused, timeout: const Duration(seconds: 30));
+    f.reply(heldOn!, held!, ['answered after the timeout']);
+    expect(await listed, ['answered after the timeout']);
+  });
+
+  test('a request waiting for the reconnect ends a pause after the floor, '
+      'and the backoff goes on', () async {
+    f.handler = (socket, request) => f.reply(socket, request, ['listed']);
+    final ownProfile = f.status['profile_id'];
+    // The owner answers, but as another profile's: each attempt fails at
+    // once, without a launch, while the endpoint keeps accepting.
+    f.status['profile_id'] = 'another-profile';
+    final pauses = <Duration>[];
+    final paused = <Stopwatch>[];
+    f.remote.reconnectPause = (pause) {
+      pauses.add(pause);
+      paused.add(Stopwatch()..start());
+      return Completer<void>().future;
+    };
+    f.sockets.last.destroy();
+    await eventually(
+      () => pauses.length == 1,
+      timeout: const Duration(seconds: 30),
+    );
+    // The waiting request's attempt fails too; the next pause is longer.
+    await expectLater(
+      f.remote.command(Operation.notesList),
+      throwsA(isA<RpcError>()),
+    );
+    expect(pauses, [const Duration(seconds: 1), const Duration(seconds: 2)]);
+    // Never sooner than the floor after the failed attempt.
+    expect(
+      paused.first.elapsed - paused.last.elapsed,
+      greaterThanOrEqualTo(const Duration(milliseconds: 900)),
+    );
+    f.status['profile_id'] = ownProfile;
+    final waited = Stopwatch()..start();
+    expect(await f.remote.command(Operation.notesList), ['listed']);
+    expect(waited.elapsed, lessThan(const Duration(seconds: 10)));
+    expect(pauses, hasLength(2));
+  });
+
+  test('closing the desktop ends a reconnect pause at once', () async {
+    f.status['profile_id'] = 'another-profile';
+    var paused = false;
+    f.remote.reconnectPause = (_) {
+      paused = true;
+      return Completer<void>().future;
+    };
+    f.sockets.last.destroy();
+    await eventually(() => paused, timeout: const Duration(seconds: 30));
+    expect(f.remote.reconnecting, isTrue);
+    f.remote.close();
+    await eventually(() => !f.remote.reconnecting);
+  });
+
   test(
     'request-specific cancellation leaves another desktop generation active',
     () async {
@@ -685,6 +1235,264 @@ void main() {
       expect(f.remote.helper.watch, isNull);
     },
   );
+  test(
+    'by-ID edits carry the workspace the desktop views were read in',
+    () async {
+      var changes = 0;
+      f.remote.helper.changed = () => changes++;
+      f.handler = (socket, request) => f.reply(socket, request, {'id': 3});
+      // The desktop starts in the profile's workspace.
+      final before = f.owner.workspaceEpoch;
+      f.event({...f.status, 'workspace_epoch': before});
+      await eventually(() => changes == 1);
+      Future<Map> sent(Operation operation, Map<String, dynamic> args) async {
+        await f.remote.command(operation, args);
+        return f.requests.last['args'] as Map;
+      }
+
+      expect(
+        await sent(Operation.notesSave, {'id': 3, 'title': 'T', 'body': 'B'}),
+        containsPair('workspace_epoch', before),
+      );
+      await f.remote.commandCurrent(Operation.meetingsEnhance, {
+        'id': 3,
+      }, () => true);
+      expect(f.requests.last['args'], containsPair('workspace_epoch', before));
+      // Creates and calls without an ID name no existing row.
+      expect(
+        await sent(Operation.notesSave, {'title': 'T', 'body': 'B'}),
+        isNot(contains('workspace_epoch')),
+      );
+      expect(
+        await sent(Operation.meetingsCreate, {'title': 'T'}),
+        isNot(contains('workspace_epoch')),
+      );
+      // A keyed create must not be replayed into a workspace cleared since.
+      expect(
+        await sent(Operation.meetingsCreate, {
+          'title': 'T',
+          'idempotency_key': 'k',
+        }),
+        containsPair('workspace_epoch', before),
+      );
+      // A dialog that read its ID earlier names that workspace itself.
+      expect(
+        await sent(Operation.artifactsEdit, {
+          'id': 3,
+          'text': 'T',
+          'workspace_epoch': 'dialog',
+        }),
+        containsPair('workspace_epoch', 'dialog'),
+      );
+      // Another client clears the workspace; the open views still predate it.
+      f.owner.renewWorkspaceEpoch();
+      f.event({...f.status, 'workspace_epoch': f.owner.workspaceEpoch});
+      await eventually(() => changes == 2);
+      expect(f.remote.workspaceReplaced, isTrue);
+      expect(
+        await sent(Operation.meetingsNotes, {'id': 3, 'body': 'stale'}),
+        containsPair('workspace_epoch', before),
+      );
+    },
+  );
+
+  test('a cleared workspace is adopted only after the views reset', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    final before = f.owner.workspaceEpoch;
+    expect(f.remote.workspaceEpoch, before);
+    expect(f.remote.workspaceReplaced, isFalse);
+    f.owner.renewWorkspaceEpoch();
+    final after = f.owner.workspaceEpoch;
+    f.event({...f.status, 'workspace_epoch': after});
+    await eventually(() => f.remote.workspaceReplaced);
+    expect(f.remote.workspaceEpoch, before);
+    f.remote.adoptWorkspace();
+    expect(f.remote.workspaceReplaced, isFalse);
+    await f.remote.command(Operation.labelsSet, {'id': 'source', 'labels': []});
+    expect(f.requests.last['args'], containsPair('workspace_epoch', after));
+  });
+
+  test('approvals open on a lost connection close when it drops', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    final approvals = <Map<String, dynamic>>[];
+    await f.remote.enableDesktopApprovals(approvals.add);
+    for (final id in ['pending', 'decided']) {
+      f.event({
+        'event': 'approval',
+        'approval_id': id,
+        'method': 'sources.delete',
+        'args': {'id': 'source'},
+      });
+    }
+    f.event({'event': 'approval_closed', 'approval_id': 'decided'});
+    await eventually(() => approvals.length == 3);
+    f.sockets.last.destroy();
+    await eventually(() => approvals.length == 4);
+    expect(approvals.last, {
+      'event': 'approval_closed',
+      'approval_id': 'pending',
+    });
+    // The reconnected desktop attaches for new approvals again.
+    await eventually(
+      () =>
+          f.requests
+              .where(
+                (request) =>
+                    request['method'] == Operation.securityAttachDesktop.wire,
+              )
+              .length ==
+          2,
+    );
+    expect(approvals, hasLength(4));
+  });
+
+  test('hiding the desktop closes the approval dialogs it showed', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    final approvals = <Map<String, dynamic>>[];
+    await f.remote.enableDesktopApprovals(approvals.add);
+    f.event({
+      'event': 'approval',
+      'approval_id': 'open',
+      'method': 'sources.delete',
+      'args': {'id': 'source'},
+    });
+    await eventually(() => approvals.length == 1);
+    await f.remote.disableDesktopApprovals();
+    expect(approvals.last, {'event': 'approval_closed', 'approval_id': 'open'});
+    expect(f.requests.last['method'], Operation.securityDetachDesktop.wire);
+    // A desktop shown again does not close it a second time.
+    await f.remote.enableDesktopApprovals(approvals.add);
+    f.sockets.last.destroy();
+    await eventually(
+      () =>
+          f.requests
+              .where((r) => r['method'] == Operation.securityAttachDesktop.wire)
+              .length ==
+          3,
+    );
+    expect(approvals, hasLength(2));
+  });
+
+  group('a clear whose reply is lost', () {
+    setUp(() {
+      f.status['workspace_epoch'] = f.owner.workspaceEpoch;
+    });
+    void loseClear({required bool committed}) {
+      f.handler = (socket, request) {
+        if (request['method'] != Operation.workspaceClear.wire) {
+          f.reply(socket, request, null);
+          return;
+        }
+        if (committed) {
+          f.owner.renewWorkspaceEpoch();
+          f.status['workspace_epoch'] = f.owner.workspaceEpoch;
+        }
+        socket.destroy();
+      };
+    }
+
+    test('is reported cleared when the next owner has a new epoch', () async {
+      loseClear(committed: true);
+      expect(await f.remote.command(Operation.workspaceClear), isNull);
+      expect(f.remote.workspaceReplaced, isTrue);
+    });
+
+    test('is reported not cleared when the epoch is unchanged', () async {
+      loseClear(committed: false);
+      await expectLater(
+        f.remote.command(Operation.workspaceClear),
+        throwsA(
+          isA<RpcError>().having(
+            (error) => error.message,
+            'message',
+            contains('nothing was cleared'),
+          ),
+        ),
+      );
+      expect(f.remote.workspaceReplaced, isFalse);
+    });
+  });
+
+  test(
+    'a clear missed before a new connection is listened to is seen',
+    () async {
+      f.handler = (socket, request) => f.reply(socket, request, null);
+      // The replacement's startup status predates a clear whose event the
+      // desktop never receives.
+      f.status['workspace_epoch'] = f.owner.workspaceEpoch;
+      expect(f.remote.workspaceReplaced, isFalse);
+      f.owner.renewWorkspaceEpoch();
+      int statuses() =>
+          f.requests.where((request) => request['method'] == 'status').length;
+      final before = statuses();
+      f.sockets.last.destroy();
+      await eventually(() => statuses() > before);
+      await eventually(() => f.remote.workspaceReplaced);
+    },
+  );
+
+  test('a late event with a replaced epoch does not reset again', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    final replaced = f.owner.workspaceEpoch;
+    f.status['workspace_epoch'] = replaced;
+    f.owner.renewWorkspaceEpoch();
+    final current = f.owner.workspaceEpoch;
+    // A reconnect reads the clear from the profile; the views reset.
+    f.sockets.last.destroy();
+    await eventually(() => f.remote.workspaceReplaced);
+    f.remote.adoptWorkspace();
+    var resets = 0;
+    f.remote.helper.changed = () {
+      if (f.remote.workspaceReplaced) resets++;
+    };
+    // The old connection's event for the epoch it replaced arrives late.
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'workspace_epoch': replaced}),
+    );
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'sources_paused': true}),
+    );
+    await eventually(() => f.remote.sourcesPaused);
+    expect(resets, 0);
+    expect(f.remote.workspaceReplaced, isFalse);
+    expect(f.remote.workspaceEpoch, current);
+  });
+
+  test('a late event for a clear the desktop never saw does not strand the '
+      'epoch it was cleared past', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    f.status['workspace_epoch'] = f.owner.workspaceEpoch;
+    // Two clears while the desktop is disconnected; it sees neither event.
+    f.owner.renewWorkspaceEpoch();
+    final skipped = f.owner.workspaceEpoch;
+    f.owner.renewWorkspaceEpoch();
+    final current = f.owner.workspaceEpoch;
+    // The reconnect reads the second clear from the profile.
+    f.sockets.last.destroy();
+    await eventually(() => f.remote.workspaceReplaced);
+    // The first clear's event arrives after that recheck.
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'workspace_epoch': skipped}),
+    );
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'sources_paused': true}),
+    );
+    await eventually(() => f.remote.sourcesPaused);
+    // The current epoch's own event must still count.
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'workspace_epoch': current}),
+    );
+    f.sockets.last.writeln(
+      jsonEncode({'event': 'changed', 'sources_paused': false}),
+    );
+    await eventually(() => !f.remote.sourcesPaused);
+    f.remote.adoptWorkspace();
+    expect(f.remote.workspaceReplaced, isFalse);
+    expect(f.remote.workspaceEpoch, current);
+    await f.remote.command(Operation.labelsSet, {'id': 'source', 'labels': []});
+    expect(f.requests.last['args'], containsPair('workspace_epoch', current));
+  });
+
   test(
     'approval events preserve the current service helper snapshot',
     () async {

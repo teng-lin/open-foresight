@@ -37,6 +37,27 @@ class _MeetingsController extends _FeatureController {
 
   final meetingNotesController = TextEditingController();
 
+  /// A retry of an unconfirmed create reuses its key, so it creates once.
+  final newNoteKey = PendingRequestKey(),
+      newMeetingKey = PendingRequestKey(),
+      quickStartKey = PendingRequestKey(),
+      transcriptImportKey = PendingRequestKey();
+
+  /// The meeting, file and text of the transcript import that
+  /// [transcriptImportKey] belongs to. Choosing the same file again retries
+  /// that import; any other choice is a new import.
+  (int, String, String)? transcriptImport;
+
+  /// The note editor's text as last loaded or saved.
+  (String, String) noteBaseline = ('', '');
+
+  /// The user moved to another meeting: an unconfirmed create is not retried
+  /// later, where its stored result would name an old meeting.
+  void forgetPendingMeetingCreates() {
+    newMeetingKey.reset();
+    quickStartKey.reset();
+  }
+
   late final NoteSaveScheduler meetingNoteSaves = NoteSaveScheduler(
     (id, body, lastManualEdit) async {
       await d.command(Operation.meetingsNotes, {
@@ -56,7 +77,8 @@ class _MeetingsController extends _FeatureController {
     onError: (failure, stack) {
       if (mounted)
         shell.update(
-          () => shell.error = 'Unable to save meeting notes: $failure',
+          () => shell.error =
+              'Unable to save meeting notes: ${failureText(failure)}',
         );
       else
         FlutterError.reportError(
@@ -166,10 +188,23 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> startRecording({bool accessReviewed = false}) async {
+    final id = meetingId, epoch = d.workspaceEpoch;
     if (!accessReviewed && !await integrationFeature.ensureRecordingAccess())
       return;
     if (!mounted) return;
-    await d.command(Operation.meetingsStart, {'id': meetingId!});
+    // The OS access prompt can stay open while another client clears the
+    // workspace, which closes this meeting. Never record into another one.
+    if (d.workspaceEpoch != epoch)
+      throw StateError(
+        'Recording did not start: the workspace was cleared while recording '
+        'access was requested.',
+      );
+    if (id == null || meetingId != id)
+      throw StateError(
+        'Recording did not start: the meeting was closed while recording '
+        'access was requested.',
+      );
+    await d.command(Operation.meetingsStart, {'id': id});
     syncCapture();
     if (mounted) setState(() {});
   }
@@ -193,6 +228,9 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> editArtifact(Map<String, Object?> a) async {
+    // The artifact ID belongs to the workspace of the rows on screen.
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final controller = TextEditingController(
       text: (a['edited'] ?? a['generated']) as String,
     );
@@ -217,6 +255,7 @@ class _MeetingsController extends _FeatureController {
             'id': a['id'],
             'text': controller.text,
             if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
+            if (epoch != null) 'workspace_epoch': epoch,
           });
         },
       ),
@@ -252,12 +291,18 @@ class _MeetingsController extends _FeatureController {
       }
       if (!await integrationFeature.ensureRecordingAccess() || !mounted) return;
       await shell.run(() async {
+        final epoch = d.workspaceEpoch;
         final created =
-            await d.command(Operation.meetingsCreate, {
-                  'title': '[New Meeting]',
-                })
+            await quickStartKey.run(
+                  {'title': '[New Meeting]'},
+                  (keyed) => d.command(Operation.meetingsCreate, {
+                    ...keyed,
+                    if (epoch != null) 'workspace_epoch': epoch,
+                  }),
+                )
                 as Map;
-        if (!mounted) return;
+        // A reply from before a workspace reset names a dropped meeting.
+        if (!mounted || d.workspaceEpoch != epoch) return;
         shell.update(() {
           shell.tab = 3;
           meetingId = created['id'] as int;
@@ -328,12 +373,17 @@ class _MeetingsController extends _FeatureController {
         shell.busy || recording != null
             ? null
             : () => shell.run(() async {
+                final epoch = d.workspaceEpoch;
                 final created =
-                    await d.command(Operation.meetingsCreate, {
-                          'title': '[New Meeting]',
-                        })
+                    await newMeetingKey.run(
+                          {'title': '[New Meeting]'},
+                          (keyed) => d.command(Operation.meetingsCreate, {
+                            ...keyed,
+                            if (epoch != null) 'workspace_epoch': epoch,
+                          }),
+                        )
                         as Map;
-                if (mounted)
+                if (mounted && d.workspaceEpoch == epoch)
                   shell.update(() => meetingId = created['id'] as int);
               }),
         icon: Icons.add,
@@ -454,7 +504,10 @@ class _MeetingsController extends _FeatureController {
     final attachmentCount = integrationFeature.google.attachments(id).length;
     final state = meeting['state'] as String;
     final active = state == 'recording' || state == 'transcribing';
-    void open() => shell.update(() => meetingPreviewId = id);
+    void open() => shell.update(() {
+      forgetPendingMeetingCreates();
+      meetingPreviewId = id;
+    });
     return Card(
       margin: EdgeInsets.zero,
       shape: const RoundedRectangleBorder(
@@ -588,6 +641,7 @@ class _MeetingsController extends _FeatureController {
       if (speechSetupProblem(d.store) != null)
         await settingsFeature.chooseSpeech();
       if (!mounted || speechSetupProblem(d.store) != null) return;
+      forgetPendingMeetingCreates();
       shell.update(() => meetingId = id);
       await shell.run(startRecording);
     } finally {
@@ -681,7 +735,8 @@ class _MeetingsController extends _FeatureController {
     } catch (failure) {
       if (mounted) {
         shell.update(
-          () => shell.error = 'Unable to save meeting notes: $failure',
+          () => shell.error =
+              'Unable to save meeting notes: ${failureText(failure)}',
         );
       }
       rethrow;
@@ -723,11 +778,17 @@ class _MeetingsController extends _FeatureController {
       meetingEnhancing = true;
       meetingEnhanceStatus = '';
     });
+    // The ID was read before the flush below; a clear during it must not
+    // enhance whichever meeting now has the ID.
+    final epoch = d.workspaceEpoch;
     try {
       await flushMeetingNotesDraft();
-      await d.command(Operation.meetingsEnhance, {'id': id});
+      await d.command(Operation.meetingsEnhance, {
+        'id': id,
+        if (epoch != null) 'workspace_epoch': epoch,
+      });
     } catch (e) {
-      if (mounted) shell.update(() => meetingEnhanceStatus = e.toString());
+      if (mounted) shell.update(() => meetingEnhanceStatus = failureText(e));
     } finally {
       if (mounted)
         shell.update(() {
@@ -828,7 +889,10 @@ class _MeetingsController extends _FeatureController {
                     ),
                     IconButton(
                       tooltip: 'Expand meeting',
-                      onPressed: () => shell.update(() => meetingId = id),
+                      onPressed: () => shell.update(() {
+                        forgetPendingMeetingCreates();
+                        meetingId = id;
+                      }),
                       icon: const Icon(Icons.open_in_full, size: 18),
                     ),
                     IconButton(
@@ -1088,17 +1152,30 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> importMeetingTranscript(int id) async {
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final file = await openFile(
       acceptedTypeGroups: [
         const XTypeGroup(label: 'Transcript text', extensions: ['txt']),
       ],
     );
     if (file == null) return;
-    await d.command(Operation.meetingsTranscript, {
-      'id': id,
-      'text': await File(file.path).readAsString(),
-      'source': 'imported transcript',
-    });
+    final text = await File(file.path).readAsString();
+    // An append is not idempotent: retrying an import whose reply was lost
+    // must not add its segments twice.
+    final chosen = (id, file.path, text);
+    if (transcriptImport != chosen) {
+      transcriptImportKey.reset();
+      transcriptImport = chosen;
+    }
+    await transcriptImportKey.run(
+      {'id': id, 'text': text, 'source': 'imported transcript'},
+      (keyed) => d.command(Operation.meetingsTranscript, {
+        ...keyed,
+        if (epoch != null) 'workspace_epoch': epoch,
+      }),
+    );
+    transcriptImport = null;
   }
 
   Widget meetingNotesEditor(

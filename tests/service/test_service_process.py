@@ -5,6 +5,7 @@ These fixtures verify ownership and data flow, not inference quality.
 """
 
 import concurrent.futures
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -607,6 +608,65 @@ def test_restart_preserves_data_and_does_not_reuse_stale_socket(running):
 
 
 @pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
+def test_keyed_retry_commits_once_and_stale_ids_fail_after_restart(running):
+    a = running["peer"]
+    mcp = McpPeer(running["env"])
+    try:
+        mcp.initialize()
+        keyed = {"title": "Before", "body": "old", "idempotency_key": "retry-1"}
+        first = mcp.tool("save_note", keyed)["structuredContent"]["result"]
+        assert mcp.tool("save_note", keyed)["structuredContent"]["result"] == first
+        assert [note["body"] for note in a.call("notes.list")] == ["old"]
+        reused = mcp.tool(
+            "create_meeting", {"title": "x", "idempotency_key": "retry-1"}
+        )
+        assert reused["structuredContent"]["error"]["code"] == "invalidArgument"
+        assert a.call("meetings.list") == []
+        stale = mcp.tool("get_status")["structuredContent"]["result"]["workspace_epoch"]
+    finally:
+        mcp.close()
+    a.call("workspace.clear")  # Approved by the fixture's synthetic desktop.
+    assert a.call("notes.save", {"title": "After", "body": "new"}) == first
+    running["process"].terminate()
+    running["process"].wait(timeout=15)
+    a.close()
+    running["peers"].remove(a)
+    log = (running["root"] / "restart.log").open("w")
+    process = subprocess.Popen(
+        [str(SERVICE)], env=running["env"], stdout=log, stderr=log
+    )
+    running["process"] = process
+    try:
+        deadline = time.monotonic() + 10
+        while True:
+            try:
+                b = Peer(running["path"])
+                running["peers"].append(b)
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                assert process.poll() is None and time.monotonic() < deadline
+                poll_delay(deadline)
+        assert b.call("status")["workspace_epoch"] != stale
+        with pytest.raises(
+            RuntimeError, match="removed when the workspace was cleared"
+        ):
+            b.call(
+                "notes.save",
+                {
+                    "id": first["id"],
+                    "title": "Before",
+                    "body": "stale edit",
+                    "workspace_epoch": stale,
+                },
+            )
+        assert [note["body"] for note in b.call("notes.list")] == ["new"]
+    finally:
+        process.terminate()
+        process.wait(timeout=15)
+        log.close()
+
+
+@pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
 def test_granola_manual_return_requires_active_matching_attempt_without_network(running):
     from urllib.parse import parse_qs, urlparse
 
@@ -824,6 +884,14 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
             assert peer.call("status")["pid"] == owner
         finally:
             peer.close()
+        # Nobody asks for another owner now. A start that lost a lock race
+        # earlier must not take the profile once this owner exits.
+        os.kill(owner, signal.SIGTERM)
+        deadline = time.monotonic() + 30
+        while not process_gone(owner):
+            poll_delay(deadline)
+        owner = None
+        assert_no_late_owner(profile / "data", profile / "run")
     finally:
         for client in [first, second]:
             if client.process.poll() is None:
@@ -834,6 +902,24 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
                 os.kill(owner, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+
+def assert_no_late_owner(data, runtime, quiet=2.0):
+    """For `quiet` seconds no process serves, and then none holds the lock.
+
+    Probing the lock during the window could make a late start lose it and
+    hide; only the socket is watched until the single final probe.
+    """
+    until = time.monotonic() + quiet
+    while time.monotonic() < until:
+        assert not (runtime / "application.sock").exists(), "a late owner serves"
+        threading.Event().wait(0.05)
+    with (data / ".application.lock").open("a") as probe:
+        try:
+            fcntl.lockf(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            pytest.fail("a late owner holds the profile lock")
+        fcntl.lockf(probe, fcntl.LOCK_UN)
 
 
 def test_cancelled_model_setup_preserves_previous_registration(running):
@@ -1179,6 +1265,316 @@ def assert_idle_shutdown_verifies_a_real_adopted_helper(
                     process.wait(timeout=10)
 
 
+GATED_HELPER = Path(__file__).resolve().parent / "gated_helper.py"
+
+
+class GatedHelper:
+    """Python side of package:foresight_test_support/gated_helper.dart.
+
+    Set FORESIGHT_HELPER to `executable`. The helper holds SIGTERM until
+    `release()`, so a closing service stays inside its helper shutdown. The
+    service SIGKILLs it 5 s after SIGTERM; `released()` shows the hold ended
+    through `release()` instead.
+    """
+
+    def __init__(self, directory):
+        self.control = directory / "helper-control"
+        self.control.mkdir(mode=0o700)
+        self.executable = directory / "helper"
+        self.executable.write_text(
+            f'#!/bin/sh\nexec "{sys.executable}" "{GATED_HELPER}" '
+            f'"{self.control}" "$@"\n'
+        )
+        self.executable.chmod(0o700)
+
+    def published(self, name, deadline, service=None):
+        """Wait for a marker; fail at once if the [service] process exits."""
+        path = self.control / name
+        while not path.exists():
+            if service is not None:
+                assert service.poll() is None, f"service exited before {name}"
+            poll_delay(deadline)
+        return int(path.read_text())
+
+    def released(self):
+        return (self.control / "released").exists()
+
+    def release(self):
+        (self.control / "release").write_text("")
+
+    def kill(self):
+        """Stop the helper if its service died without closing it."""
+        started = self.control / "started"
+        if not started.exists():
+            return
+        pid = started.read_text()
+        command = subprocess.run(
+            ["/bin/ps", "-p", pid, "-o", "command="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).stdout
+        # Never signal a reused pid: match this helper's own control path.
+        if str(self.control) in command:
+            try:
+                os.kill(int(pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+def test_gated_helper_twin_matches_the_dart_fixture():
+    """Dart lifecycle tests and this suite must hold helper shutdown alike."""
+    shared = ROOT / "packages/foresight_test_support/lib/gated_helper.py"
+    assert GATED_HELPER.read_bytes() == shared.read_bytes()
+
+
+# Every gate point in service.dart. A hook-enabled build holds armed points.
+LIFECYCLE_GATES = (
+    "start.before_lock",
+    "start.lock_contended",
+    "close.begin",
+    "close.leases_terminated",
+    "close.helper_closed",
+    "close.listener_closed",
+    "close.before_record_delete",
+    "close.before_frontend_release",
+    "close.before_lock_release",
+    "frontend.listener_closed",
+    "frontend.draining",
+    "start.locked",
+    "request.committed.status",
+)
+
+
+def test_release_service_ignores_lifecycle_gates(tmp_path):
+    """A release build strips FORESIGHT_SERVICE_GATES, so no gate can hold it.
+
+    Lifecycle tests compile bin/service.dart with FORESIGHT_ENABLE_TEST_HOOKS.
+    This production executable is built without it: every gate is armed, yet
+    status answers, SIGTERM reaches the helper, and no gate reports reaching.
+    The paired positive control is service_gate_test.dart, "the isolated
+    worker stops at every close gate in order", where the same gates hold a
+    hook-enabled build of bin/service.dart.
+    """
+    assert SERVICE.is_file(), "Build the service executable first"
+    data, runtime, gates = tmp_path / "data", tmp_path / "run", tmp_path / "gates"
+    gates.mkdir(mode=0o700)
+    # Every gate is armed to hold, and also to crash the isolate reaching it.
+    for point in LIFECYCLE_GATES:
+        (gates / f"{point}.hold").write_text("")
+        (gates / f"{point}.crash").write_text("")
+    helper = GatedHelper(tmp_path)
+    env = os.environ.copy()
+    for key in (
+        "FORESIGHT_MODEL_MANIFEST",
+        "FORESIGHT_RESOURCES",
+        "FORESIGHT_RUNTIME_REVISION",
+        "FORESIGHT_INSTALL_ROOT",
+    ):
+        env.pop(key, None)
+    env.update(
+        FORESIGHT_DATA=str(data),
+        FORESIGHT_RUNTIME=str(runtime),
+        FORESIGHT_HELPER=str(helper.executable),
+        FORESIGHT_NATIVE=str(NATIVE),
+        FORESIGHT_SERVICE_GATES=str(gates),
+        FORESIGHT_SERVICE_TRACE="1",
+    )
+    with (tmp_path / "service.log").open("w+") as log:
+        process = subprocess.Popen([str(SERVICE)], env=env, stdout=log, stderr=log)
+        peer = None
+        try:
+            deadline = time.monotonic() + 30
+            helper.published("started", deadline, process)
+            while peer is None:
+                assert process.poll() is None
+                try:
+                    peer = Peer(runtime / "application.sock")
+                except (FileNotFoundError, ConnectionRefusedError):
+                    poll_delay(deadline)
+            # A hook-enabled build would hold this reply at its commit gate.
+            # Heartbeat events keep arriving, so bound the wait here.
+            identifier = peer.send("status")
+            while True:
+                reply = json.loads(peer.reader.readline())
+                if reply.get("id") == identifier:
+                    break
+                assert time.monotonic() < deadline, "status reply was held"
+            assert reply["result"]["pid"] == process.pid
+            peer.close()
+            peer = None
+            process.send_signal(signal.SIGTERM)
+            # A hook-enabled build would hold close.begin before this.
+            helper.published("stopping", deadline, process)
+            assert sorted(path.name for path in gates.iterdir()) == sorted(
+                f"{point}.{arm}"
+                for point in LIFECYCLE_GATES
+                for arm in ("hold", "crash")
+            )
+            helper.release()
+            assert process.wait(timeout=30) == 0
+            # The hold ended through release, not the service's 5 s SIGKILL.
+            assert helper.released()
+            assert not list(gates.glob("*.reached"))
+            assert not (data / ".application-endpoint.json").exists()
+            assert not (runtime / "application.sock").exists()
+        except Exception:
+            profile_failure_diagnostics(process, log)
+            raise
+        finally:
+            helper.release()
+            if peer is not None:
+                peer.close()
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=10)
+            helper.kill()
+
+
+def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
+    """Built service, MCP and helper on both sides of the closing handoff (T3).
+
+    A gated helper holds the closing owner inside its helper shutdown, with
+    its profile lock. An attached MCP's next request is refused by the owner;
+    the handoff's startup probe gets the draining frontend's refusal, and
+    nothing launches while the owner holds the profile. Once the owner exits,
+    MCP starts exactly one replacement and sends the request to it.
+
+    MCP starts and attaches before the close, so only the refusals, not MCP's
+    own startup, must fit in the helper's 5 s hold.
+    """
+    assert SERVICE.is_file() and MCP.is_file(), "Build service and MCP first"
+    data, runtime = tmp_path / "data", tmp_path / "run"
+    helper = GatedHelper(tmp_path)
+    launches = tmp_path / "launches"
+    wrapper = tmp_path / "launch-service"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s\\n" "$$" >> "{launches}"\n'
+        f'exec "{SERVICE}" "$@" >> "{tmp_path / "replacement.log"}" 2>&1\n'
+    )
+    wrapper.chmod(0o700)
+    env = os.environ.copy()
+    for key in (
+        "FORESIGHT_MODEL_MANIFEST",
+        "FORESIGHT_RESOURCES",
+        "FORESIGHT_RUNTIME_REVISION",
+        "FORESIGHT_INSTALL_ROOT",
+        "FORESIGHT_SERVICE_GATES",
+    ):
+        env.pop(key, None)
+    env.update(
+        FORESIGHT_DATA=str(data),
+        FORESIGHT_RUNTIME=str(runtime),
+        FORESIGHT_NATIVE=str(NATIVE),
+        FORESIGHT_SERVICE=str(wrapper),
+        FORESIGHT_SERVICE_TRACE="1",
+    )
+    # The replacement runs without a helper; only the owner's is gated.
+    owner_env = {**env, "FORESIGHT_HELPER": str(helper.executable)}
+    mcp_env = {**env, "FORESIGHT_HELPER": ""}
+    mcp = None
+    with (tmp_path / "service.log").open("w+") as log:
+        owner = subprocess.Popen([str(SERVICE)], env=owner_env, stdout=log, stderr=log)
+        try:
+            deadline = time.monotonic() + 60
+            helper.published("started", deadline, owner)
+            peer = None
+            while peer is None:
+                assert owner.poll() is None
+                try:
+                    peer = Peer(runtime / "application.sock")
+                except (FileNotFoundError, ConnectionRefusedError):
+                    poll_delay(deadline)
+            try:
+                assert peer.call("status")["pid"] == owner.pid
+            finally:
+                peer.close()
+            mcp = McpPeer(mcp_env)
+            mcp.service_pid = owner.pid
+            mcp.initialize()
+            attached = mcp.tool("get_status")["structuredContent"]["result"]
+            assert attached["pid"] == owner.pid
+            owner.send_signal(signal.SIGTERM)
+            held = helper.published("stopping", deadline, owner)
+            pending = mcp.send("tools/call", {"name": "get_status", "arguments": {}})
+            # The owner refuses the request; the draining frontend then
+            # refuses the handoff's startup probe and keeps it open.
+            while "frontend refuse peer=" not in Path(log.name).read_text():
+                assert mcp.process.poll() is None, mcp.process.stderr.read()
+                poll_delay(deadline)
+            # The service kills a helper that holds SIGTERM for 5 s. Only
+            # while it is still held does the owner provably hold the lock.
+            try:
+                os.kill(held, 0)
+            except ProcessLookupError:
+                pytest.fail("hold window missed: the helper was killed first")
+            assert not launches.exists()
+            helper.release()
+            assert owner.wait(timeout=30) == 0
+            assert helper.released(), "hold window missed: the helper was killed"
+            response = mcp.result(pending)
+            assert "error" not in response, response
+            status = response["result"]["structuredContent"]["result"]
+            replacement = status["pid"]
+            assert replacement != owner.pid
+            assert [int(line) for line in launches.read_text().split()] == [replacement]
+            mcp.close()
+            mcp = None
+        except Exception:
+            profile_failure_diagnostics(owner, log)
+            replacement_log = tmp_path / "replacement.log"
+            if replacement_log.exists():
+                print(replacement_log.read_text())
+            raise
+        finally:
+            helper.release()
+            if mcp is not None and mcp.process.poll() is None:
+                mcp.process.kill()
+                mcp.process.wait(timeout=30)
+            if owner.poll() is None:
+                owner.kill()
+                owner.wait(timeout=10)
+            # Stop every service MCP launched, even if the test failed first.
+            for line in launches.read_text().split() if launches.exists() else []:
+                command = subprocess.run(
+                    ["/bin/ps", "-p", line, "-o", "command="],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                ).stdout
+                if str(SERVICE) in command:
+                    os.kill(int(line), signal.SIGTERM)
+            helper.kill()
+
+
+def process_gone(pid):
+    """Whether `pid` has exited, counting a zombie as exited.
+
+    A detached service is reparented to PID 1. In a CI container that may
+    never reap it, so a signal-0 probe keeps succeeding after it exited.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text()
+        except FileNotFoundError:
+            return True
+        # The state follows the parenthesized command name, which may itself
+        # contain spaces or parentheses.
+        return stat[stat.rindex(")") + 2] == "Z"
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).stdout.strip()
+    return not state or state.startswith("Z")
+
+
 def poll_delay(deadline):
     """Yield between observations without extending the operation's deadline."""
     remaining = deadline - time.monotonic()
@@ -1195,7 +1591,13 @@ def profile_failure_diagnostics(process, log):
         path = profile / "run" / name
         print(f"Endpoint {path}: exists={path.exists()}")
     record = profile / "data/.application-endpoint.json"
-    print(f"Endpoint record: {record.read_text() if record.exists() else 'missing'}")
+    # A closing owner may delete its record between any check and this read;
+    # that must not replace the failure these diagnostics explain.
+    try:
+        recorded = record.read_text()
+    except FileNotFoundError:
+        recorded = "missing"
+    print(f"Endpoint record: {recorded}")
     log.seek(0)
     print(log.read())
     try:
@@ -1301,7 +1703,9 @@ def assert_two_live_profiles_keep_notes_private(
         assert [note["title"] for note in second.call("notes.list")] == [
             "Second private note"
         ]
-    except Exception:
+    except BaseException:
+        # pytest.fail raises a BaseException; a stalled start needs these
+        # diagnostics (its log and a thread sample) most of all.
         for index, process in enumerate(processes):
             profile_failure_diagnostics(process, logs[index])
         raise

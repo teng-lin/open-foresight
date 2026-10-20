@@ -59,7 +59,7 @@ Use the packaged stdio launcher:
 }
 ```
 
-The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share/open-foresight`. Desktop and MCP must resolve the same profile and runtime directory. To choose an isolated profile, set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` in the launcher environment:
+The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share/open-foresight`. Its default runtime directory on Linux is `$XDG_RUNTIME_DIR/open-foresight/<first 12 characters of profile hash>`, or `<profile>/runtime/<first 12 characters of profile hash>` without `XDG_RUNTIME_DIR`, so profiles never share a socket by default. An empty or relative `XDG_RUNTIME_DIR` is ignored, `$XDG_RUNTIME_DIR/open-foresight` must be private like the runtime itself, and a runtime whose `application.sock` path would not fit a Unix socket address is refused. Desktop and MCP must resolve the same profile and runtime directory. To choose an isolated profile, set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` in the launcher environment:
 
 ```json
 {
@@ -74,6 +74,8 @@ The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share
   }
 }
 ```
+
+Status reports the profile's identity: the first 24 hexadecimal digits of the SHA-256 of the canonical profile path. Clients, `--status`, `--stop` and `--stop-if-idle` refuse at once a service that reports another profile's identity. A service released before profile identity reports none, and every released service holds its profile's ownership lock. Such a service is accepted only while this profile's endpoint record still leads to it; a new owner takes the record out of sight as soon as it holds the lock, before it decides whether to adopt it. On Linux the service must also be the process that holds this profile's lock, as `/proc/locks` lists it; if that cannot be read, or the client runs in another pid namespace, such as a flatpak sandbox, the service is refused. macOS has no such list, so there any holder of the lock counts. The residual: on macOS, with an explicit `FORESIGHT_RUNTIME` that two profiles share, an older release of the other profile's service could be accepted in the moment between this profile's new owner taking the lock and taking the record out of sight. Default macOS runtimes are per profile, and the shared default runtime of earlier versions existed only on Linux. If a crashed owner's endpoint record names a runtime that another profile's service now uses, clients never attach there; they start this profile's service, which sets the record aside and serves from its own runtime. An owner never deletes or replaces a socket that still accepts connections. A regular file at a socket path is stale. A connect follows a link, so a link to a live socket is refused like the socket; any other link is stale and is removed as a link, never followed. On macOS a live socket whose listen backlog is full refuses a connection just as a dead one does, so an owner asks three times within 200 ms before removing it. A listener that drains its backlog meanwhile keeps its socket; one whose backlog never drains cannot be told from a dead socket, so it is replaced. That can only happen to another profile's service sharing an explicitly set runtime, because macOS runtimes are per profile by default. On a case-insensitive file system, such as the default APFS on macOS, an identity computed before the profile directory exists keeps the spelling given for the missing part of the path; once the directory exists, every spelling resolves to the case it was created with.
 
 Both directories must be owned by the current user and inaccessible to other users. The launcher creates missing directories with mode 0700, and the service socket uses mode 0600. It opens no TCP listener. The adapter uses the pinned `mcp_dart` SDK for protocol negotiation, validation, stdio framing, progress, and cancellation. Stdout contains only MCP messages; diagnostics go to stderr.
 
@@ -104,7 +106,7 @@ The capability file is not a sandbox against arbitrary malicious programs runnin
 | `start_recording`, `pause_recording`, `resume_recording`, `stop_recording` | Use the shared microphone/playback capture and transcription lifecycle. Pause releases capture devices and retains queued pre-pause speech; Resume reacquires the same routes. |
 | `ask` | Generate a grounded answer with checked citations using the configured local generator. |
 
-Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
+Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
 The operation identities, tool schemas, descriptions, annotations, and helper readiness policy live in `packages/foresight_core/lib/src/operations.dart`. Application dispatch switches exhaustively over that enum; desktop command interfaces and remote facades accept those identities and convert them to wire names at the transport. The RPC contracts CI job checks dispatch coverage, rejects raw desktop operation names, and invokes every MCP tool over stdio against a controlled service socket.
 
@@ -116,9 +118,15 @@ Launching either client attaches to an existing service or starts one. A per-pro
 
 There is one recording and one active generation per profile. A second recording or simultaneous generation returns a busy error. Model configuration is rejected while another configuration, generation, or recording is active. Clients receive change events; the desktop observes content written through MCP and reconnects after a service restart. MCP reconnects on its next request after a lost connection. An in-flight mutation that loses its connection fails visibly and is not replayed automatically.
 
+A closing service answers every request it will not run with a closing refusal (`unavailable`, reason `closing`, and the unchanged text "Application service is shutting down; retry after it exits."), including requests on new connections while it drains. A request still waiting for approval or for the helper gets the same refusal; one already running gets `unavailable` with reason `outcomeUnknown` before its connection closes. A bare EOF means the service crashed. The desktop and MCP send a refused request once more to the next owner, after the startup handoff; they never resend one whose outcome is unknown. The owner removes its sockets before its endpoint record and releases its profile lock last, so a record always names a live, draining or crashed owner. A replacement that fails to start records why in a per-launch status file, and the launcher reports that cause at once. A replacement that loses the profile lock makes no second attempt; it records only that it lost, and its launcher attaches to the owner that holds the lock, or launches again if nobody does. If all three launches lose the lock, the launcher fails at once and says so. Each launch serves only while its launcher still waits for it: the launcher creates the launch's startup status file before launching and deletes it when it returns, and a service that takes the lock after that file is gone exits without serving. So no launch becomes an owner that nobody asked for.
+
 Cancellation belongs to the connection and request that started an operation. Canceling one answer cannot cancel another client's generation. Canceled model setup cannot replace the previous registration. Bulk import cancellation stops further files; already committed content and accepted indexing work are retained. Stopping a recording finishes transcription even if the requesting client disconnects. Source indexing/deletion are serialized, source revisions gate index publication and citations, and changed original notes invalidate in-flight enhancement output.
 
-Content is shared: editing/deleting an existing source or note is visible to both clients. Supplying an existing ID to an edit operation replaces its current text; the service does not merge concurrent edits. General desktop Ask uses its own answer conversation; meeting Chat uses a separate `meeting:<id>` conversation for each meeting. Each MCP connection gets a separate follow-up/history context, with saved answers still retained in the shared profile.
+Content is shared: editing/deleting an existing source or note is visible to both clients. Supplying an existing ID to an edit operation replaces its current text; the service does not merge concurrent edits. An edit by ID of an item that does not exist fails with `notFound` instead of reporting a save that wrote nothing. Only a deleted source leaves a tombstone, so only it is reported as one that no longer exists; any other unknown source or note ID is reported as naming nothing, and `save_note` and `import_text` add that omitting the ID creates a new item. `import_text` with an ID edits only a live source and never revives a deleted one or creates one under a chosen ID. General desktop Ask uses its own answer conversation; meeting Chat uses a separate `meeting:<id>` conversation for each meeting. Each MCP connection gets a separate follow-up/history context, with saved answers still retained in the shared profile.
+
+A workspace clear reuses integer IDs. `get_status` (service `status`) returns `workspace_epoch`, a random token that each clear renews and that survives restarts. Tools that take an `id`, and the keyed creates below, accept it as `workspace_epoch`; if the workspace was cleared since, the call fails with `notFound`, before any desktop approval, instead of acting on an item that now has the same ID or replaying a create into the new workspace. `changed` events carry the epoch too, and `workspaceEpoch` cannot be set as a preference. Approval IDs are random, so an ID from an owner that has gone never names a request of its replacement. The desktop sends the epoch its views were read in with every edit by ID, and edit dialogs send the one they opened in. When another client clears the workspace, the desktop closes the editors and drafts that hold old IDs before it adopts the new epoch, and says in one line, without their text, if it discarded unsaved edits. It also reads the profile's epoch after every new connection, because events sent before the connection was listened to are lost. A reply that arrives after a reset is dropped, and an edit dialog is not opened while a clear has committed but the views have not reset yet. A failed desktop clear keeps unsaved meeting notes.
+
+`save_note`, `create_meeting`, `import_text` and `import_transcript` (service `notes.save`, `meetings.create`, `sources.import` and `meetings.transcript`) accept an `idempotency_key`. The change and its result commit in one transaction. A retry with the same key and arguments returns the first result without writing again; a key used for a different operation or with different arguments is rejected with `invalidArgument`. Arguments are compared as JSON, so `1` and `1.0` differ. If indexing failed after the first attempt committed, the retry reports that failure as the source's failed state. Keys hold digests of content, so they are kept for 24 hours, pruned at startup and on each keyed write, removed with the source they imported, and removed by a workspace clear. URL, file, directory and Google imports need no key, because they already reuse the source for the same URL, path or Drive file. The desktop's New note, New meeting, Start transcribing and Import transcript keep one key per action for up to five minutes: a retry after a reply that may have committed reuses it, and opening another note or meeting releases it. For Import transcript, choosing the same file again for the same meeting is the retry; any other choice is a new import. Once a reply was lost, only success or the service's answer about the key itself (the workspace was cleared, or the key belongs to other arguments) releases the key; a later transport failure, refusal or busy service keeps it. A retry with edited text first resends the original arguments under the key to learn the ID they created, then saves the edit by that ID, so it never creates a duplicate. When a reply is lost, the desktop says the request may have completed and reads its views again. MCP adds advice to the tool's error text: retry with the same key if the call had one, otherwise check before retrying and pass a key next time. Either way it says that a key applies the change at most once only in the same workspace, so the agent should also pass `workspace_epoch`. When the reply to a desktop clear is lost, the epoch reported after reconnecting shows whether the clear happened.
 
 Internal answer commands and streams accept an optional `meeting_id`. The service validates that meeting, chooses its canonical conversation, and atomically saves each answer with its meeting association. The desktop does not infer ownership from the latest global answer row. This isolates follow-up questions and generated-answer history; retrieval still searches the shared indexed knowledge sources. Previously saved answer conversations are preserved.
 
@@ -133,7 +141,24 @@ dist/open-foresight/open-foresight-service --status
 dist/open-foresight/open-foresight-service --stop
 ```
 
-`--stop` gracefully finalizes active recording. For installers,
+`--stop` gracefully finalizes active recording, and returns only once the
+service has released its profile (its lock is free or its process is gone),
+failing if that takes more than 30 s after the service closed its
+connections. The service finalizes any recording (--stop waits up to 30
+minutes for that) and stops its helper before it closes them; it then closes
+its store, removes its sockets and endpoint record, and releases its profile
+lock. Scripts should therefore allow at least 60 s plus any recording
+finalization. If the
+service stopped without a clean shutdown, during `--stop` or before it,
+`--stop` still succeeds and prints a warning; the next start recovers its
+runtime. With no service and no endpoint record, `--stop` fails. A service
+that is already stopping, because it refuses the status probe or its socket
+is gone while it still holds its profile lock, gets "The application service
+is already stopping." and the same release wait. A service released before
+profile identity ends its connections before it finalizes a recording, so
+`--stop` waits up to 30 minutes for it to release its profile. `--status`,
+`--stop` and `--stop-if-idle` give up on a service that does not answer its
+status within 30 s. For installers,
 `--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
 atomically refuses active/finalizing recording and in-flight operations, then
 blocks new calls before shutdown begins. It acknowledges success only after
@@ -182,6 +207,25 @@ The service takes a nonblocking POSIX advisory lock on
 private `.application-endpoint.json` records the active runtime directory. Clients
 validate that directory and attach to the recorded endpoint. A service launched
 with another runtime cannot acquire a competing profile writer. An unclean shutdown retains its runtime endpoint so a replacement service can adopt surviving helpers even when launched with a different runtime override. A clean shutdown closes workers and removes the endpoint record, allowing the next launch to relocate its runtime. Endpoint records are published only after acquiring the profile lock and binding a socket. Disconnected mutations with unknown commit state are still never replayed.
+
+When its connection drops, the desktop reconnects at once. While its own launches keep failing, it waits 1 s, then twice as long after each failure, up to 30 s; a request waiting for the reconnect (at least 1 s after the last attempt), a service that starts serving, or closing the window ends a wait early, and a successful attach starts the count over. Attaching is bounded at 30 s. After a closing refusal, a client stops sending on that connection but keeps it open until the closing owner has answered the requests already sent on it (at most 5 s), so each gets the owner's own answer: a refused request is sent once more to the next owner, and a dispatched one reports that it may have completed.
+
+Lock probes never run in a process that hosts an owner of the same profile
+(L8). POSIX record locks belong to the process, not to a Dart isolate or a
+file descriptor, so closing any descriptor of the lock file drops every lock
+the process holds on it. `ensureService` (through `_profileOwnerAvailable`),
+`--stop`'s release wait (`awaitProfileRelease`, through `profileReleased`), `profileLeftUnclean`, and on
+macOS the identity check for a service that reports no profile identity
+(`servesAnotherProfile`) each open, lock and close the profile lock to probe
+it. In a process that hosts an owner, any of them would release that owner's
+lock and let a second owner start. `_localServiceOwners` keeps `ensureService`
+and the identity check from probing, but only in the isolates that started the
+owner: another isolate of the same process sees no local owner and probes
+anyway. The release wait and `profileLeftUnclean` have no such guard. No
+shipped binary does this: a serving service process makes no client calls
+(`--stop` and `--status` run as separate processes), and the desktop and MCP
+host no owner. Keep it that way, or move the probe to a short-lived subprocess
+or ownership to `flock(2)`, whose locks belong to the open file description.
 
 Installed executables discover `Contents/Resources/runtime.json` in the nearest
 enclosing `.app`. It maps `FORESIGHT_*` resource-path keys to paths relative to that

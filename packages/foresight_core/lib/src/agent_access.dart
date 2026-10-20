@@ -3,6 +3,7 @@ import 'operations.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show Random;
 import 'profile_paths.dart';
 
 /// Agent imports are limited to folders explicitly selected in the desktop.
@@ -76,17 +77,34 @@ class ImportPolicy {
   }
 }
 
+/// Whether an event reached a connection, and if not, why.
+enum EventDelivery {
+  sent,
+
+  /// The event exceeds the frame limit, so it was dropped.
+  tooLarge,
+
+  /// The event holds a value JSON cannot represent, such as NaN or Infinity,
+  /// so it was dropped.
+  unencodable,
+
+  /// Writing to the connection failed; the connection has been closed.
+  writeFailed,
+}
+
 /// Approval decisions belong to a single live desktop connection and request.
 /// Tokens authenticate the desktop; they never grant agent connections rights.
 class AgentAccessGate {
   final String desktopToken;
-  final void Function(Object host, Map<String, Object?> event) send;
+
+  /// Writes an event to the host's connection and says whether it got there.
+  final EventDelivery Function(Object host, Map<String, Object?> event) send;
   final Duration timeout;
   final DateTime Function() now;
   final _recent =
       Map<Object, List<({String fingerprint, DateTime at})>>.identity();
   Object? _host;
-  int _next = 0;
+  final _random = Random.secure();
   final _pending = <String, ({Object client, Completer<bool> done})>{};
   AgentAccessGate(
     this.desktopToken,
@@ -179,10 +197,13 @@ class AgentAccessGate {
       throw RpcError(RpcErrorCode.busy, 'Too many pending approval requests');
     }
     recent.add((fingerprint: fingerprint, at: time));
-    final id = 'approval-${++_next}';
+    // Random, so an ID from an owner that has gone never names a request of
+    // its replacement in the desktop.
+    final id =
+        'approval-${[for (var i = 0; i < 8; i++) _random.nextInt(256).toRadixString(16).padLeft(2, '0')].join()}';
     final done = Completer<bool>();
     _pending[id] = (client: client, done: done);
-    send(host, {
+    final delivery = send(host, {
       'event': 'approval',
       'approval_id': id,
       'method': method,
@@ -197,6 +218,27 @@ class AgentAccessGate {
           'Replaces source ${args['id']}',
       ],
     });
+    // Waiting for a decision on an approval the desktop never received would
+    // only end at the timeout.
+    if (delivery != EventDelivery.sent) {
+      _pending.remove(id);
+      throw switch (delivery) {
+        EventDelivery.tooLarge => RpcError(
+          RpcErrorCode.invalidArgument,
+          'Request is too large to show for approval',
+        ),
+        EventDelivery.unencodable => RpcError(
+          RpcErrorCode.invalidArgument,
+          'Request contains a value JSON cannot represent, such as NaN or '
+          'Infinity, so it cannot be shown for approval',
+        ),
+        _ => RpcError(
+          RpcErrorCode.unavailable,
+          'The desktop approval window could not be reached; retry once the '
+          'desktop app is open',
+        ),
+      };
+    }
     try {
       final allowed = await done.future.timeout(
         timeout,

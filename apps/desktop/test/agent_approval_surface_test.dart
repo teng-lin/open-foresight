@@ -3,6 +3,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:foresight_core/remote.dart';
 import 'package:open_foresight/agent_approval_surface.dart';
 import '../integration_test/meeting_workflow_test.dart' as workflow;
+import 'package:foresight_test_support/remote_service.dart';
+import 'pump_until.dart';
 
 class ApprovalClient implements ServiceClient {
   final decisions = <Map<String, dynamic>>[];
@@ -51,6 +53,83 @@ class ApprovalDomain implements RemoteDomain {
 }
 
 void main() {
+  testWidgets('an approval dialog closes when its service connection drops', (
+    tester,
+  ) async {
+    final fixture = RemoteFixture();
+    await tester.runAsync(fixture.start);
+    addTearDown(() => tester.runAsync(fixture.close));
+    fixture.handler = (socket, request) => fixture.reply(socket, request, null);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AgentApprovalSurface(
+          domain: fixture.remote,
+          child: const Scaffold(body: Text('Workspace')),
+        ),
+      ),
+    );
+    int attachments() => fixture.requests
+        .where(
+          (request) =>
+              request['method'] == Operation.securityAttachDesktop.wire,
+        )
+        .length;
+    await pumpUntil(tester, () => attachments() == 1);
+    fixture.event({
+      'event': 'approval',
+      'approval_id': 'pending',
+      'method': 'sources.delete',
+      'args': {'id': 'source'},
+    });
+    final dialog = find.text('Allow this operation?');
+    await pumpUntil(tester, () => dialog.evaluate().isNotEmpty);
+    // The service denies the lost connection's approval; nothing can answer it.
+    fixture.sockets.last.destroy();
+    await pumpUntil(tester, () => dialog.evaluate().isEmpty);
+    await pumpUntil(tester, () => attachments() == 2);
+    await tester.runAsync(fixture.remote.helper.close);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets(
+    'a decided approval ID that a replacement owner reuses is shown',
+    (tester) async {
+      final domain = ApprovalDomain();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AgentApprovalSurface(
+            domain: domain,
+            child: const Scaffold(body: Text('Workspace')),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      Map<String, dynamic> approval() => {
+        'event': 'approval',
+        'approval_id': 'approval-1',
+        'method': 'sources.delete',
+        'args': {'id': 'source'},
+      };
+      domain.events!(approval());
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Allow once'));
+      await tester.pumpAndSettle();
+      expect(domain.client.decisions.single['approval_id'], 'approval-1');
+      // The owner closes the decided request, then a replacement owner, whose
+      // IDs start over, asks again under the same ID.
+      domain.events!({'event': 'approval_closed', 'approval_id': 'approval-1'});
+      domain.events!(approval());
+      await tester.pumpAndSettle();
+      expect(find.text('Allow this operation?'), findsOneWidget);
+      await tester.tap(find.text('Deny'));
+      await tester.pumpAndSettle();
+      expect(domain.client.decisions.last, {
+        'approval_id': 'approval-1',
+        'allow': false,
+      });
+    },
+  );
+
   testWidgets(
     'setup keeps the desktop authenticated while denying external agent requests',
     (tester) async {

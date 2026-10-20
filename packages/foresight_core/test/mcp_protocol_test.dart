@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/platform_services.dart';
+import 'package:foresight_core/src/profile_paths.dart';
 
 late String mcpKernel;
 
@@ -48,7 +49,11 @@ class McpFixture {
               socket.writeln(
                 jsonEncode({
                   'id': request['id'],
-                  'result': {'ready': true},
+                  // A current service names its profile.
+                  'result': {
+                    'ready': true,
+                    'profile_id': ProfilePaths(root.path, root.path).identity,
+                  },
                   'done': true,
                 }),
               );
@@ -388,6 +393,86 @@ void main() {
     },
   );
 
+  test('a malformed service frame is a protocol error, never invalid arguments '
+      '(SL-6)', () async {
+    final id = fixture.request('tools/call', {
+      'name': 'list_notes',
+      'arguments': {},
+    });
+    await fixture.serviceRequest();
+    fixture.sockets.last.writeln('not-json');
+    final reply = (await fixture.response(id))['result'] as Map;
+    expect(reply['isError'], isTrue);
+    expect(reply['structuredContent']['error'], {
+      'code': 'internal',
+      'message': 'Application service sent an invalid reply',
+      // The tool's request had been sent; it may have taken effect.
+      'reason': 'outcomeUnknown',
+    });
+    expect(
+      reply['content'][0]['text'],
+      'Application service sent an invalid reply',
+    );
+  });
+
+  test('a lost save reply tells the agent to retry with its key, which the '
+      'server sends unchanged and only when asked (LR-M1)', () async {
+    final arguments = {
+      'title': 'Apollo',
+      'body': 'b',
+      'idempotency_key': 'agent-key',
+    };
+    final first = fixture.request('tools/call', {
+      'name': 'save_note',
+      'arguments': arguments,
+    });
+    final committed = await fixture.serviceRequest();
+    // The service committed; the reply is lost with the connection.
+    fixture.sockets.last.destroy();
+    final lost = (await fixture.response(first))['result'] as Map;
+    expect(lost['isError'], isTrue);
+    expect(lost['structuredContent']['error']['reason'], 'outcomeUnknown');
+    expect(
+      lost['content'][0]['text'],
+      'Application service disconnected. The change may have been applied. '
+      'Retry with the same idempotency_key to apply it at most once in the '
+      'same workspace (pass workspace_epoch).',
+    );
+    // The agent's retry is the next request the service sees.
+    final retry = fixture.request('tools/call', {
+      'name': 'save_note',
+      'arguments': arguments,
+    });
+    final again = await fixture.serviceRequest();
+    expect(again['method'], 'notes.save');
+    expect(again['args'], committed['args']);
+    fixture.reply(again, {'id': 1});
+    expect(
+      (await fixture.response(retry))['result']['structuredContent']['result'],
+      {'id': 1},
+    );
+  });
+
+  test(
+    'a lost reply without a key never tells the agent to reuse one',
+    () async {
+      final id = fixture.request('tools/call', {
+        'name': 'create_meeting',
+        'arguments': {'title': 'Standup'},
+      });
+      await fixture.serviceRequest();
+      fixture.sockets.last.destroy();
+      final lost = (await fixture.response(id))['result'] as Map;
+      expect(lost['structuredContent']['error']['reason'], 'outcomeUnknown');
+      expect(
+        lost['content'][0]['text'],
+        'Application service disconnected. It may have completed; check before '
+        'retrying. Pass an idempotency_key next time, so a retry applies the '
+        'change at most once in the same workspace (pass workspace_epoch).',
+      );
+    },
+  );
+
   test('cancellation reaches the service and leaves MCP responsive', () async {
     final id = fixture.request('tools/call', {
       'name': 'ask',
@@ -414,7 +499,14 @@ void main() {
       final original = await fixture.serviceRequest();
       expect(original['method'], 'sources.import');
       fixture.sockets.last.destroy();
-      expect((await fixture.response(id))['result']['isError'], isTrue);
+      final lost = (await fixture.response(id))['result'] as Map;
+      expect(lost['isError'], isTrue);
+      // The agent learns the request may have committed (SL-4, SL-6).
+      expect(lost['structuredContent']['error'], {
+        'code': 'unavailable',
+        'message': 'Application service disconnected',
+        'reason': 'outcomeUnknown',
+      });
       final next = fixture.request('tools/call', {
         'name': 'get_status',
         'arguments': {},

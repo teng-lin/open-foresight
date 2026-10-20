@@ -1,6 +1,7 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'package:foresight_core/src/agent_access.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -77,11 +78,10 @@ void main() {
       var now = DateTime.utc(2026);
       final events = <Map<String, Object?>>[];
       final host = Object(), client = Object();
-      final gate = AgentAccessGate(
-        'token',
-        (_, event) => events.add(event),
-        now: () => now,
-      );
+      final gate = AgentAccessGate('token', (_, event) {
+        events.add(event);
+        return EventDelivery.sent;
+      }, now: () => now);
       gate.attach(host, 'token');
       for (var i = 0; i < 3; i++) {
         final work = gate.authorize(client, 'sources.import_url', {
@@ -115,6 +115,69 @@ void main() {
     },
   );
 
+  test('an approval the desktop never received fails its request with the '
+      'reason it was not delivered', () async {
+    for (final (delivery, code, message) in [
+      (
+        EventDelivery.tooLarge,
+        RpcErrorCode.invalidArgument,
+        'Request is too large to show for approval',
+      ),
+      (
+        EventDelivery.unencodable,
+        RpcErrorCode.invalidArgument,
+        'Request contains a value JSON cannot represent, such as NaN or '
+            'Infinity, so it cannot be shown for approval',
+      ),
+      (
+        EventDelivery.writeFailed,
+        RpcErrorCode.unavailable,
+        'The desktop approval window could not be reached; retry once the '
+            'desktop app is open',
+      ),
+    ]) {
+      final host = Object(), client = Object();
+      final gate = AgentAccessGate(
+        'token',
+        (_, event) =>
+            event['event'] == 'approval' ? delivery : EventDelivery.sent,
+      );
+      gate.attach(host, 'token');
+      await expectLater(
+        gate.authorize(client, 'sources.delete', {
+          'id': 'source',
+        }, current: () => true),
+        throwsA(
+          isA<RpcError>()
+              .having((error) => error.code, 'code', code)
+              .having((error) => error.message, 'message', message),
+        ),
+      );
+    }
+  });
+
+  test(
+    'approval IDs are random, so a replacement owner never repeats one',
+    () async {
+      final ids = <Object?>[];
+      for (var owner = 0; owner < 2; owner++) {
+        final host = Object(), client = Object();
+        final gate = AgentAccessGate('token', (_, event) {
+          if (event['event'] == 'approval') ids.add(event['approval_id']);
+          return EventDelivery.sent;
+        });
+        gate.attach(host, 'token');
+        final work = gate.authorize(client, 'sources.delete', {
+          'id': 'source',
+        }, current: () => true);
+        gate.decide(host, ids.last as String, false);
+        await expectLater(work, throwsStateError);
+      }
+      expect(ids, everyElement(matches(RegExp(r'^approval-[0-9a-f]{16}$'))));
+      expect(ids.toSet(), hasLength(2));
+    },
+  );
+
   group('connection scoped visible approvals', () {
     late AgentAccessGate gate;
     late Object desktop, agent, stranger;
@@ -124,11 +187,10 @@ void main() {
       agent = Object();
       stranger = Object();
       events = [];
-      gate = AgentAccessGate(
-        'private-token',
-        (_, event) => events.add(event),
-        timeout: const Duration(milliseconds: 50),
-      );
+      gate = AgentAccessGate('private-token', (_, event) {
+        events.add(event);
+        return EventDelivery.sent;
+      }, timeout: const Duration(milliseconds: 50));
     });
     test(
       'reads work without desktop; protected operations fail closed',

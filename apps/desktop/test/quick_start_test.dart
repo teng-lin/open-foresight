@@ -1,6 +1,7 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_core/src/operations.dart';
 import 'package:foresight_core/src/agent_access.dart';
+import 'package:foresight_core/src/rpc_error.dart';
 import 'desktop_connection_fixture.dart';
 import 'dart:async';
 import 'dart:io';
@@ -14,6 +15,8 @@ import 'meeting_setup_test.dart' show OfflineHelper;
 class QuickStartDomain extends CommandFixtureDomain {
   final operations = <String>[];
   bool denyMicrophone = false, failCreate = false, needsSystemSetup = false;
+  bool loseCreateReply = false;
+  final createKeys = <Object?>[];
   Completer<Map<String, dynamic>>? systemGate;
   Completer<void>? createGate;
   QuickStartDomain(super.store, super.helper);
@@ -45,9 +48,19 @@ class QuickStartDomain extends CommandFixtureDomain {
     if (operation == Operation.notificationsCapabilities)
       return {'available': false};
     if (operation == Operation.meetingsCreate) {
+      createKeys.add(args['idempotency_key']);
       await createGate?.future;
       if (failCreate)
         throw StateError('Meeting creation failed. Please retry.');
+      if (loseCreateReply) {
+        // The meeting commits, then the connection drops before the reply.
+        loseCreateReply = false;
+        await super.command(operation, args);
+        throw RpcError(
+          RpcErrorCode.unavailable,
+          'Application service disconnected',
+        );
+      }
     }
     if (operation == Operation.meetingsStart) return {};
     return super.command(operation, args);
@@ -61,6 +74,7 @@ class ConsentDesktopConnection extends TestDesktopConnection {
   void Function(Map<String, dynamic>)? events;
   late final gate = AgentAccessGate('fixture-token', (_, event) {
     events?.call(Map<String, dynamic>.from(event));
+    return EventDelivery.sent;
   });
 
   @override
@@ -230,6 +244,74 @@ void main() {
       await dispose(tester);
     },
   );
+
+  testWidgets(
+    'Start transcribing again after a lost create reply records one meeting',
+    (tester) async {
+      await tester.runAsync(registerSpeech);
+      domain.loseCreateReply = true;
+      await show(tester);
+      await tester.tap(find.text('Start transcribing'));
+      await tester.pumpAndSettle();
+      final dynamic state = tester.state(find.byType(Workspace));
+      expect(state.error, contains('disconnected'));
+      expect(domain.operations, isNot(contains('meetings.start')));
+      await tester.tap(find.text('Start transcribing'));
+      await tester.pumpAndSettle();
+      final meeting = store.rows('SELECT id FROM meetings').single['id'];
+      expect(state.meetingFeature.meetingId, meeting);
+      expect(
+        domain.operations.where((method) => method == 'meetings.start'),
+        hasLength(1),
+      );
+      expect(domain.createKeys, hasLength(2));
+      expect(domain.createKeys.toSet(), hasLength(1));
+      expect(domain.createKeys.first, isA<String>());
+      await dispose(tester);
+    },
+  );
+
+  // The OS access prompt can stay open while the meeting goes away.
+  for (final (closedBy, message) in [
+    (
+      'a workspace clear',
+      'Recording did not start: the workspace was cleared while recording '
+          'access was requested.',
+    ),
+    (
+      'closing the meeting',
+      'Recording did not start: the meeting was closed while recording '
+          'access was requested.',
+    ),
+  ]) {
+    testWidgets(
+      '$closedBy during the recording access check stops without recording',
+      (tester) async {
+        await tester.runAsync(registerSpeech);
+        final meeting = store.meeting('Existing meeting');
+        await show(tester);
+        final dynamic state = tester.state(find.byType(Workspace));
+        // As the Start button does; it stops at the access check.
+        final started =
+            state.meetingFeature.recordExistingMeeting(meeting) as Future<void>;
+        expect(state.meetingFeature.meetingId, meeting);
+        if (closedBy == 'a workspace clear') {
+          // Another client clears the workspace; this desktop resets.
+          store.renewWorkspaceEpoch();
+          state.serviceChanged();
+        } else {
+          state.update(() => state.meetingFeature.meetingId = null);
+        }
+        await tester.pumpAndSettle();
+        await started;
+        expect(state.error, message);
+        expect(domain.operations, isNot(contains('meetings.start')));
+        expect(state.busy, false);
+        expect(tester.takeException(), isNull);
+        await dispose(tester);
+      },
+    );
+  }
 
   testWidgets(
     'creation failure is visible and a pending creation ignores reentry',

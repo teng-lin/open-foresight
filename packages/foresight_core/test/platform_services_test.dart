@@ -2,17 +2,26 @@ import 'dart:async';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart'
-    show serviceEndpoint, serviceLaunchCommand, writeServiceStartupEnvironment;
+    show
+        EndpointInvalid,
+        readEndpointRecord,
+        serviceEndpoint,
+        serviceLaunchCommand,
+        writeServiceStartupEnvironment;
 
 void main() {
+  // CI also runs this test with -DFORESIGHT_ENABLE_TEST_HOOKS=true by name.
   test('crash and delay hooks require an explicit test compilation', () {
     final configuration = RuntimeConfiguration.resolve(
       environment: {
         'FORESIGHT_CRASH_AT': 'commit',
         'FORESIGHT_TEST_DELAY_MS': '500',
+        'FORESIGHT_SERVICE_GATES': '/gates',
+        'FORESIGHT_TEST_STOP_RELEASE_MS': '50',
       },
       executable: '/service',
     );
@@ -23,6 +32,16 @@ void main() {
     expect(
       configuration['FORESIGHT_TEST_DELAY_MS'],
       foresightTestHooksEnabled ? '500' : isNull,
+    );
+    // Lifecycle gates are test hooks too: a release service never holds.
+    expect(
+      configuration['FORESIGHT_SERVICE_GATES'],
+      foresightTestHooksEnabled ? '/gates' : isNull,
+    );
+    // A release --stop always allows its owner the full release bound.
+    expect(
+      configuration['FORESIGHT_TEST_STOP_RELEASE_MS'],
+      foresightTestHooksEnabled ? '50' : isNull,
     );
   });
 
@@ -270,6 +289,8 @@ void main() {
         'FORESIGHT_QUERY_WORKER': '/attacker-query',
         'FORESIGHT_RUNTIME_REVISION': 'attacker-revision',
         'FORESIGHT_DATA': '${scratch.path}/requested-profile',
+        // A launcher's status file; the service validates its location.
+        'FORESIGHT_STARTUP_STATUS': '${scratch.path}/runtime/startup-1.json',
       };
       for (final handoff in [false, true]) {
         final file = handoff
@@ -293,6 +314,10 @@ void main() {
         expect(settings['FORESIGHT_QUERY_WORKER'], isNull);
         expect(settings['FORESIGHT_RUNTIME_REVISION'], 'trusted-revision');
         expect(settings['FORESIGHT_DATA'], injected['FORESIGHT_DATA']);
+        expect(
+          settings['FORESIGHT_STARTUP_STATUS'],
+          injected['FORESIGHT_STARTUP_STATUS'],
+        );
       }
       expect(
         RuntimeConfiguration.resolve(
@@ -475,7 +500,63 @@ void main() {
     expect(() => privateDirectory(alias.path), throwsStateError);
     Process.runSync('/bin/chmod', ['755', path]);
     expect(() => privateDirectory(path), throwsStateError);
+    // Something other than a directory in the way, or a parent it cannot
+    // write, fails with the reason instead of being accepted.
+    final file = File('${scratch.path}/private-file')..writeAsStringSync('');
+    Process.runSync('/bin/chmod', ['600', file.path]);
+    expect(
+      () => privateDirectory(file.path),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(
+      () => privateDirectory(file.path, repairOwnedPermissions: true),
+      throwsA(isA<FileSystemException>()),
+    );
+    expect(file.statSync().mode & 0x1ff, 0x180);
+    final sealed = Directory('${scratch.path}/sealed')..createSync();
+    Process.runSync('/bin/chmod', ['500', sealed.path]);
+    try {
+      if (Process.runSync('/usr/bin/id', ['-u']).stdout.toString().trim() !=
+          '0') {
+        expect(
+          () => privateDirectory('${sealed.path}/run'),
+          throwsA(isA<FileSystemException>()),
+        );
+      }
+    } finally {
+      Process.runSync('/bin/chmod', ['700', sealed.path]);
+    }
   });
+
+  test(
+    'a created private directory is never visible with a public mode',
+    () async {
+      // An owner creates its runtime directory while a client resolving the
+      // endpoint may create the same one. If the mode were set after mkdir, the
+      // other creator could see the directory public in between and refuse it.
+      for (var round = 0; round < 5; round++) {
+        final path = '${scratch.path}/watched-$round/run';
+        final port = ReceivePort();
+        final messages = StreamIterator(port);
+        try {
+          await Isolate.spawn(
+            _publicModesSeen,
+            [path, port.sendPort],
+            // A watcher that fails reports here instead of leaving the test
+            // waiting.
+            onError: port.sendPort,
+          );
+          expect(await messages.moveNext(), isTrue);
+          expect(messages.current, 'watching');
+          privateDirectory(path);
+          expect(await messages.moveNext(), isTrue);
+          expect(messages.current, isEmpty, reason: 'round $round');
+        } finally {
+          port.close();
+        }
+      }
+    },
+  );
 
   test(
     'owned legacy profile permissions are repaired without changing data',
@@ -524,11 +605,24 @@ void main() {
         serviceEndpoint(ProfilePaths(data, '${scratch.path}/other')),
         '$runtime/application.sock',
       );
+      // A record naming a non-private runtime is never used. Clients fall back
+      // to their own runtime instead of failing on record content, and that
+      // runtime must be private too.
       Process.runSync('/bin/chmod', ['755', runtime]);
       expect(
         () => serviceEndpoint(ProfilePaths(data, runtime)),
         throwsStateError,
       );
+      final other = ProfilePaths(data, '${scratch.path}/other');
+      expect(
+        readEndpointRecord(other),
+        isA<EndpointInvalid>().having(
+          (record) => record.reason,
+          'reason',
+          contains('Requires private user-owned directory: $runtime'),
+        ),
+      );
+      expect(serviceEndpoint(other), '${other.runtime}/application.sock');
     },
   );
 
@@ -580,4 +674,19 @@ void main() {
       expect(physicalMemoryGb(), greaterThan(0));
     }
   });
+}
+
+/// Watch [args] path until it is a private directory, then send the public
+/// modes it had before that. [args] is the path and a [SendPort].
+void _publicModesSeen(List<Object> args) {
+  final path = args[0] as String, out = args[1] as SendPort;
+  out.send('watching');
+  final modes = <int>{};
+  for (final clock = Stopwatch()..start(); clock.elapsed.inSeconds < 30;) {
+    final stat = FileStat.statSync(path);
+    if (stat.type != FileSystemEntityType.directory) continue;
+    if (stat.mode & 0x3f == 0) break;
+    modes.add(stat.mode & 0x1ff);
+  }
+  out.send(modes.toList());
 }

@@ -39,6 +39,38 @@ void main() {
     );
   });
 
+  test('ID tools take the workspace epoch and keyed tools explain retries', () {
+    for (final tool in rpcTools) {
+      final keyed = tool.operation.acceptsIdempotencyKey;
+      expect(
+        tool.properties.containsKey('workspace_epoch'),
+        tool.properties.containsKey('id') || keyed,
+        reason: tool.name,
+      );
+      expect(
+        tool.properties.containsKey('idempotency_key'),
+        keyed,
+        reason: tool.name,
+      );
+      expect(
+        tool.description.contains(
+          'If a call fails with reason outcomeUnknown, retry with the same idempotency_key.',
+        ),
+        keyed,
+        reason: tool.name,
+      );
+      expect(tool.required, isNot(contains('workspace_epoch')));
+      expect(tool.required, isNot(contains('idempotency_key')));
+    }
+    expect(
+      rpcTools
+          .where((tool) => tool.operation.acceptsIdempotencyKey)
+          .map((tool) => tool.operation)
+          .toSet(),
+      Operation.values.where((value) => value.acceptsIdempotencyKey).toSet(),
+    );
+  });
+
   test(
     'remote facades and service reference registry operation identities',
     () {

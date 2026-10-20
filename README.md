@@ -293,7 +293,7 @@ To build reproducible distro packages inside containers, see [Linux packaging](d
 
 ## Profiles and data
 
-The profile is stored in `$XDG_DATA_HOME/open-foresight`, which is normally `~/.local/share/open-foresight`. Sockets are in `$XDG_RUNTIME_DIR/open-foresight`. Set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` to use an isolated profile. Legacy profiles are never selected automatically.
+The profile is stored in `$XDG_DATA_HOME/open-foresight`, which is normally `~/.local/share/open-foresight`. Its sockets are in `$XDG_RUNTIME_DIR/open-foresight/<profile>`, where `<profile>` is 12 hexadecimal digits derived from the profile path, so each profile has its own. Set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` to use an isolated profile. Legacy profiles are never selected automatically.
 
 To migrate a profile from the earlier `foresight-linux-desktop` build, stop its app and helper, then run:
 
