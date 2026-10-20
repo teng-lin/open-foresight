@@ -23,7 +23,16 @@ Future<void> main() async {
   final data = Platform.environment['FORESIGHT_DATA']!;
   final runtime = Platform.environment['FORESIGHT_RUNTIME']!;
   final old = Platform.environment['OLD_OWNER'] == '1';
-  if (!old) File('$data/launches').writeAsStringSync('launch\n', mode: FileMode.append);
+  if (!old) {
+    File('$data/launches').writeAsStringSync('launch\n', mode: FileMode.append);
+    File('$data/launched-pids').writeAsStringSync('$pid\n', mode: FileMode.append);
+    // A test may hold replacements before they contend for the lock.
+    if (Platform.environment['REPLACEMENT_GATE'] == '1') {
+      while (!File('$data/replacement.go').existsSync()) {
+        sleep(const Duration(milliseconds: 5));
+      }
+    }
+  }
   final lock = File('$data/.application.lock').openSync(mode: FileMode.append);
   try {
     lock.lockSync(FileLock.exclusive);
@@ -35,7 +44,10 @@ Future<void> main() async {
   }
   if (!old) File('$data/replacement.pid').writeAsStringSync('$pid');
   final endpoint = File('$data/.application-endpoint.json');
-  endpoint.writeAsStringSync(jsonEncode({'data': data, 'runtime': runtime}));
+  // Publish the record atomically, as production does.
+  File('${endpoint.path}.$pid')
+    ..writeAsStringSync(jsonEncode({'data': data, 'runtime': runtime}))
+    ..renameSync(endpoint.path);
   final path = '$runtime/application.sock';
   final server = await ServerSocket.bind(InternetAddress(path, type: InternetAddressType.unix), 0);
   if (!old) File('$data/replacement.ready').writeAsStringSync('$pid');
@@ -240,6 +252,7 @@ class HandoffFixture {
       // This control path also stops a replacement whose startup status failed,
       // for which ensureService never returned a client to the test.
       File('${profile.data}/replacement.stop').writeAsStringSync('stop');
+      File('${profile.data}/replacement.go').writeAsStringSync('go');
       await client?.close();
       if (launched) {
         final marker = File('${profile.data}/replacement.pid');
@@ -256,6 +269,16 @@ class HandoffFixture {
           File('${profile.data}/replacement.closed').readAsStringSync(),
           '$replacementPid',
         );
+        // Concurrent launchers may also have started a losing replacement.
+        for (final line in File(
+          '${profile.data}/launched-pids',
+        ).readAsLinesSync()) {
+          final launchedPid = int.parse(line);
+          await eventually(
+            () async => !await replacementRunning(launchedPid),
+            timeout: const Duration(seconds: 15),
+          );
+        }
         expect(
           File('${profile.runtime}/application.sock').existsSync(),
           isFalse,
@@ -587,6 +610,9 @@ while True: signal.pause()
     () async {
       final f = HandoffFixture();
       await f.start(keepEndpoint: true);
+      // Hold replacements before the lock, so both launchers find it free and
+      // each launches exactly once.
+      runtimeConfiguration.environment['REPLACEMENT_GATE'] = '1';
       ServiceClient? second;
       try {
         final first = f.connect();
@@ -596,23 +622,25 @@ while True: signal.pause()
         await f.next('closing-observed');
         expect(f.launched, isFalse);
         await f.release();
+        final launches = File('${f.profile.data}/launches');
+        await eventually(
+          () => launches.existsSync() && launches.readAsLinesSync().length == 2,
+          timeout: const Duration(seconds: 15),
+        );
+        File('${f.profile.data}/replacement.go').writeAsStringSync('go');
         final a = await first.timeout(const Duration(seconds: 15));
         second = await other.timeout(const Duration(seconds: 15));
+        final lost = File('${f.profile.data}/lost-launches');
+        await eventually(
+          () => lost.existsSync() && lost.readAsLinesSync().length == 1,
+          timeout: const Duration(seconds: 15),
+        );
         final owner = int.parse(
           File('${f.profile.data}/replacement.pid').readAsStringSync(),
         );
         expect((await a.call('status') as Map)['pid'], owner);
         expect((await second.call('status') as Map)['pid'], owner);
-        // Both launchers may launch; every extra replacement loses the lock.
-        final launches = File(
-          '${f.profile.data}/launches',
-        ).readAsLinesSync().length;
-        final lost = File('${f.profile.data}/lost-launches');
-        expect(launches, inInclusiveRange(1, 2));
-        expect(
-          lost.existsSync() ? lost.readAsLinesSync().length : 0,
-          launches - 1,
-        );
+        expect(launches.readAsLinesSync(), ['launch', 'launch']);
       } finally {
         await second?.close();
         await f.close();
