@@ -9,7 +9,7 @@ Instead of six reviewed GitHub PRs, each fix-plan PR becomes a local **step**. A
 | Role | Where | Responsibilities |
 |---|---|---|
 | **Implementer** | Linux host `msi`, Herdr workspace `open-foresight`, pane "Service shutdown and reconnect" (Claude) | Implements each step in its own worktree, runs Linux verification, runs an independent review and fixes the findings, sends the branch to the Mac, merges approved steps into `open-foresight-services`, opens the final PR. The only one who writes merge commits or pushes to GitHub. |
-| **Mac verifier** | `SkyWalker` (macOS 26), Herdr workspace `open-foresight`, tab `foresight-claude` (Claude) | Verifies each step on macOS in its own worktree. May commit **small macOS-specific fixes** on the step branch. Reports results in the format below. Never merges into the integration branch except by fast-forward, never pushes to GitHub, never opens PRs. |
+| **Mac verifier** | `HanSolo` (macOS 26.6, user `tenglin`), Herdr workspace `open-foresight`, tab `foresight-claude` (Claude, pane `wC:p3`). `SkyWalker` (user `blackmyth`, pane `w13:pR`) verified steps 0-4 (early) and went offline on 2026-10-20; its results are kept in `~/src/ofs-handoff` on HanSolo. | Verifies each step on macOS in its own worktree. May commit **small macOS-specific fixes** on the step branch. Reports results in the format below. Never merges into the integration branch except by fast-forward, never pushes to GitHub, never opens PRs. |
 | **Codex** (`msi`, pane "Test on Mac before PR") | — | Owns PR #150 (`codex/ci-restructure`), which is **paused**. Does not touch `service.dart` or the service tests while these steps run. #150 resumes after the final PR merges (fix plan 0.3). |
 
 ## Branches and worktrees
@@ -18,7 +18,7 @@ Both machines use the same layout under `~/src` (`/home/blackmyth/src` on Linux,
 
 | Branch | Base | Linux worktree | Mac worktree |
 |---|---|---|---|
-| `open-foresight-services` (integration) | `origin/main` `1d28c0fa` (#150; first `18b67da9`, then rebased) | `~/src/open-foresight-services` | `~/src/open-foresight-services` |
+| `open-foresight-services` (integration) | `origin/main` `1d28c0fa` (#150; first `18b67da9`, then rebased); `origin/main` `20063921` (#152, #153) merged in as `d7137187` | `~/src/open-foresight-services` | `~/src/open-foresight-service` on HanSolo (SkyWalker: `~/src/open-foresight-services`) |
 | `svc/pr0-handoff` | integration tip | `~/src/ofs-pr0` | `~/src/ofs-pr0-mac` |
 | `svc/pr1-wedges` | integration tip after step 0 | `~/src/ofs-pr1` | `~/src/ofs-pr1-mac` |
 | `svc/pr2-harness` | integration tip after step 1 | `~/src/ofs-pr2` | `~/src/ofs-pr2-mac` |
@@ -32,15 +32,16 @@ Remove a step's worktrees on both machines after it merges.
 
 ## Moving code between machines
 
-The Mac never needs network access to Linux. The Linux side does all transfers over SSH (`SkyWalker.local`), with a Git remote named `skywalker` pointing at the Mac's main checkout:
+The Mac never needs network access to Linux. The Linux side does all transfers over SSH (`HanSolo.local`, formerly `SkyWalker.local`), with a Git remote named `hansolo` (formerly `skywalker`) pointing at the Mac's main checkout:
 
 ```
-git remote add skywalker SkyWalker.local:/Users/blackmyth/src/open-foresight
+git remote add hansolo tenglin@HanSolo.local:/Users/tenglin/src/open-foresight
+# formerly: git remote add skywalker SkyWalker.local:/Users/blackmyth/src/open-foresight
 ```
 
-- **Linux to Mac (a step):** `git push skywalker svc/prN-…`. The Mac creates `~/src/ofs-prN-mac` on that branch at the exact hash named in the request.
-- **Mac to Linux (fixes):** the Mac commits on the step branch in its worktree, with messages prefixed `mac:`. Linux then runs `git fetch skywalker svc/prN-…`, reviews the new commits, and fast-forwards its step branch. If a fix is easier as a patch, the Mac writes it to `~/src/ofs-handoff/prN-mac.patch`, and Linux copies it over with `scp` and applies it with `git am`.
-- **Integration sync:** after merging a step, Linux runs `git push skywalker open-foresight-services:svc/integration`. The Mac then runs `git merge --ff-only svc/integration` in `~/src/open-foresight-services`. A failed fast-forward means the branches diverged: stop and report it instead of merging.
+- **Linux to Mac (a step):** `git push hansolo svc/prN-…`. The Mac creates `~/src/ofs-prN-mac` on that branch at the exact hash named in the request.
+- **Mac to Linux (fixes):** the Mac commits on the step branch in its worktree, with messages prefixed `mac:`. Linux then runs `git fetch hansolo svc/prN-…`, reviews the new commits, and fast-forwards its step branch. If a fix is easier as a patch, the Mac writes it to `~/src/ofs-handoff/prN-mac.patch`, and Linux copies it over with `scp` and applies it with `git am`.
+- **Integration sync:** after merging a step, Linux runs `git push hansolo open-foresight-services:svc/integration`. The Mac then runs `git merge --ff-only svc/integration` in its integration worktree. A failed fast-forward means the branches diverged: stop and report it instead of merging.
 - **Nothing goes to GitHub** until the final PR. Pushing step branches to `origin` would start CI for no reason.
 
 ### Rules learned during steps 0–2
@@ -65,7 +66,7 @@ Linux may start implementing step N+1 while the Mac verifies step N. Steps still
 
 ## Message formats
 
-**Request to the Mac** (sent with `herdr --machine SkyWalker agent prompt` to pane `w13:pR`):
+**Request to the Mac** (sent with `herdr --machine HanSolo agent prompt` to pane `wC:p3`; formerly `--machine SkyWalker` to `w13:pR`):
 
 ```
 MAC-VERIFY step=prN branch=svc/prN-… head=<full hash> base=<integration hash>
