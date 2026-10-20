@@ -15,6 +15,11 @@ class ServiceSocketBinding {
   final String path;
   final String _boundPath;
   Future<void>? _closing;
+  bool _published = false;
+
+  /// Whether [publish] made this listener discoverable at [path]. Until
+  /// then, whatever is at [path] is not this owner's to remove.
+  bool get published => _published;
 
   ServiceSocketBinding._(this.listener, this.path, this._boundPath);
 
@@ -42,6 +47,7 @@ class ServiceSocketBinding {
     if (_closing != null) throw StateError('Socket publication cancelled');
     listener.listen(onClient);
     File(_boundPath).renameSync(path);
+    _published = true;
   }
 
   Future<void> close() => _closing ??= listener.close().then<void>((_) {});

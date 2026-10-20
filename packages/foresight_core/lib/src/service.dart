@@ -136,6 +136,31 @@ Future<void> serviceGate(String point) async {
   }
 }
 
+/// Clear [path] before an owner binds there. The caller holds its profile
+/// lock, so the owner that left a socket there is gone, unless it is the
+/// owner of another profile sharing this runtime directory. Never delete a
+/// socket that still accepts a connection; report that owner instead
+/// (SL-7).
+Future<void> _clearStaleSocket(String path) async {
+  if (FileSystemEntity.typeSync(path) == FileSystemEntityType.notFound) {
+    return;
+  }
+  final Socket live;
+  try {
+    live = await Socket.connect(
+      InternetAddress(path, type: InternetAddressType.unix),
+      0,
+      timeout: const Duration(milliseconds: 200),
+    );
+  } on SocketException {
+    // Nothing accepts there, or not within the bound: the socket is stale.
+    File(path).deleteSync();
+    return;
+  }
+  live.destroy();
+  throw StateError(foreignOwnerMessage(path));
+}
+
 /// What a profile's endpoint record says. Reading never fails on its content:
 /// an unusable record must not stop clients or a replacement owner.
 sealed class EndpointRecord {
@@ -861,10 +886,7 @@ class ApplicationService {
       path = '${profile.runtime}/application.sock';
       // Every supported public socket path must also fit the private endpoint.
       if (internalWorker) path = '${profile.runtime}/worker.sock';
-      final stale = File(path);
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
-        stale.deleteSync();
-      }
+      await _clearStaleSocket(path);
       sweepStaleSpeechAudio(profile.data);
       store = Store('${profile.data}/application.db');
       await store.verifyRegisteredModels(rejectInvalidRegistrations: true);
@@ -946,9 +968,12 @@ class ApplicationService {
         // Background timers would otherwise keep a worker isolate alive.
         await cleanup(() => startedApplication?.close());
         await cleanup(() => binding?.listener.close());
+        // Only a socket this attempt published is its own to remove; one
+        // that refused to clear the path belongs to another owner.
         await cleanup(() {
-          if (FileSystemEntity.typeSync(path) !=
-              FileSystemEntityType.notFound) {
+          if ((binding?.published ?? false) &&
+              FileSystemEntity.typeSync(path) !=
+                  FileSystemEntityType.notFound) {
             File(path).deleteSync();
           }
         });
@@ -1699,12 +1724,11 @@ class IsolatedApplicationService {
   Future<void> _listen() async {
     final path = _publicPath!;
     _traceServiceTransport('frontend bind $path');
-    // The domain worker already holds both ownership locks. A competing
-    // launcher cannot remove the live owner's socket or endpoint record.
-    final stale = File(path);
-    if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
-      stale.deleteSync();
-    }
+    // The domain worker already holds both ownership locks, so a competing
+    // launcher of this profile cannot remove the live owner's socket or
+    // endpoint record, and a socket that still accepts here belongs to
+    // another profile.
+    await _clearStaleSocket(path);
     final binding = await ServiceSocketBinding.bind(path);
     _binding = binding;
     if (_publicClosing) {
@@ -1889,6 +1913,8 @@ class IsolatedApplicationService {
     _traceServiceTransport('frontend listener closed');
     try {
       if (_publicRemoved || _publicPath == null) return;
+      // The public socket no longer accepts, but its path still exists.
+      if (serviceGatesEnabled) await serviceGate('frontend.listener_closed');
       RandomAccessFile? ownership;
       if (!workerOwnsLock) {
         // An unexpected worker exit may release its lock before this isolate
@@ -1912,7 +1938,9 @@ class IsolatedApplicationService {
         // an owner in this process or of another profile sharing the runtime
         // directory, may own the path now.
         final identity = await _fileIdentity(path);
-        if (identity != null &&
+        if (!(_binding?.published ?? false)) {
+          _traceServiceTransport('frontend never published $path');
+        } else if (identity != null &&
             _publicIdentity != null &&
             identity != _publicIdentity) {
           _traceServiceTransport('frontend leaves a replaced socket $path');

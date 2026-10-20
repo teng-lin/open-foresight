@@ -326,6 +326,87 @@ void main() {
     expect(await owner.stop(), 0, reason: owner.output);
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('an owner starting where another profile serves never deletes its live '
+      'sockets (SL-7)', () async {
+    final profiles = sharedRuntime('of-live-');
+    final owner = await HookedServiceProcess.start(build, profiles.owner);
+    await owner.ready();
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    final endpoint = '${profiles.owner.runtime}/application.sock';
+    // A service without the isolate relay binds the public socket itself.
+    await expectLater(
+      ApplicationService.start(profiles.other),
+      throwsA(
+        isStateError.having(
+          (error) => error.message,
+          'message',
+          foreignOwner(endpoint),
+        ),
+      ),
+    );
+    // An isolated service's worker binds the worker socket first.
+    await expectLater(
+      IsolatedApplicationService.start(profiles.other),
+      throwsA(
+        isStateError.having(
+          (error) => error.message,
+          'message',
+          contains(foreignOwner('${profiles.owner.runtime}/worker.sock')),
+        ),
+      ),
+    );
+    // A new connection reaches the owner through both of its sockets.
+    expect(await statusPid(endpoint), owner.pid);
+    expect(
+      File('${profiles.other.data}/.application-endpoint.json').existsSync(),
+      isFalse,
+    );
+    expect(await owner.stop(), 0, reason: owner.output);
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('an isolated frontend never deletes another profile\'s live public '
+      'socket (SL-7)', () async {
+    final profiles = sharedRuntime('of-live-public-');
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    // An owner without the isolate relay serves only the public socket, so
+    // the other profile's worker binds its own worker socket and only its
+    // frontend meets the live one.
+    final owner = await ApplicationService.start(profiles.owner);
+    try {
+      final endpoint = '${profiles.owner.runtime}/application.sock';
+      await expectLater(
+        IsolatedApplicationService.start(profiles.other),
+        throwsA(
+          isStateError.having(
+            (error) => error.message,
+            'message',
+            foreignOwner(endpoint),
+          ),
+        ),
+      );
+      final client = await ServiceClient.connect(endpoint);
+      try {
+        expect(
+          (await client.call('status') as Map)['profile_id'],
+          identityOf(profiles.owner.data),
+        );
+      } finally {
+        await client.close();
+      }
+      // The failed worker removed its own socket and record.
+      expect(
+        File('${profiles.owner.runtime}/worker.sock').existsSync(),
+        isFalse,
+      );
+      expect(
+        File('${profiles.other.data}/.application-endpoint.json').existsSync(),
+        isFalse,
+      );
+    } finally {
+      await owner.close();
+    }
+  });
+
   test('--stop with an invalid endpoint record never signals another '
       'profile\'s owner at the fallback endpoint (SL-7)', () async {
     final profiles = sharedRuntime('of-foreign-record-');

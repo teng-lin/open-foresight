@@ -14,6 +14,8 @@ const closeGates = [
   'close.helper_closed',
   'close.listener_closed',
   'close.before_frontend_release',
+  // In the frontend, its listener closed and its public socket not yet gone.
+  'frontend.listener_closed',
   'close.before_record_delete',
   'close.before_lock_release',
   // In the frontend, after the worker has exited.

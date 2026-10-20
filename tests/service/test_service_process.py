@@ -1284,6 +1284,7 @@ LIFECYCLE_GATES = (
     "close.before_record_delete",
     "close.before_frontend_release",
     "close.before_lock_release",
+    "frontend.listener_closed",
     "frontend.draining",
     "request.committed.status",
 )
