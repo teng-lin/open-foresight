@@ -338,6 +338,37 @@ void main() {
       raw.destroy();
     }
   });
+  test('frames JSON cannot encode fail alone, not the desktop', () async {
+    await attach();
+    final app = service.domain.application;
+    final recording = CountingRecording();
+    app.recording = recording;
+    app.recordingMeeting = service.domain.store.meeting('Recording');
+    try {
+      // Status replies and level events both carry these levels.
+      recording.currentVolumes.add(double.nan);
+      app.captureLevelChanges.add(null);
+      await expectLater(
+        desktop.call('status'),
+        throwsA(
+          isA<RpcError>()
+              .having((error) => error.code, 'code', RpcErrorCode.internal)
+              .having(
+                (error) => error.message,
+                'message',
+                contains('JSON cannot represent'),
+              ),
+        ),
+      );
+      expect(desktop.isClosed, isFalse);
+      expect(await desktop.call('notes.list'), isEmpty);
+      expect(service.access.hasHost, isTrue);
+      expect(recording.stops, 0);
+    } finally {
+      app.recording = null;
+      app.recordingMeeting = null;
+    }
+  });
   test('an oversized event is dropped without dropping the desktop', () async {
     await attach();
     final app = service.domain.application;

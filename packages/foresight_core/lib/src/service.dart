@@ -6,6 +6,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:typed_data';
 import 'dart:math';
 import 'agent_access.dart';
 import 'domain.dart';
@@ -698,24 +699,36 @@ class ApplicationService {
     }
   }
 
-  /// Returns whether [message] itself was written. An oversized reply is
-  /// replaced by an error, and an oversized event is dropped.
+  /// Returns whether [message] itself was written. A reply that is too large
+  /// or cannot be encoded is replaced by an error; such an event is dropped.
   bool _send(Socket client, Map<String, Object?> message) {
     try {
       _traceServiceTransport(
         'worker send peer=${identityHashCode(client)} id=${message['id']} '
         'event=${message['event']} done=${message['done']}',
       );
-      var frame = utf8.encode(jsonEncode(message));
-      var written = true;
-      // A client drops its whole connection on a frame over the limit, and
-      // losing the desktop's connection stops its recording. Fail only the
-      // request instead.
-      if (frame.length + 1 > _maxServiceFrame) {
+      Uint8List? frame;
+      String? failure;
+      try {
+        frame = utf8.encode(jsonEncode(message));
+        // A client drops its whole connection on a frame over the limit, and
+        // losing the desktop's connection stops its recording. Fail only the
+        // request instead.
+        if (frame.length + 1 > _maxServiceFrame) {
+          failure =
+              'Reply exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
+              'request fewer items.';
+        }
+      } on JsonUnsupportedObjectError {
+        failure =
+            'Reply contains a value JSON cannot represent, such as NaN or '
+            'Infinity.';
+      }
+      if (failure != null) {
         final id = message['id'];
         _traceServiceTransport(
-          'worker oversized peer=${identityHashCode(client)} id=$id '
-          'event=${message['event']} bytes=${frame.length}',
+          'worker unsendable peer=${identityHashCode(client)} id=$id '
+          'event=${message['event']} bytes=${frame?.length} $failure',
         );
         // A dropped snapshot is superseded by the next one. The approval gate
         // fails its request instead of waiting for a decision.
@@ -725,20 +738,15 @@ class ApplicationService {
         frame = utf8.encode(
           jsonEncode({
             'id': id,
-            'error': RpcError(
-              RpcErrorCode.internal,
-              'Reply exceeds ${_maxServiceFrame ~/ (1024 * 1024)} MiB; '
-              'request fewer items.',
-            ).toJson(),
+            'error': RpcError(RpcErrorCode.internal, failure).toJson(),
             'done': true,
           }),
         );
-        written = false;
       }
       client
-        ..add(frame)
+        ..add(frame!)
         ..add(const [10]);
-      return written;
+      return failure == null;
     } catch (_) {
       client.destroy();
       return false;
