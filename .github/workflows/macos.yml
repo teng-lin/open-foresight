@@ -41,11 +41,6 @@ jobs:
     - name: Run macOS source and SDK contracts
       run: .venv/bin/python tools/platform_python_tests.py --platform macos
     - name: Build and test the complete macOS application once
-      env:
-        GH_TOKEN: ${{ github.token }}
-        OWN_PR: ${{ github.event.pull_request.number || 0 }}
-        NATIVE_EVENT: ${{ github.event_name }}
-        NATIVE_BRANCH: ${{ github.head_ref || github.ref_name }}
       run: |
         task_cmake_args=(
           -G Ninja
@@ -55,10 +50,6 @@ jobs:
           "-DICU_ROOT=$(brew --prefix icu4c)"
           '-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local'
         )
-        # Restore only compiler work; current configure, build and tests always run.
-        .venv/bin/python tools/ci_native_work.py --platform macos --sdk-prefix build/sdk \
-          --own-pr "$OWN_PR" --event "$NATIVE_EVENT" --branch "$NATIVE_BRANCH" \
-          --output test-results/macos/native-work.json -- "${task_cmake_args[@]}"
         # Qualify resolved dependency roots before compiling any application code.
         cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
           "-DPython3_EXECUTABLE=$PWD/.venv/bin/python" "${task_cmake_args[@]}"

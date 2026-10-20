@@ -270,7 +270,16 @@ def retrieve(
         or (main_candidate and run.get("head_branch") != "main")
     ):
         raise ValueError("Application producer repository, workflow or source mismatch")
-    if run.get("event") != "pull_request" and (
+    if (
+        run.get("event") == "workflow_dispatch"
+        and run.get("path") == ".github/workflows/macos.yml"
+        and isinstance(run.get("head_branch"), str)
+        and run["head_branch"]
+        and run["head_branch"] != "main"
+    ):
+        if head_repository != repository or run_head != source:
+            raise ValueError("Application source is not this run's exact source")
+    elif run.get("event") != "pull_request" and (
         head_repository != repository
         or run.get("head_branch") != "main"
         or (

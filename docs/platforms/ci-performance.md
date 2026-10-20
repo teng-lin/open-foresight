@@ -1274,12 +1274,16 @@ DEB/RPM/Arch lifecycle checks plus the separate signed DMG fixture. The single
 core, desktop and compiled service/MCP gates in one workspace, then assembles and
 smokes the application. Nightly callers explicitly request the Mac coverage
 report, and the job retains the core/desktop coverage files as evidence. The
-compiler-work
-restore is opportunistic reuse of verified legacy artifacts, whose producer is
-retired by this switch; it is not a persistent warm path. Record genuine cold
-native compilation on the first hosted runs and use cold samples for the WS4
-latency gate. A warm restore cannot establish that gate. Add a compiler cache only
-if the plan's measured threshold calls for it, with separately reviewed inputs.
+retired compiler-work producer is no longer queried by this job. The first
+hosted run on PR #155 (`221d7796`, run `39418919789`) spent approximately
+476 seconds examining 45 legacy payloads that failed the environment-package
+identity check, followed by 106 seconds of actual native compilation. The
+complete Mac job passed in 24 minutes 41 seconds. This original cold sample is
+retained; removing the lookup does not establish a new elapsed time. Record
+genuine cold native compilation and complete job timing on subsequent hosted
+runs for the WS4 latency gate. A warm restore cannot establish that gate. Add a
+compiler cache only if the plan's measured threshold calls for it, with
+separately reviewed inputs.
 Mac Flutter/pub consumers are restore-only. The scheduled nightly preview calls
 the dedicated `macos-cache-publish.yml` publisher only after a successful plan
 selects a build. Unlike the Linux publisher, its result does not block preview

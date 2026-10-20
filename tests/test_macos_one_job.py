@@ -48,9 +48,9 @@ def test_single_job_has_no_stage_handoffs_and_qualifies_before_compilation():
     assert "--coverage" not in commands
     assert (
         commands.index("platform_python_tests.py")
-        < commands.index("ci_native_work.py")
         < commands.index("cmake -S .")
     )
+    assert "ci_native_work.py" not in commands
     assert (
         commands.index("cmake -S .")
         < commands.index("verify_macos_cmake_cache.py")
@@ -343,7 +343,6 @@ def test_real_build_step_shell_preserves_cmake_arguments_and_stops_before_build_
     for executable in (
         binary / "cmake",
         workspace / "tools/build.sh",
-        workspace / "tools/ci_native_work.py",
     ):
         executable.write_text(fake)
         executable.chmod(0o755)
@@ -361,9 +360,6 @@ def test_real_build_step_shell_preserves_cmake_arguments_and_stops_before_build_
                 "PATH": str(binary) + os.pathsep + os.environ["PATH"],
                 "MAC_BUILD_LOG": str(log),
                 "MAC_BUILD_CACHE": str(cache),
-                "OWN_PR": "987",
-                "NATIVE_EVENT": "pull_request",
-                "NATIVE_BRANCH": "fixture-branch",
             }
         ),
         capture_output=True,
@@ -371,30 +367,20 @@ def test_real_build_step_shell_preserves_cmake_arguments_and_stops_before_build_
         timeout=15,
     )
     calls = [json.loads(line) for line in log.read_text().splitlines()]
-    assert calls[0][0] == "ci_native_work.py"
-    assert calls[0][1][:10] == [
-        "--platform",
-        "macos",
-        "--sdk-prefix",
-        "build/sdk",
-        "--own-pr",
-        "987",
-        "--event",
-        "pull_request",
-        "--branch",
-        "fixture-branch",
-    ]
-    assert calls[1][0] == "cmake"
+    assert calls[0][0] == "cmake"
     if qualified:
         assert result.returncode == 0, result.stdout + result.stderr
         assert calls[-1][0] == "build.sh"
         assert calls[-1][1][:4] == ["--platform", "macos", "--stage", "all"]
-        assert calls[0][1][10:13] == [
-            "--output",
-            "test-results/macos/native-work.json",
-            "--",
+        assert calls[0][1][:6] == [
+            "-S",
+            ".",
+            "-B",
+            "build",
+            "-DCMAKE_BUILD_TYPE=Release",
+            f"-DPython3_EXECUTABLE={workspace}/.venv/bin/python",
         ]
-        assert calls[0][1][13:] == calls[-1][1][4:]
+        assert calls[0][1][6:] == calls[-1][1][4:]
         assert calls[-1][1][4:] == [
             "-G",
             "Ninja",
@@ -407,7 +393,7 @@ def test_real_build_step_shell_preserves_cmake_arguments_and_stops_before_build_
     else:
         assert result.returncode == 1
         assert "gRPC_DIR must resolve inside" in result.stderr
-        assert len(calls) == 2
+        assert len(calls) == 1
 
 
 def test_nightly_reports_macos_coverage_while_prs_always_leave_it_disabled():

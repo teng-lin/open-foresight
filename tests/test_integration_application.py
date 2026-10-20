@@ -809,3 +809,75 @@ def test_reviewed_dispatch_source_can_be_behind_main_only_with_api_ancestry(
         with pytest.raises(ValueError, match="ancestry"):
             restore(tmp_path, changed, ancestry=status)
     assert (tmp_path / "restored").exists() == allowed
+
+
+@pytest.mark.parametrize("purpose", ["acceptance", "package-contract"])
+def test_branch_dispatch_consumes_its_own_exact_source_bundle(
+    tmp_path, producer, purpose
+):
+    producer[3].update(event="workflow_dispatch", head_branch="feature")
+    changed = changed_receipt(producer, tier="sweep", label="")
+    _, restored, qualification = restore(tmp_path, changed, purpose=purpose)
+    assert (restored / "application.tar.gz").read_bytes() == (
+        producer[0] / "application.tar.gz"
+    ).read_bytes()
+    assert qualification["source_receipt"]["tier"] == "sweep"
+    assert qualification["producer_attempt"] == 1
+    assert qualification["producer_job"] == JOB
+
+
+@pytest.mark.parametrize("purpose", ["acceptance", "package-contract"])
+@pytest.mark.parametrize("mismatch", ["ancestor", "foreign-repository"])
+def test_branch_dispatch_cannot_consume_an_ancestor_or_foreign_bundle(
+    tmp_path, producer, purpose, mismatch
+):
+    producer[3].update(event="workflow_dispatch", head_branch="feature")
+    head_repository = REPOSITORY
+    if mismatch == "ancestor":
+        producer[3]["head_sha"] = "b" * 40
+        producer[4]["workflow_run"]["head_sha"] = "b" * 40
+        producer[5]["head_sha"] = "b" * 40
+    else:
+        head_repository = "fork/foresight"
+        producer[3]["head_repository"] = {"full_name": head_repository}
+    changed = changed_receipt(producer, tier="sweep", label="")
+    with pytest.raises(ValueError, match="this run's exact source"):
+        restore(
+            tmp_path, changed, purpose=purpose, head_repository=head_repository
+        )
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize("purpose", ["acceptance", "package-contract"])
+@pytest.mark.parametrize("tier", ["pr", "preview", "release"])
+def test_branch_dispatch_cannot_promote_its_bundle_to_another_tier(
+    tmp_path, producer, purpose, tier
+):
+    producer[3].update(event="workflow_dispatch", head_branch="feature")
+    changed = changed_receipt(producer, tier=tier, label="")
+    with pytest.raises(ValueError, match="tier"):
+        restore(tmp_path, changed, purpose=purpose)
+    assert not (tmp_path / "restored").exists()
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("event", "push"),
+        ("event", "schedule"),
+        ("head_branch", None),
+        ("head_branch", ""),
+        ("head_branch", 123),
+        ("path", ".github/workflows/release.yml"),
+        ("path", ".github/workflows/preview-packages.yml"),
+    ],
+)
+def test_branch_dispatch_exception_does_not_relax_main_only_sources(
+    tmp_path, producer, field, value
+):
+    producer[3].update(event="workflow_dispatch", head_branch="feature")
+    producer[3][field] = value
+    changed = changed_receipt(producer, tier="sweep", label="")
+    with pytest.raises(ValueError, match="ancestry"):
+        restore(tmp_path, changed)
+    assert not (tmp_path / "restored").exists()

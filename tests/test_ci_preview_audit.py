@@ -271,6 +271,45 @@ def test_cli_never_dispatches_or_stamps_a_new_preview(monkeypatch, tmp_path, com
         audit.main()
 
 
+def test_restore_cli_emits_original_preview_package_version(
+    preview, monkeypatch, tmp_path
+):
+    import sys
+
+    monkeypatch.chdir(tmp_path)
+    output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "audit",
+            "restore",
+            "--source",
+            SOURCE,
+            "--producer-run",
+            str(RUN),
+            "--attempt",
+            "1",
+            "--artifact-id",
+            str(ARTIFACT),
+            "--artifact-digest",
+            preview["values"][2],
+        ],
+    )
+    audit.main()
+    assert output.read_text().splitlines() == [
+        f"version=0.1.2~{LABEL}",
+        f"source={SOURCE}",
+        "release=1",
+    ]
+    assert (tmp_path / "artifacts/source-qualification.json").is_file()
+    assert (
+        tmp_path / "build/portable/dist/open-foresight/executable"
+    ).read_bytes() == b"immutable original application"
+
+
 @pytest.mark.parametrize("actual", ["b" * 40, "invalid"])
 def test_audit_checkout_is_the_exact_compiled_main_source(monkeypatch, actual):
     monkeypatch.setattr(
