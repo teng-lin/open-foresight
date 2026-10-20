@@ -193,6 +193,56 @@ void main() {
       );
     },
   );
+  testWidgets('graph embeddings from a replaced model run are not cached', (
+    tester,
+  ) async {
+    final f = await ControllerFixture.mount(tester);
+    final ids = [
+      for (final name in ['Alpha', 'Beta'])
+        f.store.importText(
+          name,
+          '$name evidence',
+          'text/plain',
+          'fixture:$name',
+        ),
+    ];
+    for (final id in ids) {
+      f.store.state(id, 'indexed');
+    }
+    control.State snapshot(String instance) => control.State(
+      pipeline: 'ready',
+      instanceId: instance,
+      model: control.ModelIdentity(
+        modelDigest: 'fixture',
+        tokenizerDigest: 'fixture',
+        preprocessing: 'fixture',
+        backend: 'fixture',
+        dimensions: 3,
+      ),
+    );
+    f.connection.helper.snapshot = snapshot('fixture');
+    final reply = Completer<Map<String, List<double>>>();
+    f.connection.graphReply = (_) => reply.future;
+    f.shell.update(() {
+      f.shell.tab = 0;
+      f.shell.sourceFeature.graphView = true;
+    });
+    await tester.pump();
+    await pumpUntil(tester, () => f.connection.graphRequests.isNotEmpty);
+    // The helper restarts while the batch is in flight, before any rebuild
+    // recomputes the layout key.
+    f.connection.helper.snapshot = snapshot('replacement');
+    // Registered after the controller's await, so it runs after that
+    // continuation.
+    var delivered = false;
+    unawaited(reply.future.then((_) => delivered = true));
+    reply.complete({
+      for (final id in ids) id: [1.0, 0, 0],
+    });
+    await pumpUntil(tester, () => delivered);
+    expect(f.shell.sourceFeature.graphVectorCache, isEmpty);
+    expect(f.connection.graphRequests, hasLength(1));
+  });
   testWidgets(
     'custom export dates stay ordered when either boundary crosses the other and cancelled edits do not apply',
     (tester) async {

@@ -1551,6 +1551,16 @@ class _SourcesController extends _FeatureController {
     graphLayoutKey = key;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted || graphLayoutKey != key) return;
+      // Results computed for this layout apply only to the same model run.
+      bool helperChanged() {
+        final current = d.helper.snapshot;
+        return d.sourcesPaused ||
+            current?.pipeline != 'ready' ||
+            current!.model.writeToJson() != identity ||
+            current.instanceId != instance ||
+            current.activeGeneration.toString() != generation;
+      }
+
       final saved = d.store.loadGraphLayout(
         persistentIdentity,
         sources,
@@ -1580,14 +1590,7 @@ class _SourcesController extends _FeatureController {
       try {
         if (saved.complete) {
           final edges = await graphEdgesInBackground(saved.vectors);
-          if (!mounted || graphLayoutKey != key) return;
-          final current = d.helper.snapshot;
-          if (d.sourcesPaused ||
-              current?.pipeline != 'ready' ||
-              current!.model.writeToJson() != identity ||
-              current.instanceId != instance ||
-              current.activeGeneration.toString() != generation)
-            return;
+          if (!mounted || graphLayoutKey != key || helperChanged()) return;
           shell.update(() {
             graphEdges = edges;
             graphOrganizing = false;
@@ -1616,7 +1619,8 @@ class _SourcesController extends _FeatureController {
             math.min(start + _graphEmbeddingBatch, missing.length),
           );
           final fresh = await d.graphEmbeddings(batch);
-          if (!mounted || graphLayoutKey != key) return;
+          // Never cache vectors from a model run that has since changed.
+          if (!mounted || graphLayoutKey != key || helperChanged()) return;
           for (final source in batch) {
             final vector = fresh[source['id']];
             if (vector != null)
@@ -1650,14 +1654,7 @@ class _SourcesController extends _FeatureController {
           documents: sources.map((s) => s['id'] as String).toList(),
         );
         final layout = scene.points;
-        if (!mounted || graphLayoutKey != key) return;
-        final current = d.helper.snapshot;
-        if (d.sourcesPaused ||
-            current?.pipeline != 'ready' ||
-            current!.model.writeToJson() != identity ||
-            current.instanceId != instance ||
-            current.activeGeneration.toString() != generation)
-          return;
+        if (!mounted || graphLayoutKey != key || helperChanged()) return;
         if (layout.length == sources.length && sources.length >= 2) {
           final published = await saveGraphLayout(
             persistentIdentity,
