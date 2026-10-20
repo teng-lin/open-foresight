@@ -385,3 +385,35 @@ def test_publisher_keeps_actual_retirement_proof_after_product_change(proof):
     changed = index.collect(REPOSITORY, "b" * 40, root=proof.root, api=proof.api, download=proof.download)
     assert changed["source"] == "b" * 40
     assert "arch_retirement" not in changed["capabilities"]
+
+
+def test_initial_retirement_uses_latest_consecutive_actual_green_suffix(proof):
+    for kind in ("arch", "archive-sdk", "fork-sdk", "recipe-change"):
+        proof.add(kind)
+    proof.add("nightly", 0)
+    proof.add("nightly", 1)
+    red = dict(proof.history[-1], id=555, created_at="2026-10-03T00:00:00Z", conclusion="failure")
+    proof.history.append(red)
+    blocked = index.collect(REPOSITORY, SOURCE, root=proof.root, api=proof.api, download=proof.download)
+    assert "arch_retirement" not in blocked["capabilities"]
+    proof.add("nightly", 3)
+    proof.add("nightly", 4)
+    recovered = index.collect(REPOSITORY, SOURCE, root=proof.root, api=proof.api, download=proof.download)
+    assert "arch_retirement" in recovered["capabilities"]
+    assert {entry["run_id"] for entry in recovered["evidence"] if entry["kind"] == "nightly"} == {7, 8}
+
+
+def test_published_retirement_keeps_its_verified_interval_after_later_product_failure(proof):
+    for kind in ("arch", "archive-sdk", "fork-sdk", "recipe-change"):
+        proof.add(kind)
+    proof.add("nightly", 0)
+    proof.add("nightly", 1)
+    initial = index.collect(REPOSITORY, SOURCE, root=proof.root, api=proof.api, download=proof.download)
+    assert "arch_retirement" in initial["capabilities"]
+    proof.index = initial
+    proof.publish()
+    proof.history.append(dict(proof.history[-1], id=555, created_at="2026-10-03T00:00:00Z", conclusion="failure"))
+    proof.add("nightly", 3)
+    renewed = index.collect(REPOSITORY, SOURCE, root=proof.root, api=proof.api, download=proof.download)
+    assert "arch_retirement" in renewed["capabilities"]
+    assert rollout.authorize(renewed, root=proof.root, source=SOURCE, capabilities=["arch_retirement"], repository=REPOSITORY, api=proof.api, download=proof.download, ongoing=True)["capabilities"] == ["arch_retirement"]

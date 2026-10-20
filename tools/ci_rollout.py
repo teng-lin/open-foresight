@@ -209,7 +209,11 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
         needed.add("acceptance-replay")
     if "arch_retirement" in requested or "acceptance_narrowing" in requested:
         needed.update(("nightly", "arch", "archive-sdk", "fork-sdk", "recipe-change"))
-    entries = [entry for entry in index["evidence"] if entry.get("kind") in needed and (controls or entry.get("closure_sha256", expected["sha256"]) == expected["sha256"])]
+    qualified_sets = index.get("qualification_sets", {})
+    allowed_artifacts = None
+    if all(capability in qualified_sets for capability in requested):
+        allowed_artifacts = {artifact for capability in requested for artifact in qualified_sets[capability]}
+    entries = [entry for entry in index["evidence"] if entry.get("kind") in needed and (allowed_artifacts is None or entry.get("artifact_id") in allowed_artifacts) and (controls or entry.get("closure_sha256", expected["sha256"]) == expected["sha256"])]
     qualified = [_qualified(entry, repository=repository, expected=expected, api=api or artifacts.api, download=download or artifacts.download_zip, controls=controls) for entry in entries]
     kinds = {row["kind"] for row in qualified}
     if not needed.issubset(kinds):
@@ -228,6 +232,8 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
         while True:
             rows = api(repository, f"actions/workflows/preview-packages.yml/runs?event=schedule&branch=main&per_page=100&page={page}")["workflow_runs"]
             for row in rows:
+                if not ongoing and row["created_at"] > nights[-1]["created_at"]:
+                    raise ValueError("Latest scheduled nightly is not qualified green evidence")
                 if nights[0]["created_at"] <= row["created_at"] <= nights[-1]["created_at"]:
                     if row["id"] not in {night["run_id"] for night in nights} or row.get("conclusion") != "success":
                         raise ValueError("Nightly qualification is not consecutive and green")

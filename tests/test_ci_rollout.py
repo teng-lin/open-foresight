@@ -359,3 +359,14 @@ def test_qualification_requires_repository_and_exact_original_uploader(root):
     entry["producer_job_id"] = wrong["id"]
     with pytest.raises(ValueError, match="upload window"):
         evidence.verify("path_selection")
+
+
+def test_initial_cutover_cannot_ignore_a_newer_failed_or_pending_nightly(root):
+    evidence = retirement_evidence(root)
+    red = dict(evidence.history[-1], id=555, created_at="2026-10-03T00:00:00Z", conclusion="failure")
+    evidence.history.append(red)
+    with pytest.raises(ValueError, match="Latest scheduled nightly"):
+        evidence.verify("arch_retirement")
+    red.update(status="in_progress", conclusion=None)
+    with pytest.raises(ValueError, match="Latest scheduled nightly"):
+        evidence.verify("arch_retirement")

@@ -83,20 +83,22 @@ def main_source(repository, run, api):
     return source
 
 
-def collect(repository, source, *, root=ROOT, api=artifacts.api, download=artifacts.download_zip):
+def collect(repository, source, *, root=ROOT, api=cached_api, download=cached_download):
     """Discover original evidence, then independently qualify each capability.
 
     Bad/stale individual descriptors are observations, never activation. API and
     transport failures propagate, preserving actionable infrastructure failures.
     """
-    index = {"schema": 1, "repository": repository, "source": source, "closure": rollout.closure(root), "control_closure": rollout.control_closure(root), "capabilities": [], "evidence": []}
+    index = {"schema": 1, "repository": repository, "source": source, "closure": rollout.closure(root), "control_closure": rollout.control_closure(root), "capabilities": [], "evidence": [], "qualification_sets": {}}
+    previous_capabilities = set()
     try:
         previous = load(repository, api=api, download=download)
         rollout.compare(previous["control_closure"], index["control_closure"])
     except (ValueError, KeyError, TypeError):
         pass
     else:
-        if "arch_retirement" in previous.get("capabilities", []):
+        previous_capabilities = set(previous.get("capabilities", []))
+        if "arch_retirement" in previous_capabilities:
             index.update(source=previous["source"], closure=previous["closure"])
     for artifact in rows(repository, "actions/artifacts?name=ci-rollout-qualification", "artifacts", api):
         if artifact.get("name") != "ci-rollout-qualification" or artifact.get("expired"):
@@ -116,13 +118,28 @@ def collect(repository, source, *, root=ROOT, api=artifacts.api, download=artifa
         except (ValueError, KeyError, TypeError):
             continue
         index["evidence"].append(entry)
+    retained_nights = [entry for entry in index["evidence"] if entry["kind"] == "nightly"]
+    history = list(rows(repository, "actions/workflows/preview-packages.yml/runs?event=schedule&branch=main", "workflow_runs", api))
+    barriers = [row["created_at"] for row in history if row.get("status") != "completed" or row.get("conclusion") != "success"]
+    if barriers:
+        boundary = max(barriers)
+        allowed = {row["id"] for row in history if row["created_at"] > boundary}
+        index["evidence"] = [entry for entry in index["evidence"] if entry["kind"] != "nightly" or entry["run_id"] in allowed]
     for capability in sorted(rollout.CAPABILITIES):
         trial = dict(index, capabilities=[capability])
+        if capability in previous_capabilities and capability in {"arch_retirement", "acceptance_narrowing"}:
+            prior_set = set(previous.get("qualification_sets", {}).get(capability, [entry["artifact_id"] for entry in previous["evidence"]]))
+            prior_ids = {(entry["run_id"], entry["artifact_id"]) for entry in previous["evidence"] if entry["kind"] == "nightly" and entry["artifact_id"] in prior_set}
+            trial["evidence"] = [entry for entry in index["evidence"] if entry["kind"] != "nightly"] + [entry for entry in retained_nights if (entry["run_id"], entry["artifact_id"]) in prior_ids]
         try:
-            rollout.authorize(trial, root=root, source=index["source"], capabilities=[capability], repository=repository, api=api, download=download, ongoing=True)
+            rollout.authorize(trial, root=root, source=index["source"], capabilities=[capability], repository=repository, api=api, download=download, ongoing=capability in previous_capabilities)
         except (ValueError, KeyError, TypeError):
             continue
         index["capabilities"].append(capability)
+        index["qualification_sets"][capability] = sorted(entry["artifact_id"] for entry in trial["evidence"])
+        if capability in previous_capabilities and capability in {"arch_retirement", "acceptance_narrowing"}:
+            existing = {(entry["run_id"], entry["artifact_id"]) for entry in index["evidence"]}
+            index["evidence"].extend(entry for entry in trial["evidence"] if (entry["run_id"], entry["artifact_id"]) not in existing)
     return index
 
 

@@ -65,11 +65,15 @@ jobs:
           task_checksum=$(cut -d' ' -f1 tests/fixtures/ci-selector-50-prs.sha256)
           python -m tools.ci_acceptance_plan --replay tests/fixtures/ci-selector-50-prs.json --sha256 "$task_checksum" --output build/qualification/acceptance-replay.json
           python -m pytest tests/test_ci_acceptance_plan.py -q --junitxml=build/qualification/acceptance-replay.junit.xml
+      - name: Load the actual document sandbox policy for application consumers
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
+        run: bash tools/ci_package_sandbox.sh
       - name: Exercise real SDK transport and complete application gates
         if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
         env:
           GH_TOKEN: ${{ github.token }}
           EXERCISE: ${{ inputs.exercise }}
+          FORESIGHT_CONTAINER_APPARMOR: foresight-ci-document-sandbox
           CI_TIER: sweep
           SOURCE_REVISION: ${{ github.sha }}
           REQUIRE_GOOGLE_CLIENT: '0'
