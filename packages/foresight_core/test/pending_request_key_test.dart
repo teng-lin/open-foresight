@@ -26,6 +26,9 @@ void main() {
 
   test('a retry after an unconfirmed failure reuses the key', () async {
     for (final failure in [
+      // First, so no earlier failure has made the key uncertain: a keyed
+      // write can commit before a later step, such as indexing, fails.
+      RpcError(RpcErrorCode.internal, 'index worker disconnected'),
       RpcError(
         RpcErrorCode.internal,
         'Application service sent an invalid reply',
@@ -45,11 +48,11 @@ void main() {
         throwsA(same(failure)),
       );
     }
-    expect(await attempt({'title': 'T'}), {'id': 6});
+    expect(await attempt({'title': 'T'}), {'id': 7});
     expect(sent.map((args) => args['idempotency_key']).toSet(), hasLength(1));
     expect(pending.pending, isNull, reason: 'success releases the key');
     await attempt({'title': 'T'});
-    expect(key(6), isNot(key(0)), reason: 'a new action, a new key');
+    expect(key(7), isNot(key(0)), reason: 'a new action, a new key');
   });
 
   test('a definite failure or a new action releases the key', () async {

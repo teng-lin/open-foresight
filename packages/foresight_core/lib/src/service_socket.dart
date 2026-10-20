@@ -25,6 +25,53 @@ bool _linkPath(String from, String to) {
   }
 }
 
+// RENAME_NOREPLACE for renameat2(2) on Linux, RENAME_EXCL for renamex_np(2)
+// on macOS: the move fails if anything is at the target.
+const _renameNoReplace = 1;
+const _renameExclusive = 4;
+
+/// Moves an entry without replacing anything at the target, or null when the
+/// C library has no such call (glibc before 2.28).
+final int Function(Pointer<Utf8>, Pointer<Utf8>)? _renameExclusively = () {
+  try {
+    if (Platform.isLinux) {
+      final renameat2 = DynamicLibrary.process()
+          .lookupFunction<
+            Int32 Function(Int32, Pointer<Utf8>, Int32, Pointer<Utf8>, Uint32),
+            int Function(int, Pointer<Utf8>, int, Pointer<Utf8>, int)
+          >('renameat2');
+      return (Pointer<Utf8> from, Pointer<Utf8> to) =>
+          renameat2(_atFdCwd, from, _atFdCwd, to, _renameNoReplace);
+    }
+    if (Platform.isMacOS) {
+      final renamex = DynamicLibrary.process()
+          .lookupFunction<
+            Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Uint32),
+            int Function(Pointer<Utf8>, Pointer<Utf8>, int)
+          >('renamex_np');
+      return (Pointer<Utf8> from, Pointer<Utf8> to) =>
+          renamex(from, to, _renameExclusive);
+    }
+  } on ArgumentError {
+    // The symbol is missing.
+  }
+  return null;
+}();
+
+/// Move [from] to [to] unless something is at [to]; never replaces it.
+bool _movePathExclusively(String from, String to) {
+  final rename = _renameExclusively;
+  if (rename == null) return false;
+  final source = from.toNativeUtf8(allocator: calloc);
+  final target = to.toNativeUtf8(allocator: calloc);
+  try {
+    return rename(source, target) == 0;
+  } finally {
+    calloc.free(source);
+    calloc.free(target);
+  }
+}
+
 // statx(2) on Linux has the same layout on every architecture; the app
 // ships for macOS on arm64 only, where lstat(2) fills the 64-bit-inode
 // struct stat.
@@ -291,7 +338,7 @@ class ServiceSocketBinding {
   bool _published = false;
   bool _linked = false;
 
-  /// Whether [publish] used a hard link, not the rename fallback for file
+  /// Whether [publish] used a hard link, not the move fallback for file
   /// systems that cannot link a socket.
   bool get linkedForTesting => _linked;
 
@@ -335,18 +382,38 @@ class ServiceSocketBinding {
   /// [path] without replacing anything there: a socket that appeared since
   /// the owner cleared the path is removed only if nobody listens on it
   /// (S2). Throws [SocketPathInUse] otherwise.
-  Future<void> publish(void Function(Socket) onClient) async {
+  ///
+  /// [linkForTesting] stands in for link(2), and [beforeMoveForTesting]
+  /// runs just before the fallback moves the socket into place.
+  Future<void> publish(
+    void Function(Socket) onClient, {
+    bool Function(String from, String to)? linkForTesting,
+    void Function()? beforeMoveForTesting,
+  }) async {
     if (_closing != null) throw StateError('Socket publication cancelled');
     listener.listen(onClient);
+    final link = linkForTesting ?? _linkPath;
     for (var attempt = 0; ; attempt++) {
-      if (_linkPath(_boundPath, path)) break;
-      if (FileSystemEntity.typeSync(path, followLinks: false) ==
-          FileSystemEntityType.notFound) {
-        // This file system cannot link a socket; nothing is at the path to
-        // replace.
-        File(_boundPath).renameSync(path);
+      if (link(_boundPath, path)) break;
+      // A file system that cannot link a socket can still move it into
+      // place. The move fails if anything is at the path, so it never
+      // replaces a socket another owner published there meanwhile.
+      beforeMoveForTesting?.call();
+      if (_movePathExclusively(_boundPath, path)) {
         _published = true;
         return;
+      }
+      if (FileSystemEntity.typeSync(path, followLinks: false) ==
+          FileSystemEntityType.notFound) {
+        // Neither a link nor a move that cannot replace works here.
+        if (attempt > 0) {
+          throw FileSystemException(
+            'Cannot publish the service socket without risking replacing '
+            'another one',
+            path,
+          );
+        }
+        continue;
       }
       if (attempt > 0) throw SocketPathInUse(path, cause: 'it reappeared');
       await clearStaleSocket(path);

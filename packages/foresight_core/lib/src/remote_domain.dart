@@ -417,6 +417,18 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     }
   }
 
+  /// Whether a cancel made from now on applies to [method] with [args]. The
+  /// old connection cannot carry a cancel for a request it refused; one made
+  /// during the handoff applies to the resend.
+  bool Function() _cancelledSince(String method, Map<String, dynamic> args) {
+    final sent = _cancellationSequence;
+    return () =>
+        cancellableAnswers.contains(method) &&
+        ((_cancellations[null] ?? 0) > sent ||
+            (args['requestId'] is String &&
+                (_cancellations[args['requestId']] ?? 0) > sent));
+  }
+
   /// One request, sent once more on the next owner if this one refused it
   /// while closing, or it was never sent, before any result (SL-9). A request
   /// whose outcome is unknown is never resent.
@@ -424,12 +436,7 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     String method, [
     Map<String, dynamic> args = const {},
   ]) async {
-    final sent = _cancellationSequence;
-    bool cancelledSince() =>
-        cancellableAnswers.contains(method) &&
-        ((_cancellations[null] ?? 0) > sent ||
-            (args['requestId'] is String &&
-                (_cancellations[args['requestId']] ?? 0) > sent));
+    final cancelledSince = _cancelledSince(method, args);
     for (var attempt = 0; ; attempt++) {
       final current = client;
       var received = false;
@@ -443,8 +450,6 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       } on RpcError catch (error) {
         if (attempt > 0 || received || !_resendable(error)) rethrow;
         await _awaitReconnect(current, error);
-        // The old connection cannot carry a cancel for a request it refused;
-        // one made during the handoff applies to the resend.
         if (cancelledSince()) {
           throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         }
@@ -557,6 +562,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     );
   }
 
+  /// A streamed request, sent once more on the next owner like [_call]: if
+  /// this one refused it while closing, or it was never sent, before any
+  /// value (SL-9).
   Stream<Object?> _streamCurrent(
     Operation operation,
     Map<String, dynamic> args,
@@ -565,14 +573,64 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     late StreamController<Object?> controller;
     StreamSubscription<Object?>? subscription;
     Timer? timer;
-    void cancelled() {
+    void end([Object? error, StackTrace? stack]) {
       if (controller.isClosed) return;
-      controller.addError(
-        RpcError(RpcErrorCode.cancelled, 'Operation cancelled'),
-      );
+      if (error != null) controller.addError(error, stack);
       timer?.cancel();
       unawaited(subscription?.cancel());
       unawaited(controller.close());
+    }
+
+    void cancelled() =>
+        end(RpcError(RpcErrorCode.cancelled, 'Operation cancelled'));
+
+    late Map<String, dynamic> scoped;
+    late bool Function() cancelledSince;
+    var received = false, resent = false;
+    void send(ServiceClient connection) {
+      var resending = false;
+      subscription = connection
+          .stream(operation.wire, scoped)
+          .listen(
+            (value) {
+              received = true;
+              if (controller.isClosed) return;
+              if (!(current?.call() ?? true)) {
+                cancelled();
+              } else {
+                controller.add(value);
+              }
+            },
+            onError: (Object error, StackTrace stack) {
+              if (controller.isClosed) return;
+              if (resent ||
+                  received ||
+                  error is! RpcError ||
+                  !_resendable(error)) {
+                controller.addError(error, stack);
+                return;
+              }
+              resent = resending = true;
+              unawaited(
+                _awaitReconnect(connection, error).then(
+                  (_) {
+                    // The caller stopped listening during the handoff.
+                    if (controller.isClosed || !controller.hasListener) return;
+                    if (cancelledSince() || !(current?.call() ?? true)) {
+                      cancelled();
+                    } else {
+                      send(client);
+                    }
+                  },
+                  onError: (Object failure, StackTrace failureStack) =>
+                      end(failure, failureStack),
+                ),
+              );
+            },
+            onDone: () {
+              if (!resending) end();
+            },
+          );
     }
 
     controller = StreamController<Object?>(
@@ -581,28 +639,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
           cancelled();
           return;
         }
-        subscription = client
-            .stream(
-              operation.wire,
-              operation.scopedToWorkspace(args, _workspaceEpoch),
-            )
-            .listen(
-              (value) {
-                if (controller.isClosed) return;
-                if (!(current?.call() ?? true)) {
-                  cancelled();
-                } else {
-                  controller.add(value);
-                }
-              },
-              onError: (Object error, StackTrace stack) {
-                if (!controller.isClosed) controller.addError(error, stack);
-              },
-              onDone: () {
-                timer?.cancel();
-                unawaited(controller.close());
-              },
-            );
+        scoped = operation.scopedToWorkspace(args, _workspaceEpoch);
+        cancelledSince = _cancelledSince(operation.wire, scoped);
+        send(client);
         if (current != null) {
           timer = Timer.periodic(const Duration(milliseconds: 100), (_) {
             if (!current()) cancelled();

@@ -1521,7 +1521,8 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
             assert [int(line) for line in launches.read_text().split()] == [replacement]
             mcp.close()
             mcp = None
-        except Exception:
+        except BaseException:
+            # pytest.fail (the missed hold window) raises a BaseException.
             profile_failure_diagnostics(owner, log)
             replacement_log = tmp_path / "replacement.log"
             if replacement_log.exists():
@@ -1544,7 +1545,10 @@ def test_attached_mcp_follows_a_closing_owner_to_one_replacement(tmp_path):
                     timeout=10,
                 ).stdout
                 if str(SERVICE) in command:
-                    os.kill(int(line), signal.SIGTERM)
+                    try:
+                        os.kill(int(line), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass  # It exited after the ps check.
             helper.kill()
 
 

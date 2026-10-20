@@ -2225,10 +2225,18 @@ class IsolatedApplicationService {
       // Refused clients wait for this EOF before probing the profile lock.
       // A bridge that fails later must not leave a new refusal open.
       _refusalsEnded = true;
-      for (final client in _refused.toList()) {
+      final refused = _refused.toList();
+      _refused.clear();
+      // A refusal can still be queued for a client that reads slowly. Its
+      // EOF alone would leave that request outcomeUnknown, never resent, so
+      // deliver the refusals first, within the same bound as a closing
+      // owner's terminal frames.
+      await Future.wait([
+        for (final client in refused) _flushQuietly(client),
+      ]).timeout(_closingFlushBound, onTimeout: () => const []);
+      for (final client in refused) {
         client.destroy();
       }
-      _refused.clear();
     }
   }
 

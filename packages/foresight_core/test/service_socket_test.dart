@@ -68,6 +68,59 @@ void main() {
     }
   });
 
+  test('where a socket cannot be linked, publishing moves it into place but '
+      'never over a socket published there meanwhile (S2)', () async {
+    final directory = createTestTempDirectorySync('of-socket-');
+    final path = '${directory.path}/application.sock';
+    bool cannotLink(String from, String to) => false;
+    // Another profile's owner, bound under its own private name.
+    final otherBound = '${directory.path}/.other';
+    final other = await ServerSocket.bind(
+      InternetAddress(otherBound, type: InternetAddressType.unix),
+      0,
+    );
+    other.listen(answer('other'));
+    final mine = await ServiceSocketBinding.bind(path);
+    ServiceSocketBinding? next;
+    try {
+      String? published;
+      // The other owner publishes after this one found the path empty, just
+      // before its fallback moves its socket into place.
+      final refused = expectLater(
+        mine.publish(
+          answer('mine'),
+          linkForTesting: cannotLink,
+          beforeMoveForTesting: () {
+            if (published != null) return;
+            File(otherBound).renameSync(path);
+            published = path;
+          },
+        ),
+        throwsA(
+          isA<SocketPathInUse>().having((error) => error.live, 'live', isTrue),
+        ),
+      );
+      await refused;
+      expect(published, path);
+      expect(await answerAt(path), 'other');
+      expect(mine.published, isFalse);
+      // With the path empty, the fallback publishes without a link.
+      await other.close();
+      File(path).deleteSync();
+      next = await ServiceSocketBinding.bind(path);
+      await next.publish(answer('next'), linkForTesting: cannotLink);
+      expect(next.linkedForTesting, isFalse);
+      expect(await answerAt(path), 'next');
+      expect(await next.unpublish(), isTrue);
+      expect(File(path).existsSync(), isFalse);
+    } finally {
+      await other.close();
+      await mine.close();
+      await next?.close();
+      directory.deleteSync(recursive: true);
+    }
+  });
+
   test(
     'closing a retired listener preserves its replacement endpoint',
     () async {
