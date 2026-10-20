@@ -1551,7 +1551,13 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
       parent.send(['closing']);
       return frontendClosed.future;
     };
-    parent.send(['ready', service.path, serviceEndpoint(profile)]);
+    // The public socket belongs beside the worker socket, in the runtime this
+    // start created or adopted. Reading the record again could disagree.
+    parent.send([
+      'ready',
+      service.path,
+      '${File(service.path).parent.path}/application.sock',
+    ]);
     await Future.any([stop.future, service.closed]);
     _traceServiceTransport('worker close begin');
     await service.close();
