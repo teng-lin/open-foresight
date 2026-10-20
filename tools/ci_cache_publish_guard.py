@@ -10,6 +10,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.ci_artifacts import api  # noqa: E402
 
+PUBLISHERS = {
+    "publish-common-caches": ("linux-cache-publish.yml",),
+    "publish-arch-caches": ("linux-cache-publish.yml",),
+    "publish-macos-models": ("macos-cache-publish.yml", "linux-cache-publish.yml"),
+}
+
 
 def current_main(environment=None, *, fetch=None, head=None):
     env = os.environ if environment is None else environment
@@ -20,9 +26,11 @@ def current_main(environment=None, *, fetch=None, head=None):
         or not re.fullmatch(r"[a-f0-9]{40}", source)
         or env.get("GITHUB_REF") != "refs/heads/main"
         or env.get("GITHUB_EVENT_NAME") not in ("push", "workflow_dispatch", "schedule")
-        or env.get("GITHUB_JOB") not in ("publish-common-caches", "publish-arch-caches")
         or env.get("GITHUB_WORKFLOW_REF")
-        != repository + "/.github/workflows/linux-cache-publish.yml@refs/heads/main"
+        not in (
+            repository + "/.github/workflows/" + workflow + "@refs/heads/main"
+            for workflow in PUBLISHERS.get(env.get("GITHUB_JOB", ""), ())
+        )
     ):
         raise ValueError("Shared cache saves require a dedicated main-only publisher")
     if head is None:
