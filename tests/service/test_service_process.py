@@ -1153,10 +1153,11 @@ def test_agent_only_service_exits_after_the_idle_period(running):
                 print(replacement_log.read_text())
 
 
-@pytest.mark.parametrize("running", ["without_embedding"], indirect=True)
+@pytest.mark.parametrize("running", ["without_embedding,idle=0.1"], indirect=True)
 def test_desktop_departure_without_agent_work_exits_after_the_grace(running):
     state = running["peer"].call("status")
-    assert state["lifetime"]["idle_minutes"] == 30
+    assert state["lifetime"]["idle_minutes"] == 0.1
+    # The desktop's non-exempt preferences.set must not become agent activity.
     assert state["lifetime"]["last_agent_activity"] is None
     running["desktop"].close()
     assert running["process"].wait(timeout=15) == 0
