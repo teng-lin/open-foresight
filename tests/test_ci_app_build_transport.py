@@ -174,8 +174,10 @@ def test_registry_namespace_normalizes_github_repository_case():
 
 
 @pytest.mark.parametrize("existing_seed", [False, True])
-def test_own_run_build_uses_the_shared_daemon_and_required_seed_without_cache_writes(
-    tmp_path, existing_seed
+@pytest.mark.parametrize("mode", ["--build-only", "--test-only"])
+@pytest.mark.parametrize("schedule_value", [None, "0", "1", "bad"])
+def test_own_run_driver_uses_the_shared_daemon_and_required_seed_without_cache_writes(
+    tmp_path, existing_seed, mode, schedule_value
 ):
     """Exercise the workflow's real driver, leaving Docker and SDK bytes untouched."""
     import os
@@ -217,6 +219,15 @@ with open(os.environ['TRANSPORT_LOG'], 'a') as stream:
     stream.write(json.dumps([name, *sys.argv[1:]]) + '\\n')
 if name == 'docker' and sys.argv[1:] == ['context', 'show']:
     print('shared-daemon')
+if name == 'docker' and sys.argv[1] == 'run':
+    forwarded = dict()
+    for index, value in enumerate(sys.argv):
+        if value == '-e':
+            key, separator, literal = sys.argv[index + 1].partition('=')
+            if separator or key in os.environ:
+                forwarded[key] = literal if separator else os.environ[key]
+    with open(os.environ['TRANSPORT_LOG'], 'a') as stream:
+        stream.write(json.dumps(['container-env', forwarded]) + '\\n')
 if name == 'host-python':
     if 'tools/ci_app_dependency_seed.py' in sys.argv:
         Path(sys.argv[sys.argv.index('--output') + 1]).mkdir(exist_ok=True)
@@ -229,11 +240,28 @@ if name == 'host-python':
         path = binary / name
         path.write_text(script)
         path.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": str(binary) + os.pathsep + os.environ["PATH"],
+        "FORESIGHT_HOST_PYTHON": str(binary / "host-python"),
+        "TRANSPORT_LOG": str(log),
+        "GITHUB_REPOSITORY": "Owner/Repo",
+        "SOURCE_REVISION": "a" * 40,
+        "SOURCE_DATE_EPOCH": "123",
+        "VERSION": "0.1.2",
+        "FORESIGHT_GOOGLE_CLIENT_FILE": "",
+        "FORESIGHT_GOOGLE_CLIENT_JSON": "",
+        "FORESIGHT_SEARCH_API_KEY": "",
+        "FORESIGHT_WEB_CONTENT_API_KEY": "",
+    }
+    environment.pop("FORESIGHT_LINUX_TEST_SCHEDULE", None)
+    if schedule_value is not None:
+        environment["FORESIGHT_LINUX_TEST_SCHEDULE"] = schedule_value
     result = subprocess.run(
         [
             "bash",
             str(ROOT / "tools/build_linux_container.sh"),
-            "--build-only",
+            mode,
             "--sdk-image",
             "verified-sdk:original",
             "--seed",
@@ -241,20 +269,7 @@ if name == 'host-python':
             "--output",
             str(tmp_path / "output"),
         ],
-        env={
-            **os.environ,
-            "PATH": str(binary) + os.pathsep + os.environ["PATH"],
-            "FORESIGHT_HOST_PYTHON": str(binary / "host-python"),
-            "TRANSPORT_LOG": str(log),
-            "GITHUB_REPOSITORY": "Owner/Repo",
-            "SOURCE_REVISION": "a" * 40,
-            "SOURCE_DATE_EPOCH": "123",
-            "VERSION": "0.1.2",
-            "FORESIGHT_GOOGLE_CLIENT_FILE": "",
-            "FORESIGHT_GOOGLE_CLIENT_JSON": "",
-            "FORESIGHT_SEARCH_API_KEY": "",
-            "FORESIGHT_WEB_CONTENT_API_KEY": "",
-        },
+        env=environment,
         capture_output=True,
         text=True,
         timeout=30,
@@ -276,8 +291,14 @@ if name == 'host-python':
     assert "--cache-to" not in build
     runs = [row for row in rows if row[:2] == ["docker", "run"]]
     assert len(runs) == 1
-    assert runs[0][-1] == "/workspace/tools/linux_container_build.sh"
-    assert "linux_container_test.sh" not in json.dumps(rows)
+    target = "test" if mode == "--test-only" else "build"
+    assert runs[0][-1] == f"/workspace/tools/linux_container_{target}.sh"
+    assert runs[0][runs[0].index("FORESIGHT_LINUX_TEST_SCHEDULE") - 1] == "-e"
+    container_env = next(row[1] for row in rows if row[0] == "container-env")
+    assert container_env.get("FORESIGHT_LINUX_TEST_SCHEDULE") == schedule_value
+    assert ("FORESIGHT_LINUX_TEST_SCHEDULE" in container_env) == (
+        schedule_value is not None
+    )
     assert "sdk.Dockerfile" not in json.dumps(rows)
     if existing_seed:
         assert (seed / "sentinel").read_bytes() == b"existing verified objects"

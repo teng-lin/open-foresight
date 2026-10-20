@@ -69,7 +69,7 @@ if [[ -n "${FORESIGHT_WEB_CONTENT_API_KEY:-}" ]]; then
   task_mounts+=(-v "$task_secrets/web_key:/run/secrets/foresight_web_content_api_key:ro")
 fi
 task_env=(-e PUB_CACHE=/src/.pub-cache -e SOURCE_REVISION -e SOURCE_DATE_EPOCH -e VERSION -e RELEASE -e OUT_UID -e OUT_GID
-  -e CI_TIER -e BUILD_LABEL -e REQUIRE_GOOGLE_CLIENT -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT -e GITHUB_RUN_NUMBER -e FORESIGHT_CORE_COVERAGE_BENCHMARK -e FORESIGHT_QUERY_TERMS_URL)
+  -e CI_TIER -e BUILD_LABEL -e REQUIRE_GOOGLE_CLIENT -e GITHUB_REPOSITORY -e GITHUB_WORKFLOW -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT -e GITHUB_RUN_NUMBER -e FORESIGHT_CORE_COVERAGE_BENCHMARK -e FORESIGHT_QUERY_TERMS_URL -e FORESIGHT_LINUX_TEST_SCHEDULE)
 if [[ "$task_mode" != test-only ]]; then
   docker run --rm "${task_env[@]}" ${task_mounts[@]+"${task_mounts[@]}"} \
     -v "$task_root:/workspace:ro" -v "$task_output:/out" -v "$task_output/ci-inputs.json:/ci-inputs.json:ro" \

@@ -1,6 +1,7 @@
 """Dependency-only configuration retains the full application's native objects."""
 
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -173,8 +174,12 @@ def test_dependency_objects_survive_full_application_reconfigure(
     if change == "source":
         changed = tmp_path / "flatbuffers/unit.cpp"
         changed.write_text("int main() { return 1; }\n")
+        changed_inputs = [changed]
     elif change == "flags":
         run(*configure, "-DCMAKE_CXX_FLAGS=-DCHANGED_DEPENDENCY_FLAG")
+        changed_inputs = list(build.glob("_deps/**/flags.make"))
+        if generator == "Unix Makefiles":
+            assert changed_inputs
     else:
         changed = (
             tmp_path
@@ -182,6 +187,20 @@ def test_dependency_objects_survive_full_application_reconfigure(
             / ("train.cpp" if change == "train" else "tool.cpp")
         )
         changed.write_text("int main() { return 1; }\n")
+        changed_inputs = [changed]
+    # macOS Make compares whole seconds. The changed tiny fixture inputs must
+    # be newer than the retained objects even when the test runs within a second.
+    # Leave every dependency output's bytes and timestamp unchanged.
+    newest_object = max(timestamp for timestamp, _ in objects.values())
+    for changed in changed_inputs:
+        metadata = changed.stat()
+        os.utime(
+            changed,
+            ns=(
+                metadata.st_atime_ns,
+                max(metadata.st_mtime_ns, newest_object + 2_000_000_000),
+            ),
+        )
     with pytest.raises(ValueError, match="would compile or relink"):
         verify(build)
     assert {

@@ -66,9 +66,11 @@ Future<void> _pump() => Future<void>.delayed(Duration.zero);
 class _PingService extends RagServiceBase {
   Map<String, String>? metadata;
   DateTime? deadline;
+  DateTime? observedAt;
 
   @override
   Future<PingResponse> ping(ServiceCall call, PingRequest request) async {
+    observedAt = DateTime.now();
     metadata = call.clientMetadata;
     deadline = call.deadline;
     return PingResponse(success: true, version: 'after-half-close');
@@ -119,11 +121,14 @@ void main() {
         expect(service.metadata?['x-probe'], 'owned-writer');
         expect(service.metadata?[':authority'], 'profile-helper');
         expect(service.metadata?['grpc-encoding'], 'gzip');
+        expect(service.metadata?['grpc-timeout'], '3000m');
         expect(service.deadline, isNotNull);
         expect(service.deadline!.isAfter(before), isTrue);
+        // gRPC reconstructs the deadline when headers arrive. Connection and
+        // event-loop startup before that point are not part of this timeout.
         expect(
-          service.deadline!.difference(before),
-          lessThan(const Duration(seconds: 4)),
+          service.deadline!.difference(service.observedAt!),
+          inInclusiveRange(Duration.zero, const Duration(seconds: 3)),
         );
       } finally {
         await channel.terminate();
