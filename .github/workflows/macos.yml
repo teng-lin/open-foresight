@@ -745,9 +745,14 @@ jobs:
         FORESIGHT_CORE_COVERAGE_BENCHMARK: ${{ (inputs.core_coverage_benchmark || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:benchmark-core'))) && '1' || '0' }}
       run: bash tools/build_linux_container.sh --test-only --output build/linux-shadow
     - name: Run the real Docker cache fixture on the host
+      shell: bash
       env:
         FORESIGHT_DOCKER_CACHE_TEST: '1'
-      run: python -m pytest tests/test_acceptance_image_cache.py -ra
+        CACHE_FIXTURE_BASE: ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+      run: |
+        # SDK archive loading does not restore the base image's own reference.
+        docker image inspect "$CACHE_FIXTURE_BASE" >/dev/null 2>&1 || docker pull "$CACHE_FIXTURE_BASE"
+        python -m pytest tests/test_acceptance_image_cache.py -ra
     - name: Retain independent shadow test results and coverage
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

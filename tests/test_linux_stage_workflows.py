@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import shutil
+import sys
 
 import pytest
 import yaml
@@ -515,3 +516,84 @@ def test_debian_compatibility_remains_independent_of_buildkit_fixture_failure():
     assert fixture.get("continue-on-error", False) is False
     assert "--security-opt apparmor=foresight-ci-document-sandbox" in debian["run"]
     assert "dist/packages:/packages:ro" in debian["run"]
+
+
+@pytest.mark.parametrize(
+    "cached,pull_fails", [(True, False), (False, False), (False, True)]
+)
+def test_shadow_host_prepares_pinned_base_before_offline_cache_fixture(
+    tmp_path, cached, pull_fails
+):
+    steps = workflow("macos.yml")["jobs"]["linux-test"]["steps"]
+    fixture = next(
+        step
+        for step in steps
+        if step.get("name") == "Run the real Docker cache fixture on the host"
+    )
+    base = fixture["env"]["CACHE_FIXTURE_BASE"]
+    assert (
+        f'BASE = "{base}"'
+        in (ROOT / "tests/test_acceptance_image_cache.py").read_text()
+    )
+    executable = tmp_path / "bin"
+    executable.mkdir()
+    trace = tmp_path / "commands.jsonl"
+    tool = executable / "tool"
+    tool.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, pathlib, sys\n"
+        "name = pathlib.Path(sys.argv[0]).name\n"
+        "with open(os.environ['FIXTURE_TRACE'], 'a') as log:\n"
+        "    log.write(json.dumps([name, *sys.argv[1:]]) + '\\n')\n"
+        "if name == 'docker':\n"
+        "    if sys.argv[1:3] == ['image', 'inspect']:\n"
+        "        sys.exit(0 if os.environ['FIXTURE_CACHED'] == '1' else 1)\n"
+        "    if sys.argv[1] == 'pull':\n"
+        "        sys.exit(1 if os.environ['FIXTURE_PULL_FAILS'] == '1' else 0)\n"
+        "    sys.exit(99)\n"
+        "assert os.environ['FORESIGHT_DOCKER_CACHE_TEST'] == '1'\n"
+    )
+    tool.chmod(0o755)
+    for name in ("docker", "python"):
+        (executable / name).symlink_to(tool)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"BASH_ENV", "ENV"}
+    }
+    env.update(
+        fixture["env"],
+        PATH=str(executable) + os.pathsep + env["PATH"],
+        FIXTURE_TRACE=str(trace),
+        FIXTURE_CACHED=str(int(cached)),
+        FIXTURE_PULL_FAILS=str(int(pull_fails)),
+    )
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-e",
+            "-o",
+            "pipefail",
+            "-c",
+            fixture["run"],
+        ],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    commands = [json.loads(line) for line in trace.read_text().splitlines()]
+    expected = [["docker", "image", "inspect", base]]
+    if not cached:
+        expected.append(["docker", "pull", base])
+    if cached or not pull_fails:
+        expected.append(
+            ["python", "-m", "pytest", "tests/test_acceptance_image_cache.py", "-ra"]
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    else:
+        assert result.returncode != 0, result.stdout + result.stderr
+    assert commands == expected
