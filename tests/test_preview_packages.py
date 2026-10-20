@@ -209,7 +209,12 @@ def installers(root):
         )
 
 
-def test_final_manifest_requires_all_formats_same_source_and_build(tmp_path):
+def test_final_manifest_requires_all_formats_same_source_and_build(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(
+        "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + ".summary"))
+    )
     installers(tmp_path)
     result = preview.manifest(tmp_path, "0.1.2", 12, LABEL, SHA, "standard")
     assert len(result["installers"]) == 5
@@ -221,7 +226,10 @@ def test_final_manifest_requires_all_formats_same_source_and_build(tmp_path):
         preview.receipt(tmp_path / "deb", "deb", SHA)
 
 
-def test_missing_formats_and_foreign_source_cannot_be_published(tmp_path):
+def test_missing_formats_and_foreign_source_cannot_be_published(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + ".summary"))
+    )
     installers(tmp_path)
     with pytest.raises(ValueError, match="pinned source"):
         preview.receipt(tmp_path / "dmg", "dmg", "b" * 40)
