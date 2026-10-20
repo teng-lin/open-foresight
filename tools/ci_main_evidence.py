@@ -98,8 +98,10 @@ def selection_jobs(selection):
         or any(type(value) is not bool for value in gates.values())
     ):
         raise ValueError("Missing or incompatible platform selection schema")
+    if type(selection.get("arch_retired", False)) is not bool:
+        raise ValueError("Arch retirement selection must be an explicit boolean")
     result = {name: gates.get(name, False) for name in APPLICATION}
-    result["linux-native"] = gates["linux-build"]
+    result["linux-native"] = gates["linux-build"] and not selection.get("arch_retired", False)
     for name in ("acceptance-cpu", "acceptance-audio", "acceptance-deb"):
         result[name] = gates["linux-build"]
     return result
@@ -127,9 +129,30 @@ class Reader:
         self.repository = repository
         self.api = api
         self.mode = mode
+        self._arch_retirement: dict[str, bool] = {}
 
     def get(self, route):
         return self.api(self.repository, route)
+
+    def arch_retired(self, source):
+        """A selection marker cannot retire an owner without current hosted proof."""
+        if source in self._arch_retirement:
+            return self._arch_retirement[source]
+        try:
+            from tools.ci_qualification_index import capability
+
+            capability("arch_retirement", source, repository=self.repository, api=self.api)
+        except (ImportError, ValueError, KeyError, TypeError):
+            self._arch_retirement[source] = False
+            return False
+        self._arch_retirement[source] = True
+        return True
+
+    def application_owners(self, source):
+        return tuple(
+            name for name in APPLICATION
+            if name != "linux-native" or not self.arch_retired(source)
+        )
 
     def rows(self, route, key):
         return pages(self.repository, route, key, request=self.api)
@@ -195,6 +218,8 @@ class Reader:
             run, "ci-selection-platform", "ci-selection.json", "changes"
         )
         selection_jobs(selection)
+        if selection.get("arch_retired") is True and not self.arch_retired(run["head_sha"]):
+            raise ValueError("Arch retirement selection lacks verified hosted qualification")
         return selection, upload
 
     def input_identity(self, source):
@@ -350,6 +375,8 @@ class Reader:
             "jobs": {},
         }
         try:
+            owners = self.application_owners(source)
+            base["owners"] = list(owners)
             commit = self.get(f"git/commits/{source}")
             if before != commit["parents"][0]["sha"]:
                 raise ValueError("Push predecessor is not a direct main parent")
@@ -390,7 +417,7 @@ class Reader:
             executed = selection_jobs(selection)
             jobs = self.jobs(run)
             previous = None
-            for name in APPLICATION:
+            for name in owners:
                 if executed[name]:
                     executions = job_proof(jobs, name)
                     base["jobs"][name] = {
@@ -447,8 +474,9 @@ class Reader:
             result["aggregates_success"] = True
         except ValueError:
             result["aggregates_success"] = False
+        owners = self.application_owners(source)
         for name, required in selected.items():
-            if not required:
+            if not required or name not in owners:
                 continue
             try:
                 proof = job_proof(jobs, name)
@@ -477,7 +505,7 @@ def observation_qualified(proposal):
         return False
     if proposal.get("decision") == "validated":
         return True
-    return set(actual.get("jobs", {})) == set(APPLICATION)
+    return set(actual.get("jobs", {})) == set(proposal.get("owners", APPLICATION))
 
 
 def selected_on_push(root, before, source):

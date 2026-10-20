@@ -9,7 +9,6 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools.ci_main_evidence import (  # noqa: E402
-    APPLICATION,
     PLATFORM,
     REQUIRED,
     Reader,
@@ -57,7 +56,8 @@ def sweep_receipt(reader, run, before):
     source = run["head_sha"]
     jobs = reader.jobs(run)
     origins = {}
-    for name in APPLICATION:
+    owners = reader.application_owners(source)
+    for name in owners:
         proof = job_proof(jobs, name)
         origins[name] = {
             "kind": "sweep",
@@ -81,6 +81,7 @@ def sweep_receipt(reader, run, before):
         "tree": reader.get(f"git/commits/{source}")["tree"]["sha"],
         "input_identity": reader.input_identity(source),
         "jobs": origins,
+        "owners": list(owners),
         "decision": "validated",
         "reason": "Fresh qualified application sweep",
     }
