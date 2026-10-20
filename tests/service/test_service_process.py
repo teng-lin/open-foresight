@@ -5,6 +5,7 @@ These fixtures verify ownership and data flow, not inference quality.
 """
 
 import concurrent.futures
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -824,6 +825,18 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
             assert peer.call("status")["pid"] == owner
         finally:
             peer.close()
+        # Nobody asks for another owner now. A start that lost a lock race
+        # earlier must not take the profile once this owner exits.
+        os.kill(owner, signal.SIGTERM)
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                os.kill(owner, 0)
+            except ProcessLookupError:
+                break
+            poll_delay(deadline)
+        owner = None
+        assert_no_late_owner(profile / "data", profile / "run")
     finally:
         for client in [first, second]:
             if client.process.poll() is None:
@@ -834,6 +847,21 @@ def test_two_headless_mcp_launchers_share_one_automatically_started_owner(runnin
                 os.kill(owner, signal.SIGTERM)
             except ProcessLookupError:
                 pass
+
+
+def assert_no_late_owner(data, runtime, quiet=2.0):
+    """For `quiet` seconds, no process holds the profile lock or serves."""
+    lock = data / ".application.lock"
+    until = time.monotonic() + quiet
+    while time.monotonic() < until:
+        assert not (runtime / "application.sock").exists(), "a late owner serves"
+        with lock.open("a") as probe:
+            try:
+                fcntl.lockf(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                pytest.fail("a late owner holds the profile lock")
+            fcntl.lockf(probe, fcntl.LOCK_UN)
+        threading.Event().wait(0.05)
 
 
 def test_cancelled_model_setup_preserves_previous_registration(running):
@@ -1244,6 +1272,7 @@ def test_gated_helper_twin_matches_the_dart_fixture():
 
 # Every gate point in service.dart. A hook-enabled build holds armed points.
 LIFECYCLE_GATES = (
+    "start.lock_contended",
     "close.begin",
     "close.leases_terminated",
     "close.helper_closed",
