@@ -140,9 +140,10 @@ service has released its profile (its lock is free or its process is gone),
 failing if that takes more than 30 s after the service closed its
 connections. The service closes them only after any recording finalizes
 (--stop waits up to 30 minutes for that), then stops its helper. Scripts
-should therefore allow at least 60 s plus any recording finalization. If the service stopped
-without a clean shutdown, `--stop` still succeeds and prints a warning; the
-next start recovers its runtime. For installers,
+should therefore allow at least 60 s plus any recording finalization. If the
+service stopped without a clean shutdown, during `--stop` or before it,
+`--stop` still succeeds and prints a warning; the next start recovers its
+runtime. With no service and no endpoint record, `--stop` fails. For installers,
 `--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
 atomically refuses active/finalizing recording and in-flight operations, then
 blocks new calls before shutdown begins. It acknowledges success only after

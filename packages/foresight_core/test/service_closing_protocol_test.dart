@@ -915,6 +915,30 @@ void main() {
     );
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('--stop succeeds but warns when the owner already died without a '
+      'clean shutdown, and still fails when no owner ever ran', () async {
+    final profile = newProfile('of-dead-');
+    final owner = await HookedServiceProcess.start(build, profile);
+    await owner.ready();
+    owner.signal(ProcessSignal.sigkill);
+    await owner.exited();
+    // The crash left the record behind, with nothing listening.
+    expect(
+      File('${profile.data}/.application-endpoint.json').existsSync(),
+      isTrue,
+    );
+    final stop = await startStop(profile);
+    await stop.line(
+      'The application service is not running; it stopped without a clean '
+      'shutdown, its endpoint record remains, and the next start recovers its '
+      'runtime.',
+    );
+    expect(await stop.exited(), 0, reason: stop.lines.join('\n'));
+
+    final never = await startStop(newProfile('of-none-'));
+    expect(await never.exited(), isNot(0), reason: never.lines.join('\n'));
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   test('the release wait ends when the lock is free or the owner is gone, and '
       'gives up after its bound', () async {
     final profile = newProfile('of-release-');

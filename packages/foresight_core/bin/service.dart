@@ -37,9 +37,20 @@ Future<void> main(List<String> args) async {
           '${record.reason}.',
         );
       }
-      final client = await ServiceClient.connect(
-        serviceEndpoint(profile, record),
-      );
+      final ServiceClient client;
+      try {
+        client = await ServiceClient.connect(serviceEndpoint(profile, record));
+      } on SocketException {
+        // An owner that died without a clean shutdown leaves its record but
+        // nothing listening; it already stopped, so --stop succeeds.
+        if (mode != '--stop' || !_leftUnclean(profile)) rethrow;
+        stderr.writeln(
+          'The application service is not running; it stopped without a '
+          'clean shutdown, its endpoint record remains, and the next start '
+          'recovers its runtime.',
+        );
+        return;
+      }
       try {
         if (mode == '--stop-if-idle') {
           final result =
@@ -91,17 +102,12 @@ Future<void> main(List<String> args) async {
                 : Duration(milliseconds: bound),
           );
           // The service stopped; tell the user its next start recovers.
-          // This is only a warning, so it can never fail the stop.
-          try {
-            if (profileLeftUnclean(profile)) {
-              stderr.writeln(
-                'The application service stopped without a clean shutdown; '
-                'its endpoint record remains, and the next start recovers its '
-                'runtime.',
-              );
-            }
-          } catch (error) {
-            stderr.writeln('Cannot check how the service stopped: $error');
+          if (_leftUnclean(profile)) {
+            stderr.writeln(
+              'The application service stopped without a clean shutdown; '
+              'its endpoint record remains, and the next start recovers its '
+              'runtime.',
+            );
           }
         }
       } finally {
@@ -133,5 +139,16 @@ Future<void> main(List<String> args) async {
   } catch (error, stack) {
     stderr.writeln('$error\n$stack');
     exitCode = 1;
+  }
+}
+
+/// Whether the profile's last owner stopped without a clean shutdown. This
+/// only chooses a warning, so a failed check never fails `--stop`.
+bool _leftUnclean(ProfilePaths profile) {
+  try {
+    return profileLeftUnclean(profile);
+  } catch (error) {
+    stderr.writeln('Cannot check how the service stopped: $error');
+    return false;
   }
 }
