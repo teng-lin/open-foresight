@@ -81,6 +81,11 @@ class Application implements ModelGate {
 
   final Domain domain;
   ImportPolicy? importPolicy;
+
+  /// The identity (`ProfilePaths.identity`) of the profile whose service hosts
+  /// this application. Status reports it, so a client of another profile that
+  /// reaches this service never attaches to or stops it (SL-7).
+  String? profileId;
   Store get store => domain.store;
   final changes = StreamController<void>.broadcast();
   final captureLevelChanges = StreamController<void>.broadcast();
@@ -620,6 +625,7 @@ class Application implements ModelGate {
         case Operation.status:
           return {
             'pid': pid,
+            'profile_id': profileId,
             'application_api_version': 1,
             'installation_root': configuredInstallationRoot,
             'runtime_revision':

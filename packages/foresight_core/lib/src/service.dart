@@ -44,6 +44,19 @@ RpcError _closingRefusal() => RpcError(
   reason: RpcErrorReason.closing,
 );
 
+/// Why [endpoint] is refused: the owner of another profile serves it.
+/// Profiles share a runtime directory only when configured to (SL-7).
+String foreignOwnerMessage(String endpoint) =>
+    'Another Open Foresight profile is serving $endpoint. Set '
+    'FORESIGHT_RUNTIME for this profile.';
+
+/// Whether [status] comes from the owner of a profile other than [profile].
+/// An owner that predates profile identity reports none and is accepted.
+bool servesAnotherProfile(Map<Object?, Object?> status, ProfilePaths profile) {
+  final owner = status['profile_id'];
+  return owner != null && owner != profile.identity;
+}
+
 // POSIX locks belong to the OS process, not a Dart isolate or file handle.
 // Local hosts must finish before a launcher probes its own process's lock.
 final _localServiceOwners = <String, int>{};
@@ -869,7 +882,7 @@ class ApplicationService {
         '${profile.data}/helper',
       );
       final domain = Domain(store, helper, webSearch: webSearch);
-      final application = Application(domain);
+      final application = Application(domain)..profileId = profile.identity;
       startedApplication = application;
       application.importPolicy = ImportPolicy(profile.data, () {
         final saved = store!.preference('importRoots', '[]');
@@ -2090,6 +2103,18 @@ class _ClosingService implements Exception {
 
 typedef ServiceStartup = ({ServiceClient client, Map<String, dynamic> status});
 
+/// The startup deadline ended a status probe before its reply.
+class _ProbeCutShort extends TimeoutException {
+  _ProbeCutShort()
+    : super('Application service did not answer its startup status probe');
+}
+
+/// The owner of another profile answered at [endpoint] (SL-7).
+class _ForeignOwner implements Exception {
+  final String endpoint;
+  _ForeignOwner(this.endpoint);
+}
+
 String _describeDuration(Duration duration) =>
     duration.inMilliseconds % 1000 == 0
     ? '${duration.inSeconds} s'
@@ -2125,16 +2150,19 @@ Future<ServiceStartup> _connectCompatibleService(
         .call(Operation.status.wire, args)
         .timeout(
           capped ? statusProbeLimit : deadline,
-          onTimeout: () => throw TimeoutException(
-            capped
-                ? 'Application service at $path accepted the connection but '
-                      'did not answer status within '
-                      '${_describeDuration(statusProbeLimit)}; it may be busy '
-                      'or hung.'
-                : 'Application service did not answer its startup status probe',
-          ),
+          onTimeout: () => throw capped
+              ? TimeoutException(
+                  'Application service at $path accepted the connection but '
+                  'did not answer status within '
+                  '${_describeDuration(statusProbeLimit)}; it may be busy '
+                  'or hung.',
+                )
+              : _ProbeCutShort(),
         );
     final value = Map<String, dynamic>.from(reply as Map);
+    // Another profile's owner is never ours, whatever its version. The first
+    // probe checks this before a desktop snapshot sends its capability.
+    if (servesAnotherProfile(value, profile)) throw _ForeignOwner(path);
     if (runtimeConfiguration['FORESIGHT_RUNTIME_REVISION'] != null) {
       validateServiceCompatibility(value);
     }
@@ -2166,6 +2194,14 @@ Future<ServiceStartup> _connectCompatibleService(
   }
 }
 
+/// Whether [error] says nothing listens at the endpoint: no socket there, or
+/// one nobody accepts on. A connect that timed out says neither.
+bool _nobodyListening(SocketException error) =>
+    switch (error.osError?.errorCode) {
+      2 || 61 || 111 => true, // ENOENT; ECONNREFUSED on macOS and Linux
+      _ => false,
+    };
+
 bool _profileOwnerAvailable(
   ProfilePaths profile, {
   required bool closingOwner,
@@ -2177,8 +2213,8 @@ bool _profileOwnerAvailable(
   if (!closingOwner && type == FileSystemEntityType.notFound) return true;
   // A closing owner of this profile always leaves its lock file. If it is
   // missing, the closing owner may belong to another profile that shares this
-  // runtime directory (SL-7), whose teardown could delete a replacement's
-  // socket. Refuse until profile identity checks replace this guard.
+  // runtime directory (SL-7). Its refusal carries no profile identity, which
+  // only status reports, so refuse rather than launch beside it.
   if (closingOwner && type == FileSystemEntityType.notFound) {
     throw StateError(
       'The application service closing at this endpoint does not own this '
@@ -2521,8 +2557,12 @@ Future<ServiceStartup> _ensureService(
   // Where the latest launch records a start that did not happen.
   File? startupStatus;
   String? ignoredRecord;
+  // The endpoint another profile's owner served at the latest attempt.
+  String? foreignOwner;
   TimeoutException deadlineFailure() {
-    final failure = launches > 0
+    final failure = foreignOwner != null
+        ? foreignOwnerMessage(foreignOwner)
+        : launches > 0
         ? startupLog != null
               ? 'Application service did not start. Inspect $startupLog.'
               : 'Application service did not start. Run $executable directly to inspect the startup error.'
@@ -2620,6 +2660,7 @@ Future<ServiceStartup> _ensureService(
 
   try {
     while (true) {
+      String? foreign;
       try {
         // An invalid record is treated as absent. Only an owner holding the
         // profile lock may move it aside.
@@ -2632,6 +2673,16 @@ Future<ServiceStartup> _ensureService(
           statusProbeLimit,
           snapshot: snapshot,
         );
+      } on _ForeignOwner catch (owner) {
+        // Never attach to another profile's owner or launch over it. If it
+        // goes away, this profile's owner may launch as usual.
+        _traceServiceTransport('${owner.endpoint} serves another profile');
+        foreign = owner.endpoint;
+      } on _ProbeCutShort {
+        // A status probe the deadline cut short says nothing new about
+        // another profile's owner seen before it.
+        if (foreignOwner == null) rethrow;
+        throw deadlineFailure();
       } on _ClosingService catch (closing) {
         closingOwner = true;
         try {
@@ -2646,11 +2697,18 @@ Future<ServiceStartup> _ensureService(
       } on _ServiceTransportLost {
         // An isolated frontend can accept while its worker is already gone.
         // Retry only this startup status probe, never a business operation.
-      } on SocketException {
-        // A starting or closing owner may still hold the profile lock.
+        // Whoever serves the endpoint is still unknown.
+        foreign = foreignOwner;
+      } on SocketException catch (error) {
+        // A starting or closing owner may still hold the profile lock. A
+        // connect cut short, for example by the deadline, says nothing new
+        // about another profile's owner; only its absence clears it.
+        if (!_nobodyListening(error)) foreign = foreignOwner;
       }
+      foreignOwner = foreign;
       remaining();
       if (launches == 0 &&
+          foreignOwner == null &&
           _profileOwnerAvailable(profile, closingOwner: closingOwner)) {
         privateDirectory(profile.runtime);
         launches++;

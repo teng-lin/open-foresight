@@ -38,9 +38,20 @@ String? _macHomeDirectory() {
   return value.startsWith(prefix) ? value.substring(prefix.length) : null;
 }
 
+/// The 24-hex identity of the profile whose canonical data path is [data].
+String _profileIdentity(String data) =>
+    sha256.convert(utf8.encode(data)).toString().substring(0, 24);
+
 class ProfilePaths {
   final String data, runtime;
   const ProfilePaths(this.data, this.runtime);
+
+  /// Which profile this is: 24 hex digits of the SHA-256 of its canonical
+  /// data path. An owner reports it in status, so a client never attaches to,
+  /// stops or replaces another profile's owner (SL-7). Aliases of one data
+  /// directory share an identity.
+  String get identity => _profileIdentity(canonicalProfilePath(data));
+
   factory ProfilePaths.resolve(Map<String, String> environment, {bool? macOS}) {
     final mac = macOS ?? Platform.isMacOS;
     final home =
@@ -71,14 +82,11 @@ class ProfilePaths {
         throw StateError('macOS TMPDIR must be a private user-owned directory');
       }
     }
-    final identity = sha256
-        .convert(utf8.encode(data))
-        .toString()
-        .substring(0, 24);
+    final profile = _profileIdentity(data).substring(0, 12);
     final runtime = canonicalProfilePath(
       environment['FORESIGHT_RUNTIME'] ??
           (mac
-              ? '$temporary/of-${identity.substring(0, 12)}'
+              ? '$temporary/of-$profile'
               : '${environment['XDG_RUNTIME_DIR'] ?? '$data/runtime'}/open-foresight'),
     );
     if (mac && utf8.encode('$runtime/application.sock').length >= 104) {
