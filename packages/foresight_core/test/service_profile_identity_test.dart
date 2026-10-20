@@ -854,6 +854,23 @@ void main() {
     }
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('a runtime fallback inside the profile that earlier versions created '
+      'group-writable still works', () {
+    final directory = createServiceTestDirectorySync('of-fallback-');
+    final data = '${directory.path}/data';
+    privateDirectory(data);
+    // Earlier versions created it with the umask's mode: 0775 under umask
+    // 002. The private profile directory protects it.
+    Directory('$data/runtime').createSync();
+    expect(Process.runSync('/bin/chmod', ['775', '$data/runtime']).exitCode, 0);
+    final profile = ProfilePaths.resolve({
+      'HOME': directory.path,
+      'FORESIGHT_DATA': data,
+    }, macOS: false);
+    expect(serviceEndpoint(profile), '${profile.runtime}/application.sock');
+    expect(FileStat.statSync(profile.runtime).mode & 0x1ff, 0x1c0);
+  });
+
   test('the directory a default runtime lives in is private too (S5)', () {
     final directory = createServiceTestDirectorySync('of-parent-');
     final xdg = '${directory.path}/xdg';

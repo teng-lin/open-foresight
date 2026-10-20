@@ -45,10 +45,12 @@ String _profileIdentity(String data) =>
 class ProfilePaths {
   final String data, runtime;
 
-  /// The directory a default Linux runtime lives in, which must be private
-  /// too: under a shared XDG_RUNTIME_DIR another user could otherwise create
-  /// it first, and clients released before per-profile runtimes use it as
-  /// their runtime (S5). Null for an explicit or macOS runtime.
+  /// The directory a default Linux runtime under XDG_RUNTIME_DIR lives in,
+  /// which must be private too: under a shared XDG_RUNTIME_DIR another user
+  /// could otherwise create it first, and clients released before per-profile
+  /// runtimes use it as their runtime (S5). Null otherwise: the private
+  /// profile directory already protects the `$data/runtime` fallback, which
+  /// earlier versions created with the umask's mode.
   final String? runtimeParent;
   const ProfilePaths(this.data, this.runtime, {this.runtimeParent});
 
@@ -118,7 +120,8 @@ class ProfilePaths {
     return ProfilePaths(
       data,
       runtime,
-      runtimeParent: mac || environment['FORESIGHT_RUNTIME'] != null
+      runtimeParent:
+          mac || environment['FORESIGHT_RUNTIME'] != null || xdgRuntime == null
           ? null
           : File(runtime).parent.path,
     );
