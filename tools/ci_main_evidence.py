@@ -105,6 +105,17 @@ def selection_jobs(selection):
     return result
 
 
+def require_ready(run):
+    """Old green jobs cannot stand in for an unfinished or failed new attempt."""
+    if (
+        run.get("status") != "completed"
+        or run.get("conclusion") != "success"
+        or not candidate.positive(run.get("run_attempt"))
+    ):
+        raise ValueError("Latest validation run attempt is not completed successfully")
+    return run
+
+
 def job_proof(jobs, name):
     return {child: candidate.latest(jobs, child) for child in GROUPS.get(name, (name,))}
 
@@ -219,12 +230,18 @@ class Reader:
             raise ValueError("Main required-check set or GitHub App binding changed")
         checks = self.rows(f"commits/{head}/check-runs?filter=all", "check_runs")
         proofs = {}
+        workflows = {}
         for name, workflow in REQUIRED.items():
             matches = [row for row in checks if row.get("name") == name]
             if not matches:
                 raise ValueError(f"Missing required check: {name}")
             check = max(matches, key=lambda row: row["id"])
-            run = self.latest_run(workflow, head, ("pull_request",))
+            if workflow not in workflows:
+                current = require_ready(
+                    self.latest_run(workflow, head, ("pull_request",))
+                )
+                workflows[workflow] = (current, self.jobs(current))
+            run, jobs = workflows[workflow]
             if (
                 check.get("head_sha") != head
                 or check.get("app", {}).get("id") != APP
@@ -235,7 +252,7 @@ class Reader:
                 raise ValueError(
                     f"Latest named required check is not trusted green: {name}"
                 )
-            job = candidate.latest(self.jobs(run), name)
+            job = candidate.latest(jobs, name)
             proofs[name] = {
                 "check": check["id"],
                 "run": run["id"],
@@ -277,32 +294,39 @@ class Reader:
                 raise ValueError("Predecessor receipt is incompatible")
             # Revalidate every original PR's current readiness. The receipt is
             # an index, never authority to trust a stale green check.
+            contexts: dict = {}
             for origin in receipt["jobs"].values():
-                self.verify_origin(origin)
+                self.verify_origin(origin, contexts=contexts)
             return receipt, upload
         raise ValueError("Predecessor has no qualified per-job evidence")
 
-    def verify_origin(self, origin):
+    def verify_origin(self, origin, *, contexts=None):
         head = require_source(origin["head"])
         sweep = origin.get("kind") == "sweep"
-        if not sweep and self.required_checks(head) != origin["required_checks"]:
-            raise ValueError("Original PR readiness changed after receipt creation")
-        if sweep:
-            from tools.ci_main_sweep import qualify
+        contexts = {} if contexts is None else contexts
+        key = (head, sweep, origin["run"])
+        if key not in contexts:
+            checks = None if sweep else self.required_checks(head)
+            if sweep:
+                from tools.ci_main_sweep import qualify
 
-            run = self.run(origin["run"])
-            qualify(self, run)
-            if run.get("head_sha") != head:
-                raise ValueError("Sweep origin source differs from its receipt")
-        else:
-            run = self.latest_run(PLATFORM, head, ("pull_request",))
-        selection, upload = self.selection(run)
+                run = self.run(origin["run"])
+                qualify(self, run)
+                if run.get("head_sha") != head:
+                    raise ValueError("Sweep origin source differs from its receipt")
+            else:
+                run = self.latest_run(PLATFORM, head, ("pull_request",))
+            selection, upload = self.selection(run)
+            contexts[key] = (checks, run, selection, upload, self.jobs(run))
+        checks, run, selection, upload, jobs = contexts[key]
+        if not sweep and checks != origin["required_checks"]:
+            raise ValueError("Original PR readiness changed after receipt creation")
         if (
             upload != origin["selection_upload"]
             or not selection_jobs(selection)[origin["name"]]
         ):
             raise ValueError("Original job selection changed or did not execute")
-        jobs = job_proof(self.jobs(run), origin["name"])
+        jobs = job_proof(jobs, origin["name"])
         observed = {
             name: {"job": job["id"], "attempt": job["run_attempt"]}
             for name, job in jobs.items()

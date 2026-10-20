@@ -30,6 +30,9 @@ Manual `exercise_sweep` dispatches a current-main application-tier sweep without
 stamping or the Linux installer matrix. The first classification step validates
 the dispatch identity and writes explicit `superseded`. Queued duplicates cannot
 mutually skip; completed duplicates must qualify their actual selected execution.
+The dispatch namespace is bound in both the run title and selection artifact.
+Exercise sweeps cannot satisfy production receipts or suppress a production sweep;
+the production namespace additionally requires independent rollout authorization.
 Sweep execution does not write production shared cache references. Ordinary
 manual dispatch, preview and release selection keep their existing semantics.
 
