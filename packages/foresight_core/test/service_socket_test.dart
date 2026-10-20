@@ -41,15 +41,22 @@ void main() {
     final second = await ServiceSocketBinding.bind(path);
     try {
       await publish(first, answer('first'));
+      expect(first.linkedForTesting, isTrue);
       // Two owners sharing a runtime start together: the later one must not
       // take the earlier one's live socket.
-      await expectLater(publish(second, answer('second')), throwsA(anything));
+      await expectLater(
+        publish(second, answer('second')),
+        throwsA(
+          isA<SocketPathInUse>().having((error) => error.live, 'live', isTrue),
+        ),
+      );
       expect(await answerAt(path), 'first');
       // Once nobody listens there, a new listener takes the path over.
       await first.close();
       final third = await ServiceSocketBinding.bind(path);
       try {
         await publish(third, answer('third'));
+        expect(third.linkedForTesting, isTrue);
         expect(await answerAt(path), 'third');
       } finally {
         await third.close();

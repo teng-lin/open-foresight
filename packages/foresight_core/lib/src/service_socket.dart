@@ -13,8 +13,19 @@ final int Function(Pointer<Utf8>, Pointer<Utf8>) _link =
       int Function(Pointer<Utf8>, Pointer<Utf8>)
     >('link');
 
+bool _linkPath(String from, String to) {
+  final source = from.toNativeUtf8(allocator: calloc);
+  final target = to.toNativeUtf8(allocator: calloc);
+  try {
+    return _link(source, target) == 0;
+  } finally {
+    calloc.free(source);
+    calloc.free(target);
+  }
+}
+
 /// The device and inode of [path] itself, without following a link, or null
-/// when it is missing or cannot be inspected.
+/// when it is missing. Throws when it exists but cannot be inspected.
 Future<String?> fileIdentity(String path) async {
   if (FileSystemEntity.typeSync(path, followLinks: false) ==
       FileSystemEntityType.notFound) {
@@ -24,7 +35,44 @@ Future<String?> fileIdentity(String path) async {
     '/usr/bin/stat',
     Platform.isMacOS ? ['-f', '%d:%i', path] : ['-c', '%d:%i', path],
   );
-  return result.exitCode == 0 ? result.stdout.toString().trim() : null;
+  if (result.exitCode == 0) return result.stdout.toString().trim();
+  if (FileSystemEntity.typeSync(path, followLinks: false) ==
+      FileSystemEntityType.notFound) {
+    return null;
+  }
+  throw FileSystemException(
+    'Cannot inspect ${result.stderr.toString().trim()}',
+    path,
+  );
+}
+
+/// Unlink the socket at [path] only if it is still the file [expected]
+/// names. It is first renamed to a private name in the same directory, so
+/// nothing can replace it between the check and the unlink; anything else
+/// is linked back, unless a newer socket took the path meanwhile. Returns
+/// whether it removed the socket.
+Future<bool> _removeIfStill(String path, String expected) async {
+  final random = Random.secure();
+  final aside =
+      '${File(path).parent.path}/.r'
+      '${base64Url.encode(List.generate(6, (_) => random.nextInt(256)))}';
+  try {
+    File(path).renameSync(aside);
+  } on PathNotFoundException {
+    return false;
+  }
+  String? moved;
+  try {
+    moved = await fileIdentity(aside);
+  } on FileSystemException {
+    moved = null;
+  }
+  if (moved == expected) {
+    File(aside).deleteSync();
+    return true;
+  }
+  if (_linkPath(aside, path)) File(aside).deleteSync();
+  return false;
 }
 
 /// Whether [error] says that nothing listens at a Unix socket path: there is
@@ -98,16 +146,22 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
 /// [SocketPathInUse] instead of deleting a socket that accepts, one whose
 /// state a connect cannot tell, or one replaced while it was probed.
 Future<void> clearStaleSocket(String path) async {
-  final before = await fileIdentity(path);
+  final String? before;
+  try {
+    before = await fileIdentity(path);
+  } on FileSystemException catch (error) {
+    throw SocketPathInUse(path, cause: error);
+  }
   if (before == null) return;
   final inUse = await probeSocketPath(path);
   if (inUse != null) throw inUse;
   // Unlink only the socket that was probed; another owner may have published
   // a new one there meanwhile.
-  final now = await fileIdentity(path);
-  if (now == null) return;
-  if (now != before) throw SocketPathInUse(path, cause: 'it was replaced');
-  File(path).deleteSync();
+  if (!await _removeIfStill(path, before) &&
+      FileSystemEntity.typeSync(path, followLinks: false) !=
+          FileSystemEntityType.notFound) {
+    throw SocketPathInUse(path, cause: 'it was replaced');
+  }
 }
 
 /// Bind under a private, generation-specific name before publishing a socket.
@@ -127,6 +181,11 @@ class ServiceSocketBinding {
   final String? identity;
   Future<void>? _closing;
   bool _published = false;
+  bool _linked = false;
+
+  /// Whether [publish] used a hard link, not the rename fallback for file
+  /// systems that cannot link a socket.
+  bool get linkedForTesting => _linked;
 
   /// Whether [publish] made this listener discoverable at [path]. Until
   /// then, whatever is at [path] is not this owner's to remove.
@@ -151,12 +210,13 @@ class ServiceSocketBinding {
     );
     try {
       protectPrivateFile(boundPath);
-      return ServiceSocketBinding._(
-        listener,
-        path,
-        boundPath,
-        await fileIdentity(boundPath),
-      );
+      String? identity;
+      try {
+        identity = await fileIdentity(boundPath);
+      } on FileSystemException {
+        // unpublish then probes before it removes the published socket.
+      }
+      return ServiceSocketBinding._(listener, path, boundPath, identity);
     } catch (_) {
       await listener.close();
       rethrow;
@@ -171,7 +231,7 @@ class ServiceSocketBinding {
     if (_closing != null) throw StateError('Socket publication cancelled');
     listener.listen(onClient);
     for (var attempt = 0; ; attempt++) {
-      if (_linkBound()) break;
+      if (_linkPath(_boundPath, path)) break;
       if (FileSystemEntity.typeSync(path, followLinks: false) ==
           FileSystemEntityType.notFound) {
         // This file system cannot link a socket; nothing is at the path to
@@ -184,31 +244,31 @@ class ServiceSocketBinding {
       await clearStaleSocket(path);
       if (_closing != null) throw StateError('Socket publication cancelled');
     }
-    File(_boundPath).deleteSync();
+    // Published from here on, even if the temporary name stays behind.
     _published = true;
-  }
-
-  bool _linkBound() {
-    final from = _boundPath.toNativeUtf8(allocator: calloc);
-    final to = path.toNativeUtf8(allocator: calloc);
+    _linked = true;
     try {
-      return _link(from, to) == 0;
-    } finally {
-      calloc.free(from);
-      calloc.free(to);
+      File(_boundPath).deleteSync();
+    } on FileSystemException {
+      // Closing the listener removes the temporary name too.
     }
   }
 
   /// Remove the published socket if [path] is still this listener's; another
-  /// owner may have published there since this listener closed (S3). Returns
+  /// owner may have published there since this listener closed (S3). Without
+  /// a known identity it is removed only if nobody listens on it. Returns
   /// whether it removed the socket.
   Future<bool> unpublish() async {
     if (!_published) return false;
-    final current = await fileIdentity(path);
-    if (current == null) return false;
-    if (identity != null && current != identity) return false;
-    File(path).deleteSync();
-    return true;
+    final known = identity;
+    if (known != null) return _removeIfStill(path, known);
+    try {
+      await clearStaleSocket(path);
+    } on SocketPathInUse {
+      return false;
+    }
+    return FileSystemEntity.typeSync(path, followLinks: false) ==
+        FileSystemEntityType.notFound;
   }
 
   Future<void> close() => _closing ??= listener.close().then<void>((_) {});
