@@ -1,4 +1,5 @@
 import 'rpc_error.dart';
+import 'operations.dart' show Operation;
 import 'model_integrity.dart';
 import 'model_asset_lifecycle.dart';
 import 'platform_services.dart';
@@ -43,8 +44,9 @@ class Store {
   /// values after a clear, so a caller holding an ID sends this back with it.
   static const workspaceEpochKey = 'workspaceEpoch';
 
-  /// How long a request key keeps a retry after a lost reply from writing twice.
-  static const requestKeyLifetime = Duration(days: 7);
+  /// How long a request key keeps a retry after a lost reply from writing
+  /// twice. Keys hold digests of content, so they are kept only this long.
+  static const requestKeyLifetime = Duration(hours: 24);
   static const _privacyMaintenanceKey = 'internal.privacyMaintenancePending';
   Timer? _privacyMaintenanceRetry;
   var _privacyRetrySeconds = 1;
@@ -90,9 +92,7 @@ class Store {
           workspaceEpochKey,
           _newWorkspaceEpoch(),
         ]);
-        db.execute('DELETE FROM request_keys WHERE created<?', [
-          clock.now().subtract(requestKeyLifetime).millisecondsSinceEpoch,
-        ]);
+        _pruneRequestKeys();
         db.execute('COMMIT');
       } catch (_) {
         // SQLITE_FULL/IOERR can already roll back the transaction.
@@ -590,10 +590,18 @@ class Store {
     'UPDATE sources SET state=?,error=? WHERE id=?',
     [state, error, id],
   );
-  void tombstone(String id) => db.execute(
-    'UPDATE sources SET deleted=1,state=\'deleting\',revision=revision+1 WHERE id=?',
-    [id],
-  );
+  void tombstone(String id) {
+    db.execute(
+      'UPDATE sources SET deleted=1,state=\'deleting\',revision=revision+1 WHERE id=?',
+      [id],
+    );
+    // A deleted source's import key would keep a digest of its text.
+    db.execute('DELETE FROM request_keys WHERE operation=? AND result=?', [
+      Operation.sourcesImport.wire,
+      jsonEncode({'id': id}),
+    ]);
+  }
+
   void answer(
     String question,
     String body,
@@ -666,6 +674,7 @@ class Store {
   }) {
     db.execute('SAVEPOINT write_once');
     try {
+      if (key != null) _pruneRequestKeys();
       final stored = key == null
           ? null
           : rows(
@@ -702,11 +711,20 @@ class Store {
       db.execute('RELEASE write_once');
       return (result: result, replayed: stored != null);
     } catch (_) {
-      db.execute('ROLLBACK TO write_once');
-      db.execute('RELEASE write_once');
+      // SQLITE_FULL/IOERR can already roll back the whole transaction; then
+      // there is no savepoint left, and the original error must surface.
+      if (!db.autocommit) {
+        db.execute('ROLLBACK TO write_once');
+        db.execute('RELEASE write_once');
+      }
       rethrow;
     }
   }
+
+  void _pruneRequestKeys() => db.execute(
+    'DELETE FROM request_keys WHERE created<?',
+    [clock.now().subtract(requestKeyLifetime).millisecondsSinceEpoch],
+  );
 
   static const _runtimeResources = {
     'generation': 'FORESIGHT_LITERT_RUNNER',

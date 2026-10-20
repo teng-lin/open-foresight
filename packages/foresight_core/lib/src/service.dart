@@ -1414,12 +1414,17 @@ class ApplicationService {
               args['requestId'] = lease.id;
               lease.waiting = true;
               final results = Stream.fromFuture(
-                access.authorize(
-                  client,
-                  lease.method,
-                  args,
-                  current: () => !lease.cancelled,
-                ),
+                Future.sync(() {
+                  // A request from a cleared workspace fails before it can
+                  // ask the desktop for approval.
+                  application.checkWorkspaceEpoch(args);
+                  return access.authorize(
+                    client,
+                    lease.method,
+                    args,
+                    current: () => !lease.cancelled,
+                  );
+                }),
               ).asyncExpand((_) => _results(client, args, lease));
               _subscriptions[client]![id] = results.listen(
                 (value) =>

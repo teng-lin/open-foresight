@@ -150,18 +150,20 @@ enum Operation {
     Operation.googleAttachments,
   }.contains(this);
 
-  /// [args] with [epoch] added when this call edits an existing row by ID and
-  /// does not already name the epoch its ID was read in.
+  /// [args] with [epoch] added when this call edits an existing row by ID, or
+  /// is a keyed create that a retry must not replay into a cleared workspace,
+  /// and does not already name the epoch it was prepared in.
   Map<String, dynamic> scopedToWorkspace(
     Map<String, dynamic> args,
     String? epoch,
-  ) =>
-      epoch != null &&
-          carriesWorkspaceEpoch &&
-          args['id'] != null &&
-          !args.containsKey('workspace_epoch')
-      ? {...args, 'workspace_epoch': epoch}
-      : args;
+  ) {
+    final scoped =
+        (carriesWorkspaceEpoch && args['id'] != null) ||
+        (acceptsIdempotencyKey && args['idempotency_key'] != null);
+    return epoch != null && scoped && !args.containsKey('workspace_epoch')
+        ? {...args, 'workspace_epoch': epoch}
+        : args;
+  }
 
   bool get notifiesChanges => !{
     Operation.status,
@@ -244,7 +246,7 @@ List<RpcTool> get rpcTools {
   final integer = JsonSchema.integer();
   final epoch = JsonSchema.string(
     description:
-        'Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item.',
+        'Optional workspace_epoch from get_status. If the workspace was cleared since, the call fails with notFound instead of acting on an ID that may now name a different item, or replaying a keyed change into the new workspace.',
   );
   final idempotencyKey = JsonSchema.string(
     minLength: 1,
@@ -253,7 +255,8 @@ List<RpcTool> get rpcTools {
         'Optional unique key for this change. If a call fails with reason outcomeUnknown, retry with the same idempotency_key: the change is applied at most once and the retry returns its result. Use a new key for a different change.',
   );
   const retry =
-      ' If a call fails with reason outcomeUnknown, retry with the same idempotency_key.';
+      ' If a call fails with reason outcomeUnknown, retry with the same idempotency_key.'
+      ' Pass workspace_epoch from get_status too, so a retry after a workspace clear fails instead of applying the change again.';
   return [
     RpcTool(
       'audio_capabilities',
@@ -312,7 +315,7 @@ List<RpcTool> get rpcTools {
     RpcTool(
       'import_text',
       Operation.sourcesImport,
-      'Create or update a text source and index it. Supplying an existing ID replaces its content and increments its revision.$retry',
+      'Create or update a text source and index it. Supplying the ID of an existing source replaces its content and increments its revision; an ID that names no source fails with notFound.$retry',
       {
         'title': text,
         'text': text,
@@ -404,7 +407,11 @@ List<RpcTool> get rpcTools {
       'create_meeting',
       Operation.meetingsCreate,
       'Create a meeting without starting audio capture.$retry',
-      {'title': text, 'idempotency_key': idempotencyKey},
+      {
+        'title': text,
+        'workspace_epoch': epoch,
+        'idempotency_key': idempotencyKey,
+      },
       ['title'],
     ),
     RpcTool(

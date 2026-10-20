@@ -926,6 +926,14 @@ void main() {
         await sent(Operation.meetingsCreate, {'title': 'T'}),
         isNot(contains('workspace_epoch')),
       );
+      // A keyed create must not be replayed into a workspace cleared since.
+      expect(
+        await sent(Operation.meetingsCreate, {
+          'title': 'T',
+          'idempotency_key': 'k',
+        }),
+        containsPair('workspace_epoch', 'before-clear'),
+      );
       // A dialog that read its ID earlier names that workspace itself.
       expect(
         await sent(Operation.artifactsEdit, {

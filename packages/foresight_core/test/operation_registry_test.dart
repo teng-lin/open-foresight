@@ -44,7 +44,7 @@ void main() {
       final keyed = tool.operation.acceptsIdempotencyKey;
       expect(
         tool.properties.containsKey('workspace_epoch'),
-        tool.properties.containsKey('id'),
+        tool.properties.containsKey('id') || keyed,
         reason: tool.name,
       );
       expect(

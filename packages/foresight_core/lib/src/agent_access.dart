@@ -3,6 +3,7 @@ import 'operations.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' show Random;
 import 'profile_paths.dart';
 
 /// Agent imports are limited to folders explicitly selected in the desktop.
@@ -88,7 +89,7 @@ class AgentAccessGate {
   final _recent =
       Map<Object, List<({String fingerprint, DateTime at})>>.identity();
   Object? _host;
-  int _next = 0;
+  final _random = Random.secure();
   final _pending = <String, ({Object client, Completer<bool> done})>{};
   AgentAccessGate(
     this.desktopToken,
@@ -181,7 +182,10 @@ class AgentAccessGate {
       throw RpcError(RpcErrorCode.busy, 'Too many pending approval requests');
     }
     recent.add((fingerprint: fingerprint, at: time));
-    final id = 'approval-${++_next}';
+    // Random, so an ID from an owner that has gone never names a request of
+    // its replacement in the desktop.
+    final id =
+        'approval-${[for (var i = 0; i < 8; i++) _random.nextInt(256).toRadixString(16).padLeft(2, '0')].join()}';
     final done = Completer<bool>();
     _pending[id] = (client: client, done: done);
     final shown = send(host, {

@@ -1,6 +1,7 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'package:foresight_test_support/google_connections.dart'
     show AdapterDomain;
+import 'dart:async';
 import 'dart:io';
 
 import 'package:clock/clock.dart';
@@ -13,6 +14,18 @@ import 'package:test/test.dart';
 
 const clearedMessage = 'This item was removed when the workspace was cleared.';
 
+/// Indexing that can fail definitely after its source committed.
+class CommitDomain extends AdapterDomain {
+  CommitDomain(super.store, super.helper);
+  bool failIndex = false;
+  @override
+  Future<void> index(String id) async {
+    if (!failIndex) return super.index(id);
+    store.state(id, 'failed', 'Bad state: index worker disconnected');
+    throw StateError('index worker disconnected');
+  }
+}
+
 Matcher throwsRpc(RpcErrorCode code, [Object? message]) => throwsA(
   isA<RpcError>()
       .having((error) => error.code, 'code', code)
@@ -24,7 +37,7 @@ void main() {
     late Directory directory;
     late Store store;
     late Helper helper;
-    late AdapterDomain domain;
+    late CommitDomain domain;
     late Application app;
     setUp(() {
       directory = createTestTempDirectorySync('commit-safety-');
@@ -34,7 +47,7 @@ void main() {
         '${directory.path}/helper',
         manageProcess: false,
       );
-      domain = AdapterDomain(store, helper);
+      domain = CommitDomain(store, helper);
       app = Application(
         domain,
         auth: GoogleAuth(
@@ -371,15 +384,19 @@ void main() {
       },
     );
 
-    test('startup prunes request keys older than seven days', () async {
+    test('keys older than a day are pruned at startup and on write', () async {
       final start = DateTime.utc(2026, 10, 1);
+      List<Object?> keys() => store
+          .rows('SELECT key FROM request_keys ORDER BY key')
+          .map((row) => row['key'])
+          .toList();
       for (final (key, age) in [
-        ('expired', 8),
-        ('boundary', 7),
-        ('recent', 6),
+        ('expired', 25),
+        ('boundary', 24),
+        ('recent', 23),
       ]) {
         await withClock(
-          Clock.fixed(start.subtract(Duration(days: age))),
+          Clock.fixed(start.subtract(Duration(hours: age))),
           () => app.call('meetings.create', {
             'title': key,
             'idempotency_key': key,
@@ -387,12 +404,16 @@ void main() {
         );
       }
       withClock(Clock.fixed(start), () => Store(store.path)).close();
-      expect(
-        store
-            .rows('SELECT key FROM request_keys ORDER BY key')
-            .map((row) => row['key']),
-        ['boundary', 'recent'],
+      expect(keys(), ['boundary', 'recent']);
+      // A keyed write prunes too, before it looks up its own key.
+      await withClock(
+        Clock.fixed(start.add(const Duration(hours: 23, minutes: 1))),
+        () => app.call('meetings.create', {
+          'title': 'later',
+          'idempotency_key': 'later',
+        }),
       );
+      expect(keys(), ['later']);
       await app.call('meetings.create', {
         'title': 'expired',
         'idempotency_key': 'expired',
@@ -404,6 +425,124 @@ void main() {
         2,
         reason: 'A pruned key no longer protects a retry',
       );
+    });
+
+    test('deleting a source forgets the key that imported it', () async {
+      final source = (await call('sources.import', {
+        'title': 'Private',
+        'text': 'deleted text',
+        'idempotency_key': 'import',
+      }))['id'];
+      await call('notes.save', {
+        'title': 'Kept',
+        'body': '',
+        'idempotency_key': 'note',
+      });
+      await app.call('sources.delete', {'id': source});
+      expect(
+        store.rows('SELECT key FROM request_keys').map((row) => row['key']),
+        ['note'],
+      );
+    });
+
+    test('an import names an existing source or none', () async {
+      final kept = (await call('sources.import', {
+        'title': 'Kept',
+        'text': 'v1',
+        'index': false,
+      }))['id'];
+      final deleted = (await call('sources.import', {
+        'title': 'Deleted',
+        'text': 'gone',
+        'index': false,
+      }))['id'];
+      await app.call('sources.delete', {'id': deleted});
+      for (final id in [deleted, 'never-existed']) {
+        await expectLater(
+          app.call('sources.import', {
+            'id': id,
+            'title': 'Revived',
+            'text': 'should not land',
+          }),
+          throwsRpc(RpcErrorCode.notFound, 'This source no longer exists.'),
+          reason: id as String,
+        );
+      }
+      expect(store.sources.map((row) => row['id']), [kept]);
+      expect(
+        store.rows('SELECT 1 FROM sources WHERE id=?', ['never-existed']),
+        isEmpty,
+      );
+      await app.call('sources.import', {
+        'id': kept,
+        'title': 'Kept',
+        'text': 'v2',
+      });
+      expect(store.sources.single['content'], 'v2');
+    });
+
+    test(
+      'a keyed create retried after a clear is not replayed into it',
+      () async {
+        final before = await epoch();
+        final keyed = {
+          'title': 'Before clear',
+          'idempotency_key': 'create',
+          'workspace_epoch': before,
+        };
+        await app.call('meetings.create', keyed);
+        await app.call('workspace.clear', {});
+        final writes = changes();
+        await expectLater(
+          app.call('meetings.create', keyed),
+          throwsRpc(
+            RpcErrorCode.notFound,
+            'The workspace was cleared after this change was prepared; nothing was saved.',
+          ),
+        );
+        expect(changes(), writes);
+        expect(store.rows('SELECT * FROM meetings'), isEmpty);
+      },
+    );
+
+    test(
+      'a replay reports the indexing failure of its first attempt',
+      () async {
+        domain.failIndex = true;
+        final keyed = {
+          'title': 'Indexed later',
+          'text': 'Body',
+          'idempotency_key': 'index',
+        };
+        await expectLater(
+          app.call('sources.import', keyed),
+          throwsA(isA<StateError>()),
+        );
+        await expectLater(
+          app.call('sources.import', keyed),
+          throwsRpc(
+            RpcErrorCode.internal,
+            'Saved, but indexing failed: Bad state: index worker disconnected',
+          ),
+        );
+        expect(store.sources, hasLength(1));
+      },
+    );
+
+    test('attachments, the epoch preference and creates are checked', () async {
+      await expectLater(
+        app.call('google.attachments', {'id': 99}),
+        throwsRpc(RpcErrorCode.notFound, 'Meeting not found: 99'),
+      );
+      final epochBefore = await epoch();
+      await expectLater(
+        app.call('preferences.set', {
+          'key': 'workspaceEpoch',
+          'value': 'chosen',
+        }),
+        throwsRpc(RpcErrorCode.invalidArgument),
+      );
+      expect(await epoch(), epochBefore);
     });
   });
 
@@ -443,6 +582,46 @@ void main() {
         await service.close();
       }
     }
+
+    test(
+      'a request from a cleared workspace fails before asking the desktop',
+      () async {
+        final service = await ApplicationService.start(profile);
+        final desktop = await ServiceClient.connect(service.path);
+        final agent = await ServiceClient.connect(service.path);
+        try {
+          await desktop.call('security.attach_desktop', {
+            'token': File(
+              '${profile.data}/.desktop-capability',
+            ).readAsStringSync(),
+          });
+          final shown = <Map<String, dynamic>>[];
+          desktop.events.stream
+              .where((event) => event['event'] == 'approval')
+              .listen((event) {
+                shown.add(event);
+                unawaited(
+                  desktop.call('security.decide', {
+                    'approval_id': event['approval_id'],
+                    'allow': false,
+                  }),
+                );
+              });
+          await expectLater(
+            agent.call('sources.delete', {
+              'id': 'source',
+              'workspace_epoch': 'from-before-a-clear',
+            }),
+            throwsRpc(RpcErrorCode.notFound, clearedMessage),
+          );
+          expect(shown, isEmpty);
+        } finally {
+          await agent.close();
+          await desktop.close();
+          await service.close();
+        }
+      },
+    );
 
     test('change events carry the workspace epoch', () async {
       await serve((client) async {
