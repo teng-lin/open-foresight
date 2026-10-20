@@ -31,6 +31,12 @@ class Producer:
 # window and checksums are separate mandatory proofs in each consumer. In
 # particular, a release-candidate row never authorizes a PR or preview handoff.
 PRODUCERS = {
+    "linux-ci-tooling": Producer(
+        (".github/workflows/linux-cache-publish.yml",),
+        ("push", "workflow_dispatch", "schedule"),
+        {"": ("publish-linux-caches",)},
+        receipt_tier="tooling",
+    ),
     "shadow-fork-sdk": Producer(
         (".github/workflows/macos.yml",),
         ("pull_request",),

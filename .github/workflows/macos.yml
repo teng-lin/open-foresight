@@ -198,7 +198,8 @@ jobs:
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: ${{ runner.temp }}/foresight-document-flutter
-        key: flutter-linux-document-host-3.35.7-v1
+        key: flutter-linux-document-host-3.35.7-v2
+        restore-keys: flutter-linux-document-host-3.35.7-v1
     - name: Install pinned Dart through the reviewed Flutter SDK
       run: |
         task_document_flutter="$RUNNER_TEMP/foresight-document-flutter"
@@ -820,7 +821,7 @@ jobs:
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/acceptance-models
-        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
     - name: Run independent cpu acceptance against the restored bytes
       env:
         GH_TOKEN: ${{ github.token }}
@@ -892,7 +893,7 @@ jobs:
     - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: build/acceptance-models
-        key: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+        key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
     - name: Run independent audio acceptance against the restored bytes
       env:
         GH_TOKEN: ${{ github.token }}

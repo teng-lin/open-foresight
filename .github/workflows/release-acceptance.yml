@@ -136,17 +136,11 @@ jobs:
         id: models-cache
         with:
           path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          restore-keys: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
           # Same pinned weights and cache path as the existing verified main cache.
-          restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare authenticated public model fixtures
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
-      - name: Cache authenticated model fixtures before application tests
-        if: steps.models-cache.outputs.cache-matched-key == ''
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Install and exercise the downloaded package as an ordinary user
         env:
           IMAGE: ${{ matrix.image }}
@@ -200,17 +194,11 @@ jobs:
         id: models-cache
         with:
           path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          key: main-integration-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
+          restore-keys: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
           # Same pinned weights and cache path as the existing verified main cache.
-          restore-keys: integration-models-v1-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Prepare authenticated public model fixtures
         run: python tools/test_installed_release.py --prepare-models-only --models build/acceptance-models --output reports
-      - name: Cache authenticated model fixtures before application tests
-        if: steps.models-cache.outputs.cache-matched-key == ''
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: build/acceptance-models
-          key: release-acceptance-models-${{ runner.os }}-${{ hashFiles('tools/test_macos_release_models.py', 'packages/foresight_core/lib/src/model_pins.dart') }}
       - name: Mount DMG, install, run functional tests, reinstall and remove owned copy
         run: |
           task_dmg=(assets/*.dmg)
