@@ -274,12 +274,18 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
   var resets = 0, refusals = 0;
   while (true) {
     final left = bound - elapsed.elapsed;
+    // A retry after a reset may come past the bound, and isolate scheduling
+    // alone can outlast a 1 ms timer; a timeout would then read as "cannot
+    // tell" and refuse a socket that is provably gone.
+    final floor = resets > 0
+        ? const Duration(milliseconds: 50)
+        : const Duration(milliseconds: 1);
     final SocketException error;
     try {
       final live = await Socket.connect(
         InternetAddress(path, type: InternetAddressType.unix),
         0,
-        timeout: left > Duration.zero ? left : const Duration(milliseconds: 1),
+        timeout: left > floor ? left : floor,
       );
       live.destroy();
       return SocketPathInUse(path);
