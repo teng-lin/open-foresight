@@ -1,4 +1,5 @@
 import 'package:foresight_test_support/native_fixture.dart';
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:io';
 import 'dart:async';
@@ -286,6 +287,8 @@ void main() {
         'queued',
       );
       expect(domain.indexGate!.isCompleted, false);
+      expect(domain.application.proactiveWork, 0);
+      expect(domain.application.backgroundBusy, false);
       domain.indexGate!.complete();
       await Future<void>.delayed(Duration.zero);
       expect(store.rows('SELECT * FROM answers'), isEmpty);
@@ -314,7 +317,12 @@ void main() {
       await queue.close().timeout(const Duration(seconds: 2));
       await work;
       expect(runtime.requests, isEmpty);
+      expect(queue.running, false);
+      expect(domain.application.proactiveWork, 1);
+      expect(domain.application.backgroundBusy, true);
       rag.gate!.complete();
+      await eventually(() => domain.application.proactiveWork == 0);
+      expect(domain.application.backgroundBusy, false);
       await Future<void>(() {});
       expect(runtime.requests, isEmpty);
       expect(store.rows('SELECT * FROM answers'), isEmpty);

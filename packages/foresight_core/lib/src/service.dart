@@ -956,7 +956,7 @@ class ApplicationService {
   StreamSubscription<void>? _changes;
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
-  Timer? _desktopShutdown;
+  Timer? _lifetime;
   final DateTime _started;
   DateTime? lastAgentActivity;
   DateTime? lastDesktopDeparture;
@@ -964,17 +964,83 @@ class ApplicationService {
   int get dispatchedCount => _dispatched.length;
   Future<void> get ready => _ready;
   double get _idleMinutes {
-    final value = double.tryParse(domain.store.preference('serviceIdleMinutes', '30')) ?? 30;
+    final value =
+        double.tryParse(domain.store.preference('serviceIdleMinutes', '30')) ??
+        30;
     return !value.isFinite || value <= 0 ? 0 : value;
   }
-  Duration? get _period => _idleMinutes == 0 ? null : Duration(milliseconds: (_idleMinutes * 60000).round());
+
+  Duration? get _period => _idleMinutes == 0
+      ? null
+      : Duration(milliseconds: (_idleMinutes * 60000).round());
   bool get _unpinned => _desktopClients.isEmpty && !access.hasHost;
-  bool _stampExempt(String method) => method == Operation.status.wire || method.startsWith('security.') || method.startsWith('service.');
-  bool _operationsBusy() => _leases.values.any((leases) => leases.values.any((lease) => lease.method != Operation.status.wire)) || _dispatched.isNotEmpty;
-  bool _busy() => _operationsBusy() || application.recording != null || application.backgroundBusy;
-  DateTime? _exitAfter() => null;
-  void _exitIfIdle() {}
-  Map<String,Object?> _lifetimeState() => {
+  bool _stampExempt(String method) =>
+      method == Operation.status.wire ||
+      method.startsWith('security.') ||
+      method.startsWith('service.');
+  bool _operationsBusy() =>
+      _leases.values.any(
+        (leases) =>
+            leases.values.any((lease) => lease.method != Operation.status.wire),
+      ) ||
+      _dispatched.isNotEmpty;
+  bool _busy() =>
+      _operationsBusy() ||
+      application.recording != null ||
+      application.backgroundBusy;
+  bool get _agentWorkInFlight =>
+      _leases.values.any(
+        (leases) => leases.values.any(
+          (lease) =>
+              lease.agent &&
+              lease.helperWait &&
+              lease.method != Operation.status.wire,
+        ),
+      ) ||
+      _dispatched.any((lease) => lease.agent);
+  DateTime? _exitAfter() {
+    if (_closing || !_unpinned) return null;
+    if (lastDesktopDeparture != null)
+      return lastDesktopDeparture!.add(_desktopDetachGrace);
+    final period = _period;
+    if (period == null || _busy()) return null;
+    return (lastAgentActivity ?? _started).add(period);
+  }
+
+  bool _shouldExit() {
+    if (_closing || !_unpinned) return false;
+    final now = domain.clock.now();
+    if (lastDesktopDeparture != null) {
+      return !now.isBefore(lastDesktopDeparture!.add(_desktopDetachGrace)) &&
+          !_agentWorkInFlight &&
+          domain.mutating == 0;
+    }
+    final period = _period;
+    if (period == null || _busy()) return false;
+    return !now.isBefore((lastAgentActivity ?? _started).add(period));
+  }
+
+  void _exitIfIdle() {
+    _lifetime?.cancel();
+    _lifetime = null;
+    if (_closing) return;
+    if (_shouldExit()) {
+      unawaited(
+        close().catchError((Object error) {
+          stderr.writeln('Automatic service exit: $error');
+        }),
+      );
+      return;
+    }
+    final after = _exitAfter();
+    final now = domain.clock.now();
+    var delay = const Duration(seconds: 30);
+    if (after != null && after.isAfter(now) && after.difference(now) < delay)
+      delay = after.difference(now);
+    _lifetime = domain.createTimer(delay, _exitIfIdle);
+  }
+
+  Map<String, Object?> _lifetimeState() => {
     'pinned_by_desktop': !_unpinned,
     'busy': _busy(),
     'last_agent_activity': lastAgentActivity?.millisecondsSinceEpoch,
@@ -992,9 +1058,11 @@ class ApplicationService {
     }
     _exitIfIdle();
   }
+
   void _settle(_RequestLease lease) {
     if (!_dispatched.remove(lease)) return;
-    if (lease.agent && !_stampExempt(lease.method)) lastAgentActivity = domain.clock.now();
+    if (lease.agent && !_stampExempt(lease.method))
+      lastAgentActivity = domain.clock.now();
     _exitIfIdle();
   }
 
@@ -1002,7 +1070,8 @@ class ApplicationService {
 
   /// Whether the shutdown after the last desktop left is pending. Tests
   /// observe it instead of sleeping past the grace.
-  bool get desktopShutdownScheduled => _desktopShutdown?.isActive ?? false;
+  bool get desktopShutdownScheduled =>
+      lastDesktopDeparture != null && !_closing;
   final _desktopClients = <Socket>{};
   bool _closing = false;
   Future<void>? _shutdown;
@@ -1019,7 +1088,8 @@ class ApplicationService {
     this.lock,
     this.installationLock,
     this.application,
-  ) : listener = _binding.listener, _started = domain.clock.now() {
+  ) : listener = _binding.listener,
+      _started = domain.clock.now() {
     final token = base64Url.encode(
       List<int>.generate(32, (_) => Random.secure().nextInt(256)),
     );
@@ -1038,7 +1108,10 @@ class ApplicationService {
       token,
       (host, event) => _send(host as Socket, event),
     );
-    _changes = application.changes.stream.listen((_) => _broadcast());
+    _changes = application.changes.stream.listen((_) {
+      _broadcast();
+      _exitIfIdle();
+    });
     _captureLevels = application.captureLevelChanges.stream.listen((_) {
       if (_closing) return;
       for (final client in _clients) {
@@ -1056,6 +1129,7 @@ class ApplicationService {
 
   /// Stop the timers and subscriptions of a service whose startup failed.
   void _discard() {
+    _lifetime?.cancel();
     _heartbeat?.cancel();
     unawaited(_changes?.cancel());
     unawaited(_captureLevels?.cancel());
@@ -1082,7 +1156,9 @@ class ApplicationService {
         installationLock,
         webSearch: webSearch,
         internalWorker: internalWorker,
-        clock: clock, createTimer: createTimer, helperStartupProbeTimeout: helperStartupProbeTimeout,
+        clock: clock,
+        createTimer: createTimer,
+        helperStartupProbeTimeout: helperStartupProbeTimeout,
       );
       service._desktopDetachGrace = desktopDetachGrace;
       unawaited(service.closed.whenComplete(releaseLocalOwner));
@@ -1216,9 +1292,16 @@ class ApplicationService {
       helper = Helper(
         '${profile.runtime}/helper.sock',
         '${profile.data}/helper',
-        startupProbeTimeout: helperStartupProbeTimeout ?? const Duration(milliseconds: 400),
+        startupProbeTimeout:
+            helperStartupProbeTimeout ?? const Duration(milliseconds: 400),
       );
-      final domain = Domain(store, helper, webSearch: webSearch, clock: clock, createTimer: createTimer);
+      final domain = Domain(
+        store,
+        helper,
+        webSearch: webSearch,
+        clock: clock,
+        createTimer: createTimer,
+      );
       final application = Application(domain)..profileId = profile.identity;
       startedApplication = application;
       application.importPolicy = ImportPolicy(profile.data, () {
@@ -1259,7 +1342,10 @@ class ApplicationService {
           registerInstalledModels(store, manifest).then<void>((_) {}),
         );
       }
-      helper.changed = service._broadcast;
+      helper.changed = () {
+        service._broadcast();
+        service._exitIfIdle();
+      };
       helper.onReady = () async {
         await domain.resume();
         for (final id in interrupted.toList()) {
@@ -1275,6 +1361,7 @@ class ApplicationService {
         stderr.writeln('Helper startup: $e');
         service._broadcast();
       });
+      service._exitIfIdle();
       return service;
     } catch (_) {
       // Report cleanup failures, but keep the startup failure and always
@@ -1464,7 +1551,8 @@ class ApplicationService {
                   if (method == Operation.securityAttachDesktop.wire) {
                     access.attach(client, securityArgs['token'] as String);
                     _desktopClients.add(client);
-                    _desktopShutdown?.cancel();
+                    lastDesktopDeparture = null;
+                    _exitIfIdle();
                   } else if (method == Operation.securityDetachDesktop.wire) {
                     if (!access.isHost(client)) {
                       throw RpcError(
@@ -1473,6 +1561,7 @@ class ApplicationService {
                       );
                     }
                     access.detach(client);
+                    _exitIfIdle();
                     unawaited(
                       application.stopRecording().catchError((Object error) {
                         stderr.writeln(
@@ -1537,7 +1626,8 @@ class ApplicationService {
                   return;
                 }
                 _desktopClients.add(client);
-                _desktopShutdown?.cancel();
+                lastDesktopDeparture = null;
+                _exitIfIdle();
               }
               if (request['method'] == Operation.serviceStopIfIdle.wire) {
                 unawaited(
@@ -1623,7 +1713,7 @@ class ApplicationService {
             }
             _clients.remove(client);
             for (final id in _leases[client]?.keys.toList() ?? <int>[]) {
-              _cancel(client, id);
+              _cancel(client, id, reevaluate: false);
             }
             _leases.remove(client);
             for (final s
@@ -1635,21 +1725,20 @@ class ApplicationService {
             if (_desktopClients.remove(client) &&
                 _desktopClients.isEmpty &&
                 !access.hasHost &&
-                !_closing) {
-              // Allow a transient socket reconnect. Once the desktop has gone,
-              // agent connections must not keep its helper/models alive forever.
-              _desktopShutdown?.cancel();
-              _desktopShutdown = Timer(_desktopDetachGrace, () {
-                if (_desktopClients.isNotEmpty || access.hasHost || _closing) {
-                  return;
-                }
-                unawaited(
-                  close().catchError((Object error) {
-                    stderr.writeln('Shutdown after desktop closed: $error');
-                  }),
-                );
-              });
+                !_closing &&
+                !_agentWorkInFlight) {
+              final now = domain.clock.now();
+              final period = _period;
+              final last = lastAgentActivity;
+              // The desktop shortcut is decided only at this departure.
+              if (last == null ||
+                  (period != null &&
+                      !now.difference(last).isNegative &&
+                      now.difference(last) >= period)) {
+                lastDesktopDeparture = now;
+              }
             }
+            _exitIfIdle();
           },
         );
   }
@@ -1668,7 +1757,8 @@ class ApplicationService {
       lease.streamed = true;
       lease.helperWait = true;
       return Stream.fromFuture(_ready).asyncExpand((_) {
-        if (lease.cancelled) throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+        if (lease.cancelled)
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         _dispatch(lease);
         return (args['web_search'] == true
             ? application.askWithWebInConversation
@@ -1714,23 +1804,40 @@ class ApplicationService {
       }
       void checkBusy() {
         if (application.recording != null) {
-          throw RpcError(RpcErrorCode.busy, 'Recording is active or finalizing. Stop recording and wait for the final transcript before upgrading.');
+          throw RpcError(
+            RpcErrorCode.busy,
+            'Recording is active or finalizing. Stop recording and wait for the final transcript before upgrading.',
+          );
         }
         if (_operationsBusy()) {
-          throw RpcError(RpcErrorCode.busy, 'Application operations are in progress. Retry the upgrade after they finish.');
+          throw RpcError(
+            RpcErrorCode.busy,
+            'Application operations are in progress. Retry the upgrade after they finish.',
+          );
         }
         if (application.backgroundBusy) {
-          throw RpcError(RpcErrorCode.busy, 'Background model work is in progress. Retry the upgrade after it finishes.');
+          throw RpcError(
+            RpcErrorCode.busy,
+            'Background model work is in progress. Retry the upgrade after it finishes.',
+          );
         }
       }
+
       checkBusy();
       if (domain.helper.starting) {
-        throw RpcError(RpcErrorCode.busy, 'The helper is still starting. Retry the upgrade after it is ready.');
+        throw RpcError(
+          RpcErrorCode.busy,
+          'The helper is still starting. Retry the upgrade after it is ready.',
+        );
       }
-      if (domain.helper.adopted || (domain.helper.snapshot != null && domain.helper.process == null)) {
+      if (domain.helper.adopted ||
+          (domain.helper.snapshot != null && domain.helper.process == null)) {
         final identity = await domain.helper.verifyAdoptedIdentity();
         if (identity == AdoptedIdentity.unknown) {
-          throw RpcError(RpcErrorCode.busy, 'Helper shutdown could not be verified. The application was not cleared for upgrade.');
+          throw RpcError(
+            RpcErrorCode.busy,
+            'Helper shutdown could not be verified. The application was not cleared for upgrade.',
+          );
         }
         if (_closing) throw _closingRefusal();
         checkBusy();
@@ -1781,7 +1888,8 @@ class ApplicationService {
         'Recording requires an open desktop indicator',
       );
     }
-    if (lease.cancelled) throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
+    if (lease.cancelled)
+      throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
     _dispatch(lease);
     final result = await application.call(
       method,
@@ -1790,7 +1898,8 @@ class ApplicationService {
     );
     // The operation has committed; a lifecycle test may hold its reply here.
     if (serviceGatesEnabled) await serviceGate('request.committed.$method');
-    if (method == Operation.status.wire) return {...result as Map, 'lifetime': _lifetimeState()};
+    if (method == Operation.status.wire)
+      return {...result as Map, 'lifetime': _lifetimeState()};
     return result;
   }
 
@@ -1806,7 +1915,8 @@ class ApplicationService {
       domain.generator?.cancel(requestId: lease.id);
     }
     final subscription = _subscriptions[client]?.remove(id);
-    if (subscription != null) unawaited(_cancelSubscription(subscription, lease));
+    if (subscription != null)
+      unawaited(_cancelSubscription(subscription, lease));
     if (reevaluate) _exitIfIdle();
   }
 
@@ -1834,7 +1944,8 @@ class ApplicationService {
   Future<void> _close({Socket? acknowledgementClient}) async {
     _closing = true;
     _heartbeat?.cancel();
-    _desktopShutdown?.cancel();
+    _lifetime?.cancel();
+    domain.helper.onReady = null;
     // An isolated frontend refuses new connections from here on.
     _onDraining?.call();
     // Every request in flight gets a terminal frame before its lease is

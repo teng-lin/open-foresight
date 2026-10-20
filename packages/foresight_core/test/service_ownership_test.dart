@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -231,6 +232,9 @@ void main() {
         );
         await first!.close();
         first = null;
+        await eventually(
+          () => diagnostics.toString().contains('Helper startup:'),
+        );
         final administration = await Process.run(
           Platform.resolvedExecutable,
           [kernel.path, '--stop-if-idle=${owner.pid}'],

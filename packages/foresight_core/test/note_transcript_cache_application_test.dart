@@ -276,6 +276,9 @@ void main() {
         try {
           await embeddings.embeddingEntered.future;
           expect(runtime.generating, isFalse);
+          expect(domain.application.activeEnhancements, 1);
+          expect(domain.application.transcriptComputing, 1);
+          expect(domain.application.backgroundBusy, true);
           expect(runtime.prompts, isEmpty);
           for (final method in [
             Operation.modelsEmbedding,
@@ -291,6 +294,9 @@ void main() {
           gate.complete();
           await enhancement;
         }
+        expect(domain.application.activeEnhancements, 0);
+        expect(domain.application.transcriptComputing, 0);
+        expect(domain.application.backgroundBusy, false);
         expect(runtime.prompts, hasLength(1));
       });
     },

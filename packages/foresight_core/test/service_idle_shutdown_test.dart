@@ -1,3 +1,4 @@
+import 'package:foresight_test_support/test_recording.dart';
 import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_core/src/application.dart';
 import 'package:foresight_test_support/test_paths.dart';
@@ -6,15 +7,6 @@ import 'package:test/test.dart';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
-
-class TestRecording extends Recording {
-  TestRecording()
-    : super(
-        Platform.isMacOS ? '/usr/lib/libSystem.B.dylib' : 'libc.so.6',
-        (_) {},
-        (_, _, _, _) {},
-      );
-}
 
 void main() {
   late Directory directory;
@@ -197,15 +189,20 @@ void main() {
       await expectLater(
         client.call('service.stop_if_idle'),
         throwsA(
-          isA<RpcError>().having((error) => error.code, 'code', RpcErrorCode.busy).having(
-            (error) => error.message,
-            'message',
-            contains('could not be verified'),
-          ),
+          isA<RpcError>()
+              .having((error) => error.code, 'code', RpcErrorCode.busy)
+              .having(
+                (error) => error.message,
+                'message',
+                contains('could not be verified'),
+              ),
         ),
       );
       expect((await client.call('status') as Map)['pid'], pid);
-      expect(FileSystemEntity.typeSync(service.path), isNot(FileSystemEntityType.notFound));
+      expect(
+        FileSystemEntity.typeSync(service.path),
+        isNot(FileSystemEntityType.notFound),
+      );
       expect(
         File('${profile.data}/.application-endpoint.json').existsSync(),
         true,

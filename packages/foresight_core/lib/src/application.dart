@@ -1588,6 +1588,8 @@ class Application implements ModelGate {
       try {
         await importFile(file.path, current: current);
       } catch (e) {
+        if (current != null && !current())
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         failures.add('${file.path.split('/').last}: $e');
       }
     }
@@ -1645,6 +1647,8 @@ class Application implements ModelGate {
           await domain.index(s['id'] as String, current: current);
         }
       } catch (e) {
+        if (current != null && !current())
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         failures.add('${s['title']}: $e');
       }
     }
@@ -1652,6 +1656,8 @@ class Application implements ModelGate {
       try {
         await google.refresh(current: current);
       } catch (e) {
+        if (current != null && !current())
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         failures.add(e.toString());
       }
     }
