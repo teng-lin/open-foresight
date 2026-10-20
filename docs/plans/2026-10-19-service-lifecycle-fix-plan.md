@@ -21,7 +21,7 @@ On 2026-10-19 the owner accepted every recommendation (D1–D6) and paused PR #1
 
 | # | Decision | Status | Chosen or recommended | Alternative | Affects |
 |---|---|---|---|---|---|
-| D1 | Where the seven service commits on PR #150 land | **Decided** (#150 paused) | **Split them out** as PR 0 off current `main`, together with only the D2 policy change (0.2). A CI PR should not carry service lifecycle behavior, and merging the unclean-shutdown `StateError` only to reverse it in the next PR wastes a review. Keep PR 1's other fixes separate, so PR 0 stays under the ~1,500-line review guideline. The `invalidArgument` classification for malformed status is pre-existing client behavior and stays with PR 3. | Rejected: resume #150 as is, then land the fixes as follow-ups | Sequencing |
+| D1 | Where the seven service commits on PR #150 land | **Superseded** | **Landed with #150.** PR #150 was ready before step 0 finished. Its service files were byte-identical to the seven picks, so it was squash-merged into `main` as `1d28c0fa` on 2026-10-20. The integration branch was rebased onto it, and step 0 now holds only item 0.2 and its review fixes. The original recommendation was to **split them out** as PR 0 off current `main`, together with only the D2 policy change (0.2). A CI PR should not carry service lifecycle behavior, and merging the unclean-shutdown `StateError` only to reverse it in the next PR wastes a review. Keep PR 1's other fixes separate, so PR 0 stays under the ~1,500-line review guideline. The `invalidArgument` classification for malformed status is pre-existing client behavior and stays with PR 3. | Rejected: resume #150 as is, then land the fixes as follow-ups | Sequencing |
 | D2 | Policy after an unclean shutdown (record kept, lock free) | **Decided** | **Always recover.** The replacement adopts the recorded runtime, which `_start` already does ("An unclean predecessor can leave a healthy helper at this endpoint"). The current error is one-shot anyway: the reconnect 1 s later launches. | Rejected: fail every launcher consistently, with a manual recovery step | PR 1 |
 | D3 | What clients see while an owner closes | **Decided** | **A structured closing refusal** for requests that were not dispatched, and a structured "outcome unknown" error for requests that were. A bare EOF happens only on a crash. Callers need "refused, safe to retry" to differ from "lost, may have committed". | Rejected: declare EOF the protocol and drop the closing-reply special case | PR 3, PR 5 |
 | D4 | Protecting editor-held IDs after a workspace clear | **Decided** | **A persistent workspace epoch**, sent with ID-based mutations. No table rebuild is needed. | Rejected: `AUTOINCREMENT` on `notes`/`meetings` through a table-rebuild migration | PR 5 |
@@ -80,6 +80,8 @@ The reviewers' reproduction tests are on the audit host only and are not in the 
 ---
 
 ## PR 0: Split out the service handoff commits (D1)
+
+**Status:** the seven commits reached `main` through #150 (`1d28c0fa`), so 0.1 and 0.3 are no longer needed. Step 0 consists of 0.2 and its review fixes.
 
 Branch: `fix/service-handoff`, from current `origin/main` (`18b67da9` at the time of writing). PR #150 stays paused until this merges.
 

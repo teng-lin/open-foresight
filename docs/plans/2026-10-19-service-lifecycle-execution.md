@@ -18,7 +18,7 @@ Both machines use the same layout under `~/src` (`/home/blackmyth/src` on Linux,
 
 | Branch | Base | Linux worktree | Mac worktree |
 |---|---|---|---|
-| `open-foresight-services` (integration) | `origin/main` `18b67da9` | `~/src/open-foresight-services` | `~/src/open-foresight-services` |
+| `open-foresight-services` (integration) | `origin/main` `1d28c0fa` (#150; first `18b67da9`, then rebased) | `~/src/open-foresight-services` | `~/src/open-foresight-services` |
 | `svc/pr0-handoff` | integration tip | `~/src/ofs-pr0` | `~/src/ofs-pr0-mac` |
 | `svc/pr1-wedges` | integration tip after step 0 | `~/src/ofs-pr1` | `~/src/ofs-pr1-mac` |
 | `svc/pr2-harness` | integration tip after step 1 | `~/src/ofs-pr2` | `~/src/ofs-pr2-mac` |
@@ -26,7 +26,7 @@ Both machines use the same layout under `~/src` (`/home/blackmyth/src` on Linux,
 | `svc/pr4-profile-identity` | integration tip after step 3 | `~/src/ofs-pr4` | `~/src/ofs-pr4-mac` |
 | `svc/pr5-commit-safety` | integration tip after step 4 | `~/src/ofs-pr5` | `~/src/ofs-pr5-mac` |
 
-The fix plan's branch names (`fix/service-handoff`, `fix/service-wedges`, and so on) map to these step branches. PR 0 cherry-picks the seven commits onto the integration branch's base. Because the integration branch starts at `origin/main` `18b67da9`, the fix plan's "from current `origin/main`" holds.
+The fix plan's branch names (`fix/service-handoff`, `fix/service-wedges`, and so on) map to these step branches. The seven #150 commits that PR 0 was to cherry-pick reached `main` in #150's squash merge `1d28c0fa`. The integration branch and step 0 were rebased onto it with `git rebase --onto`, so step 0 holds only fix-plan item 0.2 and its review fixes. After a rebase, the Mac resets its copies of the integration and step branches to the pushed refs instead of fast-forwarding them.
 
 Remove a step's worktrees on both machines after it merges.
 
