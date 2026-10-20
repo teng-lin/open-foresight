@@ -276,3 +276,30 @@ the dependency workflow still match the original producer in bytes and modes;
 all seven SDK fingerprints are unchanged. Actionlint 1.7.7 ran with ShellCheck
 0.11.0 on PATH, and pinned Dart formatting passed. No further SDK rebuild or
 manual producer dispatch is needed.
+
+Hosted follow-up `b4273cc` passed quality, all seven SDK reuse jobs, sanitizers,
+Arch, native/core/desktop/compiled service and the full macOS application path.
+Acceptance then exposed a separate pre-existing pause-fixture race before the
+meeting test ran: its first resumed microphone segment contained the paused
+1699 Hz marker despite frozen production sample counts throughout pause. The
+verified diagnostic artifact and full failed-step output are retained.
+
+A repeated real private-PipeWire baseline reproduced the exact failure once in
+20 runs. The fixture now drives silence into its owned sinks and probes the
+actual remapped microphone and playback capture routes, requiring 24,000
+consecutive quiet 48 kHz samples on both before resume. Raw PCM goes to owned
+`.raw` files; stdout/stderr remain bounded diagnostics. Production capture stays
+paused throughout the barrier. Strict marker exclusion, overlap, no-fallback,
+recovery and default-route assertions remain unchanged, with bounded probe
+shutdown and cleanup. All 20 corrected runs passed, plus one complete source
+export without `.git` (990 tracked entries unchanged). Formatting, analysis and
+independent review passed. Application/native/helper/protocol sources, all SDK
+producer controls and all seven SDK identities are unchanged; no SDK or native
+rebuild is justified. The next hosted Ubuntu acceptance remains required.
+
+The owner requested a pause when #150 is ready, with no automatic merge. All
+prepared downstream branches remain held, including the internal SDK-helper
+follow-up. Current main also contains independent Calendar PR #151 (`18b67da`);
+#150 merges without conflicts. Runtime jobs test the PR head; workflow/quality
+checks use the combined merge ref. No combined-runtime result is inferred from
+the unrelated checks, and no post-merge SDK probe has been executed.
