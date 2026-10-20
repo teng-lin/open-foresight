@@ -5,65 +5,21 @@ import argparse
 import json
 import os
 from pathlib import Path
-import tempfile
-import zipfile
 
-from tools.ci_artifacts import api, dependency_jobs, download_zip, in_producer_attempt
+from tools.ci_artifacts import api
+from tools.ci_release_evidence import acceptance_proof
 from tools.github_release import release_for_tag
-from tools.release_acceptance_report import gpu_status
+from tools.release_acceptance_report import gpu_status, SUITE_VERSION
 from tools.release_asset_acceptance import select_asset
-from tools.ci_producer_trust import PRODUCERS
 
 
 def restore(repository, tag, run_id, evidence=""):
-    run = api(repository, f"actions/runs/{run_id}")
-    if (
-        not PRODUCERS["release-acceptance"].matches_run(run)
-        or run.get("head_branch") != "main"
-        or run.get("head_repository", {}).get("full_name") != repository
-    ):
-        raise ValueError("Acceptance must come from a trusted reviewed main workflow")
-    items = api(repository, f"actions/runs/{run_id}/artifacts?per_page=100")[
-        "artifacts"
-    ]
-    matches = [
-        item
-        for item in items
-        if item["name"] == "release-acceptance-summary" and not item["expired"]
-    ]
-    if len(matches) != 1:
+    if str(run_id) == os.environ.get("GITHUB_RUN_ID"):
         raise ValueError(
-            "Original acceptance summary is missing or ambiguous; preserve the installers"
+            "Reuse acceptance from a distinct original run; preserve this run's successful proof"
         )
-    item = matches[0]
-    jobs = [
-        job
-        for job in dependency_jobs(repository, run_id)
-        if PRODUCERS["release-acceptance"].matches_job(job)
-        and job.get("conclusion") == "success"
-        and in_producer_attempt(item, job)
-    ]
-    if len(jobs) != 1:
-        raise ValueError("Acceptance summary has no successful producer job/attempt")
-    with tempfile.TemporaryDirectory() as temporary:
-        archive = Path(temporary) / "summary.zip"
-        download_zip(repository, item, archive)
-        with zipfile.ZipFile(archive) as bundle:
-            if (
-                bundle.namelist() != ["release-acceptance.json"]
-                or bundle.getinfo("release-acceptance.json").file_size > 1024 * 1024
-            ):
-                raise ValueError("Invalid acceptance archive")
-            report = json.loads(bundle.read("release-acceptance.json"))
-    if (
-        not PRODUCERS["release-acceptance"].matches_receipt(report)
-        or report.get("tag") != tag
-        or report.get("status")
-        not in (
-            "passed",
-            "automated_passed_manual_pending",
-        )
-    ):
+    locator, report = acceptance_proof(repository, run_id)
+    if report.get("tag") != tag or report.get("suite_version") != SUITE_VERSION:
         raise ValueError(
             "Original automated acceptance is incomplete or for another release"
         )
@@ -91,12 +47,7 @@ def restore(repository, tag, run_id, evidence=""):
     if evidence:
         report["gpu_inference"] = gpu_status(report["installers"], evidence)
         report["status"] = "passed"
-    report["reused_validation_from"] = {
-        "run": run_id,
-        "attempt": jobs[0].get("run_attempt", 1),
-        "artifact": item["id"],
-        "digest": item["digest"],
-    }
+    report["reused_validation_from"] = locator
     return report
 
 

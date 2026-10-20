@@ -5,9 +5,19 @@ import argparse
 import json
 from pathlib import Path
 import re
+from importlib import import_module
+
+stable_version = import_module(
+    "tools.release_latest" if __package__ else "release_latest"
+).stable_version
+
+SUITE_VERSION = "installed-release-v2"
 
 
 def aggregate(directory, tag, evidence):
+    target = stable_version(tag)
+    if target is None:
+        raise ValueError("Installer acceptance requires a stable tag")
     installers = []
     suffixes = set()
     validation_artifacts = []
@@ -74,8 +84,28 @@ def aggregate(directory, tag, evidence):
         )
     if len(sources) != 1:
         raise ValueError("Accepted installers have conflicting product sources")
+    # Validate each environment, including the additional Debian cross-install.
+    # A fixture reinstall of current bytes is not cross-version upgrade proof.
+    for item in validation_artifacts:
+        matches = list((directory / item["artifact"]).glob("reports/**/upgrade.json"))
+        if len(matches) != 1:
+            raise ValueError(
+                "Every installer environment needs previous-release upgrade evidence"
+            )
+        upgrade = json.loads(matches[0].read_text())
+        previous = stable_version(upgrade.get("previous_tag", ""))
+        if (
+            upgrade.get("status") != "passed"
+            or upgrade.get("persistence_verified") is not True
+            or upgrade.get("current_sha256") != item["sha256"]
+            or not re.fullmatch(r"[a-f0-9]{64}", upgrade.get("previous_sha256", ""))
+            or previous is None
+            or previous >= target
+        ):
+            raise ValueError("Invalid previous-release upgrade evidence")
     gpu = gpu_status(installers, evidence)
     return {
+        "suite_version": SUITE_VERSION,
         "tag": tag,
         "source_commit": sources.pop(),
         "status": "passed"

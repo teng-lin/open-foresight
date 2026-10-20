@@ -64,10 +64,14 @@ uploaded to the draft without overwriting assets. Actions copies last 14 days.
 
 Downloaded-installer acceptance runs before publication, alongside all Linux
 formats. A missing runtime, installer, or acceptance gate leaves the release
-unpublished. A failed draft can be rebuilt by rerunning all coordinator jobs or
-dispatching a repaired coordinator from reviewed main. The product tag and its
-verified candidates stay fixed; control tools may advance. Public releases require
-a new version. The DMG remains ad-hoc signed and is not
+unpublished. Retry transient external failures using only failed jobs in the
+original coordinator, preserving successful formats and their original proof.
+The retry uses the original tooling commit, so a later merged fix cannot repair
+that old run's code. Publication-only requires an existing qualified evidence
+index and never builds or packages. If old code cannot produce that index, hold
+publication for reviewed recovery and preserve installers, logs and provenance.
+A fresh partial coordinator or standalone DMG dispatch cannot replace missing
+original proof. Public releases require a new version. The DMG remains ad-hoc signed and is not
 Developer ID signed or notarized. Signed distribution still requires the setup
 and release validation below.
 

@@ -33,6 +33,7 @@ SHARED = (
     "tests/test_linux_test_schedule.py",
     "tests/test_profile_migration.py",
     "tests/test_release_hook_configurations.py",
+    "tests/test_release_upgrade.py",
     "tests/test_test_hygiene.py",
     "tests/contracts/test_descriptor.py",
     "tests/contracts/test_owned_descriptors.py",

@@ -87,7 +87,7 @@ def test_descriptor_zip_member_limit_is_independent_of_transfer_metadata(publish
 def test_manual_evidence_reuse_still_binds_exact_accepted_installer_bytes(
     monkeypatch, changed_bytes
 ):
-    acceptance_fixture(monkeypatch)
+    state = acceptance_fixture(monkeypatch)
     records = evidence()
     if changed_bytes:
         records[0]["installer_sha256"] = "f" * 64
@@ -97,7 +97,7 @@ def test_manual_evidence_reuse_still_binds_exact_accepted_installer_bytes(
         result = acceptance.restore("owner/repo", "v0.1.2", 42, json.dumps(records))
         assert result["status"] == "passed"
         assert result["gpu_inference"]["status"] == "manual_passed"
-        assert result["reused_validation_from"]["artifact"] == 5
+        assert result["reused_validation_from"] == state.locator
 
 
 def test_rpath_without_executable_context_skips_unresolvable_search_root(

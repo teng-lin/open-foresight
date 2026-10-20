@@ -1,6 +1,8 @@
 """Failed reuse/recovery validation preserves existing compiler and release work."""
 
 import base64
+import hashlib
+import io
 import json
 from unittest.mock import Mock
 import zipfile
@@ -176,30 +178,28 @@ def test_release_input_binding_rejects_changed_existing_installer(monkeypatch, f
 
 @pytest.mark.parametrize("failure", ["missing-summary", "archive", "status"])
 def test_acceptance_reuse_requires_exact_successful_summary(monkeypatch, failure):
-    run, job, artifact, assets = acceptance_fixture(monkeypatch)
+    state = acceptance_fixture(monkeypatch)
     if failure == "missing-summary":
-        artifact["name"] = "unrelated"
+        state.items[42][0]["name"] = "unrelated"
+    elif failure == "archive":
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr("untrusted", json.dumps(state.report))
+        raw = payload.getvalue()
+        state.blobs[42] = raw
+        state.items[42][0].update(
+            digest="sha256:" + hashlib.sha256(raw).hexdigest(), size_in_bytes=len(raw)
+        )
     else:
-        report = {
-            "tag": "other" if failure == "status" else "v0.1.2",
-            "status": "failed",
-        }
-
-        def download(repo, metadata, destination):
-            with zipfile.ZipFile(destination, "w") as archive:
-                archive.writestr(
-                    "untrusted" if failure == "archive" else "release-acceptance.json",
-                    json.dumps(report),
-                )
-
-        monkeypatch.setattr(acceptance, "download_zip", download)
+        state.add(42, {**state.report, "status": "failed"})
     message = {
-        "missing-summary": "summary is missing or ambiguous",
-        "archive": "Invalid acceptance archive",
-        "status": "incomplete or for another release",
+        "missing-summary": "Missing or expired original upload",
+        "archive": "Unexpected candidate evidence archive members",
+        "status": "Original automated acceptance is incomplete or obsolete",
     }[failure]
     with pytest.raises(ValueError, match=message):
         acceptance.restore("owner/repo", "v0.1.2", 42)
+    assert state.downloads == ([] if failure == "missing-summary" else [42])
 
 
 @pytest.mark.parametrize("failure", ["missing", "source", "changed-remote"])

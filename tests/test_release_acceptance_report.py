@@ -37,6 +37,17 @@ def receipts(root):
                 }
             )
         )
+        (directory / "reports/upgrade.json").write_text(
+            json.dumps(
+                {
+                    "status": "passed",
+                    "previous_tag": "v1.2.2",
+                    "previous_sha256": "f" * 64,
+                    "current_sha256": str(index) * 64,
+                    "persistence_verified": True,
+                }
+            )
+        )
 
 
 def evidence():
@@ -134,4 +145,43 @@ def test_conflicting_duplicate_installer_identity_is_rejected(tmp_path):
     data["sha256"] = "f" * 64
     receipt.write_text(json.dumps(data))
     with pytest.raises(ValueError, match="conflicting"):
+        aggregate(tmp_path, "v1.2.3", "")
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "missing",
+        "duplicate",
+        "failed",
+        "persistence",
+        "current-bytes",
+        "previous-bytes",
+        "same-version",
+        "preview-version",
+    ],
+)
+def test_upgrade_evidence_is_required_for_every_installer_environment(
+    tmp_path, problem
+):
+    receipts(tmp_path)
+    path = tmp_path / "0/reports/upgrade.json"
+    record = json.loads(path.read_text())
+    if problem == "missing":
+        path.unlink()
+    elif problem == "duplicate":
+        path.with_name("nested").mkdir()
+        shutil.copy2(path, path.with_name("nested") / "upgrade.json")
+    else:
+        field, value = {
+            "failed": ("status", "failed"),
+            "persistence": ("persistence_verified", False),
+            "current-bytes": ("current_sha256", "e" * 64),
+            "previous-bytes": ("previous_sha256", "invalid"),
+            "same-version": ("previous_tag", "v1.2.3"),
+            "preview-version": ("previous_tag", "nightly.20261019.1"),
+        }[problem]
+        record[field] = value
+        path.write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="upgrade evidence"):
         aggregate(tmp_path, "v1.2.3", "")

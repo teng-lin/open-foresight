@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 from tools.ci_artifacts import api
@@ -14,11 +15,32 @@ from tools.github_release import release_for_tag
 from tools.release_asset_acceptance import source_revision, verify_checksum
 
 
-def upload(repository, tag, paths):
+def source_bound_draft(repository, tag):
     release = release_for_tag(repository, tag)
     source = api(repository, f"commits/{tag}")["sha"]
     if not release["draft"] or release.get("target_commitish") != source:
         raise ValueError("Only the source-bound unpublished draft can receive assets")
+    return release
+
+
+def require_missing_dmg(repository, tag):
+    """Hold before rebuilding when any original DMG upload already exists."""
+    release = source_bound_draft(repository, tag)
+    name = f"Open-Foresight-{tag}-macos-arm64.dmg"
+    if any(
+        asset["name"].startswith(name) or asset["name"] == "runtime-verification.json"
+        for asset in release["assets"]
+    ):
+        raise ValueError(
+            "Draft already contains DMG installer or provenance bytes; "
+            "hold for reviewed recovery, preserve original assets, logs and "
+            "attestations, and do not repackage"
+        )
+
+
+def upload(repository, tag, paths):
+    release = source_bound_draft(repository, tag)
+    source = release["target_commitish"]
     existing = {item["name"]: item for item in release["assets"]}
     pending = []
     names = set()
@@ -63,7 +85,7 @@ def upload(repository, tag, paths):
                     )
             if remote != digest or asset["size"] != path.stat().st_size:
                 raise ValueError(
-                    f"Draft already contains different bytes: {path.name}; preserve them and select an explicit new package generation"
+                    f"Draft already contains different bytes: {path.name}; hold for reviewed recovery; preserve original assets, logs and attestations, and do not repackage"
                 )
             print(f"Retain identical published draft asset {path.name}", flush=True)
         else:
@@ -79,9 +101,28 @@ def upload(repository, tag, paths):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tag", required=True)
-    parser.add_argument("paths", nargs="+", type=Path)
+    parser.add_argument("--require-missing-dmg", action="store_true")
+    parser.add_argument("paths", nargs="*", type=Path)
     args = parser.parse_args()
-    upload(os.environ["GITHUB_REPOSITORY"], args.tag, args.paths)
+    if args.require_missing_dmg:
+        if args.paths:
+            parser.error("DMG preflight does not upload paths")
+        try:
+            require_missing_dmg(os.environ["GITHUB_REPOSITORY"], args.tag)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            for output in (error.stdout, error.stderr):
+                if output:
+                    print(
+                        output.decode(errors="replace")
+                        if isinstance(output, bytes)
+                        else output,
+                        file=sys.stderr,
+                    )
+            raise
+    elif args.paths:
+        upload(os.environ["GITHUB_REPOSITORY"], args.tag, args.paths)
+    else:
+        parser.error("Upload paths or DMG preflight required")
 
 
 if __name__ == "__main__":

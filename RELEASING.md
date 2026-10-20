@@ -236,10 +236,10 @@ rebuilding SDKs.
 
 | Situation | Next action |
 | --- | --- |
-| Builds and automated acceptance passed; GPU evidence is pending | Complete hardware testing, then use `publish_only=true`. |
-| Existing draft bytes are valid; acceptance failed transiently or evidence needs correction | Fix the cause and use `publish_only=true` to preserve the installers. |
+| Builds and automated acceptance passed with a qualified evidence index; GPU evidence is pending | Complete hardware testing, then use `publish_only=true`. |
+| Existing draft bytes are valid; acceptance failed from a transient external cause before a qualified evidence index was retained | Resolve that external cause, then re-run failed jobs in the original release coordinator using its original tooling revision. Use `publish_only=true` only after the original candidate, packaging and acceptance evidence index verifies. |
 | One application platform is missing | Preserve its successful sibling and active producers; build only the missing platform after verifying no compatible retained output exists. |
-| One installer format failed | Recover that format from its original application candidate, preserving the draft generation and other verified assets. Installer bytes are retained before lifecycle tests, so inspect them before repackaging. |
+| One installer format failed | Inspect retained bytes and retry failed jobs in the original release coordinator. Its successful sibling formats and original candidates remain qualified; do not start a separate packaging workflow to replace coordinator-bound evidence. |
 | An existing asset conflicts or an artifact is corrupt/expired | Follow the verifier's recovery diagnostic. Do not overwrite different bytes or discard surviving formats. Review the exact artifact problem before requesting replacement. |
 | The tagged product code needs a fix | Merge the fix through review and prepare a new version and tag. Keep the original tag fixed. |
 | The release is already public | Prepare a new version. Published release assets are immutable. |
@@ -248,23 +248,41 @@ The separate `release-acceptance.yml` workflow can audit an existing draft or
 public release without publishing it. Keep publication in `release.yml` so its
 coordinator, installer, and manual-evidence gates remain enforced.
 
-For an RPM-only recovery, use the Linux candidate run and package release number
-reported by the existing draft's preparation job:
+For a failed format or transient installed-acceptance failure, retain the original
+release coordinator run ID and re-run its failed jobs and dependents:
 
 ```sh
-candidate_run=REPLACE_WITH_LINUX_CANDIDATE_RUN
-package_release=REPLACE_WITH_EXISTING_DRAFT_GENERATION
-gh workflow run linux-packages.yml --ref main \
-  -f tag="$release_tag" -f candidate_run="$candidate_run" \
-  -f package_release="$package_release" -f format=rpm
+original_release_run=REPLACE_WITH_ORIGINAL_RELEASE_COORDINATOR_RUN
+gh run rerun "$original_release_run" --failed
 ```
 
-This reuses the original Linux application and leaves the DEB, Arch and DMG
-assets intact. Use `macos-release.yml` with `tag` and the original Mac
-`candidate_run` for a missing DMG. Identical verified assets are retained;
-conflicting bytes fail instead of being clobbered. After recovery, run the
-coordinator in publication-only mode for the unchanged installer set and its
-matching hardware evidence.
+A retry uses the original workflow and tooling commit. It can recover transient
+external failures when no conflicting or partial upload exists for the failed
+format; it cannot apply a subsequently merged tooling fix. If that
+original code cannot produce a valid evidence index, keep publication held for
+reviewed recovery. A partially attached DMG requires reviewed recovery: the DMG
+preflight stops before regenerating the disk image or replacing retained
+packaging evidence when its installer or associated sidecars already exist.
+Preserve existing installers, original logs and provenance;
+do not delete assets, rebuild accepted bytes, or invent a replacement locator.
+
+This preserves successful sibling jobs, installer hashes and their original
+upload attempts. GitHub may repeat untouched job records under the new API
+attempt; evidence verification requires their exact original execution, including
+all steps and authoritative attempt start times. A genuinely executed newer
+failure or skip remains authoritative and cannot be replaced by an older pass.
+After the original run finishes acceptance and retains its qualified evidence
+index, use `publish_only=true` with matching hardware evidence. Publication-only
+re-verifies that index and the current installer bytes; it never builds or packages.
+
+Do not use **Re-run all jobs**, a new partial coordinator run, or standalone
+`linux-packages.yml`/`macos-release.yml` dispatches to repair publication evidence.
+Those paths can skip already attached installers or produce attestations naming
+a different coordinator invocation. They cannot replace missing original proof.
+Keep the original run and surviving assets intact; inspect any expiry or changed
+bytes diagnostic before requesting replacement. The standalone packaging
+workflows remain available for their separate diagnostic uses, not as a source
+of replacement publication authority.
 
 ## Workflow and acceptance references
 

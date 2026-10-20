@@ -213,26 +213,56 @@ jobs:
       tag: ${{ inputs.tag }}
       gpu_evidence: ${{ inputs.gpu_evidence }}
       acceptance_run: ${{ inputs.acceptance_run }}
-  publish:
-    timeout-minutes: 10
-    if: ${{ always() && !inputs.candidates_only }}
-    needs: [preflight, candidates, candidate-receipt, prepare, linux, macos, acceptance]
+  evidence:
+    if: ${{ !cancelled() && !inputs.publish_only && needs.acceptance.result == 'success' }}
+    needs: [prepare, linux, macos, acceptance]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+      - name: Install checksum-verified GitHub CLI for release evidence
+        run: python3 tools/ci_release_gh.py
+      - name: Re-verify and retain original T5 evidence locators
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PLATFORM_RUNS: ${{ format('{{"linux-app":{0},"macos-app":{1}}}', needs.prepare.outputs.linux_candidate_run, needs.prepare.outputs.macos_candidate_run) }}
+        run: |
+          python -m tools.ci_release_evidence record --tag "$TAG" --platform-runs "$PLATFORM_RUNS" --output release-evidence-v2.json --upload-index
+  publish:
+    timeout-minutes: 10
+    if: ${{ always() && !inputs.candidates_only }}
+    needs: [preflight, candidates, candidate-receipt, prepare, linux, macos, acceptance, evidence]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Install checksum-verified GitHub CLI for release evidence
+        run: python3 tools/ci_release_gh.py
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          name: release-acceptance-summary
+          name: release-acceptance-summary-${{ needs.acceptance.outputs.summary_attempt }}
           path: acceptance-summary
       - name: Require installer-bound manual GPU evidence
         env:
           TAG: ${{ inputs.tag }}
         run: python3 tools/release_acceptance_report.py --tag "$TAG" --require-publication acceptance-summary/release-acceptance.json
+      - name: Re-verify original candidate, packaging, attestation and acceptance evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: python -m tools.ci_release_evidence verify --tag "$TAG" --publication-report acceptance-summary/release-acceptance.json
       - name: Require complete acceptance and publish the draft
         env:
           GH_TOKEN: ${{ github.token }}
@@ -246,7 +276,11 @@ jobs:
           import json, os, sys
           sys.path.insert(0, 'tools')
           from release_acceptance_report import require_coordinator
-          require_coordinator(json.loads(os.environ['RESULTS']), os.environ['GITHUB_REF'], os.environ['PUBLISH_ONLY'] == 'true', reuse=os.environ['CANDIDATE_REUSE'] == 'true')
+          results = json.loads(os.environ['RESULTS'])
+          require_coordinator(results, os.environ['GITHUB_REF'], os.environ['PUBLISH_ONLY'] == 'true', reuse=os.environ['CANDIDATE_REUSE'] == 'true')
+          expected = 'skipped' if os.environ['PUBLISH_ONLY'] == 'true' else 'success'
+          if results.get('evidence', {}).get('result') != expected:
+              raise ValueError('Original T5 evidence was not verified: ' + str(results))
           PY
           test "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = true
           gh api --paginate --slurp "repos/$GH_REPO/releases?per_page=100" > "$RUNNER_TEMP/published-releases.json"
