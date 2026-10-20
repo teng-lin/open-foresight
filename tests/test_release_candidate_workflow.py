@@ -98,14 +98,14 @@ def test_release_producer_outputs_names_and_full_gates_match_the_verified_index(
     for gate in candidates.GATES:
         if gate.startswith("packaging / "):
             package = workflow("package-contracts.yml")["jobs"]
-            if gate.endswith("dmg"):
-                assert "dmg" in package
-            else:
-                assert package["linux"]["name"] == "linux-${{ matrix.format }}"
-                assert gate.rsplit("-", 1)[1] in {
-                    item["format"]
-                    for item in package["linux"]["strategy"]["matrix"]["include"]
-                }
+            assert package["linux"]["name"] == "linux-${{ matrix.format }}"
+            assert gate.rsplit("-", 1)[1] in {
+                item["format"]
+                for item in package["linux"]["strategy"]["matrix"]["include"]
+            }
+        elif gate == "dmg / dmg":
+            assert jobs["dmg"]["uses"] == "./.github/workflows/dmg-contracts.yml"
+            assert "dmg" in workflow("dmg-contracts.yml")["jobs"]
         elif gate.startswith("sanitizers / "):
             assert (
                 gate.removeprefix("sanitizers / ")

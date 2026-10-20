@@ -11,6 +11,8 @@ def test_shadow_jobs_reuse_verified_inputs_and_leave_required_old_tier_intact():
     jobs = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())["jobs"]
     required = jobs["platform-checks"]["needs"]
     assert set(required) == {
+        "linux-native",
+        "dmg",
         "changes",
         "workflow-lint",
         "macos",

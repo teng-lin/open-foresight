@@ -87,8 +87,8 @@ def test_internal_sdk_link_cannot_resolve_to_a_fifo(tmp_path):
 @pytest.mark.parametrize(
     "path,expected",
     [
-        ("packaging/notices/dependency.md", set(changes.GATES[1:])),
-        ("apps/desktop/macos/Runner/Info.plist", {"macos"}),
+        ("packaging/notices/dependency.md", set(changes.GATES)),
+        ("apps/desktop/macos/Runner/Info.plist", {"macos", "dmg"}),
         ("apps/desktop/linux/runner/main.cc", set(changes.GATES[1:])),
         ("tools/new_unknown_build_tool.py", set(changes.GATES)),
     ],
@@ -156,6 +156,7 @@ def test_cli_checks_selected_gates_including_consolidated_macos(monkeypatch, cap
         for gate, needed in selected.items()
     }
     jobs["changes"] = {"result": "success"}
+    jobs["linux-native"] = {"result": "skipped"}
     monkeypatch.setenv("NEEDS", json.dumps(jobs))
     monkeypatch.setenv("SELECTION", json.dumps(selected))
     monkeypatch.setenv("MAIN", "false")
