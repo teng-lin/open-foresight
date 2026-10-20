@@ -120,15 +120,24 @@ def test_shadow_consumers_override_skipped_main_only_ancestors():
     # distribution-number is skipped on PRs. GitHub's implicit success() also
     # considers skipped ancestors, even after linux-build explicitly ran and
     # succeeded. Both downstream jobs must override that implicit status check.
-    for name, producers in (
-        ("linux-test", ["linux-build"]),
-        ("linux-shadow-comparison", ["linux-native", "linux-test"]),
-    ):
-        condition = jobs[name]["if"]
-        assert "!cancelled()" in condition
-        for producer in producers:
-            assert f"needs.{producer}.result == 'success'" in condition
-        # No unconditional always() or skipped-producer allowance may turn a
-        # failed/absent build into an attempted artifact handoff.
-        assert "always()" not in condition
-        assert "skipped" not in condition
+    assert jobs["linux-test"]["if"] == (
+        "!cancelled() && needs.linux-build.result == 'success' && "
+        "needs.linux-build.outputs.complete == 'true' && "
+        "needs.linux-build.outputs.handoff_id != ''"
+    )
+    assert jobs["linux-shadow-comparison"]["if"] == (
+        "!cancelled() && needs.linux-native.result == 'success' && "
+        "needs.linux-test.result == 'success' && "
+        "needs.linux-test.outputs.complete == 'true'"
+    )
+    # Probationary continue-on-error jobs can appear successful in needs even
+    # after a failed step. Only a normally reached final step marks their work
+    # complete; artifact qualification still verifies the actual API job result.
+    for name in ("linux-build", "linux-test"):
+        assert jobs[name]["outputs"]["complete"] == (
+            "${{ steps.complete.outputs.complete }}"
+        )
+        marker = jobs[name]["steps"][-1]
+        assert marker["id"] == "complete"
+        assert "if" not in marker  # Default success(), never an always() marker.
+        assert marker["run"] == "echo 'complete=true' >> \"$GITHUB_OUTPUT\""

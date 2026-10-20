@@ -230,7 +230,8 @@ hosted jobs. A failure before any steps execute does not validate the build.
 Model weights, account tokens, databases and local environments are excluded from
 the build context. No real Google account is required for CI. For a distribution
 that includes its OAuth application registration, supply the application-only
-configuration explicitly through a BuildKit secret:
+configuration explicitly with `--google-client`; the wrapper mounts the file
+read-only into the build container at `/run/secrets/google_client`:
 
 ```sh
 tools/build_linux_sdk.sh

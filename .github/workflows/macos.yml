@@ -550,6 +550,7 @@ jobs:
     outputs:
       handoff_id: ${{ steps.handoff.outputs.artifact-id }}
       handoff_digest: ${{ steps.handoff.outputs.artifact-digest }}
+      complete: ${{ steps.complete.outputs.complete }}
       attempt: ${{ steps.receipt.outputs.attempt }}
       sdk_id: ${{ steps.fork-sdk.outputs.artifact-id }}
       sdk_digest: ${{ steps.fork-sdk.outputs.artifact-digest }}
@@ -657,17 +658,22 @@ jobs:
       run: |
         df -h / /mnt
         docker system df
+    - name: Mark successful shadow build completion
+      id: complete
+      run: echo 'complete=true' >> "$GITHUB_OUTPUT"
   linux-test:
     name: linux-test
     continue-on-error: true
     needs: linux-build
-    if: "!cancelled() && needs.linux-build.result == 'success'"
+    if: "!cancelled() && needs.linux-build.result == 'success' && needs.linux-build.outputs.complete == 'true' && needs.linux-build.outputs.handoff_id != ''"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
       actions: read
       packages: read
+    outputs:
+      complete: ${{ steps.complete.outputs.complete }}
     steps:
     - name: Record initial shadow test storage
       run: |
@@ -752,10 +758,13 @@ jobs:
       run: |
         df -h / /mnt
         docker system df
+    - name: Mark successful shadow test completion
+      id: complete
+      run: echo 'complete=true' >> "$GITHUB_OUTPUT"
   linux-shadow-comparison:
     continue-on-error: true
     needs: [linux-native, linux-test]
-    if: "!cancelled() && needs.linux-native.result == 'success' && needs.linux-test.result == 'success'"
+    if: "!cancelled() && needs.linux-native.result == 'success' && needs.linux-test.result == 'success' && needs.linux-test.outputs.complete == 'true'"
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
