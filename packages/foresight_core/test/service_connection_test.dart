@@ -11,6 +11,30 @@ import 'package:test/test.dart';
 
 import 'package:foresight_test_support/remote_service.dart';
 
+/// An RpcError with [code], [message] and the wire reason [reason]. Reading
+/// the reason through toJson keeps this file runnable against older clients.
+Matcher rpcError(RpcErrorCode code, String message, String? reason) =>
+    isA<RpcError>()
+        .having((error) => error.code, 'code', code)
+        .having((error) => error.message, 'message', message)
+        .having((error) => error.toJson()['reason'], 'reason', reason);
+
+Matcher disconnected(String reason) => rpcError(
+  RpcErrorCode.unavailable,
+  'Application service disconnected',
+  reason,
+);
+
+const closingText =
+    'Application service is shutting down; retry after it exits.';
+
+/// A protocol error: requests already written may have taken effect.
+Matcher invalidReply(String? reason) => rpcError(
+  RpcErrorCode.internal,
+  'Application service sent an invalid reply',
+  reason,
+);
+
 void main() {
   test(
     'partial fixture startup removes its private directory and can close twice',
@@ -79,6 +103,150 @@ void main() {
       await expectLater(connection.connect(), throwsStateError);
     },
   );
+
+  // An owner older than the reason field sent only one of two texts (13).
+  for (final refusal in <Map<String, Object?>>[
+    {'code': 'unavailable', 'message': closingText},
+    {'code': 'unavailable', 'message': 'Application service is shutting down'},
+    {'code': 'unavailable', 'message': closingText, 'reason': 'closing'},
+  ]) {
+    test('a closing refusal before any result is sent once more after the '
+        'handoff (SL-9): $refusal', () async {
+      final connection = ServiceConnection(f.profile);
+      await connection.connect();
+      final before = f.requests.length;
+      var refusals = 1;
+      f.handler = (socket, request) {
+        if (refusals-- > 0) {
+          socket.writeln(
+            jsonEncode({'id': request['id'], 'error': refusal, 'done': true}),
+          );
+        } else {
+          f.reply(socket, request, ['listed']);
+        }
+      };
+      expect(await connection.stream('notes.list').toList(), [
+        ['listed'],
+      ]);
+      // Refused, a new startup probe, then the same request once more.
+      expect(f.requests.skip(before).map((r) => r['method']), [
+        'notes.list',
+        'status',
+        'notes.list',
+      ]);
+      await connection.close();
+    });
+  }
+
+  test('a request is resent at most once', () async {
+    final connection = ServiceConnection(f.profile);
+    f.handler = (socket, request) => socket.writeln(
+      jsonEncode({
+        'id': request['id'],
+        'error': {
+          'code': 'unavailable',
+          'message': closingText,
+          'reason': 'closing',
+        },
+        'done': true,
+      }),
+    );
+    await expectLater(
+      connection.stream('notes.list').toList(),
+      throwsA(rpcError(RpcErrorCode.unavailable, closingText, 'closing')),
+    );
+    expect(f.requests.where((r) => r['method'] == 'notes.list'), hasLength(2));
+    await connection.close();
+  });
+
+  test(
+    'a request with an unknown outcome, or one that already had a result, is '
+    'never resent',
+    () async {
+      final connection = ServiceConnection(f.profile);
+      const unknown = {
+        'code': 'unavailable',
+        'message': 'stopped',
+        'reason': 'outcomeUnknown',
+      };
+      f.handler = (socket, request) {
+        if (request['method'] == 'notes.stream') {
+          f.reply(socket, request, 'partial', done: false);
+          socket.writeln(
+            jsonEncode({
+              'id': request['id'],
+              'error': {
+                'code': 'unavailable',
+                'message': closingText,
+                'reason': 'closing',
+              },
+              'done': true,
+            }),
+          );
+        } else {
+          socket.writeln(
+            jsonEncode({'id': request['id'], 'error': unknown, 'done': true}),
+          );
+        }
+      };
+      await expectLater(
+        connection.stream('notes.save').toList(),
+        throwsA(
+          rpcError(RpcErrorCode.unavailable, 'stopped', 'outcomeUnknown'),
+        ),
+      );
+      final results = <Object?>[];
+      await expectLater(
+        connection.stream('notes.stream').forEach(results.add),
+        throwsA(rpcError(RpcErrorCode.unavailable, closingText, 'closing')),
+      );
+      expect(results, ['partial']);
+      for (final method in ['notes.save', 'notes.stream']) {
+        expect(f.requests.where((r) => r['method'] == method), hasLength(1));
+      }
+      await connection.close();
+    },
+  );
+
+  test('a peer cannot make a request resendable by claiming notSent', () async {
+    final connection = ServiceConnection(f.profile);
+    f.handler = (socket, request) => socket.writeln(
+      jsonEncode({
+        'id': request['id'],
+        'error': {
+          'code': 'unavailable',
+          'message': 'stopped',
+          'reason': 'notSent',
+        },
+        'done': true,
+      }),
+    );
+    await expectLater(
+      connection.stream('notes.save').toList(),
+      throwsA(rpcError(RpcErrorCode.unavailable, 'stopped', null)),
+    );
+    expect(f.requests.where((r) => r['method'] == 'notes.save'), hasLength(1));
+    await connection.close();
+  });
+
+  test('cancelling a stream cancels its request and never resends', () async {
+    final connection = ServiceConnection(f.profile);
+    f.handler = (socket, request) =>
+        f.reply(socket, request, 'preview', done: false);
+    final first = Completer<void>();
+    final subscription = connection.stream('answer.stream').listen((_) {
+      if (!first.isCompleted) first.complete();
+    });
+    await first.future;
+    final request = f.requests.lastWhere((r) => r['method'] == 'answer.stream');
+    await subscription.cancel();
+    await eventually(() => f.requests.any((r) => r['cancel'] == request['id']));
+    expect(
+      f.requests.where((r) => r['method'] == 'answer.stream'),
+      hasLength(1),
+    );
+    await connection.close();
+  });
 
   test('launcher waits for model verification beyond ten seconds', () async {
     runtimeConfiguration.environment.removeWhere(
@@ -179,18 +347,10 @@ void main() {
         '${f.profile.runtime}/application.sock',
       );
       final pending = client.call('fixture.pending');
+      // The request was written; whether it took effect is unknown (SL-6).
       final failure = expectLater(
         pending,
-        throwsA(
-          allOf(
-            isA<StateError>().having(
-              (error) => error.message,
-              'message',
-              'Client closed',
-            ),
-            isNot(isA<RpcError>()),
-          ),
-        ),
+        throwsA(disconnected('outcomeUnknown')),
       );
       await eventually(
         () => f.requests.any((r) => r['method'] == 'fixture.pending'),
@@ -205,18 +365,14 @@ void main() {
         await expectLater(
           request(),
           throwsA(
-            isA<RpcError>()
-                .having((error) => error.code, 'code', RpcErrorCode.unavailable)
-                .having(
-                  (error) => error.message,
-                  'message',
-                  'Application service disconnected',
-                )
-                .having(
-                  (error) => error.runtimeType,
-                  'plain public type',
-                  RpcError,
-                ),
+            allOf(
+              disconnected('notSent'),
+              isA<RpcError>().having(
+                (error) => error.runtimeType,
+                'plain public type',
+                RpcError,
+              ),
+            ),
           ),
         );
       }
@@ -231,13 +387,7 @@ void main() {
     final pending = client.call('fixture.pending');
     final failure = expectLater(
       pending,
-      throwsA(
-        isA<RpcError>().having(
-          (error) => error.code,
-          'code',
-          RpcErrorCode.unavailable,
-        ),
-      ),
+      throwsA(disconnected('outcomeUnknown')),
     );
     await eventually(
       () => f.requests.any((r) => r['method'] == 'fixture.pending'),
@@ -250,16 +400,83 @@ void main() {
           (_) => fail('Expected EOF'),
           onError: (Object error) => error,
         );
-    expect(
-      cause,
-      isA<RpcError>().having(
-        (error) => error.message,
-        'message',
-        'Application service disconnected',
-      ),
-    );
+    expect(cause, disconnected('notSent'));
     await client.close();
     await expectLater(client.call('after.close'), throwsA(same(cause)));
+  });
+
+  test(
+    'a reply cut off by EOF is a lost connection, not a caller error (SL-6)',
+    () async {
+      final client = await ServiceClient.connect(
+        '${f.profile.runtime}/application.sock',
+      );
+      final pending = client.call('fixture.pending');
+      final failure = expectLater(
+        pending,
+        throwsA(disconnected('outcomeUnknown')),
+      );
+      await eventually(
+        () => f.requests.any((r) => r['method'] == 'fixture.pending'),
+      );
+      final request = f.requests.last;
+      // ignore: close_sinks
+      final socket = f.sockets.last;
+      socket.add(
+        utf8.encode(
+          jsonEncode({
+            'id': request['id'],
+            'result': 'complete',
+            'done': true,
+          }).substring(0, 12),
+        ),
+      );
+      await socket.flush();
+      await socket.close();
+      await failure;
+      await expectLater(
+        client.stream('after.eof').toList(),
+        throwsA(disconnected('notSent')),
+      );
+    },
+  );
+
+  test('reply frames are counted exactly, not per socket read', () async {
+    const limit = 1024;
+    final client = await ServiceClient.connect(
+      '${f.profile.runtime}/application.sock',
+      maxMessageBytes: limit,
+    );
+    try {
+      final first = client.call('fixture.first');
+      final second = client.call('fixture.second');
+      await eventually(
+        () => f.requests.any((r) => r['method'] == 'fixture.second'),
+      );
+      final ids = [
+        for (final method in ['fixture.first', 'fixture.second'])
+          f.requests.singleWhere((r) => r['method'] == method)['id'],
+      ];
+      // A frame at the limit (newline included), followed in the same write
+      // by a second frame: together they exceed the limit, each fits it.
+      String filling(Object? id, String char) =>
+          char * (limit - 1 - '{"id":$id,"done":true,"result":""}'.length);
+      List<int> frame(Object? id, String result) => utf8.encode(
+        '${jsonEncode({'id': id, 'done': true, 'result': result})}\n',
+      );
+      final results = [filling(ids[0], 'a'), filling(ids[1], 'b')];
+      final bytes = [
+        ...frame(ids[0], results[0]),
+        ...frame(ids[1], results[1]),
+      ];
+      expect(bytes.length, 2 * limit);
+      f.sockets.last.add(bytes);
+      expect(await first, results[0]);
+      expect(await second, results[1]);
+      expect(client.isClosed, isFalse);
+    } finally {
+      await client.close();
+    }
   });
 
   for (final malformed in ['json', 'utf8', 'oversized']) {
@@ -271,9 +488,15 @@ void main() {
           maxMessageBytes: 1024,
         );
         final pending = client.call('fixture.pending');
+        // An oversized frame loses the connection; a complete frame that is
+        // not a JSON object is a protocol error for every caller.
         final failure = expectLater(
           pending,
-          throwsA(anyOf(isA<StateError>(), isA<FormatException>())),
+          throwsA(
+            malformed == 'oversized'
+                ? disconnected('outcomeUnknown')
+                : invalidReply('outcomeUnknown'),
+          ),
         );
         await eventually(
           () => f.requests.any((r) => r['method'] == 'fixture.pending'),
@@ -293,7 +516,11 @@ void main() {
         expect(client.isClosed, isTrue);
         await expectLater(
           client.stream('after.close').toList(),
-          throwsStateError,
+          throwsA(
+            malformed == 'oversized'
+                ? disconnected('notSent')
+                : invalidReply(null),
+          ),
         );
         final cause = await client
             .call('before.local.close')

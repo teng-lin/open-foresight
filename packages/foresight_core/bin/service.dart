@@ -37,9 +37,20 @@ Future<void> main(List<String> args) async {
           '${record.reason}.',
         );
       }
-      final client = await ServiceClient.connect(
-        serviceEndpoint(profile, record),
-      );
+      final ServiceClient client;
+      try {
+        client = await ServiceClient.connect(serviceEndpoint(profile, record));
+      } on SocketException {
+        // An owner that died without a clean shutdown leaves its record but
+        // nothing listening; it already stopped, so --stop succeeds.
+        if (mode != '--stop' || !_leftUnclean(profile)) rethrow;
+        stderr.writeln(
+          'The application service is not running; it stopped without a '
+          'clean shutdown, its endpoint record remains, and the next start '
+          'recovers its runtime.',
+        );
+        return;
+      }
       try {
         if (mode == '--stop-if-idle') {
           final result =
@@ -68,18 +79,49 @@ Future<void> main(List<String> args) async {
         if (args.single == '--status') {
           stdout.writeln(jsonEncode(state));
         } else {
+          final owner = state['pid'] as int;
           final stopped = client.events.stream.drain<void>();
-          if (!Process.killPid(state['pid'] as int, ProcessSignal.sigterm)) {
+          if (!Process.killPid(owner, ProcessSignal.sigterm)) {
             throw StateError('Could not stop application service');
           }
           await stopped.timeout(const Duration(minutes: 30));
+          // The connection closes before the helper stops and the profile
+          // lock is released; report success only after that (L6).
+          stderr.writeln(
+            'Waiting for the application service (pid $owner) to release '
+            'its profile.',
+          );
+          final bound = int.tryParse(
+            runtimeConfiguration['FORESIGHT_TEST_STOP_RELEASE_MS'] ?? '',
+          );
+          await requireProfileRelease(
+            profile,
+            owner,
+            timeout: bound == null
+                ? const Duration(seconds: 30)
+                : Duration(milliseconds: bound),
+          );
+          // The service stopped; tell the user its next start recovers.
+          if (_leftUnclean(profile)) {
+            stderr.writeln(
+              'The application service stopped without a clean shutdown; '
+              'its endpoint record remains, and the next start recovers its '
+              'runtime.',
+            );
+          }
         }
       } finally {
         await client.close();
       }
       return;
     }
-    service = await IsolatedApplicationService.start(profile);
+    try {
+      service = await IsolatedApplicationService.start(profile);
+    } catch (error) {
+      // A detached launch has no stderr; tell the launcher why (L3).
+      recordServiceStartupFailure(profile, error);
+      rethrow;
+    }
     final done = Completer<void>();
     final signals = [
       ProcessSignal.sigterm.watch().listen((_) {
@@ -97,5 +139,16 @@ Future<void> main(List<String> args) async {
   } catch (error, stack) {
     stderr.writeln('$error\n$stack');
     exitCode = 1;
+  }
+}
+
+/// Whether the profile's last owner stopped without a clean shutdown. This
+/// only chooses a warning, so a failed check never fails `--stop`.
+bool _leftUnclean(ProfilePaths profile) {
+  try {
+    return profileLeftUnclean(profile);
+  } catch (error) {
+    stderr.writeln('Cannot check how the service stopped: $error');
+    return false;
   }
 }

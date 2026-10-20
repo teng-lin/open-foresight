@@ -9,6 +9,7 @@ import 'package:test/test.dart';
 import 'package:foresight_core/src/generated/helper_control.pb.dart' as control;
 
 import 'package:foresight_test_support/remote_service.dart';
+import 'package:foresight_test_support/service_fault_proxy.dart';
 
 void main() {
   late RemoteFixture f;
@@ -476,6 +477,193 @@ void main() {
       expect(f.remote.capture['state'], 'reconnected');
       expect(
         f.requests.where((r) => r['method'] == 'notes.save'),
+        hasLength(1),
+      );
+    },
+  );
+
+  test('a command refused by a closing owner is sent once more after the '
+      'reconnect reattaches approvals (SL-9)', () async {
+    File(
+      '${f.profile.data}/.desktop-capability',
+    ).writeAsStringSync('test-token');
+    var refusals = 1;
+    f.handler = (socket, request) {
+      if (request['method'] == 'notes.list' && refusals-- > 0) {
+        // An owner older than the reason field sends only the text.
+        socket.writeln(
+          jsonEncode({
+            'id': request['id'],
+            'error': {
+              'code': 'unavailable',
+              'message':
+                  'Application service is shutting down; retry after it exits.',
+            },
+            'done': true,
+          }),
+        );
+      } else {
+        f.reply(socket, request, request['method'] == 'notes.list' ? [] : null);
+      }
+    };
+    await f.remote.enableDesktopApprovals((_) {});
+    final before = f.requests.length;
+    final previous = f.remote.client;
+    expect(await f.remote.command(Operation.notesList), isEmpty);
+    expect(f.remote.client, isNot(same(previous)));
+    expect(previous.isClosed, isTrue);
+    // Refused, then the reconnect's probe and reserving snapshot, its one
+    // approval attach, and the request once more.
+    expect(f.requests.skip(before).map((r) => r['method']), [
+      'notes.list',
+      'status',
+      'status',
+      'security.attach_desktop',
+      'notes.list',
+    ]);
+  });
+
+  // The desktop cancels with no request ID (generator.cancel()).
+  for (final cancelled in <String?>['gen-3', null, 'another-answer']) {
+    test('a cancel during the handoff stops only that answer\'s resend '
+        '(cancel $cancelled)', () async {
+      final proxy = ServiceFaultProxy();
+      try {
+        var refusals = 1;
+        f.handler = (socket, request) {
+          if (request['method'] != 'meetings.generate') return;
+          if (refusals-- > 0) {
+            socket.writeln(
+              jsonEncode({
+                'id': request['id'],
+                'error': {
+                  'code': 'unavailable',
+                  'message':
+                      'Application service is shutting down; retry after it exits.',
+                  'reason': 'closing',
+                },
+                'done': true,
+              }),
+            );
+          } else {
+            f.reply(socket, request, {'generated': true});
+          }
+        };
+        // Hold the handoff's startup probe for the next owner.
+        final probe = proxy.hold(ProxyDirection.toService, method: 'status');
+        final pending = proxy.run(
+          () => f.remote.command(Operation.meetingsGenerate, {
+            'id': 3,
+            'requestId': 'gen-3',
+          }),
+        );
+        await probe.reached;
+        // The refused request is on no connection, so nothing is sent.
+        expect(f.remote.runtime.cancel(requestId: cancelled), isFalse);
+        probe.release();
+        final generates = f.requests.where(
+          (r) => r['method'] == 'meetings.generate',
+        );
+        if (cancelled != 'another-answer') {
+          await expectLater(
+            pending,
+            throwsA(
+              isA<RpcError>().having(
+                (error) => error.code,
+                'code',
+                RpcErrorCode.cancelled,
+              ),
+            ),
+          );
+          expect(generates, hasLength(1));
+        } else {
+          expect(await pending, {'generated': true});
+          expect(generates, hasLength(2));
+        }
+      } finally {
+        await proxy.close();
+      }
+    });
+  }
+
+  test(
+    'a failed connect closes its connection and leaves nothing running',
+    () async {
+      final proxy = ServiceFaultProxy();
+      try {
+        // connect's own status call, after ensureService's probe.
+        var statuses = 0;
+        final second = proxy.hold(
+          ProxyDirection.toClient,
+          where: (frame) => frame.method == 'status' && ++statuses == 2,
+        );
+        final connecting = proxy.run(() => RemoteDomain.connect(f.profile));
+        final reply = await second.reached;
+        proxy.inject(ProxyDirection.toClient, {
+          'id': reply.id,
+          'error': {'code': 'internal', 'message': 'status failed'},
+          'done': true,
+        }, connection: reply.connection);
+        second.release();
+        await expectLater(
+          connecting,
+          throwsA(
+            isA<RpcError>().having(
+              (error) => error.message,
+              'message',
+              'status failed',
+            ),
+          ),
+        );
+        // No caller holds the domain, so it closed its own connection.
+        await reply.connection
+            .ended(ProxyDirection.toService)
+            .timeout(const Duration(seconds: 30));
+        expect(proxy.connections, hasLength(1));
+      } finally {
+        await proxy.close();
+      }
+    },
+  );
+
+  test('a command whose outcome is unknown is never resent', () async {
+    f.handler = (socket, request) => socket.writeln(
+      jsonEncode({
+        'id': request['id'],
+        'error': {
+          'code': 'unavailable',
+          'message': 'stopped',
+          'reason': 'outcomeUnknown',
+        },
+        'done': true,
+      }),
+    );
+    await expectLater(
+      f.remote.command(Operation.notesSave, {'title': 'once'}),
+      throwsA(
+        isA<RpcError>().having(
+          (error) => error.toJson()['reason'],
+          'reason',
+          'outcomeUnknown',
+        ),
+      ),
+    );
+    expect(f.requests.where((r) => r['method'] == 'notes.save'), hasLength(1));
+  });
+
+  test(
+    'a command on a connection that already closed is sent once, on the next',
+    () async {
+      final lost = f.remote.client;
+      final closed = lost.events.stream.drain<void>();
+      f.sockets.last.destroy();
+      await closed;
+      // The reconnect has begun but not finished: the request is not sent.
+      expect(identical(f.remote.client, lost), isTrue);
+      f.handler = (socket, request) => f.reply(socket, request, ['listed']);
+      expect(await f.remote.command(Operation.notesList), ['listed']);
+      expect(
+        f.requests.where((r) => r['method'] == 'notes.list'),
         hasLength(1),
       );
     },

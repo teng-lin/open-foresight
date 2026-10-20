@@ -11,6 +11,11 @@ import 'service.dart';
 import 'store.dart';
 import 'generated/helper_control.pb.dart' as control;
 
+/// Whether a failed request never took effect, so it may be sent once more
+/// after a handoff: a closing owner refused it, or it was never sent.
+bool _resendable(RpcError error) =>
+    isClosingRefusal(error) || error.reason == RpcErrorReason.notSent;
+
 /// Desktop facade: reads use SQLite WAL snapshots; all writes and workers are
 /// delegated to the single application service. No migrations run in this client.
 class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
@@ -32,24 +37,45 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   final RemoteRuntime runtime;
   final ProfilePaths profile;
   void Function(Map<String, dynamic>)? _approvalEvents;
+  // The connection the desktop approval host is attached on.
+  ServiceClient? _attached;
   @override
   Future<void> enableDesktopApprovals(
     void Function(Map<String, dynamic>) events,
   ) async {
     _approvalEvents = events;
-    await client.call(Operation.securityAttachDesktop.wire, {
+    for (var attempt = 0; ; attempt++) {
+      final current = client;
+      // A reconnect attaches its new connection itself.
+      if (identical(_attached, current)) return;
+      try {
+        await _attachDesktop(current);
+        return;
+      } on RpcError catch (error) {
+        if (attempt > 0 || !_resendable(error)) rethrow;
+        await _awaitReconnect(current, error);
+      }
+    }
+  }
+
+  Future<void> _attachDesktop(ServiceClient connection) async {
+    await connection.call(Operation.securityAttachDesktop.wire, {
       'token': File('${profile.data}/.desktop-capability').readAsStringSync(),
     });
+    _attached = connection;
   }
 
   @override
   Future<void> disableDesktopApprovals() async {
     _approvalEvents = null;
+    _attached = null;
     await client.call(Operation.securityDetachDesktop.wire);
   }
 
   bool _disposed = false;
-  bool _reconnecting = false;
+  Future<void>? _reconnection;
+  // Completes with the outcome of the current or next reconnect attempt.
+  Completer<void>? _attempt;
   @override
   Map<String, dynamic> capture = {};
   @override
@@ -67,8 +93,14 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     this.runtime,
     this.profile,
   ) {
+    runtime.onCancel = (requestId) =>
+        _cancellations[requestId] = ++_cancellationSequence;
     _listen();
   }
+  // The sequence number of the latest cancel for each request ID, or of all
+  // answers under null. A cancel during a handoff must stop the resend.
+  final _cancellations = <String?, int>{};
+  int _cancellationSequence = 0;
   final _captureLevels = StreamController<List<double>>.broadcast();
   @override
   Stream<List<double>> get captureLevels => _captureLevels.stream;
@@ -108,50 +140,112 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   }
 
   void _listen() {
-    _events = client.events.stream.listen(
+    final connection = client;
+    _events = connection.events.stream.listen(
       _apply,
       onDone: () {
-        if (!_disposed) unawaited(_reconnect());
+        // A connection already replaced needs no second reconnect.
+        if (!_disposed && identical(client, connection)) {
+          unawaited(_reconnect());
+        }
       },
     );
   }
 
-  Future<void> _reconnect() async {
-    if (_reconnecting || _disposed) return;
-    _reconnecting = true;
-    try {
-      while (!_disposed) {
-        helper.state = 'application service disconnected; reconnecting';
+  Future<void> _reconnect() => _reconnection ??= _reconnectLoop().whenComplete(
+    () => _reconnection = null,
+  );
+
+  Future<void> _reconnectLoop() async {
+    // Waiters see only failures they await; an unobserved one is not an error.
+    var attempt = _attempt = Completer<void>()..future.ignore();
+    while (!_disposed) {
+      helper.state = 'application service disconnected; reconnecting';
+      helper.changed?.call();
+      ServiceClient? next;
+      try {
+        final startup = await ensureServiceSnapshot(profile);
+        next = startup.client;
+        if (_disposed) {
+          await next.close();
+          break;
+        }
+        await _events?.cancel();
+        if (_disposed) {
+          await next.close();
+          break;
+        }
+        client = next;
+        runtime.client = next;
+        _listen();
+        _apply(startup.status);
+        if (_approvalEvents != null) await _attachDesktop(next);
+        attempt.complete();
+        return;
+      } catch (error, stack) {
+        await next?.close();
+        helper.state = 'application service reconnect failed: $error';
         helper.changed?.call();
-        ServiceClient? next;
-        try {
-          final startup = await ensureServiceSnapshot(profile);
-          next = startup.client;
-          if (_disposed) {
-            await next.close();
-            return;
-          }
-          await _events?.cancel();
-          if (_disposed) {
-            await next.close();
-            return;
-          }
-          client = next;
-          runtime.client = next;
-          _listen();
-          _apply(startup.status);
-          final approvals = _approvalEvents;
-          if (approvals != null) await enableDesktopApprovals(approvals);
-          return;
-        } catch (error) {
-          await next?.close();
-          helper.state = 'application service reconnect failed: $error';
-          helper.changed?.call();
-          await Future<void>.delayed(const Duration(seconds: 1));
+        attempt.completeError(error, stack);
+        attempt = _attempt = Completer<void>()..future.ignore();
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
+    attempt.completeError(RpcError(RpcErrorCode.cancelled, 'Workspace closed'));
+  }
+
+  /// Hand off from [failed], whose request [cause] was refused by a closing
+  /// owner or never sent, and wait for the next reconnect attempt. It
+  /// re-attaches desktop approvals and refreshes status before this returns.
+  /// If that attempt fails, [cause] reaches the caller; reconnecting goes on.
+  Future<void> _awaitReconnect(ServiceClient failed, RpcError cause) async {
+    if (_disposed) throw cause;
+    // Another request already moved to the next owner.
+    if (!identical(client, failed)) return;
+    unawaited(_reconnect());
+    final attempt = _attempt!.future;
+    // A closing owner keeps a refused connection open until it releases the
+    // profile; the handoff in ensureService waits for that itself.
+    await failed.close();
+    try {
+      await attempt;
+    } catch (_) {
+      throw cause;
+    }
+  }
+
+  /// One request, sent once more on the next owner if this one refused it
+  /// while closing, or it was never sent, before any result (SL-9). A request
+  /// whose outcome is unknown is never resent.
+  Future<Object?> _call(
+    String method, [
+    Map<String, dynamic> args = const {},
+  ]) async {
+    final sent = _cancellationSequence;
+    bool cancelledSince() =>
+        cancellableAnswers.contains(method) &&
+        ((_cancellations[null] ?? 0) > sent ||
+            (args['requestId'] is String &&
+                (_cancellations[args['requestId']] ?? 0) > sent));
+    for (var attempt = 0; ; attempt++) {
+      final current = client;
+      var received = false;
+      Object? result;
+      try {
+        await for (final value in current.stream(method, args)) {
+          received = true;
+          result = value;
+        }
+        return result;
+      } on RpcError catch (error) {
+        if (attempt > 0 || received || !_resendable(error)) rethrow;
+        await _awaitReconnect(current, error);
+        // The old connection cannot carry a cancel for a request it refused;
+        // one made during the handoff applies to the resend.
+        if (cancelledSince()) {
+          throw RpcError(RpcErrorCode.cancelled, 'Operation cancelled');
         }
       }
-    } finally {
-      _reconnecting = false;
     }
   }
 
@@ -196,13 +290,13 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         (operation == Operation.sourcesImportFile ||
             operation == Operation.sourcesImportDirectory)) {
       final path = args['path'] as String;
-      await client.call(Operation.securityAllowImportRoot.wire, {
+      await _call(Operation.securityAllowImportRoot.wire, {
         'path': operation == Operation.sourcesImportDirectory
             ? path
             : File(path).parent.path,
       });
     }
-    final result = await client.call(operation.wire, args);
+    final result = await _call(operation.wire, args);
     if (operation == Operation.workspaceClear) {
       try {
         _apply(
@@ -427,14 +521,19 @@ class RemoteHelper extends Helper {
 class RemoteRuntime implements GenerationStatus {
   ServiceClient client;
   Map<String, dynamic> state = {};
+  // Tells the domain, so an answer waiting for a handoff is not resent.
+  void Function(String? requestId)? onCancel;
   RemoteRuntime(this.client);
   @override
   Map<String, dynamic> get effectiveState => state;
   @override
   bool get generating => state['generating'] == true;
   @override
-  bool cancel({String? requestId}) =>
-      client.cancelAnswers(requestId: requestId);
+  bool cancel({String? requestId}) {
+    onCancel?.call(requestId);
+    return client.cancelAnswers(requestId: requestId);
+  }
+
   @override
   void close() {} // The service owns this worker.
 }

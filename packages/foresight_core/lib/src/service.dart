@@ -18,12 +18,31 @@ import 'store.dart';
 import 'service_socket.dart';
 
 const maxServiceMessage = 16 * 1024 * 1024;
-// Clients count bytes per socket read, not per frame, so a frame at their
-// limit followed by more bytes in the same read still fails. Keep frames 1 MiB
-// under it; clients already released need this headroom too.
+// Clients up to v0.1.2 counted bytes per socket read, not per frame, so a
+// frame at their limit followed by more bytes in the same read failed. Current
+// clients count each frame exactly; keep frames 1 MiB under the limit for the
+// released ones.
 const _maxServiceFrame = maxServiceMessage - 1024 * 1024;
-const _serviceClosingMessage =
-    'Application service is shutting down; retry after it exits.';
+const _outcomeUnknownMessage =
+    'Application service stopped before this request finished; it may or may '
+    'not have completed.';
+// The whole flush of closing connections, not each one.
+const _closingFlushBound = Duration(seconds: 2);
+
+Future<void> _flushQuietly(Socket socket) async {
+  try {
+    await socket.flush();
+  } catch (_) {
+    // The peer has gone; nothing is left to deliver.
+  }
+}
+
+/// The refusal a closing owner sends for a request it did not dispatch.
+RpcError _closingRefusal() => RpcError(
+  RpcErrorCode.unavailable,
+  serviceClosingMessage,
+  reason: RpcErrorReason.closing,
+);
 
 // POSIX locks belong to the OS process, not a Dart isolate or file handle.
 // Local hosts must finish before a launcher probes its own process's lock.
@@ -70,7 +89,9 @@ final _serviceGateNames = RegExp(r'^[A-Za-z0-9_.-]+$');
 /// directory, it publishes `<point>.reached` (this pid) there. If the test
 /// armed the point with `<point>.hold`, it then waits for `<point>.release`
 /// or `release-all`. Polling only delays a release; the test decides the
-/// order. Without the key it returns at once.
+/// order. A `<point>.crash` file instead makes the calling isolate fail with
+/// an uncaught error, as a fatal fault would, without any cleanup. Without
+/// the key it returns at once.
 Future<void> serviceGate(String point) async {
   final directory = runtimeConfiguration['FORESIGHT_SERVICE_GATES'];
   if (directory == null) return;
@@ -81,6 +102,15 @@ Future<void> serviceGate(String point) async {
     final staging = File('$directory/.$point.$pid.${Random().nextInt(1 << 32)}')
       ..writeAsStringSync('$pid', flush: true);
     staging.renameSync('$directory/$point.reached');
+    if (File('$directory/$point.crash').existsSync()) {
+      _traceServiceTransport('gate crash $point');
+      // The root zone is outside the worker's guarded zone, so the isolate
+      // dies and its owner sees only an error and an exit.
+      Zone.root.run(
+        () => Timer.run(() => throw StateError('Service gate $point crashed')),
+      );
+      await Completer<void>().future;
+    }
     if (!File('$directory/$point.hold').existsSync()) return;
     _traceServiceTransport('gate held $point');
     while (!File('$directory/$point.release').existsSync() &&
@@ -247,11 +277,68 @@ void _quarantineEndpointRecord(String data, String reason) {
 // Only the local transport can create this marker. A peer's serialized error
 // remains an ordinary RpcError, even if it copies the disconnect message.
 class _ServiceTransportLost extends RpcError {
-  _ServiceTransportLost()
-    : super(RpcErrorCode.unavailable, 'Application service disconnected');
+  _ServiceTransportLost(RpcErrorReason reason)
+    : super(
+        RpcErrorCode.unavailable,
+        'Application service disconnected',
+        reason: reason,
+      );
 }
 
+/// Splits a byte stream into newline-terminated frames. Each frame is counted
+/// exactly: with its newline it may be at most [limit] bytes. Bytes after the
+/// last newline are held until it arrives; they never form a frame.
+class _FrameSplitter {
+  _FrameSplitter(this.limit);
+  final int limit;
+  final _partial = BytesBuilder(copy: false);
+
+  /// Whether bytes of an unfinished frame are held.
+  bool get hasPartial => _partial.isNotEmpty;
+
+  /// The frames [chunk] completes, without newlines, or null as soon as a
+  /// frame exceeds [limit].
+  List<Uint8List>? add(Uint8List chunk) {
+    final frames = <Uint8List>[];
+    var start = 0;
+    while (true) {
+      final end = chunk.indexOf(10, start);
+      final length = (end < 0 ? chunk.length : end) - start;
+      if (_partial.length + length + 1 > limit) return null;
+      _partial.add(Uint8List.sublistView(chunk, start, start + length));
+      if (end < 0) return frames;
+      frames.add(_partial.takeBytes());
+      start = end + 1;
+    }
+  }
+}
+
+/// A complete frame that is a JSON object, or null for any other frame.
+Map<String, dynamic>? _decodeFrame(Uint8List frame) {
+  try {
+    final value = jsonDecode(utf8.decode(frame));
+    return value is Map<String, dynamic> ? value : null;
+  } on FormatException {
+    return null;
+  }
+}
+
+/// The operations [ServiceClient.cancelAnswers] cancels.
+final cancellableAnswers = {
+  Operation.answerStream.wire,
+  Operation.answer.wire,
+  Operation.meetingsGenerate.wire,
+  Operation.meetingsEnhance.wire,
+};
+
 /// Newline framed, multiplexed local RPC. No network listener is opened.
+///
+/// Every failure reaches callers as an [RpcError]. A lost connection (EOF, a
+/// socket error, a frame cut off by EOF, or a frame over the limit) fails
+/// requests already written with [RpcErrorReason.outcomeUnknown] and later
+/// ones with [RpcErrorReason.notSent]. A complete frame that is not a JSON
+/// object is a protocol error, reported to every caller as `internal`, with
+/// [RpcErrorReason.outcomeUnknown] for requests already written.
 class ServiceClient {
   final Socket socket;
   final int _maxMessageBytes;
@@ -265,43 +352,55 @@ class ServiceClient {
   bool get isClosed => _closed;
   ServiceClient._(this.socket, this._maxMessageBytes) {
     unawaited(socket.done.catchError((Object _) {}));
-    var bytes = 0;
-    socket
-        .map((chunk) {
-          bytes += chunk.length;
-          if (bytes > _maxMessageBytes) {
-            throw StateError('Service message too large');
-          }
-          return chunk;
-        })
-        .cast<List<int>>()
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen(
-          (line) {
-            bytes = 0;
-            try {
-              final value = jsonDecode(line) as Map<String, dynamic>;
-              if (value['event'] != null) {
-                events.add(value);
-                return;
-              }
-              final controller = _pending[value['id']];
-              if (controller == null) return;
-              controller.add(value);
-              if (value['done'] == true) {
-                _pending.remove(value['id']);
-                _methods.remove(value['id']);
-                _requestIds.remove(value['id']);
-                unawaited(controller.close());
-              }
-            } catch (e, st) {
-              _fail(e, st);
-            }
-          },
-          onError: (Object e, StackTrace st) => _fail(e, st),
-          onDone: () => _fail(_ServiceTransportLost(), StackTrace.current),
-        );
+    final frames = _FrameSplitter(_maxMessageBytes);
+    socket.listen(
+      (chunk) {
+        if (_closed) return;
+        final complete = frames.add(chunk);
+        if (complete == null) {
+          return _lose('a reply frame exceeds $_maxMessageBytes bytes');
+        }
+        for (final frame in complete) {
+          if (_closed) return;
+          _receive(frame);
+        }
+      },
+      onError: (Object error) => _lose('$error'),
+      onDone: () => _lose(frames.hasPartial ? 'EOF inside a frame' : 'EOF'),
+      cancelOnError: true,
+    );
+  }
+
+  void _receive(Uint8List frame) {
+    final value = _decodeFrame(frame);
+    if (value == null) {
+      _traceServiceTransport(
+        'client invalid frame ${utf8.decode(frame, allowMalformed: true)}',
+      );
+      const message = 'Application service sent an invalid reply';
+      // Requests already written may have taken effect.
+      return _fail(
+        RpcError(
+          RpcErrorCode.internal,
+          message,
+          reason: RpcErrorReason.outcomeUnknown,
+        ),
+        RpcError(RpcErrorCode.internal, message),
+      );
+    }
+    if (value['event'] != null) {
+      events.add(value);
+      return;
+    }
+    final controller = _pending[value['id']];
+    if (controller == null) return;
+    controller.add(value);
+    if (value['done'] == true) {
+      _pending.remove(value['id']);
+      _methods.remove(value['id']);
+      _requestIds.remove(value['id']);
+      unawaited(controller.close());
+    }
   }
 
   /// Bound each reply frame; the default matches the service's 16 MiB limit.
@@ -323,14 +422,22 @@ class ServiceClient {
     );
   }
 
-  void _fail(Object error, StackTrace st) {
+  void _lose(String cause) {
+    _traceServiceTransport('client transport lost: $cause');
+    _fail(
+      _ServiceTransportLost(RpcErrorReason.outcomeUnknown),
+      _ServiceTransportLost(RpcErrorReason.notSent),
+    );
+  }
+
+  /// Fail requests already written with [inFlight] and every later one with
+  /// [later]. The first failure wins.
+  void _fail(RpcError inFlight, RpcError later) {
     if (_closed) return;
     _closed = true;
-    _failure ??= error is SocketException
-        ? _ServiceTransportLost()
-        : RpcError.from(error);
+    _failure ??= later;
     for (final c in _pending.values) {
-      c.addError(error, st);
+      c.addError(inFlight);
       unawaited(c.close());
     }
     _pending.clear();
@@ -359,7 +466,9 @@ class ServiceClient {
         ? null
         : utf8.encode(jsonEncode({'id': id, 'method': method, 'args': args}));
     if (frame == null) {
-      controller.addError(_failure ?? _ServiceTransportLost());
+      controller.addError(
+        _failure ?? _ServiceTransportLost(RpcErrorReason.notSent),
+      );
       unawaited(controller.close());
     } else if (frame.length + 1 > _maxServiceFrame) {
       // The service drops a connection whose request exceeds its limit, which
@@ -405,12 +514,7 @@ class ServiceClient {
     final ids = _methods.entries
         .where(
           (entry) =>
-              {
-                Operation.answerStream.wire,
-                Operation.answer.wire,
-                Operation.meetingsGenerate.wire,
-                Operation.meetingsEnhance.wire,
-              }.contains(entry.value) &&
+              cancellableAnswers.contains(entry.value) &&
               (requestId == null || _requestIds[entry.key] == requestId),
         )
         .map((e) => e.key)
@@ -427,15 +531,27 @@ class ServiceClient {
   }
 
   Future<void> close() async {
-    if (!_closed) {
-      _failure = RpcError(
+    _fail(
+      RpcError(
         RpcErrorCode.unavailable,
         'Application service disconnected',
-      );
-    }
-    _fail(StateError('Client closed'), StackTrace.current);
+        reason: RpcErrorReason.outcomeUnknown,
+      ),
+      RpcError(
+        RpcErrorCode.unavailable,
+        'Application service disconnected',
+        reason: RpcErrorReason.notSent,
+      ),
+    );
   }
 }
+
+/// Whether [error] says its request never took effect, so sending it once
+/// more, after a handoff, is safe: a closing owner refused it before dispatch,
+/// or it never reached a live socket. An `outcomeUnknown` request is never
+/// resent.
+bool _resendable(RpcError error) =>
+    isClosingRefusal(error) || error.reason == RpcErrorReason.notSent;
 
 /// Reattach on the next request after a disconnect; never replay a request
 /// whose commit status is unknown.
@@ -461,12 +577,71 @@ class ServiceConnection {
     return _client = client;
   }
 
+  /// A request refused by a closing owner, or never sent, before any result
+  /// arrived is sent once more after [connect] hands off to the next owner
+  /// (SL-9). Anything else, including `outcomeUnknown`, reaches the caller.
+  /// Cancelling the stream cancels the request at once.
   Stream<Object?> stream(
     String method, [
     Map<String, dynamic> args = const {},
-  ]) async* {
-    final client = await connect();
-    yield* client.stream(method, args);
+  ]) {
+    late final StreamController<Object?> output;
+    StreamSubscription<Object?>? request;
+    var cancelled = false;
+    Future<void> send({required bool resent}) async {
+      final ServiceClient client;
+      try {
+        client = await connect();
+      } catch (error, stack) {
+        if (!cancelled) {
+          output.addError(error, stack);
+          unawaited(output.close());
+        }
+        return;
+      }
+      if (cancelled) return;
+      var received = false;
+      var handedOff = false;
+      request = client
+          .stream(method, args)
+          .listen(
+            (value) {
+              received = true;
+              output.add(value);
+            },
+            onError: (Object error, StackTrace stack) {
+              if (!resent &&
+                  !received &&
+                  error is RpcError &&
+                  _resendable(error)) {
+                handedOff = true;
+                _traceServiceTransport('connection resends $method: $error');
+                unawaited(() async {
+                  // A closing owner keeps the refused connection open.
+                  if (identical(_client, client)) _client = null;
+                  await client.close();
+                  await send(resent: true);
+                }());
+                return;
+              }
+              output.addError(error, stack);
+            },
+            onDone: () {
+              if (!handedOff) unawaited(output.close());
+            },
+          );
+    }
+
+    output = StreamController<Object?>(
+      onListen: () => unawaited(send(resent: false)),
+      onPause: () => request?.pause(),
+      onResume: () => request?.resume(),
+      onCancel: () {
+        cancelled = true;
+        return request?.cancel();
+      },
+    );
+    return output.stream;
   }
 
   Future<void> close() async {
@@ -479,6 +654,10 @@ class _RequestLease {
   final String id;
   final String method;
   bool cancelled = false;
+  // Set only while the request waits for desktop approval or helper
+  // readiness, and cleared just before dispatch. A close refuses a waiting
+  // request like a new one; any other is outcomeUnknown.
+  bool waiting = false;
   _RequestLease(this.id, this.method);
 }
 
@@ -497,9 +676,15 @@ class ApplicationService {
   StreamSubscription<void>? _captureLevels;
   Timer? _heartbeat;
   Timer? _desktopShutdown;
+  Duration _desktopDetachGrace = const Duration(seconds: 1);
+
+  /// Whether the shutdown after the last desktop left is pending. Tests
+  /// observe it instead of sleeping past the grace.
+  bool get desktopShutdownScheduled => _desktopShutdown?.isActive ?? false;
   final _desktopClients = <Socket>{};
   bool _closing = false;
   Future<void>? _shutdown;
+  void Function()? _onDraining;
   Future<void> Function()? _beforeReleaseOwnership;
   final _closed = Completer<void>();
   Future<void> get closed => _closed.future;
@@ -547,10 +732,14 @@ class ApplicationService {
       (_) => _broadcast(),
     );
   }
+
+  /// [desktopDetachGrace] is how long the service waits for a desktop to
+  /// reattach after its approval connection closes before it shuts down.
   static Future<ApplicationService> start(
     ProfilePaths profile, {
     SearchCallbacks? webSearch,
     bool internalWorker = false,
+    Duration desktopDetachGrace = const Duration(seconds: 1),
   }) async {
     // This must precede native loads, database opens, and worker creation.
     final installationLock = acquireInstallationLock();
@@ -563,6 +752,7 @@ class ApplicationService {
         webSearch: webSearch,
         internalWorker: internalWorker,
       );
+      service._desktopDetachGrace = desktopDetachGrace;
       unawaited(service.closed.whenComplete(releaseLocalOwner));
       return service;
     } catch (_) {
@@ -597,7 +787,28 @@ class ApplicationService {
           0) {
         throw StateError('Cannot protect profile ownership lock');
       }
-      lock.lockSync(FileLock.exclusive);
+      if (serviceGatesEnabled) await serviceGate('start.before_lock');
+      // One attempt only. A start that lost the lock must never take it
+      // later: the owner it lost to may exit in between, and nobody asked
+      // this start to serve then. Its launcher decides whether to relaunch.
+      try {
+        lock.lockSync(FileLock.exclusive);
+      } on FileSystemException catch (error) {
+        if (!_lockContended(error)) rethrow;
+        if (serviceGatesEnabled) await serviceGate('start.lock_contended');
+        throw ServiceOwnershipContended(
+          'Another application service owns this profile: $error',
+        );
+      }
+      // A launch that reached the lock only after its launcher stopped
+      // waiting (it attached to another owner, or gave up) serves nobody.
+      if (_launchLeaseWithdrawn(profile)) {
+        _traceServiceTransport('launch lease withdrawn; not serving');
+        throw ServiceLaunchWithdrawn(
+          'The launcher that started this service stopped waiting for it, so '
+          'it exits without serving.',
+        );
+      }
     } catch (_) {
       lock.closeSync();
       rethrow;
@@ -868,10 +1079,7 @@ class ApplicationService {
               if (_closing) {
                 _send(client, {
                   'id': id,
-                  'error': RpcError(
-                    RpcErrorCode.unavailable,
-                    _serviceClosingMessage,
-                  ).toJson(),
+                  'error': _closingRefusal().toJson(),
                   'done': true,
                 });
                 return;
@@ -989,6 +1197,7 @@ class ApplicationService {
               );
               _leases[client]![id] = lease;
               args['requestId'] = lease.id;
+              lease.waiting = true;
               final results = Stream.fromFuture(
                 access.authorize(
                   client,
@@ -1049,7 +1258,7 @@ class ApplicationService {
               // Allow a transient socket reconnect. Once the desktop has gone,
               // agent connections must not keep its helper/models alive forever.
               _desktopShutdown?.cancel();
-              _desktopShutdown = Timer(const Duration(seconds: 1), () {
+              _desktopShutdown = Timer(_desktopDetachGrace, () {
                 if (_desktopClients.isNotEmpty || access.hasHost || _closing) {
                   return;
                 }
@@ -1075,21 +1284,22 @@ class ApplicationService {
       );
     }
     if (lease.method == Operation.answerStream.wire) {
-      return Stream.fromFuture(_ready).asyncExpand(
-        (_) =>
-            (args['web_search'] == true
+      return Stream.fromFuture(_ready).asyncExpand((_) {
+        lease.waiting = false;
+        return (args['web_search'] == true
             ? application.askWithWebInConversation
             : application.askInConversation)(
-              args['question'] as String,
-              args['conversation'] as String,
-              requestId: lease.id,
-              meetingId: args['meeting_id'] as int?,
-              current: () => !lease.cancelled,
-            ),
-      );
+          args['question'] as String,
+          args['conversation'] as String,
+          requestId: lease.id,
+          meetingId: args['meeting_id'] as int?,
+          current: () => !lease.cancelled,
+        );
+      });
     }
     if (lease.method == Operation.googleSignIn.wire ||
         lease.method == Operation.googleAddAccount.wire) {
+      lease.waiting = false;
       return application.signIn(
         lease.id,
         addAccount: lease.method == Operation.googleAddAccount.wire,
@@ -1165,19 +1375,10 @@ class ApplicationService {
     Map<String, dynamic> args,
     _RequestLease lease,
   ) async {
-    if (_closing) {
-      throw RpcError(
-        RpcErrorCode.unavailable,
-        'Application service is shutting down',
-      );
-    }
+    // Nothing has been dispatched yet, so these are closing refusals too.
+    if (_closing) throw _closingRefusal();
     if (Operation.parse(method).requiresHelper) await _ready;
-    if (_closing) {
-      throw RpcError(
-        RpcErrorCode.unavailable,
-        'Application service is shutting down',
-      );
-    }
+    if (_closing) throw _closingRefusal();
     if ((method == Operation.meetingsStart.wire ||
             method == Operation.meetingsResume.wire) &&
         !access.hasHost) {
@@ -1186,6 +1387,7 @@ class ApplicationService {
         'Recording requires an open desktop indicator',
       );
     }
+    lease.waiting = false;
     final result = await application.call(
       method,
       args,
@@ -1231,8 +1433,28 @@ class ApplicationService {
     _closing = true;
     _heartbeat?.cancel();
     _desktopShutdown?.cancel();
+    // An isolated frontend refuses new connections from here on.
+    _onDraining?.call();
+    // Every request in flight gets a terminal frame before its lease is
+    // cancelled. Nothing awaits before this loop, so no request can complete
+    // in between: a client sees either its result or this error (SL-4). One
+    // still waiting for approval or the helper was never dispatched, so it is
+    // refused like a new request and may be sent to the next owner; any
+    // other may have taken effect.
+    final unknown = RpcError(
+      RpcErrorCode.unavailable,
+      _outcomeUnknownMessage,
+      reason: RpcErrorReason.outcomeUnknown,
+    ).toJson();
+    final refused = _closingRefusal().toJson();
     for (final client in _leases.keys.toList()) {
-      for (final id in _leases[client]!.keys.toList()) {
+      final leases = _leases[client]!;
+      for (final id in leases.keys.toList()) {
+        _send(client, {
+          'id': id,
+          'error': leases[id]!.waiting ? refused : unknown,
+          'done': true,
+        });
         _cancel(client, id);
       }
     }
@@ -1247,6 +1469,8 @@ class ApplicationService {
 
     // New requests are refused and in-flight leases cancelled from here.
     if (serviceGatesEnabled) await serviceGate('close.begin');
+    // Every request that was in flight has been sent its terminal frame.
+    if (serviceGatesEnabled) await serviceGate('close.leases_terminated');
     // Application.close synchronously rejects new business calls and cancels
     // background timers before its first await.
     await attempt(application.close);
@@ -1258,16 +1482,35 @@ class ApplicationService {
     await attempt(() => domain.generator?.close());
     await attempt(domain.helper.close);
     if (serviceGatesEnabled) await serviceGate('close.helper_closed');
-    for (final client in _clients.toList()) {
-      if (client != acknowledgementClient) client.destroy();
-    }
+    // Stop accepting first, so every connection is flushed and closed below.
     await attempt(listener.close);
+    // Deliver terminal frames and closing refusals before the connections
+    // close, but never let a client that stopped reading hold shutdown.
+    final peers = [
+      for (final client in _clients)
+        if (client != acknowledgementClient) client,
+    ];
+    await Future.wait([
+      for (final peer in peers) _flushQuietly(peer),
+    ]).timeout(_closingFlushBound, onTimeout: () => const []);
+    for (final peer in peers) {
+      peer.destroy();
+    }
     if (serviceGatesEnabled) await serviceGate('close.listener_closed');
     await attempt(domain.store.close);
-    await attempt(() async {
+    await attempt(() {
       if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
         File(path).deleteSync();
       }
+    });
+    if (serviceGatesEnabled) await serviceGate('close.before_frontend_release');
+    await attempt(() async {
+      await _beforeReleaseOwnership?.call();
+    });
+    // The record outlives every socket of this owner: worker socket, public
+    // socket, record, then lock. A record therefore always means its owner is
+    // live, draining or crashed (SL-3).
+    await attempt(() async {
       final endpoint = File(
         '${File(domain.store.path).parent.path}/.application-endpoint.json',
       );
@@ -1279,10 +1522,6 @@ class ApplicationService {
           endpoint.existsSync()) {
         endpoint.deleteSync();
       }
-    });
-    if (serviceGatesEnabled) await serviceGate('close.before_frontend_release');
-    await attempt(() async {
-      await _beforeReleaseOwnership?.call();
     });
     if (serviceGatesEnabled) await serviceGate('close.before_lock_release');
     await attempt(lock.closeSync);
@@ -1297,6 +1536,13 @@ class ApplicationService {
 /// Domain (SQLite connections, native handles, model ownership, approvals and
 /// request leases) lives in one long-lived worker isolate. Byte streams preserve
 /// multiplexed requests, events, cancellation and shutdown acknowledgements.
+///
+/// Once the worker begins closing (its `draining` message) or this frontend is
+/// asked to close, new connections are no longer bridged: [_refuse] answers
+/// their requests with the closing refusal until the public socket is removed.
+/// Attached clients keep their bridges, so they receive the worker's terminal
+/// frames and refusals before it closes their connections. Only a worker that
+/// exits unexpectedly leaves them with a bare EOF.
 class IsolatedApplicationService {
   final String _dataPath;
   final ReceivePort _messages;
@@ -1305,19 +1551,29 @@ class IsolatedApplicationService {
   final _ready = Completer<void>();
   final _closed = Completer<void>();
   final _peers = <Socket>{};
+  final _refused = <Socket>{};
   final _bridges = <Future<void>>{};
   SendPort? _control;
   ServiceSocketBinding? _binding;
   Future<void>? _listening;
   bool _publicClosing = false;
   String? _publicPath;
+  // The device and inode of the public socket this frontend published.
+  String? _publicIdentity;
   String? _workerPath;
   Object? _failure;
+  // This frontend asked the worker to close.
   bool _closing = false;
+  // The worker announced that it is closing.
+  bool _workerClosing = false;
+  // New connections get the closing refusal instead of a bridge.
+  bool _draining = false;
   Future<void>? _shutdown;
   Future<void>? _finishing;
   final _workerExited = Completer<void>();
   bool _publicRemoved = false;
+  // Set once the public socket is released; later refusals end at once.
+  bool _refusalsEnded = false;
   Future<void> get closed => _closed.future;
   IsolatedApplicationService._(
     this._dataPath,
@@ -1343,6 +1599,8 @@ class IsolatedApplicationService {
       _traceServiceTransport(
         'worker exit received failed=${host._failure != null}',
       );
+      final unexpected =
+          host._ready.isCompleted && !host._closing && !host._workerClosing;
       if (!host._workerExited.isCompleted) host._workerExited.complete();
       if (!host._ready.isCompleted) {
         host._ready.completeError(
@@ -1350,6 +1608,7 @@ class IsolatedApplicationService {
               StateError('Application worker exited during startup'),
         );
       }
+      if (unexpected) host._workerLost();
       unawaited(host._finish());
     });
     var spawned = false;
@@ -1400,6 +1659,10 @@ class IsolatedApplicationService {
           },
         ),
       );
+    } else if (value.first == 'draining') {
+      _traceServiceTransport('worker draining received');
+      _workerClosing = true;
+      _draining = true;
     } else if (value.first == 'closing') {
       _traceServiceTransport('worker ownership closing received');
       unawaited(
@@ -1413,7 +1676,9 @@ class IsolatedApplicationService {
       );
     } else if (value.first == 'failure') {
       _traceServiceTransport('worker failure received ${value[1]}');
-      _failure = StateError(value[1] as String);
+      _failure = value.length > 2 && value[2] == true
+          ? ServiceOwnershipContended(value[1] as String)
+          : StateError(value[1] as String);
       if (!_ready.isCompleted) _ready.completeError(_failure!);
     }
   }
@@ -1433,21 +1698,24 @@ class IsolatedApplicationService {
       await binding.close();
       throw StateError('Service closed before socket publication');
     }
-    binding.publish((client) {
-      final bridge = _bridge(client);
-      _bridges.add(bridge);
-      unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
-    });
-    _traceServiceTransport('frontend listening');
+    binding.publish(_accept);
+    _publicIdentity = await _fileIdentity(path);
+    _traceServiceTransport('frontend listening $_publicIdentity');
+  }
+
+  void _accept(Socket client) {
+    if (_draining) {
+      _refuse(client);
+      return;
+    }
+    final bridge = _bridge(client);
+    _bridges.add(bridge);
+    unawaited(bridge.whenComplete(() => _bridges.remove(bridge)));
   }
 
   Future<void> _bridge(Socket client) async {
     final peer = identityHashCode(client);
-    _traceServiceTransport('frontend accept peer=$peer closing=$_closing');
-    if (_closing) {
-      client.destroy();
-      return;
-    }
+    _traceServiceTransport('frontend accept peer=$peer');
     _peers.add(client);
     Socket? backend;
     try {
@@ -1460,9 +1728,11 @@ class IsolatedApplicationService {
       );
       _traceServiceTransport('frontend backend connected peer=$peer');
       _peers.add(backend);
-      if (_closing) {
-        client.destroy();
+      if (_draining) {
+        // The worker began closing while this connected; nothing was sent.
         backend.destroy();
+        _peers.remove(client);
+        _refuse(client);
         return;
       }
       // pipe applies stream backpressure and flushes before closing. Keeping
@@ -1500,11 +1770,82 @@ class IsolatedApplicationService {
       ]);
     } catch (error) {
       _traceServiceTransport('frontend bridge failed peer=$peer $error');
-      client.destroy();
       backend?.destroy();
+      if (backend == null && _draining) {
+        // A closing worker no longer accepts; this client sent nothing yet.
+        _peers.remove(client);
+        _refuse(client);
+      } else {
+        client.destroy();
+      }
     } finally {
       _peers.remove(client);
       if (backend != null) _peers.remove(backend);
+    }
+  }
+
+  /// Answer every request on [client] with the closing refusal instead of
+  /// bridging it, until the public socket is removed. A launcher waits for
+  /// this connection's EOF before it probes the profile lock.
+  void _refuse(Socket client) {
+    if (_refusalsEnded) {
+      client.destroy();
+      return;
+    }
+    final peer = identityHashCode(client);
+    _traceServiceTransport('frontend refuse peer=$peer');
+    _refused.add(client);
+    unawaited(client.done.catchError((Object _) {}));
+    final frames = _FrameSplitter(maxServiceMessage);
+    void stop() {
+      _refused.remove(client);
+      client.destroy();
+    }
+
+    client.listen(
+      (chunk) {
+        final complete = frames.add(chunk);
+        if (complete == null) {
+          stop();
+          return;
+        }
+        for (final frame in complete) {
+          final request = _decodeFrame(frame);
+          final id = request?['id'];
+          if (request == null || (id is! int && request['cancel'] is! int)) {
+            _traceServiceTransport('frontend refused malformed peer=$peer');
+            stop();
+            return;
+          }
+          // Nothing was dispatched, so there is nothing to cancel.
+          if (id is! int) continue;
+          try {
+            client.add(
+              utf8.encode(
+                '${jsonEncode({'id': id, 'error': _closingRefusal().toJson(), 'done': true})}\n',
+              ),
+            );
+          } catch (_) {
+            stop();
+            return;
+          }
+        }
+      },
+      onError: (Object _) => stop(),
+      onDone: stop,
+      cancelOnError: true,
+    );
+  }
+
+  /// A worker that dies without closing leaves its sockets open with nobody
+  /// reading them. Refuse new connections and end attached ones now: only
+  /// this crash path gives clients a bare EOF.
+  void _workerLost() {
+    _traceServiceTransport('worker exited unexpectedly');
+    _failure ??= StateError('Application worker exited unexpectedly');
+    _draining = true;
+    for (final peer in _peers.toList()) {
+      peer.destroy();
     }
   }
 
@@ -1512,12 +1853,10 @@ class IsolatedApplicationService {
     _traceServiceTransport('frontend close closing=$_closing');
     if (!_closing) {
       _closing = true;
-      // An explicit stop must make cached clients observe EOF immediately.
-      // Keep worker cleanup and ownership release independent of frontend pipes;
-      // the worker-initiated idle-stop path still flushes its acknowledgement.
-      for (final peer in _peers.toList()) {
-        peer.destroy();
-      }
+      // Attached clients keep their bridges: the worker answers each request
+      // in flight with a terminal frame and refuses later ones before it
+      // closes their connections. New connections are refused here.
+      _draining = true;
       _control?.send('close');
     }
     await closed;
@@ -1535,31 +1874,52 @@ class IsolatedApplicationService {
     }
     await _binding?.close();
     _traceServiceTransport('frontend listener closed');
-    if (_publicRemoved || _publicPath == null) return;
-    RandomAccessFile? ownership;
-    if (!workerOwnsLock) {
-      // An unexpected worker exit may release its lock before this isolate
-      // processes the exit message. A new process can already own the profile.
-      // Reacquire ownership before touching its public socket path.
-      try {
-        _traceServiceTransport('frontend reacquiring ownership');
-        ownership = await File(
-          '$_dataPath/.application.lock',
-        ).open(mode: FileMode.append);
-        ownership.lockSync(FileLock.exclusive);
-        _traceServiceTransport('frontend ownership reacquired');
-      } on FileSystemException {
-        await ownership?.close();
-        return;
-      }
-    }
     try {
-      final path = File(_publicPath!);
-      if (await path.exists()) await path.delete();
-      _publicRemoved = true;
-      _traceServiceTransport('frontend socket removed ${path.path}');
+      if (_publicRemoved || _publicPath == null) return;
+      RandomAccessFile? ownership;
+      if (!workerOwnsLock) {
+        // An unexpected worker exit may release its lock before this isolate
+        // processes the exit message. A new process can already own the
+        // profile. Reacquire ownership before touching its public socket path.
+        try {
+          _traceServiceTransport('frontend reacquiring ownership');
+          ownership = await File(
+            '$_dataPath/.application.lock',
+          ).open(mode: FileMode.append);
+          ownership.lockSync(FileLock.exclusive);
+          _traceServiceTransport('frontend ownership reacquired');
+        } on FileSystemException {
+          await ownership?.close();
+          return;
+        }
+      }
+      try {
+        final path = _publicPath!;
+        // Unlink only the socket this frontend published. A replacement, or
+        // an owner in this process or of another profile sharing the runtime
+        // directory, may own the path now.
+        final identity = await _fileIdentity(path);
+        if (identity != null &&
+            _publicIdentity != null &&
+            identity != _publicIdentity) {
+          _traceServiceTransport('frontend leaves a replaced socket $path');
+        } else if (FileSystemEntity.typeSync(path, followLinks: false) !=
+            FileSystemEntityType.notFound) {
+          File(path).deleteSync();
+          _traceServiceTransport('frontend socket removed $path');
+        }
+        _publicRemoved = true;
+      } finally {
+        await ownership?.close();
+      }
     } finally {
-      await ownership?.close();
+      // Refused clients wait for this EOF before probing the profile lock.
+      // A bridge that fails later must not leave a new refusal open.
+      _refusalsEnded = true;
+      for (final client in _refused.toList()) {
+        client.destroy();
+      }
+      _refused.clear();
     }
   }
 
@@ -1567,7 +1927,10 @@ class IsolatedApplicationService {
   Future<void> _finishOnce() async {
     _traceServiceTransport('frontend finish begin');
     if (_closed.isCompleted) return;
-    _closing = true;
+    // The worker has exited. New clients are refused until the public socket
+    // is gone, if the worker did not already release it.
+    _draining = true;
+    if (serviceGatesEnabled) await serviceGate('frontend.draining');
     try {
       await _removePublicSocket();
       // The worker flushes an idle-stop acknowledgement before exiting.
@@ -1588,6 +1951,20 @@ class IsolatedApplicationService {
       if (!_closed.isCompleted) _closed.complete();
     }
   }
+}
+
+/// The device and inode of [path] itself, without following a link, or null
+/// when it is missing or cannot be inspected.
+Future<String?> _fileIdentity(String path) async {
+  if (FileSystemEntity.typeSync(path, followLinks: false) ==
+      FileSystemEntityType.notFound) {
+    return null;
+  }
+  final result = await Process.run(
+    '/usr/bin/stat',
+    Platform.isMacOS ? ['-f', '%d:%i', path] : ['-c', '%d:%i', path],
+  );
+  return result.exitCode == 0 ? result.stdout.toString().trim() : null;
 }
 
 void _applicationServiceWorker(List<Object?> configuration) {
@@ -1643,6 +2020,7 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     );
     service = await ApplicationService.start(profile, internalWorker: true);
     _traceServiceTransport('worker ready ${service.path}');
+    service._onDraining = () => parent.send(['draining']);
     service._beforeReleaseOwnership = () {
       parent.send(['closing']);
       return frontendClosed.future;
@@ -1662,7 +2040,11 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
     await Future<void>.delayed(Duration.zero);
   } catch (error, stack) {
     _traceServiceTransport('worker main failed $error\n$stack');
-    parent.send(['failure', '$error\n$stack']);
+    parent.send([
+      'failure',
+      '$error\n$stack',
+      error is ServiceOwnershipContended,
+    ]);
     try {
       await service?.close();
     } catch (_) {}
@@ -1672,6 +2054,35 @@ Future<void> _runApplicationServiceWorker(List<Object?> configuration) async {
   }
 }
 
+/// Another process holds the profile lock, so this owner did not start.
+class ServiceOwnershipContended extends StateError {
+  ServiceOwnershipContended(super.message);
+}
+
+/// The launcher that started this service stopped waiting for it before it
+/// took the profile lock, so it does not serve.
+class ServiceLaunchWithdrawn extends StateError {
+  ServiceLaunchWithdrawn(super.message);
+}
+
+/// Whether [path] names a startup status file in [profile]'s runtime.
+bool _isStartupStatusPath(String path, ProfilePaths profile) =>
+    _startupStatusName.hasMatch(_entryName(path)) &&
+    canonicalProfilePath(File(path).parent.path) == profile.runtime;
+
+/// Whether this service's launcher has stopped waiting for it. The launcher
+/// creates FORESIGHT_STARTUP_STATUS before launching and deletes it when it
+/// returns, so a missing file is a withdrawn lease. A launcher attaches only
+/// to the lock holder, so a launch that holds the lock while its lease is
+/// still there is the owner its launcher waits for. Starts without a lease,
+/// such as direct starts, are unaffected.
+bool _launchLeaseWithdrawn(ProfilePaths profile) {
+  final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
+  if (path == null || !_isStartupStatusPath(path, profile)) return false;
+  return FileSystemEntity.typeSync(path, followLinks: false) ==
+      FileSystemEntityType.notFound;
+}
+
 class _ClosingService implements Exception {
   final ServiceClient client;
   _ClosingService(this.client);
@@ -1679,10 +2090,16 @@ class _ClosingService implements Exception {
 
 typedef ServiceStartup = ({ServiceClient client, Map<String, dynamic> status});
 
+String _describeDuration(Duration duration) =>
+    duration.inMilliseconds % 1000 == 0
+    ? '${duration.inSeconds} s'
+    : '${duration.inMilliseconds} ms';
+
 Future<ServiceStartup> _connectCompatibleService(
   ProfilePaths profile,
   String path,
-  Duration Function() remaining, {
+  Duration Function() remaining,
+  Duration statusProbeLimit, {
   required bool snapshot,
 }) async {
   final left = remaining();
@@ -1693,7 +2110,9 @@ Future<ServiceStartup> _connectCompatibleService(
         : const Duration(seconds: 2),
   );
   Future<Map<String, dynamic>> status({bool desktop = false}) async {
-    final statusTimeout = remaining();
+    // A stalled owner must not hold startup for the whole budget (L1).
+    final deadline = remaining();
+    final capped = deadline > statusProbeLimit;
     final args = desktop
         ? <String, dynamic>{
             'desktop': true,
@@ -1705,9 +2124,14 @@ Future<ServiceStartup> _connectCompatibleService(
     final reply = await client
         .call(Operation.status.wire, args)
         .timeout(
-          statusTimeout,
+          capped ? statusProbeLimit : deadline,
           onTimeout: () => throw TimeoutException(
-            'Application service did not answer its startup status probe',
+            capped
+                ? 'Application service at $path accepted the connection but '
+                      'did not answer status within '
+                      '${_describeDuration(statusProbeLimit)}; it may be busy '
+                      'or hung.'
+                : 'Application service did not answer its startup status probe',
           ),
         );
     final value = Map<String, dynamic>.from(reply as Map);
@@ -1725,8 +2149,12 @@ Future<ServiceStartup> _connectCompatibleService(
     if (snapshot) initial = await status(desktop: true);
     return (client: client, status: initial);
   } on RpcError catch (error) {
-    if (error.code == RpcErrorCode.unavailable &&
-        error.message == _serviceClosingMessage) {
+    // A closing owner refused the probe, or ended it as it began closing.
+    // Status is read-only, so both mean: wait for this owner, then hand off.
+    if (isClosingRefusal(error) ||
+        (error.code == RpcErrorCode.unavailable &&
+            error.reason == RpcErrorReason.outcomeUnknown &&
+            error is! _ServiceTransportLost)) {
       // Transfer ownership of this specific socket to the startup handoff.
       throw _ClosingService(client);
     }
@@ -1763,38 +2191,116 @@ bool _profileOwnerAvailable(
       'Application service ownership lock is missing or unsafe: $path',
     );
   }
-  // POSIX record locks belong to the process. Keep this probe synchronous:
-  // opening and closing another FD must not interleave with a local owner.
+  if (!_profileLockFree(path)) return false;
+  // A record without a lock owner means the previous owner exited
+  // uncleanly. The replacement adopts that record's runtime in _start, or
+  // sets the record aside if it is invalid.
+  if (FileSystemEntity.typeSync(
+        '${profile.data}/.application-endpoint.json',
+        followLinks: false,
+      ) !=
+      FileSystemEntityType.notFound) {
+    _traceServiceTransport(
+      'previous owner left its endpoint record; the replacement adopts its runtime',
+    );
+  }
+  return true;
+}
+
+/// Whether a failed lockSync means another process holds the lock. F_SETLK
+/// may report contention as EACCES or EAGAIN/EWOULDBLOCK (35 on macOS).
+bool _lockContended(FileSystemException error) =>
+    const {11, 13, 35}.contains(error.osError?.errorCode);
+
+/// Whether no other process holds the profile lock at [path]. Only call this
+/// from a process that hosts no owner of the profile: POSIX record locks
+/// belong to the process, and closing this probe's descriptor drops them all.
+bool _profileLockFree(String path) {
+  // Keep this probe synchronous: opening and closing another descriptor must
+  // not interleave with a local owner.
   final ownership = File(path).openSync(mode: FileMode.append);
   try {
-    try {
-      ownership.lockSync(FileLock.exclusive);
-    } on FileSystemException catch (error) {
-      // F_SETLK may report contention as EACCES or EAGAIN/EWOULDBLOCK.
-      // This catch only covers lockSync; opening an inaccessible file still fails.
-      if (error.osError?.errorCode == 11 ||
-          error.osError?.errorCode == 13 ||
-          error.osError?.errorCode == 35) {
-        return false;
-      }
-      rethrow;
-    }
-    // A record without a lock owner means the previous owner exited
-    // uncleanly. The replacement adopts that record's runtime in _start, or
-    // sets the record aside if it is invalid.
-    if (FileSystemEntity.typeSync(
-          '${profile.data}/.application-endpoint.json',
-          followLinks: false,
-        ) !=
-        FileSystemEntityType.notFound) {
-      _traceServiceTransport(
-        'previous owner left its endpoint record; the replacement adopts its runtime',
-      );
-    }
+    ownership.lockSync(FileLock.exclusive);
     return true;
+  } on FileSystemException catch (error) {
+    // This catch only covers lockSync; opening an inaccessible file still
+    // fails.
+    if (_lockContended(error)) return false;
+    rethrow;
   } finally {
     ownership.closeSync();
   }
+}
+
+/// Whether [pid] may still run. Without a way to tell, assume it does, so
+/// only the profile lock decides.
+Future<bool> _processRunning(int pid) async {
+  if (Platform.isLinux && Directory('/proc/self').existsSync()) {
+    return Directory('/proc/$pid').existsSync();
+  }
+  try {
+    return (await Process.run('/bin/kill', ['-0', '$pid'])).exitCode == 0;
+  } on ProcessException {
+    return true;
+  }
+}
+
+/// After `--stop` signalled the owner [ownerPid] and saw its connection close,
+/// wait until the owner released the profile: its lock is free, or the
+/// process is gone. EOF alone comes before the helper stops and the lock is
+/// released (L6). Returns false if neither happens within [timeout]. Never
+/// call this from a process that hosts an owner of the profile.
+Future<bool> awaitProfileRelease(
+  ProfilePaths profile,
+  int ownerPid, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  final lock = '${profile.data}/.application.lock';
+  final waited = Stopwatch()..start();
+  var held = false;
+  while (true) {
+    if (!await _processRunning(ownerPid) ||
+        FileSystemEntity.typeSync(lock, followLinks: false) ==
+            FileSystemEntityType.notFound ||
+        _profileLockFree(lock)) {
+      return true;
+    }
+    if (!held) {
+      held = true;
+      _traceServiceTransport('stop: service $ownerPid still holds its profile');
+    }
+    if (waited.elapsed >= timeout) return false;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+}
+
+/// [awaitProfileRelease], failing with a message when it times out.
+Future<void> requireProfileRelease(
+  ProfilePaths profile,
+  int ownerPid, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  if (!await awaitProfileRelease(profile, ownerPid, timeout: timeout)) {
+    throw StateError(
+      'The application service (pid $ownerPid) closed its connections but '
+      'did not release its profile within ${_describeDuration(timeout)}.',
+    );
+  }
+}
+
+/// Whether the profile has no owner but still has an endpoint record: the
+/// last owner did not shut down cleanly, and the next one recovers its
+/// runtime. Never call this from a process that hosts an owner.
+bool profileLeftUnclean(ProfilePaths profile) {
+  final lock = '${profile.data}/.application.lock';
+  return FileSystemEntity.typeSync(
+            '${profile.data}/$_endpointRecordName',
+            followLinks: false,
+          ) !=
+          FileSystemEntityType.notFound &&
+      (FileSystemEntity.typeSync(lock, followLinks: false) ==
+              FileSystemEntityType.notFound ||
+          _profileLockFree(lock));
 }
 
 /// Start packaged services as applications through LaunchServices so macOS can
@@ -1865,12 +2371,118 @@ Future<File> writeServiceStartupEnvironment(
   }
 }
 
+final _startupStatusName = RegExp(r'^startup-[A-Za-z0-9_-]+\.json$');
+// A status file, or the staging copy a service writes before renaming it.
+final _startupStatusEntry = RegExp(r'^startup-[A-Za-z0-9_-]+\.json(\.\d+)?$');
+
+/// Remove startup status files that no launcher still waits on: every
+/// launcher gives up within three minutes, and a launch that lost the race
+/// may write after its launcher returned. A live lease is never removed: it
+/// is younger than its launcher's elapsed time, which is under three
+/// minutes. A link is removed as a link; this code never writes one.
+void _sweepStartupStatus(String runtime) {
+  final cutoff = DateTime.now().subtract(const Duration(minutes: 3));
+  for (final path in _endpointEntries(runtime, _startupStatusEntry)) {
+    try {
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      if (type == FileSystemEntityType.link ||
+          (type == FileSystemEntityType.file &&
+              File(path).lastModifiedSync().isBefore(cutoff))) {
+        _deleteEndpointEntry(path);
+      }
+    } on FileSystemException {
+      // Another launcher removed it first.
+    }
+  }
+}
+
+/// Record why this service did not start, for the launcher waiting on it.
+/// FORESIGHT_STARTUP_STATUS names the file; it must be a startup status in
+/// [profile]'s runtime directory, and anything else is ignored. A start that
+/// lost the profile lock records `contended`, never a failure: it did
+/// nothing, and its launcher attaches to the owner or launches again.
+void recordServiceStartupFailure(ProfilePaths profile, Object error) {
+  final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
+  if (path == null) return;
+  try {
+    if (!_isStartupStatusPath(path, profile)) {
+      stderr.writeln('Ignoring a startup status outside the runtime: $path');
+      return;
+    }
+    // The status replaces the launcher's lease. With the lease gone, the
+    // launcher has stopped waiting and nobody would read it.
+    if (FileSystemEntity.typeSync(path, followLinks: false) !=
+        FileSystemEntityType.file) {
+      return;
+    }
+    final staging = File('$path.$pid')
+      ..writeAsStringSync(
+        jsonEncode(
+          error is ServiceOwnershipContended
+              ? {'state': 'contended'}
+              : {
+                  'state': 'failed',
+                  'error': error is StateError ? error.message : '$error',
+                },
+        ),
+        flush: true,
+      );
+    protectPrivateFile(staging.path);
+    staging.renameSync(path);
+  } catch (failure) {
+    stderr.writeln('Cannot record the startup failure: $failure');
+  }
+}
+
+/// What a launched service recorded in its startup status.
+sealed class _StartupOutcome {
+  const _StartupOutcome();
+}
+
+/// It lost the profile lock before touching the profile.
+final class _StartupContended extends _StartupOutcome {
+  const _StartupContended();
+}
+
+final class _StartupFailed extends _StartupOutcome {
+  final String cause;
+  const _StartupFailed(this.cause);
+}
+
+/// The outcome a launched service recorded in [status], if any yet.
+_StartupOutcome? _recordedStartupOutcome(File status) {
+  try {
+    final value = jsonDecode(status.readAsStringSync());
+    if (value is Map && value['state'] == 'contended') {
+      return const _StartupContended();
+    }
+    if (value is Map && value['state'] == 'failed') {
+      return _StartupFailed('${value['error']}'.split('\n').first);
+    }
+  } on FileSystemException {
+    // Not written: the service has not stopped, or not yet.
+  } on FormatException {
+    // Not a status this client understands.
+  }
+  return null;
+}
+
+// Launches by one ensureService call; only a launch that provably did
+// nothing (it lost the profile lock) is followed by another.
+const _maxLaunches = 3;
+
 /// Attach first; competing launchers may race safely on the service's OS lock.
+///
+/// [statusProbeLimit] bounds each startup status probe; tests shorten it.
 Future<ServiceClient> ensureService(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
-}) async =>
-    (await _ensureService(profile, startupTimeout: startupTimeout)).client;
+  Duration statusProbeLimit = const Duration(seconds: 30),
+}) async => (await _ensureService(
+  profile,
+  startupTimeout: startupTimeout,
+  statusProbeLimit: statusProbeLimit,
+)).client;
 
 /// Reserve desktop socket lifetime and obtain its final startup snapshot.
 /// This does not grant the visible desktop's approval-host capability.
@@ -1879,26 +2491,38 @@ Future<ServiceClient> ensureService(
 Future<ServiceStartup> ensureServiceSnapshot(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
-}) => _ensureService(profile, startupTimeout: startupTimeout, snapshot: true);
+  Duration statusProbeLimit = const Duration(seconds: 30),
+}) => _ensureService(
+  profile,
+  startupTimeout: startupTimeout,
+  statusProbeLimit: statusProbeLimit,
+  snapshot: true,
+);
 
 Future<ServiceStartup> _ensureService(
   ProfilePaths profile, {
   required Duration startupTimeout,
+  required Duration statusProbeLimit,
   bool snapshot = false,
 }) async {
   if (startupTimeout <= Duration.zero ||
       startupTimeout > const Duration(minutes: 3)) {
     throw ArgumentError.value(startupTimeout, 'startupTimeout');
   }
+  if (statusProbeLimit <= Duration.zero) {
+    throw ArgumentError.value(statusProbeLimit, 'statusProbeLimit');
+  }
   final startup = Stopwatch()..start();
   var closingOwner = false;
-  var launched = false;
+  var launches = 0;
   String? executable;
   String? startupLog;
   File? handoff;
+  // Where the latest launch records a start that did not happen.
+  File? startupStatus;
   String? ignoredRecord;
   TimeoutException deadlineFailure() {
-    final failure = launched
+    final failure = launches > 0
         ? startupLog != null
               ? 'Application service did not start. Inspect $startupLog.'
               : 'Application service did not start. Run $executable directly to inspect the startup error.'
@@ -1928,10 +2552,27 @@ Future<ServiceStartup> _ensureService(
       );
     }
     executable = serviceExecutable;
+    _sweepStartupStatus(profile.runtime);
+    final launchId = [
+      pid,
+      DateTime.now().microsecondsSinceEpoch,
+      Random.secure().nextInt(1 << 32),
+    ].join('-');
+    startupStatus = File('${profile.runtime}/startup-$launchId.json');
+    // This launch's lease. The service serves only if it still exists once
+    // it holds the profile lock, and writes its outcome over it; deleting it
+    // when this call returns withdraws the lease.
+    startupStatus!.writeAsStringSync(
+      jsonEncode({'state': 'launching'}),
+      flush: true,
+    );
+    protectPrivateFile(startupStatus!.path);
     final environment = {
       ...runtimeConfiguration.environment,
       'FORESIGHT_DATA': profile.data,
       'FORESIGHT_RUNTIME': profile.runtime,
+      // On macOS this travels through the private startup handoff.
+      'FORESIGHT_STARTUP_STATUS': startupStatus!.path,
     };
     handoff = Platform.isMacOS
         ? await writeServiceStartupEnvironment(
@@ -1988,6 +2629,7 @@ Future<ServiceStartup> _ensureService(
           profile,
           serviceEndpoint(profile, record),
           remaining,
+          statusProbeLimit,
           snapshot: snapshot,
         );
       } on _ClosingService catch (closing) {
@@ -2008,14 +2650,40 @@ Future<ServiceStartup> _ensureService(
         // A starting or closing owner may still hold the profile lock.
       }
       remaining();
-      if (!launched &&
+      if (launches == 0 &&
           _profileOwnerAvailable(profile, closingOwner: closingOwner)) {
         privateDirectory(profile.runtime);
-        launched = true;
+        launches++;
         await launchOnce();
       }
-      // This read-only startup loop can attach to a competing legitimate owner.
-      // It never replays a business operation or launches a second replacement.
+      switch (startupStatus == null
+          ? null
+          : _recordedStartupOutcome(startupStatus!)) {
+        // A replacement that died says why at once (L3), unless another
+        // owner holds the profile and will answer instead.
+        case _StartupFailed(:final cause)
+            when _profileOwnerAvailable(profile, closingOwner: false):
+          throw StateError('Application service failed to start: $cause');
+        // The launch lost the lock before touching the profile, for example
+        // to another launcher's or --stop's momentary probe. If nobody holds
+        // it now, launch again; otherwise attach to the owner that does.
+        case _StartupContended()
+            when _profileOwnerAvailable(profile, closingOwner: false):
+          if (launches >= _maxLaunches) {
+            throw StateError(
+              'Application service could not take the profile lock: another '
+              'process kept holding it for each of $_maxLaunches launches.',
+            );
+          }
+          await _deleteLaunchFiles(startupStatus, handoff);
+          launches++;
+          await launchOnce();
+        default:
+          break;
+      }
+      // This read-only startup loop can attach to a competing legitimate
+      // owner. It never replays a business operation, and it launches again
+      // only after a launch provably did nothing: it lost the profile lock.
       final left = remaining();
       await Future<void>.delayed(
         left < const Duration(milliseconds: 100)
@@ -2024,9 +2692,15 @@ Future<ServiceStartup> _ensureService(
       );
     }
   } finally {
-    if (handoff != null && handoff!.existsSync()) {
-      await handoff!.delete();
-      await handoff!.parent.delete();
-    }
+    await _deleteLaunchFiles(startupStatus, handoff);
   }
+}
+
+/// Remove one launch's startup status and its unconsumed environment handoff.
+Future<void> _deleteLaunchFiles(File? status, File? handoff) async {
+  if (handoff != null && handoff.existsSync()) {
+    await handoff.delete();
+    await handoff.parent.delete();
+  }
+  if (status != null && status.existsSync()) await status.delete();
 }

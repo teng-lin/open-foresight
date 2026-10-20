@@ -16,6 +16,8 @@ import 'package:test/test.dart';
 
 const closingMessage =
     'Application service is shutting down; retry after it exits.';
+// v0.1.x owners refused requests that reached _execute with this text.
+const legacyClosingMessage = 'Application service is shutting down';
 const probeTimeoutMessage =
     'Application service did not answer its startup status probe';
 
@@ -128,7 +130,7 @@ Future<void> main() async {
       if (old && Platform.environment['ERROR_MESSAGE'] == 'healthy-then-stall') { stdout.writeln('final-observed'); return; }
       if (old && Platform.environment['ERROR_MESSAGE'] == 'healthy-then-malformed') { socket.writeln('not-json'); stdout.writeln('final-observed'); return; }
       if (old || Platform.environment['REPLACEMENT_CLOSING'] == '1') {
-        socket.writeln(jsonEncode({'id': request['id'], 'error': {'code': 'unavailable', 'message': Platform.environment['ERROR_MESSAGE'] == 'healthy-then-closing' ? 'Application service is shutting down; retry after it exits.' : Platform.environment['ERROR_MESSAGE'] ?? 'Application service is shutting down; retry after it exits.'}, 'done': true}));
+        socket.writeln(jsonEncode({'id': request['id'], 'error': Platform.environment['ERROR_MESSAGE'] == 'healthy-then-unknown' ? {'code': 'unavailable', 'message': 'Application service stopped before this request finished; it may or may not have completed.', 'reason': 'outcomeUnknown'} : {'code': 'unavailable', 'message': Platform.environment['ERROR_MESSAGE'] == 'healthy-then-closing' ? 'Application service is shutting down; retry after it exits.' : Platform.environment['ERROR_MESSAGE'] ?? 'Application service is shutting down; retry after it exits.'}, 'done': true}));
         if (old) { stdout.writeln('closing-observed'); }
         else { unawaited(socket.flush().then((_) {
           File('$data/closing-replied').writeAsStringSync(jsonEncode({'pid': pid, 'method': request['method'], 'message': 'Application service is shutting down; retry after it exits.'}));
@@ -373,6 +375,17 @@ class HandoffFixture {
   }
 }
 
+/// The protocol error for a complete frame that is not a JSON object, with
+/// [reason] outcomeUnknown for a request already written.
+Matcher isInvalidReply(String? reason) => isA<RpcError>()
+    .having((error) => error.code, 'code', RpcErrorCode.internal)
+    .having(
+      (error) => error.message,
+      'message',
+      'Application service sent an invalid reply',
+    )
+    .having((error) => error.toJson()['reason'], 'reason', reason);
+
 /// The error a startup failed with. A successful startup fails the test.
 Future<Object> startupFailure(Future<Object?> startup) async {
   try {
@@ -526,35 +539,57 @@ void main() {
   test(
     'desktop final snapshot shares the original overall startup deadline',
     () async {
-      final f = HandoffFixture();
-      await f.start(
-        errorMessage: 'healthy-then-stall',
-        firstProbeDelayMs: 1500,
-      );
-      Store('${f.profile.data}/application.db').close();
-      try {
-        final failure = expectLater(
-          RemoteDomain.connect(
-            f.profile,
-            startupTimeout: const Duration(seconds: 2),
-          ),
-          throwsA(isA<TimeoutException>()),
+      // The probe limit caps a status call only while more than it remains
+      // of the startup deadline. The owner holds its first reply long enough
+      // that less than the limit remains, so the stalled final snapshot ends
+      // uncapped, at the original deadline. A fresh budget for it would
+      // exceed the limit and end capped, with a message naming the limit.
+      await expireDeadlineDuring('the final snapshot', (deadline) async {
+        final f = HandoffFixture();
+        await f.start(
+          errorMessage: 'healthy-then-stall',
+          firstProbeDelayMs: (deadline * 0.25).inMilliseconds,
         );
-        await f.next('healthy-observed');
-        await f.next('final-observed');
-        await failure.timeout(const Duration(milliseconds: 1200));
-        await eventually(
-          () => File('${f.profile.data}/old-peer-closed').existsSync(),
-        );
-        expect(f.launched, isFalse);
-        expect(
-          File('${f.profile.data}/old-connections').readAsStringSync(),
-          '1',
-        );
-      } finally {
-        await f.close();
-      }
+        try {
+          ServiceFrame? last;
+          unawaited(
+            f.proxy
+                .seen(
+                  ProxyDirection.toService,
+                  method: 'status',
+                  where: (frame) =>
+                      (frame.json?['args'] as Map?)?['desktop'] == true,
+                )
+                .then((frame) => last = frame),
+          );
+          final failure = await startupFailure(
+            f.proxy.run(
+              () => ensureServiceSnapshot(
+                f.profile,
+                startupTimeout: deadline,
+                statusProbeLimit: deadline * 0.9,
+              ),
+            ),
+          );
+          expect(failure, isA<TimeoutException>());
+          // Only a final snapshot that reached the stalled owner tests it.
+          if (last == null) return false;
+          expect((failure as TimeoutException).message, probeTimeoutMessage);
+          await eventually(
+            () => File('${f.profile.data}/old-peer-closed').existsSync(),
+          );
+          expect(f.launched, isFalse);
+          expect(
+            File('${f.profile.data}/old-connections').readAsStringSync(),
+            '1',
+          );
+          return true;
+        } finally {
+          await f.close();
+        }
+      });
     },
+    timeout: ladderTimeout(handoffDeadlines),
   );
 
   test('desktop final snapshot follows an owner that closes uncleanly to one '
@@ -591,30 +626,104 @@ void main() {
   test(
     'desktop final handoff launches at most one replacement within its deadline',
     () async {
+      // The deadline also covers launching the replacement.
+      await expireDeadlineDuring("the replacement's closing reply", (
+        deadline,
+      ) async {
+        final f = HandoffFixture();
+        await f.start(errorMessage: 'healthy-then-closing');
+        Store('${f.profile.data}/application.db').close();
+        runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
+        try {
+          final oldClosing = f.proxy.seen(
+            ProxyDirection.toClient,
+            method: 'status',
+            where: (frame) => frame.error?['message'] == closingMessage,
+          );
+          ServiceFrame? replacementClosing;
+          unawaited(
+            f.proxy
+                .seen(
+                  ProxyDirection.toClient,
+                  method: 'status',
+                  // The old owner answers on the first connection.
+                  where: (frame) =>
+                      frame.connection.index > 0 &&
+                      frame.error?['message'] == closingMessage,
+                )
+                .then((frame) => replacementClosing = frame),
+          );
+          final failure = startupFailure(
+            f.proxy.run(
+              () => RemoteDomain.connect(f.profile, startupTimeout: deadline),
+            ),
+          );
+          // Release the old owner only once it refused the final snapshot.
+          if (!await Future.any([
+            oldClosing.then((_) => true),
+            failure.then((_) => false),
+          ])) {
+            return false;
+          }
+          await f.release();
+          final error = await failure;
+          expect(error, isA<TimeoutException>());
+          final message = (error as TimeoutException).message;
+          // The deadline must expire after startup took the replacement's
+          // closing reply, not while it launched or the reply was in flight.
+          if (replacementClosing == null || message == probeTimeoutMessage) {
+            return false;
+          }
+          expect(
+            message,
+            allOf(contains('${f.root.path}/launch'), contains('startup error')),
+          );
+          await eventually(
+            () => File('${f.profile.data}/closing-replied').existsSync(),
+          );
+          expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+            'launch',
+          ]);
+          return true;
+        } finally {
+          await f.close();
+        }
+      }, deadlines: launchDeadlines);
+    },
+    timeout: ladderTimeout(launchDeadlines),
+  );
+
+  test(
+    'desktop final status that the owner ends as outcomeUnknown hands off to '
+    'one replacement',
+    () async {
+      // A status the owner answered as it began closing: read-only, so the
+      // snapshot waits for that owner and follows the handoff.
       final f = HandoffFixture();
-      await f.start(errorMessage: 'healthy-then-closing');
+      await f.start(errorMessage: 'healthy-then-unknown');
       Store('${f.profile.data}/application.db').close();
-      runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
+      RemoteDomain? domain;
       try {
-        final failure = expectLater(
-          RemoteDomain.connect(
-            f.profile,
-            startupTimeout: const Duration(seconds: 3),
-          ),
-          throwsA(isA<TimeoutException>()),
-        );
+        final pending = RemoteDomain.connect(
+          f.profile,
+        ).then((value) => domain = value);
+        final success = expectLater(pending, completes);
         await f.next('healthy-observed');
         await f.next('closing-observed');
+        expect(f.launched, isFalse);
         await f.release();
-        await eventually(
-          () => File('${f.profile.data}/closing-replied').existsSync(),
-          timeout: const Duration(seconds: 2),
+        final connected = await pending.timeout(const Duration(seconds: 15));
+        await success;
+        expect(
+          (await connected.client.call('status') as Map)['pid'],
+          isNot(f.old.pid),
         );
-        await failure.timeout(const Duration(seconds: 4));
         expect(File('${f.profile.data}/launches').readAsLinesSync(), [
           'launch',
         ]);
       } finally {
+        domain?.close();
+        domain?.store.close();
         await f.close();
       }
     },
@@ -660,7 +769,9 @@ void main() {
           final failure = expectLater(
             RemoteDomain.connect(f.profile),
             throwsA(
-              mode == 'malformed' ? isA<FormatException>() : isA<RpcError>(),
+              mode == 'malformed'
+                  ? isInvalidReply('outcomeUnknown')
+                  : isA<RpcError>(),
             ),
           );
           await f.next('healthy-observed');
@@ -715,6 +826,31 @@ void main() {
           File('${f.profile.data}/requests').readAsLinesSync(),
           everyElement('status'),
         );
+      } finally {
+        await f.close();
+      }
+    },
+  );
+
+  test(
+    'a legacy owner refusing with its shorter closing text is handed off (L2)',
+    () async {
+      // A legacy owner sends no reason, only one of its two closing texts.
+      final f = HandoffFixture();
+      await f.start(errorMessage: legacyClosingMessage);
+      try {
+        final pending = f.connect();
+        final success = expectLater(pending, completes);
+        await f.next('closing-observed');
+        expect(f.launched, isFalse);
+        await f.release();
+        final client = await pending.timeout(const Duration(seconds: 15));
+        await success;
+        expect((await client.call('status') as Map)['pid'], isNot(f.old.pid));
+        expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+          'launch',
+        ]);
+        expect(f.lostLaunch, isFalse);
       } finally {
         await f.close();
       }
@@ -801,6 +937,39 @@ void main() {
     },
     timeout: ladderTimeout(handoffDeadlines),
   );
+
+  test('a stalled owner fails startup at the probe limit, not after the whole '
+      'budget (L1)', () async {
+    final f = HandoffFixture();
+    await f.start(errorMessage: 'stall');
+    try {
+      // The full three-minute budget; only the probe limit is shortened.
+      final failure = await startupFailure(
+        f.proxy.run(
+          () => ensureService(
+            f.profile,
+            statusProbeLimit: const Duration(milliseconds: 200),
+          ),
+        ),
+      );
+      expect(
+        failure,
+        isA<TimeoutException>().having(
+          (error) => error.message,
+          'message',
+          'Application service at ${f.ownerRuntime}/application.sock '
+              'accepted the connection but did not answer status within '
+              '200 ms; it may be busy or hung.',
+        ),
+      );
+      // One probe; a stalled live owner is never replaced.
+      expect(f.proxy.connections, hasLength(1));
+      await f.proxy.connections.single.ended(ProxyDirection.toService);
+      expect(f.launched, isFalse);
+    } finally {
+      await f.close();
+    }
+  }, timeout: const Timeout(Duration(seconds: 60)));
 
   test(
     'a closing post-launch owner remains bounded without another launch',
@@ -1186,7 +1355,9 @@ void main() {
     final f = HandoffFixture();
     await f.start(errorMessage: 'malformed');
     try {
-      await expectLater(f.connect(), throwsFormatException);
+      // A complete frame that is not JSON is a protocol error, not a caller
+      // error and not a lost connection to retry (SL-6).
+      await expectLater(f.connect(), throwsA(isInvalidReply('outcomeUnknown')));
       expect(f.launched, isFalse);
     } finally {
       await f.close();
@@ -1203,22 +1374,7 @@ void main() {
         client = await ServiceClient.connect(serviceEndpoint(f.profile));
         await f.next('malformed-sent');
         await eventually(() => client!.isClosed);
-        await expectLater(
-          client.call('status'),
-          throwsA(
-            isA<RpcError>()
-                .having(
-                  (error) => error.code,
-                  'code',
-                  RpcErrorCode.invalidArgument,
-                )
-                .having(
-                  (error) => error.message,
-                  'message',
-                  contains('not-json'),
-                ),
-          ),
-        );
+        await expectLater(client.call('status'), throwsA(isInvalidReply(null)));
         expect(f.launched, isFalse);
       } finally {
         await client?.close();

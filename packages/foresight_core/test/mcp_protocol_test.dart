@@ -388,6 +388,28 @@ void main() {
     },
   );
 
+  test('a malformed service frame is a protocol error, never invalid arguments '
+      '(SL-6)', () async {
+    final id = fixture.request('tools/call', {
+      'name': 'list_notes',
+      'arguments': {},
+    });
+    await fixture.serviceRequest();
+    fixture.sockets.last.writeln('not-json');
+    final reply = (await fixture.response(id))['result'] as Map;
+    expect(reply['isError'], isTrue);
+    expect(reply['structuredContent']['error'], {
+      'code': 'internal',
+      'message': 'Application service sent an invalid reply',
+      // The tool's request had been sent; it may have taken effect.
+      'reason': 'outcomeUnknown',
+    });
+    expect(
+      reply['content'][0]['text'],
+      'Application service sent an invalid reply',
+    );
+  });
+
   test('cancellation reaches the service and leaves MCP responsive', () async {
     final id = fixture.request('tools/call', {
       'name': 'ask',
@@ -414,7 +436,14 @@ void main() {
       final original = await fixture.serviceRequest();
       expect(original['method'], 'sources.import');
       fixture.sockets.last.destroy();
-      expect((await fixture.response(id))['result']['isError'], isTrue);
+      final lost = (await fixture.response(id))['result'] as Map;
+      expect(lost['isError'], isTrue);
+      // The agent learns the request may have committed (SL-4, SL-6).
+      expect(lost['structuredContent']['error'], {
+        'code': 'unavailable',
+        'message': 'Application service disconnected',
+        'reason': 'outcomeUnknown',
+      });
       final next = fixture.request('tools/call', {
         'name': 'get_status',
         'arguments': {},

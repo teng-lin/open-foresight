@@ -10,11 +10,14 @@ import 'package:test/test.dart';
 
 const closeGates = [
   'close.begin',
+  'close.leases_terminated',
   'close.helper_closed',
   'close.listener_closed',
-  'close.before_record_delete',
   'close.before_frontend_release',
+  'close.before_record_delete',
   'close.before_lock_release',
+  // In the frontend, after the worker has exited.
+  'frontend.draining',
 ];
 
 /// True when another process holds the profile's POSIX ownership lock.
@@ -137,20 +140,21 @@ void main() {
               expect(gates.isReached(later), isFalse, reason: later);
             }
             switch (point) {
-              case 'close.begin':
-                // The helper is closed only after this point.
+              case 'close.begin' || 'close.leases_terminated':
+                // The helper is closed only after these points.
                 expect(helper.isStopping, isFalse);
               case 'close.helper_closed':
                 // The helper exited through its release, not a SIGKILL.
                 expect(helper.released, isTrue);
               case 'close.before_lock_release':
-                // Today's order and PR 3's agree here; the pinned test below
-                // covers where they differ.
+                // The close order test below covers the steps before this.
                 expect(record.existsSync(), isFalse);
                 expect(socket.existsSync(), isFalse);
                 expect(lockHeld(profile), isTrue);
+              case 'frontend.draining':
+                expect(lockHeld(profile), isFalse);
             }
-            if (point == 'close.begin') {
+            if (point == 'close.leases_terminated') {
               owner.release(point);
               await helper.stopping();
               helper.release();
@@ -169,8 +173,8 @@ void main() {
       timeout: const Timeout(Duration(minutes: 2)),
     );
 
-    test('PINNED (SL-3, reordered by PR 3): the isolated close deletes the '
-        'record while its public socket still exists', () async {
+    test('the isolated close removes its public socket before the record, '
+        'and the record before the lock (SL-3)', () async {
       final directory = createServiceTestDirectorySync('of-order-');
       final profile = ProfilePaths(
         '${directory.path}/data',
@@ -179,22 +183,31 @@ void main() {
       final owner = await HookedServiceProcess.start(
         build,
         profile,
-        hold: ['close.before_record_delete', 'close.before_frontend_release'],
+        hold: [
+          'close.before_frontend_release',
+          'close.before_record_delete',
+          'close.before_lock_release',
+        ],
       );
       try {
         await owner.ready();
         final record = File('${profile.data}/.application-endpoint.json');
         final socket = File('${profile.runtime}/application.sock');
         owner.signal(ProcessSignal.sigterm);
-        await owner.reached('close.before_record_delete');
+        await owner.reached('close.before_frontend_release');
         expect(record.existsSync(), isTrue);
         expect(socket.existsSync(), isTrue);
-        owner.release('close.before_record_delete');
-        // PR 3 removes the public socket before the record instead.
-        await owner.reached('close.before_frontend_release');
-        expect(record.existsSync(), isFalse);
-        expect(socket.existsSync(), isTrue);
         owner.release('close.before_frontend_release');
+        // The frontend removed the public socket; the record remains, so a
+        // record never outlives its owner's sockets in the other order.
+        await owner.reached('close.before_record_delete');
+        expect(record.existsSync(), isTrue);
+        expect(socket.existsSync(), isFalse);
+        owner.release('close.before_record_delete');
+        await owner.reached('close.before_lock_release');
+        expect(record.existsSync(), isFalse);
+        expect(lockHeld(profile), isTrue);
+        owner.release('close.before_lock_release');
         expect(await owner.exited(), 0, reason: owner.output);
       } finally {
         await owner.stop();
@@ -257,6 +270,11 @@ void main() {
       );
       final helper = await GatedHelper.create(directory);
       final gates = await ServiceGates.create(directory);
+      // Every gate is armed to hold, and also to crash the isolate reaching
+      // it; a hook-free build must do neither.
+      for (final point in [...closeGates, 'request.committed.status']) {
+        File('${gates.directory.path}/$point.crash').writeAsStringSync('');
+      }
       final owner = await HookedServiceProcess.start(
         build,
         profile,

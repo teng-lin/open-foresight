@@ -99,8 +99,10 @@ void main() {
       try {
         service = await ApplicationService.start(profile);
         expect(wav.existsSync(), isFalse);
+        // A bound, not a speed requirement: under a loaded concurrent run
+        // the recovery index request can take longer than a few seconds.
         final request = await rag.indexed.future.timeout(
-          const Duration(seconds: 5),
+          const Duration(seconds: 60),
         );
         expect(request.content, contains('Unindexed final transcript'));
         expect(request.documentId, 'meeting-$meeting');
@@ -130,6 +132,8 @@ void main() {
           ..addAll(original);
       }
     },
+    // Above the 60 s bound on the index request, so that bound decides.
+    timeout: const Timeout(Duration(minutes: 2)),
   );
 
   for (final adopted in [false, true]) {
