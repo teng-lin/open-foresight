@@ -113,3 +113,22 @@ def test_shadow_rollout_does_not_delay_or_fail_nightly_preview():
     assert jobs["linux-shadow-comparison"]["needs"] == ["linux-native", "linux-test"]
     for name in ("linux-build", "linux-test", "linux-shadow-comparison"):
         assert jobs[name]["continue-on-error"] is True
+
+
+def test_shadow_consumers_override_skipped_main_only_ancestors():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())["jobs"]
+    # distribution-number is skipped on PRs. GitHub's implicit success() also
+    # considers skipped ancestors, even after linux-build explicitly ran and
+    # succeeded. Both downstream jobs must override that implicit status check.
+    for name, producers in (
+        ("linux-test", ["linux-build"]),
+        ("linux-shadow-comparison", ["linux-native", "linux-test"]),
+    ):
+        condition = jobs[name]["if"]
+        assert "!cancelled()" in condition
+        for producer in producers:
+            assert f"needs.{producer}.result == 'success'" in condition
+        # No unconditional always() or skipped-producer allowance may turn a
+        # failed/absent build into an attempted artifact handoff.
+        assert "always()" not in condition
+        assert "skipped" not in condition

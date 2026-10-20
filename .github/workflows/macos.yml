@@ -661,6 +661,7 @@ jobs:
     name: linux-test
     continue-on-error: true
     needs: linux-build
+    if: "!cancelled() && needs.linux-build.result == 'success'"
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
@@ -754,6 +755,7 @@ jobs:
   linux-shadow-comparison:
     continue-on-error: true
     needs: [linux-native, linux-test]
+    if: "!cancelled() && needs.linux-native.result == 'success' && needs.linux-test.result == 'success'"
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
