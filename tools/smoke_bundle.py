@@ -220,7 +220,8 @@ def main():
                         [str(relocated / "open-foresight-service"), "--stop"],
                         env=headless_env,
                         capture_output=True,
-                        timeout=20,
+                        # Allow 30 min finalization, 60 s status/release, and margin.
+                        timeout=32 * 60,
                         check=True,
                     )
                 report = {
@@ -254,7 +255,8 @@ def main():
                     [str(relocated / "open-foresight-service"), "--stop"],
                     env=env,
                     capture_output=True,
-                    timeout=20,
+                    # Allow 30 min finalization, 60 s status/release, and margin.
+                    timeout=32 * 60,
                     check=True,
                 )
                 channel.close()

@@ -13,7 +13,6 @@ GATES = (
     "linux-build",
     "linux-test",
     "linux-document-imports",
-    "linux-bundle",
     "packaging",
 )
 
@@ -143,11 +142,11 @@ def select_gates(paths, force=False):
         else:
             selected = dict.fromkeys(GATES, True)
     # Every installer contract consumes this run's bundle. Its build also
-    # selects the test consumer and the transitional main acceptance candidate.
+    # selects its test consumer.
     if selected["packaging"]:
         selected["linux-build"] = True
     if selected["linux-build"]:
-        selected["linux-test"] = selected["linux-bundle"] = True
+        selected["linux-test"] = True
     return selected
 
 
@@ -155,7 +154,7 @@ def requires_build(paths):
     return any(select_gates(paths).values())
 
 
-def check_gates(jobs, selected, main):
+def check_gates(jobs, selected):
     """Reject failed classification, malformed selection and skipped selected jobs."""
     if set(selected) != set(GATES) or any(
         type(value) is not bool for value in selected.values()
@@ -164,9 +163,7 @@ def check_gates(jobs, selected, main):
     expected = {"changes": "success"}
     expected.update(
         {
-            name: "success"
-            if required and (name != "linux-bundle" or main)
-            else "skipped"
+            name: "success" if required else "skipped"
             for name, required in selected.items()
         }
     )
@@ -177,22 +174,12 @@ def check_gates(jobs, selected, main):
             )
 
 
-def selection_report(paths, *, force=False, platforms="all", revision_range=""):
+def selection_report(paths, *, force=False, revision_range=""):
     selected = select_gates(paths, force=force)
-    if platforms == "linux":
-        selected["macos"] = False
-    elif platforms == "macos":
-        for gate in (
-            "linux-build",
-            "linux-test",
-            "linux-document-imports",
-            "linux-bundle",
-        ):
-            selected[gate] = False
     return {
         "range": revision_range,
         "force": force,
-        "platforms": platforms,
+        "platforms": "all",
         "selection": selected,
         "paths": [
             {
@@ -214,7 +201,7 @@ def write_report(report, destination):
         "",
         f"Range: `{report['range']}`",
         "",
-        f"Forced: `{report['force']}`; platform scope: `{report['platforms']}`",
+        f"Forced: `{report['force']}`",
         "",
         "| Gate | Selected |",
         "| --- | --- |",
@@ -252,13 +239,11 @@ def main():
     parser.add_argument("--json-output", default="ci-selection.json")
     parser.add_argument("--check-gates", action="store_true")
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--platforms", choices=("all", "linux", "macos"), default="all")
     args = parser.parse_args()
     if args.check_gates:
         check_gates(
             json.loads(os.environ["NEEDS"]),
             json.loads(os.environ["SELECTION"]),
-            os.environ["MAIN"] == "true",
         )
         print("All selected platform gates passed.")
         return
@@ -285,7 +270,6 @@ def main():
     report = selection_report(
         [path for path in paths if path],
         force=args.force,
-        platforms=args.platforms,
         revision_range=args.explain or f"{revisions[0]}..HEAD",
     )
     write_report(report, args.json_output)

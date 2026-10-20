@@ -158,28 +158,24 @@ def test_ubuntu_package_and_acceptance_share_the_original_verified_application()
     assert "ci_linux_acceptance.py" in consumer_commands
     for phase in ("cpu", "audio", "deb"):
         job = jobs["acceptance-" + phase]
-        assert job["needs"] == ["changes", "linux-build", "linux-bundle"]
+        assert job["needs"] == ["changes", "linux-build"]
         assert "!cancelled()" in job["if"]
         assert "needs.linux-build.result == 'success'" in job["if"]
-        assert '"success","skipped"' in job["if"]
+        assert "linux-bundle" not in job["if"]
         setup = next(
             step
             for step in job["steps"]
             if step.get("uses") == "./.github/actions/setup-linux-consumer"
         )
         for key, output in (
-            ("artifact-id", "candidate_id"),
-            ("artifact-digest", "candidate_digest"),
+            ("artifact-id", "bundle_id"),
+            ("artifact-digest", "bundle_digest"),
             ("attempt", "attempt"),
         ):
-            expression = setup["with"][key]
-            assert "github.ref == 'refs/heads/main' && !inputs.preview" in expression
-            assert "needs.linux-bundle.outputs." + output in expression
-            assert "needs.linux-build.outputs." in expression
-        assert (
-            setup["with"]["legacy-main"]
-            == "${{ github.ref == 'refs/heads/main' && !inputs.preview && inputs.tier != 'release' }}"
-        )
+            assert (
+                setup["with"][key] == "${{ needs.linux-build.outputs." + output + " }}"
+            )
+        assert "legacy-main" not in setup["with"]
         commands = "\n".join(step.get("run", "") for step in job["steps"])
         assert "bash tools/linux_acceptance.sh " + phase in commands
         assert "build_linux_container.sh" not in commands
@@ -191,12 +187,11 @@ def test_ubuntu_package_and_acceptance_share_the_original_verified_application()
     assert set(jobs["acceptance-checks"]["needs"]) == {
         "changes",
         "linux-build",
-        "linux-bundle",
         "acceptance-cpu",
         "acceptance-audio",
         "acceptance-deb",
     }
-    assert "--max-glibc 2.39" in (ROOT / "packaging/build.Dockerfile").read_text()
+    assert "--max-glibc 2.39" in (ROOT / "tools/linux_container_build.sh").read_text()
     assert "pull_request" not in workflow("linux-packages.yml")["on"]
     assert "workflow_call" in workflow("linux-packages.yml")["on"]
 
@@ -221,7 +216,7 @@ def test_acceptance_aggregate_rejects_every_incomplete_selected_job(
     step = next(step for step in job["steps"] if "--check-gates" in step.get("run", ""))
     assert step["env"]["NEEDS"] == "${{ toJSON(needs) }}"
     assert step["env"]["SELECTED"] == "${{ needs.changes.outputs.linux_build }}"
-    needs = {"changes": {"result": changes}, "linux-bundle": {"result": "skipped"}}
+    needs = {"changes": {"result": changes}}
     needs.update(
         {
             name: {"result": package}
@@ -252,7 +247,6 @@ def test_acceptance_aggregate_rejects_every_incomplete_selected_job(
         "acceptance-cpu",
         "acceptance-audio",
         "acceptance-deb",
-        "linux-bundle",
     ],
 )
 @pytest.mark.parametrize("result", ["failure", "cancelled", "skipped"])
@@ -271,11 +265,7 @@ def test_actual_acceptance_aggregate_requires_each_selected_consumer(gate, resul
         text=True,
         timeout=30,
     )
-    # PR/preview consumers have no transitional main bundle. Every selected
-    # independent consumer must succeed; only that alternative may be skipped.
-    assert (process.returncode == 0) == (
-        gate == "linux-bundle" and result == "skipped"
-    ), process.stdout + process.stderr
+    assert process.returncode != 0, process.stdout + process.stderr
 
 
 @pytest.mark.parametrize(
@@ -566,14 +556,15 @@ def test_actual_acceptance_selection_uses_main_push_range_and_fails_safe(
     )
     assert result.returncode == 0, result.stdout + result.stderr
     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-    assert values["linux_bundle"] == str(selected).lower()
+    assert "linux_bundle" not in values
+    assert values["linux_build"] == str(selected).lower()
 
 
 def test_package_and_acceptance_share_the_exact_inrun_build_without_compiling_again():
     jobs = workflow("macos.yml")["jobs"]
     for name in ("acceptance-cpu", "acceptance-audio", "acceptance-deb"):
         job = jobs[name]
-        assert job["needs"] == ["changes", "linux-build", "linux-bundle"]
+        assert job["needs"] == ["changes", "linux-build"]
         assert "!cancelled()" in job["if"]
         assert "needs.linux-build.result == 'success'" in job["if"]
         setup = next(
@@ -582,7 +573,7 @@ def test_package_and_acceptance_share_the_exact_inrun_build_without_compiling_ag
             if step.get("uses") == "./.github/actions/setup-linux-consumer"
         )
         assert "needs.linux-build.outputs.bundle_id" in setup["with"]["artifact-id"]
-        assert "needs.linux-bundle.outputs.candidate_id" in setup["with"]["artifact-id"]
+        assert setup["with"]["artifact-id"] == "${{ needs.linux-build.outputs.bundle_id }}"
         assert not any(
             step.get("with", {}).get("file") == "packaging/build.Dockerfile"
             for step in job["steps"]
@@ -591,7 +582,7 @@ def test_package_and_acceptance_share_the_exact_inrun_build_without_compiling_ag
         jobs["packaging"]["with"]["bundle_id"]
         == "${{ needs.linux-build.outputs.bundle_id }}"
     )
-    assert "--max-glibc 2.39" in (ROOT / "packaging/build.Dockerfile").read_text()
+    assert "--max-glibc 2.39" in (ROOT / "tools/linux_container_build.sh").read_text()
     assert "pull_request" not in workflow("linux-packages.yml")["on"]
 
 
@@ -611,7 +602,7 @@ def test_failed_consolidated_macos_cannot_be_hidden_by_successful_packaging(resu
     }
     results["macos"] = {"result": result}
     with pytest.raises(ValueError, match="macos: expected success"):
-        check_gates(results, selected, False)
+        check_gates(results, selected)
 
 
 def test_debian_compatibility_remains_independent_of_buildkit_fixture_failure():
@@ -622,6 +613,8 @@ def test_debian_compatibility_remains_independent_of_buildkit_fixture_failure():
     )
     debian = jobs["acceptance-deb"]
     assert "linux-test" not in debian["needs"]
+    assert debian["needs"] == ["changes", "linux-build"]
+    assert "!cancelled()" in debian["if"]
     assert "needs.linux-build.result == 'success'" in debian["if"]
     assert any(
         step.get("run") == "bash tools/linux_acceptance.sh deb"

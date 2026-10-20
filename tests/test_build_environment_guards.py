@@ -99,16 +99,13 @@ def test_output_affecting_paths_select_all_required_platform_gates(path, expecte
     } == expected
 
 
-@pytest.mark.parametrize("platform", ["linux", "macos"])
-def test_initial_commit_classification_uses_empty_tree_and_limits_platform(
-    tmp_path, monkeypatch, platform
+def test_initial_commit_classification_uses_empty_tree_and_selects_all_platforms(
+    tmp_path, monkeypatch
 ):
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "github-output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
-    monkeypatch.setattr(
-        sys, "argv", ["ci_changes", "--base", "0" * 40, "--platforms", platform]
-    )
+    monkeypatch.setattr(sys, "argv", ["ci_changes", "--base", "0" * 40])
     commands = []
 
     def check_output(args, **kwargs):
@@ -138,9 +135,8 @@ def test_initial_commit_classification_uses_empty_tree_and_limits_platform(
     fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
     selected = json.loads(fields["selection"])
     assert selected["packaging"]
-    assert selected["macos"] == (platform == "macos")
-    assert selected["linux-build"] == (platform == "linux")
-    assert fields["linux_bundle"] == str(platform == "linux").lower()
+    assert selected["macos"] and selected["linux-build"]
+    assert "linux_bundle" not in fields
 
 
 def test_classifier_requires_base_before_running_git(monkeypatch):

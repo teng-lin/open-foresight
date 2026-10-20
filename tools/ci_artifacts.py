@@ -876,7 +876,14 @@ def waiting_for_dependency(repository, component, identity, own_head, own_pr):
 
 
 def unavailable_message(component, identity):
-    producer = "ci-dependencies.yml" if component in FILES else "macos.yml"
+    if component.endswith("-app"):
+        return (
+            f"Verified tested release candidate {component} source {identity} unavailable. "
+            "Preserve successful outputs and retry failed jobs in the original candidate run. "
+            "If no qualifying candidate run exists, dispatch release.yml with candidates_only=true "
+            "on reviewed main for this source. Packaging never rebuilds applications or SDKs."
+        )
+    producer = "ci-dependencies.yml"
     return (
         f"Verified {component} identity {identity} unavailable from {producer}. "
         "No same-head or compatible main producer is running, or the 1800-second wait expired. "
@@ -912,16 +919,17 @@ def pull(
         "release-preparation",
     ):
         raise ValueError(f"Unsupported application consumer: {consumer}")
-    if component.endswith("-app") and consumer == "release-preparation":
-        if not source_run:
+    if component.endswith("-app"):
+        if consumer == "release-preparation" and not source_run:
             raise ValueError("Release packaging requires an exact tested candidate run")
-        from tools.ci_release_candidates import authorize
+        from tools.ci_release_candidates import authorize, find
 
+        if not source_run:
+            record = find(repository, identity)
+            if record is None:
+                return False
+            source_run = record["run_id"]
         consumer = authorize(repository, identity, source_run, component)
-    if component.endswith("-app") and consumer == "legacy-release-candidate":
-        from tools.ci_release_candidates import require_legacy
-
-        require_legacy(repository, identity)
     if bool(artifact_id) != bool(artifact_digest) or (
         artifact_id
         and (
@@ -1122,21 +1130,16 @@ def pull(
 def application_descriptor(
     repository, component, source, run_id, *, consumer="artifact-pull"
 ):
-    """Prefer a small verified receipt; legacy candidates retain full verification."""
+    """Read stamped distribution metadata only from a tested release-tier run."""
     if component.endswith("-app") and consumer not in (
         "artifact-pull",
         "release-preparation",
     ):
         raise ValueError(f"Unsupported application consumer: {consumer}")
-    public_consumer = consumer
-    if consumer == "release-preparation":
+    if component.endswith("-app"):
         from tools.ci_release_candidates import authorize
 
         consumer = authorize(repository, source, run_id, component)
-    if consumer == "legacy-release-candidate":
-        from tools.ci_release_candidates import require_legacy
-
-        require_legacy(repository, source)
     run = api(repository, f"actions/runs/{run_id}")
     metadata_name = receipt_name(component, source)
     items = api(repository, f"actions/artifacts?name={metadata_name}&per_page=100")[
@@ -1189,16 +1192,7 @@ def application_descriptor(
         ):
             raise ValueError("Application metadata lacks a valid distribution identity")
         return distribution
-    with tempfile.TemporaryDirectory() as temporary:
-        prefix = Path(temporary) / "candidate"
-        options = (
-            {"consumer": public_consumer} if public_consumer != "artifact-pull" else {}
-        )
-        if not pull(
-            repository, component, source, prefix, source_run=run_id, **options
-        ):
-            raise ValueError("Verified surviving candidate became unavailable")
-        return application_distribution(prefix, component, source)
+    raise ValueError("Verified application metadata became unavailable")
 
 
 def main():

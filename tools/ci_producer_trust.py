@@ -63,21 +63,10 @@ PRODUCERS = {
         ("pull_request", "push", "workflow_dispatch", "schedule"),
         {"": ("linux-build", "build / linux-build")},
     ),
-    # Transitional per-merge candidate; removed with WS5b-3, never a PR lookup.
-    "main-acceptance": Producer(
-        (".github/workflows/macos.yml",),
-        ("push", "workflow_dispatch"),
-        {"": ("linux-bundle",)},
-    ),
     "dependency-seed-current": Producer(
         (".github/workflows/macos.yml", ".github/workflows/preview-packages.yml"),
         ("push", "workflow_dispatch", "schedule"),
         {"": ("publish-caches", "build / publish-caches")},
-    ),
-    "artifact-pull": Producer(
-        (".github/workflows/macos.yml",),
-        ("push", "workflow_dispatch"),
-        {"linux-app": ("linux-bundle",), "macos-app": ("macos",)},
     ),
     "dependency-sdk": Producer(
         (".github/workflows/ci-dependencies.yml",),
@@ -115,8 +104,8 @@ PRODUCERS = {
     ),
 }
 
-# Separate consumer rows permit release-only tier tightening without changing
-# the legacy fixtures used by PR packages or generic artifact restoration.
+# Dependency aliases and SDK promotion retain their own producer contracts.
+# Application lookup is release-tier only; in-run PR/preview checks stay separate.
 PRODUCERS["package-alias"] = Producer(
     PRODUCERS["dependency-sdk"].workflows,
     PRODUCERS["dependency-sdk"].events,
@@ -145,12 +134,9 @@ PRODUCERS["release-candidate-receipt"] = Producer(
     {"": ("candidate-receipt",)},
     receipt_tier="release",
 )
-PRODUCERS["legacy-release-candidate"] = Producer(
-    PRODUCERS["artifact-pull"].workflows,
-    ("push",),
-    dict(PRODUCERS["artifact-pull"].jobs),
-)
+
 PRODUCERS["release-preparation"] = PRODUCERS["release-candidate"]
+PRODUCERS["artifact-pull"] = PRODUCERS["release-candidate"]
 
 # Release in-run consumers have distinct caller and job identities.
 PRODUCERS["release-inrun-application"] = Producer(

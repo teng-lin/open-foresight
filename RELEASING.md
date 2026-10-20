@@ -77,27 +77,27 @@ preparation and publication.
 
 ## Reuse application candidates and test the draft packages
 
-Normal main CI produces source-bound Linux and macOS application candidates.
-Release preparation discovers those existing outputs and waits for active
-producers; it never dispatches another application build. The two platforms may
-come from different successful producer jobs, but their source, version and
-distribution build number must agree. A failed sibling job does not invalidate
-a successful platform's verified candidate.
+Release-tier runs of `release.yml` produce the Linux and macOS candidates on
+demand. The coordinator first looks for a fully tested index for the exact
+reviewed product source. If none exists, it produces both platforms and requires
+all candidate gates before recording the index. PR and preview bundles cannot
+satisfy release lookup. Sources below `RELEASE_SOURCE_FLOOR` are refused; choose a
+reviewed source at or above that floor.
 
-If preparation reports a missing platform, inspect its artifacts, receipts and
-running producers first. When no compatible output exists, build only that
-platform for the reviewed product commit. For example, for a missing Linux
-candidate:
+To prepare candidates before drafting or packaging a release, run:
 
 ```sh
-gh workflow run macos.yml --ref main \
-  -f source="$release_commit" -f platforms=linux
+gh workflow run release.yml --ref main \
+  -f candidates_only=true -f source="$release_commit"
 ```
 
-Use `platforms=macos` for a missing Mac candidate. The surviving candidate's build
-identity is retained. Replacing an existing candidate also requires a concrete
-output-affecting `rebuild_reason`; dependency SDKs and valid compiler outputs
-remain reusable. Wait for the selected producer before retrying preparation.
+This run creates or reuses the tested index without creating a release draft.
+Inspect failed candidate gates and rerun only failed jobs first, preserving
+successful outputs and their original producer attempts. An existing tested
+index retains its source, version, distribution number and byte checksums. Pass
+its original run as `candidate_run` when selecting a specific verified index.
+Packaging consumes that exact completed index without polling for application
+producers or compiling applications or SDKs.
 
 Start the coordinator on main with no GPU evidence:
 
@@ -110,8 +110,9 @@ Open the run shown by `gh run list` in GitHub Actions to follow its progress.
 The coordinator:
 
 1. Verifies the administrator-created tag and its application version.
-2. Verifies and reuses the exact tagged product's Linux and macOS candidates,
-   preserving their successful producer attempts, receipts and checksums.
+2. Verifies an existing fully tested release-tier index for the tagged product,
+   or produces and tests both candidates before packaging, preserving their
+   original successful attempts, receipts and checksums.
 3. Creates or resumes the draft generation and packages missing installer formats
    with current packaging controls and the original tested application bytes.
 4. Uploads Linux DEB, RPM, Arch, and portable packages, plus the Apple Silicon
@@ -238,7 +239,7 @@ rebuilding SDKs.
 | --- | --- |
 | Builds and automated acceptance passed with a qualified evidence index; GPU evidence is pending | Complete hardware testing, then use `publish_only=true`. |
 | Existing draft bytes are valid; acceptance failed from a transient external cause before a qualified evidence index was retained | Resolve that external cause, then re-run failed jobs in the original release coordinator using its original tooling revision. Use `publish_only=true` only after the original candidate, packaging and acceptance evidence index verifies. |
-| One application platform is missing | Preserve its successful sibling and active producers; build only the missing platform after verifying no compatible retained output exists. |
+| One application platform is missing | Preserve successful outputs and retry failed jobs in the original candidate run. If no qualifying candidate run exists, dispatch `release.yml` with `candidates_only=true` for the reviewed source; the coordinator produces both platforms with one tested index. |
 | One installer format failed | Inspect retained bytes and retry failed jobs in the original release coordinator. Its successful sibling formats and original candidates remain qualified; do not start a separate packaging workflow to replace coordinator-bound evidence. |
 | An existing asset conflicts or an artifact is corrupt/expired | Follow the verifier's recovery diagnostic. Do not overwrite different bytes or discard surviving formats. Review the exact artifact problem before requesting replacement. |
 | The tagged product code needs a fix | Merge the fix through review and prepare a new version and tag. Keep the original tag fixed. |

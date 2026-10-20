@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import tarfile
+import tempfile
 from unittest.mock import patch
 
 import pytest
@@ -15,6 +16,11 @@ import pytest
 from tools import app_version, build_sequence, ci_artifacts, preview_packages as preview
 from tools import verify_preview_cloud as cloud
 from test_pull_request_workflows import parse_workflow
+from test_ci_release_candidates import (
+    producer as producer,
+    REPOSITORY as CANDIDATE_REPOSITORY,
+    SOURCE as CANDIDATE_SOURCE,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = "a" * 40
@@ -199,7 +205,7 @@ def installers(root):
             json.dumps(
                 {
                     "revision": SHA,
-                    "version": "0.1.2" if kind == "dmg" else "0.1.2~" + LABEL,
+                    "version": "0.1.2" if kind in ("dmg", "tar") else "0.1.2~" + LABEL,
                     "build_number": 12,
                     "sha256": checksum,
                     "format": kind,
@@ -207,6 +213,32 @@ def installers(root):
                 }
             )
         )
+    portable = root / "tar"
+    (portable / "distribution-stamp.json").write_text(
+        json.dumps(
+            {
+                "version": "0.1.2",
+                "build_number": 12,
+                "label": LABEL,
+                "source_commit": SHA,
+            }
+        )
+    )
+    # Produce the real payload/identity receipt before the in-run verifier writes
+    # its retained original-source qualification beside the extracted bytes.
+    with (
+        tempfile.TemporaryDirectory() as directory,
+        patch.object(ci_artifacts.subprocess, "check_output", return_value=SHA),
+        patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}),
+    ):
+        output = Path(directory)
+        ci_artifacts.pack(
+            "linux-app", SHA, portable, output, tier="preview", label=LABEL
+        )
+        original = json.loads((output / "identity.json").read_text())
+    (portable / "source-qualification.json").write_text(
+        json.dumps({"source_receipt": original})
+    )
 
 
 def test_final_manifest_requires_all_formats_same_source_and_build(
@@ -216,7 +248,16 @@ def test_final_manifest_requires_all_formats_same_source_and_build(
         "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + ".summary"))
     )
     installers(tmp_path)
+    portable = tmp_path / "tar/installer.tar.gz"
+    original_bytes = portable.read_bytes()
     result = preview.manifest(tmp_path, "0.1.2", 12, LABEL, SHA, "standard")
+    assert portable.read_bytes() == original_bytes
+    assert (
+        next(item for item in result["installers"] if item["format"] == "tar")[
+            "version"
+        ]
+        == "0.1.2"
+    )
     assert len(result["installers"]) == 5
     assert result["full_model_cloud_acceptance"] == "not_run"
     with pytest.raises(ValueError, match="build numbers"):
@@ -224,6 +265,67 @@ def test_final_manifest_requires_all_formats_same_source_and_build(
     (tmp_path / "deb/installer.deb").write_bytes(b"changed")
     with pytest.raises(ValueError):
         preview.receipt(tmp_path / "deb", "deb", SHA)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing-stamp",
+        "missing-receipt",
+        "symlink-stamp",
+        "wrong-stamp",
+        "preview-label",
+        "source",
+        "tier",
+        "distribution",
+        "invalid-receipt",
+    ],
+)
+def test_portable_preview_requires_original_stamped_label_and_receipt(
+    tmp_path, failure
+):
+    installers(tmp_path)
+    stamp = tmp_path / "tar/distribution-stamp.json"
+    qualification = tmp_path / "tar/source-qualification.json"
+    if failure.startswith("missing-"):
+        (stamp if failure == "missing-stamp" else qualification).unlink()
+    elif failure == "symlink-stamp":
+        original = stamp.read_text()
+        stamp.unlink()
+        target = tmp_path / "stamp.json"
+        target.write_text(original)
+        stamp.symlink_to(target)
+    elif failure == "wrong-stamp":
+        stamp.write_text("{}")
+    else:
+        value = json.loads(qualification.read_text())
+        original = value["source_receipt"]
+        if failure == "preview-label":
+            original["label"] = "nightly.20261019.99"
+        elif failure == "source":
+            original["source_commit"] = "b" * 40
+        elif failure == "tier":
+            original["tier"] = "release"
+        elif failure == "distribution":
+            original["distribution"]["build_number"] = 13
+        else:
+            original["sha256"] = "invalid"
+        qualification.write_text(json.dumps(value))
+    with pytest.raises(ValueError, match="Portable preview"):
+        preview.manifest(tmp_path, "0.1.2", 12, LABEL, SHA, "standard")
+
+
+@pytest.mark.parametrize("filename", ["source-qualification.json", "distribution-stamp.json"])
+@pytest.mark.parametrize("contents", ["{", "[]", "null"])
+def test_portable_preview_rejects_malformed_metadata_with_identity_diagnostic(
+    tmp_path, filename, contents
+):
+    installers(tmp_path)
+    (tmp_path / "tar" / filename).write_text(contents)
+    with pytest.raises(
+        ValueError, match="Portable preview stamp or receipt differs from its identity"
+    ):
+        preview.manifest(tmp_path, "0.1.2", 12, LABEL, SHA, "standard")
 
 
 def test_missing_formats_and_foreign_source_cannot_be_published(tmp_path, monkeypatch):
@@ -279,7 +381,7 @@ def test_preview_workflow_has_no_release_publication_and_gates_downloads():
     assert (
         "github.ref == 'refs/heads/main'" in builds["jobs"]["distribution-number"]["if"]
     )
-    for name in ("macos", "linux-bundle"):
+    for name in ("macos", "linux-build"):
         steps = builds["jobs"][name]["steps"]
         if name == "macos":
             setup = next(
@@ -321,19 +423,21 @@ def test_application_receipts_bind_to_the_actual_source_checkout(tmp_path):
         ci_artifacts.unpack("macos-app", SHA, tmp_path, tmp_path / "destination")
 
 
-def test_producer_pin_never_falls_back_to_another_successful_run(tmp_path):
-    artifact = {
-        "expired": False,
-        "name": ci_artifacts.name("macos-app", SHA),
-        "workflow_run": {"id": 1},
-    }
-    with patch.object(
-        ci_artifacts, "api", return_value={"artifacts": [artifact]}
-    ) as api:
-        assert not ci_artifacts.pull(
-            "owner/repo", "macos-app", SHA, tmp_path / "destination", source_run=2
+def test_producer_pin_never_falls_back_to_another_successful_run(producer, tmp_path):
+    payload = producer.item(ci_artifacts.name("macos-app", CANDIDATE_SOURCE))
+    payload["workflow_run"]["id"] = 1
+    producer.downloads.clear()
+    with pytest.raises(ValueError, match="original upload"):
+        ci_artifacts.pull(
+            CANDIDATE_REPOSITORY,
+            "macos-app",
+            CANDIDATE_SOURCE,
+            tmp_path / "destination",
+            source_run=42,
+            consumer="release-preparation",
         )
-    assert api.call_count == 1
+    assert payload["id"] not in producer.downloads
+    assert not (tmp_path / "destination").exists()
 
 
 def test_preview_dmg_receipt_rejects_foreign_build_bytes(tmp_path):

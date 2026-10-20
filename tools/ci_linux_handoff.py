@@ -147,18 +147,13 @@ def input_identity(sdk_image, qualification, recipe, snapshot):
         raise ValueError("Invalid verified SDK image ID")
     if not re.fullmatch(r"\d{8}T\d{6}Z", snapshot):
         raise ValueError("Invalid pinned Ubuntu snapshot")
-    text = recipe.read_text()
-    start = text.index("FROM application-base AS application-dependencies")
-    end = text.index("FROM application-dependencies AS tested")
-    # Include the dependency-only and CI stages, not the old application/test
-    # layer. Base/package changes still affect the prefix hash below.
+    # The complete recipe now contains only dependency and CI tooling stages.
+    # Hash its actual bytes; no deleted application-stage delimiter is needed.
     record = {
         "schema": 1,
         "sdk_image_id": image_id,
         "dependency_seed_sha256": digest(qualification),
-        "ci_recipe_sha256": hashlib.sha256(
-            text[:start].encode() + text[start:end].encode()
-        ).hexdigest(),
+        "ci_recipe_sha256": digest(recipe),
         "snapshot": snapshot,
     }
     return {**record, "identity": hashlib.sha256(canonical(record)).hexdigest()}

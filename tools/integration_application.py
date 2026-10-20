@@ -202,7 +202,6 @@ def retrieve(
     component="linux-app",
     producer_wait=60,
     shadow=False,
-    main_candidate=False,
     label="",
     purpose="acceptance",
 ):
@@ -222,17 +221,11 @@ def retrieve(
     identity = source if component == "linux-app" else artifacts.fingerprint(component)
     if purpose == "weekly-audit" and component != "linux-app":
         raise ValueError("Weekly audit consumes only the preview application")
-    if main_candidate and (
-        component != "linux-app" or label or purpose != "acceptance"
-    ):
-        raise ValueError("Legacy main candidates require an unlabelled application")
     if shadow and component != "linux-sdk":
         raise ValueError("Fork handoff restores only its source-scoped SDK")
     consumer = (
         "weekly-preview-audit"
         if purpose == "weekly-audit" and component == "linux-app"
-        else "main-acceptance"
-        if main_candidate
         else "inrun-package-contract"
         if component == "linux-app" and purpose == "package-contract"
         else "inrun-application"
@@ -241,17 +234,16 @@ def retrieve(
     )
     run = artifacts.api(repository, f"actions/runs/{run_id}")
     release = run.get("path") == ".github/workflows/release.yml"
-    if release and (
-        component != "linux-app" or main_candidate or purpose == "weekly-audit"
-    ):
+    if release and (component != "linux-app" or purpose == "weekly-audit"):
         raise ValueError("Release consumers require their exact in-run application")
     if release:
         consumer = "release-inrun-application"
     name = (
         artifacts.name(component, identity)
         if release
-        else f"main-linux-bundle-{source}"
-        if main_candidate
+        else f"preview-linux-app-{run_id}-{attempt}"
+        if component == "linux-app"
+        and run.get("path") == ".github/workflows/preview-packages.yml"
         else f"linux-bundle-{run_id}-{attempt}"
         if component == "linux-app"
         else f"shadow-sdk-{source}-{attempt}"
@@ -267,7 +259,6 @@ def retrieve(
             (run.get("event") == "pull_request" or purpose == "weekly-audit")
             and run_head != source
         )
-        or (main_candidate and run.get("head_branch") != "main")
     ):
         raise ValueError("Application producer repository, workflow or source mismatch")
     if (
@@ -402,7 +393,6 @@ def main():
     )
     parser.add_argument("--save-sdk", action="store_true")
     parser.add_argument("--shadow", action="store_true")
-    parser.add_argument("--main-candidate", action="store_true")
     parser.add_argument("--label", default="")
     parser.add_argument(
         "--purpose", choices=("acceptance", "package-contract"), default="acceptance"
@@ -441,7 +431,6 @@ def main():
                 args.directory,
                 component=args.component,
                 **({"shadow": True} if args.shadow else {}),
-                **({"main_candidate": True} if args.main_candidate else {}),
                 **({"label": args.label} if args.label else {}),
                 **({"purpose": args.purpose} if args.purpose != "acceptance" else {}),
             ),

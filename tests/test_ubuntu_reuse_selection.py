@@ -63,20 +63,27 @@ def test_mixed_changes_preserve_packaging_and_apple_runtime_gates():
             ]
         ).items()
         if needed
-    } == {"macos", "packaging", "linux-build", "linux-test", "linux-bundle"}
+    } == {"macos", "packaging", "linux-build", "linux-test"}
 
 
-def test_main_sdk_is_loaded_before_dependency_inspection():
-    steps = workflow("macos.yml")["jobs"]["linux-bundle"]["steps"]
+def test_current_build_resolves_the_sdk_before_dependency_inspection():
+    steps = workflow("macos.yml")["jobs"]["linux-build"]["steps"]
     sdk = next(step for step in steps if step.get("id") == "sdk")
-    seed = next(
-        step for step in steps if "ci_app_dependency_seed.py" in step.get("run", "")
+    build = next(
+        step
+        for step in steps
+        if "build_linux_container.sh --build-only" in step.get("run", "")
     )
-    assert (
-        "resolve --prefix build/sdk-descriptor --load --discard-archive" in sdk["run"]
+    assert steps.index(sdk) < steps.index(build)
+    assert "ci_linux_shadow_sdk.py" in sdk["run"]
+    script = (ROOT / "tools/build_linux_container.sh").read_text()
+    assert script.index("ci_app_dependency_seed.py") < script.index(
+        "docker buildx build"
     )
-    assert steps.index(sdk) < steps.index(seed)
-    assert "ci_dependency_wait.py --component linux-sdk" in sdk["run"]
+    resolver = (ROOT / "tools/ci_linux_shadow_sdk.py").read_text()
+    assert "sdk.resolve(prefix, load_registry=True)" in resolver
+    assert '(prefix / "image.tar").unlink(missing_ok=True)' in resolver
+    assert "sdk.write_outputs(load(prefix))" in resolver
 
 
 def test_acceptance_dependency_cache_is_read_only_for_prs_and_main_published():

@@ -94,7 +94,7 @@ def test_aggregate_rejects_non_successful_consolidated_job(result):
     jobs["changes"] = {"result": "success"}
     jobs["macos"] = {"result": result}
     with pytest.raises(ValueError, match="macos: expected success"):
-        check_gates(jobs, selected, False)
+        check_gates(jobs, selected)
 
 
 def publisher():
