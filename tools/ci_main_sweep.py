@@ -51,6 +51,35 @@ def latest_invalidated(runs):
     )
 
 
+def validation_runs(reader, source, namespace="production"):
+    """Keep latest real readiness, excluding only verified successful no-op runs."""
+    result = []
+    for run in reader.runs(PLATFORM, source):
+        if not matches_sweep(reader, run, source, namespace):
+            continue
+        superseded = False
+        if run.get("status") == "completed" and run.get("conclusion") == "success":
+            try:
+                selection, _ = reader.artifact(
+                    run, "ci-selection-platform", "ci-selection.json", "changes"
+                )
+                superseded = (
+                    selection.get("superseded") is True
+                    and selection.get("sweep") is True
+                    and selection.get("sweep_namespace") == namespace
+                    and selection.get("selection")
+                    == dict.fromkeys(application_selection(), False)
+                    and all(type(value) is bool for value in selection["selection"].values())
+                )
+            except ValueError:
+                # An unverifiable newer run remains authoritative and fails
+                # qualification; it must never uncover older green evidence.
+                pass
+        if not superseded:
+            result.append(run)
+    return sorted(result, key=lambda run: run["id"], reverse=True)
+
+
 def guard(reader, source, current_run, *, namespace="exercise"):
     """Only already executing earlier sweeps can supersede this execution.
 
