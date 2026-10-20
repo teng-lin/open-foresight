@@ -129,4 +129,55 @@ void main() {
       '/run/test/open-foresight/${identity.substring(0, 12)}',
     );
   });
+
+  test('identity and the default runtime match a golden vector (N4)', () {
+    // Pinned: a change of canonicalization or hashing would make a running
+    // owner of the same profile look like another profile's.
+    const data = '/nonexistent-open-foresight-golden/profile';
+    expect(ProfilePaths(data, '/r').identity, '505d498948b6d8238033804b');
+    final profile = ProfilePaths.resolve({
+      'HOME': '/nonexistent-open-foresight-golden',
+      'FORESIGHT_DATA': data,
+      'XDG_RUNTIME_DIR': '/run/user/1000',
+    }, macOS: false);
+    expect(profile.runtime, '/run/user/1000/open-foresight/505d498948b6');
+  });
+
+  test('an empty or relative XDG_RUNTIME_DIR is unset, and a Linux runtime '
+      'too long for Unix sockets is refused (N3)', () {
+    final root = Directory(
+      createTestTempDirectorySync('of-xdg-').resolveSymbolicLinksSync(),
+    );
+    final data = '${root.path}/data';
+    for (final xdg in ['', 'relative/run']) {
+      final profile = ProfilePaths.resolve({
+        'HOME': root.path,
+        'FORESIGHT_DATA': data,
+        'XDG_RUNTIME_DIR': xdg,
+      }, macOS: false);
+      expect(
+        profile.runtime,
+        '$data/runtime/${profileHash(data)}',
+        reason: 'XDG_RUNTIME_DIR="$xdg"',
+      );
+    }
+    // application.sock must fit in 108 bytes with its NUL terminator.
+    final fits = '/${'r' * 89}';
+    expect(
+      ProfilePaths.resolve({
+        'HOME': root.path,
+        'FORESIGHT_DATA': data,
+        'FORESIGHT_RUNTIME': fits,
+      }, macOS: false).runtime,
+      fits,
+    );
+    expect(
+      () => ProfilePaths.resolve({
+        'HOME': root.path,
+        'FORESIGHT_DATA': data,
+        'FORESIGHT_RUNTIME': '${fits}r',
+      }, macOS: false),
+      throwsStateError,
+    );
+  });
 }

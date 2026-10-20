@@ -214,6 +214,15 @@ void protectPrivateFile(String path) {
   }
 }
 
+/// Create or check [profile]'s runtime directory as private, and the
+/// directory a default runtime lives in too (S5). An owned parent that only
+/// its user can write is tightened like the profile itself.
+void privateRuntime(ProfilePaths profile) {
+  final parent = profile.runtimeParent;
+  if (parent != null) privateDirectory(parent, repairOwnedPermissions: true);
+  privateDirectory(profile.runtime);
+}
+
 /// Refuse symlinks and foreign/public directories before using local RPC state.
 void privateDirectory(String path, {bool repairOwnedPermissions = false}) {
   final dir = Directory(path);

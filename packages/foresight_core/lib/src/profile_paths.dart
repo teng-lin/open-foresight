@@ -44,7 +44,13 @@ String _profileIdentity(String data) =>
 
 class ProfilePaths {
   final String data, runtime;
-  const ProfilePaths(this.data, this.runtime);
+
+  /// The directory a default Linux runtime lives in, which must be private
+  /// too: under a shared XDG_RUNTIME_DIR another user could otherwise create
+  /// it first, and clients released before per-profile runtimes use it as
+  /// their runtime (S5). Null for an explicit or macOS runtime.
+  final String? runtimeParent;
+  const ProfilePaths(this.data, this.runtime, {this.runtimeParent});
 
   /// Which profile this is: 24 hex digits of the SHA-256 of its canonical
   /// data path. An owner reports it in status, so a client never attaches to,
@@ -87,7 +93,9 @@ class ProfilePaths {
     // sockets only when FORESIGHT_RUNTIME says so (D5). An owner started with
     // the earlier shared Linux default stays reachable through its endpoint
     // record.
-    final xdgRuntime = environment['XDG_RUNTIME_DIR'];
+    // An empty or relative XDG_RUNTIME_DIR is invalid, so it is unset (N3).
+    final xdg = environment['XDG_RUNTIME_DIR'];
+    final xdgRuntime = xdg != null && xdg.startsWith('/') ? xdg : null;
     final runtime = canonicalProfilePath(
       environment['FORESIGHT_RUNTIME'] ??
           (mac
@@ -101,6 +109,18 @@ class ProfilePaths {
         'FORESIGHT_RUNTIME is too long for macOS Unix sockets; choose a short private directory (under 80 bytes).',
       );
     }
-    return ProfilePaths(data, runtime);
+    if (!mac && utf8.encode('$runtime/application.sock').length >= 108) {
+      throw StateError(
+        'The runtime directory $runtime is too long for Unix sockets; set '
+        'FORESIGHT_RUNTIME to a short private directory (at most 90 bytes).',
+      );
+    }
+    return ProfilePaths(
+      data,
+      runtime,
+      runtimeParent: mac || environment['FORESIGHT_RUNTIME'] != null
+          ? null
+          : File(runtime).parent.path,
+    );
   }
 }

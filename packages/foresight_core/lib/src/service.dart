@@ -304,7 +304,7 @@ String serviceEndpoint(ProfilePaths profile, [EndpointRecord? record]) {
   )) {
     return '$runtime/application.sock';
   }
-  privateDirectory(profile.runtime);
+  privateRuntime(profile);
   return '${profile.runtime}/application.sock';
 }
 
@@ -876,7 +876,7 @@ class ApplicationService {
     if (runtimeConfiguration['FORESIGHT_NATIVE'] != null) {
       configureProfileRuntime(profile.data);
     }
-    privateDirectory(profile.runtime);
+    privateRuntime(profile);
     var path = '${profile.runtime}/application.sock';
     final lock = File(
       '${profile.data}/.application.lock',
@@ -1695,6 +1695,8 @@ class IsolatedApplicationService {
   );
 
   static Future<IsolatedApplicationService> start(ProfilePaths profile) async {
+    // The worker only gets the runtime path; check its parent here.
+    privateRuntime(profile);
     final host = IsolatedApplicationService._(
       profile.data,
       ReceivePort(),
@@ -2793,7 +2795,7 @@ Future<ServiceStartup> _ensureService(
       remaining();
       if (launches == 0 &&
           _profileOwnerAvailable(profile, closingOwner: closingOwner)) {
-        privateDirectory(profile.runtime);
+        privateRuntime(profile);
         launches++;
         await launchOnce();
       }

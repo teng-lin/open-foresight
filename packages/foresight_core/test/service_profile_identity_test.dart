@@ -794,6 +794,27 @@ void main() {
     expect(recordedRuntime(profile), profile.runtime);
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('the directory a default runtime lives in is private too (S5)', () {
+    final directory = createServiceTestDirectorySync('of-parent-');
+    final xdg = '${directory.path}/xdg';
+    privateDirectory(xdg);
+    ProfilePaths resolve() => ProfilePaths.resolve({
+      'HOME': directory.path,
+      'XDG_RUNTIME_DIR': xdg,
+      'FORESIGHT_DATA': '${directory.path}/data',
+    }, macOS: false);
+    final parent = '$xdg/open-foresight';
+    // Created private, never public in between.
+    serviceEndpoint(resolve());
+    expect(FileStat.statSync(parent).mode & 0x1ff, 0x1c0);
+    // Under a shared XDG_RUNTIME_DIR another user could create it first;
+    // one that others can write is refused.
+    Directory(parent).deleteSync(recursive: true);
+    Directory(parent).createSync();
+    expect(Process.runSync('/bin/chmod', ['777', parent]).exitCode, 0);
+    expect(() => serviceEndpoint(resolve()), throwsStateError);
+  });
+
   /// A desktop facade for [profile], closed with everything it opened at the
   /// end of the test.
   Future<RemoteDomain> desktop(Future<RemoteDomain> connecting) async {
