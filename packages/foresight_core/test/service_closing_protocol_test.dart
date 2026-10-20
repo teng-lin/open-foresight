@@ -838,6 +838,10 @@ void main() {
     }
     final inside = '${profile.runtime}/startup-1-2-3.json';
     runtimeConfiguration.environment['FORESIGHT_STARTUP_STATUS'] = inside;
+    // Without its launcher's lease nobody waits, so nothing is written.
+    recordServiceStartupFailure(profile, StateError('Startup broke'));
+    expect(File(inside).existsSync(), isFalse);
+    File(inside).writeAsStringSync('{"state":"launching"}');
     recordServiceStartupFailure(profile, StateError('Startup broke'));
     expect(jsonDecode(File(inside).readAsStringSync()), {
       'state': 'failed',
@@ -1197,7 +1201,9 @@ void main() {
     // momentary probe by another launcher or --stop, would.
     final holder = await holdProfileLock(lock);
     try {
-      final status = File('${profile.runtime}/startup-contended.json');
+      // The lease a launcher creates before launching.
+      final status = File('${profile.runtime}/startup-contended.json')
+        ..writeAsStringSync('{"state":"launching"}');
       final run = await Process.run(
         Platform.resolvedExecutable,
         [build.kernel],
@@ -1452,6 +1458,7 @@ while not os.path.exists(sys.argv[3]): time.sleep(0.005)' "\$FORESIGHT_DATA/.app
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
   test('a launch whose lock is taken again at each launch fails at once with '
       'that cause (L3)', () async {
     final profile = newProfile('of-held-');
@@ -1497,4 +1504,56 @@ exec ${shellQuote(launcher.executable)} "\$@"
     }
     expect(lockHeld(profile), isFalse);
   }, timeout: const Timeout(Duration(minutes: 4)));
+
+  test('a launch that takes the lock after its launcher attached elsewhere '
+      'never serves', () async {
+    final profile = newProfile('of-lease-');
+    final directory = Directory(profile.data).parent;
+    // The launched service waits before its one lock attempt.
+    final gates = await ServiceGates.create(directory);
+    gates.hold('start.before_lock');
+    final launcher = await build.launcher(directory, gates: gates);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
+    ServiceClient? client;
+    try {
+      final startup = ensureService(profile, startupTimeout: startupBound);
+      await eventually(
+        () => launcher.launched.length == 1,
+        timeout: startupBound,
+      );
+      final late = launcher.launched.single;
+      await gates.reached('start.before_lock', pid: late);
+      // Another owner wins, and the launcher attaches to it and returns,
+      // withdrawing its launch's lease.
+      final winner = await HookedServiceProcess.start(build, profile);
+      client = await startup.timeout(startupBound);
+      expect((await client.call('status') as Map)['pid'], winner.pid);
+      expect(
+        Directory(profile.runtime).listSync().map((e) => e.path),
+        everyElement(isNot(contains('startup-'))),
+      );
+      await client.close();
+      client = null;
+      winner.signal(ProcessSignal.sigterm);
+      expect(await winner.exited(), 0, reason: winner.output);
+      // The late launch now takes the free lock, sees no lease, and leaves.
+      gates.release('start.before_lock');
+      await eventually(
+        () async => !await isRunning(late),
+        timeout: startupBound,
+      );
+      expect(lockHeld(profile), isFalse);
+      expect(
+        FileSystemEntity.typeSync('${profile.runtime}/application.sock'),
+        FileSystemEntityType.notFound,
+      );
+      expect(
+        File('${profile.data}/.application-endpoint.json').existsSync(),
+        isFalse,
+      );
+      expect(launcher.log.readAsStringSync(), contains('stopped waiting'));
+    } finally {
+      await client?.close();
+    }
+  }, timeout: const Timeout(Duration(minutes: 3)));
 }

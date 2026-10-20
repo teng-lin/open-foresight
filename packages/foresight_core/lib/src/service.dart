@@ -783,6 +783,7 @@ class ApplicationService {
           0) {
         throw StateError('Cannot protect profile ownership lock');
       }
+      if (serviceGatesEnabled) await serviceGate('start.before_lock');
       // One attempt only. A start that lost the lock must never take it
       // later: the owner it lost to may exit in between, and nobody asked
       // this start to serve then. Its launcher decides whether to relaunch.
@@ -793,6 +794,15 @@ class ApplicationService {
         if (serviceGatesEnabled) await serviceGate('start.lock_contended');
         throw ServiceOwnershipContended(
           'Another application service owns this profile: $error',
+        );
+      }
+      // A launch that reached the lock only after its launcher stopped
+      // waiting (it attached to another owner, or gave up) serves nobody.
+      if (_launchLeaseWithdrawn(profile)) {
+        _traceServiceTransport('launch lease withdrawn; not serving');
+        throw ServiceLaunchWithdrawn(
+          'The launcher that started this service stopped waiting for it, so '
+          'it exits without serving.',
         );
       }
     } catch (_) {
@@ -2045,6 +2055,30 @@ class ServiceOwnershipContended extends StateError {
   ServiceOwnershipContended(super.message);
 }
 
+/// The launcher that started this service stopped waiting for it before it
+/// took the profile lock, so it does not serve.
+class ServiceLaunchWithdrawn extends StateError {
+  ServiceLaunchWithdrawn(super.message);
+}
+
+/// Whether [path] names a startup status file in [profile]'s runtime.
+bool _isStartupStatusPath(String path, ProfilePaths profile) =>
+    _startupStatusName.hasMatch(_entryName(path)) &&
+    canonicalProfilePath(File(path).parent.path) == profile.runtime;
+
+/// Whether this service's launcher has stopped waiting for it. The launcher
+/// creates FORESIGHT_STARTUP_STATUS before launching and deletes it when it
+/// returns, so a missing file is a withdrawn lease. A launcher attaches only
+/// to the lock holder, so a launch that holds the lock while its lease is
+/// still there is the owner its launcher waits for. Starts without a lease,
+/// such as direct starts, are unaffected.
+bool _launchLeaseWithdrawn(ProfilePaths profile) {
+  final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
+  if (path == null || !_isStartupStatusPath(path, profile)) return false;
+  return FileSystemEntity.typeSync(path, followLinks: false) ==
+      FileSystemEntityType.notFound;
+}
+
 class _ClosingService implements Exception {
   final ServiceClient client;
   _ClosingService(this.client);
@@ -2339,8 +2373,9 @@ final _startupStatusEntry = RegExp(r'^startup-[A-Za-z0-9_-]+\.json(\.\d+)?$');
 
 /// Remove startup status files that no launcher still waits on: every
 /// launcher gives up within three minutes, and a launch that lost the race
-/// may write after its launcher returned. A link is removed as a link; this
-/// code never writes one.
+/// may write after its launcher returned. A live lease is never removed: it
+/// is younger than its launcher's elapsed time, which is under three
+/// minutes. A link is removed as a link; this code never writes one.
 void _sweepStartupStatus(String runtime) {
   final cutoff = DateTime.now().subtract(const Duration(minutes: 3));
   for (final path in _endpointEntries(runtime, _startupStatusEntry)) {
@@ -2366,9 +2401,14 @@ void recordServiceStartupFailure(ProfilePaths profile, Object error) {
   final path = runtimeConfiguration['FORESIGHT_STARTUP_STATUS'];
   if (path == null) return;
   try {
-    if (!_startupStatusName.hasMatch(_entryName(path)) ||
-        canonicalProfilePath(File(path).parent.path) != profile.runtime) {
+    if (!_isStartupStatusPath(path, profile)) {
       stderr.writeln('Ignoring a startup status outside the runtime: $path');
+      return;
+    }
+    // The status replaces the launcher's lease. With the lease gone, the
+    // launcher has stopped waiting and nobody would read it.
+    if (FileSystemEntity.typeSync(path, followLinks: false) !=
+        FileSystemEntityType.file) {
       return;
     }
     final staging = File('$path.$pid')
@@ -2515,6 +2555,14 @@ Future<ServiceStartup> _ensureService(
       Random.secure().nextInt(1 << 32),
     ].join('-');
     startupStatus = File('${profile.runtime}/startup-$launchId.json');
+    // This launch's lease. The service serves only if it still exists once
+    // it holds the profile lock, and writes its outcome over it; deleting it
+    // when this call returns withdraws the lease.
+    startupStatus!.writeAsStringSync(
+      jsonEncode({'state': 'launching'}),
+      flush: true,
+    );
+    protectPrivateFile(startupStatus!.path);
     final environment = {
       ...runtimeConfiguration.environment,
       'FORESIGHT_DATA': profile.data,
