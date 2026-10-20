@@ -352,7 +352,23 @@ def test_document_flutter_consumer_is_restore_only_and_publisher_warms_same_cach
         step for step in publisher if step.get("id") == "document-flutter"
     )
     assert published_restore["uses"] == restore["uses"]
-    assert published_restore["with"] == restore["with"]
+    legacy_cache = {
+        "path": restore["with"]["path"],
+        "key": restore["with"]["restore-keys"],
+    }
+    assert published_restore["with"] == legacy_cache
+    dedicated = yaml.safe_load(
+        (ROOT / ".github/workflows/linux-cache-publish.yml").read_text()
+    )["jobs"]["publish-common-caches"]["steps"]
+    current_restore = next(step for step in dedicated if step.get("id") == "document-flutter")
+    assert current_restore["with"] == restore["with"]
+    current_save = next(
+        step for step in dedicated
+        if step.get("uses", "").startswith("actions/cache/save@")
+        and step["with"]["key"] == restore["with"]["key"]
+    )
+    assert current_save["with"]["path"] == restore["with"]["path"]
+    assert "steps.document-current.outputs.current == 'true'" in current_save["if"]
     warm = next(
         step
         for step in consumer
@@ -370,7 +386,7 @@ def test_document_flutter_consumer_is_restore_only_and_publisher_warms_same_cach
         step
         for step in publisher
         if "actions/cache/save@" in step.get("uses", "")
-        and step["with"] == restore["with"]
+        and step["with"] == legacy_cache
     )
     assert (
         save["if"]

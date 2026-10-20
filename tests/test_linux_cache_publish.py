@@ -31,9 +31,16 @@ def test_maintenance_is_independent_main_only_and_preserves_original_upload_proo
         assert "github.ref == 'refs/heads/main'" in job["if"]
         assert "github.event_name" in job["if"]
         assert "pull_request" not in str(job["if"])
-        if name != "reconcile":
+        if name == "qualification-consumers":
+            assert job["needs"] == ["reconcile", "publish-linux-caches"]
+            assert "inputs.qualify_consumers" in job["if"]
+            assert "concurrency" not in job
+        elif name != "reconcile":
             assert job["needs"] == "reconcile"
-            assert not job["concurrency"]["cancel-in-progress"]
+            if "uses" in job:
+                assert job["uses"] == "./.github/workflows/macos-cache-publish.yml"
+            else:
+                assert not job["concurrency"]["cancel-in-progress"]
     job = jobs["publish-linux-caches"]
     assert job["permissions"] == {
         "contents": "read",
