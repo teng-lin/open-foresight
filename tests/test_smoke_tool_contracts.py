@@ -147,7 +147,18 @@ def mac_smoke(tmp_path, monkeypatch):
         "failure": None,
         "stops": [],
         "graph_closed": False,
+        "clock": {"now": 0.0, "sleeps": []},
+        "install_attempts": [],
     }
+    # Time advances when the harness waits or a test models a slow subprocess,
+    # rather than according to how many times production reads the clock.
+    monkeypatch.setattr(smoke.time, "monotonic", lambda: state["clock"]["now"])
+
+    def sleep(seconds):
+        state["clock"]["sleeps"].append(seconds)
+        state["clock"]["now"] += seconds
+
+    monkeypatch.setattr(smoke.time, "sleep", sleep)
     graph_peer = SimpleNamespace(
         close=Mock(side_effect=lambda: state.update(graph_closed=True))
     )
@@ -184,6 +195,7 @@ def mac_smoke(tmp_path, monkeypatch):
                 app = state["service"].parents[6]
                 return {
                     "pid": owner,
+                    "lifetime": {"busy": False},
                     "installation_root": "wrong"
                     if state["failure"] == "installation"
                     else str(app),
@@ -215,12 +227,13 @@ def mac_smoke(tmp_path, monkeypatch):
         ),
     )
 
-    def service_command(service, env, action):
+    def service_command(service, env, action, *, timeout=60):
+        assert timeout > 0
         state["service"] = service.resolve()
         if action == "--status":
             if state["owner"] is None:
                 raise subprocess.CalledProcessError(1, "status")
-            return {"pid": state["owner"]}
+            return {"pid": state["owner"], "lifetime": {"busy": False}}
         state["stops"].append(state["owner"])
         state["owner"] = None
 
@@ -235,6 +248,7 @@ def mac_smoke(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke, "installation_lock", lock)
 
     def install(source, destination, **kwargs):
+        state["install_attempts"].append(kwargs.copy())
         assert not state["graph_closed"], "Graph desktop closed before installer checks"
         if not kwargs.get("stop_services"):
             raise smoke.Deferred("live service")
@@ -300,6 +314,102 @@ def test_mac_smoke_orchestration_checks_ownership_upgrade_and_persistence(
     assert state["stops"] == [200]
     assert state["graph_closed"] is True
     assert process.terminate.called is desktop
+
+
+def test_mac_smoke_waits_for_background_work_with_a_shrinking_status_budget(
+    mac_smoke, monkeypatch
+):
+    bundle, output, state, _ = mac_smoke
+    original_status, original_install = smoke.service_command, smoke.install
+    polls = []
+
+    def command(service, env, action, **kwargs):
+        result = original_status(service, env, action, **kwargs)
+        if action == "--status" and "timeout" in kwargs:
+            polls.append(kwargs["timeout"])
+            state["clock"]["now"] += 10
+            result["lifetime"]["busy"] = len(polls) < 3
+        return result
+
+    def install(source, destination, **kwargs):
+        if kwargs.get("stop_services"):
+            assert len(polls) == 3
+            assert state["clock"]["now"] < 60
+        return original_install(source, destination, **kwargs)
+
+    monkeypatch.setattr(smoke, "service_command", command)
+    monkeypatch.setattr(smoke, "install", install)
+    smoke.smoke(bundle, output)
+    assert polls == pytest.approx([60, 49.9, 39.8])
+    assert state["clock"]["sleeps"] == pytest.approx([0.1, 0.1])
+    assert output.exists()
+    assert state["owner"] is None and state["graph_closed"]
+
+
+@pytest.mark.parametrize(
+    "failure", ["late-idle", "between-polls", "subprocess-timeout"]
+)
+def test_mac_smoke_never_installs_after_the_background_wait_deadline(
+    mac_smoke, monkeypatch, failure
+):
+    bundle, output, state, _ = mac_smoke
+    original_status = smoke.service_command
+    polls = []
+
+    def command(service, env, action, **kwargs):
+        result = original_status(service, env, action, **kwargs)
+        if action == "--status" and "timeout" in kwargs:
+            polls.append(kwargs["timeout"])
+            if failure == "subprocess-timeout" and len(polls) == 2:
+                raise subprocess.TimeoutExpired(
+                    [str(service), action],
+                    kwargs["timeout"],
+                    output="held status",
+                    stderr="blocked helper",
+                )
+            state["clock"]["now"] += (
+                61
+                if failure == "late-idle"
+                else 59.95
+                if failure == "between-polls"
+                else 10
+            )
+            result["lifetime"]["busy"] = failure != "late-idle"
+        return result
+
+    monkeypatch.setattr(smoke, "service_command", command)
+    if failure == "subprocess-timeout":
+        with pytest.raises(subprocess.TimeoutExpired) as timeout:
+            smoke.smoke(bundle, output)
+        assert timeout.value.timeout == pytest.approx(49.9)
+        assert timeout.value.output == "held status"
+        assert timeout.value.stderr == "blocked helper"
+        assert polls == pytest.approx([60, 49.9])
+    else:
+        with pytest.raises(RuntimeError, match="Background model work did not settle"):
+            smoke.smoke(bundle, output)
+        assert polls == [60]  # No second request after the budget expires.
+        if failure == "between-polls":
+            assert state["clock"]["sleeps"] == pytest.approx([0.05])
+    assert not any(
+        attempt.get("stop_services") for attempt in state["install_attempts"]
+    )
+    assert not output.exists()
+    assert state["owner"] is None and state["graph_closed"]
+
+
+@pytest.mark.parametrize("timeout", [0.25, 60])
+def test_mac_status_subprocess_uses_the_callers_timeout(monkeypatch, timeout):
+    # Cover the actual subprocess adapter, which orchestration doubles replace.
+    run = Mock(
+        return_value=subprocess.CompletedProcess(["service"], 0, '{"pid":100}', "")
+    )
+    monkeypatch.setattr(smoke.subprocess, "run", run)
+    assert smoke.service_command(Path("/service"), {}, "--status", timeout=timeout) == {
+        "pid": 100
+    }
+    assert run.call_args.kwargs["timeout"] == timeout
+    assert run.call_args.kwargs["check"] is True
 
 
 @pytest.mark.parametrize(

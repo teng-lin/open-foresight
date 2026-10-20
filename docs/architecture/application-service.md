@@ -12,7 +12,7 @@ flowchart LR
   Service --> Workers[Native generation and speech workers]
 ```
 
-The Flutter-independent package is `packages/foresight_core`. Desktop files such as `domain.dart` and `store.dart` remain compatibility exports for existing callers. Application operations, imports, source recovery, Google sync, model configuration, capture persistence, inactivity shutdown, and note enhancement live in the core. The desktop retains dialogs, browser interaction entrypoints, shortcuts, presentation, and graph layout/rendering; graph publications are validated and committed by the service.
+The Flutter-independent package is `packages/foresight_core`. Desktop files such as `domain.dart` and `store.dart` remain compatibility exports for existing callers. Application operations, imports, source recovery, Google sync, model configuration, capture persistence, inactivity shutdown, the idle exit, and note enhancement live in the core. The desktop retains dialogs, browser interaction entrypoints, shortcuts, presentation, and graph layout/rendering; graph publications are validated and committed by the service.
 
 ## Desktop and core boundaries
 
@@ -95,7 +95,7 @@ The capability file is not a sandbox against arbitrary malicious programs runnin
 | --- | --- |
 | `audio_capabilities` | Inspect audio backend, permissions, and system settings guidance without capturing. |
 | `audio_request_microphone`, `audio_request_system` | Explicitly request microphone or system audio consent in an interactive session. |
-| `get_status` | Model/helper readiness, index state, service PID, active capture, profile revision, and Google connection status. |
+| `get_status` | Model/helper readiness, index state, service PID, active capture, profile revision, Google connection status, and the service lifetime (`lifetime`). |
 | `list_sources`, `get_source`, `search` | Source metadata/full text and relevant passages with IDs, titles, revisions, and scores. Search limit is 1–100. |
 | `import_text`, `import_file`, `import_url`, `import_directory`, `refresh_sources` | Import/update sources and index them using the application's workflows. Supported local files: UTF-8 text/Markdown, PDF, RTF. |
 | `delete_source` | Tombstone the source, remove indexed evidence, and preserve retry/recovery behavior. |
@@ -106,7 +106,7 @@ The capability file is not a sandbox against arbitrary malicious programs runnin
 | `start_recording`, `pause_recording`, `resume_recording`, `stop_recording` | Use the shared microphone/playback capture and transcription lifecycle. Pause releases capture devices and retains queued pre-pause speech; Resume reacquires the same routes. |
 | `ask` | Generate a grounded answer with checked citations using the configured local generator. |
 
-Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
+Tool failures return `isError: true` with a useful message and a structured `error` containing a stable `code` and `message`. Codes distinguish invalid arguments, missing resources, busy workers, cancellation, unavailable services, denied access, and internal failures. An `unavailable` error may also carry a `reason`: `closing` (the service refused the request before running it, so retrying is safe), `outcomeUnknown` (the request was sent and may have committed), or `notSent` (it never reached the service). A `denied` error may carry `reason: needsDesktop` when the operation needs the desktop's approval and no desktop is attached. Invalid protocol requests are handled by the SDK. Tools expose their input schemas and effect annotations. Clients may supply a progress token for started/ongoing/completed notifications. `ask` returns the final checked answer; provisional generation remains internal to the service/desktop stream.
 
 The operation identities, tool schemas, descriptions, annotations, and helper readiness policy live in `packages/foresight_core/lib/src/operations.dart`. Application dispatch switches exhaustively over that enum; desktop command interfaces and remote facades accept those identities and convert them to wire names at the transport. The RPC contracts CI job checks dispatch coverage, rejects raw desktop operation names, and invokes every MCP tool over stdio against a controlled service socket.
 
@@ -114,7 +114,16 @@ The owned helper API is `foresight.helper.v1.RagService`; all failures use non-O
 
 ## Shared operation and lifecycle
 
-Launching either client attaches to an existing service or starts one. A per-profile OS lock prevents two launchers from creating competing owners. Clients can disconnect independently. Closing or hiding the desktop stops capture because its on-screen indicator is no longer available. Closing the MCP adapter leaves the meeting running while the desktop remains visible; neither client disconnect unloads the generator.
+Launching either client attaches to an existing service or starts one. A per-profile OS lock prevents two launchers from creating competing owners. Clients can disconnect independently. Closing or hiding the desktop stops capture because its on-screen indicator is no longer available. Closing the MCP adapter leaves the meeting running while the desktop remains visible; models are released only when the process exits.
+
+| Who is connected | Process exits when |
+|---|---|
+| Desktop only (no agent request within the idle period) | 1 s after the desktop closes, or `--stop` |
+| Desktop and agent | Desktop close stops recording and approvals at once; agent work continues; the process exits one idle period after the agent's last request, whether or not the agent is still connected |
+| Agent only | One idle period after the last agent request; a host that returns within the period attaches warm, after it relaunches |
+| Any | `--stop`, `--stop-if-idle`, SIGTERM, or a crash |
+
+`serviceIdleMinutes` sets the idle period in minutes (default 30; 0 disables the idle exit), separately from the recording's `inactivity` preference.
 
 There is one recording and one active generation per profile. A second recording or simultaneous generation returns a busy error. Model configuration is rejected while another configuration, generation, or recording is active. Clients receive change events; the desktop observes content written through MCP and reconnects after a service restart. MCP reconnects on its next request after a lost connection. An in-flight mutation that loses its connection fails visibly and is not replayed automatically.
 
@@ -132,7 +141,7 @@ Internal answer commands and streams accept an optional `meeting_id`. The servic
 
 URL imports accept globally routable HTTP/HTTPS text pages by default. Every redirect is checked, HTTPS downgrades are refused, and DNS results are pinned for the connection. In the desktop URL dialog, enable **Allow private network addresses** only for a page you intend to read from your local network. MCP `import_url` and `refresh_sources` (service `sources.import_url` and `sources.refresh`) accept `allow_private_network: true` for an explicit per-request opt-in; it is false by default and is not retained for later refreshes. Downloads are limited to 5 MB and 30 seconds; decoding and HTML parsing run in a disposable isolate with a three-second deadline. The response charset controls decoding, including GBK, Big5, and Shift_JIS.
 
-Google credentials and refreshes belong to the service. The service streams a sign-in URL to the desktop, which opens the browser even when MCP started the service without a graphical environment. Browser sign-in and consent are started explicitly from the desktop; MCP does not expose credentials or authentication tools. Google reminders and refresh timers run in the service, independent of an open desktop window.
+Google credentials and refreshes belong to the service. The service streams a sign-in URL to the desktop, which opens the browser even when MCP started the service without a graphical environment. Browser sign-in and consent are started explicitly from the desktop; MCP does not expose credentials or authentication tools. Google reminders and refresh timers run in the service while it is running, which with no desktop attached is until the idle exit.
 
 Inspect or stop the service explicitly:
 
@@ -160,15 +169,15 @@ profile identity ends its connections before it finalizes a recording, so
 `--stop` and `--stop-if-idle` give up on a service that does not answer its
 status within 30 s. For installers,
 `--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
-atomically refuses active/finalizing recording and in-flight operations, then
-blocks new calls before shutdown begins. It acknowledges success only after
+atomically refuses active/finalizing recording and in-flight operations and
+background model work, then blocks new calls before shutdown begins. It acknowledges success only after
 resource cleanup; EOF, a failed close, or unverified helper ownership fails the
 command. The optional PID and packaged installation/revision identity pin the
 owner authenticated by the installer. Normal `--stop` behavior is unchanged.
 Older services that lack idle-only shutdown must be stopped explicitly before
 upgrading; installers never fall back to an unverified signal/EOF shutdown.
 
- The next client starts a service again. An unexpected service crash marks unfinished recordings interrupted on restart and resumes pending source work. Stop an older, pre-service version of the desktop before upgrading a profile; that version does not participate in service ownership. Schema additions retain existing source, note, transcript, artifact, and model records.
+The next client attaches while the service is still running, otherwise starts one. An unexpected service crash marks unfinished recordings interrupted on restart and resumes pending source work. Stop an older, pre-service version of the desktop before upgrading a profile; that version does not participate in service ownership. Schema additions retain existing source, note, transcript, artifact, and model records.
 
 ## Verification
 
@@ -305,8 +314,8 @@ and replacement. A service launched during replacement fails with an actionable
 update-in-progress message before it opens profile state or native components.
 
 Status includes additive `application_api_version` (currently 1),
-`installation_root`, and `runtime_revision` fields. Clients carrying a packaged
-revision validate all three before attaching, including an already-running
+`installation_root`, `runtime_revision`, and `lifetime` fields. Clients carrying a
+packaged revision validate the three identity fields before attaching, including an already-running
 service from another app copy or revision. Canonical aliases of the same app
 remain compatible. Mismatches require the user to explicitly stop the existing
 service; clients neither stop it automatically nor replay mutations. Development

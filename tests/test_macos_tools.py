@@ -469,6 +469,11 @@ except Deferred:
         )
         for response in [
             SimpleNamespace(returncode=1, stdout="", stderr="Recording became active"),
+            SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr="Background model work is in progress. Retry the upgrade after it finishes.",
+            ),
             SimpleNamespace(returncode=0, stdout="", stderr=""),
             SimpleNamespace(
                 returncode=0, stdout=json.dumps({"stopped": True}), stderr=""
@@ -487,10 +492,12 @@ except Deferred:
                 ),
                 patch.object(installer, "process_path", return_value=executable),
             ):
-                with self.assertRaises(installer.Deferred):
+                with self.assertRaises(installer.Deferred) as failure:
                     installer.stop_owned_services(
                         self.destination, {42: str(executable)}, ["profile"]
                     )
+                if response.returncode:
+                    self.assertIn(response.stderr, str(failure.exception))
                 self.assertEqual(
                     [call.args[0][-1] for call in run.call_args_list],
                     ["--status", "--stop-if-idle=42"],

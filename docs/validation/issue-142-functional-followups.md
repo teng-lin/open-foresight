@@ -12,7 +12,7 @@ This records the bounded fix and validation for [issue #142](https://github.com/
 - Folder selection now opens a checked file review. Cancel imports nothing; Import reads only the selected files. The existing bounded scanner reports unreadable folders and scan limits.
 - A completion regression verifies that streamed enhanced notes become the saved visible output without navigation. Existing cancellation and process tests retain their scope; no unproven enhancement implementation change is included.
 
-Closing the last desktop window and explicit Quit retain the existing ownership cleanup. Continuing in the menu bar remains a separate product decision; independent headless service ownership is preserved.
+Closing the last desktop window and explicit Quit retain the existing ownership cleanup. Continuing in the menu bar remains a separate product decision; independent headless service ownership is preserved (superseded by [ADR 0007](../adr/0007-service-lifetime-and-desktop-agent-boundary.md), which adds the idle exit).
 
 ## Baseline and build reuse
 
@@ -46,4 +46,4 @@ The PR received main's coverage merge (`8db7cac`) during validation; it was inco
 
 ## Remaining acceptance
 
-Do not treat these fixture/process results as physical microphone or system-audio acceptance. A fresh packaged run still needs a controlled audible fixture, actual macOS consent/status refresh, pause/resume/stop, final speech text, and speaker/channel inspection. A live Google account must still complete a two-file batch, restricted/mixed selection and retry. Window automation was intermittent (`cgWindowNotFound`), so manual cold-launch/reopen and citation-navigation acceptance must be completed on the final installed package. Linux isolated-display and other selected hosted platform checks must pass before merge. Keep issue #142 open until these acceptance items and the background-lifetime product decision are resolved.
+Do not treat these fixture/process results as physical microphone or system-audio acceptance. A fresh packaged run still needs a controlled audible fixture, actual macOS consent/status refresh, pause/resume/stop, final speech text, and speaker/channel inspection. A live Google account must still complete a two-file batch, restricted/mixed selection and retry. Window automation was intermittent (`cgWindowNotFound`), so manual cold-launch/reopen and citation-navigation acceptance must be completed on the final installed package. Linux isolated-display and other selected hosted platform checks must pass before merge. Keep issue #142 open until these acceptance items and the [background-lifetime product decision in ADR 0007](../adr/0007-service-lifetime-and-desktop-agent-boundary.md) are resolved.

@@ -48,8 +48,8 @@ LiteRT runner paths when restoring a packaged profile.
 
 ## Existing installations
 
-Stop the existing application service before launching an upgraded bundle, so
-clients connect to the new owner. Existing `.litertlm` model files remain usable. LiteRT embeddings retain their
+Stop the existing application service before launching an upgraded bundle, or
+wait for its idle exit, so clients connect to the new owner. Existing `.litertlm` model files remain usable. LiteRT embeddings retain their
 identity and preprocessing fingerprint; CPU/GPU identity boundaries remain
 separate. Packaged generation restores through the bundled native worker even
 when the profile contains an obsolete Python runner path.
