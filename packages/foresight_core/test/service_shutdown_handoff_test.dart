@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:foresight_core/src/platform_services.dart';
-import 'package:foresight_test_support/gated_helper.dart';
+import 'package:foresight_test_support/hooked_service.dart' show ServiceGates;
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
 import 'package:foresight_core/src/profile_paths.dart';
@@ -129,7 +129,9 @@ Future<void> main() async {
   // Publish only after the handler is attached.
   File(bound).renameSync(path);
   if (!old) File('$data/replacement.ready').writeAsStringSync('$pid');
-  // Teardown follows production: public socket, then record, then lock.
+  // Teardown matches the non-isolated service and PR 3's target order: public
+  // socket, then record, then lock. Today's isolated binary deletes the
+  // record before its frontend removes the public socket (SL-3).
   Future<void> removeSocket() async {
     for (final socket in peers) { socket.destroy(); }
     await server.close();
@@ -371,6 +373,33 @@ bool Function() settledFlag(Future<Object?> startup) {
   return () => settled;
 }
 
+/// Startup deadline ladders for [expireDeadlineDuring].
+const handoffDeadlines = [
+  Duration(milliseconds: 500),
+  Duration(seconds: 2),
+  Duration(seconds: 8),
+];
+
+/// The deadline also covers launching the replacement.
+const launchDeadlines = [
+  Duration(seconds: 1),
+  Duration(seconds: 4),
+  Duration(seconds: 16),
+];
+
+const localOwnerDeadlines = [
+  Duration(milliseconds: 300),
+  Duration(seconds: 1),
+  Duration(seconds: 4),
+];
+
+/// A test timeout that covers every attempt of a ladder, with fixture setup
+/// and teardown, even on a loaded host (about two minutes).
+Timeout ladderTimeout(List<Duration> deadlines) => Timeout(
+  deadlines.fold(Duration.zero, (sum, deadline) => sum + deadline) * 3 +
+      const Duration(seconds: 60),
+);
+
 /// ensureService's startup deadline runs from its call, so on a loaded host
 /// it can expire before the phase a test is about, and that run would test
 /// nothing. [attempt] runs one startup with the given deadline and returns
@@ -380,11 +409,7 @@ bool Function() settledFlag(Future<Object?> startup) {
 Future<void> expireDeadlineDuring(
   String phase,
   Future<bool> Function(Duration startupTimeout) attempt, {
-  List<Duration> deadlines = const [
-    Duration(milliseconds: 500),
-    Duration(seconds: 2),
-    Duration(seconds: 8),
-  ],
+  List<Duration> deadlines = handoffDeadlines,
 }) async {
   for (final deadline in deadlines) {
     if (await attempt(deadline)) return;
@@ -397,12 +422,14 @@ Future<void> expireDeadlineDuring(
 /// in a separate runtime that only the endpoint record links to the profile.
 void ownerRuntimeVariants(
   String name,
-  Future<void> Function(bool separateOwnerRuntime) body,
-) {
+  Future<void> Function(bool separateOwnerRuntime) body, {
+  Timeout? timeout,
+}) {
   for (final separate in [false, true]) {
     test(
       separate ? '$name (separate owner runtime)' : name,
       () => body(separate),
+      timeout: timeout,
     );
   }
 }
@@ -523,6 +550,7 @@ void main() {
         await f.close();
       }
     },
+    timeout: ladderTimeout(handoffDeadlines),
   );
 
   test(
@@ -530,65 +558,57 @@ void main() {
     () async {
       // The deadline also covers launching the replacement, so start with
       // a longer one than the owner-handoff tests.
-      await expireDeadlineDuring(
-        "the replacement's closing reply",
-        (deadline) async {
-          final f = HandoffFixture();
-          await f.start();
-          try {
-            await f.release();
-            runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
-            ServiceFrame? closing;
-            unawaited(
-              f.proxy
-                  .seen(
-                    ProxyDirection.toClient,
-                    method: 'status',
-                    where: (frame) => frame.error?['message'] == closingMessage,
-                  )
-                  .then((frame) => closing = frame),
-            );
-            final failure = await startupFailure(
-              f.connect(startupTimeout: deadline),
-            );
-            expect(failure, isA<TimeoutException>());
-            final message = (failure as TimeoutException).message;
-            // The deadline must expire after startup took the closing reply,
-            // not while the replacement launched or the reply was in flight.
-            if (closing == null || message == probeTimeoutMessage) return false;
-            expect(
-              message,
-              allOf(
-                contains('${f.root.path}/launch'),
-                contains('startup error'),
-              ),
-            );
-            final replied = File('${f.profile.data}/closing-replied');
-            await eventually(replied.existsSync);
-            final reply = jsonDecode(replied.readAsStringSync()) as Map;
-            expect(reply['method'], 'status');
-            expect(reply['message'], closingMessage);
-            expect(
-              reply['pid'],
-              int.parse(
-                File('${f.profile.data}/replacement.pid').readAsStringSync(),
-              ),
-            );
-            expect(File('${f.profile.data}/launches').readAsLinesSync(), [
-              'launch',
-            ]);
-            return true;
-          } finally {
-            await f.close();
-          }
-        },
-        deadlines: const [
-          Duration(seconds: 1),
-          Duration(seconds: 4),
-          Duration(seconds: 16),
-        ],
-      );
+      await expireDeadlineDuring("the replacement's closing reply", (
+        deadline,
+      ) async {
+        final f = HandoffFixture();
+        await f.start();
+        try {
+          await f.release();
+          runtimeConfiguration.environment['REPLACEMENT_CLOSING'] = '1';
+          ServiceFrame? closing;
+          unawaited(
+            f.proxy
+                .seen(
+                  ProxyDirection.toClient,
+                  method: 'status',
+                  where: (frame) => frame.error?['message'] == closingMessage,
+                )
+                .then((frame) => closing = frame),
+          );
+          final failure = await startupFailure(
+            f.connect(startupTimeout: deadline),
+          );
+          expect(failure, isA<TimeoutException>());
+          final message = (failure as TimeoutException).message;
+          // The deadline must expire after startup took the closing reply,
+          // not while the replacement launched or the reply was in flight.
+          if (closing == null || message == probeTimeoutMessage) return false;
+          expect(
+            message,
+            allOf(contains('${f.root.path}/launch'), contains('startup error')),
+          );
+          final replied = File('${f.profile.data}/closing-replied');
+          await eventually(replied.existsSync);
+          final reply = jsonDecode(replied.readAsStringSync()) as Map;
+          expect(reply['method'], 'status');
+          expect(reply['message'], closingMessage);
+          expect(
+            reply['pid'],
+            int.parse(
+              File('${f.profile.data}/replacement.pid').readAsStringSync(),
+            ),
+          );
+          expect(File('${f.profile.data}/launches').readAsLinesSync(), [
+            'launch',
+          ]);
+          return true;
+        } finally {
+          await f.close();
+        }
+      }, deadlines: launchDeadlines);
     },
+    timeout: ladderTimeout(launchDeadlines),
   );
 
   for (final isolated in [false, true]) {
@@ -601,11 +621,11 @@ void main() {
           'of-local-owner-',
         );
         final marker = File('${directory.path}/launched');
-        final helper = await GatedHelper.create(directory);
         final launcher = File(
           '${directory.path}/launch',
         )..writeAsStringSync('#!/bin/sh\nprintf launched > "${marker.path}"\n');
         await Process.run('/bin/chmod', ['700', launcher.path]);
+        final gates = await ServiceGates.create(directory);
         for (final key in [
           'FORESIGHT_NATIVE',
           'FORESIGHT_INSTALL_ROOT',
@@ -614,9 +634,13 @@ void main() {
         ]) {
           runtimeConfiguration.environment.remove(key);
         }
-        runtimeConfiguration.environment['FORESIGHT_HELPER'] =
-            helper.executable;
+        runtimeConfiguration.environment['FORESIGHT_HELPER'] = '';
         runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.path;
+        // Hold the real close just before it releases the profile lock. This
+        // isolate's configuration keeps the key, and the worker inherits it.
+        runtimeConfiguration.environment['FORESIGHT_SERVICE_GATES'] =
+            gates.directory.path;
+        gates.hold('close.before_lock_release');
         final profile = ProfilePaths(
           '${directory.path}/data',
           '${directory.path}/run',
@@ -630,51 +654,42 @@ void main() {
             final service = await ApplicationService.start(profile);
             close = service.close;
           }
-          await helper.started();
           final shutdown = close();
-          await helper.stopping();
-          // Simulate the normal socket-before-lock cleanup interval. The worker
-          // is deterministically held in its owned helper shutdown, not a sleep.
-          File(serviceEndpoint(profile)).deleteSync();
+          await gates.reached('close.before_lock_release', pid: pid);
+          // The real close has removed the public socket; the lock remains.
+          expect(
+            FileSystemEntity.typeSync('${profile.runtime}/application.sock'),
+            FileSystemEntityType.notFound,
+          );
           final proxy = ServiceFaultProxy();
           try {
-            // The service kills a helper that ignores SIGTERM for 5 s, so
-            // these deadlines stay well inside that hold.
-            await expireDeadlineDuring(
-              'a lock probe',
-              (deadline) async {
-                // A second refused connect follows a complete lock probe.
-                var probed = false;
-                unawaited(
-                  proxy
-                      .attempt(refused: true, count: 2)
-                      .then((_) => probed = true),
-                );
-                final failure = await startupFailure(
-                  proxy.run(
-                    () => ensureService(profile, startupTimeout: deadline),
+            await expireDeadlineDuring('a lock probe', (deadline) async {
+              // A second refused connect follows a complete lock probe.
+              var probed = false;
+              unawaited(
+                proxy
+                    .attempt(refused: true, count: 2)
+                    .then((_) => probed = true),
+              );
+              final failure = await startupFailure(
+                proxy.run(
+                  () => ensureService(profile, startupTimeout: deadline),
+                ),
+              );
+              expect(
+                failure,
+                isA<TimeoutException>().having(
+                  (error) => error.message,
+                  'message',
+                  allOf(
+                    contains('profile lock'),
+                    contains('owner'),
+                    isNot(contains('null')),
                   ),
-                );
-                expect(
-                  failure,
-                  isA<TimeoutException>().having(
-                    (error) => error.message,
-                    'message',
-                    allOf(
-                      contains('profile lock'),
-                      contains('owner'),
-                      isNot(contains('null')),
-                    ),
-                  ),
-                );
-                return probed;
-              },
-              deadlines: const [
-                Duration(milliseconds: 300),
-                Duration(seconds: 1),
-                Duration(seconds: 2),
-              ],
-            );
+                ),
+              );
+              return probed;
+            }, deadlines: localOwnerDeadlines);
           } finally {
             await proxy.close();
           }
@@ -690,10 +705,10 @@ void main() {
             reason:
                 'Startup must not release another isolate or local owner lock: ${probe.stderr}',
           );
-          helper.release();
+          gates.release('close.before_lock_release');
           await shutdown.timeout(const Duration(seconds: 10));
         } finally {
-          helper.release();
+          gates.releaseAll();
           await close?.call();
           runtimeConfiguration.environment
             ..clear()
@@ -701,6 +716,7 @@ void main() {
           directory.deleteSync(recursive: true);
         }
       },
+      timeout: ladderTimeout(localOwnerDeadlines),
     );
   }
 
@@ -763,6 +779,7 @@ void main() {
           },
         );
       },
+      timeout: ladderTimeout(handoffDeadlines),
     );
   }
 
