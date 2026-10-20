@@ -165,7 +165,12 @@ void main() {
         profile.data,
         '${root.resolveSymbolicLinksSync()}/.local/share/open-foresight',
       );
-      expect(profile.runtime, '${profile.data}/runtime/open-foresight');
+      expect(
+        profile.runtime,
+        matches(
+          RegExp('^${RegExp.escape(profile.data)}/runtime/[0-9a-f]{12}\$'),
+        ),
+      );
       expect(
         () => ProfilePaths.resolve({
           'HOME': root.path,

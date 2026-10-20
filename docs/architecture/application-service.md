@@ -59,7 +59,7 @@ Use the packaged stdio launcher:
 }
 ```
 
-The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share/open-foresight`. Desktop and MCP must resolve the same profile and runtime directory. To choose an isolated profile, set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` in the launcher environment:
+The default profile is `$XDG_DATA_HOME/open-foresight`, normally `~/.local/share/open-foresight`. Its default runtime directory on Linux is `$XDG_RUNTIME_DIR/open-foresight/<first 12 characters of profile hash>`, or `<profile>/runtime/<first 12 characters of profile hash>` without `XDG_RUNTIME_DIR`, so profiles never share a socket by default. Status reports the profile's identity, and clients, `--status`, `--stop` and `--stop-if-idle` refuse a service of another profile. Desktop and MCP must resolve the same profile and runtime directory. To choose an isolated profile, set both `FORESIGHT_DATA` and `FORESIGHT_RUNTIME` in the launcher environment:
 
 ```json
 {

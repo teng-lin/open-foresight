@@ -29,6 +29,13 @@ String foreignOwner(String endpoint) =>
     'Another Open Foresight profile is serving $endpoint. Set '
     'FORESIGHT_RUNTIME for this profile.';
 
+/// The runtime that [profile]'s endpoint record names, if it has one.
+String? recordedRuntime(ProfilePaths profile) {
+  final record = File('${profile.data}/.application-endpoint.json');
+  if (!record.existsSync()) return null;
+  return (jsonDecode(record.readAsStringSync()) as Map)['runtime'] as String;
+}
+
 /// The pid that answers status at [endpoint].
 Future<int> statusPid(String endpoint) async {
   final client = await ServiceClient.connect(endpoint);
@@ -406,6 +413,57 @@ void main() {
       await owner.close();
     }
   });
+
+  test('an owner started with the shared Linux runtime of earlier versions is '
+      'still attached, and its replacement uses the profile\'s own runtime '
+      '(D5)', () async {
+    final directory = createServiceTestDirectorySync('of-up-');
+    final xdg = '${directory.path}/xdg';
+    privateDirectory(xdg);
+    final profile = ProfilePaths.resolve({
+      'HOME': directory.path,
+      'XDG_RUNTIME_DIR': xdg,
+      'FORESIGHT_DATA': '${directory.path}/data',
+    }, macOS: false);
+    final shared = '$xdg/open-foresight';
+    expect(
+      profile.runtime,
+      '$shared/${identityOf(profile.data).substring(0, 12)}',
+    );
+    // An earlier version served every profile from the shared default and
+    // recorded that runtime.
+    final earlier = await HookedServiceProcess.start(
+      build,
+      ProfilePaths(profile.data, shared),
+    );
+    await earlier.ready();
+    expect(recordedRuntime(profile), shared);
+    final launcher = await build.launcher(directory);
+    runtimeConfiguration.environment['FORESIGHT_SERVICE'] = launcher.executable;
+    final attached = await ensureService(
+      profile,
+      startupTimeout: const Duration(seconds: 30),
+    );
+    try {
+      expect((await attached.call('status') as Map)['pid'], earlier.pid);
+    } finally {
+      await attached.close();
+    }
+    expect(launcher.launched, isEmpty);
+    // A clean exit removes the record; the next owner uses the new default.
+    expect(await earlier.stop(), 0, reason: earlier.output);
+    final replaced = await ensureService(profile);
+    try {
+      expect(
+        (await replaced.call('status') as Map)['pid'],
+        launcher.launched.single,
+      );
+    } finally {
+      await replaced.close();
+    }
+    expect(recordedRuntime(profile), profile.runtime);
+    expect(File('${profile.runtime}/application.sock').existsSync(), isTrue);
+  }, timeout: const Timeout(Duration(minutes: 3)));
 
   test('--stop with an invalid endpoint record never signals another '
       'profile\'s owner at the fallback endpoint (SL-7)', () async {

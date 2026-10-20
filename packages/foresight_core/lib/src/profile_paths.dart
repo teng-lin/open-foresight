@@ -83,11 +83,18 @@ class ProfilePaths {
       }
     }
     final profile = _profileIdentity(data).substring(0, 12);
+    // Each profile has its own default runtime, so two profiles share
+    // sockets only when FORESIGHT_RUNTIME says so (D5). An owner started with
+    // the earlier shared Linux default stays reachable through its endpoint
+    // record.
+    final xdgRuntime = environment['XDG_RUNTIME_DIR'];
     final runtime = canonicalProfilePath(
       environment['FORESIGHT_RUNTIME'] ??
           (mac
               ? '$temporary/of-$profile'
-              : '${environment['XDG_RUNTIME_DIR'] ?? '$data/runtime'}/open-foresight'),
+              : xdgRuntime != null
+              ? '$xdgRuntime/open-foresight/$profile'
+              : '$data/runtime/$profile'),
     );
     if (mac && utf8.encode('$runtime/application.sock').length >= 104) {
       throw StateError(
