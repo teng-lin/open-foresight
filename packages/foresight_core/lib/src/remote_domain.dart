@@ -9,6 +9,7 @@ import 'desktop_connection.dart';
 import 'helper.dart';
 import 'profile_paths.dart';
 import 'service.dart';
+import 'service_socket.dart' show probeSocketPath;
 import 'store.dart';
 import 'generated/helper_control.pb.dart' as control;
 import 'generated/rag_service.pbgrpc.dart' show RagServiceClient;
@@ -226,9 +227,22 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     () => _reconnection = null,
   );
 
-  /// Waits between failed reconnect attempts. Tests replace it to observe
-  /// the backoff without waiting it out.
-  Future<void> Function(Duration pause) reconnectPause = Future<void>.delayed;
+  /// Waits out the pause between failed reconnect attempts instead of a
+  /// timer. Tests set it to observe the backoff without waiting it out; a
+  /// wake or [close] still ends the pause.
+  Future<void> Function(Duration pause)? reconnectPause;
+
+  /// The least time from the end of one reconnect attempt to the next,
+  /// whatever ends the pause early, so requests cannot cause a launch storm.
+  static const reconnectFloor = Duration(seconds: 1);
+
+  /// Whether a reconnect, or its pause after a failed attempt, is under way.
+  bool get reconnecting => _reconnection != null;
+
+  // The pause after a failed attempt, while one runs, and its timers.
+  Completer<void>? _pause;
+  Timer? _pauseTimer, _wakeTimer, _probeTimer;
+  final _sinceAttempt = Stopwatch();
 
   /// How long a reconnect waits for its desktop approval attach; the same
   /// bound as a startup status probe. Tests shorten it.
@@ -293,10 +307,78 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
         helper.changed?.call();
         attempt.completeError(error, stack);
         attempt = _attempt = Completer<void>()..future.ignore();
-        await reconnectPause(reconnectBackoff(++failures));
+        _sinceAttempt
+          ..reset()
+          ..start();
+        if (!_disposed) await _pauseReconnect(reconnectBackoff(++failures));
       }
     }
     attempt.completeError(RpcError(RpcErrorCode.cancelled, 'Workspace closed'));
+  }
+
+  /// Wait [pause] before the next attempt. A request waiting for the
+  /// reconnect ([_wakeReconnect]) ends it once [reconnectFloor] has passed
+  /// since the last attempt, and [close] ends it at once. So does an owner
+  /// that starts serving meanwhile, such as one an agent or the command
+  /// line started: the backoff only spaces this desktop's own launches.
+  /// Only an endpoint that did not accept when the pause began counts, so
+  /// an owner that keeps failing the attempt is not retried every second.
+  Future<void> _pauseReconnect(Duration pause) async {
+    final done = _pause = Completer<void>();
+    void end() {
+      if (!done.isCompleted) done.complete();
+    }
+
+    final custom = reconnectPause;
+    if (custom == null) {
+      _pauseTimer = Timer(pause, end);
+    } else {
+      unawaited(custom(pause).then((_) => end(), onError: (Object _) => end()));
+    }
+    try {
+      final accepting = await _endpointAccepts();
+      if (!done.isCompleted && !accepting) {
+        var probing = false;
+        _probeTimer = Timer.periodic(reconnectFloor, (_) async {
+          if (probing || done.isCompleted) return;
+          probing = true;
+          try {
+            if (await _endpointAccepts()) end();
+          } finally {
+            probing = false;
+          }
+        });
+      }
+      await done.future;
+    } finally {
+      for (final timer in [_pauseTimer, _wakeTimer, _probeTimer]) {
+        timer?.cancel();
+      }
+      _pauseTimer = _wakeTimer = _probeTimer = null;
+      if (identical(_pause, done)) _pause = null;
+    }
+  }
+
+  /// Whether a service accepts connections at this profile's endpoint now.
+  Future<bool> _endpointAccepts() async {
+    try {
+      return (await probeSocketPath(serviceEndpoint(profile)))?.live ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// End the pause after a failed attempt early, for a request that waits
+  /// for the reconnect; never sooner than [reconnectFloor] after that
+  /// attempt. The backoff itself is kept for the attempts that follow.
+  void _wakeReconnect() {
+    final done = _pause;
+    if (done == null || done.isCompleted) return;
+    final left = reconnectFloor - _sinceAttempt.elapsed;
+    _wakeTimer?.cancel();
+    _wakeTimer = Timer(left.isNegative ? Duration.zero : left, () {
+      if (!done.isCompleted) done.complete();
+    });
   }
 
   /// Hand off from [failed], whose request [cause] was refused by a closing
@@ -309,6 +391,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     if (!identical(client, failed)) return;
     unawaited(_reconnect());
     final attempt = _attempt!.future;
+    // Someone waits for this reconnect; a pause after failures need not
+    // run its full length.
+    _wakeReconnect();
     // The closing owner answers the other requests on [failed] itself, with
     // a refusal (they are sent once more) or its own outcomeUnknown. Closing
     // the connection now would fail them all locally as outcomeUnknown, so
@@ -654,6 +739,9 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
   @override
   void close() {
     _disposed = true;
+    // A reconnect pausing after failures ends now, with its timers.
+    final pause = _pause;
+    if (pause != null && !pause.isCompleted) pause.complete();
     unawaited(_captureLevels.close());
     unawaited(_events?.cancel());
     unawaited(client.close());

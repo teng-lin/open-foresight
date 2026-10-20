@@ -906,7 +906,8 @@ void main() {
     },
   );
   test('a reconnect whose launches keep failing backs off from 1 s to 30 s, '
-      'and a success starts over', () async {
+      'attaches to an owner that starts serving during a pause, and a '
+      'success starts over', () async {
     final previous = runtimeConfiguration.environment['FORESIGHT_SERVICE'];
     addTearDown(() {
       if (previous == null) {
@@ -933,12 +934,10 @@ void main() {
     int launched() =>
         launches.existsSync() ? launches.readAsLinesSync().length : 0;
     final pauses = <Duration>[];
-    final served = Completer<void>();
     f.remote.reconnectPause = (pause) async {
       pauses.add(pause);
-      if (pauses.length == 7) await served.future;
-      // Hold the loop after the restart's first failure.
-      if (pauses.length == 8) await Completer<void>().future;
+      // From the seventh failure on, pauses last until something ends them.
+      if (pauses.length >= 7) await Completer<void>().future;
     };
     await f.stopListening();
     f.sockets.last.destroy();
@@ -953,10 +952,10 @@ void main() {
     // One launch per failed attempt.
     expect(launched(), 7);
     expect(f.remote.helper.state, contains('database disk image is malformed'));
-    // An owner serves again; the next attempt reconnects.
-    await f.listen();
+    // An owner started elsewhere serves again; the desktop attaches to it
+    // without waiting out its pause.
     final connections = f.sockets.length;
-    served.complete();
+    await f.listen();
     await eventually(
       () => f.sockets.length > connections && !f.remote.client.isClosed,
       timeout: const Duration(seconds: 30),
@@ -1021,6 +1020,57 @@ void main() {
       'args': {'id': 'source'},
     });
     await eventually(() => approvals.isNotEmpty);
+  });
+
+  test('a request waiting for the reconnect ends a pause after the floor, '
+      'and the backoff goes on', () async {
+    f.handler = (socket, request) => f.reply(socket, request, ['listed']);
+    final ownProfile = f.status['profile_id'];
+    // The owner answers, but as another profile's: each attempt fails at
+    // once, without a launch, while the endpoint keeps accepting.
+    f.status['profile_id'] = 'another-profile';
+    final pauses = <Duration>[];
+    final paused = <Stopwatch>[];
+    f.remote.reconnectPause = (pause) {
+      pauses.add(pause);
+      paused.add(Stopwatch()..start());
+      return Completer<void>().future;
+    };
+    f.sockets.last.destroy();
+    await eventually(
+      () => pauses.length == 1,
+      timeout: const Duration(seconds: 30),
+    );
+    // The waiting request's attempt fails too; the next pause is longer.
+    await expectLater(
+      f.remote.command(Operation.notesList),
+      throwsA(isA<RpcError>()),
+    );
+    expect(pauses, [const Duration(seconds: 1), const Duration(seconds: 2)]);
+    // Never sooner than the floor after the failed attempt.
+    expect(
+      paused.first.elapsed - paused.last.elapsed,
+      greaterThanOrEqualTo(const Duration(milliseconds: 900)),
+    );
+    f.status['profile_id'] = ownProfile;
+    final waited = Stopwatch()..start();
+    expect(await f.remote.command(Operation.notesList), ['listed']);
+    expect(waited.elapsed, lessThan(const Duration(seconds: 10)));
+    expect(pauses, hasLength(2));
+  });
+
+  test('closing the desktop ends a reconnect pause at once', () async {
+    f.status['profile_id'] = 'another-profile';
+    var paused = false;
+    f.remote.reconnectPause = (_) {
+      paused = true;
+      return Completer<void>().future;
+    };
+    f.sockets.last.destroy();
+    await eventually(() => paused, timeout: const Duration(seconds: 30));
+    expect(f.remote.reconnecting, isTrue);
+    f.remote.close();
+    await eventually(() => !f.remote.reconnecting);
   });
 
   test(
