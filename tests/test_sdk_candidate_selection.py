@@ -178,12 +178,16 @@ def test_pull_retries_until_deadline_before_raising_qualification_error(
 ):
     candidates["all_bad"] = True
     clock = iter([0, 0, 0, 2])
+    delays = []
     monkeypatch.setattr(artifacts.time, "monotonic", lambda: next(clock))
-    monkeypatch.setattr(artifacts.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(artifacts.time, "sleep", delays.append)
     monkeypatch.setattr(artifacts, "waiting_for_dependency", lambda *args: [71])
     with pytest.raises(ValueError, match="require requalification"):
         lookup("pull", candidates, wait=1)
-    assert candidates["lists"] == 2
+    # The deadline permits one final qualified read without reopening the wait.
+    assert candidates["lists"] == 3
+    assert candidates["seen"] == [1, 2] * 3
+    assert delays == [1]
 
 
 def test_only_bad_artifacts_never_reach_local_compilation(candidates, monkeypatch):

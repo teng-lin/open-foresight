@@ -92,7 +92,7 @@ EXPECTED["sdk-promoted-source"] = (
 
 
 def test_exact_legacy_rows_have_no_tier_requirement_yet():
-    assert set(PRODUCERS) == set(EXPECTED)
+    assert set(PRODUCERS) == set(EXPECTED) | {"shadow-fork-sdk", "shadow-handoff"}
     for consumer, (paths, events, jobs) in EXPECTED.items():
         producer = PRODUCERS[consumer]
         assert producer.workflows == tuple(

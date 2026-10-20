@@ -87,7 +87,7 @@ def test_waiting_producer_requires_current_head_repository_identity_and_active_j
     def api(repository, route):
         assert repository == "owner/repo"
         assert f"head_sha={head}" in route or "branch=main" in route
-        return {"workflow_runs": runs if "status=in_progress" in route else []}
+        return {"workflow_runs": runs}
 
     def jobs(repository, run):
         return [

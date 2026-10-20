@@ -574,7 +574,8 @@ jobs:
             for name, job in self.workflow(filename)["jobs"].items():
                 for step in job.get("steps") or []:
                     for line in step.get("run", "").splitlines():
-                        if not any(
+                        shadow_resolver = "ci_linux_shadow_sdk.py" in line
+                        if not shadow_resolver and not any(
                             command in line
                             for command in (
                                 "ci_artifacts.py pull --component linux-sdk",
@@ -587,17 +588,23 @@ jobs:
                             lexer.whitespace_split = True
                             arguments = list(lexer)
                             for flag, variable in (
-                                ("--own-head", "$OWN_HEAD"),
+                                (
+                                    "--source" if shadow_resolver else "--own-head",
+                                    "$OWN_HEAD",
+                                ),
                                 ("--own-pr", "$OWN_PR"),
                             ):
                                 self.assertIn(flag, arguments)
                                 self.assertEqual(
                                     arguments[arguments.index(flag) + 1], variable
                                 )
-                            self.assertEqual(
-                                step["env"]["OWN_HEAD"],
-                                "${{ github.event.pull_request.head.sha || github.sha }}",
+                            expected_head = (
+                                "${{ inputs.source || github.event.pull_request.head.sha || github.sha }}"
+                                if filename == "macos.yml"
+                                and name in ("linux-build", "linux-test")
+                                else "${{ github.event.pull_request.head.sha || github.sha }}"
                             )
+                            self.assertEqual(step["env"]["OWN_HEAD"], expected_head)
                             self.assertEqual(
                                 step["env"]["OWN_PR"],
                                 "${{ github.event.pull_request.number || 0 }}",
@@ -609,6 +616,8 @@ jobs:
                 ("integration-acceptance.yml", "ubuntu-package"),
                 ("integration-acceptance.yml", "ubuntu-application"),
                 ("macos.yml", "linux-bundle"),
+                ("macos.yml", "linux-build"),
+                ("macos.yml", "linux-test"),
             },
         )
 

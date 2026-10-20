@@ -44,6 +44,10 @@ jobs:
           if [[ "$FORMAT" == rpm ]]; then
             docker exec "$PACKAGE_CONTAINER" python3 -m unittest discover -s tests -p test_rpm_scriptlets.py -v
           fi
+          if [[ "$FORMAT" == arch ]]; then
+            docker exec "$PACKAGE_CONTAINER" pacman -S --needed --noconfirm python-pytest
+            docker exec "$PACKAGE_CONTAINER" python3 -m pytest tests/test_linux_packages.py::test_nlohmann_notice_is_listed_in_arch_package -ra
+          fi
       - name: Create installer bytes without recompiling the application
         env:
           FORMAT: ${{ matrix.format }}

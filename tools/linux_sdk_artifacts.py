@@ -319,7 +319,9 @@ def qualify(component, image):
         run(["docker", "run", "--rm", image, "test", "-s", path], timeout=300)
 
 
-def produce(component, output, repository, own_head="", own_pr=0):
+def produce(
+    component, output, repository, own_head="", own_pr=0, *, retain_payload=None
+):
     """Reuse one qualified component, or build it from qualified parent images."""
     image = local_tag(component)
     identity = artifacts.fingerprint(component)
@@ -336,6 +338,9 @@ def produce(component, output, repository, own_head="", own_pr=0):
             # the saved-image checksum before forwarding its qualified output.
             # Consumers still inspect the actual image after loading it.
             record(prefix, component)
+            if retain_payload is not None:
+                prefix.rename(retain_payload)
+                return "reused"
             if (prefix / "approved-source.json").is_file():
                 print(
                     f"Reuse {component}: retaining its approved original receipt and bytes; no new payload or SDK build",
@@ -399,6 +404,9 @@ def produce(component, output, repository, own_head="", own_pr=0):
                 )
                 + "\n"
             )
+        if retain_payload is not None:
+            prefix.rename(retain_payload)
+            return "built"
         artifacts.pack(component, identity, prefix, output)
 
 

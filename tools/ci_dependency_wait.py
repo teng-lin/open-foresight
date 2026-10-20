@@ -12,7 +12,9 @@ from tools import ci_artifacts as artifacts  # noqa: E402
 from tools.ci_macos_dependencies import waiting_producers  # noqa: E402
 
 
-def fetch(repository, component, prefix, own_head="", own_pr=0, wait=1800):
+def fetch(
+    repository, component, prefix, own_head="", own_pr=0, wait=1800, *, optional=False
+):
     identity = artifacts.fingerprint(component)
     deadline = time.monotonic() + max(0, min(wait, 1800))
 
@@ -23,16 +25,20 @@ def fetch(repository, component, prefix, own_head="", own_pr=0, wait=1800):
 
     while True:
         if restore_original():
-            return
+            return True
         running = waiting_producers(repository, component, own_head, own_pr)
         if not running:
-            # A successful producer can become visible after the first pull.
-            # Keep all original qualification checks on this final read.
+            # Completion can become visible between the artifact and job reads.
             if restore_original():
-                return
+                return True
+            if optional:
+                return False
             raise RuntimeError(artifacts.report_unavailable(component, identity))
         if time.monotonic() >= deadline:
-            raise RuntimeError(artifacts.report_unavailable(component, identity))
+            raise RuntimeError(
+                artifacts.report_unavailable(component, identity)
+                + " Compatible producers are still active; preserve them and retry only this consumer. Their timeout never authorizes a duplicate SDK build."
+            )
         print(f"Waiting for verified {component} producer", flush=True)
         time.sleep(min(60, max(0, deadline - time.monotonic())))
 
