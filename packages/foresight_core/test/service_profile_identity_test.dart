@@ -916,6 +916,26 @@ void main() {
     await held.reached;
   }, timeout: const Timeout(Duration(minutes: 3)));
 
+  test('an owner removes a link or a regular file at its socket path as '
+      'stale, never what a link points to', () async {
+    final directory = createServiceTestDirectorySync('of-notsock-');
+    final profile = ProfilePaths(
+      '${directory.path}/data',
+      '${directory.path}/run',
+    );
+    privateDirectory(profile.runtime);
+    final target = File('${directory.path}/target')..writeAsStringSync('kept');
+    Link('${profile.runtime}/application.sock').createSync(target.path);
+    runtimeConfiguration.environment.remove('FORESIGHT_HELPER');
+    var service = await ApplicationService.start(profile);
+    await service.close();
+    expect(target.readAsStringSync(), 'kept');
+    // A regular file, which a connect on macOS refuses with ENOTSOCK.
+    File('${profile.runtime}/application.sock').writeAsStringSync('stale');
+    service = await ApplicationService.start(profile);
+    await service.close();
+  });
+
   test('the directory a default runtime lives in is private too (S5)', () {
     final directory = createServiceTestDirectorySync('of-parent-');
     final xdg = '${directory.path}/xdg';

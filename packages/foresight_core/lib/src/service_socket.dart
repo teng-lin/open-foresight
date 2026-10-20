@@ -76,15 +76,15 @@ Future<bool> _removeIfStill(String path, String expected) async {
 }
 
 /// Whether [error] says that nothing listens at a Unix socket path: there is
-/// no socket (ENOENT), or nobody accepts on it (ECONNREFUSED: 61 on macOS,
-/// 111 on Linux). A full backlog makes Linux fail with EAGAIN instead, but
-/// macOS refuses at once, just as for a dead socket; [probeSocketPath] asks
-/// again before trusting that.
+/// nothing (ENOENT), the path is not a socket (ENOTSOCK: 38 on macOS, 88 on
+/// Linux, which reports ECONNREFUSED for a regular file instead), or nobody
+/// accepts on it (ECONNREFUSED: 61 on macOS, 111 on Linux). A full backlog
+/// makes Linux fail with EAGAIN instead, but macOS refuses at once, just as
+/// for a dead socket; [probeSocketPath] asks again before trusting that.
 bool nobodyListening(SocketException error) =>
-    switch (error.osError?.errorCode) {
-      2 || 61 || 111 => true,
-      _ => false,
-    };
+    (Platform.isMacOS ? const {2, 38, 61} : const {2, 88, 111}).contains(
+      error.osError?.errorCode,
+    );
 
 /// A socket path that a new listener must not take: something accepts
 /// connections there, or a connect could not tell (for example it timed out,
@@ -106,9 +106,16 @@ class SocketPathInUse implements Exception {
 /// What a connect says about the socket at [path]: null when nothing is
 /// there or nobody listens, otherwise why the path is in use.
 Future<SocketPathInUse?> probeSocketPath(String path) async {
-  if (FileSystemEntity.typeSync(path, followLinks: false) ==
-      FileSystemEntityType.notFound) {
+  final type = FileSystemEntity.typeSync(path, followLinks: false);
+  // Nothing can listen on a regular file or a link (which is never
+  // followed), so either is stale.
+  if (type == FileSystemEntityType.notFound ||
+      type == FileSystemEntityType.file ||
+      type == FileSystemEntityType.link) {
     return null;
+  }
+  if (type != FileSystemEntityType.unixDomainSock) {
+    return SocketPathInUse(path, cause: 'it is a $type, not a socket');
   }
   const bound = Duration(milliseconds: 200);
   final elapsed = Stopwatch()..start();
@@ -126,8 +133,9 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
       if (!nobodyListening(error)) return SocketPathInUse(path, cause: error);
       // On macOS a live listener whose backlog is full refuses like a dead
       // socket (M1). A live owner drains its backlog, so ask up to three
-      // times within the bound. One that stays stalled still looks gone; it
-      // can only be another profile's owner sharing an explicit runtime,
+      // times within the bound. A connect cannot tell a backlog that never
+      // drains from a dead socket, so such a listener is replaced; it can
+      // only be another profile's owner sharing an explicitly set runtime,
       // since macOS runtimes are per profile by default.
       if (!Platform.isMacOS ||
           error.osError?.errorCode != 61 ||
