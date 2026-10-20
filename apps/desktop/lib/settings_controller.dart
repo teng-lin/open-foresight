@@ -754,6 +754,34 @@ class _SettingsController extends _FeatureController {
         },
       );
 
+  Widget serviceIdleSetting() {
+    final value = d.store.preference('serviceIdleMinutes', '30');
+    const choices = ['0', '15', '30', '60', '120'];
+    return settingRow(
+      'Stop the background service after agent inactivity',
+      'With the window closed, the service and its models exit this long after the last agent request.',
+      DesktopSettingSelect<String>(
+        key: const Key('serviceIdleMinutes'),
+        value: value,
+        items: [...choices, if (!choices.contains(value)) value]
+            .map(
+              (v) => DropdownMenuItem(
+                value: v,
+                child: Text(
+                  v == '0'
+                      ? 'Never'
+                      : v == '30'
+                      ? '30 minutes (Default)'
+                      : '$v minutes',
+                ),
+              ),
+            )
+            .toList(),
+        onChanged: (v) => preference('serviceIdleMinutes', v!),
+      ),
+    );
+  }
+
   Widget settings() => SingleChildScrollView(
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -910,6 +938,7 @@ class _SettingsController extends _FeatureController {
                 'Auto-stop transcribing after inactivity',
                 'Finalize when microphone and playback audio are inactive.',
                 DesktopSettingSelect<String>(
+                  key: const Key('inactivity'),
                   value: d.store.preference('inactivity', '15'),
                   items: ['0', '5', '10', '15', '30']
                       .map(
@@ -928,6 +957,8 @@ class _SettingsController extends _FeatureController {
                   onChanged: (v) => preference('inactivity', v!),
                 ),
               ),
+              const Divider(height: 1),
+              serviceIdleSetting(),
               if (Platform.isMacOS) ...[
                 const Divider(height: 1),
                 settingRow(
