@@ -457,7 +457,14 @@ def test_every_upload_in_the_nightly_called_workflow_closure_is_retry_safe():
                 visit(Path(job["uses"]).name)
             for step in job.get("steps", []):
                 if step.get("uses", "").startswith("actions/upload-artifact@"):
-                    assert step["with"].get("overwrite") is True, (filename, name, step)
+                    artifact_name = step["with"].get("name", "artifact")
+                    per_attempt = all(
+                        field in artifact_name
+                        for field in ("${{ github.run_id }}", "${{ github.run_attempt }}")
+                    )
+                    # Immutable per-attempt evidence preserves earlier failure
+                    # reports; stable names need replacement on failed-job retry.
+                    assert step["with"].get("overwrite") is True or per_attempt, (filename, name, step)
                     evidence.add(filename)
 
     visit("preview-packages.yml")
