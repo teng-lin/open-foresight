@@ -1703,7 +1703,9 @@ def assert_two_live_profiles_keep_notes_private(
         assert [note["title"] for note in second.call("notes.list")] == [
             "Second private note"
         ]
-    except Exception:
+    except BaseException:
+        # pytest.fail raises a BaseException; a stalled start needs these
+        # diagnostics (its log and a thread sample) most of all.
         for index, process in enumerate(processes):
             profile_failure_diagnostics(process, logs[index])
         raise
