@@ -10,7 +10,6 @@ import 'package:foresight_test_support/gated_helper.dart';
 import 'package:foresight_test_support/hooked_service.dart';
 import 'package:foresight_test_support/poll.dart';
 import 'package:foresight_test_support/service_fault_proxy.dart';
-import 'package:foresight_test_support/test_paths.dart';
 import 'package:test/test.dart';
 
 // The closing protocol (fix plan, PR 3) with production code on both sides:
@@ -124,8 +123,10 @@ void main() {
       ..addAll(saved);
   });
 
+  /// A profile by its canonical path: a hooked child records the canonical
+  /// data path, and a record must name the reader's own profile.data.
   ProfilePaths newProfile(String prefix) {
-    final directory = createTestTempDirectorySync(prefix);
+    final directory = createServiceTestDirectorySync(prefix);
     return ProfilePaths('${directory.path}/data', '${directory.path}/run');
   }
 
@@ -590,7 +591,8 @@ void main() {
       'a desktop starting as the detach grace ends follows the owner to its '
       'replacement and attaches approvals once (held $held) (SL-9)',
       () async {
-        final directory = createTestTempDirectorySync('of-grace-');
+        // The launched replacement records its canonical data path.
+        final directory = createServiceTestDirectorySync('of-grace-');
         final profile = ProfilePaths(
           '${directory.path}/data',
           '${directory.path}/run',
