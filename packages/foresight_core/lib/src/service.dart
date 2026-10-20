@@ -2286,6 +2286,28 @@ Future<File> writeServiceStartupEnvironment(
 }
 
 final _startupStatusName = RegExp(r'^startup-[A-Za-z0-9_-]+\.json$');
+// A status file, or the staging copy a service writes before renaming it.
+final _startupStatusEntry = RegExp(r'^startup-[A-Za-z0-9_-]+\.json(\.\d+)?$');
+
+/// Remove startup status files that no launcher still waits on: every
+/// launcher gives up within three minutes, and a launch that lost the race
+/// may write after its launcher returned. A link is removed as a link; this
+/// code never writes one.
+void _sweepStartupStatus(String runtime) {
+  final cutoff = DateTime.now().subtract(const Duration(minutes: 3));
+  for (final path in _endpointEntries(runtime, _startupStatusEntry)) {
+    try {
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      if (type == FileSystemEntityType.link ||
+          (type == FileSystemEntityType.file &&
+              File(path).lastModifiedSync().isBefore(cutoff))) {
+        _deleteEndpointEntry(path);
+      }
+    } on FileSystemException {
+      // Another launcher removed it first.
+    }
+  }
+}
 
 /// Record why this service failed to start, for the launcher waiting on it.
 /// FORESIGHT_STARTUP_STATUS names the file; it must be a startup status in
@@ -2412,6 +2434,7 @@ Future<ServiceStartup> _ensureService(
       );
     }
     executable = serviceExecutable;
+    _sweepStartupStatus(profile.runtime);
     final launchId = [
       pid,
       DateTime.now().microsecondsSinceEpoch,

@@ -1059,4 +1059,40 @@ void main() {
       await holder.exitCode;
     }
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test(
+    'a launch sweeps startup status files no launcher still waits on',
+    () async {
+      final profile = newProfile('of-sweep-');
+      privateDirectory(profile.data);
+      privateDirectory(profile.runtime);
+      final old = DateTime.now().subtract(const Duration(minutes: 10));
+      File entry(String name) => File('${profile.runtime}/$name');
+      for (final name in ['startup-old.json', 'startup-old.json.4242']) {
+        entry(name)
+          ..writeAsStringSync('{}')
+          ..setLastModifiedSync(old);
+      }
+      entry('startup-fresh.json').writeAsStringSync('{}');
+      final target = File('${Directory(profile.data).parent.path}/target')
+        ..writeAsStringSync('kept');
+      Link('${profile.runtime}/startup-link.json').createSync(target.path);
+      Directory('${profile.runtime}/startup-dir.json').createSync();
+      // A launch that never serves: startup then times out.
+      runtimeConfiguration.environment['FORESIGHT_SERVICE'] = '/usr/bin/true';
+      await expectLater(
+        ensureService(profile, startupTimeout: const Duration(seconds: 1)),
+        throwsA(isA<TimeoutException>()),
+      );
+      expect(
+        Directory(profile.runtime)
+            .listSync()
+            .map((item) => item.uri.pathSegments.lastWhere((s) => s.isNotEmpty))
+            .where((name) => name.startsWith('startup-'))
+            .toSet(),
+        {'startup-fresh.json', 'startup-dir.json'},
+      );
+      expect(target.readAsStringSync(), 'kept');
+    },
+  );
 }
