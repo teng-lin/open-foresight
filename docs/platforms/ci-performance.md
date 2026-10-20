@@ -1448,3 +1448,36 @@ The split DMG owner retains the existing broad packaging selection during
 qualification, including Linux-only packaging changes. Narrowing that breadth
 belongs to the separately qualified P9 selector; this batch does not claim the
 associated macOS scheduling savings.
+
+### Qualification and one-PR activation
+
+The main-only `CI qualification index` workflow discovers retained hosted
+qualification descriptors and publishes an immutable `ci-qualification-index`
+artifact. Consumers verify its original successful uploading job and attempt,
+repository, workflow/event, reviewed-main reachability, upload window, archive
+digest and receipt, then independently reverify each capability's source proof.
+An artifact name or a manually supplied activation flag never authorizes routing.
+Missing, expired or incompatible evidence retains the broader production routes.
+CI control changes invalidate qualification; application-only changes retain a
+previously qualified Arch baseline while continuing to bind current application
+validation through per-job receipts.
+
+The existing platform push trigger remains as a guarded heartbeat. After the
+observer's four actual parity cases and real publisher consumer exercise qualify,
+its application selection delegates to the main-only coordinator. That coordinator
+writes a verified receipt or dispatches a full current-main sweep. Before proof,
+the ordinary direct push application checks continue. The force/full-validation
+path always runs fresh checks. Reviewed-main qualification mode never runs the
+legacy cache publication job.
+
+Path selection, Arch retirement and acceptance narrowing have independent gates.
+Arch stays required until the two consecutive real scheduled nightlies, actual
+Arch drift and real SDK transport/recipe exercises qualify. Acceptance narrowing
+additionally requires the frozen complete acceptance dependency replay and four
+green weeks of actual nightly observation. Only ordinary PRs may omit qualified
+CPU/model, software GPU or virtual audio phases. Release, preview, dispatch and
+nightly runs retain all phases; package lifecycle acceptance always runs. A PR
+with a partial phase vector cannot promote a full main validation receipt and
+requires a fresh full main sweep. Physical deletion of the guarded legacy code
+can follow separately after the hosted qualification interval; this change does
+not describe that code as already removed.

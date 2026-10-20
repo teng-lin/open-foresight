@@ -181,14 +181,15 @@ def test_missing_or_unavailable_history_cannot_propose_skips(tmp_path, base):
     assert report["permits_skipping"] is False
 
 
-def test_observer_is_uploaded_and_never_controls_phase_execution():
+def test_qualified_plan_controls_phase_steps_but_preserves_acceptance_jobs():
     workflow = parse_workflow((ROOT / ".github/workflows/macos.yml").read_text())
     steps = workflow["jobs"]["changes"]["steps"]
     observer = next(
         step for step in steps if "ci_acceptance_plan.py" in step.get("run", "")
     )
     assert observer["env"]["EVENT"] == "${{ github.event_name }}"
-    assert observer["continue-on-error"] is True
+    assert "--activate" in observer["run"]
+    assert "continue-on-error" not in observer
     upload = next(
         step
         for step in steps
@@ -221,7 +222,46 @@ def test_observer_is_uploaded_and_never_controls_phase_execution():
         assert commands.count(command) == 1, (
             f"Expected one acceptance command: {command}"
         )
-    assert "acceptance-selection" not in commands and "proposed" not in commands
+    assert "CPU_MODELS_SELECTED" in commands and "SOFTWARE_GPU_SELECTED" in commands
+    assert "VIRTUAL_AUDIO_SELECTED" in commands
     assert "test-debian.sh" in commands
     assert '"${ACCEPTANCE_FULL:-false}" == true' in commands
     assert '"${PACKAGING_SELECTED:-false}" == true' in commands
+
+
+@pytest.mark.parametrize("event,force", [("schedule", False), ("push", False), ("workflow_dispatch", False), ("pull_request", True)])
+def test_non_pr_and_forced_acceptance_never_narrows(event, force):
+    def must_not_authorize(*args, **kwargs):
+        raise AssertionError("Full backstop must not depend on index availability")
+    result = selection.activate(selection.plan(["docs/example.md"], event), source="a" * 40, repository="example/repo", force=force, capability=must_not_authorize)
+    assert all(result["executed"].values())
+
+
+def test_phase_narrowing_needs_independent_four_week_capability():
+    calls = []
+    def qualified(*args, **kwargs):
+        calls.append((args, kwargs))
+    value = selection.plan(["tools/accept_software_gpu.py"])
+    result = selection.activate(value, source="a" * 40, repository="example/repo", capability=qualified)
+    assert result["permits_skipping"] is True
+    assert result["executed"] == {"cpu-models": False, "software-gpu": True, "virtual-audio": False}
+    assert calls[0][0] == ("acceptance_narrowing", "a" * 40)
+    def missing(*args, **kwargs):
+        raise ValueError("Four weeks have not passed")
+    result = selection.activate(selection.plan(["docs/example.md"]), source="a" * 40, repository="example/repo", capability=missing)
+    assert all(result["executed"].values())
+
+
+def test_complete_acceptance_replay_uses_reviewed_frozen_inventory():
+    inventory = json.loads((ROOT / "tests/fixtures/ci-selector-50-prs.json").read_text())
+    result = selection.replay(inventory)
+    assert result["count"] == 50
+    assert result["known_escapes"] == [102, 110, 112, 119, 137, 144]
+    assert all(all(row["plan"]["proposed"].values()) for row in result["prs"] if row["number"] in result["known_escapes"])
+
+
+@pytest.mark.parametrize("suite,env", [("cpu", {"CPU_MODELS_SELECTED": "false"}), ("audio", {"SOFTWARE_GPU_SELECTED": "false", "VIRTUAL_AUDIO_SELECTED": "false"})])
+def test_qualified_empty_phase_set_avoids_all_docker_work(tmp_path, suite, env):
+    result = subprocess.run(["bash", str(ROOT / "tools/linux_acceptance.sh"), suite], cwd=tmp_path, env={**os.environ, **env, "VERSION": "1.0"}, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Qualified phase omission" in (tmp_path / f"test-results/acceptance-{suite}/selection.txt").read_text()

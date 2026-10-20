@@ -173,7 +173,7 @@ jobs:
       consume_only: true
   linux-native:
     needs: changes
-    if: inputs.tier != 'release' && needs.changes.outputs.linux_build == 'true'
+    if: inputs.tier != 'release' && needs.changes.outputs.linux_build == 'true' && needs.changes.outputs.arch_retired != 'true'
     uses: ./.github/workflows/linux-platform-stages.yml
     with:
       source: ${{ inputs.source || github.event.pull_request.head.sha || github.sha }}
@@ -229,6 +229,10 @@ jobs:
       actions: read
       pull-requests: read
     outputs:
+      arch_retired: ${{ steps.changes.outputs.arch_retired }}
+      acceptance_cpu_models: ${{ steps.acceptance-plan.outputs.cpu_models }}
+      acceptance_software_gpu: ${{ steps.acceptance-plan.outputs.software_gpu }}
+      acceptance_virtual_audio: ${{ steps.acceptance-plan.outputs.virtual_audio }}
       selection: ${{ steps.changes.outputs.selection }}
       macos: ${{ steps.changes.outputs.macos }}
       linux_build: ${{ steps.changes.outputs.linux_build }}
@@ -299,7 +303,7 @@ jobs:
             FORCE=--force
           fi
         fi
-        task_args=(--base "$BASE")
+        task_args=(--base "$BASE" --activate)
         if [[ "$QUALIFICATION_MODE" == true ]]; then
           task_args+=(--candidate)
         fi
@@ -310,6 +314,13 @@ jobs:
           task_args+=(--force)
         fi
         python tools/ci_changes.py "${task_args[@]}"
+    - name: Select acceptance phases from independently qualified observations
+      id: acceptance-plan
+      env:
+        GH_TOKEN: ${{ github.token }}
+        BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+        EVENT: ${{ github.event_name }}
+      run: python3 tools/ci_acceptance_plan.py --activate --selection-report ci-selection.json --base "$BASE" --event "$EVENT" --output test-results/acceptance-selection.json
     - name: Retain platform selection
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       with:
@@ -317,12 +328,6 @@ jobs:
         overwrite: true
         path: ci-selection.json
         if-no-files-found: error
-    - name: Observe acceptance dependencies without skipping phases
-      continue-on-error: true
-      env:
-        BASE: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
-        EVENT: ${{ github.event_name }}
-      run: python3 tools/ci_acceptance_plan.py --base "$BASE" --event "$EVENT" --output test-results/acceptance-selection.json
     - name: Retain acceptance dependency observations
       if: always()
       continue-on-error: true
@@ -698,7 +703,7 @@ jobs:
       run: echo 'complete=true' >> "$GITHUB_OUTPUT"
   publish-caches:
     needs: linux-build
-    if: "!cancelled() && !inputs.sweep && inputs.tier != 'release' && github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"workflow_dispatch\",\"schedule\"]'), github.event_name) && needs.linux-build.result == 'success' && (inputs.source == '' || inputs.source == github.sha)"
+    if: "!cancelled() && !inputs.sweep && !inputs.qualification_mode && inputs.tier != 'release' && github.ref == 'refs/heads/main' && contains(fromJSON('[\"push\",\"workflow_dispatch\",\"schedule\"]'), github.event_name) && needs.linux-build.result == 'success' && (inputs.source == '' || inputs.source == github.sha)"
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
@@ -846,6 +851,9 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
         VERSION: ${{ steps.consumer.outputs.version }}
+        CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
+        SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}
+        VIRTUAL_AUDIO_SELECTED: ${{ needs.changes.outputs.acceptance_virtual_audio != 'false' }}
         ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
         PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
       run: bash tools/linux_acceptance.sh cpu
@@ -918,6 +926,9 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
         VERSION: ${{ steps.consumer.outputs.version }}
+        CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
+        SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}
+        VIRTUAL_AUDIO_SELECTED: ${{ needs.changes.outputs.acceptance_virtual_audio != 'false' }}
         ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
         PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
       run: bash tools/linux_acceptance.sh audio
@@ -987,6 +998,9 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         SDK_IMAGE: ${{ steps.consumer.outputs.image }}
         VERSION: ${{ steps.consumer.outputs.version }}
+        CPU_MODELS_SELECTED: ${{ needs.changes.outputs.acceptance_cpu_models != 'false' }}
+        SOFTWARE_GPU_SELECTED: ${{ needs.changes.outputs.acceptance_software_gpu != 'false' }}
+        VIRTUAL_AUDIO_SELECTED: ${{ needs.changes.outputs.acceptance_virtual_audio != 'false' }}
         ACCEPTANCE_FULL: ${{ inputs.tier == 'release' || inputs.acceptance == 'full' }}
         PACKAGING_SELECTED: ${{ needs.changes.outputs.packaging }}
       run: bash tools/linux_acceptance.sh deb
@@ -1056,6 +1070,7 @@ jobs:
       env:
         NEEDS: ${{ toJSON(needs) }}
         SELECTION: ${{ needs.changes.outputs.selection }}
+        ARCH_RETIRED: ${{ needs.changes.outputs.arch_retired }}
         WORKFLOW_LINT: ${{ needs.workflow-lint.result }}
         CI_TIER: ${{ inputs.tier }}
       run: |

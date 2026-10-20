@@ -6,7 +6,7 @@ on:
       exercise:
         description: Real reviewed-main candidate exercise; never changes production routing
         type: choice
-        options: [selector-replay, archive-sdk, fork-sdk, recipe-change]
+        options: [selector-replay, acceptance-replay, archive-sdk, fork-sdk, recipe-change]
         default: selector-replay
 permissions:
   contents: read
@@ -41,15 +41,15 @@ jobs:
       - name: Install hash-verified fixture dependencies
         run: python -m pip install --require-hashes -r requirements-dev.lock
       - uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
-        if: inputs.exercise != 'selector-replay'
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
         with:
           daemon-config: '{"features":{"containerd-snapshotter":true}}'
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
-        if: inputs.exercise != 'selector-replay'
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
         with:
           driver: docker
       - name: Authenticate read-only SDK and tooling access
-        if: inputs.exercise != 'selector-replay'
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
         env:
           REGISTRY_TOKEN: ${{ github.token }}
         run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
@@ -59,8 +59,14 @@ jobs:
           task_checksum=$(cut -d' ' -f1 tests/fixtures/ci-selector-50-prs.sha256)
           python -m tools.ci_selection --replay tests/fixtures/ci-selector-50-prs.json --sha256 "$task_checksum" --output build/qualification/replay.json
           python -m pytest tests/test_ci_selection.py -q --junitxml=build/qualification/replay.junit.xml
+      - name: Replay the complete frozen acceptance dependency inventory
+        if: inputs.exercise == 'acceptance-replay'
+        run: |
+          task_checksum=$(cut -d' ' -f1 tests/fixtures/ci-selector-50-prs.sha256)
+          python -m tools.ci_acceptance_plan --replay tests/fixtures/ci-selector-50-prs.json --sha256 "$task_checksum" --output build/qualification/acceptance-replay.json
+          python -m pytest tests/test_ci_acceptance_plan.py -q --junitxml=build/qualification/acceptance-replay.junit.xml
       - name: Exercise real SDK transport and complete application gates
-        if: inputs.exercise != 'selector-replay'
+        if: inputs.exercise != 'selector-replay' && inputs.exercise != 'acceptance-replay'
         env:
           GH_TOKEN: ${{ github.token }}
           EXERCISE: ${{ inputs.exercise }}
@@ -77,6 +83,8 @@ jobs:
           task_args=()
           if [[ "$EXERCISE" == selector-replay ]]; then
             task_args+=(--selector-report build/qualification/replay.json)
+          elif [[ "$EXERCISE" == acceptance-replay ]]; then
+            task_args+=(--acceptance-report build/qualification/acceptance-replay.json)
           else
             task_args+=(--exercise-record build/qualification/exercise.json)
           fi

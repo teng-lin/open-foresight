@@ -117,12 +117,14 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
         raise ValueError("Explicit positive original producer and artifact IDs required")
     run = api(repository, f"actions/runs/{entry['run_id']}")
     workflow, gate = KINDS[kind]
+    if run.get("repository", {}).get("full_name") != repository:
+        raise ValueError("Qualification run repository mismatch")
     attempt = entry["attempt"]
     if type(attempt) is not int or attempt < 1:
         raise ValueError("Qualification needs an original positive attempt")
     if (run.get("path"), run.get("head_branch"), (run.get("head_repository") or {}).get("full_name"), run.get("status"), run.get("conclusion")) != (workflow, "main", repository, "completed", "success"):
         raise ValueError("Qualification is not a successful reviewed-main producer")
-    if run.get("event") not in ("schedule", "workflow_dispatch", "push") or (kind in {"nightly", "arch"} and run.get("event") != "schedule"):
+    if run.get("event") not in ("schedule", "workflow_dispatch", "push", "workflow_run") or (kind in {"nightly", "arch"} and run.get("event") != "schedule"):
         raise ValueError("Qualification needs the actual scheduled nightly/drift event")
     source = run.get("head_sha")
     if not isinstance(source, str) or not re.fullmatch(r"[0-9a-f]{40}", source):
@@ -146,7 +148,7 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
     artifact = api(repository, f"actions/artifacts/{entry['artifact_id']}")
     if artifact.get("name") != "ci-rollout-qualification" or artifact.get("expired") or artifact.get("workflow_run", {}).get("id") != run["id"]:
         raise ValueError("Qualification artifact origin mismatch")
-    uploaders = [job for job in jobs if job.get("id") == entry["producer_job_id"] and job.get("conclusion") == "success" and job.get("run_attempt") == attempt and artifacts.in_producer_attempt(artifact, job)]
+    uploaders = [job for job in jobs if job.get("id") == entry["producer_job_id"] and job.get("conclusion") == "success" and job.get("run_attempt") == attempt and job.get("name", "").split(" / ")[-1] == gate and artifacts.in_producer_attempt(artifact, job)]
     if len(uploaders) != 1:
         raise ValueError("Qualification artifact has no successful original upload window")
     with tempfile.TemporaryDirectory(prefix="ci-rollout-") as temporary:
@@ -164,17 +166,19 @@ def _qualified(entry, *, repository, expected, api, download, controls=False):
         raise ValueError("Qualification receipt differs from original uploading job")
     if kind == "nightly" and not full_candidate_selection(result.get("qualification_selection")):
         raise ValueError("Nightly did not actually execute the prepared candidate selector")
-    if kind in {"archive-sdk", "fork-sdk", "recipe-change"} and result.get("exercise", {}).get("kind") != kind:
+    if kind in {"archive-sdk", "fork-sdk", "recipe-change", "publisher"} and result.get("exercise", {}).get("kind") != kind:
         raise ValueError("Qualification lacks its actual SDK transport/recipe exercise")
     if kind == "selector-replay" and (result.get("selector_replay", {}).get("count", 0) < 50 or result.get("selector_replay", {}).get("known_escapes") != [102, 110, 112, 119, 137, 144]):
         raise ValueError("Qualification lacks its full historical selector replay")
+    if kind == "acceptance-replay" and (result.get("acceptance_replay", {}).get("count", 0) < 50 or result.get("acceptance_replay", {}).get("known_escapes") != [102, 110, 112, 119, 137, 144]):
+        raise ValueError("Qualification lacks its full acceptance dependency replay")
     if kind == "observer" and result.get("observer_case") not in {"identical", "divergent", "partially-selected", "failed-rerun"}:
         raise ValueError("Observation lacks its actual parity case")
     compare(result["control_closure" if controls else "closure"], expected)
     return {"kind": kind, "run_id": run["id"], "source": source, "created_at": run["created_at"], "observer_case": result.get("observer_case")}
 
 
-def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/open-foresight", api=None, download=None):
+def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/open-foresight", api=None, download=None, ongoing=False):
     """Return only API-verified eligibility; absence never authorizes activation."""
     if not re.fullmatch(r"[0-9a-f]{40}", source or ""):
         raise ValueError("Activation needs an immutable source SHA")
@@ -184,18 +188,18 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
     if index.get("schema") != 1 or index.get("repository") != repository or not requested.issubset(index.get("capabilities", [])):
         raise ValueError("Cutover is inactive: missing reviewed-main qualification index")
     controls = "arch_retirement" not in requested
-    if not controls and index.get("source") != source:
+    if not controls and not ongoing and index.get("source") != source:
         raise ValueError("Rollout source does not match the proposed activation")
     if not re.fullmatch(r"[0-9a-f]{40}", index.get("source", "")):
         raise ValueError("Rollout qualification baseline must be immutable")
-    if controls and (api or artifacts.api)(repository, f"compare/{index['source']}...main").get("status") not in ("ahead", "identical"):
+    if (api or artifacts.api)(repository, f"compare/{index['source']}...main").get("status") not in ("ahead", "identical"):
         raise ValueError("Qualified coordinator baseline is not reviewed main")
-    expected = control_closure(root) if controls else closure(root)
+    expected = control_closure(root) if controls else (index["closure"] if ongoing else closure(root))
+    if ongoing:
+        compare(index["control_closure"], control_closure(root))
     compare(index["control_closure" if controls else "closure"], expected)
     if len({(entry.get("kind"), entry.get("run_id"), entry.get("artifact_id"), entry.get("attempt")) for entry in index["evidence"]}) != len(index["evidence"]):
         raise ValueError("Duplicate qualification evidence cannot multiply green observations")
-    qualified = [_qualified(entry, repository=repository, expected=expected, api=api or artifacts.api, download=download or artifacts.download_zip, controls=controls) for entry in index["evidence"]]
-    kinds = {row["kind"] for row in qualified}
     needed: set[str] = set()
     if "main_receipts" in requested:
         needed.update(("observer", "publisher"))
@@ -205,6 +209,9 @@ def authorize(index, *, root=ROOT, source, capabilities, repository="teng-lin/op
         needed.add("acceptance-replay")
     if "arch_retirement" in requested or "acceptance_narrowing" in requested:
         needed.update(("nightly", "arch", "archive-sdk", "fork-sdk", "recipe-change"))
+    entries = [entry for entry in index["evidence"] if entry.get("kind") in needed and (controls or entry.get("closure_sha256", expected["sha256"]) == expected["sha256"])]
+    qualified = [_qualified(entry, repository=repository, expected=expected, api=api or artifacts.api, download=download or artifacts.download_zip, controls=controls) for entry in entries]
+    kinds = {row["kind"] for row in qualified}
     if not needed.issubset(kinds):
         raise ValueError("Missing actual hosted cutover exercises: " + ", ".join(sorted(needed - kinds)))
     if "main_receipts" in requested and not {"identical", "divergent", "partially-selected", "failed-rerun"}.issubset({row["observer_case"] for row in qualified if row["kind"] == "observer"}):
@@ -246,6 +253,7 @@ def main():
     parser.add_argument("--producer-job", required=True)
     parser.add_argument("--exercise-record", type=Path)
     parser.add_argument("--selector-report", type=Path)
+    parser.add_argument("--acceptance-report", type=Path)
     parser.add_argument("--selection-report", type=Path)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -262,6 +270,11 @@ def main():
         if report.get("count", 0) < 50 or not {102, 110, 112, 119, 137, 144}.issubset({row["number"] for row in report.get("prs", [])}):
             parser.error("Incomplete actual selector replay")
         value["selector_replay"] = {"count": report["count"], "known_escapes": [102, 110, 112, 119, 137, 144], "sha256": digest(args.selector_report)}
+    if args.acceptance_report:
+        report = json.loads(args.acceptance_report.read_text())
+        if report.get("count", 0) < 50 or report.get("known_escapes") != [102, 110, 112, 119, 137, 144]:
+            parser.error("Incomplete actual acceptance dependency replay")
+        value["acceptance_replay"] = {"count": report["count"], "known_escapes": report["known_escapes"], "sha256": digest(args.acceptance_report)}
     args.output.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
 
 

@@ -40,7 +40,7 @@ class Evidence:
         run_id = len(self.runs) + 1
         created = (datetime(2026, 10, 1, tzinfo=timezone.utc) + timedelta(days=day)).isoformat().replace("+00:00", "Z")
         workflow, gate = rollout.KINDS[kind]
-        run = {"id": run_id, "head_sha": SOURCE, "path": workflow, "head_branch": "main", "head_repository": {"full_name": REPOSITORY}, "status": "completed", "conclusion": "success", "event": "schedule", "created_at": created}
+        run = {"id": run_id, "head_sha": SOURCE, "path": workflow, "head_branch": "main", "head_repository": {"full_name": REPOSITORY}, "repository": {"full_name": REPOSITORY}, "status": "completed", "conclusion": "success", "event": "schedule", "created_at": created}
         self.runs[run_id] = run
         names = [gate]
         if kind == "nightly":
@@ -49,10 +49,12 @@ class Evidence:
         self.jobs[run_id] = [{"id": run_id * 100 + i, "name": name, "conclusion": "success", "run_attempt": 1, "started_at": "2026-10-01T00:00:00Z", "completed_at": "2026-10-01T00:10:00Z"} for i, name in enumerate(names)]
         self.artifacts[run_id] = {"id": run_id, "name": "ci-rollout-qualification", "expired": False, "workflow_run": {"id": run_id}, "created_at": "2026-10-01T00:05:00Z"}
         self.payloads[run_id] = rollout.descriptor(SOURCE, root=self.root, run_id=run_id, attempt=1, producer_job=gate)
-        if kind in {"archive-sdk", "fork-sdk", "recipe-change"}:
+        if kind in {"archive-sdk", "fork-sdk", "recipe-change", "publisher"}:
             self.payloads[run_id]["exercise"] = {"kind": kind}
         if kind == "selector-replay":
             self.payloads[run_id]["selector_replay"] = {"count": 50, "known_escapes": [102, 110, 112, 119, 137, 144]}
+        if kind == "acceptance-replay":
+            self.payloads[run_id]["acceptance_replay"] = {"count": 50, "known_escapes": [102, 110, 112, 119, 137, 144]}
         if kind == "nightly":
             self.payloads[run_id]["qualification_selection"] = {"qualification_mode": True, "superseded": False, "selection": dict.fromkeys(rollout.GATES, True)}
         if kind == "observer":

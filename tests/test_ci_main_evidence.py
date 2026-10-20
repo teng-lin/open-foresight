@@ -718,7 +718,7 @@ class SweepTests(unittest.TestCase):
 
     def test_production_dispatch_disabled_and_exercise_is_idempotent(self):
         with self.assertRaises(ValueError):
-            sweep.dispatch(self.reader, source=SOURCE)
+            sweep.dispatch(self.reader, source=SOURCE, index={})
         with patch.object(self.reader, "api") as api:
             result = sweep.dispatch(self.reader, source=SOURCE, exercise=True)
             self.assertEqual(result["status"], "exercise-dispatched")
@@ -876,16 +876,11 @@ class CoordinatorTests(unittest.TestCase):
                 calls.append((index, kwargs)) or {"verified": True}
             )
         )
-        with tempfile.TemporaryDirectory() as temporary:
-            index = Path(temporary) / "index.json"
-            with patch.object(coordinator, "INDEX", index):
-                with self.assertRaisesRegex(ValueError, "disabled"):
-                    coordinator.authorize(self.reader, SOURCE)
-                index.write_text('{"schema":1}')
-                with patch.dict("sys.modules", {"tools.ci_rollout": module}):
-                    self.assertEqual(
-                        coordinator.authorize(self.reader, SOURCE), {"verified": True}
-                    )
+        with patch.dict("sys.modules", {"tools.ci_rollout": module}):
+            self.assertEqual(coordinator.authorize(self.reader, SOURCE, index={"schema": 1}), {"verified": True})
+        with patch("tools.ci_qualification_index.capability", return_value={"dynamic": True}) as dynamic:
+            self.assertEqual(coordinator.authorize(self.reader, SOURCE), {"dynamic": True})
+        self.assertEqual(dynamic.call_args.args, ("main_receipts", SOURCE))
         self.assertEqual(calls[0][1]["capabilities"], ("main_receipts",))
         self.assertEqual(calls[0][1]["source"], SOURCE)
 
@@ -1047,3 +1042,12 @@ class SweepRecoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_partial_acceptance_cannot_authorize_full_main_receipt():
+    reader = FixtureReader()
+    reader.selection_record["acceptance_phases"] = {"cpu-models": True, "software-gpu": False, "virtual-audio": True}
+    proposal = reader.proposal(SOURCE, BEFORE, dict.fromkeys(evidence.APPLICATION, True))
+    assert proposal["decision"] == "sweep"
+    assert "Partial acceptance" in proposal["reason"]
+    assert proposal["jobs"] == {}

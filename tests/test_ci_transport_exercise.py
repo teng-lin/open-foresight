@@ -94,9 +94,9 @@ def test_failed_real_command_output_is_preserved(tmp_path, monkeypatch):
 def test_real_exercise_calls_actual_driver_and_preserves_original_sdk_provenance(tmp_path, monkeypatch, kind, fault):
     source = tmp_path / "source"
     source.mkdir()
-    recipe = source / "packaging/build.Dockerfile"
+    recipe = source / "packaging/ci-tooling.Dockerfile"
     recipe.parent.mkdir()
-    before = b'FROM ${SDK_IMAGE} AS application-base\nRUN original_tooling\n'
+    before = b'FROM ${SDK_IMAGE} AS ci-tooling\nRUN original_tooling\n'
     recipe.write_bytes(before)
     for key, value in {"GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_SHA": SOURCE, "GITHUB_REPOSITORY": "owner/repo"}.items():
         monkeypatch.setenv(key, value)

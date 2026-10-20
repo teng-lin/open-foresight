@@ -87,7 +87,7 @@ def exercise(kind, source, output, *, root=ROOT):
     image = sdk.resolve(prefix, load_registry=True)
     original_image_id = sdk.inspect(image)
     details = {"kind": kind, "original_sdk": original, "image_id": original_image_id}
-    recipe = root / "packaging/build.Dockerfile"
+    recipe = root / "packaging/ci-tooling.Dockerfile"
     before = recipe.read_bytes()
     try:
         if kind in {"archive-sdk", "fork-sdk"}:
@@ -108,7 +108,7 @@ def exercise(kind, source, output, *, root=ROOT):
         else:
             # A harmless tooling-recipe change invalidates real setup layers;
             # verified SDK bytes and dependency outputs must remain reusable.
-            marker = b"FROM ${SDK_IMAGE} AS application-base\n"
+            marker = b"FROM ${SDK_IMAGE} AS ci-tooling\n"
             if before.count(marker) != 1:
                 raise ValueError("Tooling recipe changed; update this bounded real exercise")
             recipe.write_bytes(before.replace(marker, marker + b'LABEL org.openforesight.qualification="recipe-change"\n'))
