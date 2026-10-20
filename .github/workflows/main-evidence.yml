@@ -43,10 +43,19 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Observe proposed per-job receipts against actual main validation
+        id: observation
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE: ${{ github.event.workflow_run.head_sha || github.sha }}
-        run: python3 tools/ci_main_evidence.py --source "$SOURCE"
+        run: python3 tools/ci_main_evidence.py --source "$SOURCE" --qualification-output rollout/qualification.json
+      - name: Retain actual completed observer parity qualification
+        if: steps.observation.outputs.qualified == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ci-rollout-qualification
+          path: rollout/qualification.json
+          overwrite: true
+          if-no-files-found: error
       - name: Verify independent hosted activation gate without writing
         id: activation
         env:
