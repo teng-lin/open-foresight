@@ -340,6 +340,12 @@ def test_preview_dmg_receipt_rejects_foreign_build_bytes(tmp_path):
 
 @pytest.fixture
 def workflow_installer_tree(tmp_path, monkeypatch):
+    # Keep fixture provenance and summaries separate from inherited hosted CI.
+    monkeypatch.setenv("GITHUB_REPOSITORY", "fixture/preview")
+    monkeypatch.setenv("GITHUB_RUN_ID", "41")
+    monkeypatch.setenv(
+        "GITHUB_STEP_SUMMARY", str(tmp_path.parent / (tmp_path.name + "-summary.md"))
+    )
     # Match download-artifact's non-merged preview-installer-* directories and
     # the separately downloaded canonical portable bundle.
     installers(tmp_path)
@@ -393,6 +399,7 @@ def test_workflow_manifest_preserves_retained_arch_input_without_counting_it_as_
     before = retained.read_bytes()
     result = preview.manifest(root, "0.1.2", 12, LABEL, SHA, "standard")
     assert len(result["installers"]) == 5
+    assert result["run_url"] == "https://github.com/fixture/preview/actions/runs/41"
     portable = next(item for item in result["installers"] if item["format"] == "tar")
     assert portable["asset"] == "installer.tar.gz"
     checksum = next(
