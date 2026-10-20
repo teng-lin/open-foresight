@@ -91,12 +91,17 @@ Future<void> main(List<String> args) async {
                 : Duration(milliseconds: bound),
           );
           // The service stopped; tell the user its next start recovers.
-          if (profileLeftUnclean(profile)) {
-            stderr.writeln(
-              'The application service stopped without a clean shutdown; '
-              'its endpoint record remains, and the next start recovers its '
-              'runtime.',
-            );
+          // This is only a warning, so it can never fail the stop.
+          try {
+            if (profileLeftUnclean(profile)) {
+              stderr.writeln(
+                'The application service stopped without a clean shutdown; '
+                'its endpoint record remains, and the next start recovers its '
+                'runtime.',
+              );
+            }
+          } catch (error) {
+            stderr.writeln('Cannot check how the service stopped: $error');
           }
         }
       } finally {

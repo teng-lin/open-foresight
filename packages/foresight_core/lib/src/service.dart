@@ -2213,7 +2213,9 @@ bool _profileLockFree(String path) {
 /// Whether [pid] may still run. Without a way to tell, assume it does, so
 /// only the profile lock decides.
 Future<bool> _processRunning(int pid) async {
-  if (Platform.isLinux) return Directory('/proc/$pid').existsSync();
+  if (Platform.isLinux && Directory('/proc/self').existsSync()) {
+    return Directory('/proc/$pid').existsSync();
+  }
   try {
     return (await Process.run('/bin/kill', ['-0', '$pid'])).exitCode == 0;
   } on ProcessException {
