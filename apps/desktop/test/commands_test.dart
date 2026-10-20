@@ -1,5 +1,6 @@
 import 'package:foresight_test_support/test_paths.dart';
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:open_foresight/commands.dart';
 
@@ -109,5 +110,37 @@ void main() {
       await owner.close();
       directory.deleteSync(recursive: true);
     },
+  );
+
+  test(
+    'forwarding to a desktop that closes its listener during the connect '
+    'reports it was not forwarded',
+    () async {
+      final directory = createTestTempDirectorySync('forward-reset-');
+      final path = '${directory.path}/commands.sock';
+      final listener = await ServerSocket.bind(
+        InternetAddress(path, type: InternetAddressType.unix),
+        0,
+      );
+      try {
+        listener.listen((socket) => socket.destroy());
+        final forwarding = AppCommands.forward(path);
+        // Let the connect reach the backlog before the listener closes.
+        for (var hop = 0; hop < 20; hop++) {
+          await Future<void>.microtask(() {});
+        }
+        final closed = listener.close();
+        // Hold this isolate while the closed listener resets that connect.
+        sleep(const Duration(milliseconds: 50));
+        expect(await forwarding, isFalse);
+        await closed;
+      } finally {
+        await listener.close();
+        directory.deleteSync(recursive: true);
+      }
+    },
+    // Linux resets a connect waiting in a closed AF_UNIX backlog with
+    // ECONNRESET; the order this test forces relies on that.
+    testOn: 'linux',
   );
 }
