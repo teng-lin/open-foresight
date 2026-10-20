@@ -269,9 +269,16 @@ void main() {
               await probe.exitCode.timeout(const Duration(seconds: 5));
             }
           }
-          await Future.wait(
-            diagnosticReads,
-          ).timeout(const Duration(seconds: 5));
+          try {
+            await Future.wait(
+              diagnosticReads,
+            ).timeout(const Duration(seconds: 5));
+          } finally {
+            evidence['diagnostics'] = {
+              for (var channel = 0; channel < diagnostics.length; channel++)
+                targets[channel]: diagnostics[channel].toString(),
+            };
+          }
           for (final player in silencePlayers) {
             await stopPlayer(player);
           }
