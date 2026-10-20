@@ -1404,4 +1404,52 @@ while not os.path.exists(sys.argv[3]): time.sleep(0.005)' "\$FORESIGHT_DATA/.app
       await client?.close();
     }
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test(
+    'a desktop reservation while the owner closes is refused like any request '
+    'and never cancels the close',
+    () async {
+      final profile = newProfile('of-reserve-');
+      final owner = await HookedServiceProcess.start(
+        build,
+        profile,
+        hold: ['close.helper_closed'],
+      );
+      ServiceClient? attached, latecomer;
+      try {
+        await owner.ready();
+        final reservation = {
+          'desktop': true,
+          'token': File(
+            '${profile.data}/.desktop-capability',
+          ).readAsStringSync(),
+        };
+        attached = await ServiceClient.connect(serviceEndpoint(profile));
+        expect((await attached.call('status') as Map)['pid'], owner.pid);
+        owner.signal(ProcessSignal.sigterm);
+        await owner.reached('close.helper_closed');
+        final refusal = rpcError(
+          RpcErrorCode.unavailable,
+          closingMessage,
+          'closing',
+        );
+        // Through an attached connection the worker refuses it ...
+        expect(await failureOf(attached.call('status', reservation)), refusal);
+        // ... and on a new one, the draining frontend does.
+        latecomer = await ServiceClient.connect(serviceEndpoint(profile));
+        expect(await failureOf(latecomer.call('status', reservation)), refusal);
+        owner.release('close.helper_closed');
+        // The close goes on to a clean exit.
+        expect(await owner.exited(), 0, reason: owner.output);
+        expect(
+          File('${profile.data}/.application-endpoint.json').existsSync(),
+          isFalse,
+        );
+      } finally {
+        await attached?.close();
+        await latecomer?.close();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
