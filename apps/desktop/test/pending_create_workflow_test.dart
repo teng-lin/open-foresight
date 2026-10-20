@@ -1,11 +1,14 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:foresight_core/src/rpc_error.dart';
 import 'package:foresight_test_support/test_paths.dart';
+import 'package:open_foresight/failure_text.dart';
 import 'package:open_foresight/main.dart';
 import 'package:open_foresight/store.dart';
 import 'package:foresight_core/remote.dart';
+import 'package:foresight_core/src/application.dart' show ApplicationDomain;
 import 'desktop_connection_fixture.dart';
+import 'pump_until.dart';
 import 'meeting_setup_test.dart' show OfflineHelper;
 
 /// Commits a create, then loses its reply as a dropped connection would.
@@ -13,6 +16,9 @@ class LostReplyDomain extends CommandFixtureDomain {
   LostReplyDomain(super.store, super.helper);
   final lose = <Operation>{};
   final sent = <(Operation, Map<String, dynamic>)>[];
+
+  /// Holds the next reply after its write committed.
+  Completer<void>? hold;
   @override
   Future<Object?> command(
     Operation operation, [
@@ -20,10 +26,14 @@ class LostReplyDomain extends CommandFixtureDomain {
   ]) async {
     sent.add((operation, args));
     final result = await super.command(operation, args);
+    final held = hold;
+    hold = null;
+    await held?.future;
     if (lose.remove(operation)) {
       throw RpcError(
         RpcErrorCode.unavailable,
         'Application service disconnected',
+        reason: RpcErrorReason.outcomeUnknown,
       );
     }
     return result;
@@ -71,7 +81,7 @@ void main() {
     domain.lose.add(Operation.notesSave);
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
-    expect(state.error, contains('disconnected'));
+    expect(state.error, outcomeUnknownText);
     expect(state.meetingFeature.noteId, isNull);
     await tester.tap(find.text('Save note'));
     await tester.pumpAndSettle();
@@ -99,12 +109,75 @@ void main() {
     domain.lose.add(Operation.meetingsCreate);
     await tester.tap(find.text('New meeting'));
     await tester.pumpAndSettle();
-    expect(state.error, contains('disconnected'));
+    expect(state.error, outcomeUnknownText);
     await tester.tap(find.text('New meeting'));
     await tester.pumpAndSettle();
     final meeting = store.rows('SELECT id FROM meetings').single['id'];
     expect(state.meetingFeature.meetingId, meeting);
     expect(keys(Operation.meetingsCreate).toSet(), hasLength(1));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('retrying a new note with edited text saves one note', (
+    tester,
+  ) async {
+    final dynamic state = await show(tester);
+    state.update(() => state.tab = 2);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    final fields = find.byType(TextField);
+    await tester.enterText(fields.at(0), 'Draft');
+    await tester.enterText(fields.at(1), 'First');
+    domain.lose.add(Operation.notesSave);
+    await tester.tap(find.text('Save note'));
+    await tester.pumpAndSettle();
+    expect(state.error, outcomeUnknownText);
+    await tester.enterText(fields.at(1), 'Edited');
+    await tester.tap(find.text('Save note'));
+    await tester.pumpAndSettle();
+    final note = store.rows('SELECT id,body FROM notes').single;
+    expect(note['body'], 'Edited');
+    expect(state.meetingFeature.noteId, note['id']);
+    expect(state.error, isEmpty);
+    // The key only ever carried the first text; the edit went by ID.
+    final saves = [
+      for (final (operation, args) in domain.sent)
+        if (operation == Operation.notesSave) args,
+    ];
+    expect(saves.map((args) => args['body']), ['First', 'First', 'Edited']);
+    expect(saves[1]['idempotency_key'], saves[0]['idempotency_key']);
+    expect(saves[2], isNot(contains('idempotency_key')));
+    expect(saves[2]['id'], note['id']);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('the reply to a new note after a workspace reset is dropped', (
+    tester,
+  ) async {
+    final dynamic state = await show(tester);
+    state.update(() => state.tab = 2);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('New note'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField).at(0), 'Before the clear');
+    final reply = domain.hold = Completer<void>();
+    await tester.tap(find.text('Save note'));
+    await tester.pump();
+    // Another client clears the workspace while the reply is in flight.
+    await tester.runAsync(
+      () => domain.application.call(Operation.workspaceClear.wire, {}),
+    );
+    // The save is still in flight, so wait for the reset, not for settling.
+    await pumpUntil(
+      tester,
+      () => state.d.workspaceEpoch == store.workspaceEpoch,
+    );
+    final reused = store.saveNote(null, 'After the clear', '');
+    reply.complete();
+    await tester.pumpAndSettle();
+    expect(state.meetingFeature.noteId, isNull, reason: 'note $reused');
+    expect(state.meetingFeature.noteTitle.text, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
   });
 }

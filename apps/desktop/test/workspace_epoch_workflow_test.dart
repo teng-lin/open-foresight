@@ -62,6 +62,9 @@ void main() {
       final after = f.store.meeting('After');
       f.store.artifact(after, 'summary', 'new summary', 'fixture');
       expect(f.store.rows('SELECT id FROM artifacts').single['id'], row['id']);
+      // The views were reset and adopted the new workspace; only the epoch
+      // the dialog opened in can stop its save.
+      expect(f.connection.workspaceEpoch, f.store.workspaceEpoch);
       await tester.enterText(
         find.descendant(
           of: find.byType(AlertDialog),
@@ -82,6 +85,51 @@ void main() {
       await tester.tap(find.text('Cancel'));
       await tester.pumpAndSettle();
       await editing;
+    },
+  );
+
+  const notice = 'Workspace cleared elsewhere; unsaved edits were discarded.';
+
+  testWidgets(
+    'a clear elsewhere reports discarded edits, never their text, and only then',
+    (tester) async {
+      final f = await ControllerFixture.mount(tester);
+      Future<void> clearElsewhere() async {
+        await tester.runAsync(
+          () =>
+              f.connection.application.call(Operation.workspaceClear.wire, {}),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      f.shell.update(() {
+        f.shell.tab = 2;
+        f.shell.meetingFeature.noteTitle.text = 'private unsaved draft';
+      });
+      await tester.pumpAndSettle();
+      await clearElsewhere();
+      expect(find.text(notice), findsOneWidget);
+      expect(find.textContaining('private unsaved draft'), findsNothing);
+      ScaffoldMessenger.of(
+        tester.element(find.byType(Workspace)),
+      ).removeCurrentSnackBar();
+      await tester.pumpAndSettle();
+      // Nothing unsaved: the views reset without a notice.
+      await clearElsewhere();
+      expect(f.connection.workspaceEpoch, f.store.workspaceEpoch);
+      expect(find.text(notice), findsNothing);
+      // This desktop's own clear discards edits on purpose.
+      f.shell.update(
+        () => f.shell.meetingFeature.noteTitle.text = 'discarded on purpose',
+      );
+      final clear = f.shell.settingsFeature.clearWorkspace() as Future<void>;
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Delete workspace'));
+      await tester.pump();
+      await tester.runAsync(() async => clear);
+      await tester.pumpAndSettle();
+      expect(f.shell.meetingFeature.noteTitle.text, isEmpty);
+      expect(find.text(notice), findsNothing);
     },
   );
 }

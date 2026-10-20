@@ -706,7 +706,12 @@ class _SettingsController extends _FeatureController {
     if (ok != true || !mounted) return;
     await shell.run(() async {
       meetingFeature.meetingNoteSaves.discardAll();
-      await d.command(Operation.workspaceClear);
+      shell.clearingWorkspace = true;
+      try {
+        await d.command(Operation.workspaceClear);
+      } finally {
+        shell.clearingWorkspace = false;
+      }
       shell.update(shell.resetWorkspaceViews);
     });
   }

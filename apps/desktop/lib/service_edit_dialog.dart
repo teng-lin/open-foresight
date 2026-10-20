@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'failure_text.dart';
 
 /// Retains the edit until the service accepts it and offers an inline retry.
 class ServiceEditDialog extends StatefulWidget {
@@ -34,7 +35,8 @@ class _ServiceEditDialogState extends State<ServiceEditDialog> {
       await widget.onSave();
       if (mounted) Navigator.pop(context, true);
     } catch (failure) {
-      if (mounted) setState(() => error = 'Unable to save: $failure');
+      if (mounted)
+        setState(() => error = 'Unable to save: ${failureText(failure)}');
     } finally {
       if (mounted) setState(() => saving = false);
     }
