@@ -698,13 +698,16 @@ class ApplicationService {
     }
   }
 
-  void _send(Socket client, Map<String, Object?> message) {
+  /// Returns whether [message] itself was written. An oversized reply is
+  /// replaced by an error, and an oversized event is dropped.
+  bool _send(Socket client, Map<String, Object?> message) {
     try {
       _traceServiceTransport(
         'worker send peer=${identityHashCode(client)} id=${message['id']} '
         'event=${message['event']} done=${message['done']}',
       );
       var frame = utf8.encode(jsonEncode(message));
+      var written = true;
       // A client drops its whole connection on a frame over the limit, and
       // losing the desktop's connection stops its recording. Fail only the
       // request instead.
@@ -714,8 +717,9 @@ class ApplicationService {
           'worker oversized peer=${identityHashCode(client)} id=$id '
           'event=${message['event']} bytes=${frame.length}',
         );
-        // Events are snapshots; the next one supersedes a dropped one.
-        if (id == null) return;
+        // A dropped snapshot is superseded by the next one. The approval gate
+        // fails its request instead of waiting for a decision.
+        if (id == null) return false;
         // No later frame may follow this request's terminal error.
         if (id is int) _cancel(client, id);
         frame = utf8.encode(
@@ -729,12 +733,15 @@ class ApplicationService {
             'done': true,
           }),
         );
+        written = false;
       }
       client
         ..add(frame)
         ..add(const [10]);
+      return written;
     } catch (_) {
       client.destroy();
+      return false;
     }
   }
 

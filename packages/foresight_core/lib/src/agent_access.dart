@@ -80,7 +80,9 @@ class ImportPolicy {
 /// Tokens authenticate the desktop; they never grant agent connections rights.
 class AgentAccessGate {
   final String desktopToken;
-  final void Function(Object host, Map<String, Object?> event) send;
+
+  /// Returns whether the event reached the host's connection.
+  final bool Function(Object host, Map<String, Object?> event) send;
   final Duration timeout;
   final DateTime Function() now;
   final _recent =
@@ -182,7 +184,7 @@ class AgentAccessGate {
     final id = 'approval-${++_next}';
     final done = Completer<bool>();
     _pending[id] = (client: client, done: done);
-    send(host, {
+    final shown = send(host, {
       'event': 'approval',
       'approval_id': id,
       'method': method,
@@ -197,6 +199,15 @@ class AgentAccessGate {
           'Replaces source ${args['id']}',
       ],
     });
+    // Waiting for a decision on an approval the desktop never received would
+    // only end at the timeout.
+    if (!shown) {
+      _pending.remove(id);
+      throw RpcError(
+        RpcErrorCode.invalidArgument,
+        'Request is too large to show for approval',
+      );
+    }
     try {
       final allowed = await done.future.timeout(
         timeout,

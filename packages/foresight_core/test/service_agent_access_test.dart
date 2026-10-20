@@ -284,6 +284,60 @@ void main() {
       raw.destroy();
     }
   });
+  test('an approval too large to show fails its request at once', () async {
+    await attach();
+    final approvals = <Map<String, dynamic>>[];
+    final subscription = desktop.events.stream
+        .where((event) => event['event'] == 'approval')
+        .listen(approvals.add);
+    // The service still accepts this request, but its approval event, which
+    // carries the arguments, exceeds the frame cap.
+    final raw = await Socket.connect(
+      InternetAddress(service.path, type: InternetAddressType.unix),
+      0,
+    );
+    final frames = StreamIterator(
+      raw
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .map((line) => jsonDecode(line) as Map)
+          .where((frame) => frame['event'] == null),
+    );
+    try {
+      raw.writeln(
+        jsonEncode({
+          'id': 1,
+          'method': 'sources.import',
+          'args': {
+            'title': 'Large',
+            'content': 'x' * (maxServiceMessage - 1024 * 1024),
+          },
+        }),
+      );
+      // Without a delivered approval this would wait for the two-minute
+      // approval timeout; bound it well below that.
+      expect(
+        await frames.moveNext().timeout(const Duration(seconds: 10)),
+        isTrue,
+      );
+      expect(frames.current, {
+        'id': 1,
+        'error': {
+          'code': 'invalidArgument',
+          'message': 'Request is too large to show for approval',
+        },
+        'done': true,
+      });
+      expect(approvals, isEmpty);
+      expect(await desktop.call('notes.list'), isEmpty);
+      expect(service.domain.store.sources, isEmpty);
+    } finally {
+      await subscription.cancel();
+      await frames.cancel();
+      raw.destroy();
+    }
+  });
   test('an oversized event is dropped without dropping the desktop', () async {
     await attach();
     final app = service.domain.application;
