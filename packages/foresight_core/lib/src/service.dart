@@ -103,6 +103,12 @@ Set<int>? Function(String lock) readPosixLockHolders = _posixLockHolders;
 /// macOS has no /proc/locks, so there any holder counts: a service of
 /// another profile that shares an explicit FORESIGHT_RUNTIME could pass
 /// while this profile's new owner is starting.
+///
+/// The macOS check, and the Linux one when the holders cannot be read,
+/// probe the lock. Never call this from a process that hosts an owner of
+/// [profile]: POSIX record locks belong to the process, so closing the
+/// probe's descriptor drops the owner's lock. [_localServiceOwners] skips
+/// the probe only in the isolate that started that owner.
 bool servesAnotherProfile(
   Map<Object?, Object?> status,
   ProfilePaths profile,
@@ -181,6 +187,8 @@ Set<int>? _posixLockHolders(String lock) {
 
 // POSIX locks belong to the OS process, not a Dart isolate or file handle.
 // Local hosts must finish before a launcher probes its own process's lock.
+// Like every top-level variable, this is per isolate: it guards only probes
+// made in the isolate that started the owner.
 final _localServiceOwners = <String, int>{};
 void Function() _retainLocalServiceOwner(String data) {
   privateDirectory(data, repairOwnedPermissions: true);
@@ -2516,6 +2524,8 @@ bool _lockContended(FileSystemException error) =>
 /// Whether no other process holds the profile lock at [path]. Only call this
 /// from a process that hosts no owner of the profile: POSIX record locks
 /// belong to the process, and closing this probe's descriptor drops them all.
+/// Callers that check [_localServiceOwners] first are safe only in the
+/// isolate that started the owner; another isolate does not see it there.
 bool _profileLockFree(String path) {
   // Keep this probe synchronous: opening and closing another descriptor must
   // not interleave with a local owner.
@@ -2552,7 +2562,9 @@ Future<bool> _processRunning(int pid) async {
 /// released (L6). Without [ownerPid], as for an owner that refused its
 /// status because it was already stopping, only the lock decides. Returns
 /// false if neither happens within [timeout]. Never call this from a process
-/// that hosts an owner of the profile.
+/// that hosts an owner of the profile, in any isolate: it probes the lock,
+/// POSIX record locks belong to the process, and closing the probe's
+/// descriptor drops the owner's lock.
 Future<bool> awaitProfileRelease(
   ProfilePaths profile,
   int? ownerPid, {
@@ -2597,7 +2609,9 @@ Future<void> requireProfileRelease(
 
 /// Whether the profile has no owner but still has an endpoint record: the
 /// last owner did not shut down cleanly, and the next one recovers its
-/// runtime. Never call this from a process that hosts an owner.
+/// runtime. Never call this from a process that hosts an owner of the
+/// profile, in any isolate: it probes the lock, POSIX record locks belong to
+/// the process, and closing the probe's descriptor drops the owner's lock.
 bool profileLeftUnclean(ProfilePaths profile) {
   final lock = '${profile.data}/.application.lock';
   return FileSystemEntity.typeSync(
@@ -2781,6 +2795,12 @@ const _maxLaunches = 3;
 /// Attach first; competing launchers may race safely on the service's OS lock.
 ///
 /// [statusProbeLimit] bounds each startup status probe; tests shorten it.
+///
+/// Deciding whether to launch probes the profile lock. Never call this from
+/// a process that hosts an owner of [profile] in another isolate: POSIX
+/// record locks belong to the process, so closing the probe's descriptor
+/// drops the owner's lock. [_localServiceOwners] skips the probe only in the
+/// isolate that started the owner.
 Future<ServiceClient> ensureService(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
@@ -2794,7 +2814,8 @@ Future<ServiceClient> ensureService(
 /// Reserve desktop socket lifetime and obtain its final startup snapshot.
 /// This does not grant the visible desktop's approval-host capability.
 /// Closing/transport failures here use the original startup deadline and owner
-/// handoff; no business operation is retried.
+/// handoff; no business operation is retried. The restriction of
+/// [ensureService] on processes that host an owner applies.
 Future<ServiceStartup> ensureServiceSnapshot(
   ProfilePaths profile, {
   Duration startupTimeout = const Duration(minutes: 3),
