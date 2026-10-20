@@ -562,6 +562,21 @@ class _WorkspaceState extends State<Workspace>
     super.dispose();
   }
 
+  /// Whether the rows on screen belong to the workspace the views edit. A
+  /// clear elsewhere can commit before its event resets the views; until
+  /// then a row on screen may name an ID that the new workspace reuses, so
+  /// a dialog that edits one is not opened.
+  bool rowsAreCurrent() {
+    final stored = d.store.workspaceEpoch;
+    if (stored.isEmpty || stored == d.workspaceEpoch) return true;
+    update(
+      () => error =
+          'The workspace was cleared elsewhere. Wait for the views to '
+          'refresh, then try again.',
+    );
+    return false;
+  }
+
   /// Whether a reset would drop text the user has not saved. Only whether,
   /// never the text itself, is reported.
   bool unsavedWorkspaceEdits() {

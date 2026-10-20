@@ -209,12 +209,13 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> editArtifact(Map<String, Object?> a) async {
+    // The artifact ID belongs to the workspace of the rows on screen.
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final controller = TextEditingController(
       text: (a['edited'] ?? a['generated']) as String,
     );
     final original = controller.text;
-    // The artifact ID belongs to the workspace of the rows this dialog shows.
-    final epoch = d.store.workspaceEpoch;
     int? lastManualEdit;
     final saved = await shell.showInputDialog<bool>(
       builder: (context) => ServiceEditDialog(
@@ -235,7 +236,7 @@ class _MeetingsController extends _FeatureController {
             'id': a['id'],
             'text': controller.text,
             if (lastManualEdit != null) 'last_manual_edit': lastManualEdit,
-            if (epoch.isNotEmpty) 'workspace_epoch': epoch,
+            if (epoch != null) 'workspace_epoch': epoch,
           });
         },
       ),
@@ -1132,7 +1133,8 @@ class _MeetingsController extends _FeatureController {
   }
 
   Future<void> importMeetingTranscript(int id) async {
-    final epoch = d.store.workspaceEpoch;
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final file = await openFile(
       acceptedTypeGroups: [
         const XTypeGroup(label: 'Transcript text', extensions: ['txt']),
@@ -1143,7 +1145,7 @@ class _MeetingsController extends _FeatureController {
       'id': id,
       'text': await File(file.path).readAsString(),
       'source': 'imported transcript',
-      if (epoch.isNotEmpty) 'workspace_epoch': epoch,
+      if (epoch != null) 'workspace_epoch': epoch,
     });
   }
 

@@ -192,9 +192,10 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> editSource(Map<String, Object?> s) async {
+    // The source ID belongs to the workspace of the rows on screen.
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final text = TextEditingController(text: s['content'] as String);
-    // The source ID belongs to the workspace of the rows this dialog shows.
-    final epoch = d.store.workspaceEpoch;
     final saved = await shell.showInputDialog<bool>(
       builder: (context) => ServiceEditDialog(
         title: 'Edit ${s['title']}',
@@ -210,7 +211,7 @@ class _SourcesController extends _FeatureController {
             'id': s['id'],
             'locallyEdited': true,
             'index': false,
-            if (epoch.isNotEmpty) 'workspace_epoch': epoch,
+            if (epoch != null) 'workspace_epoch': epoch,
           });
           await d.index(s['id'] as String);
         },
@@ -637,11 +638,12 @@ class _SourcesController extends _FeatureController {
   }
 
   Future<void> editLabels(Map<String, Object?>? s) async {
+    // The sources belong to the workspace of the rows on screen.
+    if (!shell.rowsAreCurrent()) return;
+    final epoch = d.workspaceEpoch;
     final input = TextEditingController(
       text: s == null ? '' : sourceLabels(s).join(', '),
     );
-    // The sources belong to the workspace this dialog opened in.
-    final epoch = d.store.workspaceEpoch;
     final ok = await shell.showInputDialog<bool>(
       builder: (context) => AlertDialog(
         title: Text(
@@ -677,7 +679,7 @@ class _SourcesController extends _FeatureController {
         'labels': s == null
             ? {...sourceLabels(row), ...values}.toList()
             : values,
-        if (epoch.isNotEmpty) 'workspace_epoch': epoch,
+        if (epoch != null) 'workspace_epoch': epoch,
       });
     }
     if (mounted) shell.update(() {});

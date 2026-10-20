@@ -180,4 +180,23 @@ void main() {
     expect(state.meetingFeature.noteTitle.text, isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+
+  testWidgets('opening a meeting starts a new action for New meeting', (
+    tester,
+  ) async {
+    final dynamic state = await show(tester);
+    domain.lose.add(Operation.meetingsCreate);
+    await tester.tap(find.text('New meeting'));
+    await tester.pumpAndSettle();
+    // The user opens the meeting that may have been created, so a later New
+    // meeting is a new action, not a retry that returns this meeting.
+    await tester.tap(find.text('[New Meeting]').first);
+    await tester.pumpAndSettle();
+    expect(state.meetingFeature.meetingPreviewId, isNotNull);
+    await tester.tap(find.text('New meeting'));
+    await tester.pumpAndSettle();
+    expect(store.rows('SELECT id FROM meetings'), hasLength(2));
+    expect(keys(Operation.meetingsCreate).toSet(), hasLength(2));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
 }
