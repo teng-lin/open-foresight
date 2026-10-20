@@ -70,18 +70,11 @@ class PrepareReleaseTest(unittest.TestCase):
                 "candidate_runs",
                 return_value={"linux-app": 42, "macos-app": 42},
             ) as ready,
-            patch.object(
-                release,
-                "application_descriptor",
-                return_value={"version": "0.1.2", "build_number": 10},
-            ),
             patch.object(release, "api") as request,
             patch.object(release.subprocess, "run") as command,
         ):
             self.assertEqual(
-                release.require_candidates(
-                    "owner/repo", "a" * 40, 0, fresh=True, candidate_run=42
-                ),
+                release.verified_candidates("owner/repo", "a" * 40, 42),
                 {"linux-app": 42, "macos-app": 42},
             )
         ready.assert_called_once_with("owner/repo", "a" * 40, 42)
@@ -97,107 +90,8 @@ class PrepareReleaseTest(unittest.TestCase):
                 patch.object(release.subprocess, "run") as command,
             ):
                 with self.assertRaises(ValueError):
-                    release.require_candidates(
-                        "owner/repo",
-                        "a" * 40,
-                        0,
-                        fresh=True,
-                        candidate_run=candidate_run,
-                    )
+                    release.verified_candidates("owner/repo", "a" * 40, candidate_run)
                 command.assert_not_called()
-
-    def test_legacy_resume_requires_both_artifacts_from_the_requested_trusted_run(self):
-        run = {
-            "id": 42,
-            "head_sha": "a" * 40,
-            "path": ".github/workflows/macos.yml",
-            "event": "workflow_dispatch",
-            "head_branch": "main",
-            "conclusion": "success",
-            "head_repository": {"full_name": "owner/repo"},
-        }
-        artifact_overrides = {}
-        missing = set()
-
-        def response(repository, route):
-            if route.startswith("actions/artifacts?"):
-                if any(component in route for component in missing):
-                    return {"artifacts": []}
-                return {
-                    "artifacts": [
-                        {
-                            "name": route.split("name=")[1].split("&")[0],
-                            "expired": False,
-                            "created_at": "2026-10-18T01:00:30Z",
-                            "workflow_run": {"id": 42},
-                            **artifact_overrides,
-                        }
-                    ]
-                }
-            if "/jobs?" in route:
-                return {
-                    "jobs": [
-                        {
-                            "name": name,
-                            "conclusion": "success",
-                            "started_at": "2026-10-18T01:00:00Z",
-                            "completed_at": "2026-10-18T01:01:00Z",
-                        }
-                        for name in ("linux-bundle", "macos")
-                    ]
-                }
-            self.assertEqual(route, "actions/runs/42")
-            if "/jobs?" in route:
-                return {
-                    "jobs": [
-                        {
-                            "name": name,
-                            "conclusion": "success",
-                            "started_at": "2026-10-18T01:00:00Z",
-                            "completed_at": "2026-10-18T01:01:00Z",
-                        }
-                        for name in ("linux-bundle", "macos")
-                    ]
-                }
-            return run
-
-        from tools import ci_artifacts
-
-        with (
-            patch.object(release, "api", side_effect=response),
-            patch.object(ci_artifacts, "api", side_effect=response),
-        ):
-            self.assertTrue(
-                len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
-            )
-            for component in ("linux-app", "macos-app"):
-                missing.add(component)
-                self.assertFalse(
-                    len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
-                )
-                missing.clear()
-            for change in (
-                {"expired": True},
-                {"workflow_run": {"id": 43}},
-                {"name": "ci-macos-app-" + "b" * 40},
-            ):
-                artifact_overrides.update(change)
-                self.assertFalse(
-                    len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
-                )
-                artifact_overrides.clear()
-            for change in (
-                {"head_branch": "unreviewed"},
-                {"path": ".github/workflows/other.yml"},
-                {"head_repository": {"full_name": "untrusted/repo"}},
-            ):
-                original = dict(run)
-                run.update(change)
-                self.assertFalse(
-                    len(release.legacy_candidate_runs("owner/repo", "a" * 40, 42)) == 2
-                )
-                run.clear()
-                run.update(original)
 
     def test_created_draft_uses_list_lookup_when_tag_endpoint_is_unavailable(self):
         draft = {
@@ -268,70 +162,6 @@ class PrepareReleaseTest(unittest.TestCase):
             command.call_args.args[0][:4], ["gh", "release", "create", "v0.1.1"]
         )
 
-    def test_legacy_candidate_requires_successful_exact_main_and_both_platforms(self):
-        commit = "a" * 40
-        run = dict(
-            id=1,
-            head_sha=commit,
-            path=".github/workflows/macos.yml",
-            event="push",
-            head_branch="main",
-            conclusion="success",
-            head_repository={"full_name": "owner/repo"},
-        )
-
-        def response(repository, route):
-            if route.startswith("actions/artifacts?"):
-                return {
-                    "artifacts": [
-                        {
-                            "name": route.split("name=")[1].split("&")[0],
-                            "expired": False,
-                            "created_at": "2026-10-18T01:00:30Z",
-                            "workflow_run": {"id": 1},
-                        }
-                    ]
-                }
-            if "/jobs?" in route:
-                return {
-                    "jobs": [
-                        {
-                            "name": name,
-                            "conclusion": "success",
-                            "started_at": "2026-10-18T01:00:00Z",
-                            "completed_at": "2026-10-18T01:01:00Z",
-                        }
-                        for name in ("linux-bundle", "macos")
-                    ]
-                }
-            return run
-
-        from tools import ci_artifacts
-
-        with (
-            patch.object(release, "api", side_effect=response),
-            patch.object(ci_artifacts, "api", side_effect=response),
-        ):
-            self.assertTrue(
-                len(release.legacy_candidate_runs("owner/repo", commit)) == 2
-            )
-            for change in (
-                {"head_sha": "b" * 40},
-                {"head_branch": "other"},
-                {"event": "pull_request"},
-            ):
-                original = dict(run)
-                run.update(change)
-                self.assertFalse(
-                    len(release.legacy_candidate_runs("owner/repo", commit)) == 2
-                )
-                run.clear()
-                run.update(original)
-        with patch.object(release, "api", return_value={"artifacts": []}):
-            self.assertFalse(
-                len(release.legacy_candidate_runs("owner/repo", commit)) == 2
-            )
-
     def test_missing_candidate_fails_without_building_or_tagging(
         self,
     ):
@@ -341,7 +171,7 @@ class PrepareReleaseTest(unittest.TestCase):
             patch.object(release.subprocess, "run") as command,
         ):
             with self.assertRaisesRegex(ValueError, "unavailable"):
-                release.require_candidates("owner/repo", "a" * 40, wait=0)
+                release.verified_candidates("owner/repo", "a" * 40, 42)
             command.assert_not_called()
 
     def test_different_existing_tag_and_public_release_are_never_overwritten(self):

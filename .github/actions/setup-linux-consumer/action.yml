@@ -40,9 +40,6 @@ inputs:
   label:
     default: ''
     description: Exact preview label, empty in PR/sweep tiers
-  legacy-main:
-    default: 'false'
-    description: Transitional stamped main candidate from this same run
   purpose:
     default: acceptance
     description: Consumer trust purpose, acceptance or package-contract
@@ -108,13 +105,10 @@ runs:
         ARTIFACT_ID: ${{ inputs.artifact-id }}
         ARTIFACT_DIGEST: ${{ inputs.artifact-digest }}
         PRODUCER_ATTEMPT: ${{ inputs.attempt }}
-        LEGACY_MAIN: ${{ inputs.legacy-main }}
         BUILD_LABEL: ${{ inputs.label }}
         PURPOSE: ${{ inputs.purpose }}
       run: |
-        task_args=()
-        if [[ "$LEGACY_MAIN" == true ]]; then task_args+=(--main-candidate); fi
-        python -m tools.integration_application --source "$SOURCE" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --purpose "$PURPOSE" --label "$BUILD_LABEL" --directory artifacts ${task_args[@]+"${task_args[@]}"}
+        python -m tools.integration_application --source "$SOURCE" --head-repository "$HEAD_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --purpose "$PURPOSE" --label "$BUILD_LABEL" --directory artifacts
     - name: Verify the original portable checksum and prepare its exact bytes
       id: package
       shell: bash

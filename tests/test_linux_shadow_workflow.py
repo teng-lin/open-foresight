@@ -17,7 +17,6 @@ def test_shadow_jobs_reuse_verified_inputs_and_leave_required_old_tier_intact():
         "linux-build",
         "linux-test",
         "linux-document-imports",
-        "linux-bundle",
         "packaging",
     }
     assert "linux-shadow-comparison" not in jobs

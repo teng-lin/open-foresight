@@ -3,9 +3,7 @@
 
 import argparse
 import base64
-from datetime import datetime, timezone
 import json
-import hashlib
 import os
 from pathlib import Path
 import re
@@ -48,10 +46,6 @@ CONSUMERS = ("linux-test", "acceptance-cpu", "acceptance-audio", "acceptance-deb
 api = artifacts.api
 
 
-def utc_now():
-    return datetime.now(timezone.utc)
-
-
 def positive(value):
     return type(value) is int and value > 0
 
@@ -71,7 +65,7 @@ def ancestor(repository, older, newer):
     )
 
 
-def source_policy(repository, source, control, *, floor=None, now=None, policy=None):
+def source_policy(repository, source, control, *, floor=None, policy=None):
     floor = os.environ.get("RELEASE_SOURCE_FLOOR", "") if floor is None else floor
     policy = json.loads(POLICY.read_text()) if policy is None else policy
     if (
@@ -94,20 +88,9 @@ def source_policy(repository, source, control, *, floor=None, now=None, policy=N
         )
     if ancestor(repository, floor, source):
         return "release"
-    try:
-        expiry = datetime.fromisoformat(
-            policy["legacy_expires_at"].replace("Z", "+00:00")
-        )
-        current = now or utc_now()
-        if expiry.tzinfo is None or current >= expiry:
-            raise ValueError(
-                "Legacy below-floor release transition has expired; use a source at or above RELEASE_SOURCE_FLOOR"
-            )
-    except (KeyError, TypeError) as error:
-        raise ValueError(
-            "Legacy transition needs an explicit schema-1 expiry"
-        ) from error
-    return "legacy"
+    raise ValueError(
+        "Release source is below RELEASE_SOURCE_FLOOR; per-merge legacy candidates are retired. Choose a reviewed source at or above the floor."
+    )
 
 
 def pages(repository, route, key, *, page_size=100):
@@ -221,57 +204,25 @@ def run_identity(repository, run, *, current_run=0):
         )
 
 
-def component_record(
-    repository, source, component, run, jobs, items, *, consumer="release-candidate"
-):
-    job = latest(jobs, PRODUCERS[consumer].jobs[component][0])
+def component_record(repository, source, component, run, jobs, items):
+    job = latest(jobs, PRODUCERS["release-candidate"].jobs[component][0])
     payload = original(items, artifacts.name(component, source), run, job)
-    sidecars = [
-        item
-        for item in items
-        if item.get("name") == artifacts.receipt_name(component, source)
-        and not item.get("expired")
-    ]
-    if sidecars or consumer != "legacy-release-candidate":
-        sidecar = original(items, artifacts.receipt_name(component, source), run, job)
-        record = read_json(repository, sidecar, "receipt.json")
-        receipt = record.get("source_receipt", {})
-        if (
-            type(record.get("schema")) is not int
-            or record.get("schema") != 1
-            or record.get("component") != component
-            or record.get("identity") != source
-            or record.get("artifact_id") != payload["id"]
-            or record.get("artifact_digest") != payload["digest"]
-        ):
-            raise ValueError("Candidate sidecar does not bind its original payload")
-    else:
-        # The below-floor transition retains byte verification for old payloads
-        # that predate sidecars. Never execute or relabel their source code.
-        with tempfile.TemporaryDirectory(
-            prefix="legacy-release-candidate-"
-        ) as directory:
-            archive = Path(directory) / "original.zip"
-            artifacts.download_zip(repository, payload, archive)
-            with zipfile.ZipFile(archive) as bundle:
-                if (
-                    set(bundle.namelist()) != {"identity.json", "payload.tar.gz"}
-                    or len(bundle.namelist()) != 2
-                ):
-                    raise ValueError("Unexpected legacy candidate archive members")
-                receipt = json.loads(bundle.read("identity.json"))
-                digest = hashlib.sha256()
-                with bundle.open("payload.tar.gz") as stream:
-                    for block in iter(lambda: stream.read(1024 * 1024), b""):
-                        digest.update(block)
-                if receipt.get("sha256") != digest.hexdigest():
-                    raise ValueError("Legacy candidate payload checksum mismatch")
-    legacy = consumer == "legacy-release-candidate"
+    sidecar = original(items, artifacts.receipt_name(component, source), run, job)
+    record = read_json(repository, sidecar, "receipt.json")
+    receipt = record.get("source_receipt", {})
+    if (
+        type(record.get("schema")) is not int
+        or record.get("schema") != 1
+        or record.get("component") != component
+        or record.get("identity") != source
+        or record.get("artifact_id") != payload["id"]
+        or record.get("artifact_digest") != payload["digest"]
+    ):
+        raise ValueError("Candidate sidecar does not bind its original payload")
     if (
         not artifacts.valid_receipt(receipt, component, source)
-        or not PRODUCERS[consumer].matches_receipt(receipt)
-        or receipt.get("label") not in ((None, "") if legacy else ("",))
-        or (legacy and receipt.get("tier") is not None)
+        or not PRODUCERS["release-candidate"].matches_receipt(receipt)
+        or receipt.get("label") != ""
         or receipt.get("source_commit") != source
         or receipt["source_run_attempt"] != job["run_attempt"]
     ):
@@ -572,32 +523,12 @@ def preflight(
     source = source or control
     mode = source_policy(repository, source, control, floor=floor)
     version, minimum = source_version(repository, source)
-    if mode == "legacy":
-        if candidates_only:
-            raise ValueError(
-                "Below-floor sources use the expiring legacy release path; candidates_only requires the new source capabilities"
-            )
-        from tools.prepare_release import legacy_candidate_runs
-
-        runs = legacy_candidate_runs(
-            repository,
-            source,
-            candidate_run or None,
-            consumer="legacy-release-candidate",
+    found = find(repository, source, candidate_run, floor=floor)
+    runs = {name: found["run_id"] for name in COMPONENTS} if found else {}
+    if publish_only and not found:
+        raise ValueError(
+            "publish_only requires existing verified tested candidates and schedules no producers"
         )
-        if set(runs) != set(COMPONENTS):
-            raise ValueError(
-                "Below-floor release needs both existing verified legacy platform candidates; do not rebuild unsupported source"
-            )
-        verified_evidence(repository, source, runs, floor=floor)
-        found = None
-    else:
-        found = find(repository, source, candidate_run, floor=floor)
-        runs = {name: found["run_id"] for name in COMPONENTS} if found else {}
-        if publish_only and not found:
-            raise ValueError(
-                "publish_only requires existing verified tested candidates and schedules no producers"
-            )
     return {
         "source": source,
         "mode": mode,
@@ -610,44 +541,8 @@ def preflight(
     }
 
 
-def legacy_component(repository, source, run_id, component):
-    require_legacy(repository, source)
-    run = api(repository, f"actions/runs/{run_id}")
-    if (
-        not artifacts.trusted_run(
-            run, component, repository=repository, consumer="legacy-release-candidate"
-        )
-        or run.get("head_sha") != source
-        or run.get("status") != "completed"
-        or run.get("conclusion") != "success"
-    ):
-        raise ValueError(
-            "Legacy evidence requires original green reviewed-main push producers"
-        )
-    jobs = original_jobs(repository, run)
-    items = pages(repository, f"actions/runs/{run_id}/artifacts", "artifacts")
-    record = component_record(
-        repository,
-        source,
-        component,
-        run,
-        jobs,
-        items,
-        consumer="legacy-release-candidate",
-    )
-    version, minimum = source_version(repository, source)
-    if (
-        record["distribution"]["version"] != version
-        or record["distribution"]["build_number"] < minimum
-    ):
-        raise ValueError(
-            "Legacy candidate distribution differs from immutable source version"
-        )
-    return record
-
-
 def verified_evidence(repository, source, platform_runs, *, floor=None, current_run=0):
-    """Shared T5 adapter; the expiring legacy exception remains explicit."""
+    """Requalify the original release-tier tested index for T5 publication."""
     floor = os.environ.get("RELEASE_SOURCE_FLOOR", "") if floor is None else floor
     control = api(repository, "commits/main")["sha"]
     mode = source_policy(repository, source, control, floor=floor)
@@ -655,62 +550,34 @@ def verified_evidence(repository, source, platform_runs, *, floor=None, current_
         not positive(run) for run in platform_runs.values()
     ):
         raise ValueError("Evidence requires both original platform producer runs")
-    if mode == "release":
-        if len(set(platform_runs.values())) != 1:
-            raise ValueError(
-                "Release platforms must share one fully tested candidate index"
-            )
-        record = verify(
-            repository,
-            source,
-            platform_runs["linux-app"],
-            floor=floor,
-            current_run=current_run,
+    if len(set(platform_runs.values())) != 1:
+        raise ValueError(
+            "Release platforms must share one fully tested candidate index"
         )
-        return {
-            "schema": 1,
-            "mode": mode,
-            "source": source,
-            "source_floor": floor,
-            "candidate_runs": platform_runs,
-            "components": record["components"],
-            "index": record,
-        }
-    components = {
-        component: legacy_component(repository, source, run_id, component)
-        for component, run_id in platform_runs.items()
-    }
-    if (
-        components["linux-app"]["distribution"]
-        != components["macos-app"]["distribution"]
-    ):
-        raise ValueError("Legacy platform distribution identities differ")
+    record = verify(
+        repository,
+        source,
+        platform_runs["linux-app"],
+        floor=floor,
+        current_run=current_run,
+    )
     return {
         "schema": 1,
         "mode": mode,
         "source": source,
         "source_floor": floor,
         "candidate_runs": platform_runs,
-        "components": components,
-        "legacy_expires_at": json.loads(POLICY.read_text())["legacy_expires_at"],
+        "components": record["components"],
+        "index": record,
     }
 
 
-def require_legacy(repository, source):
-    control = api(repository, "commits/main")["sha"]
-    if source_policy(repository, source, control) != "legacy":
-        raise ValueError(
-            "Legacy candidate acceptance is restricted to an unexpired below-floor source"
-        )
-
-
 def authorize(repository, source, run_id, component):
-    """Only packaging consumers may select the expiring below-floor exception."""
+    """Packaging requires a reviewed source and the original tested release run."""
+    if component not in COMPONENTS:
+        raise ValueError("Unknown release application component")
     control = api(repository, "commits/main")["sha"]
-    mode = source_policy(repository, source, control)
-    if mode == "legacy":
-        legacy_component(repository, source, run_id, component)
-        return "legacy-release-candidate"
+    source_policy(repository, source, control)
     verify(
         repository,
         source,

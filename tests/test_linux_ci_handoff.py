@@ -133,8 +133,10 @@ def test_archive_rejects_untrusted_source_links(tmp_path, target):
 
 def test_ci_identity_is_input_based_and_does_not_hash_a_rebuilt_ci_image(tmp_path):
     recipe = tmp_path / "Dockerfile"
-    recipe.write_text(
-        "FROM sdk AS application-base\nFROM application-base AS application-dependencies\nFROM application-dependencies AS ci\nRUN tools\nFROM application-dependencies AS tested\nRUN app\n"
+    recipe.write_bytes(
+        (
+            Path(__file__).resolve().parents[1] / "packaging/build.Dockerfile"
+        ).read_bytes()
     )
     qualification = tmp_path / "qualification.json"
     qualification.write_text('{"original_producer":42}')
@@ -144,14 +146,17 @@ def test_ci_identity_is_input_based_and_does_not_hash_a_rebuilt_ci_image(tmp_pat
         first = handoff.input_identity(
             "verified-sdk", qualification, recipe, "20261001T000000Z"
         )
-        recipe.write_text(recipe.read_text().replace("RUN app", "RUN different app"))
+        assert first["ci_recipe_sha256"] == handoff.digest(recipe)
+        # Application source is mounted after the tooling image is built.
+        (tmp_path / "application.cpp").write_text("new application bytes")
         assert (
             handoff.input_identity(
                 "verified-sdk", qualification, recipe, "20261001T000000Z"
             )
             == first
         )
-        recipe.write_text(recipe.read_text().replace("RUN tools", "RUN new tools"))
+        with recipe.open("a") as stream:
+            stream.write("\nRUN printf 'new CI tooling'\n")
         assert (
             handoff.input_identity(
                 "verified-sdk", qualification, recipe, "20261001T000000Z"

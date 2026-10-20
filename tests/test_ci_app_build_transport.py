@@ -85,16 +85,9 @@ def test_registry_failure_is_not_permission_to_compile_uncached():
         transport.prepare("teng-lin/open-foresight", request=request)
 
 
-@pytest.mark.parametrize(
-    "name,job",
-    [
-        ("macos.yml", "linux-bundle"),
-    ],
-)
-def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consumed(
-    name, job
-):
-    workflow = yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
+@pytest.mark.parametrize("job", ["linux-build", "linux-test"])
+def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consumed(job):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/macos.yml").read_text())
     selected = workflow["jobs"][job]
     steps = selected["steps"]
     setup = next(
@@ -113,25 +106,25 @@ def test_shared_daemon_is_provisioned_before_sdk_load_and_seed_is_always_consume
         if step.get("uses", "").startswith("docker/setup-buildx-action@")
     ]
     assert len(builders) == 1 and builders[0]["with"]["driver"] == "docker"
-    seed = next(
-        step for step in steps if "ci_app_dependency_seed.py" in step.get("run", "")
+    transport_step = next(
+        step for step in steps if "ci_app_build_transport.py" in step.get("run", "")
     )
-    assert seed["env"]["GH_TOKEN"] == "${{ github.token }}"
-    builds = [
-        step["with"]
-        for step in steps
-        if step.get("with", {}).get("file") == "packaging/build.Dockerfile"
-    ]
-    for build in builds:
-        assert build["build-contexts"] == "appdeps_seed=./build/app-dependency-seed"
-        assert "steps.app-cache.outputs.cache" in build["cache-from"]
-        assert "steps.app-cache.outputs.legacy_cache" in build["cache-from"]
-        assert "steps.sdk.outputs.cache" not in build["cache-from"]
-        assert "REQUIRE_DEPENDENCY_REUSE=1" in build["build-args"]
-    exporters = [build for build in builds if "cache-to" in build]
-    assert not exporters
+    assert '--repository "$GITHUB_REPOSITORY"' in transport_step["run"]
+    assert "--ci" in transport_step["run"]
+    script = (ROOT / "tools/build_linux_container.sh").read_text()
+    assert "tools/ci_app_dependency_seed.py" in script
+    assert "--verify-existing" in script
+    assert "--target ci" in script
+    assert "appdeps_seed=$task_seed" in script
+    for cache in (
+        "ci-tools-buildcache-v1",
+        "app-deps-buildcache-v1",
+        "app-buildcache-x86-64",
+    ):
+        assert cache in script
+    assert "REQUIRE_DEPENDENCY_REUSE=1" in script
+    assert "--cache-to" not in script
     assert selected["permissions"]["packages"] == "read"
-    assert "github.ref == 'refs/heads/main'" in selected["if"]
 
 
 def test_new_cache_absence_retains_original_seed_and_does_not_republish_it(capsys):

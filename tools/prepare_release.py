@@ -14,70 +14,21 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools.app_version import PUBSPEC, SOURCE, read_version, stale
-from tools.ci_artifacts import (
-    api,
-    name,
-    trusted_run,
-    application_jobs,
-    application_descriptor,
-)
+from tools.ci_artifacts import api
 from tools.github_release import release_for_tag
-
-
-def legacy_candidate_runs(repository, commit, run_id=None, *, consumer="artifact-pull"):
-    if consumer == "legacy-release-candidate":
-        from tools.ci_release_candidates import require_legacy
-
-        require_legacy(repository, commit)
-    result = {}
-    for component in ("linux-app", "macos-app"):
-        artifact_name = name(component, commit)
-        artifacts = api(
-            repository, f"actions/artifacts?name={artifact_name}&per_page=100"
-        )["artifacts"]
-        for artifact in artifacts:
-            if artifact["expired"] or artifact["name"] != artifact_name:
-                continue
-            producer = artifact["workflow_run"]["id"]
-            if run_id is not None and producer != run_id:
-                continue
-            run = api(repository, f"actions/runs/{producer}")
-            if consumer == "legacy-release-candidate" and (
-                run.get("status") != "completed" or run.get("conclusion") != "success"
-            ):
-                continue
-            if (
-                (run["head_sha"] == commit or run.get("event") == "workflow_dispatch")
-                and trusted_run(
-                    run, component, repository=repository, consumer=consumer
-                )
-                and application_jobs(
-                    repository, run, component, artifact, consumer=consumer
-                )
-            ):
-                result[component] = producer
-                break
-    return result
 
 
 def candidate_runs(repository, commit, run_id=None, *, consumer="release-preparation"):
     if consumer not in ("release-preparation", "release-candidate"):
-        return legacy_candidate_runs(repository, commit, run_id, consumer=consumer)
+        raise ValueError(
+            "Only fully tested release-tier candidate discovery is supported"
+        )
     from tools import ci_release_candidates as tested
 
     if consumer == "release-candidate" and not os.environ.get("RELEASE_SOURCE_FLOOR"):
-        # Allocation must not count main/preview bundles while floor setup is
-        # pending; preflight itself always fails closed without the merge SHA.
         return {}
-    if consumer == "release-preparation":
-        control = api(repository, "commits/main")["sha"]
-        if tested.source_policy(repository, commit, control) == "legacy":
-            runs = legacy_candidate_runs(
-                repository, commit, run_id, consumer="legacy-release-candidate"
-            )
-            for component, producer in runs.items():
-                tested.legacy_component(repository, commit, producer, component)
-            return runs
+    control = api(repository, "commits/main")["sha"]
+    tested.source_policy(repository, commit, control)
     record = tested.find(
         repository,
         commit,
@@ -91,67 +42,18 @@ def candidate_runs(repository, commit, run_id=None, *, consumer="release-prepara
     )
 
 
-def candidates_ready(repository, commit, run_id=None):
-    return len(candidate_runs(repository, commit, run_id)) == 2
-
-
-def require_candidates(repository, commit, wait, fresh=False, candidate_run=0):
-    # This consumer never starts a producer. A missing output is an actionable
-    # artifact problem, not authorization to rebuild both platforms.
-    if candidate_run < 0:
-        raise ValueError("Candidate run must be a positive run ID")
-    deadline = time.monotonic() + wait
-    while True:
-        runs = candidate_runs(repository, commit, candidate_run or None)
-        if len(runs) == 2:
-            identities = [
-                application_descriptor(
-                    repository, component, commit, run, consumer="release-preparation"
-                )
-                for component, run in runs.items()
-            ]
-            if identities[0] != identities[1]:
-                raise ValueError(
-                    "Platform candidates have different distribution identities; recover only the missing matching output"
-                )
-            print(
-                f"Reuse verified exact-source platform candidates: {runs}", flush=True
-            )
-            return runs
-        active = (
-            [api(repository, f"actions/runs/{candidate_run}")]
-            if candidate_run
-            else api(
-                repository,
-                "actions/runs?branch=main&event=workflow_dispatch&per_page=100",
-            )["workflow_runs"]
+def verified_candidates(repository, commit, candidate_run):
+    """Read the exact completed candidate once; packaging never waits or builds."""
+    if type(candidate_run) is not int or candidate_run < 1:
+        raise ValueError("Release preparation requires a positive tested candidate run")
+    runs = candidate_runs(repository, commit, candidate_run)
+    if set(runs) != {"linux-app", "macos-app"} or any(
+        run != candidate_run for run in runs.values()
+    ):
+        raise ValueError(
+            "Fully tested release candidates are unavailable; no packaging or builds were started"
         )
-        pending = any(
-            run.get("status")
-            in ("queued", "in_progress", "waiting", "requested", "pending")
-            and (
-                candidate_run
-                or run.get("head_sha") == commit
-                or run.get("id") in runs.values()
-            )
-            and trusted_run(
-                run, "linux-app", repository=repository, consumer="release-preparation"
-            )
-            for run in active
-        )
-        if not pending or time.monotonic() >= deadline:
-            missing = sorted({"linux-app", "macos-app"} - runs.keys())
-            raise ValueError(
-                f"Verified candidates unavailable for {commit}: {missing}. "
-                "Preserve completed outputs; inspect existing producers, then "
-                "rerun the affected candidate gates or use release.yml candidates_only for supported sources. "
-                "Packaging never recompiles applications or SDKs."
-            )
-        print(
-            f"Waiting for existing exact-source producers; available: {runs}",
-            flush=True,
-        )
-        time.sleep(min(20, max(0, deadline - time.monotonic())))
+    return runs
 
 
 def package_release(body):
@@ -278,12 +180,11 @@ def main():
     parser.add_argument(
         "--repo", default=os.environ.get("GITHUB_REPOSITORY", "teng-lin/open-foresight")
     )
-    parser.add_argument("--wait", type=int, default=10800)
     parser.add_argument(
         "--candidate-run",
         type=int,
-        default=0,
-        help="Resume packaging from both verified candidates in this successful main run",
+        required=True,
+        help="Original completed release-tier run verified by preflight",
     )
     args = parser.parse_args()
     if not re.fullmatch(r"v\d+\.\d+\.\d+", args.tag) or stale():
@@ -300,9 +201,7 @@ def main():
         raise ValueError(
             "A new release tag must match the synchronized application version"
         )
-    candidate_run = require_candidates(
-        args.repo, commit, args.wait, candidate_run=args.candidate_run
-    )
+    candidate_run = verified_candidates(args.repo, commit, args.candidate_run)
     release = create_draft(args.repo, args.tag, commit)
     with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
         stream.write(

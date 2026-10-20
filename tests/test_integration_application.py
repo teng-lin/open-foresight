@@ -742,7 +742,7 @@ def test_pr_inrun_receipt_cannot_claim_a_different_tier_or_label(
 
 
 @pytest.mark.parametrize("purpose", ["acceptance", "package-contract"])
-@pytest.mark.parametrize("kind", ["pr", "sweep", "preview", "main", "release"])
+@pytest.mark.parametrize("kind", ["pr", "sweep", "preview", "release"])
 def test_own_run_consumers_require_their_actual_producer_tier(
     tmp_path, producer, purpose, kind
 ):
@@ -753,6 +753,7 @@ def test_own_run_consumers_require_their_actual_producer_tier(
             path=".github/workflows/preview-packages.yml", event="schedule"
         )
         producer[5]["name"] = "build / linux-build"
+        producer[4]["name"] = f"preview-linux-app-{RUN}-1"
         (producer[0] / "distribution-stamp.json").write_text(
             json.dumps(
                 {
@@ -763,9 +764,6 @@ def test_own_run_consumers_require_their_actual_producer_tier(
                 }
             )
         )
-    if kind == "main":
-        producer[4]["name"] = f"main-linux-bundle-{SOURCE}"
-        producer[5]["name"] = "linux-bundle"
     if kind == "release":
         producer[3].update(
             path=".github/workflows/release.yml", event="workflow_dispatch"
@@ -774,18 +772,13 @@ def test_own_run_consumers_require_their_actual_producer_tier(
         producer[5]["name"] = "candidates / linux-build"
     changed = changed_receipt(
         producer,
-        tier="sweep" if kind == "main" else kind,
+        tier=kind,
         label="nightly" if kind == "preview" else "",
     )
-    if kind == "main" and purpose == "package-contract":
-        with pytest.raises(ValueError, match="Legacy main"):
-            restore(tmp_path, changed, purpose=purpose, main_candidate=True)
-        return
     _, restored, qualification = restore(
         tmp_path,
         changed,
         purpose=purpose,
-        main_candidate=kind == "main",
         label="nightly" if kind == "preview" else "",
     )
     assert (restored / "application.tar.gz").is_file()

@@ -19,6 +19,11 @@ import zipfile
 from tools import ci_artifacts as artifacts
 from tools import ci_changes as changes
 from tools import ci_registry as registry
+from test_ci_release_candidates import (
+    producer as producer,
+    SOURCE as CANDIDATE_SOURCE,
+    REPOSITORY as CANDIDATE_REPOSITORY,
+)
 
 
 def pack_fixture(*args):
@@ -293,7 +298,11 @@ class ProvenanceTests(unittest.TestCase):
         self.assertFalse(artifacts.trusted_run(manual, "macos-sdk", own_head="b" * 40))
 
     def test_candidate_context_is_independent_of_sibling_workflow_failures(self):
-        run = self.run_record(path=".github/workflows/macos.yml", conclusion="success")
+        run = self.run_record(
+            path=".github/workflows/release.yml",
+            event="workflow_dispatch",
+            conclusion="success",
+        )
         self.assertTrue(artifacts.trusted_run(run, "macos-app"))
         for change in (
             {"head_branch": "feature"},
@@ -503,32 +512,6 @@ class ProvenanceTests(unittest.TestCase):
                         "first successful component",
                     )
 
-    def test_release_rejects_candidate_for_another_commit(self):
-        run = self.run_record(
-            path=".github/workflows/macos.yml", conclusion="success", head_sha="b" * 40
-        )
-        listed = {
-            "artifacts": [
-                {
-                    "id": 5,
-                    "name": artifacts.name("macos-app", "a" * 40),
-                    "expired": False,
-                    "workflow_run": {"id": 123},
-                    "created_at": "2026-10-18T01:00:10Z",
-                }
-            ]
-        }
-        with (
-            patch.object(artifacts, "api", side_effect=[listed, run]),
-            patch.object(artifacts.subprocess, "run") as download,
-        ):
-            self.assertFalse(
-                artifacts.pull(
-                    "teng-lin/open-foresight", "macos-app", "a" * 40, Path("/unused")
-                )
-            )
-            download.assert_not_called()
-
 
 class SelectionTests(unittest.TestCase):
     def assert_selection(self, paths, expected):
@@ -561,7 +544,7 @@ class SelectionTests(unittest.TestCase):
         for path in (*changes.PACKAGING_FILES, "packaging/ci/test-debian.sh"):
             with self.subTest(path=path):
                 self.assert_selection(
-                    [path], ["packaging", "linux-build", "linux-test", "linux-bundle"]
+                    [path], ["packaging", "linux-build", "linux-test"]
                 )
 
     def test_shared_unknown_and_selector_changes_keep_full_validation(self):
@@ -606,26 +589,22 @@ class SelectionTests(unittest.TestCase):
             ["apps/desktop/linux/a.cc"],
             ["native/a.cpp"],
         ):
-            for main in (False, True):
+            for _main in (False, True):
                 selected = changes.select_gates(paths)
                 jobs = {
                     "changes": {"result": "success"},
                     **{
-                        name: {
-                            "result": "success"
-                            if required and (name != "linux-bundle" or main)
-                            else "skipped"
-                        }
+                        name: {"result": "success" if required else "skipped"}
                         for name, required in selected.items()
                     },
                 }
-                changes.check_gates(jobs, selected, main)
+                changes.check_gates(jobs, selected)
                 for name in jobs:
                     for result in ("success", "cancelled", "failure", "skipped"):
                         if result != jobs[name]["result"]:
                             with self.assertRaises(ValueError):
                                 changes.check_gates(
-                                    {**jobs, name: {"result": result}}, selected, main
+                                    {**jobs, name: {"result": result}}, selected
                                 )
 
     def test_cli_rename_considers_removed_shared_path_and_force_selects_all(self):
@@ -693,9 +672,9 @@ class SelectionTests(unittest.TestCase):
     def test_missing_selection_or_job_fails_closed(self):
         for selected in ({}, {"macos": True}, dict.fromkeys(changes.GATES, "false")):
             with self.assertRaises(ValueError):
-                changes.check_gates({}, selected, False)
+                changes.check_gates({}, selected)
         with self.assertRaises(ValueError):
-            changes.check_gates({}, changes.select_gates([]), False)
+            changes.check_gates({}, changes.select_gates([]))
 
 
 class RegistryTests(unittest.TestCase):
@@ -767,9 +746,7 @@ def test_shared_dmg_packaging_selects_contracts_with_this_runs_linux_bundle():
     selected = changes.select_gates(["tools/create_dmg.py"])
     assert selected["packaging"]
     assert not selected["macos"]
-    assert (
-        selected["linux-build"] and selected["linux-test"] and selected["linux-bundle"]
-    )
+    assert selected["linux-build"] and selected["linux-test"]
 
 
 @pytest.mark.parametrize("artifact", [True, False])
@@ -931,3 +908,23 @@ def test_shared_dmg_packaging_selects_own_bundle_without_macos_application_compi
     assert not selected["macos"]
     assert selected["linux-build"] and selected["linux-test"]
     assert not selected["macos"]
+
+
+def test_release_rejects_candidate_for_another_commit(producer, tmp_path):
+    payload = producer.item(artifacts.name("macos-app", CANDIDATE_SOURCE))
+    producer.change(
+        artifacts.receipt_name("macos-app", CANDIDATE_SOURCE),
+        lambda record: record["source_receipt"].update(source_commit="e" * 40),
+    )
+    producer.downloads.clear()
+    with pytest.raises(ValueError, match="mismatched"):
+        artifacts.pull(
+            CANDIDATE_REPOSITORY,
+            "macos-app",
+            CANDIDATE_SOURCE,
+            tmp_path / "restored",
+            source_run=42,
+            consumer="release-preparation",
+        )
+    assert payload["id"] not in producer.downloads
+    assert not (tmp_path / "restored").exists()

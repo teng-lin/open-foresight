@@ -72,9 +72,6 @@ def check_gates(needs, selected):
             raise ValueError(
                 f"{job}: expected {expected}, got {needs.get(job, {}).get('result')}"
             )
-    allowed = ("success", "skipped") if selected else ("skipped",)
-    if needs.get("linux-bundle", {}).get("result") not in allowed:
-        raise ValueError("The stamped main candidate failed or was cancelled")
 
 
 GATES = ("linux-test", "acceptance-cpu", "acceptance-audio", "acceptance-deb")

@@ -88,9 +88,7 @@ def test_acceptance_aggregate_rejects_missing_failed_or_unexpectedly_skipped_pro
             "acceptance-deb",
         )
     }
-    jobs.update(
-        changes={"result": "success"}, **{"linux-bundle": {"result": "skipped"}}
-    )
+    jobs.update(changes={"result": "success"})
     acceptance.check_gates(jobs, selected)
     for name in jobs:
         for status in (
@@ -100,9 +98,7 @@ def test_acceptance_aggregate_rejects_missing_failed_or_unexpectedly_skipped_pro
             "success" if result == "skipped" else "skipped",
         ):
             changed = {**jobs, name: {"result": status}}
-            if (name == "linux-bundle" and status == "skipped") or (
-                name == "changes" and status == "success"
-            ):
+            if name == "changes" and status == "success":
                 continue
             with pytest.raises(ValueError):
                 acceptance.check_gates(changed, selected)
@@ -189,7 +185,7 @@ def test_common_action_restores_exact_ids_and_read_only_sdk_inputs():
     assert (
         "--artifact-id" in text and "--artifact-digest" in text and "--attempt" in text
     )
-    assert "--purpose" in text and "--main-candidate" in text
+    assert "--purpose" in text and "--main-candidate" not in text
     assert "--run-id" in text and "--artifact-digest" in text
     assert "Build SDK reference is missing" in text
     assert "--load --discard-archive" in text

@@ -1,7 +1,6 @@
 """Real receipt ZIP/checksum proofs and authoritative candidate job attempts."""
 
 import base64
-from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -22,7 +21,6 @@ REPOSITORY = "owner/repo"
 SOURCE = "1" * 40
 FLOOR = "0" * 40
 CONTROL = "3" * 40
-NOW = datetime(2026, 10, 19, tzinfo=timezone.utc)
 
 
 def zipped(member, record):
@@ -39,7 +37,6 @@ def producer(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_RUN_ID", "99")
     monkeypatch.setenv("GITHUB_REPOSITORY", REPOSITORY)
     monkeypatch.setenv("RELEASE_SOURCE_FLOOR", FLOOR)
-    monkeypatch.setattr(candidates, "utc_now", lambda: NOW)
     state = SimpleNamespace(
         items=[], blobs={}, downloads=[], requests=[], next_id=1000, floor=FLOOR
     )
@@ -275,18 +272,13 @@ def test_verified_index_reuses_original_payload_without_downloading_or_relabelin
     assert evidence["components"] == producer.record["components"]
 
 
-@pytest.mark.parametrize("legacy_source", [False, True])
 @pytest.mark.parametrize("requested_run", [None, 42])
 def test_prepare_adapter_requalifies_original_candidates_for_each_source_mode(
-    producer, monkeypatch, legacy_source, requested_run
+    producer, requested_run
 ):
-    if legacy_source:
-        legacy(producer, monkeypatch)
-        monkeypatch.setenv("RELEASE_SOURCE_FLOOR", producer.floor)
     assert prepare_release.candidate_runs(REPOSITORY, SOURCE, requested_run) == {
         component: 42 for component in candidates.COMPONENTS
     }
-    assert prepare_release.candidates_ready(REPOSITORY, SOURCE, requested_run)
     assert producer.downloads
 
 
@@ -641,44 +633,6 @@ def test_floor_is_explicit_and_reachable_from_reviewed_main(
         candidates.source_policy(REPOSITORY, SOURCE, CONTROL)
 
 
-def test_legacy_exception_expires_and_never_accepts_source_at_or_above_floor(producer):
-    policy = {
-        "schema": 1,
-        "expected_source_floor": "",
-        "legacy_expires_at": "2026-11-02T00:00:00Z",
-    }
-    assert (
-        candidates.source_policy(
-            REPOSITORY, SOURCE, CONTROL, floor="2" * 40, now=NOW, policy=policy
-        )
-        == "legacy"
-    )
-    with pytest.raises(ValueError, match="expired"):
-        candidates.source_policy(
-            REPOSITORY,
-            SOURCE,
-            CONTROL,
-            floor="2" * 40,
-            now=datetime(2026, 11, 2, tzinfo=timezone.utc),
-            policy=policy,
-        )
-    policy["expected_source_floor"] = "2" * 40
-    with pytest.raises(ValueError, match="recorded policy"):
-        candidates.source_policy(
-            REPOSITORY, SOURCE, CONTROL, floor=FLOOR, policy=policy
-        )
-    assert (
-        candidates.source_policy(
-            REPOSITORY,
-            FLOOR,
-            CONTROL,
-            floor=FLOOR,
-            policy={**policy, "expected_source_floor": FLOOR},
-        )
-        == "release"
-    )
-
-
 def test_digest_and_small_archive_checks_are_real(producer):
     item = producer.item(f"ci-release-candidate-{SOURCE}")
     producer.blobs[item["id"]] += b"changed transport bytes"
@@ -708,133 +662,6 @@ def test_manual_gpu_pending_failure_does_not_force_rebuilding_tested_candidates(
             candidate_run=42,
             publish_only=True,
         )
-
-
-def legacy(producer, monkeypatch, *, sidecars=True):
-    monkeypatch.setenv("RELEASE_SOURCE_FLOOR", "2" * 40)
-    producer.floor = "2" * 40
-    producer.run.update(
-        path=".github/workflows/macos.yml", event="push", head_sha=SOURCE
-    )
-    for component, name in (("linux-app", "linux-bundle"), ("macos-app", "macos")):
-        job = next(
-            job
-            for job in producer.jobs
-            if job["name"]
-            == candidates.PRODUCERS["release-candidate"].jobs[component][0]
-        )
-        job["name"] = name
-        payload = producer.item(artifacts.name(component, SOURCE))
-        with zipfile.ZipFile(io.BytesIO(producer.blobs[payload["id"]])) as bundle:
-            receipt = json.loads(bundle.read("identity.json"))
-            receipt.pop("tier")
-            receipt.pop("label")
-            raw = bundle.read("payload.tar.gz")
-        output = io.BytesIO()
-        with zipfile.ZipFile(output, "w") as bundle:
-            bundle.writestr("identity.json", json.dumps(receipt))
-            bundle.writestr("payload.tar.gz", raw)
-        producer.blobs[payload["id"]] = output.getvalue()
-        payload["digest"] = "sha256:" + hashlib.sha256(output.getvalue()).hexdigest()
-        producer.change(
-            artifacts.receipt_name(component, SOURCE),
-            lambda record, receipt=receipt, payload=payload: record.update(
-                source_receipt=receipt, artifact_digest=payload["digest"]
-            ),
-        )
-    if not sidecars:
-        producer.items[:] = [
-            item
-            for item in producer.items
-            if not item["name"].startswith("receipt-ci-")
-        ]
-
-
-@pytest.mark.parametrize("sidecars", [True, False])
-def test_legacy_evidence_retains_original_byte_proof_and_fixed_expiry(
-    producer, monkeypatch, sidecars
-):
-    legacy(producer, monkeypatch, sidecars=sidecars)
-    result = candidates.verified_evidence(
-        REPOSITORY, SOURCE, {name: 42 for name in candidates.COMPONENTS}
-    )
-    assert result["mode"] == "legacy"
-    assert result["legacy_expires_at"] == "2026-11-02T00:00:00Z"
-    assert "tested" not in result
-    assert (
-        candidates.authorize(REPOSITORY, SOURCE, 42, "linux-app")
-        == "legacy-release-candidate"
-    )
-    outcome = candidates.preflight(
-        REPOSITORY, CONTROL, ref="refs/heads/main", tag="v1.2.3"
-    )
-    assert outcome["mode"] == "legacy" and outcome["reuse"] == "true"
-    with pytest.raises(ValueError, match="candidates_only requires"):
-        candidates.preflight(
-            REPOSITORY,
-            CONTROL,
-            ref="refs/heads/main",
-            source=SOURCE,
-            candidates_only=True,
-        )
-    if not sidecars:
-        assert result["components"]["linux-app"]["artifact_id"] in producer.downloads
-
-
-@pytest.mark.parametrize("tamper", ["members", "payload"])
-def test_legacy_without_sidecar_still_verifies_exact_archive_and_payload_bytes(
-    producer, monkeypatch, tamper
-):
-    legacy(producer, monkeypatch, sidecars=False)
-    item = producer.item(artifacts.name("linux-app", SOURCE))
-    with zipfile.ZipFile(io.BytesIO(producer.blobs[item["id"]])) as bundle:
-        contents = {name: bundle.read(name) for name in bundle.namelist()}
-    if tamper == "members":
-        contents["unexpected.json"] = b"{}"
-    else:
-        contents["payload.tar.gz"] += b"different bytes"
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w") as bundle:
-        for name, data in contents.items():
-            bundle.writestr(name, data)
-    blob = output.getvalue()
-    producer.blobs[item["id"]] = blob
-    item.update(
-        digest="sha256:" + hashlib.sha256(blob).hexdigest(), size_in_bytes=len(blob)
-    )
-    with pytest.raises(ValueError, match="archive members|payload checksum mismatch"):
-        candidates.verified_evidence(
-            REPOSITORY, SOURCE, {name: 42 for name in candidates.COMPONENTS}
-        )
-
-
-@pytest.mark.parametrize(
-    "change",
-    [
-        {"conclusion": "failure"},
-        {"status": "in_progress"},
-        {"event": "workflow_dispatch"},
-        {"head_sha": CONTROL},
-        {"head_repository": {"full_name": "fork/repo"}},
-    ],
-)
-def test_legacy_is_not_a_backdoor_for_preview_or_failed_producers(
-    producer, monkeypatch, change
-):
-    legacy(producer, monkeypatch)
-    producer.run.update(change)
-    with pytest.raises(ValueError, match="Legacy evidence"):
-        candidates.verified_evidence(
-            REPOSITORY, SOURCE, {name: 42 for name in candidates.COMPONENTS}
-        )
-
-
-def test_legacy_below_floor_exception_cannot_be_called_for_new_source(producer):
-    with pytest.raises(ValueError, match="restricted to an unexpired below-floor"):
-        candidates.require_legacy(REPOSITORY, SOURCE)
-    assert (
-        candidates.authorize(REPOSITORY, SOURCE, 42, "linux-app") == "release-candidate"
-    )
 
 
 def test_api_json_failures_never_authorize_candidate_rebuilding(producer, monkeypatch):
@@ -1086,9 +913,7 @@ def test_explicit_source_tag_mismatch_and_unstable_source_are_rejected(
         candidates.source_version(REPOSITORY, SOURCE)
 
 
-@pytest.mark.parametrize(
-    "command", ["preflight", "receipt", "evidence", "legacy-evidence"]
-)
+@pytest.mark.parametrize("command", ["preflight", "receipt", "evidence"])
 def test_cli_runs_real_byte_proof_before_writing_outputs(
     producer, monkeypatch, tmp_path, command
 ):
@@ -1099,14 +924,11 @@ def test_cli_runs_real_byte_proof_before_writing_outputs(
     monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
     argv = [
         "ci_release_candidates.py",
-        command if command != "legacy-evidence" else "evidence",
+        command,
         "--repository",
         REPOSITORY,
     ]
-    if command == "legacy-evidence":
-        legacy(producer, monkeypatch)
-        argv += ["--tag", "v1.2.3"]
-    elif command in ("preflight", "evidence"):
+    if command in ("preflight", "evidence"):
         producer.index()
         argv += ["--source", SOURCE, "--candidates-only"]
     else:
@@ -1158,10 +980,7 @@ def test_cli_runs_real_byte_proof_before_writing_outputs(
                 name: 42 for name in candidates.COMPONENTS
             }
             assert "tested" not in value
-            if command == "evidence":
-                assert value["original_candidate"]["run_id"] == 42
-            else:
-                assert value["mode"] == "legacy" and "original_candidate" not in value
+            assert value["original_candidate"]["run_id"] == 42
     assert producer.downloads
 
 
@@ -1211,12 +1030,9 @@ def test_cli_never_forwards_evidence_for_missing_original(
 
 
 @pytest.mark.parametrize("minimum", [8, 999])
-@pytest.mark.parametrize("mode", ["release", "legacy"])
 def test_direct_verifiers_bind_immutable_source_version_floor(
-    producer, monkeypatch, mode, minimum
+    producer, monkeypatch, minimum
 ):
-    if mode == "legacy":
-        legacy(producer, monkeypatch)
     original = candidates.api
 
     def api(repository, route):
@@ -1231,12 +1047,9 @@ def test_direct_verifiers_bind_immutable_source_version_floor(
 
     monkeypatch.setattr(candidates, "api", api)
     with pytest.raises(ValueError, match="immutable source version"):
-        if mode == "release":
-            candidates.collect(
-                REPOSITORY, SOURCE, producer.run, floor=FLOOR, receipt_attempt=1
-            )
-        else:
-            candidates.legacy_component(REPOSITORY, SOURCE, 42, "linux-app")
+        candidates.collect(
+            REPOSITORY, SOURCE, producer.run, floor=FLOOR, receipt_attempt=1
+        )
 
 
 @pytest.mark.parametrize("value", [None, "bad", "sha256:" + "g" * 64, True])
@@ -1361,21 +1174,52 @@ def test_required_job_identity_cannot_be_ambiguous_or_untyped(field, value):
         candidates.latest(jobs, "required")
 
 
-def test_legacy_missing_platform_is_actionable_without_rebuilding(
-    producer, monkeypatch
+@pytest.mark.parametrize("entry", ["preflight", "prepare", "authorize", "evidence"])
+def test_retired_below_floor_sources_are_rejected_without_reusing_old_main_bytes(
+    producer, monkeypatch, entry
 ):
-    legacy(producer, monkeypatch)
-    producer.items[:] = [
-        item
-        for item in producer.items
-        if item["name"] != artifacts.name("macos-app", SOURCE)
-    ]
-    with pytest.raises(ValueError, match="both existing verified legacy"):
-        candidates.preflight(REPOSITORY, CONTROL, ref="refs/heads/main", tag="v1.2.3")
+    monkeypatch.setenv("RELEASE_SOURCE_FLOOR", "2" * 40)
+    producer.downloads.clear()
+    with pytest.raises(ValueError, match="below RELEASE_SOURCE_FLOOR"):
+        if entry == "preflight":
+            candidates.preflight(
+                REPOSITORY, CONTROL, ref="refs/heads/main", tag="v1.2.3"
+            )
+        elif entry == "prepare":
+            prepare_release.candidate_runs(REPOSITORY, SOURCE)
+        elif entry == "authorize":
+            candidates.authorize(REPOSITORY, SOURCE, 42, "linux-app")
+        else:
+            candidates.verified_evidence(
+                REPOSITORY,
+                SOURCE,
+                {component: 42 for component in candidates.COMPONENTS},
+            )
+    assert not producer.downloads
 
 
-def test_candidate_clock_is_timezone_aware():
-    assert candidates.utc_now().tzinfo is not None
+def test_default_application_pull_cannot_bypass_the_fully_tested_index(
+    producer, tmp_path
+):
+    index = producer.item(f"ci-release-candidate-{SOURCE}")
+    producer.items.remove(index)
+    with pytest.raises(ValueError, match="original upload"):
+        artifacts.pull(
+            REPOSITORY, "linux-app", SOURCE, tmp_path / "untrusted", source_run=42
+        )
+    assert not (tmp_path / "untrusted").exists()
+
+
+@pytest.mark.parametrize("field,value", [("build_number", 8), ("version", "9.9.9")])
+def test_candidate_index_rejects_mixed_platform_distribution_identity(
+    producer, field, value
+):
+    producer.change(
+        artifacts.receipt_name("macos-app", SOURCE),
+        lambda record: record["source_receipt"]["distribution"].update({field: value}),
+    )
+    with pytest.raises(ValueError, match="different stamped identities"):
+        candidates.verify(REPOSITORY, SOURCE, 42)
 
 
 @pytest.mark.parametrize(
@@ -1601,18 +1445,6 @@ def test_public_release_preparation_rejects_latest_failed_gate_before_payload(
     assert not (tmp_path / "restored").exists()
 
 
-def test_legacy_descriptor_without_sidecar_reenters_public_authorization(
-    producer, monkeypatch
-):
-    legacy(producer, monkeypatch, sidecars=False)
-    assert artifacts.application_descriptor(
-        REPOSITORY, "linux-app", SOURCE, 42, consumer="release-preparation"
-    ) == {"version": "1.2.3", "build_number": 7}
-    assert (
-        producer.item(artifacts.name("linux-app", SOURCE))["id"] in producer.downloads
-    )
-
-
 def test_sdk_pull_keeps_existing_consumer_behavior(monkeypatch, tmp_path):
     requests = []
     monkeypatch.setattr(artifacts, "approved_original", lambda *args: None)
@@ -1642,3 +1474,24 @@ def test_authorized_release_pull_still_checks_downloaded_zip_bytes(producer, tmp
         )
     assert payload["id"] in producer.downloads
     assert not (tmp_path / "restored").exists()
+@pytest.mark.parametrize(
+    "distribution",
+    [
+        {"version": "1.2.3", "build_number": True},
+        {"version": "1.2.3", "build_number": 0},
+        {"version": "1.2.3-dev", "build_number": 7},
+        {"version": "1.2.3", "build_number": 3},
+    ],
+)
+def test_candidate_index_rejects_invalid_or_below_source_distribution(
+    producer, distribution
+):
+    for component in candidates.COMPONENTS:
+        producer.change(
+            artifacts.receipt_name(component, SOURCE),
+            lambda record: record["source_receipt"].update(distribution=distribution),
+        )
+    with pytest.raises(
+        ValueError, match="distribution identity|immutable source version"
+    ):
+        candidates.verify(REPOSITORY, SOURCE, 42)

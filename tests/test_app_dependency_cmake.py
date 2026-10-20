@@ -218,7 +218,7 @@ def test_dependency_recipe_and_layer_exclude_application_revision():
     )
     dockerfile = (ROOT / "packaging/build.Dockerfile").read_text()
     dependencies = dockerfile.split("AS application-dependencies\n")[1].split(
-        "FROM application-dependencies AS tested"
+        "FROM application-dependencies AS ci"
     )[0]
     assert "COPY . ." not in dependencies
     assert "SOURCE_REVISION" not in dependencies

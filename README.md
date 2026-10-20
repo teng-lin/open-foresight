@@ -220,6 +220,7 @@ and Whisper runtimes, use Docker with BuildKit and Buildx on an x86-64 Linux hos
 ```sh
 tools/build_linux_sdk.sh
 tools/build_linux_container.sh
+# Add --build-only or --test-only to run either phase with the same archived inputs.
 ./build/portable/dist/open-foresight/open-foresight
 ```
 

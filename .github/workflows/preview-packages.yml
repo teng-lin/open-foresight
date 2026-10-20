@@ -124,10 +124,16 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.13'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: preview-linux-portable
-          path: artifacts
+      - name: Restore the exact verified in-run preview bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.plan.outputs.source }}
+          BUILD_LABEL: ${{ needs.plan.outputs.label }}
+          ARTIFACT_ID: ${{ needs.build.outputs.linux_bundle_id }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.linux_bundle_digest }}
+          PRODUCER_ATTEMPT: ${{ needs.build.outputs.linux_bundle_attempt }}
+        run: |
+          python -m tools.integration_application --source "$SOURCE" --head-repository "$GITHUB_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --label "$BUILD_LABEL" --purpose package-contract --directory artifacts
       - name: Package and test native installation lifecycle and version ordering
         env:
           FORMAT: ${{ matrix.format }}
@@ -189,8 +195,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           dpkg-deb -x dist/packages/*.deb build/cloud-package
-          python tools/ci_artifacts.py pull --component linux-sdk --prefix build/cloud-sdk
-          python tools/linux_sdk_artifacts.py resolve --prefix build/cloud-sdk --discard-archive
+          python tools/ci_linux_sdk_reference.py restore --source "${{ needs.plan.outputs.source }}" --reference artifacts/sdk-reference.json --directory build/cloud-sdk
           task_sdk=$(python -c 'import json; print(json.load(open("build/cloud-sdk/image.json"))["image"])')
           docker run --rm -v "$PWD:/work" -w /work "$task_sdk" python3 tools/verify_preview_cloud.py --bundle build/cloud-package/opt/open-foresight --output reports/cloud.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -299,10 +304,16 @@ jobs:
         with:
           pattern: preview-installer-*
           path: packages
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
-        with:
-          name: preview-linux-portable
-          path: packages/portable
+      - name: Restore the exact tested portable preview for download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.plan.outputs.source }}
+          BUILD_LABEL: ${{ needs.plan.outputs.label }}
+          ARTIFACT_ID: ${{ needs.build.outputs.linux_bundle_id }}
+          ARTIFACT_DIGEST: ${{ needs.build.outputs.linux_bundle_digest }}
+          PRODUCER_ATTEMPT: ${{ needs.build.outputs.linux_bundle_attempt }}
+        run: |
+          python -m tools.integration_application --source "$SOURCE" --head-repository "$GITHUB_REPOSITORY" --artifact-id "$ARTIFACT_ID" --artifact-digest "$ARTIFACT_DIGEST" --attempt "$PRODUCER_ATTEMPT" --label "$BUILD_LABEL" --purpose package-contract --directory packages/portable
       - name: Write provenance and acceptance summary
         env:
           VERSION: ${{ needs.plan.outputs.version }}

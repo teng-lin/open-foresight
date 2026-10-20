@@ -1,8 +1,9 @@
 # Linux packages and CI
 
-Main CI builds and tests one portable x86-64 application bundle.
-`.github/workflows/linux-packages.yml` retrieves that exact-commit candidate and
-wraps it with the native tools for Debian/Ubuntu, Fedora and Arch/Omarchy.
+Main CI builds and tests one portable x86-64 application bundle for its in-run
+checks. Release candidates are produced on demand through `release.yml`;
+`.github/workflows/linux-packages.yml` retrieves the exact tested release-tier
+candidate and wraps it with native tools for Debian/Ubuntu, Fedora and Arch/Omarchy.
 The release coordinator, `.github/workflows/release.yml`, calls both platform
 packagers after successful candidates exist for one reviewed main commit. It
 creates the tag and a draft, then every packaging job checks out that exact tag.
@@ -101,6 +102,7 @@ Run from a clean checkout with Docker/BuildKit available:
 ```sh
 tools/build_linux_sdk.sh
 tools/build_linux_container.sh
+# Add --build-only or --test-only to run either phase with the same archived inputs.
 export SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)
 python3 packaging/package_linux.py --bundle build/portable/dist/open-foresight \
   --format tar --version 0.1.0 --release 1

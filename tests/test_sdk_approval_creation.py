@@ -12,6 +12,11 @@ from tools import ci_artifacts as artifacts
 from tools import create_sdk_approval as create
 from test_sdk_approval_bridge import original as original
 from test_sdk_approval_bridge import REPOSITORY, PRODUCER, FINAL
+from test_ci_release_candidates import (
+    producer as tested_producer,
+    SOURCE as CANDIDATE_SOURCE,
+    REPOSITORY as CANDIDATE_REPOSITORY,
+)
 
 
 @pytest.fixture(autouse=True, params=[None, "refs/heads/main", "refs/pull/987/merge"])
@@ -24,6 +29,18 @@ def explicit_ci_metadata(request, monkeypatch):
         monkeypatch.setenv("GITHUB_REF", request.param)
     else:
         monkeypatch.delenv("GITHUB_REF", raising=False)
+    return request.param
+
+
+@pytest.fixture
+def producer(tested_producer, explicit_ci_metadata, monkeypatch):
+    # Packing supplies original attempt 1; the consuming rerun remains attempt 7.
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "7")
+    if explicit_ci_metadata:
+        monkeypatch.setenv("GITHUB_REF", explicit_ci_metadata)
+    else:
+        monkeypatch.delenv("GITHUB_REF", raising=False)
+    return tested_producer
 
 
 def git_boundary(original, monkeypatch):
@@ -201,68 +218,44 @@ def test_approval_cli_replaces_only_requested_component(
         assert entries[0] == {"component": "macos-sdk", "original": True}
 
 
-@pytest.fixture
-def application_receipt(original):
-    records = original["records"]
-    source = PRODUCER
-    component = "linux-app"
-    record = rewrite_receipt(
-        original,
-        lambda value: value.update(
-            component=component,
-            identity=source,
-            source_receipt={
-                **value["source_receipt"],
-                "component": component,
-                "identity": source,
-                "source_commit": source,
-                "distribution": {"version": "1.2.3", "build_number": 42},
-            },
-        ),
-    )
-    payload, sidecar, run = (
-        records["actions/artifacts/5"],
-        records["actions/artifacts/6"],
-        records["actions/runs/99"],
-    )
-    payload["name"], sidecar["name"] = (
-        artifacts.name(component, source),
-        artifacts.receipt_name(component, source),
-    )
-    run.update(path=".github/workflows/macos.yml", event="push", head_branch="main")
-    original["job"]["name"] = "linux-bundle"
-    records[f"actions/artifacts?name={sidecar['name']}&per_page=100"] = {
-        "artifacts": [sidecar]
-    }
-    return record
-
-
-def test_application_descriptor_uses_real_verified_sidecar_not_large_payload(
-    original, application_receipt
-):
-    assert artifacts.application_descriptor(REPOSITORY, "linux-app", PRODUCER, 99) == {
-        "version": "1.2.3",
-        "build_number": 42,
-    }
-    assert original["downloads"] == [6]
+def test_application_descriptor_uses_real_verified_sidecar_not_large_payload(producer):
+    payload = producer.item(artifacts.name("linux-app", CANDIDATE_SOURCE))
+    sidecar = producer.item(artifacts.receipt_name("linux-app", CANDIDATE_SOURCE))
+    assert artifacts.application_descriptor(
+        CANDIDATE_REPOSITORY,
+        "linux-app",
+        CANDIDATE_SOURCE,
+        42,
+        consumer="release-preparation",
+    ) == {"version": "1.2.3", "build_number": 7}
+    assert sidecar["id"] in producer.downloads
+    assert payload["id"] not in producer.downloads
 
 
 @pytest.mark.parametrize(
     "failure", ["digest", "receipt", "attempt", "version", "build-number", "archive"]
 )
 def test_application_descriptor_rejects_corrupt_or_unqualified_metadata(
-    original, application_receipt, failure
+    producer, failure
 ):
+    sidecar = producer.item(artifacts.receipt_name("linux-app", CANDIDATE_SOURCE))
     if failure == "digest":
-        original["records"]["actions/artifacts/5"]["digest"] = "sha256:" + "0" * 64
+        producer.item(artifacts.name("linux-app", CANDIDATE_SOURCE))["digest"] = (
+            "sha256:" + "0" * 64
+        )
     elif failure == "attempt":
-        original["job"]["run_attempt"] = 2
+        producer.jobs[0]["run_attempt"] = 2
     elif failure == "archive":
-        rewrite_receipt(original, extra=True)
+        buffer = io.BytesIO(producer.blobs[sidecar["id"]])
+        with zipfile.ZipFile(buffer, "a") as bundle:
+            bundle.writestr("unexpected.json", "{}")
+        producer.blobs[sidecar["id"]] = buffer.getvalue()
+        sidecar["digest"] = "sha256:" + hashlib.sha256(buffer.getvalue()).hexdigest()
+        sidecar["size_in_bytes"] = len(buffer.getvalue())
     else:
 
-        def change(value):
-            receipt = value["source_receipt"]
+        def change(record):
+            receipt = record["source_receipt"]
             if failure == "receipt":
                 receipt["schema"] = 2
             else:
@@ -270,37 +263,48 @@ def test_application_descriptor_rejects_corrupt_or_unqualified_metadata(
                     "version" if failure == "version" else "build_number"
                 ] = "bad" if failure == "version" else True
 
-        rewrite_receipt(original, change)
-    with pytest.raises(ValueError):
-        artifacts.application_descriptor(REPOSITORY, "linux-app", PRODUCER, 99)
-
-
-@pytest.mark.parametrize("available", [False, True])
-def test_application_descriptor_legacy_fallback_still_requires_verified_payload(
-    original, application_receipt, monkeypatch, available
-):
-    sidecar = original["records"]["actions/artifacts/6"]
-    sidecar["expired"] = True
-
-    def pull(repository, component, source, prefix, *, source_run):
-        assert source_run == 99
-        if available:
-            prefix.mkdir()
-            (prefix / "application.build.json").write_text(
-                json.dumps(
-                    {"revision": PRODUCER, "version": "1.2.3", "build_number": 42}
-                )
-            )
-        return available
-
-    monkeypatch.setattr(artifacts, "pull", pull)
-    if available:
-        assert (
-            artifacts.application_descriptor(REPOSITORY, "linux-app", PRODUCER, 99)[
-                "build_number"
-            ]
-            == 42
+        producer.change(sidecar["name"], change)
+    expected = {
+        "digest": "sidecar does not bind its original payload",
+        "receipt": "mismatched.*original receipt",
+        "attempt": "mismatched.*original receipt",
+        "version": "no stamped distribution identity",
+        "build-number": "no stamped distribution identity",
+        "archive": "Unexpected candidate evidence archive members",
+    }[failure]
+    with pytest.raises(ValueError, match=expected):
+        artifacts.application_descriptor(
+            CANDIDATE_REPOSITORY,
+            "linux-app",
+            CANDIDATE_SOURCE,
+            42,
+            consumer="release-preparation",
         )
-    else:
-        with pytest.raises(ValueError, match="unavailable"):
-            artifacts.application_descriptor(REPOSITORY, "linux-app", PRODUCER, 99)
+    if failure != "attempt":
+        assert sidecar["id"] in producer.downloads
+    assert "actions/runs/42" in producer.requests
+
+
+def test_application_descriptor_missing_sidecar_fails_without_payload_fallback(
+    producer, monkeypatch
+):
+    producer.item(artifacts.receipt_name("linux-app", CANDIDATE_SOURCE))["expired"] = (
+        True
+    )
+    from unittest.mock import Mock
+
+    pull = Mock()
+    monkeypatch.setattr(artifacts, "pull", pull)
+    with pytest.raises(ValueError, match="Missing or expired original upload"):
+        artifacts.application_descriptor(
+            CANDIDATE_REPOSITORY,
+            "linux-app",
+            CANDIDATE_SOURCE,
+            42,
+            consumer="release-preparation",
+        )
+    pull.assert_not_called()
+    assert (
+        producer.item(artifacts.name("linux-app", CANDIDATE_SOURCE))["id"]
+        not in producer.downloads
+    )

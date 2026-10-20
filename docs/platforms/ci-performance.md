@@ -254,16 +254,14 @@ threshold and platform-dependent execution has been accounted for. Report PR
 elapsed time separately from summed runner time; parallel jobs can dominate the
 critical path even after another job becomes faster.
 
-For a hosted comparison, the existing Platform candidates and checks manual
-dispatch accepts `core_coverage_benchmark=true`, with `platforms=all`. It runs full
-macOS core tests plain and covered on the same host, plus full Linux core tests
-with coverage on the same source revision. The macOS coverage gate stays at 90%;
-the Linux trial also checks 90%. This input defaults to false and only affects
-core jobs. Normal Linux core execution stays plain, and normal macOS core stays
-fully covered. Compare the retained core events and phase logs with their stage
-environment records; the observed 447-second macOS versus 97-second Linux sample
-mixes platform and instrumentation and cannot estimate coverage-placement savings.
-The manual experiment has not been executed by this change.
+For a hosted Linux comparison, the Platform candidates and checks manual
+dispatch accepts `core_coverage_benchmark=true`. It compares full core execution
+with and without coverage on the selected source. Current Linux core coverage is
+enforced in `linux-test`; normal macOS runs omit coverage, while release and
+nightly callers request a coverage report. Earlier macOS plain/covered trials and
+the observed 447-second macOS versus 97-second Linux sample are historical
+measurements. Compare retained events, phase logs and environment records;
+cross-platform timings alone cannot establish coverage-placement savings.
 
 ## Observe model and audio selection before skipping
 
@@ -380,24 +378,36 @@ match, allowing Ninja to retain valid object files. Distribution stamping makes
 the input tree derived, so those results are not reusable as clean PR results.
 
 Ubuntu package lifecycle and model/audio acceptance share the exact application
-bundle from the successful in-run `linux-build` producer. Independent
-`acceptance-cpu`, `acceptance-audio` and `acceptance-deb` jobs verify the repository,
-workflow, source, successful original job attempt, upload bounds, ZIP and payload
-checksums, and distribution metadata before mounting the application read-only.
-Rerunning failed acceptance jobs retains that original producer and never compiles
-or relabels it. Fork-local verified SDK artifacts remain scoped to their PR; they
-never enter the main SDK or release-candidate pools. DEB acceptance skips the SDK
-download because its package lifecycle checks use only the portable application.
+bundle. The `linux-build` producer builds it once and completes after uploading
+its checksummed source/attempt receipt. Independent acceptance and packaging
+jobs restore that exact artifact and mount the application read-only into an
+acceptance-tools image. It verifies the repository, workflow, source, successful
+producer job and original attempt, upload bounds, ZIP and payload checksums, and
+distribution metadata. Rerunning failed acceptance jobs retains the successful
+producer; it neither compiles an application nor relabels the original attempt.
+When the run-wide jobs API reports that exact producer as pending, restore checks
+the individual job endpoint, requiring the same job ID, name, run, source and
+attempt. If that job is also pending, restore polls for up to 60 seconds before
+failing. It still requires completed success and the
+original upload window before downloading any bytes; failed, ambiguous or
+incorrectly scoped producers are never accepted.
+A fork's locally built SDK is also retained for this successful source-scoped
+producer, so its acceptance job does not build the SDK again. Those artifacts
+never enter the trusted main SDK or release-candidate pools.
 Pinned snapshot package setup retries transient failures, requires a complete
-index update, and preserves downloaded work between attempts. On main,
-acceptance starts after a successful
-`linux-bundle` producer job and downloads its verified exact-source candidate;
-nightly acceptance uses its same-run, separately labelled preview bundle.
-The tools image installs test prerequisites without building an application or
-SDK. DEB acceptance creates and installs the package in Ubuntu 24.04 to check
-dependencies, layout, service lifecycle and document parsing.
+index update, and preserves downloaded work between attempts. CPU, audio and
+DEB acceptance start after a successful `linux-build` job and consume its exact
+in-run artifact ID, digest and original successful attempt. PRs retain their own
+bundles; nightly callers use `preview-linux-app-<run>-<attempt>`, and release
+callers use release-tier candidates. The consume-only weekly audit independently
+qualifies the newest green preview for the exact current main source. Acceptance
+checks out the original product for its Dart/Flutter test packages while retaining
+the current acceptance-image recipe. The tools image installs test prerequisites but has no application
+or SDK build step. The package job creates the DEB and installs it in Ubuntu
+24.04 to test dependencies, layout, service lifecycle and document parsing.
+DEB acceptance restores only the portable application and skips SDK downloads.
 
-The main `linux-bundle` job loads the verified SDK into its shared Docker daemon
+The `linux-build` job loads the verified SDK into its shared Docker daemon
 before inspecting it to qualify existing dependency objects. Resolving a registry
 descriptor alone does not load an image; failed inspection must never authorize
 recompiling the SDK or dependencies.
@@ -562,19 +572,23 @@ document the exact incompatible input and the affected component before running
 its necessary replacement build. A missing tag or transport failure does not
 authorize that build.
 
-Main builds allocate a monotonic distribution number and stamp it before
-building Linux and macOS candidates. A missing platform uses the surviving
-platform's verified version and build number. An existing requested candidate
-stops compilation unless an operator supplies a concrete output-affecting
-`rebuild_reason`; select `platforms=linux` or `platforms=macos` for a missing
-platform. Compiler recipes remain bound to the selected product source.
+Release-tier `release.yml` runs allocate a monotonic distribution number and
+stamp it before building Linux and macOS candidates. Normal main checks retain
+in-run application bundles and do not produce release candidates. The coordinator
+first reuses an exact-source tested index when one is available; otherwise it
+runs both candidate platforms and every required gate. `candidates_only=true`
+with a reviewed `source` creates or reuses that index without drafting or packaging
+a release. Sources below `RELEASE_SOURCE_FLOOR` are refused; the legacy per-merge
+application route is removed by this cutover. The historical dependency-seed qualification is a
+separate contract and remains available.
 
-Release preparation only discovers and verifies candidates; it never dispatches
-a build. Linux and macOS can have separate producer runs. A successful platform
-job remains eligible when a sibling job fails, with its original successful
-attempt, receipt, upload bounds and checksums intact. Candidates and small
-identity receipts are retained for 90 days. Missing or incompatible candidates
-stop with an actionable error, preserving completed outputs and active producers.
+Both release platforms belong to one fully tested candidate run. The index
+binds original producer attempts, upload bounds, application bytes and successful
+consumer evidence; the retained candidates and small receipts last 90 days.
+Rerun failed jobs first while preserving successful outputs. Packaging receives
+the completed verified `candidate_run` and never polls for application producers
+or builds applications or SDKs. Missing or incompatible evidence stops with an
+actionable error.
 
 Recover transient external failures by retrying failed jobs in the original
 `release.yml` coordinator, retaining successful sibling formats and original
@@ -590,10 +604,10 @@ rebuild accepted bytes. See [release recovery](../../RELEASING.md#recover-from-a
 Installer creation and validation are separate steps. Installer bytes upload
 before installation tests; validation evidence uploads separately. A lifecycle
 failure therefore preserves the installer and the original application candidate.
-RPM contracts exercise real macro expansion and upgrade locks. Package-only PRs
-run the DEB/RPM/Arch lifecycle against a verified reviewed-main application fixture,
-and a tiny signed macOS fixture exercises DMG creation, mounting and execution.
-These recipe contracts do not require an application or SDK build.
+RPM contracts exercise real macro expansion and upgrade locks. Package contracts
+run the DEB/RPM/Arch lifecycle against the current run's verified bundle, and a
+tiny signed macOS fixture exercises DMG creation, mounting and execution. These
+recipe consumers do not compile another application or SDK.
 
 Nightly/manual previews use the same installer paths and validate installed
 packages. A new preview label is a new embedded distribution identity, which
@@ -707,14 +721,18 @@ For target `0.1.2`, date `20261018`, build `12`:
 | Debian | `0.1.2~nightly.20261018.12-1` |
 | RPM | Version `0.1.2~nightly.20261018.12`, release `1` |
 | Arch | Version `0.1.2`, package release `0.12` |
-| Portable archive | `0.1.2~nightly.20261018.12-1` in the filename/provenance |
+| Portable archive | Original numeric version and filename, such as `open-foresight-0.1.2-1-linux-x86_64.tar.gz`; preview label in verified provenance |
 
-Native package-manager comparators check preview ordering before packaging. All
-previews sort below the intended stable package (`0.1.2-1` in this example).
+Native package-manager comparators check preview ordering before packaging. The
+native preview installers sort below the intended stable package (`0.1.2-1` in
+this example).
 Arch uses a numeric package release because its `pkgver` rules differ from
-Debian/RPM tilde versions.
+Debian/RPM tilde versions. The portable download preserves the exact tar bytes
+accepted by `linux-test` and acceptance, without repackaging or renaming. Its
+nightly identity is carried by the enclosing download artifact and manifest, plus
+the verified original preview receipt and `distribution-stamp.json`.
 
-Normal main application candidates and previews share a compare-and-swap build
+Release-tier candidates and previews share a compare-and-swap build
 counter on the managed **`ci/build-sequence`** branch. Do not delete/reset that
 branch. Allocation respects the checked-in build number as a lower bound and
 never force-pushes the counter; concurrent allocators retry conflicting updates.
@@ -732,12 +750,13 @@ Preview uses its own `preview-packages` concurrency group. Official release
 workflows serialize through `distribution-packages`, while the
 compare-and-swap allocator protects build numbers. A release can start while a
 nightly runs.
-Official release preparation discovers existing exact-product candidates and
-does not dispatch a build. Each platform retains its original successful producer
-run; source, version and distribution identity must match across the pair. A
-missing platform uses the surviving build number. Both packagers use current
-controls with those original application bytes. Unsupported or incompatible
-historical inputs fail without substituting newer source or publishing a release.
+The official release coordinator reuses an exact-product fully tested index or
+produces both release-tier candidates and all required gates before packaging.
+`candidates_only=true` prepares that index without drafting or packaging. Both
+platforms retain their original successful producer attempts from the same tested
+run and share source, version and distribution identity. Both packagers use
+current controls with those original application bytes. Sources below the release
+floor and incompatible historical inputs fail before packaging or publication.
 
 Packaging code is shared: both channels use the Linux native package/lifecycle
 scripts and `tools/create_dmg.py`. Standard and full previews contain the same
@@ -1041,7 +1060,9 @@ configuration secrets read-only outside the image. Distribution stamping happens
 on the verified host checkout. Packaging retains the exact GPU runtime flags,
 Google-client requirement, ABI report and tar package used by the existing builder.
 Only the host's Git checkout writes the application receipt, including tier/label.
-The PR handoff uses `linux-bundle-<run>-<attempt>`, never candidate lookup names.
+PR and ordinary main bundles use `linux-bundle-<run>-<attempt>`; nightly bundles
+use `preview-linux-app-<run>-<attempt>`. Release-tier bundles alone use
+`ci-linux-app-<source>` and qualify for the tested release index.
 
 The input identity covers the SDK image ID, dependency-seed qualification digest,
 CI/dependency Docker recipe and pinned Ubuntu snapshot. A rebuilt CI image may
@@ -1316,6 +1337,9 @@ post-merge receipt reuse remain separate later steps.
 
 ### On-demand tested release candidates (WS5b-1)
 
+This subsection records the WS5b-1 transition before the held WS5b-3 cutover.
+Its below-floor and per-merge paths are removed by the successor described below.
+
 `release.yml` resolves the reviewed source and verifies reusable tested candidates
 before allocating a distribution number or compiling an application. Its
 `candidates_only` dispatch runs the same required platform, package, acceptance
@@ -1343,3 +1367,29 @@ attempts and checksums remain authoritative when forwarding existing bytes.
 This stage keeps per-merge builds enabled. The on-demand switch requires two
 successful hosted `candidates_only` runs, or one such run and a release. Local
 fixtures do not establish those hosted gates or release readiness.
+
+
+### WS5b-3 candidates-on-demand cutover stacked on #157
+
+This prepared successor to PR #157 stops per-merge candidates and accepts release
+sources only at or above the reviewed WS5b-1 merge floor (PR #155 merge
+`16fc5b60`). The repository variable carries that authoritative merge SHA; the
+committed policy keeps no mutable default. The cutover may merge only after #157
+lands on main and two successful hosted `candidates_only` runs, or one
+`candidates_only` run and a release, plus final actual-main reconciliation and
+validation before activation. Local fixtures do not establish those hosted gates.
+
+Ordinary PR/main acceptance uses its successful in-run Linux bundle. Nightly
+packaging and acceptance use the same run's stamped preview bundle; preview
+bytes never become release bytes. Release packaging and publication re-verify
+the tested release-tier index, original producer jobs and attempts, installer
+checksums, original acceptance receipts, and certificate-bound attestations.
+Publication-only still requires an existing qualified evidence index and runs
+zero application or installer builds.
+
+The cutover removes per-merge candidate uploads, legacy below-floor readers,
+retired Docker application stages and obsolete candidate dispatch/polling inputs.
+Canonical original-job qualification and 30-row all-attempt pagination remain;
+API failures do not authorize partial evidence, alternate provenance or SDK
+compilation. Upgrade acceptance, preview lifecycle separation, and the immutable
+draft DMG preflight remain enforced.

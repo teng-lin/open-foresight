@@ -140,11 +140,13 @@ def test_release_producer_outputs_names_and_full_gates_match_the_verified_index(
             for step in steps
             if step.get("uses") == "./.github/actions/setup-linux-consumer"
         )
-        assert "inputs.tier != 'release'" in setup["with"]["legacy-main"]
-        assert "inputs.tier != 'release'" in setup["with"]["artifact-id"]
+        assert "legacy-main" not in setup["with"]
+        assert (
+            setup["with"]["artifact-id"] == "${{ needs.linux-build.outputs.bundle_id }}"
+        )
         run = next(step for step in steps if "ACCEPTANCE_FULL" in step.get("env", {}))
         assert "inputs.tier == 'release'" in run["env"]["ACCEPTANCE_FULL"]
-    assert "inputs.tier != 'release'" in jobs["linux-bundle"]["if"]
+    assert "linux-bundle" not in jobs
     assert "inputs.tier != 'release'" in jobs["linux-native"]["if"]
     assert "inputs.tier == 'release'" in jobs["macos"]["env"]["FORESIGHT_COVERAGE"]
     assert "inputs.tier != 'release'" in jobs["publish-caches"]["if"]
@@ -156,16 +158,11 @@ def test_release_producer_outputs_names_and_full_gates_match_the_verified_index(
         step for step in jobs["linux-build"]["steps"] if step.get("id") == "bundle"
     )
     assert "format('ci-linux-app-{0}', inputs.source)" in linux_upload["with"]["name"]
-    ordinary_upload = next(
-        step
-        for step in jobs["linux-bundle"]["steps"]
-        if step.get("id") == "linux-candidate"
-    )
-    assert ordinary_upload["with"]["name"].startswith("main-linux-bundle-")
     mac_upload = next(
         step for step in jobs["macos"]["steps"] if step.get("id") == "macos-candidate"
     )
-    assert "'ci-macos-app' || 'main-macos-app'" in mac_upload["with"]["name"]
+    assert mac_upload["with"]["name"] == "ci-macos-app-${{ inputs.source }}"
+    assert "inputs.tier == 'release'" in mac_upload["if"]
 
 
 def test_only_release_candidates_publish_canonical_candidate_sidecars():
@@ -185,10 +182,6 @@ def test_only_release_candidates_publish_canonical_candidate_sidecars():
         ]
         assert len(sidecars) == 1
         assert "inputs.tier == 'release'" in sidecars[0]["if"]
-    assert not any(
-        "publish-receipt" in step.get("run", "")
-        for step in jobs["linux-bundle"]["steps"]
-    )
     assert not any(
         step.get("with", {}).get("name", "").startswith("receipt-main-")
         for job in jobs.values()
