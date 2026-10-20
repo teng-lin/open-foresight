@@ -775,11 +775,8 @@ void main() {
             count: 2,
           )
           .then((_) => 'probed twice'),
-      starting.then((client) async {
-        final attached = (await client.call('status') as Map)['pid'];
-        await client.close();
-        return 'attached to $attached';
-      }),
+      // Only observes: the client is checked below once the gate opens.
+      starting.then((_) => 'attached while the lock was held'),
     ]);
     expect(observed, 'probed twice');
     gates.release('start.locked');
