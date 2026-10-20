@@ -26,6 +26,12 @@ bool _linkPath(String from, String to) {
 
 /// The device and inode of [path] itself, without following a link, or null
 /// when it is missing. Throws when it exists but cannot be inspected.
+///
+/// On Linux the modification time, to the nanosecond, is part of it: ext4
+/// and overlay filesystems hand a freed inode number to the next file at
+/// once, so a socket that replaced a dead one can carry its old inode. A
+/// socket's modification time is set when it is bound; linking, renaming
+/// and chmod leave it alone. APFS never reuses inode numbers.
 Future<String?> fileIdentity(String path) async {
   if (FileSystemEntity.typeSync(path, followLinks: false) ==
       FileSystemEntityType.notFound) {
@@ -33,7 +39,7 @@ Future<String?> fileIdentity(String path) async {
   }
   final result = await Process.run(
     '/usr/bin/stat',
-    Platform.isMacOS ? ['-f', '%d:%i', path] : ['-c', '%d:%i', path],
+    Platform.isMacOS ? ['-f', '%d:%i', path] : ['-c', '%d:%i:%y', path],
   );
   if (result.exitCode == 0) return result.stdout.toString().trim();
   if (FileSystemEntity.typeSync(path, followLinks: false) ==

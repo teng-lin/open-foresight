@@ -167,4 +167,34 @@ void main() {
       directory.deleteSync(recursive: true);
     }
   });
+
+  test('a socket keeps its identity through link, rename and chmod, and a '
+      'replacement that reuses its inode number gets a new one', () async {
+    final directory = createTestTempDirectorySync('of-identity-');
+    final path = '${directory.path}/application.sock';
+    final server = await ServerSocket.bind(
+      InternetAddress(path, type: InternetAddressType.unix),
+      0,
+    );
+    try {
+      final bound = await fileIdentity(path);
+      expect(bound, isNotNull);
+      // What publishing and protecting a socket do to it.
+      expect(Process.runSync('/bin/chmod', ['600', path]).exitCode, 0);
+      expect(Process.runSync('/bin/ln', [path, '$path.2']).exitCode, 0);
+      File('$path.2').deleteSync();
+      File(path).renameSync('$path.aside');
+      File('$path.aside').renameSync(path);
+      expect(await fileIdentity(path), bound);
+      if (Platform.isLinux) {
+        // ext4 and overlay filesystems give a freed inode number to the next
+        // file at once. A replacement differs in its bind time even then;
+        // the same inode with a different modification time stands in for it.
+        File(path).setLastModifiedSync(DateTime(2001));
+        expect(await fileIdentity(path), isNot(bound));
+      }
+    } finally {
+      await server.close();
+    }
+  });
 }
