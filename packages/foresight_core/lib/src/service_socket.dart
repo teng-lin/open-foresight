@@ -29,9 +29,9 @@ Future<String?> fileIdentity(String path) async {
 
 /// Whether [error] says that nothing listens at a Unix socket path: there is
 /// no socket (ENOENT), or nobody accepts on it (ECONNREFUSED: 61 on macOS,
-/// 111 on Linux). macOS also refuses when a live listener's backlog is full;
-/// its runtimes are per profile, so only a crashed owner of this profile can
-/// have left a socket there.
+/// 111 on Linux). A full backlog makes Linux fail with EAGAIN instead, but
+/// macOS refuses at once, just as for a dead socket; [probeSocketPath] asks
+/// again before trusting that.
 bool nobodyListening(SocketException error) =>
     switch (error.osError?.errorCode) {
       2 || 61 || 111 => true,
@@ -62,16 +62,33 @@ Future<SocketPathInUse?> probeSocketPath(String path) async {
       FileSystemEntityType.notFound) {
     return null;
   }
-  try {
-    final live = await Socket.connect(
-      InternetAddress(path, type: InternetAddressType.unix),
-      0,
-      timeout: const Duration(milliseconds: 200),
-    );
-    live.destroy();
-    return SocketPathInUse(path);
-  } on SocketException catch (error) {
-    return nobodyListening(error) ? null : SocketPathInUse(path, cause: error);
+  const bound = Duration(milliseconds: 200);
+  final elapsed = Stopwatch()..start();
+  for (var attempt = 1; ; attempt++) {
+    final left = bound - elapsed.elapsed;
+    try {
+      final live = await Socket.connect(
+        InternetAddress(path, type: InternetAddressType.unix),
+        0,
+        timeout: left > Duration.zero ? left : const Duration(milliseconds: 1),
+      );
+      live.destroy();
+      return SocketPathInUse(path);
+    } on SocketException catch (error) {
+      if (!nobodyListening(error)) return SocketPathInUse(path, cause: error);
+      // On macOS a live listener whose backlog is full refuses like a dead
+      // socket (M1). A live owner drains its backlog, so ask up to three
+      // times within the bound. One that stays stalled still looks gone; it
+      // can only be another profile's owner sharing an explicit runtime,
+      // since macOS runtimes are per profile by default.
+      if (!Platform.isMacOS ||
+          error.osError?.errorCode != 61 ||
+          attempt >= 3 ||
+          elapsed.elapsed >= bound) {
+        return null;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+    }
   }
 }
 

@@ -815,6 +815,34 @@ void main() {
     expect(() => serviceEndpoint(resolve()), throwsStateError);
   });
 
+  test('--stop with a record of another profile and nothing serving never '
+      'reports this profile\'s owner as stopped (M2)', () async {
+    final directory = createServiceTestDirectorySync('of-copied-');
+    final profile = ProfilePaths(
+      '${directory.path}/a',
+      '${directory.path}/run',
+    );
+    // Another profile's record, copied into this profile's data directory.
+    privateDirectory(profile.data);
+    final record = File('${profile.data}/.application-endpoint.json')
+      ..writeAsStringSync(
+        jsonEncode({
+          'data': '${directory.path}/b',
+          'runtime': '${directory.path}/other',
+        }),
+      );
+    protectPrivateFile(record.path);
+    final stop = await serviceCommand(profile, '--stop');
+    expect(stop.exitCode, 1);
+    expect(
+      stop.stderr,
+      allOf(
+        contains('was ignored because it names another profile'),
+        isNot(contains('stopped without a clean shutdown')),
+      ),
+    );
+  }, timeout: const Timeout(Duration(minutes: 3)));
+
   /// A desktop facade for [profile], closed with everything it opened at the
   /// end of the test.
   Future<RemoteDomain> desktop(Future<RemoteDomain> connecting) async {
