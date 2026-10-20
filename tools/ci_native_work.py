@@ -9,13 +9,13 @@ from pathlib import Path
 import tempfile
 
 cache = importlib.import_module(
-    "tools.ci_stage_cache" if __package__ else "ci_stage_cache"
+    "tools.ci_native_cache" if __package__ else "ci_native_cache"
 )
 payloads = importlib.import_module(
-    "tools.ci_stage_artifacts" if __package__ else "ci_stage_artifacts"
+    "tools.ci_build_artifacts" if __package__ else "ci_build_artifacts"
 )
 stage_environment = importlib.import_module(
-    "tools.ci_stage_environment" if __package__ else "ci_stage_environment"
+    "tools.ci_build_environment" if __package__ else "ci_build_environment"
 )
 
 ROOT = Path(__file__).resolve().parents[1]

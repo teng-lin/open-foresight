@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
-from tools import ci_stage_environment as environment
+from tools import ci_build_environment as environment
 
 ROOT = Path(__file__).resolve().parents[1]
 
