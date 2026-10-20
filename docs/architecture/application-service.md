@@ -151,7 +151,14 @@ lock. Scripts should therefore allow at least 60 s plus any recording
 finalization. If the
 service stopped without a clean shutdown, during `--stop` or before it,
 `--stop` still succeeds and prints a warning; the next start recovers its
-runtime. With no service and no endpoint record, `--stop` fails. For installers,
+runtime. With no service and no endpoint record, `--stop` fails. A service
+that is already stopping, because it refuses the status probe or its socket
+is gone while it still holds its profile lock, gets "The application service
+is already stopping." and the same release wait. A service released before
+profile identity ends its connections before it finalizes a recording, so
+`--stop` waits up to 30 minutes for it to release its profile. `--status`,
+`--stop` and `--stop-if-idle` give up on a service that does not answer its
+status within 30 s. For installers,
 `--stop-if-idle[=PID]` uses the private `service.stop_if_idle` operation. It
 atomically refuses active/finalizing recording and in-flight operations, then
 blocks new calls before shutdown begins. It acknowledges success only after
@@ -201,11 +208,13 @@ private `.application-endpoint.json` records the active runtime directory. Clien
 validate that directory and attach to the recorded endpoint. A service launched
 with another runtime cannot acquire a competing profile writer. An unclean shutdown retains its runtime endpoint so a replacement service can adopt surviving helpers even when launched with a different runtime override. A clean shutdown closes workers and removes the endpoint record, allowing the next launch to relocate its runtime. Endpoint records are published only after acquiring the profile lock and binding a socket. Disconnected mutations with unknown commit state are still never replayed.
 
+When its connection drops, the desktop reconnects at once. While its own launches keep failing, it waits 1 s, then twice as long after each failure, up to 30 s; a request waiting for the reconnect (at least 1 s after the last attempt), a service that starts serving, or closing the window ends a wait early, and a successful attach starts the count over. Attaching is bounded at 30 s. After a closing refusal, a client stops sending on that connection but keeps it open until the closing owner has answered the requests already sent on it (at most 5 s), so each gets the owner's own answer: a refused request is sent once more to the next owner, and a dispatched one reports that it may have completed.
+
 Lock probes never run in a process that hosts an owner of the same profile
 (L8). POSIX record locks belong to the process, not to a Dart isolate or a
 file descriptor, so closing any descriptor of the lock file drops every lock
 the process holds on it. `ensureService` (through `_profileOwnerAvailable`),
-`--stop`'s release wait (`awaitProfileRelease`), `profileLeftUnclean`, and on
+`--stop`'s release wait (`awaitProfileRelease`, through `profileReleased`), `profileLeftUnclean`, and on
 macOS the identity check for a service that reports no profile identity
 (`servesAnotherProfile`) each open, lock and close the profile lock to probe
 it. In a process that hosts an owner, any of them would release that owner's

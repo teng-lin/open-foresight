@@ -27,6 +27,7 @@ On 2026-10-19 the owner accepted every recommendation (D1–D6) and paused PR #1
 | D4 | Protecting editor-held IDs after a workspace clear | **Decided** | **A persistent workspace epoch**, sent with ID-based mutations. No table rebuild is needed. | Rejected: `AUTOINCREMENT` on `notes`/`meetings` through a table-rebuild migration | PR 5 |
 | D5 | Linux default runtime directory | **Decided** | **Per profile** (`$XDG_RUNTIME_DIR/open-foresight/<id12>`), as on macOS, plus the identity check | Rejected: identity check only, keeping the shared default | PR 4 |
 | D6 | Stopping recording when the host desktop disconnects | **Decided** | **Keep the immediate stop** (privacy). Fix the causes of spurious disconnects instead (SL-1). | Rejected: give it the 1 s reattach grace | None |
+| D7 | Service lifetime and the desktop/agent boundary | **Proposed** | Recorded in [ADR 0007](../adr/0007-service-lifetime-and-desktop-agent-boundary.md): the desktop keeps the service running; with no desktop, the service exits after `serviceIdleMinutes` without agent activity. | Rejected in the ADR: a resident service that unloads its models when idle | A follow-up PR after this plan's PR |
 
 Overlap with [plan 3](../audit/2026-10-18-implementation-plan-3.md):
 - **6.1 (typed RPC boundary):** the `reason` field added in PR 3 is additive and consistent with 6.1's split between caller errors and internal errors.
