@@ -962,6 +962,40 @@ void main() {
     );
   });
 
+  test('approvals open on a lost connection close when it drops', () async {
+    f.handler = (socket, request) => f.reply(socket, request, null);
+    final approvals = <Map<String, dynamic>>[];
+    await f.remote.enableDesktopApprovals(approvals.add);
+    for (final id in ['pending', 'decided']) {
+      f.event({
+        'event': 'approval',
+        'approval_id': id,
+        'method': 'sources.delete',
+        'args': {'id': 'source'},
+      });
+    }
+    f.event({'event': 'approval_closed', 'approval_id': 'decided'});
+    await eventually(() => approvals.length == 3);
+    f.sockets.last.destroy();
+    await eventually(() => approvals.length == 4);
+    expect(approvals.last, {
+      'event': 'approval_closed',
+      'approval_id': 'pending',
+    });
+    // The reconnected desktop attaches for new approvals again.
+    await eventually(
+      () =>
+          f.requests
+              .where(
+                (request) =>
+                    request['method'] == Operation.securityAttachDesktop.wire,
+              )
+              .length ==
+          2,
+    );
+    expect(approvals, hasLength(4));
+  });
+
   test(
     'approval events preserve the current service helper snapshot',
     () async {

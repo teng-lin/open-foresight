@@ -125,6 +125,12 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
       return;
     }
     if (event['event'] == 'approval' || event['event'] == 'approval_closed') {
+      final id = event['approval_id'];
+      if (id is String && event['event'] == 'approval') {
+        _openApprovals.add(id);
+      } else {
+        _openApprovals.remove(id);
+      }
       _approvalEvents?.call(event);
       return;
     }
@@ -156,11 +162,23 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
     helper.changed?.call();
   }
 
+  // Approvals shown for the current connection that have not closed yet.
+  final _openApprovals = <String>{};
+
+  /// The service denies a lost connection's approvals, but their
+  /// approval_closed can no longer arrive. Close their dialogs here.
+  void _closeOpenApprovals() {
+    for (final id in _openApprovals.toList()) {
+      _apply({'event': 'approval_closed', 'approval_id': id});
+    }
+  }
+
   void _listen() {
     final connection = client;
     _events = connection.events.stream.listen(
       _apply,
       onDone: () {
+        _closeOpenApprovals();
         // A connection already replaced needs no second reconnect.
         if (!_disposed && identical(client, connection)) {
           unawaited(_reconnect());
@@ -188,6 +206,8 @@ class RemoteDomain implements DesktopConnection, CaptureLevelEvents {
           break;
         }
         await _events?.cancel();
+        // A cancelled subscription reports no end; its approvals are lost too.
+        _closeOpenApprovals();
         if (_disposed) {
           await next.close();
           break;
