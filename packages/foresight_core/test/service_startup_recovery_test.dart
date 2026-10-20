@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'package:foresight_core/foresight_core.dart';
 import 'package:foresight_core/src/service.dart';
@@ -30,6 +31,16 @@ class RecoveryRag extends AdoptionRag {
     deleted.add(request.documentId);
     return DeleteResponse(success: true);
   }
+}
+
+/// Whether another process sees the profile ownership lock as held.
+Future<bool> lockHeldElsewhere(ProfilePaths profile) async {
+  final probe = await Process.run('python3', [
+    '-c',
+    'import fcntl,sys\nf=open(sys.argv[1],"a")\ntry: fcntl.lockf(f,fcntl.LOCK_EX|fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(0)\nsys.exit(1)',
+    '${profile.data}/.application.lock',
+  ]);
+  return probe.exitCode == 0;
 }
 
 void main() {
@@ -117,6 +128,105 @@ void main() {
         runtimeConfiguration.environment
           ..clear()
           ..addAll(original);
+      }
+    },
+  );
+
+  for (final adopted in [false, true]) {
+    test('failed startup ${adopted ? 'keeps an adopted' : 'removes its own'} '
+        'endpoint record before releasing ownership', () async {
+      final original = Map.of(runtimeConfiguration.environment);
+      for (final key in [
+        'FORESIGHT_HELPER',
+        'FORESIGHT_NATIVE',
+        'FORESIGHT_RUNTIME_REVISION',
+        'FORESIGHT_INSTALL_ROOT',
+      ]) {
+        runtimeConfiguration.environment.remove(key);
+      }
+      final root = createTestTempDirectorySync('of-failed-start-');
+      final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
+      try {
+        privateDirectory(profile.data);
+        privateDirectory(profile.runtime);
+        final record = File('${profile.data}/.application-endpoint.json');
+        if (adopted) {
+          // An unclean predecessor's record names the runtime to adopt.
+          record.writeAsStringSync(
+            jsonEncode({'data': profile.data, 'runtime': profile.runtime}),
+          );
+        }
+        // The desktop capability check fails after the record is published.
+        final capability = Link('${profile.data}/.desktop-capability')
+          ..createSync('${root.path}/elsewhere');
+        await expectLater(
+          ApplicationService.start(profile),
+          throwsA(
+            isA<StateError>().having(
+              (error) => error.message,
+              'message',
+              contains('Desktop capability must not be a symbolic link'),
+            ),
+          ),
+        );
+        expect(record.existsSync(), adopted);
+        // POSIX locks belong to the process, so probe from another one.
+        expect(await lockHeldElsewhere(profile), isFalse);
+        capability.deleteSync();
+        final service = await ApplicationService.start(profile);
+        await service.close();
+      } finally {
+        runtimeConfiguration.environment
+          ..clear()
+          ..addAll(original);
+        root.deleteSync(recursive: true);
+      }
+    });
+  }
+
+  test(
+    'failed isolated startup exits its worker and releases ownership',
+    () async {
+      final original = Map.of(runtimeConfiguration.environment);
+      for (final key in [
+        'FORESIGHT_HELPER',
+        'FORESIGHT_NATIVE',
+        'FORESIGHT_RUNTIME_REVISION',
+        'FORESIGHT_INSTALL_ROOT',
+      ]) {
+        runtimeConfiguration.environment.remove(key);
+      }
+      final root = createTestTempDirectorySync('of-failed-isolated-');
+      final profile = ProfilePaths('${root.path}/data', '${root.path}/run');
+      try {
+        privateDirectory(profile.data);
+        privateDirectory(profile.runtime);
+        // Fails after the record is published and background work started.
+        Link(
+          '${profile.data}/.desktop-capability',
+        ).createSync('${root.path}/elsewhere');
+        await expectLater(
+          IsolatedApplicationService.start(
+            profile,
+          ).timeout(const Duration(seconds: 30)),
+          throwsA(
+            predicate(
+              (Object error) => '$error'.contains(
+                'Desktop capability must not be a symbolic link',
+              ),
+            ),
+          ),
+        );
+        expect(
+          File('${profile.data}/.application-endpoint.json').existsSync(),
+          isFalse,
+        );
+        expect(await lockHeldElsewhere(profile), isFalse);
+      } finally {
+        runtimeConfiguration.environment
+          ..clear()
+          ..addAll(original);
+        root.deleteSync(recursive: true);
       }
     },
   );

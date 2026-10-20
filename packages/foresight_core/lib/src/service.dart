@@ -420,7 +420,21 @@ class ApplicationService {
     }
     Store? store;
     Helper? helper;
+    Application? startedApplication;
     ServiceSocketBinding? binding;
+    final endpointRecord = File('${profile.data}/.application-endpoint.json');
+    // A predecessor's record names the runtime this attempt adopts. Keep it if
+    // startup fails; remove only a record this attempt published itself.
+    final adoptedRecord =
+        FileSystemEntity.typeSync(endpointRecord.path, followLinks: false) !=
+        FileSystemEntityType.notFound;
+    if (adoptedRecord) {
+      stderr.writeln(
+        'Application service: the previous owner left its endpoint record; '
+        'adopting its runtime.',
+      );
+    }
+    var publishedRecord = false;
     try {
       // An unclean predecessor can leave a healthy helper at this endpoint.
       // Reuse that runtime until a clean shutdown releases its workers.
@@ -450,14 +464,14 @@ class ApplicationService {
       );
       final domain = Domain(store, helper, webSearch: webSearch);
       final application = Application(domain);
+      startedApplication = application;
       application.importPolicy = ImportPolicy(profile.data, () {
         final saved = store!.preference('importRoots', '[]');
         return (jsonDecode(saved) as List).cast<String>();
       });
       application.startBackground();
       binding = await ServiceSocketBinding.bind(path);
-      final endpoint = File('${profile.data}/.application-endpoint.json');
-      final temporary = File('${endpoint.path}.$pid');
+      final temporary = File('${endpointRecord.path}.$pid');
       temporary.writeAsStringSync(
         jsonEncode({'data': profile.data, 'runtime': profile.runtime}),
       );
@@ -465,7 +479,8 @@ class ApplicationService {
           0) {
         throw StateError('Cannot protect service endpoint record');
       }
-      temporary.renameSync(endpoint.path);
+      temporary.renameSync(endpointRecord.path);
+      publishedRecord = true;
       final service = ApplicationService._(
         domain,
         binding,
@@ -498,13 +513,44 @@ class ApplicationService {
       });
       return service;
     } catch (_) {
-      await binding?.listener.close();
-      if (FileSystemEntity.typeSync(path) != FileSystemEntityType.notFound) {
-        File(path).deleteSync();
+      // Report cleanup failures, but keep the startup failure and always
+      // release ownership.
+      Future<void> cleanup(FutureOr<void> Function() step) async {
+        try {
+          await step();
+        } catch (error) {
+          stderr.writeln('Application service startup cleanup: $error');
+        }
       }
-      await helper?.close();
-      store?.close();
-      lock.closeSync();
+
+      try {
+        // Background timers would otherwise keep a worker isolate alive.
+        await cleanup(() => startedApplication?.close());
+        await cleanup(() => binding?.listener.close());
+        await cleanup(() {
+          if (FileSystemEntity.typeSync(path) !=
+              FileSystemEntityType.notFound) {
+            File(path).deleteSync();
+          }
+        });
+        await cleanup(() => helper?.close());
+        await cleanup(() => store?.close());
+        // Remove the record while the lock is still held, so no launcher sees
+        // a record without an owner that this failed attempt left behind.
+        await cleanup(() {
+          if (publishedRecord &&
+              !adoptedRecord &&
+              FileSystemEntity.typeSync(
+                    endpointRecord.path,
+                    followLinks: false,
+                  ) !=
+                  FileSystemEntityType.notFound) {
+            endpointRecord.deleteSync();
+          }
+        });
+      } finally {
+        lock.closeSync();
+      }
       rethrow;
     }
   }
@@ -1394,6 +1440,17 @@ bool _profileOwnerAvailable(
   final path = '${profile.data}/.application.lock';
   final type = FileSystemEntity.typeSync(path, followLinks: false);
   if (!closingOwner && type == FileSystemEntityType.notFound) return true;
+  // A closing owner of this profile always leaves its lock file. If it is
+  // missing, the closing owner may belong to another profile that shares this
+  // runtime directory (SL-7), whose teardown could delete a replacement's
+  // socket. Refuse until profile identity checks replace this guard.
+  if (closingOwner && type == FileSystemEntityType.notFound) {
+    throw StateError(
+      'The application service closing at this endpoint does not own this '
+      'profile ($path is missing). Another profile may share the runtime '
+      'directory; set FORESIGHT_RUNTIME for this profile.',
+    );
+  }
   if (type != FileSystemEntityType.file) {
     throw StateError(
       'Application service ownership lock is missing or unsafe: $path',
@@ -1415,14 +1472,15 @@ bool _profileOwnerAvailable(
       }
       rethrow;
     }
-    if (closingOwner &&
-        FileSystemEntity.typeSync(
-              '${profile.data}/.application-endpoint.json',
-              followLinks: false,
-            ) !=
-            FileSystemEntityType.notFound) {
-      throw StateError(
-        'Previous application service released ownership without clean shutdown',
+    // A record without a lock owner means the previous owner exited
+    // uncleanly. The replacement adopts that record's runtime in _start.
+    if (FileSystemEntity.typeSync(
+          '${profile.data}/.application-endpoint.json',
+          followLinks: false,
+        ) !=
+        FileSystemEntityType.notFound) {
+      _traceServiceTransport(
+        'previous owner left its endpoint record; the replacement adopts its runtime',
       );
     }
     return true;
