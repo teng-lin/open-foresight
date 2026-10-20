@@ -77,8 +77,8 @@ String anotherProfileMessage(
 
 /// A service released before profile identity answers where this
 /// profile's owner would, and this profile's lock is held, but the lock's
-/// holder cannot be read (/proc/locks or stat is unavailable, or the
-/// holder runs in another pid namespace). Waiting cannot tell more.
+/// holder cannot be read (/proc/locks or stat is unavailable) or seen (it
+/// runs outside this pid namespace). Waiting cannot tell more.
 class UnverifiableServiceOwner extends StateError {
   UnverifiableServiceOwner(int? pid)
     : super(
@@ -98,8 +98,9 @@ Set<int>? Function(String lock) readPosixLockHolders = _posixLockHolders;
 /// Such a service is accepted only while this profile's endpoint record
 /// still leads to [endpoint], because a new owner claims the record as soon
 /// as it takes the lock. On Linux its status pid must also hold this
-/// profile's lock; when the holders cannot be read while the lock is held
-/// and the record still leads here, this throws [UnverifiableServiceOwner].
+/// profile's lock; when the holder cannot be read or seen while the lock is
+/// held and the record still leads here, this throws
+/// [UnverifiableServiceOwner].
 /// macOS has no /proc/locks, so there any holder counts: a service of
 /// another profile that shares an explicit FORESIGHT_RUNTIME could pass
 /// while this profile's new owner is starting.
@@ -128,7 +129,8 @@ bool servesAnotherProfile(
   if (Platform.isLinux) {
     final holders = readPosixLockHolders(lock);
     final pid = status['pid'];
-    if (holders == null) {
+    // Pid 0 is a holder this pid namespace cannot see.
+    if (holders == null || holders.contains(0)) {
       // No owner of this profile runs, or the lock holder claimed the
       // record away from here: either way this service is not its owner.
       if (_profileLockFree(lock) || serviceEndpoint(profile) != endpoint) {
@@ -147,12 +149,13 @@ bool servesAnotherProfile(
 }
 
 /// The pids holding a POSIX write lock on [lock], from /proc/locks, or null
-/// if that cannot be read. Only the inode is compared,
-/// because btrfs reports a subvolume's device to stat (0:31, 0:58) but the
-/// file system's (00:1d) in /proc/locks. That fails open only if the same
-/// pid also locks a file with this inode in another subvolume, which is very
-/// unlikely. In another pid namespace, such as a flatpak sandbox, pids differ
-/// and the check fails closed.
+/// if that cannot be read. Only the inode is compared, because btrfs
+/// reports a subvolume's device to stat (0:31, 0:58) but the file system's
+/// (00:1d) in /proc/locks. That fails open only if the same pid also locks a
+/// file with this inode in another subvolume, which is very unlikely. A
+/// holder this pid namespace cannot see, such as one outside a flatpak
+/// sandbox, is listed as pid 0. A holder inside another pid namespace has
+/// another pid there than here, and the check fails closed.
 Set<int>? _posixLockHolders(String lock) {
   final ProcessResult stat;
   try {

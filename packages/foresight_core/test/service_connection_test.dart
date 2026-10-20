@@ -411,9 +411,14 @@ void main() {
     }
   });
 
-  for (final recorded in [false, true]) {
+  // No /proc/locks or stat; or a holder outside this pid namespace (pid 0).
+  for (final (recorded, holders) in <(bool, Set<int>?)>[
+    (false, null),
+    (true, null),
+    (true, {0}),
+  ]) {
     test('an older owner whose lock holder cannot be read fails startup at '
-        'once and says so (record: $recorded)', () async {
+        'once and says so (record: $recorded, holders: $holders)', () async {
       // An owner released before profile identity holds this profile's
       // lock and answers status without profile_id.
       final profile = ProfilePaths(
@@ -467,9 +472,8 @@ void main() {
           jsonEncode({'data': profile.data, 'runtime': runtime}),
         );
       }
-      // As in another pid namespace, or without /proc/locks.
       final reader = readPosixLockHolders;
-      readPosixLockHolders = (_) => null;
+      readPosixLockHolders = (_) => holders;
       addTearDown(() => readPosixLockHolders = reader);
       final startup = Stopwatch()..start();
       await expectLater(
